@@ -8,6 +8,7 @@ import logging
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
+import cerebro.gemini as gemini
 import config
 import db.db as db
 from captura.telegram import recibir_audio, recibir_foto, recibir_texto
@@ -22,6 +23,19 @@ log = logging.getLogger("lucy")
 async def _al_arrancar(app) -> None:
     await db.abrir()
     log.info("Pool de Postgres abierto. Lucy escuchando solo a %s.", config.CHAT_ID_DUENO)
+
+    # La IA se chequea, pero su falla NO tumba a Lucy: capturar no puede
+    # depender de que Gemini esté vivo (es el principio del Nivel 1). Un
+    # modelo jubilado o una key vencida degradan a Lucy a "solo bandeja",
+    # que es exactamente lo que queremos: ruidoso en el log, intacto para vos.
+    try:
+        await gemini.verificar_modelo()
+        log.info("Gemini OK: modelo %s disponible.", gemini.MODELO)
+    except Exception:
+        log.exception(
+            "GEMINI NO DISPONIBLE — la captura sigue funcionando, "
+            "pero no habrá interpretación hasta arreglarlo."
+        )
 
 
 async def _al_apagar(app) -> None:
