@@ -17,9 +17,10 @@ try:
 except ModuleNotFoundError:
     pass  # dotenv es solo comodidad local; en producción no hace falta.
 
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-DATABASE_URL   = os.environ["DATABASE_URL"]
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+# .strip() defensivo: un espacio invisible pegado al copiar no vuelve a romper nada.
+TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"].strip()
+DATABASE_URL   = os.environ["DATABASE_URL"].strip()
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
 # Candado de seguridad (pilar): Lucy SOLO le responde a este chat.
 # Cualquier otro que le escriba es ignorado sin más.
