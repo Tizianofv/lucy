@@ -10,7 +10,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 
 import config
 import db.db as db
-from captura.telegram import recibir_texto
+from captura.telegram import recibir_audio, recibir_foto, recibir_texto
 
 logging.basicConfig(
     format="%(asctime)s · %(levelname)s · %(name)s · %(message)s",
@@ -66,6 +66,12 @@ def main() -> None:
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND & solo_dueno, recibir_texto)
     )
+    # VOICE = nota de voz grabada en el momento; AUDIO = archivo de audio reenviado.
+    app.add_handler(
+        MessageHandler((filters.VOICE | filters.AUDIO) & solo_dueno, recibir_audio)
+    )
+    app.add_handler(MessageHandler(filters.PHOTO & solo_dueno, recibir_foto))
+
     app.add_error_handler(_al_fallar)
 
     log.info("Lucy arrancando…")
