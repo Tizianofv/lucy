@@ -23,7 +23,14 @@ CREATE TABLE bandeja (
   clasificacion    TEXT,          -- tarea|cita|nota|idea|gasto|pregunta
   interpretacion   JSONB,         -- extracción estructurada completa
   procesado_en     TIMESTAMPTZ,
-  error_detalle    TEXT
+  error_detalle    TEXT,
+
+  -- Idempotencia: Telegram reentrega el mismo mensaje si no le confirmamos a
+  -- tiempo (deploy, timeout, base lenta). Sin esto una reentrega duplica la
+  -- fila. Misma lección que el dedupe de wamid en Natalia.
+  -- Ojo: en Postgres los NULL no chocan entre sí, así que las filas de otros
+  -- orígenes (email, etc.) sin telegram_msg_id conviven sin problema.
+  CONSTRAINT bandeja_msg_unico UNIQUE (chat_id, telegram_msg_id)
 );
 CREATE INDEX idx_bandeja_estado ON bandeja(estado);
 

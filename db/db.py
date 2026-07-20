@@ -14,7 +14,11 @@ pool = AsyncConnectionPool(DATABASE_URL, open=False)
 
 
 async def abrir() -> None:
-    await pool.open()
+    # wait=True es deliberado: si la base no responde, queremos reventar ACÁ,
+    # al arrancar, y que el deploy falle a los gritos. Sin esto el pool abre
+    # "en diferido" y el log canta "Pool abierto" aunque no haya conexión:
+    # Lucy estuvo 3 horas respondiendo silencio con cara de que todo iba bien.
+    await pool.open(wait=True, timeout=30)
 
 
 async def cerrar() -> None:
@@ -40,12 +44,19 @@ async def guardar_en_bandeja(
         else None
     )
     async with pool.connection() as conn:
+        # ON CONFLICT = idempotencia. Telegram reentrega el mismo mensaje si no
+        # le confirmamos a tiempo (un deploy, un timeout, la base lenta). Sin
+        # esto, una reentrega crea una fila duplicada y mañana Lucy te recuerda
+        # dos veces la misma tarea. El DO UPDATE es un no-op: existe solo para
+        # que RETURNING devuelva el id de la fila que YA estaba.
         cur = await conn.execute(
             """
             INSERT INTO bandeja
               (tipo_entrada, contenido_raw, archivo_id, chat_id,
                telegram_msg_id, hash_contenido)
             VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (chat_id, telegram_msg_id) DO UPDATE
+              SET contenido_raw = EXCLUDED.contenido_raw
             RETURNING id
             """,
             (tipo_entrada, contenido_raw, archivo_id, chat_id,
