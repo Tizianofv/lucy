@@ -1,0 +1,23 @@
+# Secretos — NUNCA suben a GitHub. Viven en las variables de Railway.
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Volcados de base de datos (van a Drive, no al repo)
+*.dump
+*.sql.gz
+backups/
+
+# Editores / SO
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
