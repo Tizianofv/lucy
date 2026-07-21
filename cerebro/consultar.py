@@ -193,6 +193,30 @@ async def _ejecutar(sql: str) -> list[dict]:
             return await cur.fetchmany(LIMITE_FILAS)
 
 
+async def _corregir(pregunta: str, sql: str, error: str) -> str:
+    """Segunda oportunidad: se le muestra el error de Postgres y lo arregla.
+
+    Se le devuelve la conversación completa —su propia consulta y el rechazo—
+    porque el modelo corrige mucho mejor viendo qué escribió que recibiendo el
+    pedido de cero.
+    """
+    r = json.loads((await cliente.chat.completions.create(
+        model=MODELO,
+        messages=[
+            {"role": "system", "content": INSTRUCCIONES_SQL.format(
+                ahora=_ahora_txt(), zona=TZ.key, esquema=ESQUEMA)},
+            {"role": "user", "content": pregunta},
+            {"role": "assistant", "content": json.dumps({"sql": sql})},
+            {"role": "user", "content":
+                f"Postgres rechazó esa consulta con este error:\n{error}\n\n"
+                f"Corregila y devolvé el mismo JSON con el sql arreglado."},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0,
+    )).choices[0].message.content)
+    return str(r.get("sql") or "")
+
+
 def _crudo(filas: list[dict]) -> str:
     """El resultado tal cual, sin redactar. Fea pero verdadera."""
     if not filas:
@@ -255,7 +279,18 @@ async def responder(pregunta: str) -> dict:
                 "sql": None, "explicacion": explicacion}
 
     sql = _validar(sql)
-    filas = await _ejecutar(sql)
+    try:
+        filas = await _ejecutar(sql)
+    except Exception as e:
+        # Un SELECT que Postgres rechaza no es el final del camino: el mensaje
+        # de error dice exactamente qué está mal, y con esa pista el modelo
+        # suele arreglarlo solo. Rendirse en el primer intento sería tirar la
+        # mejor información disponible — enseñarle sale más barato.
+        log.warning("SQL rechazado, intento corregirlo una vez: %s", e)
+        sql = _validar(await _corregir(pregunta, sql, str(e)))
+        filas = await _ejecutar(sql)
+        log.info("La corrección funcionó.")
+
     log.info("Consulta (%s filas): %s", len(filas), sql.replace("\n", " ")[:160])
 
     texto = _redactar_o_crudo(await cliente.chat.completions.create(

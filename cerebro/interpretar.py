@@ -24,6 +24,7 @@ import acciones.crud as crud
 import cerebro.consultar as consultar
 import cerebro.deepseek as motor
 import cerebro.ordenar as ordenar
+import cerebro.preguntar as preguntar
 import cerebro.vision as vision
 import cerebro.whisper as whisper
 import db.db as db
@@ -160,10 +161,18 @@ async def _fallo(fila: dict, e: Exception, bot) -> None:
 
     log.exception("Fallo definitivo interpretando #%s", bandeja_id)
     await db.marcar_error(bandeja_id, f"{type(e).__name__}: {e}")
-    await bot.send_message(
+
+    # Preguntar en vez de informar el error. Lo que Tiziano dijo puede estar
+    # crudo (el texto sin interpretar) o transcripto; con eso alcanza para que
+    # Lucy arme una repregunta concreta en lugar de un aviso que no lleva a
+    # ninguna parte.
+    dicho = fila.get("transcripcion") or fila.get("contenido_raw") or ""
+    pregunta = await preguntar.repreguntar(dicho, f"{type(e).__name__}: {e}")
+    await _enviar(
+        bot,
+        text=f"{pregunta}\n\n(Tu mensaje quedó guardado como #{bandeja_id}, "
+             f"no se perdió nada.)",
         chat_id=fila["chat_id"],
-        text=f"⚠️ Guardé tu mensaje (#{bandeja_id}) pero no logro interpretarlo.\n"
-             "Está a salvo en la bandeja: no se perdió nada.",
         reply_to_message_id=fila.get("telegram_msg_id"),
     )
 
@@ -280,12 +289,10 @@ async def _procesar(fila: dict, bot) -> None:
             log.exception("No pude responder la pregunta #%s", bandeja_id)
             await db.marcar_error(bandeja_id, f"{type(e).__name__}: {e}")
             try:
-                await _enviar(
-                    bot,
-                    "❓ Entendí la pregunta pero me tropecé buscando la respuesta. "
-                    "Probá diciéndomelo de otra forma.",
-                    **plano,
-                )
+                # Acá es donde el cinturón tiene que actuar: si no supo, que
+                # pregunte. Un "me tropecé" es un callejón sin salida; una
+                # pregunta concreta deja la conversación viva.
+                await _enviar(bot, await preguntar.repreguntar(texto, str(e)), **plano)
             except Exception:
                 log.exception("Tampoco pude avisar del fallo de #%s", bandeja_id)
             return
@@ -309,11 +316,10 @@ async def _procesar(fila: dict, bot) -> None:
                 await _fallo(fila, e, bot)
                 return
             log.exception("No pude planear la orden #%s", bandeja_id)
-            await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
+            await db.marcar_error(bandeja_id, f"{type(e).__name__}: {e}")
             await _enviar(
                 bot,
-                text="🛠 Entendí que querés cambiar algo, pero me tropecé "
-                     "buscándolo. Probá diciéndomelo de otra forma.",
+                text=await preguntar.repreguntar(texto, str(e)),
                 **{k: v for k, v in responder.items() if k != "parse_mode"},
             )
             return
@@ -352,10 +358,10 @@ async def _procesar(fila: dict, bot) -> None:
                     await _fallo(fila, e, bot)
                     return
                 log.exception("Fallo aplicando la orden #%s", bandeja_id)
-                await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
+                await db.marcar_error(bandeja_id, f"{type(e).__name__}: {e}")
                 await _enviar(
                     bot,
-                    text=f"🛠 Quise hacerlo pero no pude: {e}",
+                    text=await preguntar.repreguntar(texto, str(e)),
                     **{k: v for k, v in responder.items() if k != "parse_mode"},
                 )
                 return
