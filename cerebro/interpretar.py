@@ -20,6 +20,7 @@ import openai
 import telegram.error
 
 import acciones.botones as botones
+import acciones.crud as crud
 import cerebro.consultar as consultar
 import cerebro.deepseek as motor
 import cerebro.ordenar as ordenar
@@ -303,37 +304,110 @@ async def _procesar(fila: dict, bot) -> None:
             log.info("Orden #%s sin candidatos", bandeja_id)
             return
 
-        r["plan"] = res["plan"]
-        await db.guardar_interpretacion(bandeja_id, clas, r)
-
+        plan = res["plan"]
         candidatos = [(c["id"], ordenar.describir(c)) for c in res["candidatos"]]
-        lineas = [f"🛠 <b>{escape(res['plan']['resumen'])}</b>"]
-        if len(candidatos) > 1:
-            lineas.append("")
-            lineas.append(f"<i>Encontré {len(candidatos)}. ¿Cuál?</i>")
-        else:
-            lineas.append("")
-            lineas.append(f"<i>{escape(candidatos[0][1])}</i>")
 
+        # ── Un solo candidato: entendió, hace y avisa ────────────────────
+        # Preguntar acá sería un peaje: la respuesta iba a ser que sí. El
+        # cinturón queda igual, pero como botón de deshacer.
+        if len(candidatos) == 1:
+            rid, etiqueta = candidatos[0]
+            motivo = f"Orden de Tiziano (bandeja #{bandeja_id}): {plan['resumen']}"
+            try:
+                if plan["accion"] == "borrar":
+                    log_id = await crud.borrar(plan["tabla"], rid, motivo)
+                    aplicado = log_id is not None
+                else:
+                    despues, log_id = await crud.editar(
+                        plan["tabla"], rid, plan.get("cambios") or {}, motivo)
+                    aplicado = despues is not None
+            except Exception as e:
+                if _es_pasajero(e):
+                    await _fallo(fila, e, bot)
+                    return
+                log.exception("Fallo aplicando la orden #%s", bandeja_id)
+                await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
+                await bot.send_message(
+                    text=f"🛠 Quise hacerlo pero no pude: {e}",
+                    **{k: v for k, v in responder.items() if k != "parse_mode"},
+                )
+                return
+
+            await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
+            if not aplicado:
+                await bot.send_message(
+                    text="🛠 Eso ya no está ahí.",
+                    **{k: v for k, v in responder.items() if k != "parse_mode"},
+                )
+                return
+            await bot.send_message(
+                text=f"✅ {escape(plan['resumen'])}",
+                reply_markup=botones.teclado_deshacer(log_id),
+                **responder,
+            )
+            log.info("Orden #%s aplicada sola sobre %s#%s",
+                     bandeja_id, plan["tabla"], rid)
+            return
+
+        # ── Varios candidatos: ACÁ sí se pregunta ────────────────────────
+        # Elegir por su cuenta cuál de tres reuniones mover sería adivinar
+        # sobre datos reales. Este es el golpe donde el cinturón actúa.
+        r["plan"] = plan
+        await db.guardar_interpretacion(bandeja_id, clas, r)
         await bot.send_message(
-            text="\n".join(lineas),
+            text=f"🛠 <b>{escape(plan['resumen'])}</b>\n\n"
+                 f"<i>Encontré {len(candidatos)}. ¿Cuál?</i>",
             reply_markup=botones.teclado_orden(bandeja_id, candidatos),
             **responder,
         )
-        log.info("Orden #%s propuesta (%s candidatos)", bandeja_id, len(candidatos))
+        log.info("Orden #%s con %s candidatos: pregunto", bandeja_id, len(candidatos))
         return
 
-    # ── Lo demás sí se puede convertir en una fila: tarjeta + botones ────
-    await db.guardar_interpretacion(bandeja_id, clas, r)
+    # ── Duda de clasificación: pregunta antes de escribir ────────────────
+    # Si no sabe si es tarea o nota, crear una de las dos y avisar sería
+    # elegir por él. Acá la pregunta cuesta menos que la corrección.
+    if r.get("alternativa"):
+        await db.guardar_interpretacion(bandeja_id, clas, r)
+        await bot.send_message(
+            text=_formatear(bandeja_id, r, oido=oido),
+            reply_markup=botones.teclado(bandeja_id, r["alternativa"]),
+            **responder,
+        )
+        log.info("Interpretado #%s como %s (duda con %s); pregunto",
+                 bandeja_id, clas, r["alternativa"])
+        return
+
+    # ── Segura: crea y avisa, con el deshacer a mano ─────────────────────
+    try:
+        tabla, registro_id, log_id = await crud.crear_desde_interpretacion(
+            bandeja_id, r, motivo=f"Entendido de la bandeja #{bandeja_id}")
+    except crud.FaltanDatos as e:
+        # Falta un dato obligatorio: no puede crear nada, así que pregunta.
+        # Es el mismo criterio de siempre — la duda es lo que dispara la
+        # pregunta, no el tipo de operación.
+        r["falta"] = list(r.get("falta") or []) + [f"me falta {e}"]
+        await db.guardar_interpretacion(bandeja_id, clas, r)
+        await bot.send_message(
+            text=_formatear(bandeja_id, r, oido=oido),
+            reply_markup=botones.teclado(bandeja_id),
+            **responder,
+        )
+        log.info("Interpretado #%s como %s pero falta %s", bandeja_id, clas, e)
+        return
+    except Exception as e:
+        if _es_pasajero(e):
+            await _fallo(fila, e, bot)
+            return
+        raise
+
+    await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
     await bot.send_message(
-        text=_formatear(bandeja_id, r, oido=oido),
-        reply_markup=botones.teclado(bandeja_id, r.get("alternativa", "")),
+        text=f"{_formatear(bandeja_id, r, oido=oido)}\n\n<i>Guardado</i> ✅",
+        reply_markup=botones.teclado_deshacer(log_id),
         **responder,
     )
-    log.info(
-        "Interpretado #%s como %s%s", bandeja_id, clas,
-        f" (duda con {r['alternativa']})" if r.get("alternativa") else "",
-    )
+    log.info("Interpretado #%s como %s -> %s#%s (sin preguntar)",
+             bandeja_id, clas, tabla, registro_id)
 
 
 async def bucle(bot) -> None:

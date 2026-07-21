@@ -57,6 +57,19 @@ def teclado(bandeja_id: int, alternativa: str = "") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[ok, alt], [no]])
 
 
+def teclado_deshacer(log_id: int) -> InlineKeyboardMarkup:
+    """El botón que reemplaza a la confirmación previa.
+
+    Preguntar antes cuesta un toque SIEMPRE, incluso las veces —la mayoría—
+    en que Lucy acertó. Deshacer cuesta un toque solo cuando se equivocó. Con
+    log_acciones guardando el 'antes' de todo, equivocarse es barato, y eso es
+    lo que permite actuar sin pedir permiso.
+    """
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("↩️ Deshacer", callback_data=f"und:{log_id}")
+    ]])
+
+
 def teclado_orden(
     bandeja_id: int, candidatos: list[tuple[int, str]]
 ) -> InlineKeyboardMarkup:
@@ -121,6 +134,18 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Cortar el relojito de Telegram cuanto antes; si no, parece que se colgó.
     await q.answer()
 
+    # ── Deshacer: acá bandeja_id es en realidad el id de la huella ──────
+    if accion == "und":
+        try:
+            que = await crud.deshacer(bandeja_id)
+        except Exception as e:
+            log.exception("No pude deshacer la accion #%s", bandeja_id)
+            await q.answer(f"No pude deshacerlo: {e}"[:190], show_alert=True)
+            return
+        await _cerrar_tarjeta(q, f"↩️ <b>Deshecho</b> · revertí {que}")
+        log.info("Deshecha la accion #%s", bandeja_id)
+        return
+
     if accion == "no":
         if not await db.cambiar_estado(bandeja_id, "descartado", desde="esperando_confirmacion"):
             await _cerrar_tarjeta(q, "<i>(ya estaba resuelto)</i>")
@@ -149,11 +174,10 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                   f"{plan.get('resumen') or plan.get('accion')}")
         try:
             if plan.get("accion") == "borrar":
-                hecho = await crud.borrar(plan["tabla"], registro_id, motivo)
-                remate = ("🗑 <b>Archivado</b> · se puede deshacer"
-                          if hecho else "⚠️ Ya no estaba ahí")
+                log_id = await crud.borrar(plan["tabla"], registro_id, motivo)
+                remate = ("🗑 <b>Archivado</b>" if log_id else "⚠️ Ya no estaba ahí")
             else:
-                despues = await crud.editar(
+                despues, log_id = await crud.editar(
                     plan["tabla"], registro_id, plan.get("cambios") or {}, motivo)
                 remate = ("✅ <b>Hecho</b>" if despues else "⚠️ Ya no estaba ahí")
         except Exception as e:
@@ -162,7 +186,12 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await q.answer(f"No pude aplicarlo: {e}"[:190], show_alert=True)
             return
 
+        # Aunque haya pasado por la pregunta, igual queda el deshacer: elegir
+        # el candidato equivocado de una lista es fácil.
         await _cerrar_tarjeta(q, remate)
+        if log_id:
+            await q.message.reply_text(
+                "Si me equivoqué, tocá acá.", reply_markup=teclado_deshacer(log_id))
         log.info("Orden aplicada: %s %s#%s", plan.get("accion"),
                  plan.get("tabla"), registro_id)
         return
@@ -203,7 +232,7 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         interpretacion["clasificacion"] = elegida
 
     try:
-        tabla, registro_id = await crud.crear_desde_interpretacion(
+        tabla, registro_id, _log = await crud.crear_desde_interpretacion(
             bandeja_id, interpretacion, motivo=motivo
         )
     except crud.FaltanDatos as e:

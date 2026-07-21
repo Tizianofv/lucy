@@ -54,13 +54,19 @@ async def _registrar(
     despues: dict | None = None,
     motivo: str | None = None,
     bandeja_id: int | None = None,
-) -> None:
-    """Escribe la huella en log_acciones. Siempre dentro de la transacción."""
-    await conn.execute(
+) -> int:
+    """Escribe la huella en log_acciones. Siempre dentro de la transacción.
+
+    Devuelve el id de la huella: es el asa por la que después se agarra el
+    deshacer. Sin ese número, "deshacé lo último" tendría que adivinar qué
+    fue lo último.
+    """
+    cur = await conn.execute(
         """
         INSERT INTO log_acciones
           (actor, accion, tabla, registro_id, antes, despues, motivo, bandeja_id)
         VALUES ('lucy', %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
         """,
         (
             accion,
@@ -72,16 +78,18 @@ async def _registrar(
             bandeja_id,
         ),
     )
+    return (await cur.fetchone())[0]
 
 
 async def crear_desde_interpretacion(
     bandeja_id: int, r: dict, motivo: str | None = None
-) -> tuple[str, int]:
-    """Convierte una interpretación confirmada en una fila real.
+) -> tuple[str, int, int]:
+    """Convierte una interpretación en una fila real.
 
-    Devuelve (tabla, id). Lanza FaltanDatos si el mensaje no alcanza para
-    crear la entidad — pasa con una cita sin fecha o un gasto sin monto, que
-    son columnas NOT NULL a propósito: una cita sin cuándo no es una cita.
+    Devuelve (tabla, id, log_id). El log_id es lo que permite deshacerlo.
+    Lanza FaltanDatos si el mensaje no alcanza para crear la entidad — pasa
+    con una cita sin fecha o un gasto sin monto, que son columnas NOT NULL a
+    propósito: una cita sin cuándo no es una cita.
     """
     clas = r.get("clasificacion")
     cuando = _fecha(r.get("cuando"))
@@ -168,17 +176,17 @@ async def crear_desde_interpretacion(
             )
 
         registro_id = (await cur.fetchone())[0]
-        await _registrar(
+        log_id = await _registrar(
             conn,
             accion="crear",
             tabla=tabla,
             registro_id=registro_id,
             despues=r,
-            motivo=motivo or f"Confirmado por Tiziano desde la bandeja #{bandeja_id}",
+            motivo=motivo or f"Creado desde la bandeja #{bandeja_id}",
             bandeja_id=bandeja_id,
         )
 
-    return tabla, registro_id
+    return tabla, registro_id, log_id
 
 
 # Lo único que no se edita. Cambiar esto no habilitaría nada: rompería la
@@ -203,8 +211,8 @@ def _adaptar(v):
 
 async def editar(
     tabla: str, registro_id: int, cambios: dict, motivo: str
-) -> dict | None:
-    """Aplica cambios a una fila existente. Devuelve el 'después', o None.
+) -> tuple[dict | None, int | None]:
+    """Aplica cambios a una fila existente. Devuelve (después, log_id).
 
     Guarda el antes Y el después en el log: con eso, deshacer una edición es
     volver a escribir el 'antes', igual que con el borrado.
@@ -224,7 +232,7 @@ async def editar(
         )
         antes = await cur.fetchone()
         if antes is None:
-            return None
+            return None, None
 
         # Los nombres de columna se interpolan (no se pueden parametrizar), así
         # que se validan contra las columnas reales de la fila que acabamos de
@@ -241,19 +249,20 @@ async def editar(
         await cur.execute(f"SELECT * FROM {tabla} WHERE id = %s", (registro_id,))
         despues = await cur.fetchone()
 
-        await _registrar(
+        log_id = await _registrar(
             conn, accion="editar", tabla=tabla, registro_id=registro_id,
             antes=antes, despues=despues, motivo=motivo,
             bandeja_id=antes.get("bandeja_id"),
         )
-    return despues
+    return despues, log_id
 
 
-async def borrar(tabla: str, registro_id: int, motivo: str) -> bool:
+async def borrar(tabla: str, registro_id: int, motivo: str) -> int | None:
     """Soft-delete: marca borrado_en y guarda el 'antes' completo en el log.
 
-    Ese 'antes' ES el deshacer: restaurar la fila es volver a escribir lo que
-    quedó guardado ahí. Por eso nunca hay DELETE de verdad.
+    Devuelve el log_id, o None si no había nada que borrar. Ese 'antes' ES el
+    deshacer: restaurar la fila es volver a escribir lo que quedó guardado
+    ahí. Por eso nunca hay DELETE de verdad.
     """
     if tabla not in TABLAS:
         raise ValueError(f"Tabla no permitida: {tabla}")
@@ -266,12 +275,12 @@ async def borrar(tabla: str, registro_id: int, motivo: str) -> bool:
         )
         antes = await cur.fetchone()
         if antes is None:
-            return False  # no existe o ya estaba borrada
+            return None  # no existe o ya estaba borrada
 
         await conn.execute(
             f"UPDATE {tabla} SET borrado_en = now() WHERE id = %s", (registro_id,)
         )
-        await _registrar(
+        return await _registrar(
             conn,
             accion="borrar",
             tabla=tabla,
@@ -280,4 +289,64 @@ async def borrar(tabla: str, registro_id: int, motivo: str) -> bool:
             motivo=motivo,
             bandeja_id=antes.get("bandeja_id"),
         )
-    return True
+
+
+async def deshacer(log_id: int) -> str:
+    """Revierte una acción registrada. Devuelve una frase de qué se revirtió.
+
+    Es lo que permite que Lucy actúe sin preguntar: equivocarse deja de ser
+    caro. Preguntar antes cuesta un toque SIEMPRE; deshacer cuesta un toque
+    solo cuando se equivocó — y se equivoca poco.
+
+    Para revertir una edición se usa jsonb_populate_record, que le deja a
+    Postgres la conversión de tipos. Reescribir a mano un timestamptz o un
+    numeric desde el JSON del log sería reinventar —mal— algo que la base ya
+    hace bien.
+    """
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT accion, tabla, registro_id, antes FROM log_acciones WHERE id = %s",
+            (log_id,),
+        )
+        huella = await cur.fetchone()
+        if huella is None:
+            raise ValueError("No encuentro esa acción en el registro.")
+
+        tabla, registro_id = huella["tabla"], huella["registro_id"]
+        if tabla not in TABLAS:
+            raise ValueError(f"No sé deshacer cambios en {tabla}.")
+
+        if huella["accion"] == "crear":
+            await conn.execute(
+                f"UPDATE {tabla} SET borrado_en = now() "
+                f"WHERE id = %s AND borrado_en IS NULL", (registro_id,))
+            que = "lo que había creado"
+
+        elif huella["accion"] == "borrar":
+            await conn.execute(
+                f"UPDATE {tabla} SET borrado_en = NULL WHERE id = %s", (registro_id,))
+            que = "lo que había archivado"
+
+        elif huella["accion"] == "editar":
+            antes = huella["antes"] or {}
+            columnas = [c for c in antes if c not in NO_EDITABLES]
+            if not columnas:
+                raise ValueError("Esa edición no guardó con qué volver atrás.")
+            asignaciones = ", ".join(f"{c} = r.{c}" for c in columnas)
+            await conn.execute(
+                f"UPDATE {tabla} t SET {asignaciones} "
+                f"FROM jsonb_populate_record(null::{tabla}, %s) r WHERE t.id = %s",
+                (json.dumps(antes, default=str, ensure_ascii=False), registro_id))
+            que = "el cambio"
+
+        else:
+            raise ValueError(f"No sé deshacer una acción de tipo '{huella['accion']}'.")
+
+        # El deshacer también se registra: la historia no se reescribe, se
+        # agrega. Si no, el log mentiría diciendo que aquello nunca pasó.
+        await _registrar(
+            conn, accion="deshacer", tabla=tabla, registro_id=registro_id,
+            motivo=f"Tiziano deshizo la acción #{log_id} ({huella['accion']})",
+        )
+    return que
