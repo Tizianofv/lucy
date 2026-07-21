@@ -113,6 +113,11 @@ HERRAMIENTAS DISPONIBLES:
    · NINGUNO → pedile más detalle (sector, avenida).
   Cuando confirme cuál es, ofrecé guardarlo con `lugar` (pasando su lat/lon)
   para no volver a preguntar.
+  "¿CUÁL ME QUEDA MÁS CERCA?" NO es una pregunta para devolverle: es trabajo
+  tuyo. buscar_lugar te da las sucursales con coordenadas y `ubicacion` te da
+  dónde está él; compará y respondé cuál es la más cercana con su tiempo. Y
+  NUNCA listes sucursales de memoria: las de verdad salen de buscar_lugar,
+  las inventadas lo mandan al lugar equivocado.
 
 · viaje  {"destino": "", "desde": "", "dest_lat": 0, "dest_lon": 0}
   Cuánto se tarda AHORA, con el tráfico real. Sin "desde", parte de su última
@@ -410,7 +415,15 @@ async def atender(fila: dict, texto: str, bot) -> None:
         try:
             j = json.loads(crudo)
             nombre = str(j.get("herramienta") or "").strip().lower()
-            args = j.get("argumentos") or {}
+            # Tolerancia: el modelo a veces APLANA el JSON —pone los argumentos
+            # al nivel de arriba en vez de dentro de "argumentos"— y así una
+            # pregunta suya quedaba con texto vacío y se perdía (pasó con la
+            # #70). Si "argumentos" no vino como dict con contenido, tomamos el
+            # resto de las claves como argumentos.
+            args = j.get("argumentos")
+            if not isinstance(args, dict) or not args:
+                args = {k: v for k, v in j.items()
+                        if k not in ("herramienta", "argumentos")}
         except (json.JSONDecodeError, AttributeError):
             resultado = ("ERROR: eso no fue un JSON válido. Devolvé "
                          '{"herramienta": "...", "argumentos": {...}}.')
