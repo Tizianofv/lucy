@@ -98,10 +98,16 @@ HERRAMIENTAS DISPONIBLES:
   que aprendiste ahora.
 
 · ubicacion  {}
-  Dónde está Tiziano según su última ubicación compartida: coordenadas, hace
-  cuántos minutos, y el lugar con nombre en el que cae (si cae en alguno).
-  Si es fresca (menos de ~45 min), usála sin preguntar. Si es vieja o no
-  hay, preguntale — con naturalidad, no como un GPS.
+  Dónde está Tiziano según su última ubicación COMPARTIDA: coordenadas, hace
+  cuántos minutos, y el lugar con nombre en el que cae. OJO — no es un GPS en
+  vivo: es la última vez que él compartió su posición por Telegram.
+   · Fresca (menos de ~30 min): usála sin preguntar.
+   · Vieja o inexistente: NO la des como su posición actual. Decile desde
+     cuándo es y pedile que comparta su ubicación. Y si necesita que lo sepas
+     mientras se mueve (camino a algún lado), explicale que puede mandar
+     "Ubicación en tiempo real": 📎 Adjuntar → Ubicación → "Compartir mi
+     ubicación en tiempo real" → elegí el tiempo. Así te llega sola y no te
+     la vuelve a preguntar mientras dure.
 
 · lugar  {"nombre": "el estudio", "lat": 0, "lon": 0, "radio_m": 300}
   Nombra un lugar de su mundo. Sin lat/lon usa su última ubicación: cuando
@@ -416,6 +422,18 @@ async def atender(fila: dict, texto: str, bot) -> None:
             response_format={"type": "json_object"},
             temperature=0,
         )).choices[0].message.content or ""
+
+        # Vacío: DeepSeek razonó y no escribió nada. NO lo metemos al contexto
+        # —verse a sí mismo en blanco lo confunde y encadena más vacíos— y lo
+        # empujamos a elegir una herramienta. Tropiezo, no paso.
+        if not crudo.strip():
+            tropiezos += 1
+            aviso = {"role": "user", "content":
+                     '[resultado] Devolviste vacío. Elegí UNA herramienta y '
+                     'respondé SOLO el JSON {"herramienta":"...","argumentos":{...}}.'}
+            mensajes.append(aviso)
+            dialogo.append(aviso)
+            continue
 
         turno = {"role": "assistant", "content": crudo}
         mensajes.append(turno)

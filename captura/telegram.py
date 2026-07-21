@@ -73,9 +73,16 @@ async def recibir_ubicacion(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
     if not es_latido:
         if loc.live_period:
-            await msg.reply_text("📍 Te sigo mientras compartas la ubicación.")
+            await msg.reply_text(
+                "📍 Ubicación en vivo activa — te sigo mientras dure.")
         else:
-            await msg.reply_text("📍 Anotado dónde estás.")
+            # Un pin es una foto del momento: aclaramos que no es seguimiento,
+            # para que no crea que Lucy lo verá moverse (fue la confusión de
+            # Tiziano el 21-jul).
+            await msg.reply_text(
+                "📍 Anoté dónde estás ahora. (Si querés que te siga mientras "
+                "te movés, mandá *Ubicación en tiempo real* desde 📎.)",
+                parse_mode="Markdown")
 
 
 async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
