@@ -160,7 +160,8 @@ async def crear_desde_interpretacion(
                 """,
                 (bandeja_id, clas, (cuando or datetime.now(TZ)).date(),
                  abs(float(r["monto"])), str(r.get("moneda") or "DOP"),
-                 str(r.get("lugar") or r.get("persona") or "") or None,
+                 str(r.get("contraparte") or r.get("lugar")
+                     or r.get("persona") or "") or None,
                  str(r.get("referencia") or "") or None,
                  persona_id, proyecto_id, detalle),
             )

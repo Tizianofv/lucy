@@ -20,6 +20,7 @@ import openai
 import telegram.error
 
 import acciones.botones as botones
+import cerebro.consultar as consultar
 import cerebro.deepseek as motor
 import cerebro.vision as vision
 import cerebro.whisper as whisper
@@ -237,16 +238,38 @@ async def _procesar(fila: dict, bot) -> None:
         log.info("Charla #%s", bandeja_id)
         return
 
-    # ── Pregunta: todavía no sabemos responderla ────────────────────────
-    # Decirlo es mejor que fingir. Consultar la agenda en lenguaje natural es
-    # el req 10 y todavía no está; inventar una respuesta sería peor que nada.
+    # ── Pregunta: se consulta la base y se responde ─────────────────────
+    # La respuesta va sin parse_mode: la escribe un modelo y podría traer un
+    # "<" o un "&" en el nombre de un comercio. Con HTML activo, eso haría que
+    # Telegram rechazara el mensaje entero y la respuesta se perdiera.
     if clas == "pregunta":
+        plano = {k: v for k, v in responder.items() if k != "parse_mode"}
+        try:
+            res = await consultar.responder(texto)
+        except Exception as e:
+            if _es_pasajero(e):
+                await _fallo(fila, e, bot)  # cuota o red: vuelve a la cola
+                return
+            log.exception("No pude consultar para #%s", bandeja_id)
+            await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
+            await bot.send_message(
+                text="❓ Entendí la pregunta pero me tropecé armando la consulta. "
+                     "Probá diciéndomelo de otra forma.",
+                **plano,
+            )
+            return
+
+        # El SQL queda guardado con la interpretación: si mañana Tiziano
+        # pregunta por qué contestó eso, la respuesta es auditable (req 36).
+        r["consulta_sql"] = res.get("sql")
+        r["consulta_explicacion"] = res.get("explicacion")
         await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
-        aviso = "❓ Te entendí, pero todavía no sé consultar tus datos para responderte."
+
+        salida = res["texto"]
         if oido:
-            aviso = f"🎙 <i>«{escape(oido)}»</i>\n\n{aviso}"
-        await bot.send_message(text=aviso, **responder)
-        log.info("Pregunta #%s (sin capacidad de consulta aún)", bandeja_id)
+            salida = f"🎙 «{oido}»\n\n{salida}"
+        await bot.send_message(text=salida, **plano)
+        log.info("Pregunta #%s respondida", bandeja_id)
         return
 
     # ── Lo demás sí se puede convertir en una fila: tarjeta + botones ────

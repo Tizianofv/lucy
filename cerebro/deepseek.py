@@ -94,6 +94,9 @@ Devolvés SOLO un objeto JSON con exactamente estas claves:
          lo dice la clasificación, no el signo.
   moneda: SOLO si es "gasto" o "ingreso" (por defecto "DOP"); si no, ""
   referencia: No. de confirmación, comprobante o factura si aparece; si no, ""
+  contraparte: SOLO en "gasto" o "ingreso" — el comercio donde gastó, o quién
+               le pagó/transfirió (en un comprobante, el ORIGEN cuando la
+               plata entra). "" si no aplica.
   supuestos: lista de strings — lo que dedujiste sin que te lo dijeran, en
              primera persona ("asumí que...")
   falta: lista de strings — solo datos CRÍTICOS ausentes que ameriten preguntar
