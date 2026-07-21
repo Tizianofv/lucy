@@ -99,6 +99,8 @@ CREATE TABLE eventos (
   proyecto_id  BIGINT REFERENCES proyectos(id),
   notas        TEXT,
   avisado_en   TIMESTAMPTZ,                      -- el despertador ya avisó (1 sola vez)
+  preaviso_en  TIMESTAMPTZ,                      -- ya se preguntó "¿desde dónde salís?"
+                                                 --   (solo citas con lugar, ~2h antes)
   borrado_en   TIMESTAMPTZ
 );
 

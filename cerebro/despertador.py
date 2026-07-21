@@ -36,6 +36,24 @@ log = logging.getLogger("lucy.despertador")
 # pero nunca después de la hora sin decir nada.
 ANTICIPO_MIN = 30
 
+# Cuánto antes se PREPARA una cita con lugar: la pregunta de salida ("¿desde
+# dónde vas a salir?") sale con este margen, para que dé tiempo a calcular la
+# hora de arrancar y crear el recordatorio de salida. Pedido de Tiziano,
+# 21-jul: "si tengo una reunión a las 3, dos horas antes debería preguntarme
+# dónde estoy".
+PREAVISO_MIN = 120
+
+
+async def _avisar(bot, texto: str) -> None:
+    """Manda el aviso Y lo deja en la bandeja como parte de la conversación.
+
+    Sin el registro, el próximo mensaje de Tiziano ("salgo del estudio")
+    llegaría al agente sin la pregunta que lo causó: proactividad que rompe
+    el hilo en vez de empezarlo.
+    """
+    await bot.send_message(chat_id=config.CHAT_ID_DUENO, text=texto[:4000])
+    await db.registrar_aviso(config.CHAT_ID_DUENO, texto)
+
 
 async def revisar(bot) -> int:
     """Busca lo que está por vencer, avisa, y marca. Devuelve cuántos avisos.
@@ -81,7 +99,7 @@ async def revisar(bot) -> int:
             # "en -40 min" sería ridículo; la honestidad suena distinto:
             texto = f"⏰ Ojo, esto venció a las {hora}: {f['titulo']}"
 
-        await bot.send_message(chat_id=config.CHAT_ID_DUENO, text=texto)
+        await _avisar(bot, texto)
 
         async with db.pool.connection() as conn:
             await conn.execute(
@@ -96,4 +114,49 @@ async def revisar(bot) -> int:
         avisos += 1
         log.info("Aviso enviado: %s#%s (%s)", f["tabla"], f["id"], f["titulo"])
 
+    avisos += await _preparar_salidas(bot)
     return avisos
+
+
+async def _preparar_salidas(bot) -> int:
+    """La pregunta de salida: citas con lugar se preparan ~2h antes (req 26).
+
+    El despertador solo abre la conversación ("¿desde dónde vas a salir?");
+    el cálculo de la salida y el recordatorio los arma el AGENTE cuando
+    Tiziano contesta — él tiene la ventana, las herramientas y el criterio.
+    Cada pieza en su oficio: este módulo mira el reloj, el agente piensa.
+    """
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT id, titulo, lugar, inicia_en
+              FROM eventos
+             WHERE borrado_en IS NULL AND preaviso_en IS NULL
+               AND lugar IS NOT NULL AND lugar <> ''
+               AND inicia_en >  now() + make_interval(mins => %s)
+               AND inicia_en <= now() + make_interval(mins => %s)
+             ORDER BY inicia_en
+            """,
+            (ANTICIPO_MIN + 5, PREAVISO_MIN),
+        )
+        filas = await cur.fetchall()
+
+    for f in filas:
+        hora = f["inicia_en"].astimezone(TZ).strftime("%I:%M %p").lstrip("0")
+        texto = (f"📍 A las {hora} tenés: {f['titulo']} en {f['lugar']}. "
+                 f"¿Desde dónde vas a salir? Decime y te aviso a qué hora "
+                 f"arrancar para llegar bien.")
+        await _avisar(bot, texto)
+
+        async with db.pool.connection() as conn:
+            await conn.execute(
+                "UPDATE eventos SET preaviso_en = now() WHERE id = %s", (f["id"],))
+            await crud._registrar(
+                conn, accion="avisar", tabla="eventos", registro_id=f["id"],
+                motivo=f"Pregunta de salida enviada: {f['titulo']} en "
+                       f"{f['lugar']} ({hora})",
+            )
+        log.info("Pregunta de salida: eventos#%s (%s)", f["id"], f["titulo"])
+
+    return len(filas)

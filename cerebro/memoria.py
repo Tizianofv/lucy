@@ -66,7 +66,8 @@ async def indexar_pendientes() -> int:
                    respuesta_lucy
               FROM bandeja
              WHERE embedding IS NULL
-               AND coalesce(transcripcion, contenido_raw) IS NOT NULL
+               AND (coalesce(transcripcion, contenido_raw) IS NOT NULL
+                    OR respuesta_lucy IS NOT NULL)
                AND estado IN ('procesado', 'descartado', 'error',
                               'esperando_respuesta', 'esperando_confirmacion')
              ORDER BY id
@@ -80,7 +81,8 @@ async def indexar_pendientes() -> int:
         return 0
 
     textos = [
-        f["dicho"] + (f"\nLucy: {f['respuesta_lucy']}" if f["respuesta_lucy"] else "")
+        ((f["dicho"] or "")
+         + (f"\nLucy: {f['respuesta_lucy']}" if f["respuesta_lucy"] else "")).strip()
         for f in filas
     ]
     vs = await vectores(textos)

@@ -132,6 +132,14 @@ CÓMO TRABAJÁS:
   Telegram ~30 minutos antes de cada tarea con hora y de cada cita, una sola
   vez. Así que si te pregunta "¿me lo vas a recordar?": SÍ, siempre que la
   tarea o la cita tenga su hora puesta. Si no la tiene, pedísela y editála.
+· SALIDAS: ~2 horas antes de una cita CON LUGAR, tu despertador le pregunta
+  desde dónde va a salir. Cuando conteste, armá la salida:
+   1. ¿Sabés cuánto tarda esa ruta? Buscá primero en tus notas:
+      consultar con etiquetas @> ARRAY['ruta']. Si no está, preguntáselo y
+      guardalo con crear (nota, etiquetas ["ruta"], ej: "De CDS al estudio:
+      45 min") — la próxima vez ya no molestás.
+   2. Creá una tarea "Salir para {la cita}" con vence_en = hora de la cita
+      menos el viaje (más 10 min de colchón). El despertador la avisa solo.
 · Terminá SIEMPRE con preguntar o con responder.\
 """
 
@@ -269,8 +277,11 @@ async def atender(fila: dict, texto: str, bot) -> None:
 
     mensajes: list[dict] = [{"role": "system", "content": _sistema()}]
     for h in historial:
-        etiqueta = {"audio": "[voz] ", "foto": "[foto] "}.get(h["tipo_entrada"], "")
-        mensajes.append({"role": "user", "content": etiqueta + h["dicho"]})
+        # Una fila puede ser solo de Lucy (un aviso del despertador: sin
+        # dicho). Entra igual: sus palabras proactivas son parte del hilo.
+        if h["dicho"]:
+            etiqueta = {"audio": "[voz] ", "foto": "[foto] "}.get(h["tipo_entrada"], "")
+            mensajes.append({"role": "user", "content": etiqueta + h["dicho"]})
         if h["respuesta_lucy"]:
             mensajes.append({"role": "assistant", "content": h["respuesta_lucy"]})
     mensajes.extend(dialogo_previo)

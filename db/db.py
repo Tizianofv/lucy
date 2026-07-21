@@ -207,6 +207,12 @@ async def ultimos_intercambios(
 
     Es la memoria corta del agente (req 11). Se excluyen las filas que ya
     viajan aparte en el contexto (la actual y la pendiente) para no duplicar.
+
+    Entran también las filas donde solo habló Lucy (los avisos del
+    despertador: dicho NULL, respuesta_lucy con texto). Sin ellas, si Lucy
+    pregunta "¿desde dónde salís?" y Tiziano contesta "del estudio", el
+    agente vería la respuesta sin la pregunta — proactividad que rompe la
+    conversación en vez de empezarla.
     """
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -218,7 +224,8 @@ async def ultimos_intercambios(
               FROM bandeja
              WHERE chat_id = %s
                AND NOT (id = ANY(%s))
-               AND coalesce(transcripcion, contenido_raw) IS NOT NULL
+               AND (coalesce(transcripcion, contenido_raw) IS NOT NULL
+                    OR respuesta_lucy IS NOT NULL)
              ORDER BY id DESC
              LIMIT %s
             """,
@@ -226,6 +233,27 @@ async def ultimos_intercambios(
         )
         filas = await cur.fetchall()
     return list(reversed(filas))
+
+
+async def registrar_aviso(chat_id: int, texto: str) -> int:
+    """Deja constancia en la bandeja de algo que Lucy dijo POR SU CUENTA.
+
+    Los avisos del despertador entran a la conversación como una fila más
+    (origen 'despertador', sin dicho, con respuesta_lucy): así la memoria
+    corta y la de largo plazo los ven igual que a cualquier otro intercambio.
+    Lo que Lucy dice proactivamente también es parte de la historia.
+    """
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            INSERT INTO bandeja
+              (origen, tipo_entrada, chat_id, estado, respuesta_lucy, procesado_en)
+            VALUES ('despertador', 'aviso', %s, 'procesado', %s, now())
+            RETURNING id
+            """,
+            (chat_id, texto[:4000]),
+        )
+        return (await cur.fetchone())[0]
 
 
 async def buscar_esperando_respuesta(chat_id: int, excluir_id: int) -> dict | None:
