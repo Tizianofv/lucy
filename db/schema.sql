@@ -137,6 +137,29 @@ CREATE TABLE movimientos (
 );
 CREATE INDEX idx_movimientos_fecha ON movimientos(fecha);
 
+-- ═══ Dónde está Tiziano (reqs 22/26: salidas sin preguntar) ═══
+-- Cada pin o ubicación en vivo que comparte por Telegram cae acá. La última
+-- fila fresca es "dónde está"; si es vieja, el agente pregunta como siempre.
+CREATE TABLE ubicaciones (
+  id       BIGSERIAL PRIMARY KEY,
+  ts       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  lat      DOUBLE PRECISION NOT NULL,
+  lon      DOUBLE PRECISION NOT NULL,
+  en_vivo  BOOLEAN NOT NULL DEFAULT false   -- true = actualización de ubicación en vivo
+);
+
+-- Los lugares con nombre de su vida ("CDS", "el estudio", "casa"): son lo que
+-- convierte unas coordenadas en un dato con significado.
+CREATE TABLE lugares (
+  id         BIGSERIAL PRIMARY KEY,
+  creado_en  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  nombre     TEXT NOT NULL,
+  lat        DOUBLE PRECISION NOT NULL,
+  lon        DOUBLE PRECISION NOT NULL,
+  radio_m    INT NOT NULL DEFAULT 300,      -- dentro de este radio "está ahí"
+  borrado_en TIMESTAMPTZ
+);
+
 -- ═══ Todo lo que Lucy hace, queda escrito (pilares + Nivel 7 desde el día 1) ═══
 CREATE TABLE log_acciones (
   id          BIGSERIAL PRIMARY KEY,

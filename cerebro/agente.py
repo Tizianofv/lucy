@@ -89,6 +89,18 @@ HERRAMIENTAS DISPONIBLES:
   suman, las notas se agregan con fecha, nada se pisa. Mandá solo los campos
   que aprendiste ahora.
 
+· ubicacion  {}
+  Dónde está Tiziano según su última ubicación compartida: coordenadas, hace
+  cuántos minutos, y el lugar con nombre en el que cae (si cae en alguno).
+  Si es fresca (menos de ~45 min), usála sin preguntar. Si es vieja o no
+  hay, preguntale — con naturalidad, no como un GPS.
+
+· lugar  {"nombre": "el estudio", "lat": 0, "lon": 0, "radio_m": 300}
+  Nombra un lugar de su mundo. Sin lat/lon usa su última ubicación: cuando
+  diga "estoy en el estudio" (y haya pin reciente) o "guardá este lugar
+  como X", esta es la herramienta. Los lugares con nombre son lo que vuelve
+  útil la ubicación.
+
 · recordar  {"texto": "lo que acordamos del depósito", "n": 5}
   Busca por SIGNIFICADO en todo lo que se han dicho (tus respuestas
   incluidas). Para "¿qué te dije de...?", "¿cuándo hablamos de...?" y todo
@@ -132,14 +144,22 @@ CÓMO TRABAJÁS:
   Telegram ~30 minutos antes de cada tarea con hora y de cada cita, una sola
   vez. Así que si te pregunta "¿me lo vas a recordar?": SÍ, siempre que la
   tarea o la cita tenga su hora puesta. Si no la tiene, pedísela y editála.
-· SALIDAS: ~2 horas antes de una cita CON LUGAR, tu despertador le pregunta
-  desde dónde va a salir. Cuando conteste, armá la salida:
-   1. ¿Sabés cuánto tarda esa ruta? Buscá primero en tus notas:
-      consultar con etiquetas @> ARRAY['ruta']. Si no está, preguntáselo y
-      guardalo con crear (nota, etiquetas ["ruta"], ej: "De CDS al estudio:
-      45 min") — la próxima vez ya no molestás.
-   2. Creá una tarea "Salir para {la cita}" con vence_en = hora de la cita
-      menos el viaje (más 10 min de colchón). El despertador la avisa solo.
+· Los mensajes [sistema] son ENCARGOS DE TU PROPIA MAQUINARIA (el
+  despertador), no de Tiziano. Hacé el trabajo con tus herramientas y usá
+  responder para decirle a él SOLO el resultado útil — o preguntar si de
+  verdad falta algo.
+· SALIDAS (el encargo [sistema] típico): ~2h antes de una cita CON LUGAR te
+  llega "prepará la salida". La regla de oro: RESOLVÉ CON LO QUE YA SABÉS y
+  preguntá únicamente lo que falte de verdad:
+   1. ¿Desde dónde sale? → ubicacion. Fresca y con lugar con nombre: listo.
+      Vieja, sin lugar o sin datos: preguntale.
+   2. ¿Cuánto tarda? → consultar notas con etiquetas @> ARRAY['ruta']. Si no
+      hay ruta guardada, preguntáselo UNA vez y guardala con crear (nota,
+      etiquetas ["ruta"], ej: "De CDS al estudio: 45 min").
+   3. Creá la tarea "Salir para {la cita}" con vence_en = hora de la cita
+      menos el viaje menos 10 min de colchón, y avisale en una línea:
+      "Salí 2:05 desde CDS para llegar a las 3". El despertador la recuerda.
+  Con todo a mano, CERO preguntas: ese es el estándar.
 · Terminá SIEMPRE con preguntar o con responder.\
 """
 
@@ -208,6 +228,28 @@ async def _ejecutar_herramienta(
             que = await crud.deshacer(int(args.get("accion") or 0))
             return f"OK: revertí {que}."
 
+        if nombre == "ubicacion":
+            u = await db.ultima_ubicacion()
+            if u is None:
+                return ("No hay ninguna ubicación compartida todavía. "
+                        "Habría que pedirle un pin.")
+            donde = f"dentro de '{u['lugar']}'" if u["lugar"] else \
+                "en un punto sin lugar con nombre"
+            return (f"Hace {u['hace_min']} min estaba {donde} "
+                    f"(lat {u['lat']:.5f}, lon {u['lon']:.5f}"
+                    f"{', ubicación en vivo' if u['en_vivo'] else ''}).")
+
+        if nombre == "lugar":
+            resultado, log_id = await crud.guardar_lugar(
+                str(args.get("nombre") or ""),
+                lat=args.get("lat") or None,
+                lon=args.get("lon") or None,
+                radio_m=args.get("radio_m") or None,
+            )
+            if log_id:
+                acciones.append(log_id)
+            return resultado
+
         if nombre == "perfil":
             resultado, log_id = await crud.perfil(
                 str(args.get("tipo") or ""),
@@ -234,7 +276,7 @@ async def _ejecutar_herramienta(
 
         return (f"ERROR: no existe la herramienta '{nombre}'. Las que hay: "
                 "consultar, crear, editar, archivar, deshacer, perfil, "
-                "recordar, preguntar, responder.")
+                "ubicacion, lugar, recordar, preguntar, responder.")
 
     except crud.FaltanDatos as e:
         return f"ERROR: me falta {e}. Preguntáselo a Tiziano."
@@ -280,13 +322,15 @@ async def atender(fila: dict, texto: str, bot) -> None:
         # Una fila puede ser solo de Lucy (un aviso del despertador: sin
         # dicho). Entra igual: sus palabras proactivas son parte del hilo.
         if h["dicho"]:
-            etiqueta = {"audio": "[voz] ", "foto": "[foto] "}.get(h["tipo_entrada"], "")
+            etiqueta = {"audio": "[voz] ", "foto": "[foto] ",
+                        "sistema": "[sistema] "}.get(h["tipo_entrada"], "")
             mensajes.append({"role": "user", "content": etiqueta + h["dicho"]})
         if h["respuesta_lucy"]:
             mensajes.append({"role": "assistant", "content": h["respuesta_lucy"]})
     mensajes.extend(dialogo_previo)
 
-    etiqueta = {"audio": "[voz] ", "foto": "[foto] "}.get(fila["tipo_entrada"], "")
+    etiqueta = {"audio": "[voz] ", "foto": "[foto] ",
+                "sistema": "[sistema] "}.get(fila["tipo_entrada"], "")
     actual = {"role": "user", "content": etiqueta + texto}
     mensajes.append(actual)
 

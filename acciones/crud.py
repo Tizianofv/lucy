@@ -25,7 +25,8 @@ from config import TZ
 # parametrizar), así que nunca pueden venir de afuera sin pasar por acá.
 # personas y proyectos entraron con el perfil vivo (req 12): antes el agente
 # no podía editarlos y el "perfil" era una tabla que nadie alimentaba.
-TABLAS = ("tareas", "eventos", "notas", "movimientos", "personas", "proyectos")
+TABLAS = ("tareas", "eventos", "notas", "movimientos", "personas", "proyectos",
+          "lugares")
 
 
 class FaltanDatos(Exception):
@@ -368,6 +369,59 @@ async def perfil(
     )
     return (f"OK: perfil de '{fila['nombre']}' actualizado "
             f"({', '.join(cambios)}).", log_id)
+
+
+async def guardar_lugar(
+    nombre: str,
+    lat: float | None = None,
+    lon: float | None = None,
+    radio_m: int | None = None,
+) -> tuple[str, int | None]:
+    """Nombra un lugar del mundo de Tiziano ("CDS", "el estudio", "casa").
+
+    Sin coordenadas usa la última ubicación compartida: el gesto natural es
+    "estoy en el estudio" + un pin, o el pin primero y el nombre después.
+    Si el lugar ya existía, actualiza sus coordenadas (se mudó, o el pin
+    viejo era malo) — el log guarda el antes, como siempre.
+    """
+    nombre = (nombre or "").strip()
+    if not nombre:
+        raise ValueError("Sin nombre no hay lugar.")
+
+    if lat is None or lon is None:
+        u = await db.ultima_ubicacion()
+        if u is None:
+            raise ValueError(
+                "no tengo ninguna ubicación suya; pedile que comparta un pin.")
+        lat, lon = u["lat"], u["lon"]
+
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT * FROM lugares WHERE borrado_en IS NULL "
+            "AND lower(nombre) = lower(%s) LIMIT 1", (nombre,))
+        fila = await cur.fetchone()
+
+    if fila is not None:
+        cambios: dict = {"lat": lat, "lon": lon}
+        if radio_m:
+            cambios["radio_m"] = int(radio_m)
+        _, log_id = await editar(
+            "lugares", fila["id"], cambios,
+            motivo=f"Lugar '{fila['nombre']}' reubicado")
+        return f"OK: lugar '{fila['nombre']}' actualizado.", log_id
+
+    async with db.pool.connection() as conn:
+        cur = await conn.execute(
+            """INSERT INTO lugares (nombre, lat, lon, radio_m)
+               VALUES (%s, %s, %s, %s) RETURNING id""",
+            (nombre, lat, lon, int(radio_m or 300)))
+        rid = (await cur.fetchone())[0]
+        log_id = await _registrar(
+            conn, accion="crear", tabla="lugares", registro_id=rid,
+            despues={"nombre": nombre, "lat": lat, "lon": lon},
+            motivo=f"Lugar nuevo: {nombre}")
+    return f"OK: lugar '{nombre}' guardado (#{rid}).", log_id
 
 
 async def borrar(tabla: str, registro_id: int, motivo: str) -> int | None:

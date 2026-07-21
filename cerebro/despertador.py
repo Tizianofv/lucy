@@ -119,11 +119,16 @@ async def revisar(bot) -> int:
 
 
 async def _preparar_salidas(bot) -> int:
-    """La pregunta de salida: citas con lugar se preparan ~2h antes (req 26).
+    """Citas con lugar se preparan ~2h antes (reqs 22/26) — SIN preguntar.
 
-    El despertador solo abre la conversación ("¿desde dónde vas a salir?");
-    el cálculo de la salida y el recordatorio los arma el AGENTE cuando
-    Tiziano contesta — él tiene la ventana, las herramientas y el criterio.
+    El despertador no le habla a Tiziano: le deja un ENCARGO al agente en la
+    bandeja (tipo 'sistema'). El agente lo toma como cualquier mensaje, junta
+    lo que ya sabe —última ubicación, lugares con nombre, rutas guardadas—
+    y le habla a Tiziano una sola vez, con la respuesta: "salí 2:05 desde
+    CDS". Solo pregunta si de verdad le falta algo. Pedido explícito de
+    Tiziano (21-jul): "debería decírmelo por su cuenta, sin que yo tenga que
+    responder ninguna pregunta; si le falta algo, que pregunte como siempre".
+
     Cada pieza en su oficio: este módulo mira el reloj, el agente piensa.
     """
     async with db.pool.connection() as conn:
@@ -144,19 +149,28 @@ async def _preparar_salidas(bot) -> int:
 
     for f in filas:
         hora = f["inicia_en"].astimezone(TZ).strftime("%I:%M %p").lstrip("0")
-        texto = (f"📍 A las {hora} tenés: {f['titulo']} en {f['lugar']}. "
-                 f"¿Desde dónde vas a salir? Decime y te aviso a qué hora "
-                 f"arrancar para llegar bien.")
-        await _avisar(bot, texto)
+        encargo = (
+            f"Prepará la salida para la cita #{f['id']}: «{f['titulo']}» en "
+            f"{f['lugar']} a las {hora}. Averiguá desde dónde sale (ubicacion "
+            f"/ lugares) y cuánto tarda (notas con etiqueta 'ruta'); creá la "
+            f"tarea «Salir para {f['titulo']}» a la hora correcta y avisale "
+            f"en una línea. Si tenés todo, no le preguntes nada."
+        )
+        await db.guardar_en_bandeja(
+            tipo_entrada="sistema",
+            contenido_raw=encargo,
+            chat_id=config.CHAT_ID_DUENO,
+            origen="despertador",
+        )
 
         async with db.pool.connection() as conn:
             await conn.execute(
                 "UPDATE eventos SET preaviso_en = now() WHERE id = %s", (f["id"],))
             await crud._registrar(
                 conn, accion="avisar", tabla="eventos", registro_id=f["id"],
-                motivo=f"Pregunta de salida enviada: {f['titulo']} en "
+                motivo=f"Encargo de salida al agente: {f['titulo']} en "
                        f"{f['lugar']} ({hora})",
             )
-        log.info("Pregunta de salida: eventos#%s (%s)", f["id"], f["titulo"])
+        log.info("Encargo de salida: eventos#%s (%s)", f["id"], f["titulo"])
 
     return len(filas)

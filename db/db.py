@@ -37,6 +37,7 @@ async def guardar_en_bandeja(
     archivo_id: str | None = None,
     chat_id: int | None = None,
     telegram_msg_id: int | None = None,
+    origen: str = "telegram",
 ) -> int:
     """Guarda un mensaje crudo en la bandeja y devuelve su id.
 
@@ -58,21 +59,22 @@ async def guardar_en_bandeja(
             """
             INSERT INTO bandeja
               (tipo_entrada, contenido_raw, archivo_id, chat_id,
-               telegram_msg_id, hash_contenido)
-            VALUES (%s, %s, %s, %s, %s, %s)
+               telegram_msg_id, hash_contenido, origen)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (chat_id, telegram_msg_id) DO UPDATE
               SET contenido_raw = EXCLUDED.contenido_raw
             RETURNING id
             """,
             (tipo_entrada, contenido_raw, archivo_id, chat_id,
-             telegram_msg_id, hash_contenido),
+             telegram_msg_id, hash_contenido, origen),
         )
         row = await cur.fetchone()
         return row[0]
 
 
 async def tomar_pendientes(
-    tipos: tuple[str, ...] = ("texto", "audio", "foto"), limite: int = 5
+    tipos: tuple[str, ...] = ("texto", "audio", "foto", "sistema"),
+    limite: int = 5,
 ) -> list[dict]:
     """Reclama filas sin procesar y las marca 'procesando' en un solo paso.
 
@@ -233,6 +235,47 @@ async def ultimos_intercambios(
         )
         filas = await cur.fetchall()
     return list(reversed(filas))
+
+
+async def guardar_ubicacion(lat: float, lon: float, en_vivo: bool) -> None:
+    """Cada pin o latido de ubicación en vivo cae acá. Captura pura, sin IA."""
+    async with pool.connection() as conn:
+        await conn.execute(
+            "INSERT INTO ubicaciones (lat, lon, en_vivo) VALUES (%s, %s, %s)",
+            (lat, lon, en_vivo),
+        )
+
+
+async def ultima_ubicacion() -> dict | None:
+    """La última posición conocida, con su edad en minutos y el lugar con
+    nombre en el que cae (si cae en alguno).
+
+    La distancia usa la aproximación equirectangular, que a escala de una
+    ciudad erra por centímetros: Haversine acá sería precisión de avión para
+    un problema de motoconcho.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT u.lat, u.lon, u.en_vivo,
+                   round(extract(epoch FROM (now() - u.ts)) / 60)::int AS hace_min,
+                   (SELECT l.nombre FROM lugares l
+                     WHERE l.borrado_en IS NULL
+                       AND 111320 * sqrt(
+                             pow(l.lat - u.lat, 2) +
+                             pow((l.lon - u.lon) * cos(radians(u.lat)), 2)
+                           ) <= l.radio_m
+                     ORDER BY 111320 * sqrt(
+                             pow(l.lat - u.lat, 2) +
+                             pow((l.lon - u.lon) * cos(radians(u.lat)), 2))
+                     LIMIT 1) AS lugar
+              FROM ubicaciones u
+             ORDER BY u.ts DESC
+             LIMIT 1
+            """
+        )
+        return await cur.fetchone()
 
 
 async def registrar_aviso(chat_id: int, texto: str) -> int:
