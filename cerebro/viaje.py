@@ -95,9 +95,16 @@ async def calcular(destino: str, desde: str | None = None) -> str:
         )
 
     if r.status_code != 200:
-        log.warning("Routes API %s: %s", r.status_code, r.text[:300])
-        return (f"ERROR: Maps respondió {r.status_code}. Usá la ruta guardada "
-                f"en notas o preguntale a Tiziano.")
+        # El motivo de Google viaja en el cuerpo. Un "403" pelado no le dice
+        # nada a nadie; "403: facturación deshabilitada" le dice a Tiziano
+        # exactamente qué botón le faltó tocar en Google Cloud.
+        try:
+            motivo = (r.json().get("error") or {}).get("message") or r.text[:150]
+        except Exception:
+            motivo = r.text[:150]
+        log.warning("Routes API %s: %s", r.status_code, motivo)
+        return (f"ERROR: Maps respondió {r.status_code}: {motivo[:200]} — "
+                f"usá la ruta guardada en notas o preguntale a Tiziano.")
 
     rutas = (r.json() or {}).get("routes") or []
     if not rutas:

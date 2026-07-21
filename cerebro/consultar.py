@@ -70,6 +70,13 @@ movimientos — TODA la plata, entre o salga.
 personas — gente de su vida.
   id, creado_en, nombre, alias (text[]), relacion, notas, borrado_en
 
+lugares — los lugares con nombre de su vida ("CDS", "el estudio", "casa").
+  id, creado_en, nombre, lat, lon, radio_m, borrado_en
+
+ubicaciones — cada pin o latido de ubicación que compartió por Telegram.
+  id, ts, lat, lon, en_vivo. La última fila es dónde está (preferí la
+  herramienta `ubicacion`, que ya calcula la edad y el lugar con nombre).
+
 proyectos — id, creado_en, nombre, descripcion, estado, borrado_en
 
 log_acciones — todo lo que Lucy hizo, con el antes y el después.
