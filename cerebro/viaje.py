@@ -23,10 +23,53 @@ from config import GOOGLE_MAPS_API_KEY
 log = logging.getLogger("lucy.viaje")
 
 URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
+URL_BUSCAR = "https://places.googleapis.com/v1/places:searchText"
 
 # Solo pedimos lo que usamos: la máscara de campos es obligatoria en Routes
 # API y de paso evita pagar (en bytes y en latencia) por datos que no leemos.
 MASCARA = "routes.duration,routes.distanceMeters"
+MASCARA_BUSCAR = "places.displayName,places.formattedAddress,places.location"
+
+
+async def buscar_lugares(texto: str, n: int = 5) -> list[dict]:
+    """Busca un lugar por nombre y devuelve candidatos con coordenadas.
+
+    Es lo que arregla de raíz el problema de la UNPHU: en vez de que Routes
+    geocodifique un nombre suelto y elija a ciegas (a veces mal), Places busca
+    como el buscador de Google Maps y devuelve VARIOS resultados con su
+    dirección. Si hay uno claro, el agente lo usa; si hay varios —"la Sirena"
+    tiene cuatro sucursales— le pregunta a Tiziano cuál. Desambiguar es tarea
+    del agente, no adivinanza de Google.
+
+    Devuelve [{nombre, direccion, lat, lon}]. Lista vacía si no hay resultados;
+    lanza en error de red/API para que la cola de reintentos lo maneje.
+    """
+    if not GOOGLE_MAPS_API_KEY:
+        return []
+    async with httpx.AsyncClient(timeout=15) as http:
+        r = await http.post(
+            URL_BUSCAR,
+            json={"textQuery": texto, "regionCode": "DO", "languageCode": "es"},
+            headers={
+                "X-Goog-Api-Key": GOOGLE_MAPS_API_KEY,
+                "X-Goog-FieldMask": MASCARA_BUSCAR,
+            },
+        )
+    if r.status_code != 200:
+        log.warning("Places API %s: %s", r.status_code, r.text[:200])
+        return []
+    lugares = []
+    for p in (r.json().get("places") or [])[:n]:
+        loc = p.get("location") or {}
+        if loc.get("latitude") is None:
+            continue
+        lugares.append({
+            "nombre": (p.get("displayName") or {}).get("text") or texto,
+            "direccion": p.get("formattedAddress") or "",
+            "lat": loc["latitude"],
+            "lon": loc["longitude"],
+        })
+    return lugares
 
 
 async def _punto(nombre_o_direccion: str) -> dict | None:
@@ -45,11 +88,25 @@ async def _punto(nombre_o_direccion: str) -> dict | None:
     return None
 
 
-async def calcular(destino: str, desde: str | None = None) -> str:
+def _coord(lat, lon) -> dict:
+    return {"location": {"latLng": {"latitude": float(lat), "longitude": float(lon)}}}
+
+
+async def calcular(
+    destino: str | None = None,
+    desde: str | None = None,
+    dest_lat: float | None = None,
+    dest_lon: float | None = None,
+) -> str:
     """Minutos con tráfico de ahora, de donde está Tiziano hasta el destino.
 
     `desde` es opcional: sin él se usa la última ubicación compartida. Con él
     ("desde CDS") se resuelve contra los lugares con nombre.
+
+    dest_lat/dest_lon permiten pasar el destino YA desambiguado (las
+    coordenadas de un candidato que devolvió buscar_lugar): así el cálculo no
+    depende de que Google vuelva a geocodificar el nombre y no puede volver a
+    elegir el punto equivocado.
     """
     if not GOOGLE_MAPS_API_KEY:
         return ("ERROR: no hay GOOGLE_MAPS_API_KEY configurada. Usá la ruta "
@@ -74,7 +131,12 @@ async def calcular(destino: str, desde: str | None = None) -> str:
             # certeza falsa.
             desde = f"su última ubicación (de hace {u['hace_min']} min, OJO)"
 
-    destino_punto = await _punto(destino)
+    # Coordenadas explícitas (un candidato ya elegido) ganan siempre: son el
+    # destino sin ambigüedad posible.
+    if dest_lat is not None and dest_lon is not None:
+        destino_punto = _coord(dest_lat, dest_lon)
+    else:
+        destino_punto = await _punto(destino or "")
     if destino_punto is None:
         return "ERROR: el destino vino vacío."
 
@@ -123,5 +185,6 @@ async def calcular(destino: str, desde: str | None = None) -> str:
     minutos = max(1, round(seg / 60))
 
     origen_txt = f" desde {desde}" if desde else ""
+    destino_txt = f" hasta {destino}" if destino else ""
     return (f"OK: ~{minutos} min con el tráfico de ahora ({km:.1f} km)"
-            f"{origen_txt} hasta {destino}.")
+            f"{origen_txt}{destino_txt}.")

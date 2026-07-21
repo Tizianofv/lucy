@@ -102,22 +102,30 @@ HERRAMIENTAS DISPONIBLES:
   como X", esta es la herramienta. Los lugares con nombre son lo que vuelve
   útil la ubicación.
 
-· viaje  {"destino": "el estudio", "desde": ""}
-  Cuánto se tarda AHORA, con el tráfico real (Google Maps). Sin "desde", parte
-  de su última ubicación. Preferila a las rutas guardadas: el tráfico de hoy
-  le gana a la memoria de la semana pasada. Si da ERROR, caé a nota 'ruta' o
-  preguntá.
-  OJO CON EL DESTINO — el nombre suelto engaña a Google. "UNPHU" a secas cayó
-  en un punto equivocado a 3.4 km; "UNPHU, Av. John F. Kennedy" dio los 32 min
-  reales. Reglas:
-   1. Si el destino es un lugar guardado (consultá `lugares`), usá ESE nombre:
-      viaje resuelve por sus coordenadas exactas, sin geocodificar a ciegas.
-   2. Si no está guardado, pasá la dirección MÁS específica que tengas (con
-      avenida/sector), no solo el nombre.
-   3. Un resultado con muy poca distancia para un lugar que debería estar
-      lejos es señal de que Google geocodificó mal: reintentá con más detalle.
-   4. Cuando aciertes un lugar que Tiziano usa seguido, ofrecé guardarlo con
-      `lugar` para no volver a fallar.
+· buscar_lugar  {"texto": "la sirena"}
+  Busca un lugar por nombre en Google Maps y devuelve varios candidatos, cada
+  uno con nombre, dirección y coordenadas (lat/lon). Es tu forma de ubicar un
+  sitio que Tiziano no tiene guardado. Cómo usar el resultado:
+   · UN candidato claro → seguí con él (viaje con sus lat/lon).
+   · VARIOS que podrían ser → NO adivines: mostrale los nombres+direcciones y
+     preguntale cuál. "La Sirena" tiene cuatro sucursales; elegir por él es la
+     forma más silenciosa de mandarlo al lugar equivocado.
+   · NINGUNO → pedile más detalle (sector, avenida).
+  Cuando confirme cuál es, ofrecé guardarlo con `lugar` (pasando su lat/lon)
+  para no volver a preguntar.
+
+· viaje  {"destino": "", "desde": "", "dest_lat": 0, "dest_lon": 0}
+  Cuánto se tarda AHORA, con el tráfico real. Sin "desde", parte de su última
+  ubicación. Preferila a las rutas guardadas: el tráfico de hoy le gana a la
+  memoria de la semana pasada.
+  El destino, en orden de preferencia:
+   1. dest_lat/dest_lon → coordenadas exactas (de buscar_lugar o de un lugar
+      guardado). SIN AMBIGÜEDAD posible: es la mejor opción.
+   2. destino = nombre de un lugar GUARDADO (consultá `lugares`): resuelve por
+      sus coordenadas.
+   3. destino = texto libre: ÚLTIMO recurso; Google geocodifica y puede
+      elegir mal. Si vas a caer acá para un lugar conocido, mejor buscar_lugar
+      primero.
 
 · recordar  {"texto": "lo que acordamos del depósito", "n": 5}
   Busca por SIGNIFICADO en todo lo que se han dicho (tus respuestas
@@ -288,10 +296,19 @@ async def _ejecutar_herramienta(
                 acciones.append(log_id)
             return resultado
 
+        if nombre == "buscar_lugar":
+            cands = await viaje.buscar_lugares(str(args.get("texto") or ""))
+            if not cands:
+                return ("No encontré ese lugar. Pedile más detalle (sector, "
+                        "avenida) o que comparta la ubicación.")
+            return json.dumps(cands, ensure_ascii=False)
+
         if nombre == "viaje":
             return await viaje.calcular(
-                str(args.get("destino") or ""),
+                destino=str(args.get("destino") or "") or None,
                 desde=str(args.get("desde") or "") or None,
+                dest_lat=args.get("dest_lat") or None,
+                dest_lon=args.get("dest_lon") or None,
             )
 
         if nombre == "recordar":
@@ -306,7 +323,8 @@ async def _ejecutar_herramienta(
 
         return (f"ERROR: no existe la herramienta '{nombre}'. Las que hay: "
                 "consultar, crear, editar, archivar, deshacer, perfil, "
-                "ubicacion, lugar, viaje, recordar, preguntar, responder.")
+                "ubicacion, lugar, buscar_lugar, viaje, recordar, preguntar, "
+                "responder.")
 
     except crud.FaltanDatos as e:
         return f"ERROR: me falta {e}. Preguntáselo a Tiziano."
