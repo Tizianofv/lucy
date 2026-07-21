@@ -21,6 +21,7 @@ import openai
 import telegram.error
 
 import cerebro.agente as agente
+import cerebro.despertador as despertador
 import cerebro.memoria as memoria
 import cerebro.preguntar as preguntar
 import cerebro.vision as vision
@@ -163,11 +164,17 @@ async def bucle(bot) -> None:
             # silencio, Lucy vuelve a "solo bandeja" sin que nadie se entere.
             log.exception("Error en el bucle de interpretación; sigo igual.")
 
-        # La memoria de largo plazo se alimenta como rama lateral, una vez
-        # por minuto: si el indexado falla (cuota, red), la comprensión ni se
-        # entera — misma filosofía que los logs de Natalia. Nada de lo que
-        # pase acá puede tocar el camino del mensaje.
+        # Las ramas laterales: el despertador (cada ~30s) y el indexado de la
+        # memoria (cada ~1min). Si fallan, la comprensión ni se entera —
+        # misma filosofía que los logs de Natalia. Nada de lo que pase acá
+        # puede tocar el camino del mensaje.
         vuelta += 1
+        if vuelta % 6 == 0:
+            try:
+                await despertador.revisar(bot)
+            except Exception:
+                log.warning("El despertador tropezó; reintento en la próxima.",
+                            exc_info=True)
         if vuelta % 12 == 0:
             try:
                 await memoria.indexar_pendientes()
