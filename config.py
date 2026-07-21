@@ -20,7 +20,12 @@ except ModuleNotFoundError:
 # .strip() defensivo: un espacio invisible pegado al copiar no vuelve a romper nada.
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"].strip()
 DATABASE_URL   = os.environ["DATABASE_URL"].strip()
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+
+# Cerebro (texto) y oído (voz). Las de IA van con .get(): si faltan, Lucy
+# arranca igual y sigue capturando — degradada, pero sin perder nada. Capturar
+# no puede depender de que la IA esté viva.
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+OPENAI_API_KEY   = os.environ.get("OPENAI_API_KEY", "").strip()
 
 # Candado de seguridad (pilar): Lucy SOLO le responde a este chat.
 # Cualquier otro que le escriba es ignorado sin más.

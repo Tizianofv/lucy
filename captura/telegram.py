@@ -4,6 +4,8 @@ Principio arquitectónico rey: este módulo NO importa nada de `cerebro/`.
 Su único trabajo es guardar el mensaje crudo y confirmar recepción.
 Que la IA funcione o no, es problema de otra capa — acá nada se pierde.
 """
+from __future__ import annotations
+
 from telegram import Message, Update
 from telegram.ext import ContextTypes
 
@@ -28,11 +30,12 @@ async def _capturar(
         telegram_msg_id=msg.message_id,
     )
 
-    # 2. Confirmar. Nunca depende de que Gemini esté vivo.
+    # 2. Confirmar. Nunca depende de que la IA esté viva.
     await msg.reply_text(f"✅ Recibí (#{bandeja_id})")
 
-    # 3. (Nivel 2) Acá enganchará el disparo de la interpretación con Gemini,
-    #    en segundo plano, leyendo de la bandeja. Todavía no.
+    # 3. La interpretación NO se dispara acá: la hace el bucle de
+    #    cerebro/interpretar.py leyendo de la bandeja. Ese desacople es lo que
+    #    hace que tu ✅ no espere a que la IA piense.
 
 
 async def recibir_texto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

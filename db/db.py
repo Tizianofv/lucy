@@ -4,6 +4,8 @@ Regla de oro del Nivel 1: guardar_en_bandeja() es lo primero que corre con
 cada mensaje, ANTES de tocar la IA. Si todo lo demás falla, el mensaje ya está
 a salvo aquí.
 """
+from __future__ import annotations
+
 import hashlib
 import json
 
@@ -38,7 +40,7 @@ async def guardar_en_bandeja(
 ) -> int:
     """Guarda un mensaje crudo en la bandeja y devuelve su id.
 
-    No interpreta nada: solo captura. La comprensión (Gemini) viene después,
+    No interpreta nada: solo captura. La comprensión viene después,
     en un paso aparte, leyendo de esta tabla.
     """
     hash_contenido = (
@@ -70,7 +72,7 @@ async def guardar_en_bandeja(
 
 
 async def tomar_pendientes(
-    tipos: tuple[str, ...] = ("texto",), limite: int = 5
+    tipos: tuple[str, ...] = ("texto", "audio"), limite: int = 5
 ) -> list[dict]:
     """Reclama filas sin procesar y las marca 'procesando' en un solo paso.
 
@@ -97,7 +99,7 @@ async def tomar_pendientes(
                 FOR UPDATE SKIP LOCKED
             )
             RETURNING id, tipo_entrada, contenido_raw, archivo_id, chat_id,
-                      telegram_msg_id, intentos
+                      telegram_msg_id, intentos, transcripcion
             """,
             (list(tipos), limite),
         )
@@ -107,7 +109,7 @@ async def tomar_pendientes(
 async def guardar_interpretacion(
     bandeja_id: int, clasificacion: str, interpretacion: dict
 ) -> None:
-    """Guarda lo que Gemini entendió. La fila queda esperando confirmación.
+    """Guarda lo que el cerebro entendió. La fila queda esperando confirmación.
 
     No crea todavía la tarea/evento/gasto: eso es un paso aparte y deliberado.
     Primero que Tiziano vea qué entendió Lucy; recién después se escribe.
@@ -124,6 +126,19 @@ async def guardar_interpretacion(
              WHERE id = %s
             """,
             (clasificacion, json.dumps(interpretacion), bandeja_id),
+        )
+
+
+async def guardar_transcripcion(bandeja_id: int, texto: str) -> None:
+    """Guarda lo que Whisper oyó, antes de interpretarlo.
+
+    Se escribe en un paso aparte a propósito: si DeepSeek falla después, la
+    transcripción ya está a salvo y el reintento no vuelve a pagar el audio.
+    """
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE bandeja SET transcripcion = %s WHERE id = %s",
+            (texto, bandeja_id),
         )
 
 

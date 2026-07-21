@@ -3,6 +3,8 @@
 Un solo proceso. No necesita webhook ni servidor web: Lucy le pregunta a
 Telegram "¿algo nuevo?" en un bucle. Simple y robusto.
 """
+from __future__ import annotations
+
 import asyncio
 import logging
 
@@ -10,7 +12,8 @@ from telegram import Update
 from telegram.error import Conflict
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
-import cerebro.gemini as gemini
+import cerebro.deepseek as motor
+import cerebro.whisper as whisper
 import cerebro.interpretar as interpretar
 import config
 import db.db as db
@@ -22,11 +25,10 @@ logging.basicConfig(
 )
 log = logging.getLogger("lucy")
 
-# gemini-3.5-flash razona antes de responder, y el SDK avisa por consola en
-# CADA llamada que la respuesta trae partes de pensamiento además del texto.
-# Es informativo, no un problema — pero repetido en cada mensaje convierte el
-# log en ruido, y el ruido es lo que nos entrena a ignorar los errores reales.
-logging.getLogger("google_genai.types").setLevel(logging.ERROR)
+# httpx loguea una línea INFO por cada llamada HTTP. Con DeepSeek y Whisper
+# eso serían dos líneas por mensaje ensuciando el log — y el ruido es lo que
+# nos entrena a ignorar los errores reales.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 _tarea_interpretacion: asyncio.Task | None = None
 
@@ -36,16 +38,25 @@ async def _al_arrancar(app) -> None:
     log.info("Pool de Postgres abierto. Lucy escuchando solo a %s.", config.CHAT_ID_DUENO)
 
     # La IA se chequea, pero su falla NO tumba a Lucy: capturar no puede
-    # depender de que Gemini esté vivo (es el principio del Nivel 1). Un
-    # modelo jubilado o una key vencida degradan a Lucy a "solo bandeja",
-    # que es exactamente lo que queremos: ruidoso en el log, intacto para vos.
+    # depender de que la IA esté viva (es el principio del Nivel 1). Cerebro y
+    # oído se chequean por separado porque son proveedores distintos: que se
+    # caiga uno no tiene por qué llevarse puesto al otro.
     try:
-        await gemini.verificar_modelo()
-        log.info("Gemini OK: modelo %s disponible.", gemini.MODELO)
+        await motor.verificar_modelo()
+        log.info("Cerebro OK: %s responde.", motor.MODELO)
     except Exception:
         log.exception(
-            "GEMINI NO DISPONIBLE — la captura sigue funcionando, "
+            "CEREBRO NO DISPONIBLE (DeepSeek) — la captura sigue funcionando, "
             "pero no habrá interpretación hasta arreglarlo."
+        )
+
+    try:
+        await whisper.verificar()
+        log.info("Oído OK: %s configurado.", whisper.MODELO)
+    except Exception:
+        log.exception(
+            "OÍDO NO DISPONIBLE (Whisper) — los textos se siguen entendiendo; "
+            "las notas de voz esperan en la bandeja."
         )
 
     # El bucle de comprensión vive aparte del de captura, a propósito: si
