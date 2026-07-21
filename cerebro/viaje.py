@@ -13,6 +13,7 @@ precisión. Mismo contrato que todas sus herramientas.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -78,11 +79,17 @@ async def calcular(destino: str, desde: str | None = None) -> str:
         return "ERROR: el destino vino vacío."
 
     # ── Routes API ───────────────────────────────────────────────────────
+    # TRAFFIC_AWARE_OPTIMAL + departureTime es lo que usa la app de Maps: el
+    # modelo de tráfico en vivo de verdad, no la versión liviana. La diferencia
+    # se nota en hora pico. departureTime va ~1 min al futuro porque Google lo
+    # exige presente-o-futuro y la latencia de red podría dejarlo en el pasado.
+    salida = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
     cuerpo = {
         "origin": origen,
         "destination": destino_punto,
         "travelMode": "DRIVE",
-        "routingPreference": "TRAFFIC_AWARE",  # el punto de todo esto
+        "routingPreference": "TRAFFIC_AWARE_OPTIMAL",
+        "departureTime": salida,
     }
     async with httpx.AsyncClient(timeout=15) as http:
         r = await http.post(

@@ -103,11 +103,21 @@ HERRAMIENTAS DISPONIBLES:
   útil la ubicación.
 
 · viaje  {"destino": "el estudio", "desde": ""}
-  Cuánto se tarda AHORA, con el tráfico real (Google Maps). El destino puede
-  ser un lugar con nombre o una dirección completa. Sin "desde", parte de su
-  última ubicación. Preferila a las rutas guardadas: el tráfico de hoy le
-  gana a la memoria de la semana pasada. Si da ERROR, caé a la nota 'ruta'
-  o preguntá.
+  Cuánto se tarda AHORA, con el tráfico real (Google Maps). Sin "desde", parte
+  de su última ubicación. Preferila a las rutas guardadas: el tráfico de hoy
+  le gana a la memoria de la semana pasada. Si da ERROR, caé a nota 'ruta' o
+  preguntá.
+  OJO CON EL DESTINO — el nombre suelto engaña a Google. "UNPHU" a secas cayó
+  en un punto equivocado a 3.4 km; "UNPHU, Av. John F. Kennedy" dio los 32 min
+  reales. Reglas:
+   1. Si el destino es un lugar guardado (consultá `lugares`), usá ESE nombre:
+      viaje resuelve por sus coordenadas exactas, sin geocodificar a ciegas.
+   2. Si no está guardado, pasá la dirección MÁS específica que tengas (con
+      avenida/sector), no solo el nombre.
+   3. Un resultado con muy poca distancia para un lugar que debería estar
+      lejos es señal de que Google geocodificó mal: reintentá con más detalle.
+   4. Cuando aciertes un lugar que Tiziano usa seguido, ofrecé guardarlo con
+      `lugar` para no volver a fallar.
 
 · recordar  {"texto": "lo que acordamos del depósito", "n": 5}
   Busca por SIGNIFICADO en todo lo que se han dicho (tus respuestas
