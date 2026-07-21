@@ -162,8 +162,11 @@ def _ahora_txt() -> str:
     return f"{DIAS[ahora.weekday()]} {ahora.isoformat(timespec='minutes')}"
 
 
-def _validar(r: dict) -> dict:
+def _validar(r: dict, texto: str = "") -> dict:
     """Normaliza la respuesta. DeepSeek garantiza JSON, NO garantiza la forma.
+
+    `texto` es el mensaje original y se usa como red: si falta algo que se
+    puede reponer, se repone en vez de descartar lo que Tiziano dijo.
 
     Gemini permitía forzar el esquema desde la API; acá no existe eso, así que
     el contrato se verifica de este lado. Confiar en que el modelo se porte
@@ -180,14 +183,21 @@ def _validar(r: dict) -> dict:
     else:
         r["clasificacion"] = clas
 
-    # La charla no genera ninguna fila, así que no necesita título: exigirlo
-    # obligaría al modelo a inventar un "Saludo matutino" para algo que no se
-    # guarda en ningún lado. Lo que sí necesita es la respuesta.
+    r["titulo"] = str(r.get("titulo") or "").strip()
+
+    # El título solo importa en lo que va a terminar siendo una fila con
+    # nombre. Una pregunta, una orden o un saludo no necesitan titularse, y
+    # exigírselo a todo hizo que "Mi balance?" muriera con "vino sin título":
+    # un requisito de forma matando un mensaje perfectamente entendido.
+    #
+    # Y aun cuando el título hace falta, tirar el mensaje entero por eso sería
+    # desproporcionado. Si el modelo entendió qué era y solo se olvidó de
+    # ponerle nombre, alcanza con usar lo que dijo Tiziano.
+    if r["clasificacion"] in CLASES_ENTIDAD and not r["titulo"]:
+        r["titulo"] = (texto or "").strip()[:80] or "(sin título)"
+
     if r["clasificacion"] == "charla":
-        r["titulo"] = str(r.get("titulo") or "").strip()
         r["respuesta"] = str(r.get("respuesta") or "").strip() or "👋"
-    elif not str(r.get("titulo", "")).strip():
-        raise ValueError("Vino sin título; el mensaje quedaría sin nombre.")
 
     # Las listas tienen que ser listas: el formateador las recorre sin preguntar.
     for campo in ("supuestos", "falta"):
@@ -246,4 +256,4 @@ async def interpretar_texto(texto: str, origen: str = "texto") -> dict:
         response_format={"type": "json_object"},
         temperature=0,  # extracción, no creatividad
     )
-    return _validar(json.loads(respuesta.choices[0].message.content))
+    return _validar(json.loads(respuesta.choices[0].message.content), texto)
