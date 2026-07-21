@@ -5,6 +5,9 @@ cada mensaje, ANTES de tocar la IA. Si todo lo demás falla, el mensaje ya está
 a salvo aquí.
 """
 import hashlib
+import json
+
+from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from config import DATABASE_URL
@@ -64,3 +67,72 @@ async def guardar_en_bandeja(
         )
         row = await cur.fetchone()
         return row[0]
+
+
+async def tomar_pendientes(
+    tipos: tuple[str, ...] = ("texto",), limite: int = 5
+) -> list[dict]:
+    """Reclama filas sin procesar y las marca 'procesando' en un solo paso.
+
+    FOR UPDATE SKIP LOCKED no es adorno: durante cada redespliegue conviven dos
+    contenedores unos segundos (lo vemos en los logs como 409 Conflict de
+    Telegram). Sin esto, los dos tomarían la misma fila y Lucy interpretaría el
+    mismo mensaje dos veces. Con esto, el segundo simplemente saltea lo tomado.
+
+    `tipos` acota a lo que Lucy sabe interpretar hoy. Los audios y fotos se
+    quedan en 'sin_procesar' esperando su turno: no se pierden ni se traban.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            UPDATE bandeja SET estado = 'procesando'
+            WHERE id IN (
+                SELECT id FROM bandeja
+                WHERE estado = 'sin_procesar'
+                  AND tipo_entrada = ANY(%s)
+                ORDER BY id
+                LIMIT %s
+                FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id, tipo_entrada, contenido_raw, archivo_id, chat_id,
+                      telegram_msg_id
+            """,
+            (list(tipos), limite),
+        )
+        return await cur.fetchall()
+
+
+async def guardar_interpretacion(
+    bandeja_id: int, clasificacion: str, interpretacion: dict
+) -> None:
+    """Guarda lo que Gemini entendió. La fila queda esperando confirmación.
+
+    No crea todavía la tarea/evento/gasto: eso es un paso aparte y deliberado.
+    Primero que Tiziano vea qué entendió Lucy; recién después se escribe.
+    """
+    async with pool.connection() as conn:
+        await conn.execute(
+            """
+            UPDATE bandeja
+               SET clasificacion  = %s,
+                   interpretacion = %s,
+                   estado         = 'esperando_confirmacion',
+                   procesado_en   = now(),
+                   error_detalle  = NULL
+             WHERE id = %s
+            """,
+            (clasificacion, json.dumps(interpretacion), bandeja_id),
+        )
+
+
+async def marcar_error(bandeja_id: int, detalle: str) -> None:
+    """Deja la fila en 'error' con el motivo, para poder reintentar a mano.
+
+    Nunca se borra ni se pierde: el mensaje crudo sigue intacto en la bandeja.
+    """
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE bandeja SET estado = 'error', error_detalle = %s WHERE id = %s",
+            (detalle[:2000], bandeja_id),
+        )

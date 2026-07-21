@@ -3,12 +3,15 @@
 Un solo proceso. No necesita webhook ni servidor web: Lucy le pregunta a
 Telegram "¿algo nuevo?" en un bucle. Simple y robusto.
 """
+import asyncio
 import logging
 
 from telegram import Update
+from telegram.error import Conflict
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 
 import cerebro.gemini as gemini
+import cerebro.interpretar as interpretar
 import config
 import db.db as db
 from captura.telegram import recibir_audio, recibir_foto, recibir_texto
@@ -18,6 +21,14 @@ logging.basicConfig(
     level=logging.INFO,
 )
 log = logging.getLogger("lucy")
+
+# gemini-3.5-flash razona antes de responder, y el SDK avisa por consola en
+# CADA llamada que la respuesta trae partes de pensamiento además del texto.
+# Es informativo, no un problema — pero repetido en cada mensaje convierte el
+# log en ruido, y el ruido es lo que nos entrena a ignorar los errores reales.
+logging.getLogger("google_genai.types").setLevel(logging.ERROR)
+
+_tarea_interpretacion: asyncio.Task | None = None
 
 
 async def _al_arrancar(app) -> None:
@@ -37,8 +48,19 @@ async def _al_arrancar(app) -> None:
             "pero no habrá interpretación hasta arreglarlo."
         )
 
+    # El bucle de comprensión vive aparte del de captura, a propósito: si
+    # interpretar tarda 4 segundos, tu ✅ no espera esos 4 segundos.
+    global _tarea_interpretacion
+    _tarea_interpretacion = asyncio.create_task(interpretar.bucle(app.bot))
+
 
 async def _al_apagar(app) -> None:
+    if _tarea_interpretacion is not None:
+        _tarea_interpretacion.cancel()
+        # Esperamos a que muera de verdad: si el proceso se apaga con una
+        # fila en 'procesando', esa fila queda huérfana hasta que alguien la
+        # rescate a mano.
+        await asyncio.gather(_tarea_interpretacion, return_exceptions=True)
     await db.cerrar()
 
 
@@ -49,6 +71,14 @@ async def _al_fallar(update: object, context: ContextTypes.DEFAULT_TYPE) -> None
     se queda esperando una respuesta que no llega. Un aviso honesto siempre es
     mejor que un silencio educado: el silencio parece que Lucy te ignoró.
     """
+    # El Conflict es esperable: en cada redespliegue el contenedor viejo y el
+    # nuevo se pisan unos segundos peleando por el long-polling. Registrarlo
+    # como ERROR sería crear un error benigno recurrente — y un log que grita
+    # todos los días es un log que se deja de leer.
+    if isinstance(context.error, Conflict):
+        log.warning("Conflict de Telegram (dos instancias); típico de un redespliegue.")
+        return
+
     log.error("Fallo procesando un update", exc_info=context.error)
 
     msg = getattr(update, "effective_message", None)
