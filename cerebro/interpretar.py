@@ -5,8 +5,9 @@ Corre en un bucle propio, desacoplado de la captura. Ese desacople es la razón
 de ser del diseño: si la IA se cae o tarda, la captura sigue respondiendo ✅ al
 instante y los mensajes se apilan acá esperando. Nada se pierde, nada se traba.
 
-Estado: Nivel 2, primera mitad. Interpreta y reporta; todavía no crea tareas
-ni eventos — eso es el paso siguiente, con botones para corregir.
+Estado: Nivel 2 completo en el camino feliz. Interpreta, reporta y —con el ✅
+de Tiziano— crea la tarea/cita/nota/gasto de verdad. La charla se responde sin
+guardar nada; las preguntas todavía no se saben consultar (req 10).
 """
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ from html import escape
 import openai
 import telegram.error
 
+import acciones.botones as botones
 import cerebro.deepseek as motor
 import cerebro.whisper as whisper
 import db.db as db
@@ -214,14 +216,47 @@ async def _procesar(fila: dict, bot) -> None:
         await _fallo(fila, e, bot)
         return
 
-    await db.guardar_interpretacion(bandeja_id, r["clasificacion"], r)
-    await bot.send_message(
+    clas = r["clasificacion"]
+    oido = texto if fila["tipo_entrada"] == "audio" else None
+    responder = dict(
         chat_id=fila["chat_id"],
-        text=_formatear(bandeja_id, r, oido=fila["tipo_entrada"] == "audio" and texto),
         parse_mode="HTML",
         reply_to_message_id=fila.get("telegram_msg_id"),
     )
-    log.info("Interpretado #%s como %s", bandeja_id, r["clasificacion"])
+
+    # ── Charla: se responde y se archiva ahí mismo ──────────────────────
+    # No crea entidad, no lleva botones, no queda esperando nada. Un "buenos
+    # días" no es material de agenda, y pedirle a Tiziano que apruebe un
+    # saludo con un botón sería el opuesto exacto del silencio inteligente.
+    if clas == "charla":
+        await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
+        salida = escape(r.get("respuesta") or "👋")
+        if oido:
+            salida = f"🎙 <i>«{escape(oido)}»</i>\n\n{salida}"
+        await bot.send_message(text=salida, **responder)
+        log.info("Charla #%s", bandeja_id)
+        return
+
+    # ── Pregunta: todavía no sabemos responderla ────────────────────────
+    # Decirlo es mejor que fingir. Consultar la agenda en lenguaje natural es
+    # el req 10 y todavía no está; inventar una respuesta sería peor que nada.
+    if clas == "pregunta":
+        await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
+        aviso = "❓ Te entendí, pero todavía no sé consultar tus datos para responderte."
+        if oido:
+            aviso = f"🎙 <i>«{escape(oido)}»</i>\n\n{aviso}"
+        await bot.send_message(text=aviso, **responder)
+        log.info("Pregunta #%s (sin capacidad de consulta aún)", bandeja_id)
+        return
+
+    # ── Lo demás sí se puede convertir en una fila: tarjeta + botones ────
+    await db.guardar_interpretacion(bandeja_id, clas, r)
+    await bot.send_message(
+        text=_formatear(bandeja_id, r, oido=oido),
+        reply_markup=botones.teclado(bandeja_id),
+        **responder,
+    )
+    log.info("Interpretado #%s como %s", bandeja_id, clas)
 
 
 async def bucle(bot) -> None:

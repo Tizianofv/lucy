@@ -19,7 +19,9 @@ from config import OPENAI_API_KEY
 
 log = logging.getLogger("lucy.whisper")
 
-cliente = AsyncOpenAI(api_key=OPENAI_API_KEY)
+# Placeholder por el mismo motivo que en deepseek.py: con la key vacía el SDK
+# falla al construir el cliente y se lleva puesto el import del módulo entero.
+cliente = AsyncOpenAI(api_key=OPENAI_API_KEY or "sin-key")
 
 MODELO = "whisper-1"
 

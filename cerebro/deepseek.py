@@ -23,13 +23,25 @@ from openai import AsyncOpenAI
 
 from config import DEEPSEEK_API_KEY, TZ
 
-cliente = AsyncOpenAI(api_key=DEEPSEEK_API_KEY, base_url="https://api.deepseek.com")
+# El "sin-key" no es cosmético: el SDK revienta al CONSTRUIR el cliente si la
+# key viene vacía, y eso ocurre al importar el módulo. Sin el placeholder, una
+# key ausente no degradaría a Lucy: la mataría entera al arrancar, incluida la
+# captura — exactamente lo contrario de lo que promete config.py. Con él, el
+# cliente existe, verificar_modelo() falla a los gritos en el log, y el Nivel 1
+# sigue vivo recibiendo mensajes.
+cliente = AsyncOpenAI(
+    api_key=DEEPSEEK_API_KEY or "sin-key", base_url="https://api.deepseek.com"
+)
 
 MODELO = "deepseek-v4-flash"
 
 DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 
-CLASES = ("tarea", "cita", "nota", "idea", "gasto", "pregunta")
+CLASES = ("tarea", "cita", "nota", "idea", "gasto", "pregunta", "charla")
+
+# Las que se convierten en una fila de verdad. El resto (pregunta, charla) se
+# responde y se archiva: no todo lo que Tiziano dice es algo para guardar.
+CLASES_ENTIDAD = ("tarea", "cita", "nota", "idea", "gasto")
 
 INSTRUCCIONES = """\
 Sos el motor de comprensión de Lucy, la asistente personal de Tiziano.
@@ -39,7 +51,7 @@ informal o abreviado. Tu trabajo es ENTENDERLO, no responderle.
 Ahora es {ahora} (zona {zona}, UTC-4, sin horario de verano).
 
 Devolvés SOLO un objeto JSON con exactamente estas claves:
-  clasificacion: uno de "tarea","cita","nota","idea","gasto","pregunta"
+  clasificacion: uno de "tarea","cita","nota","idea","gasto","pregunta","charla"
   titulo: string corto (en infinitivo si es tarea: "Llamar a Ana")
   detalle: string ("" si no aplica)
   cuando: ISO 8601 con offset, o "" si no hay ninguna referencia temporal
@@ -52,6 +64,8 @@ Devolvés SOLO un objeto JSON con exactamente estas claves:
   supuestos: lista de strings — lo que dedujiste sin que te lo dijeran, en
              primera persona ("asumí que...")
   falta: lista de strings — solo datos CRÍTICOS ausentes que ameriten preguntar
+  respuesta: SOLO si clasificacion es "charla" — lo que Lucy le contesta, en su
+             mismo registro y tono, breve y cálida. "" en todo lo demás.
 
 CLASIFICACIÓN:
   tarea → algo que Tiziano tiene que hacer
@@ -59,7 +73,14 @@ CLASIFICACIÓN:
   gasto → hay plata gastada
   nota → información para guardar, sin acción
   idea → algo que se le ocurrió y no quiere perder
-  pregunta → le está preguntando algo a Lucy, no pidiéndole guardar algo
+  pregunta → quiere consultar SUS datos (agenda, pendientes, gastos)
+  charla → saludos, cortesías, bromas, "¿estás ahí?", "gracias": conversación
+           que no pide guardar NADA ni consultar NADA
+
+NO fuerces la charla dentro de otra categoría. "Buenos días" no es una nota y
+"klk viejita" no es una pregunta. Si Tiziano solo está saludando o tirando un
+chiste, es "charla" y punto: inventarle una categoría le llena la base de
+basura que después tiene que borrar a mano.
 
 FECHAS — lo más delicado:
 · Resolvé SIEMPRE lo relativo contra "ahora". "el jueves que viene no, el otro"
@@ -105,7 +126,13 @@ def _validar(r: dict) -> dict:
     else:
         r["clasificacion"] = clas
 
-    if not str(r.get("titulo", "")).strip():
+    # La charla no genera ninguna fila, así que no necesita título: exigirlo
+    # obligaría al modelo a inventar un "Saludo matutino" para algo que no se
+    # guarda en ningún lado. Lo que sí necesita es la respuesta.
+    if r["clasificacion"] == "charla":
+        r["titulo"] = str(r.get("titulo") or "").strip()
+        r["respuesta"] = str(r.get("respuesta") or "").strip() or "👋"
+    elif not str(r.get("titulo", "")).strip():
         raise ValueError("Vino sin título; el mensaje quedaría sin nombre.")
 
     # Las listas tienen que ser listas: el formateador las recorre sin preguntar.

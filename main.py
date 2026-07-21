@@ -10,8 +10,15 @@ import logging
 
 from telegram import Update
 from telegram.error import Conflict
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
+import acciones.botones as botones
 import cerebro.deepseek as motor
 import cerebro.whisper as whisper
 import cerebro.interpretar as interpretar
@@ -126,6 +133,10 @@ def main() -> None:
         MessageHandler((filters.VOICE | filters.AUDIO) & solo_dueno, recibir_audio)
     )
     app.add_handler(MessageHandler(filters.PHOTO & solo_dueno, recibir_foto))
+
+    # Los botones ✅/🗑 de las tarjetas de interpretación. El candado del chat
+    # se revisa adentro: los callbacks no pasan por los filtros de mensajes.
+    app.add_handler(CallbackQueryHandler(botones.al_pulsar))
 
     app.add_error_handler(_al_fallar)
 

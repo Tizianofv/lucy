@@ -107,12 +107,20 @@ async def tomar_pendientes(
 
 
 async def guardar_interpretacion(
-    bandeja_id: int, clasificacion: str, interpretacion: dict
+    bandeja_id: int,
+    clasificacion: str,
+    interpretacion: dict,
+    estado: str = "esperando_confirmacion",
 ) -> None:
-    """Guarda lo que el cerebro entendió. La fila queda esperando confirmación.
+    """Guarda lo que el cerebro entendió. Por defecto queda esperando el ✅.
 
     No crea todavía la tarea/evento/gasto: eso es un paso aparte y deliberado.
     Primero que Tiziano vea qué entendió Lucy; recién después se escribe.
+
+    `estado` se fuerza a 'procesado' para lo que no va a crear nada: la charla
+    y las preguntas se responden y se archivan ahí mismo. Poner un botón de
+    confirmación bajo un "buenos días" sería pedirle a Tiziano que apruebe la
+    existencia de un saludo.
     """
     async with pool.connection() as conn:
         await conn.execute(
@@ -120,12 +128,12 @@ async def guardar_interpretacion(
             UPDATE bandeja
                SET clasificacion  = %s,
                    interpretacion = %s,
-                   estado         = 'esperando_confirmacion',
+                   estado         = %s,
                    procesado_en   = now(),
                    error_detalle  = NULL
              WHERE id = %s
             """,
-            (clasificacion, json.dumps(interpretacion), bandeja_id),
+            (clasificacion, json.dumps(interpretacion), estado, bandeja_id),
         )
 
 
@@ -176,3 +184,80 @@ async def marcar_error(bandeja_id: int, detalle: str) -> None:
             "UPDATE bandeja SET estado = 'error', error_detalle = %s WHERE id = %s",
             (detalle[:2000], bandeja_id),
         )
+
+
+async def obtener(bandeja_id: int) -> dict | None:
+    """Trae una fila completa de la bandeja. La usa el manejador de botones."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT id, tipo_entrada, contenido_raw, transcripcion, chat_id,
+                   telegram_msg_id, estado, clasificacion, interpretacion
+              FROM bandeja WHERE id = %s
+            """,
+            (bandeja_id,),
+        )
+        return await cur.fetchone()
+
+
+async def cambiar_estado(bandeja_id: int, estado: str, desde: str | None = None) -> bool:
+    """Cambia el estado y dice si realmente cambió algo.
+
+    `desde` convierte la operación en un candado: solo pasa si la fila todavía
+    está en el estado esperado. Sin eso, dos toques rápidos al botón ✅ crearían
+    la misma tarea dos veces — Telegram reenvía el callback si tarda en
+    responder, así que no es una hipótesis rebuscada.
+    """
+    sql = "UPDATE bandeja SET estado = %s WHERE id = %s"
+    args: tuple = (estado, bandeja_id)
+    if desde is not None:
+        sql += " AND estado = %s"
+        args += (desde,)
+
+    async with pool.connection() as conn:
+        cur = await conn.execute(sql, args)
+        return cur.rowcount > 0
+
+
+async def _buscar_o_crear(tabla: str, nombre: str) -> int | None:
+    """Devuelve el id de la persona/proyecto con ese nombre; la crea si no está.
+
+    Sin esto, "Ana", "ana" y "Ana García" serían tres personas distintas y la
+    consulta "¿cuándo vi a Ana por última vez?" del req 10 devolvería un tercio
+    de la verdad. Por eso la búsqueda es insensible a mayúsculas y acentos
+    (unaccent no está garantizado, así que comparamos en minúsculas) y mira
+    también los alias.
+    """
+    nombre = (nombre or "").strip()
+    if not nombre:
+        return None
+
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            f"""
+            SELECT id FROM {tabla}
+             WHERE borrado_en IS NULL
+               AND (lower(nombre) = lower(%s)
+                    {"OR lower(%s) = ANY(SELECT lower(a) FROM unnest(alias) a)"
+                     if tabla == "personas" else ""})
+             LIMIT 1
+            """,
+            (nombre, nombre) if tabla == "personas" else (nombre,),
+        )
+        fila = await cur.fetchone()
+        if fila:
+            return fila[0]
+
+        cur = await conn.execute(
+            f"INSERT INTO {tabla} (nombre) VALUES (%s) RETURNING id", (nombre,)
+        )
+        return (await cur.fetchone())[0]
+
+
+async def buscar_o_crear_persona(nombre: str) -> int | None:
+    return await _buscar_o_crear("personas", nombre)
+
+
+async def buscar_o_crear_proyecto(nombre: str) -> int | None:
+    return await _buscar_o_crear("proyectos", nombre)
