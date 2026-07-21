@@ -25,6 +25,12 @@ CREATE TABLE bandeja (
   procesado_en     TIMESTAMPTZ,
   error_detalle    TEXT,
 
+  -- Cola de reintentos. Un fallo pasajero (cuota de la IA, un timeout) no
+  -- puede condenar un mensaje: vuelve a 'sin_procesar' con una espera que se
+  -- va duplicando. Solo tras agotar los intentos pasa a 'error' de verdad.
+  intentos           INT NOT NULL DEFAULT 0,
+  reintentar_despues TIMESTAMPTZ,
+
   -- Idempotencia: Telegram reentrega el mismo mensaje si no le confirmamos a
   -- tiempo (deploy, timeout, base lenta). Sin esto una reentrega duplica la
   -- fila. Misma lección que el dedupe de wamid en Natalia.

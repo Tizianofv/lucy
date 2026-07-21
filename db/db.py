@@ -91,12 +91,13 @@ async def tomar_pendientes(
                 SELECT id FROM bandeja
                 WHERE estado = 'sin_procesar'
                   AND tipo_entrada = ANY(%s)
+                  AND (reintentar_despues IS NULL OR reintentar_despues <= now())
                 ORDER BY id
                 LIMIT %s
                 FOR UPDATE SKIP LOCKED
             )
             RETURNING id, tipo_entrada, contenido_raw, archivo_id, chat_id,
-                      telegram_msg_id
+                      telegram_msg_id, intentos
             """,
             (list(tipos), limite),
         )
@@ -124,6 +125,30 @@ async def guardar_interpretacion(
             """,
             (clasificacion, json.dumps(interpretacion), bandeja_id),
         )
+
+
+async def devolver_a_cola(bandeja_id: int, espera_s: int) -> int:
+    """Devuelve la fila a la cola tras un fallo pasajero. Devuelve los intentos.
+
+    Un 429 de la IA o un timeout de red duran segundos; condenar el mensaje por
+    eso sería perderlo, que es lo único que Lucy no puede hacer. Vuelve a
+    'sin_procesar' con una espera, y el bucle la retoma sola.
+    """
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            UPDATE bandeja
+               SET estado             = 'sin_procesar',
+                   intentos           = intentos + 1,
+                   error_detalle      = NULL,
+                   reintentar_despues = now() + make_interval(secs => %s)
+             WHERE id = %s
+            RETURNING intentos
+            """,
+            (espera_s, bandeja_id),
+        )
+        row = await cur.fetchone()
+        return row[0]
 
 
 async def marcar_error(bandeja_id: int, detalle: str) -> None:

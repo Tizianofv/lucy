@@ -22,6 +22,10 @@ log = logging.getLogger("lucy.interpretar")
 # hace cosquillas a la base: es una query indexada por estado.
 INTERVALO_S = 5
 
+# Reintentos ante fallos pasajeros (cuota de la IA, red). 30s, 60s, 120s…
+MAX_INTENTOS = 5
+ESPERA_BASE_S = 30
+
 ICONO = {
     "tarea": "📌",
     "cita": "📅",
@@ -86,6 +90,48 @@ def _formatear(bandeja_id: int, r: dict) -> str:
     return "\n".join(lineas)
 
 
+def _es_pasajero(e: Exception) -> bool:
+    """¿Vale la pena reintentar, o el mensaje está roto de verdad?
+
+    Pasajero: cuota agotada (429), caída del proveedor (5xx), timeouts de red.
+    Definitivo: el modelo no existe, la key no sirve, el contenido es inválido.
+    Reintentar lo definitivo es martillar la API sin sentido; NO reintentar lo
+    pasajero es perder el mensaje. La distinción importa.
+    """
+    codigo = getattr(e, "code", None) or getattr(e, "status_code", None)
+    if codigo in (429, 500, 502, 503, 504):
+        return True
+    return isinstance(e, (asyncio.TimeoutError, ConnectionError, OSError))
+
+
+async def _fallo(fila: dict, e: Exception, bot) -> None:
+    """Decide si la fila vuelve a la cola o se da por perdida."""
+    bandeja_id = fila["id"]
+
+    if _es_pasajero(e) and fila.get("intentos", 0) < MAX_INTENTOS:
+        # Espera que se duplica: 30s, 60s, 120s… así un corte largo no se
+        # convierte en un martilleo contra la API.
+        espera = ESPERA_BASE_S * (2 ** fila.get("intentos", 0))
+        n = await db.devolver_a_cola(bandeja_id, espera)
+        log.warning(
+            "Fallo pasajero en #%s (%s). Reintento %s/%s en %ss.",
+            bandeja_id, type(e).__name__, n, MAX_INTENTOS, espera,
+        )
+        # A propósito NO le avisamos a Tiziano: en 30 segundos lo más probable
+        # es que funcione. Avisar de algo que se arregla solo es ruido, y el
+        # pilar de silencio inteligente dice que hay que ganarse la interrupción.
+        return
+
+    log.exception("Fallo definitivo interpretando #%s", bandeja_id)
+    await db.marcar_error(bandeja_id, f"{type(e).__name__}: {e}")
+    await bot.send_message(
+        chat_id=fila["chat_id"],
+        text=f"⚠️ Guardé tu mensaje (#{bandeja_id}) pero no logro interpretarlo.\n"
+             "Está a salvo en la bandeja: no se perdió nada.",
+        reply_to_message_id=fila.get("telegram_msg_id"),
+    )
+
+
 async def _procesar(fila: dict, bot) -> None:
     """Interpreta una fila y reporta. Un fallo acá no puede tumbar el bucle."""
     bandeja_id = fila["id"]
@@ -98,15 +144,7 @@ async def _procesar(fila: dict, bot) -> None:
     try:
         r = await gemini.interpretar_texto(texto)
     except Exception as e:
-        # El mensaje crudo sigue intacto en la bandeja: se puede reintentar.
-        log.exception("Gemini falló interpretando #%s", bandeja_id)
-        await db.marcar_error(bandeja_id, f"{type(e).__name__}: {e}")
-        await bot.send_message(
-            chat_id=fila["chat_id"],
-            text=f"⚠️ Guardé tu mensaje (#{bandeja_id}) pero no pude interpretarlo. "
-                 "Sigue a salvo, lo reintento cuando se arregle.",
-            reply_to_message_id=fila.get("telegram_msg_id"),
-        )
+        await _fallo(fila, e, bot)
         return
 
     await db.guardar_interpretacion(bandeja_id, r.get("clasificacion", "nota"), r)
