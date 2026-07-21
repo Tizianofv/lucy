@@ -1,34 +1,30 @@
-"""Orquesta la comprensión: toma filas 'sin_procesar' de la bandeja, transcribe
-la voz si hace falta, la pasa por el cerebro y le cuenta a Tiziano qué entendió.
+"""El despachador: toma filas 'sin_procesar', vuelve texto lo que haga falta
+(voz, foto) y le entrega el mensaje al agente.
 
 Corre en un bucle propio, desacoplado de la captura. Ese desacople es la razón
-de ser del diseño: si la IA se cae o tarda, la captura sigue respondiendo ✅ al
-instante y los mensajes se apilan acá esperando. Nada se pierde, nada se traba.
+de ser del diseño: si la IA se cae o tarda, la captura sigue respondiendo ✅
+al instante y los mensajes se apilan acá esperando. Nada se pierde.
 
-Estado: Nivel 2 completo en el camino feliz. Interpreta, reporta y —con el ✅
-de Tiziano— crea la tarea/cita/nota/gasto de verdad. La charla se responde sin
-guardar nada; las preguntas todavía no se saben consultar (req 10).
+Este módulo ya no entiende nada por sí mismo. Antes era un pasillo de salones
+—clasificar, y según la puerta un prompt distinto—; ahora la comprensión
+entera vive en cerebro/agente.py, que trabaja con herramientas y puede
+preguntarle a Tiziano por Telegram cuando no sabe (la ventana). Acá queda lo
+que no es pensar: la cola, los reintentos con espera creciente, y la
+distinción entre un tropiezo pasajero y un fallo real.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
-from html import escape
 
 import openai
 import telegram.error
 
-import acciones.botones as botones
-import acciones.crud as crud
-import cerebro.consultar as consultar
-import cerebro.deepseek as motor
-import cerebro.ordenar as ordenar
+import cerebro.agente as agente
 import cerebro.preguntar as preguntar
 import cerebro.vision as vision
 import cerebro.whisper as whisper
 import db.db as db
-from cerebro.deepseek import DIAS, ICONO
 
 log = logging.getLogger("lucy.interpretar")
 
@@ -39,73 +35,6 @@ INTERVALO_S = 5
 # Reintentos ante fallos pasajeros (cuota de la IA, red). 30s, 60s, 120s…
 MAX_INTENTOS = 5
 ESPERA_BASE_S = 30
-
-
-
-def _fecha_legible(iso: str) -> str:
-    """ISO 8601 → 'martes 21/07 10:00'. Devuelve el crudo si no parsea."""
-    try:
-        d = datetime.fromisoformat(iso)
-    except (TypeError, ValueError):
-        return iso
-    hora = "" if (d.hour == 0 and d.minute == 0) else d.strftime(" %H:%M")
-    return f"{DIAS[d.weekday()]} {d.strftime('%d/%m')}{hora}"
-
-
-def _formatear(bandeja_id: int, r: dict, oido: str | None = None) -> str:
-    """Arma el mensaje que Lucy manda con lo que entendió.
-
-    Los supuestos van SIEMPRE visibles, no escondidos: el req 9 pide que Lucy
-    confiese lo que dedujo. Un asistente que asume en silencio es un asistente
-    en el que no se puede confiar.
-
-    `oido` es la transcripción, cuando el mensaje fue una nota de voz. Se
-    muestra por la misma razón: si Whisper entendió mal, tenés que poder verlo
-    en el momento y no descubrirlo por una tarea absurda tres días después.
-    """
-    # esc() es obligatorio en TODO lo que venga de vos o del modelo: el mensaje
-    # va con parse_mode HTML, así que un "<" en "gasté <1200" o un "&" en un
-    # título haría que Telegram rechace el mensaje entero y la tarjeta se pierda.
-    esc = escape
-
-    clas = r.get("clasificacion", "nota")
-    lineas = [f"{ICONO.get(clas, '•')} <b>{clas.capitalize()}</b> · #{bandeja_id}",
-              f"<b>{esc(str(r.get('titulo', '')))}</b>"]
-
-    if oido:
-        lineas.append(f"🎙 <i>«{esc(oido)}»</i>")
-
-    if r.get("detalle"):
-        lineas.append(esc(str(r["detalle"])))
-
-    datos = []
-    if r.get("cuando"):
-        datos.append(f"🕐 {esc(_fecha_legible(r['cuando']))}")
-    if r.get("duracion_min"):
-        datos.append(f"⏱ {r['duracion_min']} min")
-    if r.get("lugar"):
-        datos.append(f"📍 {esc(str(r['lugar']))}")
-    if r.get("persona"):
-        datos.append(f"👤 {esc(str(r['persona']))}")
-    if r.get("monto"):
-        datos.append(f"💵 {r['monto']:g} {esc(str(r.get('moneda') or 'DOP'))}")
-    if r.get("proyecto"):
-        datos.append(f"🗂 {esc(str(r['proyecto']))}")
-    if datos:
-        lineas.append("")
-        lineas.extend(datos)
-
-    if r.get("supuestos"):
-        lineas.append("")
-        lineas.append("<i>Asumí:</i>")
-        lineas.extend(f"· <i>{esc(s)}</i>" for s in r["supuestos"])
-
-    if r.get("falta"):
-        lineas.append("")
-        lineas.append("<i>Me falta saber:</i>")
-        lineas.extend(f"· <i>{esc(f)}</i>" for f in r["falta"])
-
-    return "\n".join(lineas)
 
 
 def _es_pasajero(e: Exception) -> bool:
@@ -159,38 +88,20 @@ async def _fallo(fila: dict, e: Exception, bot) -> None:
         # pilar de silencio inteligente dice que hay que ganarse la interrupción.
         return
 
-    log.exception("Fallo definitivo interpretando #%s", bandeja_id)
+    log.exception("Fallo definitivo en #%s", bandeja_id)
     await db.marcar_error(bandeja_id, f"{type(e).__name__}: {e}")
 
-    # Preguntar en vez de informar el error. Lo que Tiziano dijo puede estar
-    # crudo (el texto sin interpretar) o transcripto; con eso alcanza para que
-    # Lucy arme una repregunta concreta en lugar de un aviso que no lleva a
-    # ninguna parte.
+    # Preguntar en vez de informar el error: una pregunta concreta deja la
+    # conversación viva; un "no pude" la mata.
     dicho = fila.get("transcripcion") or fila.get("contenido_raw") or ""
     pregunta = await preguntar.repreguntar(dicho, f"{type(e).__name__}: {e}")
-    await _enviar(
+    await agente._enviar(
         bot,
         text=f"{pregunta}\n\n(Tu mensaje quedó guardado como #{bandeja_id}, "
              f"no se perdió nada.)",
         chat_id=fila["chat_id"],
         reply_to_message_id=fila.get("telegram_msg_id"),
     )
-
-
-async def _enviar(bot, text: str, **kw):
-    """Manda un mensaje, blindado contra el vacío.
-
-    Telegram rechaza un texto vacío. Si ese rechazo ocurre después de haber
-    marcado la fila como procesada, el resultado es silencio permanente: Lucy
-    convencida de que contestó y Tiziano esperando una respuesta que no existe.
-    Pasó con la pregunta #26. Un texto feo es mejor que ninguno.
-
-    El recorte a 4000 es por el límite de Telegram: un mensaje más largo se
-    rechaza entero, y perder la respuesta completa por larga es la misma
-    falla con otra excusa.
-    """
-    limpio = (text or "").strip() or "Me quedé sin palabras — algo salió mal de mi lado."
-    return await bot.send_message(text=limpio[:4000], **kw)
 
 
 async def _obtener_texto(fila: dict, bot) -> str | None:
@@ -200,7 +111,7 @@ async def _obtener_texto(fila: dict, bot) -> str | None:
     un archivo que hay que volver texto antes de poder entenderlo. Whisper y
     gpt-4o-mini son intercambiables acá — cambia el traductor, no el recorrido.
 
-    Lo leído se guarda ANTES de interpretar: si DeepSeek falla después, el
+    Lo leído se guarda ANTES de interpretar: si el agente falla después, el
     reintento no vuelve a pagar —ni a esperar— la lectura del archivo.
     """
     tipo = fila["tipo_entrada"]
@@ -225,228 +136,15 @@ async def _obtener_texto(fila: dict, bot) -> str | None:
 
 
 async def _procesar(fila: dict, bot) -> None:
-    """Interpreta una fila y reporta. Un fallo acá no puede tumbar el bucle."""
-    bandeja_id = fila["id"]
-
+    """Un mensaje → texto → agente. Un fallo acá no puede tumbar el bucle."""
     try:
         texto = await _obtener_texto(fila, bot)
+        if not texto or not texto.strip():
+            await db.marcar_error(fila["id"], "Sin contenido que interpretar.")
+            return
+        await agente.atender(fila, texto, bot)
     except Exception as e:
         await _fallo(fila, e, bot)
-        return
-
-    if not texto or not texto.strip():
-        await db.marcar_error(bandeja_id, "Sin contenido que interpretar.")
-        return
-
-    try:
-        r = await motor.interpretar_texto(texto, origen=fila["tipo_entrada"])
-    except Exception as e:
-        await _fallo(fila, e, bot)
-        return
-
-    clas = r["clasificacion"]
-    oido = texto if fila["tipo_entrada"] == "audio" else None
-    responder = dict(
-        chat_id=fila["chat_id"],
-        parse_mode="HTML",
-        reply_to_message_id=fila.get("telegram_msg_id"),
-    )
-
-    # ── Charla: se responde y se archiva ahí mismo ──────────────────────
-    # No crea entidad, no lleva botones, no queda esperando nada. Un "buenos
-    # días" no es material de agenda, y pedirle a Tiziano que apruebe un
-    # saludo con un botón sería el opuesto exacto del silencio inteligente.
-    if clas == "charla":
-        salida = escape(r.get("respuesta") or "👋")
-        if oido:
-            salida = f"🎙 <i>«{escape(oido)}»</i>\n\n{salida}"
-        # Mandar ANTES de marcar procesado: si el envío falla, la fila queda
-        # para reintentar en vez de darse por contestada en silencio.
-        await _enviar(bot, salida, **responder)
-        await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
-        log.info("Charla #%s", bandeja_id)
-        return
-
-    # ── Pregunta: se consulta la base y se responde ─────────────────────
-    # La respuesta va sin parse_mode: la escribe un modelo y podría traer un
-    # "<" o un "&" en el nombre de un comercio. Con HTML activo, eso haría que
-    # Telegram rechazara el mensaje entero y la respuesta se perdiera.
-    if clas == "pregunta":
-        plano = {k: v for k, v in responder.items() if k != "parse_mode"}
-        try:
-            res = await consultar.responder(texto)
-            salida = res["texto"]
-            if oido:
-                salida = f"🎙 «{oido}»\n\n{salida}"
-            # El envío va DENTRO del try y ANTES de marcar procesado. Consultar
-            # de nuevo no cuesta nada, así que es preferible reintentar a darse
-            # por contestada sin haber dicho una palabra.
-            await _enviar(bot, salida, **plano)
-        except Exception as e:
-            if _es_pasajero(e):
-                await _fallo(fila, e, bot)  # cuota o red: vuelve a la cola
-                return
-            log.exception("No pude responder la pregunta #%s", bandeja_id)
-            await db.marcar_error(bandeja_id, f"{type(e).__name__}: {e}")
-            try:
-                # Acá es donde el cinturón tiene que actuar: si no supo, que
-                # pregunte. Un "me tropecé" es un callejón sin salida; una
-                # pregunta concreta deja la conversación viva.
-                await _enviar(bot, await preguntar.repreguntar(texto, str(e)), **plano)
-            except Exception:
-                log.exception("Tampoco pude avisar del fallo de #%s", bandeja_id)
-            return
-
-        # El SQL queda guardado con la interpretación: si mañana Tiziano
-        # pregunta por qué contestó eso, la respuesta es auditable (req 36).
-        r["consulta_sql"] = res.get("sql")
-        r["consulta_explicacion"] = res.get("explicacion")
-        await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
-        log.info("Pregunta #%s respondida", bandeja_id)
-        return
-
-    # ── Orden: cambiar algo que ya existe. Se PROPONE, no se aplica ─────
-    # El cinturón es la pregunta: Lucy planea el cambio, muestra qué haría y
-    # espera el ✅. Si hay varios candidatos, tampoco elige — los ofrece.
-    if clas == "orden":
-        try:
-            res = await ordenar.planear(texto)
-        except Exception as e:
-            if _es_pasajero(e):
-                await _fallo(fila, e, bot)
-                return
-            log.exception("No pude planear la orden #%s", bandeja_id)
-            await db.marcar_error(bandeja_id, f"{type(e).__name__}: {e}")
-            await _enviar(
-                bot,
-                text=await preguntar.repreguntar(texto, str(e)),
-                **{k: v for k, v in responder.items() if k != "parse_mode"},
-            )
-            return
-
-        # Sin plan o sin candidatos: no hay nada que confirmar, se avisa.
-        if not res["plan"] or not res["candidatos"]:
-            await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
-            aviso = res["aclaracion"] or "No encontré nada que coincida con eso."
-            await _enviar(
-                bot,
-                text=f"🛠 {aviso}",
-                **{k: v for k, v in responder.items() if k != "parse_mode"},
-            )
-            log.info("Orden #%s sin candidatos", bandeja_id)
-            return
-
-        plan = res["plan"]
-        candidatos = [(c["id"], ordenar.describir(c)) for c in res["candidatos"]]
-
-        # ── Un solo candidato: entendió, hace y avisa ────────────────────
-        # Preguntar acá sería un peaje: la respuesta iba a ser que sí. El
-        # cinturón queda igual, pero como botón de deshacer.
-        if len(candidatos) == 1:
-            rid, etiqueta = candidatos[0]
-            motivo = f"Orden de Tiziano (bandeja #{bandeja_id}): {plan['resumen']}"
-            try:
-                if plan["accion"] == "borrar":
-                    log_id = await crud.borrar(plan["tabla"], rid, motivo)
-                    aplicado = log_id is not None
-                else:
-                    despues, log_id = await crud.editar(
-                        plan["tabla"], rid, plan.get("cambios") or {}, motivo)
-                    aplicado = despues is not None
-            except Exception as e:
-                if _es_pasajero(e):
-                    await _fallo(fila, e, bot)
-                    return
-                log.exception("Fallo aplicando la orden #%s", bandeja_id)
-                await db.marcar_error(bandeja_id, f"{type(e).__name__}: {e}")
-                await _enviar(
-                    bot,
-                    text=await preguntar.repreguntar(texto, str(e)),
-                    **{k: v for k, v in responder.items() if k != "parse_mode"},
-                )
-                return
-
-            await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
-            if not aplicado:
-                await _enviar(
-                    bot,
-                    text="🛠 Eso ya no está ahí.",
-                    **{k: v for k, v in responder.items() if k != "parse_mode"},
-                )
-                return
-            await _enviar(
-                bot,
-                text=f"✅ {escape(plan['resumen'])}",
-                reply_markup=botones.teclado_deshacer(log_id),
-                **responder,
-            )
-            log.info("Orden #%s aplicada sola sobre %s#%s",
-                     bandeja_id, plan["tabla"], rid)
-            return
-
-        # ── Varios candidatos: ACÁ sí se pregunta ────────────────────────
-        # Elegir por su cuenta cuál de tres reuniones mover sería adivinar
-        # sobre datos reales. Este es el golpe donde el cinturón actúa.
-        r["plan"] = plan
-        await db.guardar_interpretacion(bandeja_id, clas, r)
-        await _enviar(
-            bot,
-            text=f"🛠 <b>{escape(plan['resumen'])}</b>\n\n"
-                 f"<i>Encontré {len(candidatos)}. ¿Cuál?</i>",
-            reply_markup=botones.teclado_orden(bandeja_id, candidatos),
-            **responder,
-        )
-        log.info("Orden #%s con %s candidatos: pregunto", bandeja_id, len(candidatos))
-        return
-
-    # ── Duda de clasificación: pregunta antes de escribir ────────────────
-    # Si no sabe si es tarea o nota, crear una de las dos y avisar sería
-    # elegir por él. Acá la pregunta cuesta menos que la corrección.
-    if r.get("alternativa"):
-        await db.guardar_interpretacion(bandeja_id, clas, r)
-        await _enviar(
-            bot,
-            text=_formatear(bandeja_id, r, oido=oido),
-            reply_markup=botones.teclado(bandeja_id, r["alternativa"]),
-            **responder,
-        )
-        log.info("Interpretado #%s como %s (duda con %s); pregunto",
-                 bandeja_id, clas, r["alternativa"])
-        return
-
-    # ── Segura: crea y avisa, con el deshacer a mano ─────────────────────
-    try:
-        tabla, registro_id, log_id = await crud.crear_desde_interpretacion(
-            bandeja_id, r, motivo=f"Entendido de la bandeja #{bandeja_id}")
-    except crud.FaltanDatos as e:
-        # Falta un dato obligatorio: no puede crear nada, así que pregunta.
-        # Es el mismo criterio de siempre — la duda es lo que dispara la
-        # pregunta, no el tipo de operación.
-        r["falta"] = list(r.get("falta") or []) + [f"me falta {e}"]
-        await db.guardar_interpretacion(bandeja_id, clas, r)
-        await _enviar(
-            bot,
-            text=_formatear(bandeja_id, r, oido=oido),
-            reply_markup=botones.teclado(bandeja_id),
-            **responder,
-        )
-        log.info("Interpretado #%s como %s pero falta %s", bandeja_id, clas, e)
-        return
-    except Exception as e:
-        if _es_pasajero(e):
-            await _fallo(fila, e, bot)
-            return
-        raise
-
-    await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
-    await _enviar(
-        bot,
-        text=f"{_formatear(bandeja_id, r, oido=oido)}\n\n<i>Guardado</i> ✅",
-        reply_markup=botones.teclado_deshacer(log_id),
-        **responder,
-    )
-    log.info("Interpretado #%s como %s -> %s#%s (sin preguntar)",
-             bandeja_id, clas, tabla, registro_id)
 
 
 async def bucle(bot) -> None:

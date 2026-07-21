@@ -187,6 +187,70 @@ async def marcar_error(bandeja_id: int, detalle: str) -> None:
         )
 
 
+async def guardar_respuesta(bandeja_id: int, texto: str) -> None:
+    """Guarda lo que Lucy contestó. Es SU mitad de la conversación.
+
+    Sin esto no hay memoria conversacional posible: "movelo a las 6" solo se
+    entiende si se recuerda qué se dijo justo antes — de los dos lados.
+    """
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE bandeja SET respuesta_lucy = %s WHERE id = %s",
+            (texto[:4000], bandeja_id),
+        )
+
+
+async def ultimos_intercambios(
+    chat_id: int, excluir: list[int], n: int = 6
+) -> list[dict]:
+    """Los últimos n intercambios (lo que dijo Tiziano, lo que contestó Lucy).
+
+    Es la memoria corta del agente (req 11). Se excluyen las filas que ya
+    viajan aparte en el contexto (la actual y la pendiente) para no duplicar.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT id, tipo_entrada,
+                   coalesce(transcripcion, contenido_raw) AS dicho,
+                   respuesta_lucy
+              FROM bandeja
+             WHERE chat_id = %s
+               AND NOT (id = ANY(%s))
+               AND coalesce(transcripcion, contenido_raw) IS NOT NULL
+             ORDER BY id DESC
+             LIMIT %s
+            """,
+            (chat_id, excluir or [0], n),
+        )
+        filas = await cur.fetchall()
+    return list(reversed(filas))
+
+
+async def buscar_esperando_respuesta(chat_id: int, excluir_id: int) -> dict | None:
+    """La conversación que quedó abierta cuando Lucy preguntó algo (si hay).
+
+    NO la marca como cerrada: eso se hace recién cuando el mensaje nuevo se
+    procesa hasta el final. Si esto la cerrara al leerla y el procesamiento
+    fallara a mitad de camino, el reintento arrancaría sin el contexto — la
+    ventana se habría cerrado sola con la pregunta adentro.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT id, interpretacion
+              FROM bandeja
+             WHERE chat_id = %s AND estado = 'esperando_respuesta' AND id <> %s
+             ORDER BY id DESC
+             LIMIT 1
+            """,
+            (chat_id, excluir_id),
+        )
+        return await cur.fetchone()
+
+
 async def obtener(bandeja_id: int) -> dict | None:
     """Trae una fila completa de la bandeja. La usa el manejador de botones."""
     async with pool.connection() as conn:

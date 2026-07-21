@@ -17,9 +17,14 @@ CREATE TABLE bandeja (
   chat_id          BIGINT,                            -- para responder/editar el msg exacto
   telegram_msg_id  BIGINT,                            --   y base de "muévelo a las 6"
   hash_contenido   TEXT,                              -- dedup futuro (req 20)
-  transcripcion    TEXT,                              -- Gemini: audio → texto, foto → datos
+  transcripcion    TEXT,                              -- audio → texto, foto → texto leído
+  respuesta_lucy   TEXT,                              -- lo que Lucy contestó: la mitad
+                                                      --   suya de la conversación (req 11)
   estado           TEXT NOT NULL DEFAULT 'sin_procesar',
-    -- sin_procesar | esperando_confirmacion | procesado | descartado | error
+    -- sin_procesar | procesando | esperando_confirmacion | esperando_respuesta
+    -- | procesado | descartado | error
+    -- esperando_respuesta = Lucy preguntó algo por Telegram y la conversación
+    -- sigue cuando Tiziano conteste (la ventana del agente)
   clasificacion    TEXT,          -- tarea|cita|nota|idea|gasto|pregunta
   interpretacion   JSONB,         -- extracción estructurada completa
   procesado_en     TIMESTAMPTZ,
