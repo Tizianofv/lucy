@@ -57,6 +57,30 @@ def teclado(bandeja_id: int, alternativa: str = "") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[ok, alt], [no]])
 
 
+def teclado_orden(
+    bandeja_id: int, candidatos: list[tuple[int, str]]
+) -> InlineKeyboardMarkup:
+    """Botones para confirmar un cambio sobre algo que ya existe.
+
+    Con un solo candidato es un simple "dale". Con varios, cada uno es un
+    botón: ahí la pregunta ES el cinturón. Lucy no elige por su cuenta cuál
+    de tres reuniones mover — eso sería adivinar sobre datos reales, que es la
+    forma más silenciosa de equivocarse.
+    """
+    if len(candidatos) == 1:
+        filas = [[InlineKeyboardButton(
+            "✅ Dale", callback_data=f"acc:{bandeja_id}:{candidatos[0][0]}")]]
+    else:
+        filas = [
+            [InlineKeyboardButton(f"👉 {etiqueta}"[:60],
+                                  callback_data=f"acc:{bandeja_id}:{rid}")]
+            for rid, etiqueta in candidatos
+        ]
+    filas.append([InlineKeyboardButton(
+        "🗑 Cancelar", callback_data=f"no:{bandeja_id}")])
+    return InlineKeyboardMarkup(filas)
+
+
 async def _cerrar_tarjeta(q, remate: str) -> None:
     """Saca los botones y deja escrito en qué terminó la tarjeta.
 
@@ -85,9 +109,12 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     try:
-        accion, sid = q.data.split(":", 1)
-        bandeja_id = int(sid)
-    except (ValueError, AttributeError):
+        partes = (q.data or "").split(":")
+        accion = partes[0]
+        bandeja_id = int(partes[1])
+        # Las órdenes llevan un tercer campo: sobre qué fila hay que actuar.
+        registro_id = int(partes[2]) if len(partes) > 2 else None
+    except (ValueError, IndexError, AttributeError):
         await q.answer("Botón ilegible.", show_alert=True)
         return
 
@@ -102,6 +129,42 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # crear la entidad, no borrar lo que dijo Tiziano.
         await _cerrar_tarjeta(q, "🗑 <b>Descartado</b> · sigue guardado en la bandeja")
         log.info("Descartado #%s", bandeja_id)
+        return
+
+    # ── Orden: aplicar un cambio sobre algo que ya existe ───────────────
+    if accion == "acc":
+        if not await db.cambiar_estado(bandeja_id, "procesado",
+                                       desde="esperando_confirmacion"):
+            await _cerrar_tarjeta(q, "<i>(ya estaba resuelto)</i>")
+            return
+
+        fila = await db.obtener(bandeja_id)
+        plan = ((fila or {}).get("interpretacion") or {}).get("plan")
+        if not plan or registro_id is None:
+            await db.cambiar_estado(bandeja_id, "esperando_confirmacion")
+            await _cerrar_tarjeta(q, "⚠️ <b>Perdí el plan de esa orden</b>")
+            return
+
+        motivo = (f"Orden de Tiziano (bandeja #{bandeja_id}): "
+                  f"{plan.get('resumen') or plan.get('accion')}")
+        try:
+            if plan.get("accion") == "borrar":
+                hecho = await crud.borrar(plan["tabla"], registro_id, motivo)
+                remate = ("🗑 <b>Archivado</b> · se puede deshacer"
+                          if hecho else "⚠️ Ya no estaba ahí")
+            else:
+                despues = await crud.editar(
+                    plan["tabla"], registro_id, plan.get("cambios") or {}, motivo)
+                remate = ("✅ <b>Hecho</b>" if despues else "⚠️ Ya no estaba ahí")
+        except Exception as e:
+            await db.cambiar_estado(bandeja_id, "esperando_confirmacion")
+            log.exception("Fallo aplicando la orden de #%s", bandeja_id)
+            await q.answer(f"No pude aplicarlo: {e}"[:190], show_alert=True)
+            return
+
+        await _cerrar_tarjeta(q, remate)
+        log.info("Orden aplicada: %s %s#%s", plan.get("accion"),
+                 plan.get("tabla"), registro_id)
         return
 
     if accion not in ("ok", "alt"):

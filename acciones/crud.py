@@ -13,6 +13,7 @@ poder explicar de dónde salió algo que ella misma creó.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta
 
 from psycopg.rows import dict_row
@@ -178,6 +179,74 @@ async def crear_desde_interpretacion(
         )
 
     return tabla, registro_id
+
+
+# Lo único que no se edita. Cambiar esto no habilitaría nada: rompería la
+# trazabilidad (bandeja_id, creado_en) o la identidad de la fila (id). Es lista
+# NEGRA y no blanca a propósito — todo lo demás es editable sin que haya que
+# venir a autorizarlo campo por campo cada vez que Lucy aprenda algo nuevo.
+NO_EDITABLES = {"id", "bandeja_id", "creado_en", "borrado_en"}
+
+_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}([T ]|$)")
+
+
+def _adaptar(v):
+    """Las fechas viajan como texto ISO en el JSON del modelo; Postgres las
+    quiere como datetime para una columna timestamptz."""
+    if isinstance(v, str) and _ISO.match(v):
+        try:
+            return datetime.fromisoformat(v)
+        except ValueError:
+            return v
+    return v
+
+
+async def editar(
+    tabla: str, registro_id: int, cambios: dict, motivo: str
+) -> dict | None:
+    """Aplica cambios a una fila existente. Devuelve el 'después', o None.
+
+    Guarda el antes Y el después en el log: con eso, deshacer una edición es
+    volver a escribir el 'antes', igual que con el borrado.
+    """
+    if tabla not in TABLAS:
+        raise ValueError(f"Tabla no permitida: {tabla}")
+
+    campos = {k: _adaptar(v) for k, v in cambios.items() if k not in NO_EDITABLES}
+    if not campos:
+        raise ValueError("No hay nada que cambiar.")
+
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            f"SELECT * FROM {tabla} WHERE id = %s AND borrado_en IS NULL",
+            (registro_id,),
+        )
+        antes = await cur.fetchone()
+        if antes is None:
+            return None
+
+        # Los nombres de columna se interpolan (no se pueden parametrizar), así
+        # que se validan contra las columnas reales de la fila que acabamos de
+        # leer. Nada que no exista en la tabla llega al UPDATE.
+        desconocidas = set(campos) - set(antes)
+        if desconocidas:
+            raise ValueError(f"Esa tabla no tiene: {', '.join(sorted(desconocidas))}")
+
+        asignaciones = ", ".join(f"{c} = %s" for c in campos)
+        await conn.execute(
+            f"UPDATE {tabla} SET {asignaciones} WHERE id = %s",
+            (*campos.values(), registro_id),
+        )
+        await cur.execute(f"SELECT * FROM {tabla} WHERE id = %s", (registro_id,))
+        despues = await cur.fetchone()
+
+        await _registrar(
+            conn, accion="editar", tabla=tabla, registro_id=registro_id,
+            antes=antes, despues=despues, motivo=motivo,
+            bandeja_id=antes.get("bandeja_id"),
+        )
+    return despues
 
 
 async def borrar(tabla: str, registro_id: int, motivo: str) -> bool:

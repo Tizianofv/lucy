@@ -22,6 +22,7 @@ import telegram.error
 import acciones.botones as botones
 import cerebro.consultar as consultar
 import cerebro.deepseek as motor
+import cerebro.ordenar as ordenar
 import cerebro.vision as vision
 import cerebro.whisper as whisper
 import db.db as db
@@ -270,6 +271,56 @@ async def _procesar(fila: dict, bot) -> None:
             salida = f"🎙 «{oido}»\n\n{salida}"
         await bot.send_message(text=salida, **plano)
         log.info("Pregunta #%s respondida", bandeja_id)
+        return
+
+    # ── Orden: cambiar algo que ya existe. Se PROPONE, no se aplica ─────
+    # El cinturón es la pregunta: Lucy planea el cambio, muestra qué haría y
+    # espera el ✅. Si hay varios candidatos, tampoco elige — los ofrece.
+    if clas == "orden":
+        try:
+            res = await ordenar.planear(texto)
+        except Exception as e:
+            if _es_pasajero(e):
+                await _fallo(fila, e, bot)
+                return
+            log.exception("No pude planear la orden #%s", bandeja_id)
+            await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
+            await bot.send_message(
+                text="🛠 Entendí que querés cambiar algo, pero me tropecé "
+                     "buscándolo. Probá diciéndomelo de otra forma.",
+                **{k: v for k, v in responder.items() if k != "parse_mode"},
+            )
+            return
+
+        # Sin plan o sin candidatos: no hay nada que confirmar, se avisa.
+        if not res["plan"] or not res["candidatos"]:
+            await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
+            aviso = res["aclaracion"] or "No encontré nada que coincida con eso."
+            await bot.send_message(
+                text=f"🛠 {aviso}",
+                **{k: v for k, v in responder.items() if k != "parse_mode"},
+            )
+            log.info("Orden #%s sin candidatos", bandeja_id)
+            return
+
+        r["plan"] = res["plan"]
+        await db.guardar_interpretacion(bandeja_id, clas, r)
+
+        candidatos = [(c["id"], ordenar.describir(c)) for c in res["candidatos"]]
+        lineas = [f"🛠 <b>{escape(res['plan']['resumen'])}</b>"]
+        if len(candidatos) > 1:
+            lineas.append("")
+            lineas.append(f"<i>Encontré {len(candidatos)}. ¿Cuál?</i>")
+        else:
+            lineas.append("")
+            lineas.append(f"<i>{escape(candidatos[0][1])}</i>")
+
+        await bot.send_message(
+            text="\n".join(lineas),
+            reply_markup=botones.teclado_orden(bandeja_id, candidatos),
+            **responder,
+        )
+        log.info("Orden #%s propuesta (%s candidatos)", bandeja_id, len(candidatos))
         return
 
     # ── Lo demás sí se puede convertir en una fila: tarjeta + botones ────

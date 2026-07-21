@@ -37,7 +37,8 @@ MODELO = "deepseek-v4-flash"
 
 DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 
-CLASES = ("tarea", "cita", "nota", "idea", "gasto", "ingreso", "pregunta", "charla")
+CLASES = ("tarea", "cita", "nota", "idea", "gasto", "ingreso",
+          "pregunta", "orden", "charla")
 
 # Las que se convierten en una fila de verdad. El resto (pregunta, charla) se
 # responde y se archiva: no todo lo que Tiziano dice es algo para guardar.
@@ -51,6 +52,7 @@ ICONO = {
     "gasto": "💸",
     "ingreso": "💰",
     "pregunta": "❓",
+    "orden": "🛠",
     "charla": "💬",
 }
 
@@ -118,7 +120,14 @@ CLASIFICACIÓN:
             papel diga "transferencia". Confundir esto le invierte el balance.
   nota → información para guardar, sin acción
   idea → algo que se le ocurrió y no quiere perder
-  pregunta → quiere consultar SUS datos (agenda, pendientes, gastos)
+  pregunta → quiere CONSULTAR sus datos (agenda, pendientes, gastos)
+  orden → quiere CAMBIAR algo que ya existe: marcarlo como hecho, moverlo de
+          hora, corregir un dato, archivarlo.
+          Lo que separa "tarea" de "orden" es si la cosa ya existe:
+            "llamar al contador"          → tarea (nace algo nuevo)
+            "ya llamé al contador"        → orden (completar la que existe)
+            "movelo a las 6"              → orden (cambiar una que existe)
+            "esa reunión era el jueves"   → orden (corregir una que existe)
   charla → saludos, cortesías, bromas, "¿estás ahí?", "gracias": conversación
            que no pide guardar NADA ni consultar NADA
 
