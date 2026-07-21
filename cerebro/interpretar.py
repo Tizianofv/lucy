@@ -168,6 +168,22 @@ async def _fallo(fila: dict, e: Exception, bot) -> None:
     )
 
 
+async def _enviar(bot, text: str, **kw):
+    """Manda un mensaje, blindado contra el vacío.
+
+    Telegram rechaza un texto vacío. Si ese rechazo ocurre después de haber
+    marcado la fila como procesada, el resultado es silencio permanente: Lucy
+    convencida de que contestó y Tiziano esperando una respuesta que no existe.
+    Pasó con la pregunta #26. Un texto feo es mejor que ninguno.
+
+    El recorte a 4000 es por el límite de Telegram: un mensaje más largo se
+    rechaza entero, y perder la respuesta completa por larga es la misma
+    falla con otra excusa.
+    """
+    limpio = (text or "").strip() or "Me quedé sin palabras — algo salió mal de mi lado."
+    return await bot.send_message(text=limpio[:4000], **kw)
+
+
 async def _obtener_texto(fila: dict, bot) -> str | None:
     """Devuelve el texto a interpretar, leyendo la voz o la foto si hace falta.
 
@@ -232,11 +248,13 @@ async def _procesar(fila: dict, bot) -> None:
     # días" no es material de agenda, y pedirle a Tiziano que apruebe un
     # saludo con un botón sería el opuesto exacto del silencio inteligente.
     if clas == "charla":
-        await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
         salida = escape(r.get("respuesta") or "👋")
         if oido:
             salida = f"🎙 <i>«{escape(oido)}»</i>\n\n{salida}"
-        await bot.send_message(text=salida, **responder)
+        # Mandar ANTES de marcar procesado: si el envío falla, la fila queda
+        # para reintentar en vez de darse por contestada en silencio.
+        await _enviar(bot, salida, **responder)
+        await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
         log.info("Charla #%s", bandeja_id)
         return
 
@@ -248,17 +266,28 @@ async def _procesar(fila: dict, bot) -> None:
         plano = {k: v for k, v in responder.items() if k != "parse_mode"}
         try:
             res = await consultar.responder(texto)
+            salida = res["texto"]
+            if oido:
+                salida = f"🎙 «{oido}»\n\n{salida}"
+            # El envío va DENTRO del try y ANTES de marcar procesado. Consultar
+            # de nuevo no cuesta nada, así que es preferible reintentar a darse
+            # por contestada sin haber dicho una palabra.
+            await _enviar(bot, salida, **plano)
         except Exception as e:
             if _es_pasajero(e):
                 await _fallo(fila, e, bot)  # cuota o red: vuelve a la cola
                 return
-            log.exception("No pude consultar para #%s", bandeja_id)
-            await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
-            await bot.send_message(
-                text="❓ Entendí la pregunta pero me tropecé armando la consulta. "
-                     "Probá diciéndomelo de otra forma.",
-                **plano,
-            )
+            log.exception("No pude responder la pregunta #%s", bandeja_id)
+            await db.marcar_error(bandeja_id, f"{type(e).__name__}: {e}")
+            try:
+                await _enviar(
+                    bot,
+                    "❓ Entendí la pregunta pero me tropecé buscando la respuesta. "
+                    "Probá diciéndomelo de otra forma.",
+                    **plano,
+                )
+            except Exception:
+                log.exception("Tampoco pude avisar del fallo de #%s", bandeja_id)
             return
 
         # El SQL queda guardado con la interpretación: si mañana Tiziano
@@ -266,11 +295,6 @@ async def _procesar(fila: dict, bot) -> None:
         r["consulta_sql"] = res.get("sql")
         r["consulta_explicacion"] = res.get("explicacion")
         await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
-
-        salida = res["texto"]
-        if oido:
-            salida = f"🎙 «{oido}»\n\n{salida}"
-        await bot.send_message(text=salida, **plano)
         log.info("Pregunta #%s respondida", bandeja_id)
         return
 
@@ -286,7 +310,8 @@ async def _procesar(fila: dict, bot) -> None:
                 return
             log.exception("No pude planear la orden #%s", bandeja_id)
             await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
-            await bot.send_message(
+            await _enviar(
+                bot,
                 text="🛠 Entendí que querés cambiar algo, pero me tropecé "
                      "buscándolo. Probá diciéndomelo de otra forma.",
                 **{k: v for k, v in responder.items() if k != "parse_mode"},
@@ -297,7 +322,8 @@ async def _procesar(fila: dict, bot) -> None:
         if not res["plan"] or not res["candidatos"]:
             await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
             aviso = res["aclaracion"] or "No encontré nada que coincida con eso."
-            await bot.send_message(
+            await _enviar(
+                bot,
                 text=f"🛠 {aviso}",
                 **{k: v for k, v in responder.items() if k != "parse_mode"},
             )
@@ -327,7 +353,8 @@ async def _procesar(fila: dict, bot) -> None:
                     return
                 log.exception("Fallo aplicando la orden #%s", bandeja_id)
                 await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
-                await bot.send_message(
+                await _enviar(
+                    bot,
                     text=f"🛠 Quise hacerlo pero no pude: {e}",
                     **{k: v for k, v in responder.items() if k != "parse_mode"},
                 )
@@ -335,12 +362,14 @@ async def _procesar(fila: dict, bot) -> None:
 
             await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
             if not aplicado:
-                await bot.send_message(
+                await _enviar(
+                    bot,
                     text="🛠 Eso ya no está ahí.",
                     **{k: v for k, v in responder.items() if k != "parse_mode"},
                 )
                 return
-            await bot.send_message(
+            await _enviar(
+                bot,
                 text=f"✅ {escape(plan['resumen'])}",
                 reply_markup=botones.teclado_deshacer(log_id),
                 **responder,
@@ -354,7 +383,8 @@ async def _procesar(fila: dict, bot) -> None:
         # sobre datos reales. Este es el golpe donde el cinturón actúa.
         r["plan"] = plan
         await db.guardar_interpretacion(bandeja_id, clas, r)
-        await bot.send_message(
+        await _enviar(
+            bot,
             text=f"🛠 <b>{escape(plan['resumen'])}</b>\n\n"
                  f"<i>Encontré {len(candidatos)}. ¿Cuál?</i>",
             reply_markup=botones.teclado_orden(bandeja_id, candidatos),
@@ -368,7 +398,8 @@ async def _procesar(fila: dict, bot) -> None:
     # elegir por él. Acá la pregunta cuesta menos que la corrección.
     if r.get("alternativa"):
         await db.guardar_interpretacion(bandeja_id, clas, r)
-        await bot.send_message(
+        await _enviar(
+            bot,
             text=_formatear(bandeja_id, r, oido=oido),
             reply_markup=botones.teclado(bandeja_id, r["alternativa"]),
             **responder,
@@ -387,7 +418,8 @@ async def _procesar(fila: dict, bot) -> None:
         # pregunta, no el tipo de operación.
         r["falta"] = list(r.get("falta") or []) + [f"me falta {e}"]
         await db.guardar_interpretacion(bandeja_id, clas, r)
-        await bot.send_message(
+        await _enviar(
+            bot,
             text=_formatear(bandeja_id, r, oido=oido),
             reply_markup=botones.teclado(bandeja_id),
             **responder,
@@ -401,7 +433,8 @@ async def _procesar(fila: dict, bot) -> None:
         raise
 
     await db.guardar_interpretacion(bandeja_id, clas, r, estado="procesado")
-    await bot.send_message(
+    await _enviar(
+        bot,
         text=f"{_formatear(bandeja_id, r, oido=oido)}\n\n<i>Guardado</i> ✅",
         reply_markup=botones.teclado_deshacer(log_id),
         **responder,

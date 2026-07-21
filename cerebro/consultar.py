@@ -193,6 +193,40 @@ async def _ejecutar(sql: str) -> list[dict]:
             return await cur.fetchmany(LIMITE_FILAS)
 
 
+def _crudo(filas: list[dict]) -> str:
+    """El resultado tal cual, sin redactar. Fea pero verdadera."""
+    if not filas:
+        return "No encontré nada."
+    if len(filas) == 1 and len(filas[0]) == 1:
+        valor = next(iter(filas[0].values()))
+        # Un booleano suelto es la respuesta a un "¿tengo...?". Devolver
+        # "False" sería contestar en jerga de base de datos.
+        if isinstance(valor, bool):
+            return "Sí." if valor else "No."
+        return str(valor)
+    return "\n".join(
+        "· " + " · ".join(f"{k}: {v}" for k, v in f.items() if v is not None)
+        for f in filas[:20]
+    )
+
+
+def _redactar_o_crudo(respuesta, filas: list[dict]) -> str:
+    """Devuelve la redacción del modelo, o el resultado crudo si vino vacía.
+
+    Esto no es paranoia: pasó de verdad. DeepSeek v4-flash razona antes de
+    responder, y esta es la única llamada sin modo JSON. Volvió con `content`
+    vacío, Telegram rechazó el mensaje vacío, y como la fila ya estaba marcada
+    como procesada, la pregunta de Tiziano murió en un silencio perfecto.
+
+    Una respuesta fea siempre es mejor que ninguna.
+    """
+    contenido = (respuesta.choices[0].message.content or "").strip()
+    if contenido:
+        return contenido
+    log.warning("El modelo no redactó nada; devuelvo el resultado crudo.")
+    return _crudo(filas)
+
+
 async def responder(pregunta: str) -> dict:
     """Pregunta en criollo → respuesta en criollo.
 
@@ -224,7 +258,7 @@ async def responder(pregunta: str) -> dict:
     filas = await _ejecutar(sql)
     log.info("Consulta (%s filas): %s", len(filas), sql.replace("\n", " ")[:160])
 
-    texto = (await cliente.chat.completions.create(
+    texto = _redactar_o_crudo(await cliente.chat.completions.create(
         model=MODELO,
         messages=[
             {"role": "system", "content": INSTRUCCIONES_RESPUESTA.format(
@@ -235,6 +269,6 @@ async def responder(pregunta: str) -> dict:
                 f"{json.dumps(filas, default=str, ensure_ascii=False, indent=1)}"},
         ],
         temperature=0.3,  # un poco de soltura para que suene humana
-    )).choices[0].message.content.strip()
+    ), filas)
 
     return {"texto": texto, "sql": sql, "explicacion": explicacion}
