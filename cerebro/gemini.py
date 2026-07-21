@@ -22,23 +22,46 @@ cliente = genai.Client(api_key=GEMINI_API_KEY)
 # mueva el alias por debajo. El precio de fijarlo es que algún día lo jubilan
 # —a gemini-1.5-flash, que estaba acá antes, ya lo jubilaron— y por eso existe
 # verificar_modelo(): que ese día falle al arrancar y no en silencio.
-# gemini-3.5-flash quedó descartado por cuota, no por calidad: su capa gratuita
-# son 20 peticiones por día, verificado a los golpes (429 repetidos con uso de
-# prueba). Un asistente que deja de entender al mensaje 21 no es un asistente.
-# La cuota es POR MODELO, así que bajar de versión da un presupuesto nuevo.
-MODELO = "gemini-2.5-flash"
+# Alias, no versión fija — y es un cambio de opinión con motivo. Fijar el
+# modelo parecía lo prudente (que el comportamiento cambie cuando lo decidamos
+# nosotros), pero en una sola noche se cayeron dos modelos fijados por debajo:
+# gemini-1.5-flash jubilado, y 2.5-flash "cerrado para cuentas nuevas".
+# 3.5-flash sirve pero su capa gratuita son 20 peticiones por día.
+# El riesgo real no era que Lucy cambiara de humor: era que dejara de andar.
+# El alias además demostró presupuesto propio (respondía con 3.5 agotado).
+MODELO = "gemini-flash-latest"
 
 
 async def verificar_modelo() -> None:
-    """Confirma al arrancar que la key sirve y el modelo existe.
+    """Confirma al arrancar que la key sirve y el modelo se puede USAR.
 
-    Misma filosofía que pool.open(wait=True): más vale reventar en el deploy
-    que descubrir tres semanas después que Lucy dejó de entender lo que le
-    mandan. Un modelo jubilado es la falla silenciosa perfecta.
+    Antes esto llamaba a models.get(), que solo pregunta si el modelo existe.
+    No alcanzaba: gemini-2.5-flash existe, models.get() decía que sí, el log
+    cantaba "Gemini OK" — y cada llamada real moría con 404 "no longer
+    available to new users". Un chequeo que aprueba algo inservible es peor
+    que no tener chequeo, porque da tranquilidad falsa.
+
+    Así que hacemos una llamada de verdad, con el mismo esquema estructurado
+    que se usa en producción. Cuesta una petición por arranque y vale cada
+    centavo: es la diferencia entre enterarse en el deploy o tres semanas
+    después.
     """
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY vacía: Lucy no podría interpretar nada.")
-    await cliente.aio.models.get(model=MODELO)
+
+    await cliente.aio.models.generate_content(
+        model=MODELO,
+        contents="ok",
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema={
+                "type": "OBJECT",
+                "properties": {"ok": {"type": "STRING"}},
+                "required": ["ok"],
+            },
+            temperature=0,
+        ),
+    )
 
 
 # Esquema de salida forzado. No le pedimos a Gemini que "devuelva JSON" y
