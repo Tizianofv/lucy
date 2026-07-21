@@ -278,6 +278,18 @@ async def ultima_ubicacion() -> dict | None:
         return await cur.fetchone()
 
 
+async def lugar_por_nombre(nombre: str) -> dict | None:
+    """Un lugar con nombre de Tiziano, o None si no existe con ese nombre."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, nombre, lat, lon, radio_m FROM lugares "
+            "WHERE borrado_en IS NULL AND lower(nombre) = lower(%s) LIMIT 1",
+            ((nombre or "").strip(),),
+        )
+        return await cur.fetchone()
+
+
 async def registrar_aviso(chat_id: int, texto: str) -> int:
     """Deja constancia en la bandeja de algo que Lucy dijo POR SU CUENTA.
 

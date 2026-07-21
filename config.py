@@ -27,6 +27,10 @@ DATABASE_URL   = os.environ["DATABASE_URL"].strip()
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
 OPENAI_API_KEY   = os.environ.get("OPENAI_API_KEY", "").strip()
 
+# Tránsito real (Routes API). Si falta, Lucy degrada con gracia: usa las
+# rutas que aprendió preguntando, como antes de tener Maps.
+GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "").strip()
+
 # Candado de seguridad (pilar): Lucy SOLO le responde a este chat.
 # Cualquier otro que le escriba es ignorado sin más.
 CHAT_ID_DUENO = int(os.environ["CHAT_ID_DUENO"])

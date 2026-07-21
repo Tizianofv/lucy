@@ -35,6 +35,7 @@ import acciones.crud as crud
 import cerebro.consultar as consultar
 import cerebro.deepseek as motor
 import cerebro.memoria as memoria
+import cerebro.viaje as viaje
 import db.db as db
 
 log = logging.getLogger("lucy.agente")
@@ -101,6 +102,13 @@ HERRAMIENTAS DISPONIBLES:
   como X", esta es la herramienta. Los lugares con nombre son lo que vuelve
   útil la ubicación.
 
+· viaje  {"destino": "el estudio", "desde": ""}
+  Cuánto se tarda AHORA, con el tráfico real (Google Maps). El destino puede
+  ser un lugar con nombre o una dirección completa. Sin "desde", parte de su
+  última ubicación. Preferila a las rutas guardadas: el tráfico de hoy le
+  gana a la memoria de la semana pasada. Si da ERROR, caé a la nota 'ruta'
+  o preguntá.
+
 · recordar  {"texto": "lo que acordamos del depósito", "n": 5}
   Busca por SIGNIFICADO en todo lo que se han dicho (tus respuestas
   incluidas). Para "¿qué te dije de...?", "¿cuándo hablamos de...?" y todo
@@ -153,9 +161,9 @@ CÓMO TRABAJÁS:
   preguntá únicamente lo que falte de verdad:
    1. ¿Desde dónde sale? → ubicacion. Fresca y con lugar con nombre: listo.
       Vieja, sin lugar o sin datos: preguntale.
-   2. ¿Cuánto tarda? → consultar notas con etiquetas @> ARRAY['ruta']. Si no
-      hay ruta guardada, preguntáselo UNA vez y guardala con crear (nota,
-      etiquetas ["ruta"], ej: "De CDS al estudio: 45 min").
+   2. ¿Cuánto tarda? → viaje (tráfico real de ahora). Si viaje da ERROR:
+      consultar notas con etiquetas @> ARRAY['ruta']; y si tampoco hay,
+      preguntáselo UNA vez y guardalo con crear (nota, etiquetas ["ruta"]).
    3. Creá la tarea "Salir para {la cita}" con vence_en = hora de la cita
       menos el viaje menos 10 min de colchón, y avisale en una línea:
       "Salí 2:05 desde CDS para llegar a las 3". El despertador la recuerda.
@@ -264,6 +272,12 @@ async def _ejecutar_herramienta(
                 acciones.append(log_id)
             return resultado
 
+        if nombre == "viaje":
+            return await viaje.calcular(
+                str(args.get("destino") or ""),
+                desde=str(args.get("desde") or "") or None,
+            )
+
         if nombre == "recordar":
             filas = await memoria.buscar(
                 str(args.get("texto") or ""),
@@ -276,7 +290,7 @@ async def _ejecutar_herramienta(
 
         return (f"ERROR: no existe la herramienta '{nombre}'. Las que hay: "
                 "consultar, crear, editar, archivar, deshacer, perfil, "
-                "ubicacion, lugar, recordar, preguntar, responder.")
+                "ubicacion, lugar, viaje, recordar, preguntar, responder.")
 
     except crud.FaltanDatos as e:
         return f"ERROR: me falta {e}. Preguntáselo a Tiziano."
