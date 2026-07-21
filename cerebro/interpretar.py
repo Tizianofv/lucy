@@ -21,6 +21,7 @@ import telegram.error
 
 import acciones.botones as botones
 import cerebro.deepseek as motor
+import cerebro.vision as vision
 import cerebro.whisper as whisper
 import db.db as db
 from cerebro.deepseek import DIAS
@@ -173,27 +174,34 @@ async def _fallo(fila: dict, e: Exception, bot) -> None:
 
 
 async def _obtener_texto(fila: dict, bot) -> str | None:
-    """Devuelve el texto a interpretar, transcribiendo la voz si hace falta.
+    """Devuelve el texto a interpretar, leyendo la voz o la foto si hace falta.
 
-    La transcripción se guarda ANTES de interpretar: si DeepSeek falla después,
-    el reintento no vuelve a pagar —ni a esperar— la transcripción del audio.
+    Voz y foto siguen exactamente el mismo camino porque son el mismo problema:
+    un archivo que hay que volver texto antes de poder entenderlo. Whisper y
+    gpt-4o-mini son intercambiables acá — cambia el traductor, no el recorrido.
+
+    Lo leído se guarda ANTES de interpretar: si DeepSeek falla después, el
+    reintento no vuelve a pagar —ni a esperar— la lectura del archivo.
     """
-    if fila["tipo_entrada"] == "audio":
-        if fila.get("transcripcion"):
-            return fila["transcripcion"]  # ya transcripto en un intento previo
+    tipo = fila["tipo_entrada"]
+    if tipo not in ("audio", "foto"):
+        return fila.get("contenido_raw")
 
+    texto = fila.get("transcripcion")
+    if not texto:  # si ya se leyó en un intento previo, no se vuelve a pagar
         archivo = await bot.get_file(fila["archivo_id"])
-        datos = await archivo.download_as_bytearray()
-        texto = await whisper.transcribir(bytes(datos))
+        datos = bytes(await archivo.download_as_bytearray())
+        texto = (
+            await whisper.transcribir(datos) if tipo == "audio"
+            else await vision.leer(datos)
+        )
         await db.guardar_transcripcion(fila["id"], texto)
-        log.info("Transcripto #%s (%s caracteres)", fila["id"], len(texto))
+        log.info("Leído #%s (%s, %s caracteres)", fila["id"], tipo, len(texto))
 
-        # El pie de foto del audio, si lo hubiera, suma contexto a lo dicho.
-        if fila.get("contenido_raw"):
-            return f"{texto}\n\n({fila['contenido_raw']})"
-        return texto
-
-    return fila.get("contenido_raw")
+    # El pie de foto suma contexto a lo leído ("esto es del almuerzo de ayer").
+    if fila.get("contenido_raw"):
+        return f"{texto}\n\n({fila['contenido_raw']})"
+    return texto
 
 
 async def _procesar(fila: dict, bot) -> None:

@@ -72,7 +72,7 @@ async def guardar_en_bandeja(
 
 
 async def tomar_pendientes(
-    tipos: tuple[str, ...] = ("texto", "audio"), limite: int = 5
+    tipos: tuple[str, ...] = ("texto", "audio", "foto"), limite: int = 5
 ) -> list[dict]:
     """Reclama filas sin procesar y las marca 'procesando' en un solo paso.
 
@@ -81,8 +81,9 @@ async def tomar_pendientes(
     Telegram). Sin esto, los dos tomarían la misma fila y Lucy interpretaría el
     mismo mensaje dos veces. Con esto, el segundo simplemente saltea lo tomado.
 
-    `tipos` acota a lo que Lucy sabe interpretar hoy. Los audios y fotos se
-    quedan en 'sin_procesar' esperando su turno: no se pierden ni se traban.
+    `tipos` acota a lo que Lucy sabe interpretar hoy. Desde que tiene vista,
+    entran los tres; lo que aparezca mañana (un PDF, un reenvío) se queda en
+    'sin_procesar' esperando su turno, sin perderse ni trabar la cola.
     """
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)

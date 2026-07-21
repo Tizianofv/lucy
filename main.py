@@ -20,6 +20,7 @@ from telegram.ext import (
 
 import acciones.botones as botones
 import cerebro.deepseek as motor
+import cerebro.vision as vision
 import cerebro.whisper as whisper
 import cerebro.interpretar as interpretar
 import config
@@ -57,13 +58,17 @@ async def _al_arrancar(app) -> None:
             "pero no habrá interpretación hasta arreglarlo."
         )
 
+    # Oído y vista van juntos: comparten proveedor y credencial, así que
+    # fallan juntos. Chequearlos por separado sería fingir una independencia
+    # que no existe.
     try:
         await whisper.verificar()
-        log.info("Oído OK: %s configurado.", whisper.MODELO)
+        await vision.verificar()
+        log.info("Oído y vista OK: %s y %s.", whisper.MODELO, vision.MODELO)
     except Exception:
         log.exception(
-            "OÍDO NO DISPONIBLE (Whisper) — los textos se siguen entendiendo; "
-            "las notas de voz esperan en la bandeja."
+            "OÍDO/VISTA NO DISPONIBLES (OpenAI) — los textos se siguen "
+            "entendiendo; las notas de voz y las fotos esperan en la bandeja."
         )
 
     # El bucle de comprensión vive aparte del de captura, a propósito: si
