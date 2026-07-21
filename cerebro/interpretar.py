@@ -24,7 +24,7 @@ import cerebro.deepseek as motor
 import cerebro.vision as vision
 import cerebro.whisper as whisper
 import db.db as db
-from cerebro.deepseek import DIAS
+from cerebro.deepseek import DIAS, ICONO
 
 log = logging.getLogger("lucy.interpretar")
 
@@ -36,14 +36,6 @@ INTERVALO_S = 5
 MAX_INTENTOS = 5
 ESPERA_BASE_S = 30
 
-ICONO = {
-    "tarea": "📌",
-    "cita": "📅",
-    "nota": "📝",
-    "idea": "💡",
-    "gasto": "💸",
-    "pregunta": "❓",
-}
 
 
 def _fecha_legible(iso: str) -> str:
@@ -219,7 +211,7 @@ async def _procesar(fila: dict, bot) -> None:
         return
 
     try:
-        r = await motor.interpretar_texto(texto)
+        r = await motor.interpretar_texto(texto, origen=fila["tipo_entrada"])
     except Exception as e:
         await _fallo(fila, e, bot)
         return
@@ -261,10 +253,13 @@ async def _procesar(fila: dict, bot) -> None:
     await db.guardar_interpretacion(bandeja_id, clas, r)
     await bot.send_message(
         text=_formatear(bandeja_id, r, oido=oido),
-        reply_markup=botones.teclado(bandeja_id),
+        reply_markup=botones.teclado(bandeja_id, r.get("alternativa", "")),
         **responder,
     )
-    log.info("Interpretado #%s como %s", bandeja_id, clas)
+    log.info(
+        "Interpretado #%s como %s%s", bandeja_id, clas,
+        f" (duda con {r['alternativa']})" if r.get("alternativa") else "",
+    )
 
 
 async def bucle(bot) -> None:

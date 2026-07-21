@@ -43,12 +43,42 @@ CLASES = ("tarea", "cita", "nota", "idea", "gasto", "pregunta", "charla")
 # responde y se archiva: no todo lo que Tiziano dice es algo para guardar.
 CLASES_ENTIDAD = ("tarea", "cita", "nota", "idea", "gasto")
 
+ICONO = {
+    "tarea": "📌",
+    "cita": "📅",
+    "nota": "📝",
+    "idea": "💡",
+    "gasto": "💸",
+    "pregunta": "❓",
+    "charla": "💬",
+}
+
+# Lo que se le dice al cerebro sobre DE DÓNDE vino el texto.
+#
+# Con texto y voz, las palabras son de Tiziano. Con una foto no: el texto es
+# algo que él te MUESTRA. Sin esta aclaración, la captura de un cliente
+# preguntando por su depósito se leía como si Tiziano se lo preguntara a Lucy
+# — el canal cambia el significado, y el cerebro tiene que saberlo.
+CONTEXTO_ORIGEN = {
+    "texto": "",
+    "audio": "",
+    "foto": (
+        "\nORIGEN — IMPORTANTE: lo que sigue NO son palabras de Tiziano. Es lo "
+        "que se ve en una FOTO que él sacó y te muestra: un ticket, una captura "
+        "de pantalla, un cartel, una tarjeta. Preguntate qué significa que te la "
+        "muestre, en vez de leerlo como si él lo estuviera diciendo. Si es la "
+        "captura de alguien escribiéndole, quien habla ahí es esa persona y no "
+        "él; lo más probable entonces es que haya algo que hacer al respecto.\n"
+    ),
+}
+
 INSTRUCCIONES = """\
 Sos el motor de comprensión de Lucy, la asistente personal de Tiziano.
 Recibís un mensaje suyo, en español rioplatense/dominicano, muchas veces
 informal o abreviado. Tu trabajo es ENTENDERLO, no responderle.
 
 Ahora es {ahora} (zona {zona}, UTC-4, sin horario de verano).
+{origen}
 
 Devolvés SOLO un objeto JSON con exactamente estas claves:
   clasificacion: uno de "tarea","cita","nota","idea","gasto","pregunta","charla"
@@ -66,6 +96,11 @@ Devolvés SOLO un objeto JSON con exactamente estas claves:
   falta: lista de strings — solo datos CRÍTICOS ausentes que ameriten preguntar
   respuesta: SOLO si clasificacion es "charla" — lo que Lucy le contesta, en su
              mismo registro y tono, breve y cálida. "" en todo lo demás.
+  alternativa: otra clasificación que también sería razonable, o "" si estás
+               seguro. Solo cuando dudás DE VERDAD entre dos: sirve para
+               ofrecerle a Tiziano un botón y que elija él. Poner una
+               alternativa por las dudas, cuando la primera es clara, le
+               agrega una decisión inútil a cada mensaje.
 
 CLASIFICACIÓN:
   tarea → algo que Tiziano tiene que hacer
@@ -140,6 +175,14 @@ def _validar(r: dict) -> dict:
         v = r.get(campo)
         r[campo] = [str(x) for x in v] if isinstance(v, list) else []
 
+    # La alternativa solo vale si crea algo y si de verdad es OTRA cosa. Un
+    # botón que ofrece lo mismo que ya dice la tarjeta es ruido con forma de
+    # opción, y el pilar de silencio inteligente aplica también a los botones.
+    alt = str(r.get("alternativa", "")).strip().lower()
+    r["alternativa"] = (
+        alt if alt in CLASES_ENTIDAD and alt != r["clasificacion"] else ""
+    )
+
     return r
 
 
@@ -162,8 +205,12 @@ async def verificar_modelo() -> None:
     )
 
 
-async def interpretar_texto(texto: str) -> dict:
+async def interpretar_texto(texto: str, origen: str = "texto") -> dict:
     """Clasifica y extrae estructura. Devuelve el dict ya validado.
+
+    `origen` es el tipo de entrada (texto|audio|foto) y NO es un detalle: lo
+    que llega de una foto no son palabras de Tiziano sino algo que él muestra,
+    y leerlo como si lo dijera cambia por completo la interpretación.
 
     El "ahora" se calcula en cada llamada, nunca se cachea: si el proceso lleva
     días levantado, un "ahora" del arranque haría que "mañana" apunte a un día
@@ -173,7 +220,8 @@ async def interpretar_texto(texto: str) -> dict:
         model=MODELO,
         messages=[
             {"role": "system", "content": INSTRUCCIONES.format(
-                ahora=_ahora_txt(), zona=TZ.key)},
+                ahora=_ahora_txt(), zona=TZ.key,
+                origen=CONTEXTO_ORIGEN.get(origen, ""))},
             {"role": "user", "content": texto},
         ],
         response_format={"type": "json_object"},

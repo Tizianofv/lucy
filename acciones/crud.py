@@ -73,7 +73,9 @@ async def _registrar(
     )
 
 
-async def crear_desde_interpretacion(bandeja_id: int, r: dict) -> tuple[str, int]:
+async def crear_desde_interpretacion(
+    bandeja_id: int, r: dict, motivo: str | None = None
+) -> tuple[str, int]:
     """Convierte una interpretación confirmada en una fila real.
 
     Devuelve (tabla, id). Lanza FaltanDatos si el mensaje no alcanza para
@@ -163,7 +165,7 @@ async def crear_desde_interpretacion(bandeja_id: int, r: dict) -> tuple[str, int
             tabla=tabla,
             registro_id=registro_id,
             despues=r,
-            motivo=f"Confirmado por Tiziano desde la bandeja #{bandeja_id}",
+            motivo=motivo or f"Confirmado por Tiziano desde la bandeja #{bandeja_id}",
             bandeja_id=bandeja_id,
         )
 

@@ -19,6 +19,7 @@ from telegram.ext import ContextTypes
 import acciones.crud as crud
 import config
 import db.db as db
+from cerebro.deepseek import ICONO
 
 log = logging.getLogger("lucy.botones")
 
@@ -31,16 +32,29 @@ COMO_SE_LLAMA = {
 }
 
 
-def teclado(bandeja_id: int) -> InlineKeyboardMarkup:
+def teclado(bandeja_id: int, alternativa: str = "") -> InlineKeyboardMarkup:
     """Los botones que van debajo de la tarjeta de interpretación.
 
     El bandeja_id viaja en el callback_data porque el callback llega suelto,
     sin contexto: es el único hilo que ata el botón a la fila que representa.
+
+    Si el cerebro dudó entre dos clasificaciones, la duda aparece como un
+    botón más. Es la forma barata de "preguntar": Tiziano decide con un toque
+    en vez de escribir una corrección, y su elección queda en log_acciones —
+    que es la materia prima con la que Lucy va a aprender sus hábitos (req 35)
+    en vez de que nosotros los adivinemos hoy.
     """
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Dale", callback_data=f"ok:{bandeja_id}"),
-        InlineKeyboardButton("🗑 Descartar", callback_data=f"no:{bandeja_id}"),
-    ]])
+    ok = InlineKeyboardButton("✅ Dale", callback_data=f"ok:{bandeja_id}")
+    no = InlineKeyboardButton("🗑 Descartar", callback_data=f"no:{bandeja_id}")
+
+    if not alternativa:
+        return InlineKeyboardMarkup([[ok, no]])
+
+    alt = InlineKeyboardButton(
+        f"{ICONO.get(alternativa, '')} Mejor {alternativa}".strip(),
+        callback_data=f"alt:{bandeja_id}",
+    )
+    return InlineKeyboardMarkup([[ok, alt], [no]])
 
 
 async def _cerrar_tarjeta(q, remate: str) -> None:
@@ -90,7 +104,7 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         log.info("Descartado #%s", bandeja_id)
         return
 
-    if accion != "ok":
+    if accion not in ("ok", "alt"):
         return
 
     # Reclamamos la fila ANTES de crear nada. Si dos toques llegan casi juntos
@@ -107,9 +121,27 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _cerrar_tarjeta(q, "⚠️ <b>No encuentro la interpretación</b>")
         return
 
+    interpretacion = dict(fila["interpretacion"])
+    motivo = f"Confirmado por Tiziano desde la bandeja #{bandeja_id}"
+
+    if accion == "alt":
+        # Tiziano prefirió la segunda opción. Se deja escrito cuál se descartó:
+        # ese par (lo que Lucy propuso, lo que él eligió) es exactamente lo que
+        # después permite detectar el patrón y dejar de preguntar.
+        elegida = interpretacion.get("alternativa")
+        if not elegida:
+            await db.cambiar_estado(bandeja_id, "esperando_confirmacion")
+            await q.answer("Esa tarjeta no tenía alternativa.", show_alert=True)
+            return
+        motivo = (
+            f"Tiziano eligió '{elegida}' en vez de "
+            f"'{interpretacion.get('clasificacion')}' (bandeja #{bandeja_id})"
+        )
+        interpretacion["clasificacion"] = elegida
+
     try:
         tabla, registro_id = await crud.crear_desde_interpretacion(
-            bandeja_id, fila["interpretacion"]
+            bandeja_id, interpretacion, motivo=motivo
         )
     except crud.FaltanDatos as e:
         # Devolvemos la fila a su estado para que el botón siga sirviendo
