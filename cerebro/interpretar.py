@@ -21,6 +21,7 @@ import openai
 import telegram.error
 
 import cerebro.agente as agente
+import cerebro.memoria as memoria
 import cerebro.preguntar as preguntar
 import cerebro.vision as vision
 import cerebro.whisper as whisper
@@ -150,6 +151,7 @@ async def _procesar(fila: dict, bot) -> None:
 async def bucle(bot) -> None:
     """Bucle infinito de comprensión. Se lanza al arrancar (ver main.py)."""
     log.info("Bucle de interpretación en marcha (cada %ss).", INTERVALO_S)
+    vuelta = 0
     while True:
         try:
             for fila in await db.tomar_pendientes():
@@ -160,4 +162,17 @@ async def bucle(bot) -> None:
             # Que una vuelta falle no puede matar el bucle: si se muere en
             # silencio, Lucy vuelve a "solo bandeja" sin que nadie se entere.
             log.exception("Error en el bucle de interpretación; sigo igual.")
+
+        # La memoria de largo plazo se alimenta como rama lateral, una vez
+        # por minuto: si el indexado falla (cuota, red), la comprensión ni se
+        # entera — misma filosofía que los logs de Natalia. Nada de lo que
+        # pase acá puede tocar el camino del mensaje.
+        vuelta += 1
+        if vuelta % 12 == 0:
+            try:
+                await memoria.indexar_pendientes()
+            except Exception:
+                log.warning("No pude indexar memoria; reintento en la próxima.",
+                            exc_info=True)
+
         await asyncio.sleep(INTERVALO_S)

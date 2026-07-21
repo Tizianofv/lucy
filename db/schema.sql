@@ -20,6 +20,9 @@ CREATE TABLE bandeja (
   transcripcion    TEXT,                              -- audio → texto, foto → texto leído
   respuesta_lucy   TEXT,                              -- lo que Lucy contestó: la mitad
                                                       --   suya de la conversación (req 11)
+  embedding        vector(1536),                      -- memoria de largo plazo (req 13):
+                                                      --   se indexa dicho+respuesta al
+                                                      --   cerrarse cada intercambio
   estado           TEXT NOT NULL DEFAULT 'sin_procesar',
     -- sin_procesar | procesando | esperando_confirmacion | esperando_respuesta
     -- | procesado | descartado | error
@@ -44,6 +47,7 @@ CREATE TABLE bandeja (
   CONSTRAINT bandeja_msg_unico UNIQUE (chat_id, telegram_msg_id)
 );
 CREATE INDEX idx_bandeja_estado ON bandeja(estado);
+CREATE INDEX idx_bandeja_embedding ON bandeja USING hnsw (embedding vector_cosine_ops);
 
 -- ═══ Vínculos reales desde el día 1 (req 16) ═══
 CREATE TABLE personas (

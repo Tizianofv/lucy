@@ -34,6 +34,7 @@ import acciones.botones as botones
 import acciones.crud as crud
 import cerebro.consultar as consultar
 import cerebro.deepseek as motor
+import cerebro.memoria as memoria
 import db.db as db
 
 log = logging.getLogger("lucy.agente")
@@ -73,11 +74,26 @@ HERRAMIENTAS DISPONIBLES:
           "contraparte": ""}
   Crea la fila real. Personas y proyectos se enlazan solos por nombre.
 
-· editar  {"tabla": "tareas|eventos|notas|movimientos", "id": N,
-           "cambios": {"columna": "valor", ...}}
+· editar  {"tabla": "tareas|eventos|notas|movimientos|personas|proyectos",
+           "id": N, "cambios": {"columna": "valor", ...}}
   Cambia algo que ya existe. Marcar hecha una tarea =
   cambios {"estado": "hecha", "completado_en": "<ahora en ISO>"}.
   Consultá antes para encontrar el id correcto: editar a ciegas es adivinar.
+
+· perfil  {"tipo": "persona|proyecto", "nombre": "Rosi",
+           "alias": ["la flaca"], "relacion": "hermana",
+           "nota": "no llamarla antes de las 10", "descripcion": ""}
+  Lo que sabés de la gente y los proyectos de Tiziano. Cuando él cuente algo
+  de alguien ("Rosi es mi hermana", "Pedro es el contador") anotalo SIN que
+  te lo pida, y confirmalo en una palabra. Es acumulativo: los alias se
+  suman, las notas se agregan con fecha, nada se pisa. Mandá solo los campos
+  que aprendiste ahora.
+
+· recordar  {"texto": "lo que acordamos del depósito", "n": 5}
+  Busca por SIGNIFICADO en todo lo que se han dicho (tus respuestas
+  incluidas). Para "¿qué te dije de...?", "¿cuándo hablamos de...?" y todo
+  lo que no se pueda nombrar con palabras exactas — ahí SQL no llega y esto
+  sí. Si hace falta precisión de fechas o montos, combiná con consultar.
 
 · archivar  {"tabla": "...", "id": N}
   Saca algo de la vista (reversible). Hoy está deshabilitada por Tiziano.
@@ -180,9 +196,33 @@ async def _ejecutar_herramienta(
             que = await crud.deshacer(int(args.get("accion") or 0))
             return f"OK: revertí {que}."
 
+        if nombre == "perfil":
+            resultado, log_id = await crud.perfil(
+                str(args.get("tipo") or ""),
+                str(args.get("nombre") or ""),
+                alias=list(args.get("alias") or []),
+                relacion=str(args.get("relacion") or "") or None,
+                nota=str(args.get("nota") or "") or None,
+                descripcion=str(args.get("descripcion") or "") or None,
+                bandeja_id=bandeja_id,
+            )
+            if log_id:
+                acciones.append(log_id)
+            return resultado
+
+        if nombre == "recordar":
+            filas = await memoria.buscar(
+                str(args.get("texto") or ""),
+                max(1, min(int(args.get("n") or 5), 10)),
+            )
+            if not filas:
+                return ("No encontré nada parecido en la memoria (¿quizás fue "
+                        "antes de que yo existiera, o todavía no se indexó?).")
+            return json.dumps(filas, default=str, ensure_ascii=False)
+
         return (f"ERROR: no existe la herramienta '{nombre}'. Las que hay: "
-                "consultar, crear, editar, archivar, deshacer, preguntar, "
-                "responder.")
+                "consultar, crear, editar, archivar, deshacer, perfil, "
+                "recordar, preguntar, responder.")
 
     except crud.FaltanDatos as e:
         return f"ERROR: me falta {e}. Preguntáselo a Tiziano."

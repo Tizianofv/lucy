@@ -23,7 +23,9 @@ from config import TZ
 
 # Lista blanca. Los nombres de tabla se interpolan en el SQL (no se pueden
 # parametrizar), así que nunca pueden venir de afuera sin pasar por acá.
-TABLAS = ("tareas", "eventos", "notas", "movimientos")
+# personas y proyectos entraron con el perfil vivo (req 12): antes el agente
+# no podía editarlos y el "perfil" era una tabla que nadie alimentaba.
+TABLAS = ("tareas", "eventos", "notas", "movimientos", "personas", "proyectos")
 
 
 class FaltanDatos(Exception):
@@ -255,6 +257,117 @@ async def editar(
             bandeja_id=antes.get("bandeja_id"),
         )
     return despues, log_id
+
+
+async def perfil(
+    tipo: str,
+    nombre: str,
+    *,
+    alias: list[str] | None = None,
+    relacion: str | None = None,
+    nota: str | None = None,
+    descripcion: str | None = None,
+    bandeja_id: int | None = None,
+) -> tuple[str, int | None]:
+    """El perfil vivo (req 12): lo que Lucy sabe de la gente y los proyectos.
+
+    Devuelve (resultado_para_el_agente, log_id|None).
+
+    Es ACUMULATIVO a propósito: los alias se suman, las notas se agregan con
+    fecha, nada se pisa. "Rosi es mi hermana" en enero y "a Rosi no llamarla
+    antes de las 10" en marzo tienen que convivir — un perfil que se
+    sobreescribe es un perfil que olvida, y olvidar es lo único que un
+    asistente no se puede permitir. Lo único que se reemplaza es `relacion`,
+    porque es un dato de estado, no una historia.
+    """
+    tipo = (tipo or "").strip().lower()
+    nombre = (nombre or "").strip()
+    if tipo not in ("persona", "proyecto"):
+        raise ValueError(f"'{tipo}' no es persona ni proyecto.")
+    if not nombre:
+        raise ValueError("Sin nombre no hay perfil.")
+
+    tabla = "personas" if tipo == "persona" else "proyectos"
+    hoy = datetime.now(TZ).strftime("%d/%m/%Y")
+    linea = f"· [{hoy}] {nota.strip()}" if nota and nota.strip() else None
+
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        if tabla == "personas":
+            await cur.execute(
+                """
+                SELECT * FROM personas
+                 WHERE borrado_en IS NULL
+                   AND (lower(nombre) = lower(%s)
+                        OR lower(%s) = ANY(SELECT lower(a) FROM unnest(alias) a))
+                 LIMIT 1
+                """,
+                (nombre, nombre),
+            )
+        else:
+            await cur.execute(
+                "SELECT * FROM proyectos "
+                "WHERE borrado_en IS NULL AND lower(nombre) = lower(%s) LIMIT 1",
+                (nombre,),
+            )
+        fila = await cur.fetchone()
+
+        # ── No existía: nace con lo que se sepa hoy ──────────────────────
+        if fila is None:
+            if tabla == "personas":
+                cur = await conn.execute(
+                    """INSERT INTO personas (nombre, alias, relacion, notas)
+                       VALUES (%s, %s, %s, %s) RETURNING id""",
+                    (nombre, [a.strip() for a in (alias or []) if a.strip()],
+                     (relacion or "").strip() or None, linea),
+                )
+            else:
+                cur = await conn.execute(
+                    """INSERT INTO proyectos (nombre, descripcion)
+                       VALUES (%s, %s) RETURNING id""",
+                    (nombre, (descripcion or "").strip() or linea),
+                )
+            rid = (await cur.fetchone())[0]
+            log_id = await _registrar(
+                conn, accion="crear", tabla=tabla, registro_id=rid,
+                despues={"nombre": nombre, "alias": alias, "relacion": relacion,
+                         "nota": nota, "descripcion": descripcion},
+                motivo=f"Perfil: Tiziano contó algo de {nombre}",
+                bandeja_id=bandeja_id,
+            )
+            return f"OK: {tipo} '{nombre}' creado en el perfil (#{rid}).", log_id
+
+    # ── Existía: se acumula (editar() registra antes/después y es reversible) ─
+    cambios: dict = {}
+    if alias:
+        nuevos = [a.strip() for a in alias if a.strip()]
+        viejos = fila.get("alias") or []
+        union = viejos + [a for a in nuevos
+                          if a.lower() not in {v.lower() for v in viejos}]
+        if union != viejos:
+            cambios["alias"] = union
+    if relacion and relacion.strip():
+        if (fila.get("relacion") or "").strip().lower() != relacion.strip().lower():
+            cambios["relacion"] = relacion.strip()
+    if descripcion and descripcion.strip() and tabla == "proyectos":
+        cambios["descripcion"] = descripcion.strip()
+    if linea:
+        campo = "notas" if tabla == "personas" else "descripcion"
+        previo = fila.get(campo)
+        if campo not in cambios:
+            cambios[campo] = f"{previo}\n{linea}" if previo else linea
+        else:
+            cambios[campo] = f"{cambios[campo]}\n{linea}"
+
+    if not cambios:
+        return f"OK: eso ya lo sabía de '{fila['nombre']}'.", None
+
+    _, log_id = await editar(
+        tabla, fila["id"], cambios,
+        motivo=f"Perfil: Tiziano contó algo de {fila['nombre']}",
+    )
+    return (f"OK: perfil de '{fila['nombre']}' actualizado "
+            f"({', '.join(cambios)}).", log_id)
 
 
 async def borrar(tabla: str, registro_id: int, motivo: str) -> int | None:
