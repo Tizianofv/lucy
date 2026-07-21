@@ -40,10 +40,17 @@ import db.db as db
 
 log = logging.getLogger("lucy.agente")
 
-# Techo de pasos por mensaje. No es un muro: es el equivalente de "si diste
-# ocho vueltas y seguís perdido, pará y preguntá" — y eso es exactamente lo
-# que hace al llegar acá.
-MAX_PASOS = 8
+# Techo de pasos ÚTILES por mensaje (herramientas ejecutadas de verdad). No es
+# un muro: es el equivalente de "si diste doce vueltas y seguís perdido, pará y
+# preguntá". Una consulta legítima —buscar sucursales + ubicación + comparar
+# rutas— encadena varias herramientas, así que el techo tiene que dar aire.
+MAX_PASOS = 12
+
+# Tope aparte para los TROPIEZOS: turnos en que el modelo devuelve vacío o un
+# JSON inválido. DeepSeek razona antes de responder y a veces sale con la
+# respuesta en blanco; eso no es un paso de trabajo, así que no gasta del
+# presupuesto de arriba — pero igual tiene tope para no colgarse en un bucle.
+MAX_TROPIEZOS = 6
 
 # Archivar/borrar existe y está probado, pero apagado a pedido de Tiziano
 # (21-jul: "ahora no quiero que borre nada pero es seguro que mañana sí").
@@ -400,7 +407,9 @@ async def atender(fila: dict, texto: str, bot) -> None:
             await db.cambiar_estado(
                 pendiente["id"], "procesado", desde="esperando_respuesta")
 
-    for paso in range(MAX_PASOS):
+    pasos = 0       # herramientas ejecutadas de verdad
+    tropiezos = 0   # turnos vacíos o mal formados: no cuentan como paso
+    while pasos < MAX_PASOS and tropiezos < MAX_TROPIEZOS:
         crudo = (await motor.cliente.chat.completions.create(
             model=motor.MODELO,
             messages=mensajes,
@@ -425,8 +434,11 @@ async def atender(fila: dict, texto: str, bot) -> None:
                 args = {k: v for k, v in j.items()
                         if k not in ("herramienta", "argumentos")}
         except (json.JSONDecodeError, AttributeError):
-            resultado = ("ERROR: eso no fue un JSON válido. Devolvé "
-                         '{"herramienta": "...", "argumentos": {...}}.')
+            # Vacío o mal formado: tropiezo, no paso. Se le pide de nuevo sin
+            # cobrarle del presupuesto de trabajo.
+            tropiezos += 1
+            resultado = ("ERROR: devolviste vacío o inválido. Respondé SOLO el "
+                         'JSON {"herramienta": "...", "argumentos": {...}}.')
             aviso = {"role": "user", "content": f"[resultado] {resultado}"}
             mensajes.append(aviso)
             dialogo.append(aviso)
@@ -443,7 +455,7 @@ async def atender(fila: dict, texto: str, bot) -> None:
                 {"dialogo": dialogo[-30:]}, estado="procesado")
             await _cerrar_pendiente()
             log.info("#%s resuelto en %s paso(s), %s acción(es)",
-                     bandeja_id, paso + 1, len(acciones))
+                     bandeja_id, pasos, len(acciones))
             return
 
         # ── preguntar: la ventana se abre y el turno termina ─────────────
@@ -459,13 +471,14 @@ async def atender(fila: dict, texto: str, bot) -> None:
                 estado="esperando_respuesta")
             await _cerrar_pendiente()  # la ventana vieja la reemplaza esta
             log.info("#%s preguntó y espera respuesta (paso %s)",
-                     bandeja_id, paso + 1)
+                     bandeja_id, pasos)
             return
 
         # ── cualquier otra herramienta: ejecutar y seguir ────────────────
         resultado = await _ejecutar_herramienta(nombre, args, bandeja_id, acciones)
+        pasos += 1
         log.info("#%s paso %s: %s -> %s",
-                 bandeja_id, paso + 1, nombre, resultado[:120])
+                 bandeja_id, pasos, nombre, resultado[:120])
         aviso = {"role": "user", "content": f"[resultado] {resultado}"}
         mensajes.append(aviso)
         dialogo.append(aviso)
