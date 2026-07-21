@@ -28,7 +28,7 @@ COMO_SE_LLAMA = {
     "tareas": "tarea",
     "eventos": "cita",
     "notas": "nota",
-    "gastos": "gasto",
+    "movimientos": "movimiento",
 }
 
 

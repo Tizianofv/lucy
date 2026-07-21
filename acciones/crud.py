@@ -22,7 +22,7 @@ from config import TZ
 
 # Lista blanca. Los nombres de tabla se interpolan en el SQL (no se pueden
 # parametrizar), así que nunca pueden venir de afuera sin pasar por acá.
-TABLAS = ("tareas", "eventos", "notas", "gastos")
+TABLAS = ("tareas", "eventos", "notas", "movimientos")
 
 
 class FaltanDatos(Exception):
@@ -91,9 +91,9 @@ async def crear_desde_interpretacion(
     # ocupar una conexión del pool para terminar cancelando.
     if clas == "cita" and cuando is None:
         raise FaltanDatos("la fecha y la hora")
-    if clas == "gasto" and not r.get("monto"):
+    if clas in ("gasto", "ingreso") and not r.get("monto"):
         raise FaltanDatos("el monto")
-    if clas not in ("tarea", "cita", "nota", "idea", "gasto"):
+    if clas not in ("tarea", "cita", "nota", "idea", "gasto", "ingreso"):
         raise ValueError(f"'{clas}' no crea ninguna entidad.")
 
     # Personas y proyectos se resuelven fuera de la transacción a propósito:
@@ -145,17 +145,24 @@ async def crear_desde_interpretacion(
                  proyecto_id, persona_id),
             )
 
-        else:  # gasto
-            tabla = "gastos"
+        else:  # gasto | ingreso — misma tabla, lo distingue `tipo`
+            tabla = "movimientos"
+            # abs() a propósito: el monto se guarda siempre positivo y la
+            # dirección la da `tipo`. Si el modelo devolviera -2300 para un
+            # gasto, un monto negativo con tipo='gasto' sumaría al revés en
+            # cualquier balance.
             cur = await conn.execute(
                 """
-                INSERT INTO gastos
-                  (bandeja_id, fecha, monto, moneda, comercio, notas)
-                VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+                INSERT INTO movimientos
+                  (bandeja_id, tipo, fecha, monto, moneda, contraparte,
+                   referencia, persona_id, proyecto_id, notas)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                 """,
-                (bandeja_id, (cuando or datetime.now(TZ)).date(), r["monto"],
-                 str(r.get("moneda") or "DOP"), str(r.get("lugar") or "") or None,
-                 detalle),
+                (bandeja_id, clas, (cuando or datetime.now(TZ)).date(),
+                 abs(float(r["monto"])), str(r.get("moneda") or "DOP"),
+                 str(r.get("lugar") or r.get("persona") or "") or None,
+                 str(r.get("referencia") or "") or None,
+                 persona_id, proyecto_id, detalle),
             )
 
         registro_id = (await cur.fetchone())[0]

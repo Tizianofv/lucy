@@ -37,11 +37,11 @@ MODELO = "deepseek-v4-flash"
 
 DIAS = ("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
 
-CLASES = ("tarea", "cita", "nota", "idea", "gasto", "pregunta", "charla")
+CLASES = ("tarea", "cita", "nota", "idea", "gasto", "ingreso", "pregunta", "charla")
 
 # Las que se convierten en una fila de verdad. El resto (pregunta, charla) se
 # responde y se archiva: no todo lo que Tiziano dice es algo para guardar.
-CLASES_ENTIDAD = ("tarea", "cita", "nota", "idea", "gasto")
+CLASES_ENTIDAD = ("tarea", "cita", "nota", "idea", "gasto", "ingreso")
 
 ICONO = {
     "tarea": "📌",
@@ -49,6 +49,7 @@ ICONO = {
     "nota": "📝",
     "idea": "💡",
     "gasto": "💸",
+    "ingreso": "💰",
     "pregunta": "❓",
     "charla": "💬",
 }
@@ -89,8 +90,10 @@ Devolvés SOLO un objeto JSON con exactamente estas claves:
   lugar: string ("" si no aplica)
   persona: string ("" si no aplica)
   proyecto: string ("" si no aplica)
-  monto: número (0 si no aplica)
-  moneda: SOLO si clasificacion es "gasto" (por defecto "DOP"); si no, ""
+  monto: número SIEMPRE POSITIVO (0 si no aplica). Que la plata entre o salga
+         lo dice la clasificación, no el signo.
+  moneda: SOLO si es "gasto" o "ingreso" (por defecto "DOP"); si no, ""
+  referencia: No. de confirmación, comprobante o factura si aparece; si no, ""
   supuestos: lista de strings — lo que dedujiste sin que te lo dijeran, en
              primera persona ("asumí que...")
   falta: lista de strings — solo datos CRÍTICOS ausentes que ameriten preguntar
@@ -105,7 +108,11 @@ Devolvés SOLO un objeto JSON con exactamente estas claves:
 CLASIFICACIÓN:
   tarea → algo que Tiziano tiene que hacer
   cita → algo que ocurre en un momento dado
-  gasto → hay plata gastada
+  gasto → plata que SALE: una compra, un pago que hizo, un ticket
+  ingreso → plata que ENTRA: le transfirieron, le pagaron, cobró algo.
+            En un comprobante, mirá quién es el DESTINO: si el destino es
+            Tiziano (Fajardo Vargas), la plata entró y es "ingreso", aunque el
+            papel diga "transferencia". Confundir esto le invierte el balance.
   nota → información para guardar, sin acción
   idea → algo que se le ocurrió y no quiere perder
   pregunta → quiere consultar SUS datos (agenda, pendientes, gastos)

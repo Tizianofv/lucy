@@ -102,18 +102,27 @@ CREATE TABLE notas (
   borrado_en  TIMESTAMPTZ
 );
 
-CREATE TABLE gastos (
+-- Todo lo que mueve plata, salga o entre. Una tabla y no dos porque "¿cuánto
+-- gasté?" y "¿cuánto entró?" son la misma consulta con otro filtro, y el
+-- balance es restarlas. Separarlas obligaría a unir dos tablas cada vez que
+-- Tiziano pregunte algo sobre su plata.
+CREATE TABLE movimientos (
   id          BIGSERIAL PRIMARY KEY,
   bandeja_id  BIGINT REFERENCES bandeja(id),   -- la foto del ticket, vinculada
   creado_en   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  tipo        TEXT NOT NULL DEFAULT 'gasto',   -- gasto | ingreso | transferencia
   fecha       DATE NOT NULL,
-  monto       NUMERIC(12,2) NOT NULL,
+  monto       NUMERIC(12,2) NOT NULL,          -- SIEMPRE positivo: el signo lo da `tipo`
   moneda      TEXT NOT NULL DEFAULT 'DOP',
-  comercio    TEXT,
+  contraparte TEXT,                            -- el comercio si sale, quién pagó si entra
   categoria   TEXT,
+  referencia  TEXT,                            -- No. de confirmación / comprobante
+  persona_id  BIGINT REFERENCES personas(id),  -- "¿cuánto le pagué a Juan?"
+  proyecto_id BIGINT REFERENCES proyectos(id), -- "¿cuánto llevo gastado en X?"
   notas       TEXT,
   borrado_en  TIMESTAMPTZ
 );
+CREATE INDEX idx_movimientos_fecha ON movimientos(fecha);
 
 -- ═══ Todo lo que Lucy hace, queda escrito (pilares + Nivel 7 desde el día 1) ═══
 CREATE TABLE log_acciones (
