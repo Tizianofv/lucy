@@ -22,7 +22,11 @@ cliente = genai.Client(api_key=GEMINI_API_KEY)
 # mueva el alias por debajo. El precio de fijarlo es que algún día lo jubilan
 # —a gemini-1.5-flash, que estaba acá antes, ya lo jubilaron— y por eso existe
 # verificar_modelo(): que ese día falle al arrancar y no en silencio.
-MODELO = "gemini-3.5-flash"
+# gemini-3.5-flash quedó descartado por cuota, no por calidad: su capa gratuita
+# son 20 peticiones por día, verificado a los golpes (429 repetidos con uso de
+# prueba). Un asistente que deja de entender al mensaje 21 no es un asistente.
+# La cuota es POR MODELO, así que bajar de versión da un presupuesto nuevo.
+MODELO = "gemini-2.5-flash"
 
 
 async def verificar_modelo() -> None:
