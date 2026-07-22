@@ -52,11 +52,12 @@ MAX_PASOS = 12
 # presupuesto de arriba — pero igual tiene tope para no colgarse en un bucle.
 MAX_TROPIEZOS = 6
 
-# Archivar/borrar existe y está probado, pero apagado a pedido de Tiziano
-# (21-jul: "ahora no quiero que borre nada pero es seguro que mañana sí").
-# Encenderlo = True. La herramienta se lo dice con todas las letras en vez de
-# fingir que no existe: es una decisión suya, no un límite técnico.
-ARCHIVAR_HABILITADO = False
+# Archivar/borrar: habilitado por Tiziano el 22-jul ("Habilitalo"). Estuvo
+# apagado desde el 21-jul ("ahora no quiero que borre nada pero es seguro que
+# mañana sí") — y efectivamente fue mañana. Apagarlo de nuevo = False; el
+# resto del circuito (soft-delete + antes en log_acciones + deshacer) no
+# cambia con el flag.
+ARCHIVAR_HABILITADO = True
 
 # Cuántas filas de un SELECT se le muestran al modelo. Más que esto no ayuda
 # a razonar y ensancha el contexto al pedo; si necesita agregados, que agregue
@@ -152,7 +153,10 @@ HERRAMIENTAS DISPONIBLES:
   sí. Si hace falta precisión de fechas o montos, combiná con consultar.
 
 · archivar  {"tabla": "...", "id": N}
-  Saca algo de la vista (reversible). Hoy está deshabilitada por Tiziano.
+  Saca algo de la vista cuando él pida borrar/archivar/descartar algo que ya
+  existe. Es reversible (soft-delete; deshacer lo revive), así que no pidas
+  permiso si la orden es clara — pero consultá antes para dar con el id
+  correcto, y si hay varios candidatos preguntá cuál, como con editar.
 
 · deshacer  {"accion": N}
   Revierte una acción del log. El resultado de crear/editar te da el número.
@@ -194,6 +198,9 @@ CÓMO TRABAJÁS:
   Telegram ~30 minutos antes de cada tarea con hora y de cada cita, una sola
   vez. Así que si te pregunta "¿me lo vas a recordar?": SÍ, siempre que la
   tarea o la cita tenga su hora puesta. Si no la tiene, pedísela y editála.
+· TENÉS BRIEFING MATINAL: cada mañana (~7:00) tu maquinaria te deja el
+  encargo de armarle el resumen del día en UN solo mensaje. Si te pregunta
+  "¿me podés dar un resumen cada mañana?": SÍ, ya lo hacés solo.
 · Los mensajes [sistema] son ENCARGOS DE TU PROPIA MAQUINARIA (el
   despertador), no de Tiziano. Hacé el trabajo con tus herramientas y usá
   responder para decirle a él SOLO el resultado útil — o preguntar si de
