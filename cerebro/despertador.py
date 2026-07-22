@@ -58,8 +58,8 @@ BRIEFING_HASTA = 12  # mediodía
 # lo que no se hizo. "No quiero que me lo informe: si faltó algo, que lo
 # ponga en la nueva semana."
 SEMANAL_DIA = 6      # domingo (weekday() de Python: lunes=0 … domingo=6)
-SEMANAL_DESDE = 18   # 6:00 PM
-SEMANAL_HASTA = 21   # hasta las 9 PM tiene sentido; después, a dormir
+SEMANAL_DESDE = 21   # 9:00 PM — lo pidió Tiziano así (22-jul)
+SEMANAL_HASTA = 24   # la medianoche cierra sola: el lunes ya no es SEMANAL_DIA
 
 
 async def _avisar(bot, texto: str) -> None:
