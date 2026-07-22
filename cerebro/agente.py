@@ -245,6 +245,25 @@ def _sistema() -> str:
     )
 
 
+async def _avisar_choques(evento_id: int) -> str:
+    """Texto de advertencia si el evento se pisa con otro, o "" si está limpio.
+
+    Se le pega al resultado de crear/editar para que el modelo LO VEA en el
+    mismo turno y se lo diga a Tiziano. Detectar el choque y callárselo al
+    agente sería detectarlo para nadie.
+    """
+    choques = await db.choques_de_evento(evento_id)
+    if not choques:
+        return ""
+    partes = []
+    for c in choques[:3]:
+        hora = c["inicia_rd"].strftime("%d/%m %I:%M %p").lstrip("0")
+        lugar = f" en {c['lugar']}" if c.get("lugar") else ""
+        partes.append(f"«{c['titulo']}»{lugar} ({hora})")
+    return (" OJO — CHOQUE DE AGENDA: se pisa con " + "; ".join(partes) +
+            ". Avisale a Tiziano en tu respuesta y, si él quiere, movés una.")
+
+
 async def _ejecutar_herramienta(
     nombre: str, args: dict, bandeja_id: int, acciones: list[int]
 ) -> str:
@@ -270,17 +289,26 @@ async def _ejecutar_herramienta(
                 bandeja_id, dict(args),
                 motivo=f"Creado por Lucy desde la bandeja #{bandeja_id}")
             acciones.append(log_id)
-            return f"OK: {tabla}#{rid} creado (acción #{log_id}, reversible)."
+            resultado = f"OK: {tabla}#{rid} creado (acción #{log_id}, reversible)."
+            if tabla == "eventos":
+                resultado += await _avisar_choques(rid)
+            return resultado
 
         if nombre == "editar":
+            tabla = str(args.get("tabla") or "")
+            cambios = dict(args.get("cambios") or {})
             despues, log_id = await crud.editar(
-                str(args.get("tabla") or ""), int(args.get("id") or 0),
-                dict(args.get("cambios") or {}),
+                tabla, int(args.get("id") or 0), cambios,
                 motivo=f"Orden de Tiziano (bandeja #{bandeja_id})")
             if despues is None:
                 return "ERROR: ese registro no existe o está archivado."
             acciones.append(log_id)
-            return f"OK: editado (acción #{log_id}, reversible)."
+            resultado = f"OK: editado (acción #{log_id}, reversible)."
+            # Mover una cita puede crear un choque que antes no existía: el
+            # chequeo va acá y no en el prompt, porque acá no se olvida.
+            if tabla == "eventos" and ("inicia_en" in cambios or "termina_en" in cambios):
+                resultado += await _avisar_choques(int(args.get("id") or 0))
+            return resultado
 
         if nombre == "archivar":
             if not ARCHIVAR_HABILITADO:

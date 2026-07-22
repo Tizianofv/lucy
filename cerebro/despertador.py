@@ -296,11 +296,15 @@ async def _briefing() -> int:
     encargo = (
         f"Prepará el briefing matinal de hoy, {fecha}. Consultá la base y "
         "armá UN solo mensaje breve y ordenado con lo que aplique: 1) las "
-        "citas de HOY, con hora y lugar; 2) las tareas que vencen hoy; 3) las "
-        "atrasadas (vencieron antes de hoy y siguen pendientes); 4) las "
-        "pospuestas más de una vez, si las hay. Omití las secciones vacías "
-        "sin mencionarlas. Si no hay nada de nada, un buenos días de una "
-        "línea y listo. No le preguntes nada."
+        "citas de HOY, con hora y lugar — y si dos se pisan en el tiempo, "
+        "decilo con todas las letras (es lo más importante del briefing); "
+        "2) las tareas que vencen hoy; 3) las atrasadas (vencieron antes de "
+        "hoy y siguen pendientes); 4) las bolas que se están cayendo: tareas "
+        "pospuestas 2 o más veces (pospuesta_veces) o pendientes sin fecha "
+        "desde hace más de 7 días — decile cuánto llevan rodando, sin "
+        "regañar. Omití las secciones vacías sin mencionarlas. Si no hay "
+        "nada de nada, un buenos días de una línea y listo. No le preguntes "
+        "nada."
     )
     await db.guardar_en_bandeja(
         tipo_entrada="sistema",

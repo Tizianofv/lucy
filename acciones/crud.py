@@ -247,6 +247,24 @@ async def editar(
         if desconocidas:
             raise ValueError(f"Esa tabla no tiene: {', '.join(sorted(desconocidas))}")
 
+        # Posponer se cuenta solo (req 28): una tarea pendiente que se mueve
+        # para MÁS TARDE es una posposición, lo diga Tiziano con esa palabra o
+        # no. Contarlo acá —y no confiar en que el modelo se acuerde— es lo
+        # que alimenta el "llevás semanas pateando esto" del briefing. El
+        # try tapa un caso real: si el modelo mandó la fecha sin zona horaria,
+        # comparar aware con naive lanza TypeError, y perder la edición entera
+        # por no poder contar una posposición sería castigo desproporcionado.
+        if (tabla == "tareas" and "pospuesta_veces" not in campos
+                and isinstance(campos.get("vence_en"), datetime)
+                and antes.get("vence_en") is not None
+                and antes.get("estado") == "pendiente"
+                and campos.get("estado", "pendiente") == "pendiente"):
+            try:
+                if campos["vence_en"] > antes["vence_en"]:
+                    campos["pospuesta_veces"] = (antes.get("pospuesta_veces") or 0) + 1
+            except TypeError:
+                pass
+
         asignaciones = ", ".join(f"{c} = %s" for c in campos)
         await conn.execute(
             f"UPDATE {tabla} SET {asignaciones} WHERE id = %s",

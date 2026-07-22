@@ -409,3 +409,35 @@ async def buscar_o_crear_persona(nombre: str) -> int | None:
 
 async def buscar_o_crear_proyecto(nombre: str) -> int | None:
     return await _buscar_o_crear("proyectos", nombre)
+
+
+async def choques_de_evento(evento_id: int) -> list[dict]:
+    """Los eventos que se pisan en el tiempo con este (req 26: conflictos).
+
+    Es determinístico a propósito — la lección de Natalia: los datos críticos
+    no dependen de que un prompt se acuerde de mirar. El que crea o mueve una
+    cita SIEMPRE pasa por acá, y el choque se detecta con álgebra de rangos
+    de Postgres, no con la memoria del modelo.
+
+    Un evento sin termina_en se asume de 1 hora: mejor un choque de más que
+    dos citas pisadas en silencio.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT o.id, o.titulo, o.lugar,
+                   o.inicia_en AT TIME ZONE 'America/Santo_Domingo' AS inicia_rd
+              FROM eventos e
+              JOIN eventos o
+                ON o.id <> e.id AND o.borrado_en IS NULL
+               AND tstzrange(e.inicia_en,
+                             coalesce(e.termina_en, e.inicia_en + interval '1 hour'))
+                && tstzrange(o.inicia_en,
+                             coalesce(o.termina_en, o.inicia_en + interval '1 hour'))
+             WHERE e.id = %s AND e.borrado_en IS NULL
+             ORDER BY o.inicia_en
+            """,
+            (evento_id,),
+        )
+        return await cur.fetchall()
