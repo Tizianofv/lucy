@@ -249,11 +249,12 @@ async def editar(
 
         # Posponer se cuenta solo (req 28): una tarea pendiente que se mueve
         # para MÁS TARDE es una posposición, lo diga Tiziano con esa palabra o
-        # no. Contarlo acá —y no confiar en que el modelo se acuerde— es lo
-        # que alimenta el "llevás semanas pateando esto" del briefing. El
-        # try tapa un caso real: si el modelo mandó la fecha sin zona horaria,
-        # comparar aware con naive lanza TypeError, y perder la edición entera
-        # por no poder contar una posposición sería castigo desproporcionado.
+        # no. Esto es contabilidad del armario, no vigilancia del modelo: como
+        # actualizado_en o el log, es la casa llevando sus propias cuentas
+        # para que Lucy tenga el dato cuando lo quiera mirar. El try tapa un
+        # caso real: si la fecha vino sin zona horaria, comparar aware con
+        # naive lanza TypeError, y perder la edición entera por no poder
+        # contar una posposición sería castigo desproporcionado.
         if (tabla == "tareas" and "pospuesta_veces" not in campos
                 and isinstance(campos.get("vence_en"), datetime)
                 and antes.get("vence_en") is not None

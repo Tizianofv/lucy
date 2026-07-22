@@ -414,10 +414,12 @@ async def buscar_o_crear_proyecto(nombre: str) -> int | None:
 async def choques_de_evento(evento_id: int) -> list[dict]:
     """Los eventos que se pisan en el tiempo con este (req 26: conflictos).
 
-    Es determinístico a propósito — la lección de Natalia: los datos críticos
-    no dependen de que un prompt se acuerde de mirar. El que crea o mueve una
-    cita SIEMPRE pasa por acá, y el choque se detecta con álgebra de rangos
-    de Postgres, no con la memoria del modelo.
+    Corrección de Tiziano (22-jul) sobre el espíritu de esto: Lucy no es
+    Natalia — acá la regla es ENSEÑARLE al modelo, no restringirlo. Este
+    chequeo no es una reja: es un mueble de la casa. Le acerca el dato del
+    choque a Lucy en el momento justo, y ELLA decide qué hacer con él —
+    avisarlo, proponer mover una, o preguntarle a Tiziano por Telegram
+    (que siempre está).
 
     Un evento sin termina_en se asume de 1 hora: mejor un choque de más que
     dos citas pisadas en silencio.

@@ -178,6 +178,8 @@ HERRAMIENTAS DISPONIBLES:
   contexto. Usála cuando falte un dato, cuando haya varios candidatos y no
   sea obvio cuál, cuando el mensaje sea ambiguo de verdad. Preguntar bien es
   mejor que adivinar rápido — pero preguntar lo obvio es ruido.
+  Tiziano SIEMPRE está del otro lado (lo dijo él, con esas palabras): ante
+  cualquier duda real, preferí preguntarle antes que trabarte o adivinar.
 
 · responder  {"texto": "...",
               "clasificacion": "tarea|cita|nota|idea|gasto|ingreso|pregunta|orden|charla"}
@@ -246,11 +248,12 @@ def _sistema() -> str:
 
 
 async def _avisar_choques(evento_id: int) -> str:
-    """Texto de advertencia si el evento se pisa con otro, o "" si está limpio.
+    """Texto informativo si el evento se pisa con otro, o "" si está limpio.
 
-    Se le pega al resultado de crear/editar para que el modelo LO VEA en el
-    mismo turno y se lo diga a Tiziano. Detectar el choque y callárselo al
-    agente sería detectarlo para nadie.
+    Es una ventana, no un muro: no bloquea nada ni decide nada. Le acerca el
+    dato a Lucy en el mismo turno y ella elige el movimiento — avisar,
+    proponer mover una, o preguntarle a Tiziano. La casa le alcanza la
+    información donde la necesita; qué hacer con ella es asunto suyo.
     """
     choques = await db.choques_de_evento(evento_id)
     if not choques:
@@ -304,8 +307,8 @@ async def _ejecutar_herramienta(
                 return "ERROR: ese registro no existe o está archivado."
             acciones.append(log_id)
             resultado = f"OK: editado (acción #{log_id}, reversible)."
-            # Mover una cita puede crear un choque que antes no existía: el
-            # chequeo va acá y no en el prompt, porque acá no se olvida.
+            # Mover una cita puede crear un choque que antes no existía: la
+            # casa le acerca el dato acá, en el momento en que aparece.
             if tabla == "eventos" and ("inicia_en" in cambios or "termina_en" in cambios):
                 resultado += await _avisar_choques(int(args.get("id") or 0))
             return resultado
