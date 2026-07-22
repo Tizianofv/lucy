@@ -52,6 +52,15 @@ PREAVISO_MIN = 120
 BRIEFING_DESDE = 7   # 7:00 AM
 BRIEFING_HASTA = 12  # mediodía
 
+# El plan semanal (req 25, con la vuelta que le dio Tiziano): domingo a la
+# tarde, mirando SOLO hacia adelante. Lucy revisa el pasado ella sola y lo
+# que quedó colgado lo reubica en la semana que arranca — sin informes de
+# lo que no se hizo. "No quiero que me lo informe: si faltó algo, que lo
+# ponga en la nueva semana."
+SEMANAL_DIA = 6      # domingo (weekday() de Python: lunes=0 … domingo=6)
+SEMANAL_DESDE = 18   # 6:00 PM
+SEMANAL_HASTA = 21   # hasta las 9 PM tiene sentido; después, a dormir
+
 
 async def _avisar(bot, texto: str) -> None:
     """Manda el aviso Y lo deja en la bandeja como parte de la conversación.
@@ -125,8 +134,64 @@ async def revisar(bot) -> int:
 
     avisos += await _preparar_salidas(bot)
     avisos += await _briefing()
+    avisos += await _semanal()
     await _reprogramar_recurrentes()
     return avisos
+
+
+async def _semanal() -> int:
+    """Deja el encargo del plan semanal, los domingos a la tarde.
+
+    Mismo patrón que el briefing: este módulo mira el reloj, el agente
+    piensa. La diferencia está en el encargo: acá Lucy primero ORDENA la
+    casa ella sola (reubicar lo colgado) y recién después habla — y habla
+    solo del futuro.
+    """
+    ahora = datetime.now(TZ)
+    if ahora.weekday() != SEMANAL_DIA:
+        return 0
+    if not (SEMANAL_DESDE <= ahora.hour < SEMANAL_HASTA):
+        return 0
+
+    hoy_arranca = ahora.replace(hour=0, minute=0, second=0, microsecond=0)
+    async with db.pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            SELECT 1 FROM bandeja
+             WHERE origen = 'despertador' AND tipo_entrada = 'sistema'
+               AND contenido_raw LIKE 'Prepará la semana%%'
+               AND creado_en >= %s
+             LIMIT 1
+            """,
+            (hoy_arranca,),
+        )
+        if await cur.fetchone() is not None:
+            return 0
+
+    await db.guardar_en_bandeja(
+        tipo_entrada="sistema",
+        contenido_raw=ENCARGO_SEMANAL,
+        chat_id=config.CHAT_ID_DUENO,
+        origen="despertador",
+    )
+    log.info("Encargo del plan semanal dejado en la bandeja.")
+    return 1
+
+
+ENCARGO_SEMANAL = (
+    "Prepará la semana que arranca mañana lunes. En DOS tiempos:\n"
+    "PRIMERO, ordená la casa vos sola, sin contarle nada: consultá las "
+    "tareas vencidas sin hacer y las estancadas, y a cada una que siga "
+    "teniendo sentido ponele con editar una fecha nueva dentro de la semana "
+    "entrante (que sume posposición está bien, para eso existe). Si alguna "
+    "te parece que ya murió, no la borres callada: preguntale solo por esa.\n"
+    "SEGUNDO, mandale UN mensaje mirando SOLO hacia adelante: las citas de "
+    "la semana con hora y lugar (si dos chocan, decilo), lo que vence cada "
+    "día, y lo que reubicaste YA INTEGRADO como parte del plan — sin decir "
+    "'esto quedó de la semana pasada' ni rendirle cuentas del pasado. Tono "
+    "de plan, no de informe. Si la semana está vacía, decíselo en una línea "
+    "y listo."
+)
 
 
 # ── Recurrencia (22-jul, pedido de Tiziano) ─────────────────────────────
