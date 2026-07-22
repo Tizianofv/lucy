@@ -120,10 +120,13 @@ async def crear_desde_interpretacion(
             cur = await conn.execute(
                 """
                 INSERT INTO tareas
-                  (bandeja_id, titulo, detalle, vence_en, proyecto_id, persona_id)
-                VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+                  (bandeja_id, titulo, detalle, vence_en, recurrencia,
+                   proyecto_id, persona_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
                 """,
-                (bandeja_id, titulo, detalle, cuando, proyecto_id, persona_id),
+                (bandeja_id, titulo, detalle, cuando,
+                 str(r.get("recurrencia") or "").strip() or None,
+                 proyecto_id, persona_id),
             )
 
         elif clas == "cita":

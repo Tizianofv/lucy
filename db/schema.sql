@@ -77,6 +77,12 @@ CREATE TABLE tareas (
   titulo          TEXT NOT NULL,
   detalle         TEXT,
   vence_en        TIMESTAMPTZ,
+  recurrencia     TEXT,                            -- NULL = una vez. 'cada 8 horas' |
+                                                   --   'diaria' | 'cada 3 días' | 'semanal' |
+                                                   --   'cada 2 semanas' | 'mensual' | 'cada lunes'…
+                                                   --   El despertador reprograma la MISMA fila al
+                                                   --   marcarse hecha: 1 fila por tarea recurrente,
+                                                   --   no 1 por ocurrencia.
   prioridad       TEXT,                            -- baja | media | alta
   proyecto_id     BIGINT REFERENCES proyectos(id),
   persona_id      BIGINT REFERENCES personas(id),  -- "preguntarle a Pedro por el presupuesto"

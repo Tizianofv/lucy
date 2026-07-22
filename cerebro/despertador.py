@@ -20,7 +20,8 @@ Cada aviso queda en log_acciones: cuando llegue el Nivel 7 y Tiziano pregunte
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 
 from psycopg.rows import dict_row
 
@@ -124,7 +125,141 @@ async def revisar(bot) -> int:
 
     avisos += await _preparar_salidas(bot)
     avisos += await _briefing()
+    await _reprogramar_recurrentes()
     return avisos
+
+
+# ── Recurrencia (22-jul, pedido de Tiziano) ─────────────────────────────
+#
+# Una tarea recurrente es UNA fila que avanza, no N filas futuras. Nació de
+# ver la bandeja #86: "medicina cada 8 horas" terminó como 11 tareas
+# individuales porque el esquema no tenía dónde decir "esto se repite" — y
+# once filas se acaban; una regla, no.
+#
+# El formato de `recurrencia` es español acotado, no texto libre: lo que el
+# agente escribe tiene que ser lo que este parser lee, y un formato libre
+# es una promesa de desincronización.
+
+_DIAS_SEMANA = ("lunes", "martes", "miércoles", "jueves", "viernes",
+                "sábado", "domingo")
+
+_PATRONES = (
+    (re.compile(r"^cada\s+(\d+)\s*horas?$"), lambda n: timedelta(hours=n)),
+    (re.compile(r"^(cada\s+hora|horaria)$"), lambda n: timedelta(hours=1)),
+    (re.compile(r"^(diaria|diario|cada\s+d[ií]a|todos\s+los\s+d[ií]as)$"),
+     lambda n: timedelta(days=1)),
+    (re.compile(r"^cada\s+(\d+)\s*d[ií]as?$"), lambda n: timedelta(days=n)),
+    (re.compile(r"^(semanal|cada\s+semana)$"), lambda n: timedelta(weeks=1)),
+    (re.compile(r"^cada\s+(\d+)\s*semanas?$"), lambda n: timedelta(weeks=n)),
+    # "cada lunes" = semanal; el día lo ancla vence_en, no hace falta más.
+    (re.compile(r"^cada\s+(?:%s)$" % "|".join(_DIAS_SEMANA)),
+     lambda n: timedelta(weeks=1)),
+    # Mensual como 30 días: para recordatorios personales la deriva de 1-2
+    # días es aceptable y evita la aritmética de calendarios (¿31 de feb?).
+    (re.compile(r"^(mensual|cada\s+mes)$"), lambda n: timedelta(days=30)),
+    (re.compile(r"^cada\s+(\d+)\s*meses$"), lambda n: timedelta(days=30 * n)),
+)
+
+
+def _intervalo(recurrencia: str) -> timedelta | None:
+    """'cada 8 horas' → timedelta(hours=8). None si no se entiende.
+
+    Un valor ilegible NO rompe nada: la tarea simplemente no se reprograma
+    y queda como tarea normal. Degradar a "una sola vez" es mejor que
+    adivinar un intervalo.
+    """
+    texto = (recurrencia or "").strip().lower()
+    for patron, fabrica in _PATRONES:
+        m = patron.match(texto)
+        if m:
+            n = int(m.group(1)) if m.groups() and m.group(1) and m.group(1).isdigit() else 1
+            return fabrica(max(1, n))
+    return None
+
+
+def _proxima(vence_en: datetime, intervalo: timedelta, ahora: datetime) -> datetime:
+    """La próxima ocurrencia FUTURA, anclada al horario original.
+
+    Se avanza desde vence_en y no desde 'ahora' a propósito: la medicina de
+    las 23:00 marcada hecha a las 23:40 tiene que caer a las 7:00, no a las
+    7:40. El ancla es el horario de la regla, no el momento del clic.
+    """
+    proxima = vence_en + intervalo
+    while proxima <= ahora:
+        proxima += intervalo
+    return proxima
+
+
+async def _reprogramar_recurrentes() -> int:
+    """Avanza las tareas recurrentes que ya cumplieron su ocurrencia.
+
+    Dos casos, mismo destino:
+    · hecha → se reprograma al toque: el "listo" de hoy arma el aviso de
+      mañana. completado_en queda en el log, no en la fila: la fila es la
+      REGLA viva, la historia vive en log_acciones (como todo lo demás).
+    · pendiente y vencida hace más de medio intervalo → se saltó una toma.
+      Se avanza igual (con su huella diciendo que se saltó): una cadena de
+      recordatorios que se corta porque un día no marcaste "hecha" es
+      exactamente el tipo de silencio que el despertador vino a matar.
+      El medio intervalo es la gracia para marcarla tarde sin perderla.
+    """
+    from psycopg.rows import dict_row as _dict_row
+
+    ahora = datetime.now(timezone.utc)
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=_dict_row)
+        await cur.execute(
+            """
+            SELECT * FROM tareas
+             WHERE recurrencia IS NOT NULL AND borrado_en IS NULL
+               AND vence_en IS NOT NULL
+               AND (estado = 'hecha'
+                    OR (estado = 'pendiente' AND vence_en < now()))
+            """
+        )
+        filas = await cur.fetchall()
+
+    avanzadas = 0
+    for f in filas:
+        intervalo = _intervalo(f["recurrencia"])
+        if intervalo is None:
+            continue  # recurrencia ilegible: queda como tarea normal
+
+        saltada = f["estado"] == "pendiente"
+        if saltada and ahora < f["vence_en"] + intervalo / 2:
+            continue  # todavía en gracia: puede marcarla hecha tarde
+
+        proxima = _proxima(f["vence_en"], intervalo, ahora)
+        hora = proxima.astimezone(TZ).strftime("%d/%m %I:%M %p").lstrip("0")
+        motivo = (
+            f"Recurrente ({f['recurrencia']}): ocurrencia "
+            + ("saltada sin marcar" if saltada else "hecha")
+            + f", reprogramada para el {hora}"
+        )
+
+        async with db.pool.connection() as conn:
+            cur = conn.cursor(row_factory=_dict_row)
+            await cur.execute(
+                """
+                UPDATE tareas
+                   SET estado = 'pendiente', vence_en = %s,
+                       avisado_en = NULL, completado_en = NULL
+                 WHERE id = %s
+                RETURNING *
+                """,
+                (proxima, f["id"]),
+            )
+            despues = await cur.fetchone()
+            await crud._registrar(
+                conn, accion="editar", tabla="tareas", registro_id=f["id"],
+                antes=f, despues=despues, motivo=motivo,
+                bandeja_id=f.get("bandeja_id"),
+            )
+        avanzadas += 1
+        log.info("Recurrente avanzada: tareas#%s → %s (%s)",
+                 f["id"], hora, "saltada" if saltada else "hecha")
+
+    return avanzadas
 
 
 async def _briefing() -> int:
