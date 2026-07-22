@@ -27,6 +27,7 @@ from psycopg.rows import dict_row
 import acciones.crud as crud
 import config
 import db.db as db
+from cerebro.deepseek import DIAS
 from config import TZ
 
 log = logging.getLogger("lucy.despertador")
@@ -42,6 +43,13 @@ ANTICIPO_MIN = 30
 # 21-jul: "si tengo una reunión a las 3, dos horas antes debería preguntarme
 # dónde estoy".
 PREAVISO_MIN = 120
+
+# La ventana del briefing matinal (Nivel 5, req 24): a partir de qué hora se
+# arma, y hasta cuándo tiene sentido mandarlo. Si Lucy estuvo caída toda la
+# mañana, un "buenos días" a las 4 de la tarde no informa: molesta. Mejor
+# saltar el día y que el de mañana salga a su hora.
+BRIEFING_DESDE = 7   # 7:00 AM
+BRIEFING_HASTA = 12  # mediodía
 
 
 async def _avisar(bot, texto: str) -> None:
@@ -115,7 +123,58 @@ async def revisar(bot) -> int:
         log.info("Aviso enviado: %s#%s (%s)", f["tabla"], f["id"], f["titulo"])
 
     avisos += await _preparar_salidas(bot)
+    avisos += await _briefing()
     return avisos
+
+
+async def _briefing() -> int:
+    """Deja el encargo del briefing una vez por día, en la ventana matinal.
+
+    Mismo patrón que las salidas: este módulo solo mira el reloj, el agente
+    piensa. El encargo cae en la bandeja como [sistema], y el agente consulta
+    la agenda REAL y redacta el resumen — acá no se arma ningún texto de
+    briefing, porque armarlo sin mirar los datos sería opinar sin consultar.
+
+    La marca de "hoy ya salió" es la propia fila de la bandeja: no hace falta
+    una tabla nueva para recordar un hecho que la bandeja ya registra.
+    """
+    ahora = datetime.now(TZ)
+    if not (BRIEFING_DESDE <= ahora.hour < BRIEFING_HASTA):
+        return 0
+
+    hoy_arranca = ahora.replace(hour=0, minute=0, second=0, microsecond=0)
+    async with db.pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            SELECT 1 FROM bandeja
+             WHERE origen = 'despertador' AND tipo_entrada = 'sistema'
+               AND contenido_raw LIKE 'Prepará el briefing%%'
+               AND creado_en >= %s
+             LIMIT 1
+            """,
+            (hoy_arranca,),
+        )
+        if await cur.fetchone() is not None:
+            return 0
+
+    fecha = f"{DIAS[ahora.weekday()]} {ahora.strftime('%d/%m/%Y')}"
+    encargo = (
+        f"Prepará el briefing matinal de hoy, {fecha}. Consultá la base y "
+        "armá UN solo mensaje breve y ordenado con lo que aplique: 1) las "
+        "citas de HOY, con hora y lugar; 2) las tareas que vencen hoy; 3) las "
+        "atrasadas (vencieron antes de hoy y siguen pendientes); 4) las "
+        "pospuestas más de una vez, si las hay. Omití las secciones vacías "
+        "sin mencionarlas. Si no hay nada de nada, un buenos días de una "
+        "línea y listo. No le preguntes nada."
+    )
+    await db.guardar_en_bandeja(
+        tipo_entrada="sistema",
+        contenido_raw=encargo,
+        chat_id=config.CHAT_ID_DUENO,
+        origen="despertador",
+    )
+    log.info("Encargo del briefing matinal dejado en la bandeja.")
+    return 1
 
 
 async def _preparar_salidas(bot) -> int:
