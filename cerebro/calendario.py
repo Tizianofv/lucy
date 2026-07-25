@@ -11,10 +11,13 @@ Tiziano COMPARTIÓ cada calendario con la dirección de esa cuenta, como se
 comparte con una persona: el personal con permiso de escritura, los del
 estudio en solo lectura. La cuenta no caduca nunca.
 
-Los calendarios NO se hardcodean: se descubren con calendarList (lo que la
-cuenta puede ver = lo que Tiziano compartió). Si mañana comparte uno nuevo,
-entra solo; si deja de compartir otro, desaparece. La casa se adapta a lo que
-él decide, no al revés.
+Por qué los calendarios se listan por ID y NO se autodescubren: compartir un
+calendario con una cuenta de servicio le da acceso a sus eventos, pero —a
+diferencia de una persona— NO lo agrega a la lista de calendarios de la
+cuenta (`calendarList` queda vacía; es un límite conocido de Google, no un
+error de la compartición). Así que la cuenta puede LEER cada calendario por
+su ID, pero hay que decirle cuáles. Por eso viven en CALENDARIOS. Sumar uno
+nuevo = compartirlo con la cuenta + agregar su línea acá.
 
 Esto es LECTURA (los eventos de Google se espejan en `eventos`, marcados con
 su gcal_id). Un evento nativo de Lucy —una cita que ella creó por Telegram—
@@ -38,6 +41,33 @@ log = logging.getLogger("lucy.calendario")
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 API = "https://www.googleapis.com/calendar/v3"
+
+# Los calendarios que Tiziano compartió con la cuenta de servicio. Se listan
+# por ID a propósito (ver el docstring): Google no los autodescubre para una
+# cuenta de servicio. `ambito` distingue su mundo personal del estudio, para
+# que el agente sepa de dónde viene cada cita.
+CALENDARIOS = [
+    {"id": "tizianofv@gmail.com",
+     "nombre": "Tiziano (personal)", "ambito": "personal"},
+    {"id": "caribbeandreamstudios@gmail.com",
+     "nombre": "CDS (principal)", "ambito": "estudio"},
+    {"id": "3244683b95cf9e097bad11c306a0cddacf9307a46fbe510b1993f3d61080bc29@group.calendar.google.com",
+     "nombre": "Bloqueos CDS", "ambito": "estudio"},
+    {"id": "c4a8e661ac3d6db4e1c6c7a583f04d21f85c1d5db2aab2458b99396b9dca6d5b@group.calendar.google.com",
+     "nombre": "Rosilis", "ambito": "estudio"},
+    {"id": "dbpn9pdc8qgc675gnlqlmeg1d0@group.calendar.google.com",
+     "nombre": "Calendario Tiziano (estudio)", "ambito": "estudio"},
+    {"id": "460c6e48147b09eaa2cd81d5f75725420a502cada46bcdea3cadda661595b27b@group.calendar.google.com",
+     "nombre": "CDS GRABACIONES", "ambito": "estudio"},
+    {"id": "onauqbbgkqkd4gp1l7dl58rh9k@group.calendar.google.com",
+     "nombre": "CDS Sala P", "ambito": "estudio"},
+    {"id": "c6f02a737eae3212f6f5299184286777cec4f6f78137418c24c21d9e80fcd6da@group.calendar.google.com",
+     "nombre": "CDS Sala R", "ambito": "estudio"},
+    {"id": "cd12e934b0d7b88dfc06539cde755ee3efcb6bc4000e4bad776f674451284569@group.calendar.google.com",
+     "nombre": "Sala K", "ambito": "estudio"},
+    {"id": "66e0c93e0fbe5bc633632c863ed6750abdd98161ae4ee8a728c94f3224821e02@group.calendar.google.com",
+     "nombre": "Pasantías", "ambito": "estudio"},
+]
 
 # Ventana de sincronización: desde ayer (para no perder algo que empezó y aún
 # corre) hasta 60 días adelante. Más lejos no alimenta ni el briefing ni el
@@ -82,19 +112,6 @@ async def _get(client: httpx.AsyncClient, url: str, token: str,
         url, params=params, headers={"Authorization": f"Bearer {token}"})
     r.raise_for_status()
     return r.json()
-
-
-async def _calendarios(client: httpx.AsyncClient, token: str) -> list[dict]:
-    """Los calendarios que la cuenta ve = los que Tiziano compartió."""
-    datos = await _get(client, f"{API}/users/me/calendarList", token)
-    cals = []
-    for c in datos.get("items", []):
-        cals.append({
-            "id": c["id"],
-            "nombre": c.get("summaryOverride") or c.get("summary") or c["id"],
-            "acceso": c.get("accessRole"),  # owner | writer | reader
-        })
-    return cals
 
 
 def _parse_dt(campo: dict | None) -> datetime | None:
@@ -181,7 +198,7 @@ async def sincronizar() -> dict:
     token = await _token()
     resumen: dict[str, int] = {}
     async with httpx.AsyncClient(timeout=30) as client:
-        for cal in await _calendarios(client, token):
+        for cal in CALENDARIOS:
             try:
                 eventos = await _eventos_de(client, token, cal["id"])
                 for ev in eventos:
@@ -194,15 +211,29 @@ async def sincronizar() -> dict:
 
 
 async def verificar() -> list[str]:
-    """Al arrancar: confirma que la key sirve y lista los calendarios visibles.
+    """Al arrancar: confirma que la key sirve Y que cada calendario responde.
 
-    Como el chequeo de DeepSeek: una llamada real, no una promesa. Si la cuenta
-    no puede ver ningún calendario, algo se rompió en la compartición y hay que
-    saberlo ahora, no cuando el briefing salga vacío.
+    Como el chequeo de DeepSeek: una llamada real, no una promesa. Prueba el
+    acceso a cada calendario con una consulta mínima y devuelve los que
+    respondieron; si uno falla, se sabe acá y no cuando el briefing salga
+    incompleto. Un calendario mudo casi siempre es una compartición que quedó
+    a medias.
     """
     if not GOOGLE_SA_KEY:
         raise RuntimeError("GOOGLE_SA_KEY vacía: Lucy no puede leer el calendario.")
     token = await _token()
+    vivos = []
     async with httpx.AsyncClient(timeout=30) as client:
-        cals = await _calendarios(client, token)
-    return [c["nombre"] for c in cals]
+        for cal in CALENDARIOS:
+            try:
+                url = f"{API}/calendars/{quote(cal['id'], safe='')}/events"
+                await _get(client, url, token, {"maxResults": 1})
+                vivos.append(cal["nombre"])
+            except Exception:
+                log.warning("Sin acceso al calendario '%s' (¿compartición a "
+                            "medias?).", cal["nombre"], exc_info=True)
+    if not vivos:
+        raise RuntimeError(
+            "La cuenta de servicio no pudo leer NINGÚN calendario: revisar que "
+            "estén compartidos con lucy-calendar@…gserviceaccount.com")
+    return vivos
