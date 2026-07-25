@@ -19,6 +19,7 @@ from telegram.ext import (
 )
 
 import acciones.botones as botones
+import cerebro.calendario as calendario
 import cerebro.deepseek as motor
 import cerebro.vision as vision
 import cerebro.whisper as whisper
@@ -74,6 +75,18 @@ async def _al_arrancar(app) -> None:
         log.exception(
             "OÍDO/VISTA NO DISPONIBLES (OpenAI) — los textos se siguen "
             "entendiendo; las notas de voz y las fotos esperan en la bandeja."
+        )
+
+    # El calendario es opcional como todo lo externo: si la cuenta de servicio
+    # falla, Lucy sigue con su agenda propia y solo no ve los de Google.
+    try:
+        cals = await calendario.verificar()
+        log.info("Calendario OK: %s calendario(s) visibles — %s.",
+                 len(cals), ", ".join(cals))
+    except Exception:
+        log.exception(
+            "CALENDARIO NO DISPONIBLE (Google) — Lucy sigue con su agenda "
+            "propia; no verá los eventos de Google hasta arreglarlo."
         )
 
     # El bucle de comprensión vive aparte del de captura, a propósito: si

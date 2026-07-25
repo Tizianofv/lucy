@@ -56,9 +56,14 @@ tareas — cosas por hacer.
     'semanal'...) la tarea se reprograma sola al marcarse hecha: hay UNA
     fila por tarea recurrente, no una por ocurrencia.
 
-eventos — citas y compromisos con hora.
+eventos — citas y compromisos con hora. Agenda UNIFICADA: las que creó Lucy
+  y las que vienen de Google Calendar (personal + estudio) viven juntas acá.
   id, bandeja_id, creado_en, titulo, inicia_en, termina_en, lugar,
-  persona_id, proyecto_id, notas, borrado_en
+  persona_id, proyecto_id, notas, gcal_id, gcal_calendar, borrado_en
+  · gcal_calendar: de qué calendario de Google vino ('Tiziano Fajardo Vargas'
+    = su personal; 'CDS Sala P', 'CDS GRABACIONES', etc. = el estudio). NULL =
+    cita que creó Lucy por Telegram.
+  · gcal_id: NULL = nativa de Lucy; con valor = espejo de un evento de Google.
 
 notas — información guardada sin acción asociada.
   id, bandeja_id, creado_en, contenido, etiquetas (text[]; 'idea' marca las

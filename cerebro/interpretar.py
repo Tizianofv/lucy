@@ -22,6 +22,7 @@ import telegram.error
 
 import captura.correo as correo
 import cerebro.agente as agente
+import cerebro.calendario as calendario
 import cerebro.despertador as despertador
 import cerebro.memoria as memoria
 import cerebro.preguntar as preguntar
@@ -187,6 +188,15 @@ async def bucle(bot) -> None:
                 await correo.reporte_diario()
             except Exception:
                 log.warning("El reporte de correo tropezó; reintento en la próxima.",
+                            exc_info=True)
+        # El calendario se jala cada ~5 min (60 vueltas): las sesiones del
+        # estudio no cambian cada segundo, y consultar 10 calendarios más
+        # seguido gastaría cuota sin ganar frescura útil.
+        if vuelta % 60 == 0:
+            try:
+                await calendario.sincronizar()
+            except Exception:
+                log.warning("No pude sincronizar el calendario; sigo igual.",
                             exc_info=True)
 
         await asyncio.sleep(INTERVALO_S)

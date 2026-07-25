@@ -130,8 +130,15 @@ CREATE TABLE eventos (
   avisos_enviados INT[] NOT NULL DEFAULT '{}',   -- minutos-antes ya avisados: {30,0} = avisó a -30 y a la hora
   preaviso_en  TIMESTAMPTZ,                      -- ya se preguntó "¿desde dónde salís?"
                                                  --   (solo citas con lugar, ~2h antes)
+  -- Nivel 4: espejo de Google Calendar. NULL = cita nativa de Lucy (Telegram).
+  gcal_id       TEXT,                            -- id del evento en Google
+  gcal_cal_id   TEXT,                            -- id del calendario (clave + push)
+  gcal_calendar TEXT,                            -- nombre legible ('CDS Sala P'…)
   borrado_en   TIMESTAMPTZ
 );
+-- Upsert del sync: un evento de Google es único por (calendario, id).
+CREATE UNIQUE INDEX idx_eventos_gcal ON eventos (gcal_cal_id, gcal_id)
+  WHERE gcal_id IS NOT NULL;
 
 CREATE TABLE notas (
   id          BIGSERIAL PRIMARY KEY,
