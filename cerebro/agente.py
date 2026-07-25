@@ -232,6 +232,13 @@ CÓMO TRABAJÁS:
   te mostró — quien habla ahí NO es Tiziano (mirá el DESTINO en los
   comprobantes: si es él, la plata ENTRÓ). Los [voz] son su nota de voz
   transcripta.
+· Los [correo] son correos que YA filtraste como relevantes y llegaron a la
+  bandeja: quien escribe NO es Tiziano, es el remitente. Tu trabajo con un
+  correo es AVISARLE en una línea (de quién, de qué) y accionar lo que
+  claramente corresponda: si trae una cita, creála; si pide algo con fecha,
+  anotá la tarea; si es una factura, registrala. No respondas el correo (todavía
+  no sabés hacerlo) y no te inventes lo que no está en el texto. Ante la duda
+  entre accionar o solo avisar, avisá y preguntale si querés que lo anote.
 · DIRECCIONES: cuando te dé la dirección de un lugar suyo ("mi casa es
   Capitán Eugenio de Marchena #5"), guardala al instante como nota con
   etiquetas ["direccion"] (ej: "Casa: Capitán Eugenio de Marchena #5,
@@ -508,14 +515,14 @@ async def atender(fila: dict, texto: str, bot) -> None:
         # dicho). Entra igual: sus palabras proactivas son parte del hilo.
         if h["dicho"]:
             etiqueta = {"audio": "[voz] ", "foto": "[foto] ",
-                        "sistema": "[sistema] "}.get(h["tipo_entrada"], "")
+                        "sistema": "[sistema] ", "email": "[correo] "}.get(h["tipo_entrada"], "")
             mensajes.append({"role": "user", "content": etiqueta + h["dicho"]})
         if h["respuesta_lucy"]:
             mensajes.append({"role": "assistant", "content": h["respuesta_lucy"]})
     mensajes.extend(dialogo_previo)
 
     etiqueta = {"audio": "[voz] ", "foto": "[foto] ",
-                "sistema": "[sistema] "}.get(fila["tipo_entrada"], "")
+                "sistema": "[sistema] ", "email": "[correo] "}.get(fila["tipo_entrada"], "")
     actual = {"role": "user", "content": etiqueta + texto}
     mensajes.append(actual)
 

@@ -3,6 +3,7 @@
 Los secretos se leen de variables de entorno — nunca se escriben en el código.
 En Railway se cargan en la pestaña Variables; en local, desde un archivo .env.
 """
+import json
 import os
 from zoneinfo import ZoneInfo
 
@@ -30,6 +31,17 @@ OPENAI_API_KEY   = os.environ.get("OPENAI_API_KEY", "").strip()
 # Tránsito real (Routes API). Si falta, Lucy degrada con gracia: usa las
 # rutas que aprendió preguntando, como antes de tener Maps.
 GOOGLE_MAPS_API_KEY = os.environ.get("GOOGLE_MAPS_API_KEY", "").strip()
+
+# Vigilancia de correo (Nivel 4, req 17). JSON: [{"user":..., "pass":...}, ...]
+# — la "pass" es una contraseña de aplicación de Google (IMAP), no la real.
+# Si falta o viene mal, queda vacía y Lucy arranca sin correo: como toda IA,
+# su ausencia degrada con gracia, no tumba la captura.
+try:
+    CORREO_CUENTAS = json.loads(os.environ.get("CORREO_CUENTAS", "[]"))
+    if not isinstance(CORREO_CUENTAS, list):
+        CORREO_CUENTAS = []
+except ValueError:
+    CORREO_CUENTAS = []
 
 # Candado de seguridad (pilar): Lucy SOLO le responde a este chat.
 # Cualquier otro que le escriba es ignorado sin más.

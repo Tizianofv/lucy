@@ -73,7 +73,7 @@ async def guardar_en_bandeja(
 
 
 async def tomar_pendientes(
-    tipos: tuple[str, ...] = ("texto", "audio", "foto", "sistema"),
+    tipos: tuple[str, ...] = ("texto", "audio", "foto", "sistema", "email"),
     limite: int = 5,
 ) -> list[dict]:
     """Reclama filas sin procesar y las marca 'procesando' en un solo paso.
@@ -199,6 +199,37 @@ async def guardar_respuesta(bandeja_id: int, texto: str) -> None:
         await conn.execute(
             "UPDATE bandeja SET respuesta_lucy = %s WHERE id = %s",
             (texto[:4000], bandeja_id),
+        )
+
+
+async def leer_estado_correo(cuenta: str) -> dict | None:
+    """Hasta qué UID se procesó una cuenta de correo. None si es la primera vez."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT uidvalidity, ultimo_uid FROM correo_estado WHERE cuenta = %s",
+            (cuenta,),
+        )
+        return await cur.fetchone()
+
+
+async def guardar_estado_correo(cuenta: str, uidvalidity: int, ultimo_uid: int) -> None:
+    """Avanza el puntero de lectura de una cuenta. Upsert.
+
+    El puntero es lo que hace que 'vigilar' sea mirar hacia adelante y no
+    releer 44.000 correos cada vuelta.
+    """
+    async with pool.connection() as conn:
+        await conn.execute(
+            """
+            INSERT INTO correo_estado (cuenta, uidvalidity, ultimo_uid, actualizado_en)
+            VALUES (%s, %s, %s, now())
+            ON CONFLICT (cuenta) DO UPDATE
+              SET uidvalidity = EXCLUDED.uidvalidity,
+                  ultimo_uid  = EXCLUDED.ultimo_uid,
+                  actualizado_en = now()
+            """,
+            (cuenta, uidvalidity, ultimo_uid),
         )
 
 

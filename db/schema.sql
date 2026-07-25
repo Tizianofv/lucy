@@ -81,6 +81,17 @@ CREATE TABLE preferencias (
   borrado_en TIMESTAMPTZ
 );
 
+-- Puntero de lectura por cuenta de correo (Nivel 4). Guarda hasta qué UID se
+-- miró, para que 'vigilar' sea mirar lo nuevo y no releer decenas de miles.
+-- uidvalidity: si Gmail lo cambia, el puntero se resetea (los UID ya no son
+-- los mismos) y se vuelve a fijar la línea de corte sin procesar el backlog.
+CREATE TABLE correo_estado (
+  cuenta         TEXT PRIMARY KEY,
+  uidvalidity    BIGINT,
+  ultimo_uid     BIGINT NOT NULL DEFAULT 0,
+  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ═══ Entidades (bandeja_id = trazabilidad, borrado_en = reversibilidad) ═══
 CREATE TABLE tareas (
   id              BIGSERIAL PRIMARY KEY,

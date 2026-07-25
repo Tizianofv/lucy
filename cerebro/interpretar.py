@@ -20,6 +20,7 @@ import logging
 import openai
 import telegram.error
 
+import captura.correo as correo
 import cerebro.agente as agente
 import cerebro.despertador as despertador
 import cerebro.memoria as memoria
@@ -180,6 +181,14 @@ async def bucle(bot) -> None:
                 await memoria.indexar_pendientes()
             except Exception:
                 log.warning("No pude indexar memoria; reintento en la próxima.",
+                            exc_info=True)
+        if vuelta % 36 == 0:  # cada ~3 min: el correo no es urgente al segundo
+            try:
+                n = await correo.vigilar()
+                if n:
+                    log.info("Correo: %s relevante(s) a la bandeja.", n)
+            except Exception:
+                log.warning("El vigía de correo tropezó; reintento en la próxima.",
                             exc_info=True)
 
         await asyncio.sleep(INTERVALO_S)
