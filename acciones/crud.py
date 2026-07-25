@@ -26,7 +26,7 @@ from config import TZ
 # personas y proyectos entraron con el perfil vivo (req 12): antes el agente
 # no podía editarlos y el "perfil" era una tabla que nadie alimentaba.
 TABLAS = ("tareas", "eventos", "notas", "movimientos", "personas", "proyectos",
-          "lugares")
+          "lugares", "preferencias")
 
 
 class FaltanDatos(Exception):
@@ -193,6 +193,50 @@ async def crear_desde_interpretacion(
         )
 
     return tabla, registro_id, log_id
+
+
+async def guardar_preferencia(
+    bandeja_id: int, texto: str, contexto: str | None = None
+) -> tuple[int, int]:
+    """Guarda una regla de comportamiento que Lucy aprendió. Devuelve (id, log_id).
+
+    Es 'crear' a los ojos del log, así que el deshacer genérico la revierte
+    igual que a una tarea: soft-delete por borrado_en. Sin trato especial.
+    """
+    async with db.pool.connection() as conn:
+        cur = await conn.execute(
+            "INSERT INTO preferencias (texto, contexto) VALUES (%s, %s) RETURNING id",
+            (texto.strip(), (contexto or "").strip() or None),
+        )
+        pid = (await cur.fetchone())[0]
+        log_id = await _registrar(
+            conn, accion="crear", tabla="preferencias", registro_id=pid,
+            despues={"texto": texto, "contexto": contexto},
+            motivo=f"Preferencia aprendida: {texto}", bandeja_id=bandeja_id,
+        )
+    return pid, log_id
+
+
+async def olvidar_preferencia(bandeja_id: int, pref_id: int) -> int | None:
+    """Da de baja una preferencia (soft-delete). Devuelve el log_id, o None si no estaba.
+
+    Acción 'borrar' a los ojos del log: el deshacer la revive poniendo
+    borrado_en = NULL. Reversibilidad sin escribir nada nuevo.
+    """
+    async with db.pool.connection() as conn:
+        cur = await conn.execute(
+            "UPDATE preferencias SET borrado_en = now() "
+            "WHERE id = %s AND borrado_en IS NULL RETURNING texto",
+            (pref_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return await _registrar(
+            conn, accion="borrar", tabla="preferencias", registro_id=pref_id,
+            antes={"texto": row[0]},
+            motivo=f"Preferencia olvidada: {row[0]}", bandeja_id=bandeja_id,
+        )
 
 
 # Lo único que no se edita. Cambiar esto no habilitaría nada: rompería la

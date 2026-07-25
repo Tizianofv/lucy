@@ -202,6 +202,22 @@ async def guardar_respuesta(bandeja_id: int, texto: str) -> None:
         )
 
 
+async def listar_preferencias() -> list[dict]:
+    """Las reglas activas que Lucy aprendió (req 35), las más nuevas primero.
+
+    Se leen en cada mensaje para inyectarlas en el prompt del agente: son el
+    'dentro de los límites que vos fijás' de la autonomía. Baratas de traer —
+    son pocas y la tabla es chica — y siempre frescas.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, texto, contexto FROM preferencias "
+            "WHERE borrado_en IS NULL ORDER BY creado_en DESC"
+        )
+        return await cur.fetchall()
+
+
 async def ultimos_intercambios(
     chat_id: int, excluir: list[int], n: int = 6
 ) -> list[dict]:

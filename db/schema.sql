@@ -69,6 +69,18 @@ CREATE TABLE proyectos (
   borrado_en  TIMESTAMPTZ
 );
 
+-- Lo que Lucy aprende de CÓMO Tiziano quiere que trabaje (req 35). Cada fila es
+-- una regla en lenguaje natural; TODAS las activas se inyectan en el prompt del
+-- agente en cada mensaje, así las aplica sin que él las repita. borrado_en =
+-- "olvidá esa regla" (reversible con el deshacer genérico, como todo lo demás).
+CREATE TABLE preferencias (
+  id         BIGSERIAL PRIMARY KEY,
+  creado_en  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  texto      TEXT NOT NULL,                    -- "no me recuerdes trabajo los domingos"
+  contexto   TEXT,                             -- opcional: 'agenda'|'recordatorios'|'personas'…
+  borrado_en TIMESTAMPTZ
+);
+
 -- ═══ Entidades (bandeja_id = trazabilidad, borrado_en = reversibilidad) ═══
 CREATE TABLE tareas (
   id              BIGSERIAL PRIMARY KEY,

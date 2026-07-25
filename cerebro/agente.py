@@ -109,6 +109,21 @@ HERRAMIENTAS DISPONIBLES:
   suman, las notas se agregan con fecha, nada se pisa. Mandá solo los campos
   que aprendiste ahora.
 
+· preferencia  {"accion": "guardar|olvidar", "texto": "...", "contexto": "", "id": 0}
+  CÓMO quiere Tiziano que trabajes. Cuando te CORRIJA o te dé una instrucción
+  de estilo —"los eventos con Rosi ponelos a las 8", "no me recuerdes trabajo
+  los domingos", "las facturas son siempre urgentes", "avisame con más tiempo"—
+  guardala con `guardar` SIN que te lo pida, y confirmalo en una palabra. Las
+  reglas activas te llegan arriba en cada mensaje: aplicálas siempre.
+   · guardar → "texto" es la regla en tus palabras, clara y corta. "contexto"
+     opcional (agenda|recordatorios|personas…) para agruparla.
+   · olvidar → cuando diga que ya no vale ("olvidá lo de los domingos"): pasá
+     el "id" que aparece en la lista de arriba. Si no lo ves, consultá
+     preferencias primero.
+  OJO: una preferencia es un PATRÓN, no un pedido puntual. "Hoy no me molestes"
+  es una orden del momento (obedecela y ya), no una regla para guardar. Guardá
+  lo que vale para SIEMPRE, no lo de una vez.
+
 · ubicacion  {}
   Dónde está Tiziano según su última ubicación COMPARTIDA: coordenadas, hace
   cuántos minutos, y el lugar con nombre en el que cae. OJO — no es un GPS en
@@ -240,13 +255,28 @@ CÓMO TRABAJÁS:
 """
 
 
-def _sistema() -> str:
-    """El prompt de sistema se arma en cada llamada: el 'ahora' no se cachea."""
+def _sistema(preferencias: list[dict] | None = None) -> str:
+    """El prompt de sistema se arma en cada llamada: el 'ahora' no se cachea.
+
+    Las preferencias (req 35) se inyectan acá, arriba de las herramientas: son
+    el 'dentro de los límites que vos fijás'. Van con su id para que Lucy pueda
+    olvidar una por número cuando Tiziano lo pida.
+    """
+    bloque = ""
+    if preferencias:
+        reglas = "\n".join(f"  · (#{p['id']}) {p['texto']}" for p in preferencias)
+        bloque = (
+            "CÓMO QUIERE TIZIANO QUE TRABAJES — reglas que aprendiste de él.\n"
+            "Aplicálas siempre, salvo que una orden puntual de este mensaje diga\n"
+            "otra cosa (esa manda hoy, pero no borra la regla):\n"
+            f"{reglas}\n\n"
+        )
     return (
         "Sos Lucy, la asistente personal de Tiziano. Trabajás en pasos: en "
         "cada turno elegís UNA herramienta y esperás su resultado.\n\n"
         f"Ahora es {motor._ahora_txt()} (zona {motor.TZ.key}, UTC-4, sin "
         "horario de verano).\n\n"
+        f"{bloque}"
         f"{consultar.ESQUEMA}\n\n{HERRAMIENTAS}"
     )
 
@@ -369,6 +399,23 @@ async def _ejecutar_herramienta(
                 acciones.append(log_id)
             return resultado
 
+        if nombre == "preferencia":
+            accion = str(args.get("accion") or "guardar").strip().lower()
+            if accion == "olvidar":
+                log_id = await crud.olvidar_preferencia(
+                    bandeja_id, int(args.get("id") or 0))
+                if log_id is None:
+                    return "ERROR: no encuentro esa preferencia (¿ya la olvidaste?)."
+                acciones.append(log_id)
+                return f"OK: preferencia olvidada (acción #{log_id}, reversible)."
+            texto = str(args.get("texto") or "").strip()
+            if not texto:
+                return "ERROR: 'texto' vacío; una preferencia tiene que decir la regla."
+            _pid, log_id = await crud.guardar_preferencia(
+                bandeja_id, texto, str(args.get("contexto") or "") or None)
+            acciones.append(log_id)
+            return f"OK: preferencia guardada (acción #{log_id}, reversible)."
+
         if nombre == "buscar_lugar":
             cands = await viaje.buscar_lugares(str(args.get("texto") or ""))
             if not cands:
@@ -396,8 +443,8 @@ async def _ejecutar_herramienta(
 
         return (f"ERROR: no existe la herramienta '{nombre}'. Las que hay: "
                 "consultar, crear, editar, archivar, deshacer, perfil, "
-                "ubicacion, lugar, buscar_lugar, viaje, recordar, preguntar, "
-                "responder.")
+                "preferencia, ubicacion, lugar, buscar_lugar, viaje, recordar, "
+                "preguntar, responder.")
 
     except crud.FaltanDatos as e:
         return f"ERROR: me falta {e}. Preguntáselo a Tiziano."
@@ -438,7 +485,8 @@ async def atender(fila: dict, texto: str, bot) -> None:
     excluir = [bandeja_id] + ([pendiente["id"]] if pendiente else [])
     historial = await db.ultimos_intercambios(chat_id, excluir)
 
-    mensajes: list[dict] = [{"role": "system", "content": _sistema()}]
+    preferencias = await db.listar_preferencias()
+    mensajes: list[dict] = [{"role": "system", "content": _sistema(preferencias)}]
     for h in historial:
         # Una fila puede ser solo de Lucy (un aviso del despertador: sin
         # dicho). Entra igual: sus palabras proactivas son parte del hilo.
