@@ -51,7 +51,7 @@ bandeja — todo lo que Tiziano le mandó a Lucy, crudo. Es el historial complet
 tareas — cosas por hacer.
   id, bandeja_id, creado_en, titulo, detalle, vence_en, recurrencia,
   prioridad, proyecto_id, persona_id, estado ('pendiente'|'hecha'|'pospuesta'),
-  pospuesta_veces, completado_en, avisado_en, borrado_en
+  pospuesta_veces, completado_en, avisos_enviados, borrado_en
   · recurrencia: NULL = una sola vez. Con texto ('cada 8 horas', 'diaria',
     'semanal'...) la tarea se reprograma sola al marcarse hecha: hay UNA
     fila por tarea recurrente, no una por ocurrencia.

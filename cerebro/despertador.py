@@ -7,12 +7,13 @@ cuando me hablas". Era cierto — tenía oídos pero no reloj. Técnicamente era
 mentira que no se pudiera: Telegram deja que el bot escriba primero. Nadie le
 había construido esa parte.
 
-Esta es esa parte. Mira el reloj cada medía vuelta del bucle y avisa una sola
-vez, un rato antes, de cada tarea con hora y cada cita. `avisado_en` es lo que
-garantiza el "una sola vez": el pilar de silencio inteligente aplica más que
-nunca cuando Lucy es la que inicia — cada interrupción tiene que ganarse el
-derecho a existir, y una alarma repetida es la forma más rápida de que las
-alarmas se ignoren.
+Esta es esa parte. Mira el reloj cada media vuelta del bucle y avisa de cada
+tarea con hora y cada cita, en los momentos que fija ANTICIPOS_MIN (hoy: un
+rato antes y al pie de la hora). `avisos_enviados` guarda qué campanadas ya
+sonaron, para que cada una suene UNA sola vez: el pilar de silencio inteligente
+aplica más que nunca cuando Lucy es la que inicia — cada interrupción tiene que
+ganarse el derecho a existir, y una alarma repetida es la forma más rápida de
+que las alarmas se ignoren.
 
 Cada aviso queda en log_acciones: cuando llegue el Nivel 7 y Tiziano pregunte
 "¿por qué me escribiste a las 2:30?", la respuesta ya va a estar escrita.
@@ -33,10 +34,23 @@ from config import TZ
 
 log = logging.getLogger("lucy.despertador")
 
-# Cuánto antes se avisa. Si la tarea se creó con menos margen que esto, el
-# aviso sale igual apenas el despertador la vea: tarde es mejor que nunca,
-# pero nunca después de la hora sin decir nada.
-ANTICIPO_MIN = 30
+# En qué momentos se avisa, en minutos ANTES de la hora. Es una lista, no un
+# número, porque Tiziano pidió (23-jul) dos campanadas por evento: una de
+# anticipación y otra al pie de la hora. Poner 0 acá es lo que hace el "también
+# a la hora del evento". Mañana se le puede sumar 1440 (un día antes) o 60 sin
+# tocar nada más: la maquinaria recorre la lista, no un valor fijo.
+#   avisos_enviados (en tareas/eventos) guarda cuáles de estos ya salieron, así
+#   cada campanada suena una sola vez — el pilar de silencio inteligente pesa
+#   doble cuando Lucy habla sin que le hablen.
+ANTICIPOS_MIN = (30, 0)
+ANTICIPO_MAX = max(ANTICIPOS_MIN)  # la ventana que hay que mirar hacia adelante
+
+# Hasta cuánto DESPUÉS de la hora sigue teniendo sentido avisar. Si Lucy estuvo
+# caída y algo venció hace un rato, "ojo, esto venció a las 3" ayuda; "venció
+# hace dos días" es ruido — eso ya lo sabés. Sin este tope, agregar el aviso a
+# la hora haría que, tras un reinicio, cada evento viejo suelte su campanada
+# retroactiva de golpe. La avalancha es justo lo que el despertador vino a evitar.
+GRACIA_MIN = 120
 
 # Cuánto antes se PREPARA una cita con lugar: la pregunta de salida ("¿desde
 # dónde vas a salir?") sale con este margen, para que dé tiempo a calcular la
@@ -77,28 +91,36 @@ async def revisar(bot) -> int:
     """Busca lo que está por vencer, avisa, y marca. Devuelve cuántos avisos.
 
     El orden dentro de cada aviso es el de siempre: primero MANDAR, después
-    marcar avisado_en. Si el envío falla, la fila queda sin marcar y el
-    próximo ciclo lo reintenta solo. Al revés, un fallo de envío se comería
-    el recordatorio en silencio — que es exactamente la clase de mudez que
-    este módulo vino a matar.
+    agregar la campanada a avisos_enviados. Si el envío falla, la fila queda
+    sin marcar y el próximo ciclo lo reintenta solo. Al revés, un fallo de
+    envío se comería el recordatorio en silencio — que es exactamente la clase
+    de mudez que este módulo vino a matar.
     """
+    todos = list(ANTICIPOS_MIN)
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
+            # Traemos lo que entró en la ventana de la campanada más lejana y a
+            # lo que le falta AL MENOS una campanada por sonar. `@>` es "contiene":
+            # NOT (avisos_enviados @> todos) = todavía no salieron todas.
             """
-            SELECT 'tareas' AS tabla, id, titulo, vence_en AS cuando
+            SELECT 'tareas' AS tabla, id, titulo, vence_en AS cuando, avisos_enviados
               FROM tareas
              WHERE estado = 'pendiente' AND borrado_en IS NULL
-               AND avisado_en IS NULL AND vence_en IS NOT NULL
+               AND vence_en IS NOT NULL
                AND vence_en <= now() + make_interval(mins => %s)
+               AND vence_en >= now() - make_interval(mins => %s)
+               AND NOT (avisos_enviados @> %s::int[])
             UNION ALL
-            SELECT 'eventos', id, titulo, inicia_en
+            SELECT 'eventos', id, titulo, inicia_en, avisos_enviados
               FROM eventos
-             WHERE borrado_en IS NULL AND avisado_en IS NULL
+             WHERE borrado_en IS NULL
                AND inicia_en <= now() + make_interval(mins => %s)
+               AND inicia_en >= now() - make_interval(mins => %s)
+               AND NOT (avisos_enviados @> %s::int[])
              ORDER BY cuando
             """,
-            (ANTICIPO_MIN, ANTICIPO_MIN),
+            (ANTICIPO_MAX, GRACIA_MIN, todos, ANTICIPO_MAX, GRACIA_MIN, todos),
         )
         filas = await cur.fetchall()
 
@@ -106,8 +128,18 @@ async def revisar(bot) -> int:
     for f in filas:
         faltan = round(
             (f["cuando"] - datetime.now(timezone.utc)).total_seconds() / 60)
-        hora = f["cuando"].astimezone(TZ).strftime("%I:%M %p").lstrip("0")
+        enviados = set(f["avisos_enviados"] or ())
 
+        # Campanadas cuyo momento ya llegó (faltan <= minutos-antes) y que aún
+        # no sonaron. Si Lucy estuvo caída y el evento ya pasó, pueden "tocar"
+        # varias de una: mandamos UN solo mensaje —el de la situación real— y
+        # damos por sonadas todas las vencidas, para no disparar el "en 30 min"
+        # retroactivo al lado del "ya es la hora".
+        pendientes = {m for m in ANTICIPOS_MIN if m not in enviados and faltan <= m}
+        if not pendientes:
+            continue
+
+        hora = f["cuando"].astimezone(TZ).strftime("%I:%M %p").lstrip("0")
         if faltan > 1:
             texto = f"⏰ En {faltan} min: {f['titulo']} ({hora})"
         elif faltan >= -5:
@@ -119,10 +151,11 @@ async def revisar(bot) -> int:
 
         await _avisar(bot, texto)
 
+        nuevos = sorted(enviados | {m for m in ANTICIPOS_MIN if faltan <= m})
         async with db.pool.connection() as conn:
             await conn.execute(
-                f"UPDATE {f['tabla']} SET avisado_en = now() WHERE id = %s",
-                (f["id"],),
+                f"UPDATE {f['tabla']} SET avisos_enviados = %s WHERE id = %s",
+                (nuevos, f["id"]),
             )
             await crud._registrar(
                 conn, accion="avisar", tabla=f["tabla"], registro_id=f["id"],
@@ -130,7 +163,8 @@ async def revisar(bot) -> int:
                        f"faltaban {faltan} min)",
             )
         avisos += 1
-        log.info("Aviso enviado: %s#%s (%s)", f["tabla"], f["id"], f["titulo"])
+        log.info("Aviso enviado: %s#%s (%s, faltan %s)",
+                 f["tabla"], f["id"], f["titulo"], faltan)
 
     avisos += await _preparar_salidas(bot)
     avisos += await _briefing()
@@ -308,7 +342,7 @@ async def _reprogramar_recurrentes() -> int:
                 """
                 UPDATE tareas
                    SET estado = 'pendiente', vence_en = %s,
-                       avisado_en = NULL, completado_en = NULL
+                       avisos_enviados = '{}', completado_en = NULL
                  WHERE id = %s
                 RETURNING *
                 """,

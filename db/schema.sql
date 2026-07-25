@@ -89,7 +89,7 @@ CREATE TABLE tareas (
   estado          TEXT NOT NULL DEFAULT 'pendiente', -- pendiente | hecha | pospuesta
   pospuesta_veces INT NOT NULL DEFAULT 0,          -- alimenta "bolas que se caen" (req 28)
   completado_en   TIMESTAMPTZ,
-  avisado_en      TIMESTAMPTZ,                     -- el despertador ya avisó (1 sola vez)
+  avisos_enviados INT[] NOT NULL DEFAULT '{}',      -- minutos-antes ya avisados: {30,0} = avisó a -30 y a la hora
   borrado_en      TIMESTAMPTZ
 );
 
@@ -104,7 +104,7 @@ CREATE TABLE eventos (
   persona_id   BIGINT REFERENCES personas(id),   -- "¿cuándo vi a Ana por última vez?" = 1 query
   proyecto_id  BIGINT REFERENCES proyectos(id),
   notas        TEXT,
-  avisado_en   TIMESTAMPTZ,                      -- el despertador ya avisó (1 sola vez)
+  avisos_enviados INT[] NOT NULL DEFAULT '{}',   -- minutos-antes ya avisados: {30,0} = avisó a -30 y a la hora
   preaviso_en  TIMESTAMPTZ,                      -- ya se preguntó "¿desde dónde salís?"
                                                  --   (solo citas con lugar, ~2h antes)
   borrado_en   TIMESTAMPTZ
