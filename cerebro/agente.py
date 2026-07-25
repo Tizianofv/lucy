@@ -32,10 +32,12 @@ import logging
 
 import acciones.botones as botones
 import acciones.crud as crud
+import captura.correo as correo
 import cerebro.consultar as consultar
 import cerebro.deepseek as motor
 import cerebro.memoria as memoria
 import cerebro.viaje as viaje
+import config
 import db.db as db
 
 log = logging.getLogger("lucy.agente")
@@ -171,6 +173,17 @@ HERRAMIENTAS DISPONIBLES:
    3. destino = texto libre: ÚLTIMO recurso; Google geocodifica y puede
       elegir mal. Si vas a caer acá para un lugar conocido, mejor buscar_lugar
       primero.
+
+· correo  {"accion": "revisar|buscar", "de": "", "asunto": "", "texto": ""}
+  Mira el correo cuando Tiziano lo pida (todos los días a la mañana sale solo).
+   · revisar → "¿llegó algo?", "revisá el correo". Lee lo nuevo desde la última
+     revisión, descarta el ruido y te devuelve lo relevante para que se lo
+     resumas: de quién, de qué, qué requiere. Si vuelve vacío, no llegó nada que
+     importe — decíselo así, tranquilo.
+   · buscar → "¿Juan escribió?", "¿llegó la factura de la luz?". Busca en el
+     buzón por remitente ("de"), asunto o texto y devuelve las coincidencias
+     (de quién, asunto, fecha). Poné al menos uno de de/asunto/texto. Si vuelve
+     vacío, no hay nada de eso — no lo inventes.
 
 · recordar  {"texto": "lo que acordamos del depósito", "n": 5}
   Busca por SIGNIFICADO en todo lo que se han dicho (tus respuestas
@@ -454,6 +467,30 @@ async def _ejecutar_herramienta(
                 dest_lon=args.get("dest_lon") or None,
             )
 
+        if nombre == "correo":
+            if not config.CORREO_CUENTAS:
+                return "ERROR: no hay cuentas de correo configuradas."
+            accion = str(args.get("accion") or "revisar").strip().lower()
+            if accion == "buscar":
+                de = str(args.get("de") or "")
+                asu = str(args.get("asunto") or "")
+                txt = str(args.get("texto") or "")
+                if not (de or asu or txt):
+                    return ("ERROR: 'buscar' necesita al menos 'de', 'asunto' o "
+                            "'texto'. Para «la factura de la luz» usá asunto o "
+                            "texto 'factura'; para «¿me escribió Juan?» usá de "
+                            "'Juan'.")
+                res = await correo.buscar(de=de, asunto=asu, texto=txt)
+                return (json.dumps(res, ensure_ascii=False) if res
+                        else "0 correos que coincidan con esa búsqueda.")
+            rel = await correo.revisar_ahora()
+            if not rel:
+                return "0 correos nuevos relevantes: lo nuevo era ruido, o no llegó nada."
+            resumen = [{"de": r["from"], "asunto": r["subject"],
+                        "cuenta": r["cuenta"], "extracto": r["snippet"][:200]}
+                       for r in rel]
+            return json.dumps(resumen, ensure_ascii=False)
+
         if nombre == "recordar":
             filas = await memoria.buscar(
                 str(args.get("texto") or ""),
@@ -466,8 +503,8 @@ async def _ejecutar_herramienta(
 
         return (f"ERROR: no existe la herramienta '{nombre}'. Las que hay: "
                 "consultar, crear, editar, archivar, deshacer, perfil, "
-                "preferencia, ubicacion, lugar, buscar_lugar, viaje, recordar, "
-                "preguntar, responder.")
+                "preferencia, correo, ubicacion, lugar, buscar_lugar, viaje, "
+                "recordar, preguntar, responder.")
 
     except crud.FaltanDatos as e:
         return f"ERROR: me falta {e}. Preguntáselo a Tiziano."

@@ -203,33 +203,44 @@ async def guardar_respuesta(bandeja_id: int, texto: str) -> None:
 
 
 async def leer_estado_correo(cuenta: str) -> dict | None:
-    """Hasta qué UID se procesó una cuenta de correo. None si es la primera vez."""
+    """Estado de lectura de una cuenta. None si es la primera vez.
+
+    Trae ultimo_reporte: la fecha del último reporte matinal, para no repetirlo
+    el mismo día aunque el proceso se reinicie.
+    """
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
-            "SELECT uidvalidity, ultimo_uid FROM correo_estado WHERE cuenta = %s",
+            "SELECT uidvalidity, ultimo_uid, ultimo_reporte "
+            "FROM correo_estado WHERE cuenta = %s",
             (cuenta,),
         )
         return await cur.fetchone()
 
 
-async def guardar_estado_correo(cuenta: str, uidvalidity: int, ultimo_uid: int) -> None:
+async def guardar_estado_correo(
+    cuenta: str, uidvalidity: int, ultimo_uid: int, ultimo_reporte=None
+) -> None:
     """Avanza el puntero de lectura de una cuenta. Upsert.
 
-    El puntero es lo que hace que 'vigilar' sea mirar hacia adelante y no
-    releer 44.000 correos cada vuelta.
+    El puntero es lo que hace que revisar sea mirar hacia adelante y no releer
+    44.000 correos. ultimo_reporte, cuando se pasa, marca que el reporte de hoy
+    ya salió: sobrevive reinicios, así el reporte matinal no se duplica.
     """
     async with pool.connection() as conn:
         await conn.execute(
             """
-            INSERT INTO correo_estado (cuenta, uidvalidity, ultimo_uid, actualizado_en)
-            VALUES (%s, %s, %s, now())
+            INSERT INTO correo_estado
+              (cuenta, uidvalidity, ultimo_uid, ultimo_reporte, actualizado_en)
+            VALUES (%s, %s, %s, %s, now())
             ON CONFLICT (cuenta) DO UPDATE
               SET uidvalidity = EXCLUDED.uidvalidity,
                   ultimo_uid  = EXCLUDED.ultimo_uid,
+                  ultimo_reporte = COALESCE(EXCLUDED.ultimo_reporte,
+                                            correo_estado.ultimo_reporte),
                   actualizado_en = now()
             """,
-            (cuenta, uidvalidity, ultimo_uid),
+            (cuenta, uidvalidity, ultimo_uid, ultimo_reporte),
         )
 
 

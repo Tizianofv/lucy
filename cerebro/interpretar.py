@@ -182,13 +182,11 @@ async def bucle(bot) -> None:
             except Exception:
                 log.warning("No pude indexar memoria; reintento en la próxima.",
                             exc_info=True)
-        if vuelta % 36 == 0:  # cada ~3 min: el correo no es urgente al segundo
+        if vuelta % 36 == 0:  # chequeo barato cada ~3 min; solo abre Gmail 1x/día
             try:
-                n = await correo.vigilar()
-                if n:
-                    log.info("Correo: %s relevante(s) a la bandeja.", n)
+                await correo.reporte_diario()
             except Exception:
-                log.warning("El vigía de correo tropezó; reintento en la próxima.",
+                log.warning("El reporte de correo tropezó; reintento en la próxima.",
                             exc_info=True)
 
         await asyncio.sleep(INTERVALO_S)

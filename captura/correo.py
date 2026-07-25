@@ -1,15 +1,19 @@
 """Vigía de correo (Nivel 4, req 17): mira los buzones, filtra con criterio, y
 deja en la bandeja SOLO lo que amerita la atención de Tiziano.
 
+Una vez al día, en la mañana, Lucy junta el correo relevante del último día y
+le deja UN reporte — no gotea avisos durante el día (pedido de Tiziano, 24-jul:
+"con que lo haga una vez al día y me dé el reporte en la mañana estoy contento").
+
 Dos filtros en cascada, para no malgastar IA ni exponer de más:
   1. Barato, por cabeceras: descarta el grueso (no-reply, listas, newsletters)
      sin gastar un token. En el correo real de Tiziano tumba ~80%.
   2. La IA juzga lo que sobrevive: ¿esto merece que lo interrumpan? Solo lo que
-     pasa acá cae en la bandeja.
+     pasa acá entra al reporte.
 
-Arranca desde AHORA. La primera vuelta de cada cuenta guarda el UID más alto
-SIN procesar nada: el backlog histórico (decenas de miles) no se toca. Vigilar
-es mirar lo que llega, no releer el pasado.
+Arranca desde AHORA. La primera vez de cada cuenta guarda el UID más alto SIN
+procesar nada: el backlog histórico (decenas de miles) no se toca. Revisar es
+mirar lo que llega, no releer el pasado.
 
 imaplib es síncrono; toda la sesión IMAP corre en un hilo (asyncio.to_thread)
 para no congelar el bucle del agente mientras habla con Gmail.
@@ -21,20 +25,27 @@ import email
 import imaplib
 import json
 import logging
+from datetime import datetime
 from email.header import decode_header
 
 import cerebro.deepseek as motor
 import config
 import db.db as db
+from config import TZ
 
 log = logging.getLogger("lucy.correo")
 
 SERVIDOR = "imap.gmail.com"
 
-# Cuántos correos nuevos procesar por cuenta y vuelta. Un tope para que una
-# ráfaga (volvió el internet tras horas) no dispare cientos de llamadas a la IA
-# de golpe; lo que no entre esta vuelta entra en la próxima.
-MAX_POR_VUELTA = 25
+# La ventana matinal en que sale el reporte, igual que el briefing. Si Lucy
+# estuvo caída toda la mañana, el correo de ayer a las 4 PM ya no es un
+# "reporte matinal": espera al de mañana.
+REPORTE_DESDE = 7   # 7 AM
+REPORTE_HASTA = 12  # mediodía
+
+# Tope de correos nuevos a mirar por cuenta y día. Un día normal trae pocos que
+# pasen el filtro barato; el tope es un cinturón contra una ráfaga rara.
+MAX_POR_DIA = 60
 
 SISTEMA_RELEVANCIA = (
     "Sos el filtro de correo de Lucy, la asistente personal de Tiziano. Decidís "
@@ -115,7 +126,7 @@ def _cosechar(cuenta: dict, desde_uid: int) -> tuple[int, int, list[dict]]:
 
         top = max(uids)
         candidatos = []
-        for uid in uids[:MAX_POR_VUELTA]:
+        for uid in uids[:MAX_POR_DIA]:
             typ, d = M.uid("fetch", str(uid), "(BODY.PEEK[])")
             if not d or not d[0]:
                 continue
@@ -157,22 +168,101 @@ async def _relevante(cand: dict) -> dict:
     return json.loads(r.choices[0].message.content)
 
 
-async def _procesar_cuenta(cuenta: dict) -> int:
-    """Vigila una cuenta. Devuelve cuántos correos relevantes dejó en la bandeja."""
+def _buscar_sync(cuenta: dict, criterios: list[str], limite: int) -> list[dict]:
+    """SÍNCRONO (en un hilo). IMAP SEARCH en el buzón, devuelve coincidencias."""
+    M = imaplib.IMAP4_SSL(SERVIDOR, 993)
+    try:
+        M.login(cuenta["user"], cuenta["pass"])
+        M.select("INBOX", readonly=True)
+        # Sin CHARSET (ASCII): es la forma que Gmail parsea sin quejarse. Los
+        # valores ya vienen entre comillas para tolerar espacios ("Jorge Taveras").
+        typ, data = M.uid("search", None, *criterios)
+        uids = data[0].split()[-limite:][::-1] if data and data[0] else []
+        salida = []
+        for uid in uids:
+            d = M.uid("fetch", uid.decode(),
+                      "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")[1]
+            if not d or not d[0]:
+                continue
+            msg = email.message_from_bytes(d[0][1])
+            salida.append({
+                "cuenta": cuenta["user"],
+                "de": _texto(msg.get("From")),
+                "asunto": _texto(msg.get("Subject")),
+                "fecha": _texto(msg.get("Date")),
+            })
+        return salida
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
+
+
+async def buscar(de: str = "", asunto: str = "", texto: str = "",
+                 limite: int = 8) -> list[dict]:
+    """Busca en los buzones por remitente/asunto/texto. Para "¿Juan escribió?".
+
+    Busca en TODO el INBOX (no solo lo nuevo): la pregunta puede ser sobre algo
+    de la semana pasada. Solo lee cabeceras, no cuerpos.
+    """
+    # Entre comillas para que un valor con espacios sea UN término IMAP; sin
+    # comillas internas, que romperían el comando.
+    def _q(v: str) -> str:
+        return '"' + v.strip().replace('"', "") + '"'
+
+    criterios: list[str] = []
+    if de:
+        criterios += ["FROM", _q(de)]
+    if asunto:
+        criterios += ["SUBJECT", _q(asunto)]
+    if texto:
+        criterios += ["TEXT", _q(texto)]
+    if not criterios:
+        return []
+    resultados = []
+    for cuenta in config.CORREO_CUENTAS:
+        try:
+            resultados += await asyncio.to_thread(
+                _buscar_sync, cuenta, criterios, limite)
+        except Exception:
+            log.warning("Falló la búsqueda en %s.", cuenta.get("user", "?"),
+                        exc_info=True)
+    return resultados
+
+
+async def revisar_ahora() -> list[dict]:
+    """Revisión on-demand: lo mismo que el reporte matinal, pero cuando Tiziano
+    lo pide ("revisá si llegó algo"). Devuelve los relevantes para que el agente
+    los resuma en su respuesta; NO deja encargo ni marca el reporte del día."""
+    relevantes = []
+    for cuenta in config.CORREO_CUENTAS:
+        try:
+            relevantes += await _relevantes_de(cuenta, None)  # None = no marca reporte
+        except Exception:
+            log.warning("Falló la revisión de %s.", cuenta.get("user", "?"),
+                        exc_info=True)
+    return relevantes
+
+
+async def _relevantes_de(cuenta: dict, hoy) -> list[dict]:
+    """Lee lo nuevo de una cuenta y devuelve solo los relevantes. Avanza el
+    puntero. Si `hoy` no es None, marca el reporte de ese día (para no repetir
+    el matinal); on-demand pasa None y no lo toca."""
     estado = await db.leer_estado_correo(cuenta["user"])
 
     uidvalidity, top, candidatos = await asyncio.to_thread(
         _cosechar, cuenta, estado["ultimo_uid"] if estado else 0)
 
     # Primera vez, o Gmail renumeró (cambió UIDVALIDITY): fijamos la línea de
-    # corte en el tope actual y NO procesamos el backlog. Vigilamos desde acá.
+    # corte en el tope actual y NO procesamos el backlog. Miramos desde acá.
     if estado is None or estado["uidvalidity"] != uidvalidity:
-        await db.guardar_estado_correo(cuenta["user"], uidvalidity, top)
+        await db.guardar_estado_correo(cuenta["user"], uidvalidity, top, hoy)
         log.info("Correo %s: línea de corte en UID %s (backlog ignorado).",
                  cuenta["user"], top)
-        return 0
+        return []
 
-    relevantes = 0
+    relevantes = []
     for cand in candidatos:
         try:
             veredicto = await _relevante(cand)
@@ -180,37 +270,73 @@ async def _procesar_cuenta(cuenta: dict) -> int:
             log.warning("No pude juzgar un correo de %s; lo salteo (sigue en "
                         "el buzón).", cuenta["user"], exc_info=True)
             continue
-        if not veredicto.get("relevante"):
-            continue
-        contenido = (
-            f"[correo de {cand['from']} → {cuenta['user']}]\n"
-            f"Asunto: {cand['subject']}\n\n{cand['snippet']}"
-        )
-        await db.guardar_en_bandeja(
-            tipo_entrada="email",
-            contenido_raw=contenido,
-            chat_id=config.CHAT_ID_DUENO,
-            origen="email",
-        )
-        relevantes += 1
-        log.info("Correo relevante de %s: %s (%s)", cand["from"][:40],
-                 cand["subject"][:50], veredicto.get("motivo", ""))
+        if veredicto.get("relevante"):
+            cand["cuenta"] = cuenta["user"]
+            relevantes.append(cand)
+            log.info("Correo relevante de %s: %s (%s)", cand["from"][:40],
+                     cand["subject"][:50], veredicto.get("motivo", ""))
 
-    await db.guardar_estado_correo(cuenta["user"], uidvalidity, top)
+    await db.guardar_estado_correo(cuenta["user"], uidvalidity, top, hoy)
     return relevantes
 
 
-async def vigilar() -> int:
-    """Recorre todas las cuentas. Devuelve el total de relevantes encolados.
+def _encargo(relevantes: list[dict]) -> str:
+    """Arma el encargo que se le deja al agente para que redacte el reporte.
 
-    Una cuenta que falla (Gmail caído, credencial revocada) no frena a las
-    otras ni al bucle: se loguea y se sigue. El correo no es el latido de Lucy.
+    Igual que el briefing: el despertador/vigía junta los datos, el agente los
+    convierte en un mensaje humano y acciona lo que corresponda. Acá no se
+    escribe el reporte — armarlo sin el criterio del agente sería opinar sin él.
     """
-    total = 0
+    lineas = []
+    for i, r in enumerate(relevantes, 1):
+        lineas.append(f"{i}. De {r['from']} (a {r['cuenta']})\n"
+                      f"   Asunto: {r['subject']}\n   {r['snippet'][:300]}")
+    return (
+        "Reporte de correo de la mañana. Llegaron estos correos relevantes desde "
+        "tu última revisión:\n\n" + "\n\n".join(lineas) + "\n\n"
+        "Dale a Tiziano UN resumen corto y ordenado: de quién, de qué, y qué "
+        "requiere de él. Accioná lo que claramente corresponda —si alguno trae "
+        "una cita, creála; si es una factura, registrala; si pide respuesta con "
+        "fecha, anotá la tarea— y decile qué hiciste. Lo dudoso, proponelo. No "
+        "respondas ningún correo ni inventes lo que no está en el texto."
+    )
+
+
+async def reporte_diario() -> int:
+    """Una vez al día, en la mañana: junta el correo relevante y deja el encargo
+    del reporte en la bandeja. Devuelve cuántos relevantes encontró.
+
+    El guard es barato (una query por cuenta): el IMAP solo se abre cuando de
+    verdad toca, una vez al día. Fuera de la ventana, o si ya reportó hoy, sale
+    enseguida sin tocar Gmail.
+    """
+    if not config.CORREO_CUENTAS:
+        return 0
+    ahora = datetime.now(TZ)
+    if not (REPORTE_DESDE <= ahora.hour < REPORTE_HASTA):
+        return 0
+    hoy = ahora.date()
+
+    # ¿Ya reportó hoy? Si TODAS las cuentas tienen ultimo_reporte == hoy, listo.
+    estados = [await db.leer_estado_correo(c["user"]) for c in config.CORREO_CUENTAS]
+    if estados and all(e and e.get("ultimo_reporte") == hoy for e in estados):
+        return 0
+
+    relevantes = []
     for cuenta in config.CORREO_CUENTAS:
         try:
-            total += await _procesar_cuenta(cuenta)
+            relevantes += await _relevantes_de(cuenta, hoy)
         except Exception:
-            log.warning("Falló la vigilancia de %s; reintento en la próxima.",
+            log.warning("Falló la revisión de %s; sigo con las demás.",
                         cuenta.get("user", "?"), exc_info=True)
-    return total
+
+    if relevantes:
+        await db.guardar_en_bandeja(
+            tipo_entrada="sistema",
+            contenido_raw=_encargo(relevantes),
+            chat_id=config.CHAT_ID_DUENO,
+            origen="correo",
+        )
+        log.info("Reporte de correo: %s relevante(s) → encargo en la bandeja.",
+                 len(relevantes))
+    return len(relevantes)
