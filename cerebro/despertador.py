@@ -440,7 +440,7 @@ async def _preparar_salidas(bot) -> int:
                AND inicia_en <= now() + make_interval(mins => %s)
              ORDER BY inicia_en
             """,
-            (ANTICIPO_MIN + 5, PREAVISO_MIN),
+            (ANTICIPO_MAX + 5, PREAVISO_MIN),
         )
         filas = await cur.fetchall()
 
