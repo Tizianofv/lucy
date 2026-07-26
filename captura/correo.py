@@ -294,14 +294,32 @@ async def buscar(de: str = "", asunto: str = "", texto: str = "",
         desde = datetime.now(TZ) - timedelta(days=dias)
         criterios += ["SINCE", _fecha_imap(desde)]
 
-    resultados = []
+    resultados: list[dict] = []
+    fallos: list[str] = []
     for cuenta in config.CORREO_CUENTAS:
         try:
             resultados += await asyncio.to_thread(
                 _buscar_sync, cuenta, criterios, limite)
-        except Exception:
+        except Exception as e:
+            fallos.append(f"{cuenta.get('user', '?')} ({type(e).__name__}: {e})")
             log.warning("Falló la búsqueda en %s.", cuenta.get("user", "?"),
                         exc_info=True)
+
+    # Un fallo NO puede volver como lista vacía. Es la lección más cara de esta
+    # función: cuando el acento de "Paso Rápido" rompía el IMAP, el error se
+    # tragaba acá, buscar() devolvía [] y Lucy le dijo a Tiziano "no encontré
+    # ningún correo" — una respuesta tranquila y falsa sobre correos que SÍ
+    # estaban. Vacío y roto se ven igual desde afuera, así que hay que
+    # distinguirlos acá: si nadie pudo mirar, esto revienta y el agente recibe
+    # un ERROR (que sabe contar como "no pude mirar"), no un "no hay nada".
+    if fallos and not resultados:
+        raise RuntimeError(
+            "no pude buscar en el correo — " + "; ".join(fallos) +
+            ". OJO: esto NO significa que no haya correos, significa que la "
+            "búsqueda falló. Decíselo así a Tiziano.")
+    if fallos:
+        log.warning("Búsqueda PARCIAL: falló %s; devuelvo lo de las demás.",
+                    ", ".join(fallos))
     return resultados
 
 
@@ -382,13 +400,21 @@ async def revisar_ahora() -> list[dict]:
     """Revisión on-demand: lo mismo que el reporte matinal, pero cuando Tiziano
     lo pide ("revisá si llegó algo"). Devuelve los relevantes para que el agente
     los resuma en su respuesta; NO deja encargo ni marca el reporte del día."""
-    relevantes = []
+    relevantes: list[dict] = []
+    fallos: list[str] = []
     for cuenta in config.CORREO_CUENTAS:
         try:
             relevantes += await _relevantes_de(cuenta, None)  # None = no marca reporte
-        except Exception:
+        except Exception as e:
+            fallos.append(f"{cuenta.get('user', '?')} ({type(e).__name__}: {e})")
             log.warning("Falló la revisión de %s.", cuenta.get("user", "?"),
                         exc_info=True)
+    # Mismo principio que en buscar(): si no se pudo mirar, no se dice "no llegó
+    # nada". Un buzón que no se pudo abrir no es un buzón vacío.
+    if fallos and not relevantes:
+        raise RuntimeError(
+            "no pude revisar el correo — " + "; ".join(fallos) +
+            ". NO es que no haya llegado nada: la revisión falló.")
     return relevantes
 
 
