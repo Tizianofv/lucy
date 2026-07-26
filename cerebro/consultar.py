@@ -109,7 +109,10 @@ MODISMOS DE LA CASA — respetarlos o las respuestas van a ser falsas:
 4. HORA LOCAL. Las columnas timestamptz se guardan en UTC. Para razonar sobre
    "hoy", "esta semana" o la hora del día, convertí primero:
    (vence_en AT TIME ZONE 'America/Santo_Domingo')
-   `movimientos.fecha` ya es DATE local, esa no se convierte.
+   `AT TIME ZONE` va SOLO sobre timestamptz (vence_en, inicia_en, creado_en,
+   ts…). Aplicárselo a un DATE o a current_date revienta con "invalid input
+   syntax for type date" — `movimientos.fecha` YA es fecha local, y para el
+   día de hoy usá (now() AT TIME ZONE 'America/Santo_Domingo')::date.
 
 5. UNA TAREA PENDIENTE es estado='pendiente' AND borrado_en IS NULL.\
 """

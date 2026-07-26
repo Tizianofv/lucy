@@ -25,6 +25,7 @@ import email
 import imaplib
 import json
 import logging
+import unicodedata
 from datetime import datetime, timedelta
 from email.header import decode_header
 
@@ -178,6 +179,51 @@ def _fecha_imap(dt: datetime) -> str:
     return f"{dt.day:02d}-{_MESES[dt.month - 1]}-{dt.year}"
 
 
+def _sin_acentos(v: str) -> str:
+    """'Paso Rápido' → 'Paso Rapido'. Descompone y tira los diacríticos."""
+    return "".join(c for c in unicodedata.normalize("NFD", v)
+                   if not unicodedata.combining(c))
+
+
+def _buscar_uids(M, criterios: list[str]) -> list[bytes]:
+    """Corre el SEARCH tolerando acentos. Devuelve los uids (sin repetir).
+
+    Esto existe por un fallo real (26-jul): Tiziano preguntó por "Paso Rápido"
+    y la búsqueda entera se cayó con UnicodeEncodeError — el comando IMAP viaja
+    en ASCII y la á no cabe. Buscar SOLO sin acentos tampoco alcanza: si la
+    cabecera dice "Rápido" de verdad, el servidor no la matchea contra "Rapido".
+    Así que se hace las dos búsquedas y se unen:
+      1. sin acentos, en ASCII → siempre corre, y pega cuando el remitente
+         escribe su nombre sin tilde (el caso de Paso Rapido);
+      2. el término tal cual, declarando CHARSET UTF-8 → pega cuando la
+         cabecera sí trae el acento. Va en try porque no todo servidor lo
+         acepta, y un rechazo acá no puede tumbar la búsqueda.
+    """
+    vistos: list[bytes] = []
+
+    def _sumar(data) -> None:
+        if data and data[0]:
+            for u in data[0].split():
+                if u not in vistos:
+                    vistos.append(u)
+
+    ascii_crit = [_sin_acentos(c) for c in criterios]
+    try:
+        _sumar(M.uid("search", None, *ascii_crit)[1])
+    except Exception:
+        log.warning("SEARCH ASCII falló con %s", ascii_crit, exc_info=True)
+
+    if any(c != a for c, a in zip(criterios, ascii_crit)):
+        try:
+            _sumar(M.uid("search", "CHARSET", "UTF-8",
+                         *[c.encode("utf-8") for c in criterios])[1])
+        except Exception:
+            # El servidor no quiso el UTF-8: nos quedamos con lo del ASCII.
+            log.info("SEARCH UTF-8 no aceptado; sigo con el resultado ASCII.")
+
+    return sorted(vistos, key=lambda u: int(u))
+
+
 def _buscar_sync(cuenta: dict, criterios: list[str], limite: int) -> list[dict]:
     """SÍNCRONO (en un hilo). IMAP SEARCH en el buzón, devuelve coincidencias.
 
@@ -188,10 +234,9 @@ def _buscar_sync(cuenta: dict, criterios: list[str], limite: int) -> list[dict]:
     try:
         M.login(cuenta["user"], cuenta["pass"])
         M.select("INBOX", readonly=True)
-        # Sin CHARSET (ASCII): es la forma que Gmail parsea sin quejarse. Los
-        # valores ya vienen entre comillas para tolerar espacios ("Jorge Taveras").
-        typ, data = M.uid("search", None, *criterios)
-        uids = data[0].split()[-limite:][::-1] if data and data[0] else []
+        # Los valores ya vienen entre comillas para tolerar espacios
+        # ("Jorge Taveras"); los acentos los maneja _buscar_uids.
+        uids = _buscar_uids(M, criterios)[-limite:][::-1]
         salida = []
         for uid in uids:
             # FLAGS junto con las cabeceras: el preámbulo de la respuesta trae
