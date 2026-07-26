@@ -25,7 +25,7 @@ import email
 import imaplib
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.header import decode_header
 
 import cerebro.deepseek as motor
@@ -168,8 +168,22 @@ async def _relevante(cand: dict) -> dict:
     return json.loads(r.choices[0].message.content)
 
 
+# Meses en inglés para el formato de fecha de IMAP (SINCE 27-Apr-2026), que no
+# depende del locale del contenedor.
+_MESES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def _fecha_imap(dt: datetime) -> str:
+    return f"{dt.day:02d}-{_MESES[dt.month - 1]}-{dt.year}"
+
+
 def _buscar_sync(cuenta: dict, criterios: list[str], limite: int) -> list[dict]:
-    """SÍNCRONO (en un hilo). IMAP SEARCH en el buzón, devuelve coincidencias."""
+    """SÍNCRONO (en un hilo). IMAP SEARCH en el buzón, devuelve coincidencias.
+
+    Trae también el uid (para poder LEER el cuerpo después) y si está sin leer
+    —eso es lo que Tiziano suele buscar: lo viejo que quedó pendiente—.
+    """
     M = imaplib.IMAP4_SSL(SERVIDOR, 993)
     try:
         M.login(cuenta["user"], cuenta["pass"])
@@ -180,13 +194,18 @@ def _buscar_sync(cuenta: dict, criterios: list[str], limite: int) -> list[dict]:
         uids = data[0].split()[-limite:][::-1] if data and data[0] else []
         salida = []
         for uid in uids:
+            # FLAGS junto con las cabeceras: el preámbulo de la respuesta trae
+            # los flags, y ahí miramos si \Seen está o no (sin leer = no está).
             d = M.uid("fetch", uid.decode(),
-                      "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")[1]
+                      "(FLAGS BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)])")[1]
             if not d or not d[0]:
                 continue
+            preambulo = d[0][0] if isinstance(d[0][0], bytes) else b""
             msg = email.message_from_bytes(d[0][1])
             salida.append({
                 "cuenta": cuenta["user"],
+                "uid": uid.decode(),
+                "no_leido": b"\\Seen" not in preambulo,
                 "de": _texto(msg.get("From")),
                 "asunto": _texto(msg.get("Subject")),
                 "fecha": _texto(msg.get("Date")),
@@ -200,11 +219,15 @@ def _buscar_sync(cuenta: dict, criterios: list[str], limite: int) -> list[dict]:
 
 
 async def buscar(de: str = "", asunto: str = "", texto: str = "",
-                 limite: int = 8) -> list[dict]:
+                 dias: int = 90, solo_no_leidos: bool = False,
+                 limite: int = 15) -> list[dict]:
     """Busca en los buzones por remitente/asunto/texto. Para "¿Juan escribió?".
 
-    Busca en TODO el INBOX (no solo lo nuevo): la pregunta puede ser sobre algo
-    de la semana pasada. Solo lee cabeceras, no cuerpos.
+    Mira el HISTORIAL, no solo lo nuevo: la ventana por defecto son los últimos
+    90 días (`dias`), que es donde suele estar "el correo viejo sin leer" que
+    Tiziano no alcanzó a ver. Con `solo_no_leidos` se limita a los pendientes.
+    Devuelve cabeceras + uid + si está sin leer (el cuerpo se pide aparte con
+    leer()). Ordena del más nuevo al más viejo.
     """
     # Entre comillas para que un valor con espacios sea UN término IMAP; sin
     # comillas internas, que romperían el comando.
@@ -220,6 +243,12 @@ async def buscar(de: str = "", asunto: str = "", texto: str = "",
         criterios += ["TEXT", _q(texto)]
     if not criterios:
         return []
+    if solo_no_leidos:
+        criterios.append("UNSEEN")
+    if dias and dias > 0:
+        desde = datetime.now(TZ) - timedelta(days=dias)
+        criterios += ["SINCE", _fecha_imap(desde)]
+
     resultados = []
     for cuenta in config.CORREO_CUENTAS:
         try:
@@ -229,6 +258,79 @@ async def buscar(de: str = "", asunto: str = "", texto: str = "",
             log.warning("Falló la búsqueda en %s.", cuenta.get("user", "?"),
                         exc_info=True)
     return resultados
+
+
+def _cuerpo(msg, limite: int = 3000) -> str:
+    """El texto plano del cuerpo, más largo que el snippet, para LEER el correo.
+
+    Prefiere text/plain; si solo hay HTML, lo desnuda a lo bruto (quita etiquetas)
+    para que quede legible sin traer una librería nueva. No es perfecto, pero
+    alcanza para 'qué dice el correo'.
+    """
+    plano, html = "", ""
+    try:
+        partes = msg.walk() if msg.is_multipart() else [msg]
+        for parte in partes:
+            ct = parte.get_content_type()
+            if ct not in ("text/plain", "text/html"):
+                continue
+            crudo = parte.get_payload(decode=True) or b""
+            txt = crudo.decode(parte.get_content_charset() or "utf-8", "replace")
+            if ct == "text/plain" and not plano:
+                plano = txt
+            elif ct == "text/html" and not html:
+                html = txt
+    except Exception:
+        return ""
+    cuerpo = plano
+    if not cuerpo and html:
+        import re
+        sin_tags = re.sub(r"(?is)<(script|style).*?</\1>", " ", html)
+        sin_tags = re.sub(r"(?s)<[^>]+>", " ", sin_tags)
+        cuerpo = sin_tags
+    return " ".join(cuerpo.split())[:limite]
+
+
+def _leer_sync(cuenta: dict, uid: str) -> dict | None:
+    """SÍNCRONO (en un hilo). Trae el cuerpo completo de UN correo por su uid."""
+    M = imaplib.IMAP4_SSL(SERVIDOR, 993)
+    try:
+        M.login(cuenta["user"], cuenta["pass"])
+        M.select("INBOX", readonly=True)  # readonly = leerlo NO lo marca leído
+        d = M.uid("fetch", str(uid), "(BODY.PEEK[])")[1]
+        if not d or not d[0]:
+            return None
+        msg = email.message_from_bytes(d[0][1])
+        return {
+            "cuenta": cuenta["user"],
+            "de": _texto(msg.get("From")),
+            "asunto": _texto(msg.get("Subject")),
+            "fecha": _texto(msg.get("Date")),
+            "cuerpo": _cuerpo(msg),
+        }
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
+
+
+async def leer(cuenta: str, uid: str) -> dict | None:
+    """Lee el cuerpo de un correo concreto (el que Tiziano señaló de una lista).
+
+    `cuenta` y `uid` salen de un buscar() previo. Leerlo por Lucy NO lo marca
+    como leído en Gmail (la sesión IMAP es de solo lectura): si él quiere, lo
+    abre él mismo.
+    """
+    cta = next((c for c in config.CORREO_CUENTAS if c["user"] == cuenta), None)
+    if cta is None:
+        return None
+    try:
+        return await asyncio.to_thread(_leer_sync, cta, uid)
+    except Exception:
+        log.warning("No pude leer el correo uid=%s de %s.", uid, cuenta,
+                    exc_info=True)
+        return None
 
 
 async def revisar_ahora() -> list[dict]:

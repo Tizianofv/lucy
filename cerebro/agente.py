@@ -174,16 +174,25 @@ HERRAMIENTAS DISPONIBLES:
       elegir mal. Si vas a caer acá para un lugar conocido, mejor buscar_lugar
       primero.
 
-· correo  {"accion": "revisar|buscar", "de": "", "asunto": "", "texto": ""}
+· correo  {"accion": "revisar|buscar|leer", "de": "", "asunto": "", "texto": "",
+           "solo_no_leidos": false, "cuenta": "", "uid": ""}
   Mira el correo cuando Tiziano lo pida (todos los días a la mañana sale solo).
-   · revisar → "¿llegó algo?", "revisá el correo". Lee lo nuevo desde la última
-     revisión, descarta el ruido y te devuelve lo relevante para que se lo
-     resumas: de quién, de qué, qué requiere. Si vuelve vacío, no llegó nada que
-     importe — decíselo así, tranquilo.
-   · buscar → "¿Juan escribió?", "¿llegó la factura de la luz?". Busca en el
-     buzón por remitente ("de"), asunto o texto y devuelve las coincidencias
-     (de quién, asunto, fecha). Poné al menos uno de de/asunto/texto. Si vuelve
-     vacío, no hay nada de eso — no lo inventes.
+   · revisar → SOLO "¿llegó algo NUEVO?", "revisá el correo". Lee lo nuevo desde
+     la última revisión y te devuelve lo relevante. OJO: revisar NO ve el correo
+     viejo — si vuelve vacío NO significa que no exista, solo que no llegó nada
+     nuevo hoy.
+   · buscar → "¿hay correo de Paso Rápido?", "¿me escribió Juan?", "¿llegó la
+     factura de la luz?". ESTE es el que se usa cuando pregunta si HAY correo de
+     alguien: busca en el HISTORIAL (por defecto los últimos 90 días), incluidos
+     los VIEJOS SIN LEER, por remitente ("de"), asunto o texto. Devuelve una
+     lista con de/asunto/fecha, si está sin leer, y su "cuenta" y "uid" (que
+     necesitás para leer()). Poné al menos uno de de/asunto/texto. `solo_no_leidos`
+     true si él pide solo los pendientes. Presentáselos ordenaditos (fecha, de
+     quién, asunto, marcando los "sin leer"); si vuelve vacío, no hay nada de eso.
+   · leer → "¿qué dice el de Paso Rápido?", "leeme el segundo". Trae el cuerpo
+     completo de UN correo que ya le mostraste. Pasá "cuenta" y "uid" tal cual
+     vinieron en el buscar previo. Resumí o citá lo que pida; no inventes nada
+     que no esté en el cuerpo. Leerlo NO lo marca como leído en Gmail.
 
 · recordar  {"texto": "lo que acordamos del depósito", "n": 5}
   Busca por SIGNIFICADO en todo lo que se han dicho (tus respuestas
@@ -486,9 +495,23 @@ async def _ejecutar_herramienta(
                             "'texto'. Para «la factura de la luz» usá asunto o "
                             "texto 'factura'; para «¿me escribió Juan?» usá de "
                             "'Juan'.")
-                res = await correo.buscar(de=de, asunto=asu, texto=txt)
+                res = await correo.buscar(
+                    de=de, asunto=asu, texto=txt,
+                    solo_no_leidos=bool(args.get("solo_no_leidos")))
                 return (json.dumps(res, ensure_ascii=False) if res
-                        else "0 correos que coincidan con esa búsqueda.")
+                        else "0 correos que coincidan con esa búsqueda en los "
+                             "últimos 90 días.")
+            if accion == "leer":
+                cta = str(args.get("cuenta") or "")
+                uid = str(args.get("uid") or "")
+                if not (cta and uid):
+                    return ("ERROR: 'leer' necesita 'cuenta' y 'uid' — los que "
+                            "vinieron en el buscar previo. Buscá primero si no "
+                            "los tenés.")
+                msg = await correo.leer(cta, uid)
+                return (json.dumps(msg, ensure_ascii=False) if msg
+                        else "ERROR: no pude leer ese correo (¿uid/cuenta "
+                             "equivocados o ya no está?). Buscá de nuevo.")
             rel = await correo.revisar_ahora()
             if not rel:
                 return "0 correos nuevos relevantes: lo nuevo era ruido, o no llegó nada."
