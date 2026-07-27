@@ -189,6 +189,22 @@ async def bucle(bot) -> None:
             except Exception:
                 log.warning("El reporte de correo tropezó; reintento en la próxima.",
                             exc_info=True)
+            # Marcar leído lo ya informado va pegado al reporte y DESPUÉS: solo
+            # marca lo que de verdad llegó (leído = "ya te informé").
+            try:
+                await correo.confirmar_leidos()
+            except Exception:
+                log.warning("No pude marcar leídos; reintento en la próxima.",
+                            exc_info=True)
+        # Vigilancia 911 cada ~10 min, las 24 horas: lo ÚNICO que interrumpe es
+        # que se rompa la infraestructura donde viven Natalia y Lucy. Es barato
+        # —mirar remitente y asunto— y no gasta IA salvo que encuentre algo.
+        if vuelta % 120 == 0:
+            try:
+                await correo.vigilar_911(bot)
+            except Exception:
+                log.warning("La vigilancia 911 tropezó; sigo igual.",
+                            exc_info=True)
         # El calendario se jala cada ~5 min (60 vueltas): las sesiones del
         # estudio no cambian cada segundo, y consultar 10 calendarios más
         # seguido gastaría cuota sin ganar frescura útil.

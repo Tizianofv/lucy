@@ -48,16 +48,116 @@ REPORTE_HASTA = 12  # mediodía
 # pasen el filtro barato; el tope es un cinturón contra una ráfaga rara.
 MAX_POR_DIA = 60
 
-SISTEMA_RELEVANCIA = (
-    "Sos el filtro de correo de Lucy, la asistente personal de Tiziano. Decidís "
-    "si un correo AMERITA su atención personal. Relevante: escrito por una "
-    "persona real para él, algo que pide acción o respuesta, una cita, una "
-    "factura o pago, algo personal o de sus negocios (CDS, estudio de "
-    "grabación) que no puede ignorar. NO relevante: promociones, newsletters, "
-    "avisos automáticos, redes sociales, cosas de sistema. Ante la duda, es NO: "
-    "molestarlo con ruido es peor que dejar pasar un correo tibio. Devolvé JSON "
-    '{"relevante": true/false, "motivo": "en pocas palabras"}.'
+# Hasta dónde mira hacia atrás el reporte. Lo eligió Tiziano el 26-jul: 7 días.
+# Lo anterior queda como pasado — en la cuenta del estudio hay ~2.900 sin leer
+# acumulados, y arrastrarlos sería empezar la relación con una deuda imposible.
+VENTANA_DIAS = 7
+
+# ═══ La política de correo, definida con Tiziano el 26-jul-2026 ═══════════
+#
+# El filtro viejo era binario (relevante sí/no) y tenía un defecto que él marcó
+# enseguida: lo "no relevante" desaparecía en silencio. Su regla: aunque Lucy
+# juzgue que algo no vale la pena, IGUAL tiene que decir que llegó. Por eso
+# esto ya no filtra: CLASIFICA. Nada baja de "mención".
+#
+# Tres niveles de decisión: ámbito (su vida personal o su trabajo), área (cuál
+# de sus frentes) y —lo que decide cuánto detalle— qué pide de él.
+
+AMBITOS = ("personal", "laboral")
+
+# Las áreas de su mundo, tal como él las ordenó. No son etiquetas inventadas:
+# son sus dos frentes de negocio (CDS el estudio, ACD la academia), la docencia
+# que da en otros centros, lo transversal a los dos, y su vida personal.
+AREAS = (
+    # Personal
+    "rosi_familia", "tramites_servicios", "dinero_personal", "compras_publicidad",
+    # Laboral · CDS (Caribbean Dream Studios)
+    "cds_clientes", "cds_pasantes", "cds_proveedores", "cds_dinero",
+    # Laboral · ACD (Academia Caribbean Dream)
+    "acd_estudiantes", "acd_administracion", "acd_pasantes", "acd_dinero",
+    # Laboral · docencia en otros centros (ITLA, UNPHU)
+    "docencia_externa",
+    # Laboral · transversal a los dos frentes
+    "infraestructura", "oficio_conocimiento", "publicidad_laboral",
 )
+
+NIVELES = ("911", "accion", "enterarte", "mencion", "dudoso")
+
+SISTEMA_CLASIFICA = """\
+Sos el clasificador de correo de Lucy, la asistente personal de Tiziano
+Fajardo. Recibís el remitente y el asunto de UN correo y lo clasificás. NO
+filtrás: todo correo se clasifica, hasta la publicidad. Nada se descarta.
+
+QUIÉN ES TIZIANO: ingeniero de mezcla, master y productor musical. Dueño de
+dos frentes de negocio en República Dominicana — CDS (Caribbean Dream Studios,
+estudio de grabación) y ACD (Academia Caribbean Dream). Además da clases en
+otros centros (ITLA, UNPHU). Rosi es su pareja y maneja la parte
+administrativa de ACD.
+
+Devolvés SOLO un JSON con estas claves:
+  ambito: "personal" | "laboral"
+  area: una de estas, la que mejor calce:
+    PERSONALES:
+      rosi_familia ......... Rosi o la familia, en lo personal
+      tramites_servicios ... trámites suyos: peajes (Paso Rápido), bancos, seguros
+      dinero_personal ...... facturas y pagos de su casa/vida
+      compras_publicidad ... compras y promociones personales (Amazon, Pinterest)
+    LABORALES · CDS (el estudio):
+      cds_clientes ......... clientes, sesiones, reservas del estudio
+      cds_pasantes ......... CVs y pasantías para el estudio
+      cds_proveedores ...... proveedores, equipos, servicios del estudio
+      cds_dinero ........... facturas, comprobantes y pagos DEL ESTUDIO
+    LABORALES · ACD (la academia):
+      acd_estudiantes ...... estudiantes y docencia de la academia
+      acd_administracion ... administración interna de ACD (él y Rosi)
+      acd_pasantes ......... CVs y pasantías para la academia
+      acd_dinero ........... facturas, comprobantes y pagos DE LA ACADEMIA
+    LABORALES · otros:
+      docencia_externa ..... ITLA, UNPHU y otros centros donde él da clases
+      infraestructura ...... Railway, n8n, Google Cloud, UptimeRobot, dominios,
+                             hosting, seguridad de sus sistemas
+      oficio_conocimiento .. su oficio: audio, plugins, técnicas, marcas
+                             (Audient, Kazrog, Krotos), tecnología que usa
+      publicidad_laboral ... promociones de herramientas de trabajo (Canva, Fiverr)
+  nivel: "911" | "accion" | "enterarte" | "mencion"
+  asunto_corto: de qué va, en menos de 12 palabras, en español
+  motivo: por qué le pusiste ese nivel, en pocas palabras
+
+LOS NIVELES — esto decide cuánto se le cuenta:
+  911 ....... SOLO infraestructura rota o comprometida: un deploy que falló,
+              un servicio caído, una vulnerabilidad crítica. Ahí viven Natalia
+              y Lucy, y esperar hasta la mañana empeora la cosa. NADA MÁS es
+              911: lo urgente de clientes le llega por WhatsApp, no por correo.
+  accion .... alguien real espera algo suyo, o hay algo que hacer.
+              ⚠️ TODA FACTURA, comprobante fiscal o cobro es SIEMPRE "accion",
+              nunca menos: todas vencen y hay que archivarlas.
+  enterarte . nada que hacer, pero le sirve saberlo: novedades de su oficio
+              (audio, plugins, técnicas), avisos de seguridad no críticos,
+              noticias de las herramientas que usa.
+  mencion ... llegó pero no aporta: publicidad, encuestas automáticas,
+              newsletters comerciales sin valor profesional.
+
+CRITERIOS FINOS:
+· Un boletín de una marca de AUDIO (Audient, Krotos, Waves…) que enseña algo
+  del oficio es "enterarte". Si es solo una OFERTA de precio, es "mencion".
+· Railway/n8n avisando que algo FALLÓ o de una vulnerabilidad crítica = 911.
+  El mismo remitente mandando su newsletter de producto = "enterarte", y un
+  reporte rutinario de que todo está bien = "mencion".
+· Un CV o una pasantía puede ser de CDS o de ACD: elegí por el contenido. Si
+  de verdad no se puede saber, poné el área que te parezca más probable y
+  decilo en "motivo".
+· Rosi aparece en los dos lados: lo decide el CONTENIDO, no el remitente.
+  "¿Compramos algo para la casa?" es rosi_familia; "los pagos de los
+  estudiantes" es acd_administracion.
+· Ante la duda en el NIVEL, subí un escalón: es peor que se le pase una
+  factura que darle una línea de más.
+· Un REBOTE (Mail Delivery Subsystem, mailer-daemon, "Delivery Status
+  Notification: Failure") es "accion": algo que ÉL mandó no llegó a destino.
+· Alertas de su BANCO sobre movimientos o cambios en su cuenta: "accion" si
+  es un movimiento o un cambio de datos; "mencion" si es publicidad del banco.
+· Alguien pidiendo COTIZACIÓN, alquiler del estudio, o queriendo grabar =
+  cds_clientes y "accion", siempre: es plata entrando por la puerta.\
+"""
 
 
 def _texto(v: str | None) -> str:
@@ -73,9 +173,13 @@ def _texto(v: str | None) -> str:
 def _es_ruido(msg) -> str | None:
     """Motivo del descarte barato, o None si merece la mirada de la IA."""
     frm = (_texto(msg.get("From")) or "").lower()
+    # OJO con los rebotes: mailer-daemon NO es ruido. Un "Delivery Status
+    # Notification (Failure)" significa que algo que Tiziano mandó NO llegó, y
+    # eso amerita saberlo. Estaba en esta lista y se descartaba solo; salió a
+    # la luz en el ensayo del 26-jul con dos rebotes reales en su buzón.
     if any(x in frm for x in ("no-reply", "noreply", "no_reply", "donotreply",
-                              "notifications@", "notification@", "mailer@",
-                              "newsletter", "bounce", "mailer-daemon")):
+                              "notifications@", "notification@",
+                              "newsletter")):
         return "remitente automático"
     if msg.get("List-Unsubscribe") or msg.get("List-Id") or msg.get("List-Post"):
         return "lista/newsletter"
@@ -101,7 +205,53 @@ def _snippet(msg, limite: int = 400) -> str:
         texto = cuerpo.decode(msg.get_content_charset() or "utf-8", "replace")
     except Exception:
         return ""
+    # Fuera las URLs: un correo de Pinterest es media pantalla de link firmado
+    # que no le dice nada a nadie y se come el presupuesto de contexto.
+    import re as _re
+    texto = _re.sub(r"https?://\S+", " ", texto)
     return " ".join(texto.split())[:limite]
+
+
+def _sin_leer_sync(cuenta: dict, dias: int, limite: int) -> list[dict]:
+    """SÍNCRONO (en un hilo). Los correos SIN LEER de los últimos `dias`.
+
+    Este reemplaza al puntero como fuente del reporte, y es el arreglo de fondo
+    del sistema: el puntero SE CONSUMÍA —cualquier revisión lo adelantaba— así
+    que el reporte de la mañana podía encontrar cero y quedarse mudo mientras
+    había correos pendientes de verdad. "Sin leer" no se consume solo, coincide
+    con lo que Tiziano ve en su Gmail, y sobrevive a que Lucy esté caída.
+    """
+    M = imaplib.IMAP4_SSL(SERVIDOR, 993)
+    try:
+        M.login(cuenta["user"], cuenta["pass"])
+        M.select("INBOX", readonly=True)
+        desde = _fecha_imap(datetime.now(TZ) - timedelta(days=dias))
+        typ, data = M.uid("search", None, "UNSEEN", "SINCE", desde)
+        uids = data[0].split() if data and data[0] else []
+        # Los más nuevos primero: si hay que cortar por el tope, que se caiga
+        # lo viejo, no lo de hoy.
+        uids = uids[-limite:][::-1]
+        salida = []
+        for uid in uids:
+            d = M.uid("fetch", uid.decode(), "(BODY.PEEK[])")[1]
+            if not d or not d[0]:
+                continue
+            msg = email.message_from_bytes(d[0][1])
+            salida.append({
+                "cuenta": cuenta["user"],
+                "uid": int(uid),
+                "from": _texto(msg.get("From")),
+                "subject": _texto(msg.get("Subject")),
+                "fecha": _texto(msg.get("Date")),
+                "snippet": _snippet(msg),
+                "ruido_barato": _es_ruido(msg),  # se informa igual, pero baja solo
+            })
+        return salida
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
 
 
 def _cosechar(cuenta: dict, desde_uid: int) -> tuple[int, int, list[dict]]:
@@ -153,20 +303,53 @@ def _cosechar(cuenta: dict, desde_uid: int) -> tuple[int, int, list[dict]]:
             pass
 
 
-async def _relevante(cand: dict) -> dict:
-    """La IA decide si el correo amerita atención. From+Subject alcanza y expone
-    menos que mandar el cuerpo entero."""
-    r = await motor.cliente.chat.completions.create(
-        model=motor.MODELO,
-        messages=[
-            {"role": "system", "content": SISTEMA_RELEVANCIA},
-            {"role": "user",
-             "content": f"De: {cand['from']}\nAsunto: {cand['subject']}"},
-        ],
-        response_format={"type": "json_object"},
-        temperature=0,
-    )
-    return json.loads(r.choices[0].message.content)
+async def clasificar(cand: dict, reglas: str = "") -> dict:
+    """Clasifica UN correo: ámbito, área y nivel. From+Subject alcanza, y expone
+    mucho menos que mandar el cuerpo entero a la IA.
+
+    `reglas` son las preferencias que Tiziano le fue enseñando ("lo de Kazrog
+    es ruido", "cualquier cosa de UNPHU avisame completo"). Van arriba del
+    prompt para que pesen más que el criterio general: la clasificación se
+    afina con el uso, sin que haya que tocar código cada vez.
+
+    Nunca devuelve "descartado": lo peor que le puede pasar a un correo es
+    quedar en 'mencion', y si algo sale raro cae en 'dudoso' — que también se
+    informa. Nada desaparece en silencio.
+    """
+    sistema = SISTEMA_CLASIFICA
+    if reglas:
+        sistema += ("\n\nREGLAS QUE TE DIO TIZIANO (mandan sobre lo de arriba):\n"
+                    + reglas)
+    try:
+        r = await motor.cliente.chat.completions.create(
+            model=motor.MODELO,
+            messages=[
+                {"role": "system", "content": sistema},
+                {"role": "user",
+                 "content": f"De: {cand['from']}\nAsunto: {cand['subject']}"},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        v = json.loads(r.choices[0].message.content)
+    except Exception:
+        # Si la IA no puede juzgar, el correo NO se pierde: se informa como
+        # dudoso y Tiziano decide. Callarse por un fallo propio sería
+        # exactamente lo que esta política vino a prohibir.
+        log.warning("No pude clasificar «%s»; va como dudoso.",
+                    cand.get("subject", "")[:60], exc_info=True)
+        return {"ambito": "", "area": "", "nivel": "dudoso",
+                "asunto_corto": cand.get("subject", "")[:80],
+                "motivo": "no pude clasificarlo"}
+
+    nivel = str(v.get("nivel", "")).strip().lower()
+    v["nivel"] = nivel if nivel in NIVELES else "dudoso"
+    v["ambito"] = str(v.get("ambito", "")).strip().lower()
+    area = str(v.get("area", "")).strip().lower()
+    v["area"] = area if area in AREAS else ""
+    v["asunto_corto"] = str(v.get("asunto_corto") or cand.get("subject", ""))[:120]
+    v["motivo"] = str(v.get("motivo") or "")[:160]
+    return v
 
 
 # Meses en inglés para el formato de fecha de IMAP (SINCE 27-Apr-2026), que no
@@ -418,70 +601,285 @@ async def revisar_ahora() -> list[dict]:
     return relevantes
 
 
-async def _relevantes_de(cuenta: dict, hoy) -> list[dict]:
-    """Lee lo nuevo de una cuenta y devuelve solo los relevantes. Avanza el
-    puntero. Si `hoy` no es None, marca el reporte de ese día (para no repetir
-    el matinal); on-demand pasa None y no lo toca."""
-    estado = await db.leer_estado_correo(cuenta["user"])
+async def _pendientes_de(cuenta: dict, reglas: str = "") -> list[dict]:
+    """Los correos SIN LEER de esta cuenta que todavía no se informaron, ya
+    clasificados. Es la materia prima del reporte.
 
-    uidvalidity, top, candidatos = await asyncio.to_thread(
-        _cosechar, cuenta, estado["ultimo_uid"] if estado else 0)
-
-    # Primera vez, o Gmail renumeró (cambió UIDVALIDITY): fijamos la línea de
-    # corte en el tope actual y NO procesamos el backlog. Miramos desde acá.
-    if estado is None or estado["uidvalidity"] != uidvalidity:
-        await db.guardar_estado_correo(cuenta["user"], uidvalidity, top, hoy)
-        log.info("Correo %s: línea de corte en UID %s (backlog ignorado).",
-                 cuenta["user"], top)
+    No toca el puntero ni marca nada: solo mira. Lo que se informa y lo que se
+    marca leído se decide después, cuando el reporte de verdad haya salido.
+    """
+    crudos = await asyncio.to_thread(
+        _sin_leer_sync, cuenta, VENTANA_DIAS, MAX_POR_DIA)
+    if not crudos:
         return []
 
-    relevantes = []
-    for cand in candidatos:
-        try:
-            veredicto = await _relevante(cand)
-        except Exception:
-            log.warning("No pude juzgar un correo de %s; lo salteo (sigue en "
-                        "el buzón).", cuenta["user"], exc_info=True)
-            continue
-        if veredicto.get("relevante"):
-            cand["cuenta"] = cuenta["user"]
-            relevantes.append(cand)
-            log.info("Correo relevante de %s: %s (%s)", cand["from"][:40],
-                     cand["subject"][:50], veredicto.get("motivo", ""))
+    ya = await db.correos_ya_reportados(
+        cuenta["user"], [c["uid"] for c in crudos])
+    nuevos = [c for c in crudos if c["uid"] not in ya]
+    if not nuevos:
+        return []
 
-    await db.guardar_estado_correo(cuenta["user"], uidvalidity, top, hoy)
-    return relevantes
+    for c in nuevos:
+        # El filtro barato ya no descarta: solo ahorra una llamada a la IA en lo
+        # que es ruido evidente. El correo se informa igual, como mención — que
+        # es justo la regla que puso Tiziano: nada desaparece en silencio.
+        if c.get("ruido_barato"):
+            c["clasificacion"] = {
+                "ambito": "", "area": "publicidad_laboral", "nivel": "mencion",
+                "asunto_corto": c["subject"][:120],
+                "motivo": f"filtro: {c['ruido_barato']}",
+            }
+        else:
+            c["clasificacion"] = await clasificar(c, reglas)
+    return nuevos
 
 
-def _encargo(relevantes: list[dict]) -> str:
-    """Arma el encargo que se le deja al agente para que redacte el reporte.
+def _linea(c: dict) -> str:
+    """Una línea de correo para el encargo, con lo justo según su nivel."""
+    cl = c["clasificacion"]
+    base = f"[{cl['nivel']}|{cl.get('area') or '?'}] De {c['from']} → {cl['asunto_corto']}"
+    if cl["nivel"] in ("911", "accion", "dudoso"):
+        # Los que piden algo van con extracto: el agente necesita el contenido
+        # para decir qué requiere y proponer la tarea.
+        return f"{base}\n    (cuenta {c['cuenta']} · uid {c['uid']})\n    {c['snippet'][:280]}"
+    return f"{base}  (uid {c['uid']})"
 
-    Igual que el briefing: el despertador/vigía junta los datos, el agente los
-    convierte en un mensaje humano y acciona lo que corresponda. Acá no se
-    escribe el reporte — armarlo sin el criterio del agente sería opinar sin él.
+
+def _nombre(remitente: str) -> str:
+    """'Kazrog <list@kazrog.com>' → 'Kazrog'. Para agrupar las menciones."""
+    r = (remitente or "").strip()
+    if "<" in r:
+        r = r.split("<")[0].strip().strip('"')
+    if not r and "@" in (remitente or ""):
+        r = remitente.split("@")[-1].strip("> ")
+    return r or "(sin remitente)"
+
+
+def _encargo(pendientes: list[dict]) -> str:
+    """El encargo que se le deja al agente para que redacte el reporte.
+
+    Igual que el briefing: acá se juntan y clasifican los datos, y el AGENTE
+    los convierte en un mensaje humano. Lo que este texto sí fija es la
+    política que Tiziano definió: qué nivel lleva cuánto detalle, y que nada
+    —ni la publicidad— puede quedar sin mencionarse.
     """
-    lineas = []
-    for i, r in enumerate(relevantes, 1):
-        lineas.append(f"{i}. De {r['from']} (a {r['cuenta']})\n"
-                      f"   Asunto: {r['subject']}\n   {r['snippet'][:300]}")
+    orden = {"911": 0, "accion": 1, "dudoso": 2, "enterarte": 3, "mencion": 4}
+    pendientes = sorted(pendientes, key=lambda c: orden.get(
+        c["clasificacion"]["nivel"], 9))
+
+    # Las menciones van AGRUPADAS por remitente y contadas. Cumplen la regla de
+    # Tiziano (aparecen, él se entera de que llegaron) sin convertir el reporte
+    # en un muro: en el ensayo eran 69 líneas de Pinterest, ofertas y newsletters.
+    detalle = [c for c in pendientes if c["clasificacion"]["nivel"] != "mencion"]
+    menciones = [c for c in pendientes if c["clasificacion"]["nivel"] == "mencion"]
+    lineas = "\n".join(_linea(c) for c in detalle)
+    if menciones:
+        cuenta_por: dict[str, int] = {}
+        for c in menciones:
+            n = _nombre(c["from"])
+            cuenta_por[n] = cuenta_por.get(n, 0) + 1
+        top = sorted(cuenta_por.items(), key=lambda x: -x[1])
+        listado = ", ".join(f"{n} ({k})" if k > 1 else n for n, k in top[:25])
+        if len(top) > 25:
+            listado += f", y {len(top) - 25} remitentes más"
+        lineas += (f"\n\n[mencion] {len(menciones)} correos sin importancia, "
+                   f"de: {listado}")
     return (
-        "Reporte de correo de la mañana. Llegaron estos correos relevantes desde "
-        "tu última revisión:\n\n" + "\n\n".join(lineas) + "\n\n"
-        "Dale a Tiziano UN resumen corto y ordenado: de quién, de qué, y qué "
-        "requiere de él. Accioná lo que claramente corresponda —si alguno trae "
-        "una cita, creála; si es una factura, registrala; si pide respuesta con "
-        "fecha, anotá la tarea— y decile qué hiciste. Lo dudoso, proponelo. No "
-        "respondas ningún correo ni inventes lo que no está en el texto."
+        "Reporte de correo de la mañana. Estos son los correos SIN LEER que "
+        "todavía no le informaste a Tiziano, ya clasificados por vos misma "
+        f"(nivel|área):\n\n{lineas}\n\n"
+        "Armá UN mensaje, en este orden y con este detalle — es la política que "
+        "él definió:\n"
+        "· ACCION (y 911): lo primero. De quién, qué pide y para cuándo. Creale "
+        "la tarea cuando esté claro y decíselo. Las FACTURAS siempre van acá: "
+        "toda factura vence y hay que archivarla.\n"
+        "· DUDOSO: mostráselos aparte, con remitente y asunto, y que él decida.\n"
+        "· ENTERARTE: una o dos líneas cada uno, de qué va. Son cosas de su "
+        "oficio (audio, plugins, técnica) o avisos de sus sistemas.\n"
+        "· MENCION: SOLO los nombres de quién escribió, juntos en una línea, "
+        "sin tema y sin detalle. Ej: «De publicidad: Amazon, Canva, Fiverr».\n\n"
+        "REGLA QUE NO SE ROMPE: todo lo que llegó tiene que aparecer, aunque "
+        "sea solo el nombre. Él fue explícito: aunque vos creas que no vale la "
+        "pena, igual tiene que saber que llegó. No respondas ningún correo ni "
+        "inventes nada que no esté en el texto."
     )
 
 
-async def reporte_diario() -> int:
-    """Una vez al día, en la mañana: junta el correo relevante y deja el encargo
-    del reporte en la bandeja. Devuelve cuántos relevantes encontró.
+async def revisar_ahora() -> list[dict]:
+    """Revisión on-demand ("revisá el correo"): mira lo mismo que el reporte
+    pero sin informar formalmente — no marca reportado ni leído, así lo que él
+    espía a media tarde igual le llega ordenado en el reporte de la mañana."""
+    reglas = await _reglas()
+    salida: list[dict] = []
+    fallos: list[str] = []
+    for cuenta in config.CORREO_CUENTAS:
+        try:
+            salida += await _pendientes_de(cuenta, reglas)
+        except Exception as e:
+            fallos.append(f"{cuenta.get('user', '?')} ({type(e).__name__}: {e})")
+            log.warning("Falló la revisión de %s.", cuenta.get("user", "?"),
+                        exc_info=True)
+    # Un buzón que no se pudo abrir no es un buzón vacío (lección del 26-jul).
+    if fallos and not salida:
+        raise RuntimeError(
+            "no pude revisar el correo — " + "; ".join(fallos) +
+            ". NO es que no haya llegado nada: la revisión falló.")
+    return salida
 
-    El guard es barato (una query por cuenta): el IMAP solo se abre cuando de
-    verdad toca, una vez al día. Fuera de la ventana, o si ya reportó hoy, sale
-    enseguida sin tocar Gmail.
+
+def _marcar_leidos_sync(cuenta: dict, uids: list[int]) -> int:
+    """SÍNCRONO (en un hilo). Marca \\Seen en Gmail. Única escritura de Lucy
+    sobre el buzón: todo lo demás es readonly."""
+    M = imaplib.IMAP4_SSL(SERVIDOR, 993)
+    try:
+        M.login(cuenta["user"], cuenta["pass"])
+        M.select("INBOX")  # sin readonly: acá sí escribimos el flag
+        hechos = 0
+        for uid in uids:
+            typ, _ = M.uid("store", str(uid), "+FLAGS", "(\\Seen)")
+            if typ == "OK":
+                hechos += 1
+        return hechos
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
+
+
+async def confirmar_leidos() -> int:
+    """Marca como leído en Gmail lo que YA se informó y llegó de verdad.
+
+    "Leído = te informé", la definición de Tiziano. Por eso esto corre después
+    del reporte y no antes: primero el mensaje llega, después se marca. Es la
+    misma regla de oro de todo el proyecto (mandar primero, marcar después),
+    acá aplicada a su buzón: un correo marcado leído que él nunca vio sería
+    una mentira escrita en un lugar donde no puede desconfiar.
+    """
+    await db.olvidar_reportados_fallidos()
+    filas = await db.correos_por_marcar_leidos()
+    if not filas:
+        return 0
+    por_cuenta: dict[str, list[int]] = {}
+    for f in filas:
+        por_cuenta.setdefault(f["cuenta"], []).append(f["uid"])
+
+    total = 0
+    for user, uids in por_cuenta.items():
+        cta = next((c for c in config.CORREO_CUENTAS if c["user"] == user), None)
+        if cta is None:
+            continue
+        try:
+            hechos = await asyncio.to_thread(_marcar_leidos_sync, cta, uids)
+            for uid in uids:
+                await db.confirmar_leido(user, uid)
+            total += hechos
+            log.info("Marcados %s correos como leídos en %s (ya informados).",
+                     hechos, user)
+        except Exception:
+            log.warning("No pude marcar leídos en %s; reintento después.", user,
+                        exc_info=True)
+    return total
+
+
+# ═══ Vigilancia 911: lo único que interrumpe ═════════════════════════════
+#
+# Tiziano lo acotó y eso simplificó todo: por correo, lo ÚNICO urgente es que
+# se rompa la infraestructura donde viven Natalia, Lucy y la App de registro.
+# Lo urgente de clientes le llega por WhatsApp con Natalia, o de humano a
+# humano. Así que esto no necesita juzgar el mundo entero: mira un puñado de
+# remitentes conocidos y si el asunto huele a incendio.
+
+REMITENTES_INFRA = ("railway.app", "railway.com", "n8n.io", "google.com",
+                    "googlecloud", "uptimerobot.com", "nocodb", "cloudflare")
+
+ASUNTOS_911 = ("build failed", "deploy failed", "deployment failed", "failed to",
+               "is down", "went down", "outage", "incident", "critical",
+               "security update", "vulnerability", "suspended", "payment failed",
+               "quota exceeded", "se cayó", "caído")
+
+
+def _huele_a_911(cand: dict) -> bool:
+    """¿Vale la pena despertarlo por esto? Barato: remitente + asunto."""
+    frm = (cand.get("from") or "").lower()
+    asunto = (cand.get("subject") or "").lower()
+    if not any(d in frm for d in REMITENTES_INFRA):
+        return False
+    return any(p in asunto for p in ASUNTOS_911)
+
+
+async def vigilar_911(bot) -> int:
+    """Cada pocos minutos, 24 h: ¿se rompió algo de la infraestructura?
+
+    Solo esto interrumpe. Si encuentra algo, avisa AL MOMENTO y lo deja como
+    encargo para que el agente lo cuente con criterio; el resto del correo ni
+    se toca — sigue esperando tranquilo al reporte de la mañana.
+    """
+    if not config.CORREO_CUENTAS:
+        return 0
+    avisados = 0
+    for cuenta in config.CORREO_CUENTAS:
+        try:
+            crudos = await asyncio.to_thread(
+                _sin_leer_sync, cuenta, 1, 30)  # solo el último día
+        except Exception:
+            log.warning("Vigilancia 911: no pude mirar %s.",
+                        cuenta.get("user", "?"), exc_info=True)
+            continue
+
+        sospechosos = [c for c in crudos if _huele_a_911(c)]
+        if not sospechosos:
+            continue
+        ya = await db.correos_ya_reportados(
+            cuenta["user"], [c["uid"] for c in sospechosos])
+        for c in sospechosos:
+            if c["uid"] in ya:
+                continue
+            texto = (f"🚨 {c['from']}\n{c['subject']}\n\n{c['snippet'][:400]}")
+            bandeja_id = await db.guardar_en_bandeja(
+                tipo_entrada="sistema",
+                contenido_raw=(
+                    "ALERTA DE INFRAESTRUCTURA por correo (esto sí interrumpe, "
+                    "es la única clase de correo urgente que definió Tiziano). "
+                    f"Llegó esto:\n\n{texto}\n\n"
+                    "Avisale YA, corto y claro: qué servicio, qué pasó, y si "
+                    "hay algo que él pueda hacer. Si no es grave de verdad, "
+                    "decíselo igual en una línea — pero no lo dejes pasar."),
+                chat_id=config.CHAT_ID_DUENO,
+                origen="correo",
+            )
+            await db.marcar_correo_reportado(
+                cuenta["user"], c["uid"], nivel="911", ambito="laboral",
+                area="infraestructura", asunto=c["subject"],
+                bandeja_id=bandeja_id)
+            avisados += 1
+            log.info("911 de correo: %s — %s", c["from"][:40], c["subject"][:60])
+    return avisados
+
+
+async def _reglas() -> str:
+    """Las preferencias de Tiziano que aplican al correo, para el clasificador.
+
+    Es lo que hace que la clasificación se afine sola: él dice «lo de Kazrog es
+    ruido» y desde mañana Kazrog baja a mención, sin tocar una línea de código.
+    """
+    try:
+        prefs = await db.listar_preferencias()
+    except Exception:
+        return ""
+    utiles = [p for p in prefs
+              if not p.get("contexto") or "correo" in str(p["contexto"]).lower()]
+    return "\n".join(f"· {p['texto']}" for p in utiles[:20])
+
+
+async def reporte_diario() -> int:
+    """Una vez al día, en la mañana: junta lo sin leer no informado, lo clasifica
+    y deja el encargo del reporte. Devuelve cuántos correos entraron.
+
+    Los correos quedan anotados como "reportados" con el id del encargo, pero
+    NO se marcan leídos todavía: eso pasa recién cuando el mensaje llegó de
+    verdad (ver confirmar_leidos). Leído significa "ya te informé", así que
+    marcarlo antes de que él lo lea sería una mentira escrita en su buzón.
     """
     if not config.CORREO_CUENTAS:
         return 0
@@ -490,26 +888,45 @@ async def reporte_diario() -> int:
         return 0
     hoy = ahora.date()
 
-    # ¿Ya reportó hoy? Si TODAS las cuentas tienen ultimo_reporte == hoy, listo.
     estados = [await db.leer_estado_correo(c["user"]) for c in config.CORREO_CUENTAS]
     if estados and all(e and e.get("ultimo_reporte") == hoy for e in estados):
         return 0
 
-    relevantes = []
+    reglas = await _reglas()
+    pendientes: list[dict] = []
     for cuenta in config.CORREO_CUENTAS:
         try:
-            relevantes += await _relevantes_de(cuenta, hoy)
+            pendientes += await _pendientes_de(cuenta, reglas)
         except Exception:
             log.warning("Falló la revisión de %s; sigo con las demás.",
                         cuenta.get("user", "?"), exc_info=True)
 
-    if relevantes:
-        await db.guardar_en_bandeja(
-            tipo_entrada="sistema",
-            contenido_raw=_encargo(relevantes),
-            chat_id=config.CHAT_ID_DUENO,
-            origen="correo",
-        )
-        log.info("Reporte de correo: %s relevante(s) → encargo en la bandeja.",
-                 len(relevantes))
-    return len(relevantes)
+    # Marcamos el día aunque no haya nada, para no reintentar toda la mañana.
+    for c, e in zip(config.CORREO_CUENTAS, estados):
+        if e:
+            await db.guardar_estado_correo(
+                c["user"], e["uidvalidity"], e["ultimo_uid"], hoy)
+
+    if not pendientes:
+        log.info("Reporte de correo: nada sin leer que no se haya informado.")
+        return 0
+
+    bandeja_id = await db.guardar_en_bandeja(
+        tipo_entrada="sistema",
+        contenido_raw=_encargo(pendientes),
+        chat_id=config.CHAT_ID_DUENO,
+        origen="correo",
+    )
+    for c in pendientes:
+        cl = c["clasificacion"]
+        await db.marcar_correo_reportado(
+            c["cuenta"], c["uid"], nivel=cl["nivel"], ambito=cl.get("ambito", ""),
+            area=cl.get("area", ""), asunto=c["subject"], bandeja_id=bandeja_id)
+
+    niveles = {}
+    for c in pendientes:
+        n = c["clasificacion"]["nivel"]
+        niveles[n] = niveles.get(n, 0) + 1
+    log.info("Reporte de correo: %s correos (%s) → encargo #%s.",
+             len(pendientes), niveles, bandeja_id)
+    return len(pendientes)

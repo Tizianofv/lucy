@@ -218,6 +218,101 @@ async def leer_estado_correo(cuenta: str) -> dict | None:
         return await cur.fetchone()
 
 
+async def correos_ya_reportados(cuenta: str, uids: list[int]) -> set[int]:
+    """De esos uids, cuáles ya se le informaron a Tiziano.
+
+    Es la memoria que hace posible mirar los SIN LEER en vez de un puntero que
+    se consume: sin ella, un correo que él no marque leído volvería a aparecer
+    cada mañana hasta el fin de los tiempos. Informado una vez, informado.
+    """
+    if not uids:
+        return set()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT uid FROM correo_reportado WHERE cuenta = %s AND uid = ANY(%s)",
+            (cuenta, [int(u) for u in uids]),
+        )
+        return {r[0] for r in await cur.fetchall()}
+
+
+async def marcar_correo_reportado(cuenta: str, uid: int, *, nivel: str = "",
+                                  ambito: str = "", area: str = "",
+                                  asunto: str = "", bandeja_id: int | None = None
+                                  ) -> None:
+    """Deja constancia de que ese correo ya se informó, con su clasificación.
+
+    Guardar CÓMO se clasificó no es adorno: es lo que después permite contestar
+    "¿por qué no me avisaste de esto?" con datos en la mano, y afinar las
+    reglas con hechos en vez de impresiones.
+    """
+    async with pool.connection() as conn:
+        await conn.execute(
+            """
+            INSERT INTO correo_reportado
+              (cuenta, uid, nivel, ambito, area, asunto, bandeja_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (cuenta, uid) DO NOTHING
+            """,
+            (cuenta, int(uid), nivel or None, ambito or None, area or None,
+             (asunto or "")[:300] or None, bandeja_id),
+        )
+
+
+async def correos_por_marcar_leidos() -> list[dict]:
+    """Correos ya informados cuyo reporte SÍ llegó y todavía no están marcados.
+
+    El filtro es la clave de que "leído" no mienta: solo entran los que
+    pertenecen a un encargo que el agente ya procesó y contestó (estado
+    'procesado' + respuesta enviada). Si el reporte se rompió a mitad de
+    camino, esos correos siguen sin marcar y sin contar como informados, así
+    que vuelven a aparecer mañana.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT r.cuenta, r.uid
+              FROM correo_reportado r
+              JOIN bandeja b ON b.id = r.bandeja_id
+             WHERE r.leido_en IS NULL
+               AND b.estado = 'procesado'
+               AND b.respuesta_lucy IS NOT NULL
+             LIMIT 200
+            """
+        )
+        return await cur.fetchall()
+
+
+async def confirmar_leido(cuenta: str, uid: int) -> None:
+    """Deja constancia de que ese correo ya quedó marcado como leído en Gmail."""
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE correo_reportado SET leido_en = now() "
+            "WHERE cuenta = %s AND uid = %s",
+            (cuenta, int(uid)),
+        )
+
+
+async def olvidar_reportados_fallidos() -> int:
+    """Suelta los correos cuyo reporte NUNCA llegó, para que vuelvan mañana.
+
+    Sin esto habría un agujero silencioso: un correo anotado como "reportado"
+    cuyo encargo murió con error quedaría marcado para siempre y no se
+    volvería a mencionar — justo el silencio que esta política prohíbe.
+    """
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            DELETE FROM correo_reportado r
+             USING bandeja b
+             WHERE b.id = r.bandeja_id
+               AND r.leido_en IS NULL
+               AND b.estado = 'error'
+            """
+        )
+        return cur.rowcount
+
+
 async def guardar_estado_correo(
     cuenta: str, uidvalidity: int, ultimo_uid: int, ultimo_reporte=None
 ) -> None:
