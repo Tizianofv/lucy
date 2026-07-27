@@ -177,10 +177,17 @@ HERRAMIENTAS DISPONIBLES:
 · correo  {"accion": "revisar|buscar|leer", "de": "", "asunto": "", "texto": "",
            "solo_no_leidos": false, "cuenta": "", "uid": ""}
   Mira el correo cuando Tiziano lo pida (todos los días a la mañana sale solo).
-   · revisar → SOLO "¿llegó algo NUEVO?", "revisá el correo". Lee lo nuevo desde
-     la última revisión y te devuelve lo relevante. OJO: revisar NO ve el correo
-     viejo — si vuelve vacío NO significa que no exista, solo que no llegó nada
-     nuevo hoy.
+   · revisar → "¿llegó algo?", "revisá el correo". Te devuelve los correos SIN
+     LEER que todavía no le informaste, cada uno con su "nivel" y su "área".
+     Contáselos SIEMPRE con la política que él definió (la misma del reporte
+     de la mañana):
+       · accion / 911 → primero, con detalle: de quién, qué pide, para cuándo.
+         Ofrecé o creá la tarea. TODA factura va acá.
+       · dudoso → aparte, con remitente y asunto, para que él decida.
+       · enterarte → una o dos líneas de qué va.
+       · mencion → SOLO los nombres, juntos en una línea, sin tema.
+         Ej: "de publicidad: Amazon, Canva, Fiverr".
+     NADA se omite: aunque sea publicidad, él quiere saber que llegó.
    · buscar → "¿hay correo de Paso Rápido?", "¿me escribió Juan?", "¿llegó la
      factura de la luz?". ESTE es el que se usa cuando pregunta si HAY correo de
      alguien: busca en el HISTORIAL (por defecto los últimos 90 días), incluidos
@@ -528,10 +535,23 @@ async def _ejecutar_herramienta(
                              "equivocados o ya no está?). Buscá de nuevo.")
             rel = await correo.revisar_ahora()
             if not rel:
-                return "0 correos nuevos relevantes: lo nuevo era ruido, o no llegó nada."
-            resumen = [{"de": r["from"], "asunto": r["subject"],
-                        "cuenta": r["cuenta"], "extracto": r["snippet"][:200]}
-                       for r in rel]
+                return ("0 correos sin leer sin informar en los últimos "
+                        f"{correo.VENTANA_DIAS} días.")
+            # La clasificación viaja con cada correo: es lo que te deja aplicar
+            # la política (acción con detalle, mención solo por nombre) también
+            # cuando él lo pide a mano, y no solo en el reporte de la mañana.
+            resumen = []
+            for r in rel:
+                cl = r.get("clasificacion") or {}
+                fila = {"nivel": cl.get("nivel", "dudoso"),
+                        "area": cl.get("area", ""),
+                        "de": r["from"], "asunto": r["subject"],
+                        "cuenta": r["cuenta"], "uid": r["uid"]}
+                # El extracto solo donde hace falta: en lo que pide algo. Para
+                # una mención, el nombre alcanza y el resto es ruido de contexto.
+                if fila["nivel"] in ("911", "accion", "dudoso"):
+                    fila["extracto"] = r["snippet"][:200]
+                resumen.append(fila)
             return json.dumps(resumen, ensure_ascii=False)
 
         if nombre == "recordar":
