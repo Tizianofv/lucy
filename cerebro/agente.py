@@ -29,6 +29,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+
+import telegram.error
 
 import acciones.botones as botones
 import acciones.crud as crud
@@ -269,8 +272,27 @@ CÓMO TRABAJÁS:
   razón corta cada uno, nunca una lista muda. Respetá las reglas que Tiziano
   te haya dado sobre cómo priorizar.
 · Nunca inventes un dato que no hayas visto en un resultado.
-· Respuestas breves, en su registro (español dominicano informal), texto
-  plano sin markdown ni HTML. Montos: RD$ 2,300.00.
+· Respuestas breves, en su registro (español dominicano informal).
+  Montos: RD$ 2,300.00.
+
+CÓMO SE VE LO QUE ESCRIBÍS — Tiziano lo pidió expreso: "para los humanos la
+estructura visual es importante". Un muro de texto no se lee, se saltea.
+· Escribís para Telegram y podés usar SOLO estas etiquetas: <b>negrita</b>,
+  <i>itálica</i> y <code>monoespaciado</code>. NADA de markdown (* _ #), que
+  Telegram no interpreta y se ve como basura. Nunca uses < para otra cosa.
+· En una respuesta corta (una o dos frases) no hace falta nada: escribí normal.
+· Cuando la respuesta tenga PARTES (un reporte, una lista, un plan del día):
+   · Cada sección arranca con un título corto en <b>negrita</b>, con su emoji
+     si ayuda a distinguirla de un vistazo.
+   · UNA LÍNEA EN BLANCO entre secciones. Es lo que más se nota: sin ese aire,
+     todo se ve apiñado.
+   · Un ítem por línea, arrancando con "• ". Nunca metas tres cosas en un
+     párrafo corrido.
+   · Lo importante de cada ítem al principio: <b>de quién</b> o <b>qué</b>, y
+     después el detalle. Él lee la primera palabra y decide si sigue.
+   · Si una sección tiene muchísimos ítems (la publicidad del correo),
+     resumila en una sola línea corrida — ahí lo compacto SÍ es mejor.
+· Nada de líneas de guiones ni separadores dibujados: el aire alcanza.
 · Los mensajes que empiezan con [foto] son texto leído de una imagen que él
   te mostró — quien habla ahí NO es Tiziano (mirá el DESTINO en los
   comprobantes: si es él, la plata ENTRÓ). Los [voz] son su nota de voz
@@ -585,9 +607,26 @@ async def _enviar(bot, text: str, **kw):
     Si un envío vacío se rechazara después de dar la fila por atendida, el
     resultado sería silencio permanente (pasó con la pregunta #26). Un texto
     feo es mejor que ninguno.
+
+    FORMATO (26-jul, pedido de Tiziano: "para los humanos la estructura visual
+    es importante"): se manda en HTML para que los títulos puedan ir en negrita
+    y el mensaje respire. El riesgo conocido de HTML es que un '<' suelto del
+    modelo rompa el envío entero — por eso hay red: si Telegram lo rechaza, el
+    mismo texto sale plano y sin etiquetas. Nunca se pierde el mensaje por una
+    cuestión estética.
     """
     limpio = (text or "").strip() or "Me quedé sin palabras — algo salió mal de mi lado."
-    return await bot.send_message(text=limpio[:4000], **kw)
+    limpio = limpio[:4000]
+    try:
+        return await bot.send_message(text=limpio, parse_mode="HTML", **kw)
+    except telegram.error.BadRequest:
+        log.warning("HTML rechazado; mando el mismo texto en plano.")
+        return await bot.send_message(text=_sin_etiquetas(limpio), **kw)
+
+
+def _sin_etiquetas(t: str) -> str:
+    """Quita las etiquetas HTML para el reintento en plano."""
+    return re.sub(r"<[^>]+>", "", t)
 
 
 async def atender(fila: dict, texto: str, bot) -> None:
