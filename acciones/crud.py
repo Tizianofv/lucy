@@ -84,6 +84,69 @@ async def _registrar(
     return (await cur.fetchone())[0]
 
 
+async def _duplicado_pendiente(
+    conn, tabla: str, titulo: str, cuando: datetime | None
+) -> tuple[int, int | None] | None:
+    """Busca una fila viva y pendiente igual a la que se va a crear.
+
+    Devuelve (id, log_id_de_creación) si ya existe una, o None si no hay.
+    Es el corazón de la deduplicación: el agente a veces re-crea lo que
+    acaba de crear (misma tarea, misma cita) y sin este freno llegan
+    recordatorios repetidos —era exactamente el pendiente de los avisos
+    dobles—.
+
+    La coincidencia se acota a título + fecha a propósito. Dos tareas
+    homónimas en fechas distintas —"pagar la luz" este mes y el que viene,
+    una recurrencia— son dos tareas legítimas, no un duplicado: recortar por
+    la sola coincidencia de título las fusionaría y perderíamos una.
+
+    Se devuelve el log de la creación original (no uno nuevo): así el asa de
+    "deshacer" sigue apuntando a la fila real, y no se ensucia el log con una
+    huella de algo que en verdad no se creó.
+    """
+    if tabla == "tareas":
+        # IS NOT DISTINCT FROM: una tarea sin fecha (vence_en NULL) coincide
+        # con otra sin fecha. Con `=`, NULL nunca iguala a NULL y se colarían
+        # duplicados de tareas sin cuándo, que son las más fáciles de repetir.
+        cur = await conn.execute(
+            """
+            SELECT id FROM tareas
+            WHERE borrado_en IS NULL
+              AND estado = 'pendiente'
+              AND titulo = %s
+              AND vence_en IS NOT DISTINCT FROM %s
+            ORDER BY id DESC LIMIT 1
+            """,
+            (titulo, cuando),
+        )
+    else:  # eventos — no tienen `estado`; "pendiente" = vivo (no borrado)
+        cur = await conn.execute(
+            """
+            SELECT id FROM eventos
+            WHERE borrado_en IS NULL
+              AND titulo = %s
+              AND inicia_en = %s
+            ORDER BY id DESC LIMIT 1
+            """,
+            (titulo, cuando),
+        )
+    row = await cur.fetchone()
+    if row is None:
+        return None
+    registro_id = row[0]
+
+    cur = await conn.execute(
+        """
+        SELECT id FROM log_acciones
+        WHERE tabla = %s AND registro_id = %s AND accion = 'crear'
+        ORDER BY id DESC LIMIT 1
+        """,
+        (tabla, registro_id),
+    )
+    log_row = await cur.fetchone()
+    return registro_id, (log_row[0] if log_row else None)
+
+
 async def crear_desde_interpretacion(
     bandeja_id: int, r: dict, motivo: str | None = None
 ) -> tuple[str, int, int]:
@@ -117,6 +180,11 @@ async def crear_desde_interpretacion(
     async with db.pool.connection() as conn:
         if clas == "tarea":
             tabla = "tareas"
+            ya = await _duplicado_pendiente(conn, tabla, titulo, cuando)
+            if ya is not None:
+                # El agente la re-pidió; ya existía. Se devuelve la de antes
+                # sin crear otra ni escribir un log nuevo.
+                return tabla, ya[0], ya[1]
             cur = await conn.execute(
                 """
                 INSERT INTO tareas
@@ -131,6 +199,9 @@ async def crear_desde_interpretacion(
 
         elif clas == "cita":
             tabla = "eventos"
+            ya = await _duplicado_pendiente(conn, tabla, titulo, cuando)
+            if ya is not None:
+                return tabla, ya[0], ya[1]
             dur = int(r.get("duracion_min") or 0)
             termina = cuando + timedelta(minutes=dur) if dur > 0 else None
             cur = await conn.execute(
