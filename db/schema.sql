@@ -113,6 +113,7 @@ CREATE TABLE tareas (
   pospuesta_veces INT NOT NULL DEFAULT 0,          -- alimenta "bolas que se caen" (req 28)
   completado_en   TIMESTAMPTZ,
   avisos_enviados INT[] NOT NULL DEFAULT '{}',      -- minutos-antes ya avisados: {30,0} = avisó a -30 y a la hora
+  anticipos_min   INT[] NOT NULL DEFAULT '{0}',     -- minutos-antes a avisar (por fila): {0}=solo a la hora; {30,0}=30' antes y a la hora
   borrado_en      TIMESTAMPTZ
 );
 
@@ -128,6 +129,7 @@ CREATE TABLE eventos (
   proyecto_id  BIGINT REFERENCES proyectos(id),
   notas        TEXT,
   avisos_enviados INT[] NOT NULL DEFAULT '{}',   -- minutos-antes ya avisados: {30,0} = avisó a -30 y a la hora
+  anticipos_min INT[] NOT NULL DEFAULT '{0}',    -- minutos-antes a avisar (por fila): {0}=solo a la hora; {30,0}=30' antes y a la hora
   preaviso_en  TIMESTAMPTZ,                      -- ya se preguntó "¿desde dónde salís?"
                                                  --   (solo citas con lugar, ~2h antes)
   -- Nivel 4: espejo de Google Calendar. NULL = cita nativa de Lucy (Telegram).

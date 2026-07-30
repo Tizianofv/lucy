@@ -47,6 +47,28 @@ def _fecha(iso: str | None) -> datetime | None:
         return None
 
 
+def _anticipos(v) -> list[int]:
+    """Normaliza los minutos-antes de aviso: garantiza el 0, dedupe, ordena.
+
+    El 0 (la campanada a la hora exacta) SIEMPRE está: es el default y el ancla
+    del recordatorio. Ausente, vacío o ilegible → [0], que es un solo aviso a
+    la hora. Se ordena de mayor a menor —el anticipado primero, la hora al
+    final: [30, 0]— por legibilidad; el despertador no depende del orden (usa
+    `@>`, contención de conjuntos). Negativos y basura se descartan en silencio:
+    un anticipo mal formado no puede robarle a la fila su aviso a la hora.
+    """
+    nums: set[int] = set()
+    for x in (v or []):
+        try:
+            n = int(x)
+        except (TypeError, ValueError):
+            continue
+        if n >= 0:
+            nums.add(n)
+    nums.add(0)
+    return sorted(nums, reverse=True)
+
+
 async def _registrar(
     conn,
     *,
@@ -189,12 +211,12 @@ async def crear_desde_interpretacion(
                 """
                 INSERT INTO tareas
                   (bandeja_id, titulo, detalle, vence_en, recurrencia,
-                   proyecto_id, persona_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id
+                   proyecto_id, persona_id, anticipos_min)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                 """,
                 (bandeja_id, titulo, detalle, cuando,
                  str(r.get("recurrencia") or "").strip() or None,
-                 proyecto_id, persona_id),
+                 proyecto_id, persona_id, _anticipos(r.get("anticipos_min"))),
             )
 
         elif clas == "cita":
@@ -208,11 +230,12 @@ async def crear_desde_interpretacion(
                 """
                 INSERT INTO eventos
                   (bandeja_id, titulo, inicia_en, termina_en, lugar,
-                   persona_id, proyecto_id, notas)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                   persona_id, proyecto_id, notas, anticipos_min)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                 """,
                 (bandeja_id, titulo, cuando, termina, str(r.get("lugar") or "") or None,
-                 persona_id, proyecto_id, detalle),
+                 persona_id, proyecto_id, detalle,
+                 _anticipos(r.get("anticipos_min"))),
             )
 
         elif clas in ("nota", "idea"):

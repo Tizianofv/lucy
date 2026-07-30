@@ -8,8 +8,9 @@ mentira que no se pudiera: Telegram deja que el bot escriba primero. Nadie le
 había construido esa parte.
 
 Esta es esa parte. Mira el reloj cada media vuelta del bucle y avisa de cada
-tarea con hora y cada cita, en los momentos que fija ANTICIPOS_MIN (hoy: un
-rato antes y al pie de la hora). `avisos_enviados` guarda qué campanadas ya
+tarea con hora y cada cita, en los momentos que fija la columna `anticipos_min`
+de CADA fila (default: {0} = una sola campanada a la hora exacta; el anticipado
+es opt-in por recordatorio). `avisos_enviados` guarda qué campanadas ya
 sonaron, para que cada una suene UNA sola vez: el pilar de silencio inteligente
 aplica más que nunca cuando Lucy es la que inicia — cada interrupción tiene que
 ganarse el derecho a existir, y una alarma repetida es la forma más rápida de
@@ -34,16 +35,16 @@ from config import TZ
 
 log = logging.getLogger("lucy.despertador")
 
-# En qué momentos se avisa, en minutos ANTES de la hora. Es una lista, no un
-# número, porque Tiziano pidió (23-jul) dos campanadas por evento: una de
-# anticipación y otra al pie de la hora. Poner 0 acá es lo que hace el "también
-# a la hora del evento". Mañana se le puede sumar 1440 (un día antes) o 60 sin
-# tocar nada más: la maquinaria recorre la lista, no un valor fijo.
-#   avisos_enviados (en tareas/eventos) guarda cuáles de estos ya salieron, así
-#   cada campanada suena una sola vez — el pilar de silencio inteligente pesa
-#   doble cuando Lucy habla sin que le hablen.
-ANTICIPOS_MIN = (30, 0)
-ANTICIPO_MAX = max(ANTICIPOS_MIN)  # la ventana que hay que mirar hacia adelante
+# En qué momentos se avisa, en minutos ANTES de la hora, es una decisión POR
+# FILA: cada tarea/evento lleva su propia lista en la columna `anticipos_min`.
+# El default de una fila nueva es {0} —una sola campanada, a la hora exacta—
+# porque Tiziano lo pidió así (30-jul): el doble aviso por defecto molestaba.
+# El anticipado es opt-in por recordatorio: "recordámelo 30 min antes" guarda
+# {30,0}; "el día antes", {1440,0}. La maquinaria recorre la lista de CADA
+# fila, así que sumar o quitar un anticipo NO toca este archivo.
+#   avisos_enviados (en tareas/eventos) guarda cuáles de esos minutos-antes ya
+#   salieron, así cada campanada suena una sola vez — el pilar de silencio
+#   inteligente pesa doble cuando Lucy habla sin que le hablen.
 
 # Hasta cuánto DESPUÉS de la hora sigue teniendo sentido avisar. Si Lucy estuvo
 # caída y algo venció hace un rato, "ojo, esto venció a las 3" ayuda; "venció
@@ -58,6 +59,12 @@ GRACIA_MIN = 120
 # 21-jul: "si tengo una reunión a las 3, dos horas antes debería preguntarme
 # dónde estoy".
 PREAVISO_MIN = 120
+
+# Piso de la ventana de preparación de salida: no tiene sentido preparar la
+# salida de una cita que arranca en cinco minutos. 35' da aire para calcular la
+# hora de arranque y crear el recordatorio de salida. (Antes se derivaba de
+# ANTICIPO_MAX+5, que desapareció al volverse los anticipos una lista por-fila.)
+SALIDA_LEAD_MIN = 35
 
 # La ventana del briefing matinal (Nivel 5, req 24): a partir de qué hora se
 # arma, y hasta cuándo tiene sentido mandarlo. Si Lucy estuvo caída toda la
@@ -87,6 +94,19 @@ async def _avisar(bot, texto: str) -> None:
     await db.registrar_aviso(config.CHAT_ID_DUENO, texto)
 
 
+def _campanadas(anticipos, enviados, faltan: int) -> set[int]:
+    """Cuáles de los minutos-antes de una fila deben sonar AHORA.
+
+    Suena una campanada `m` si su momento ya llegó (faltan <= m) y todavía no
+    salió (m not in enviados). Es la decisión pura —sin base ni Telegram—, por
+    eso se puede probar sola. Si Lucy estuvo caída y el evento ya pasó, pueden
+    devolverse varias de una: el bucle manda UN solo mensaje —el de la situación
+    real— y da por sonadas todas las vencidas, para no soltar el "en 30 min"
+    retroactivo al lado del "ya es la hora".
+    """
+    return {m for m in anticipos if m not in enviados and faltan <= m}
+
+
 async def revisar(bot) -> int:
     """Busca lo que está por vencer, avisa, y marca. Devuelve cuántos avisos.
 
@@ -95,32 +115,41 @@ async def revisar(bot) -> int:
     sin marcar y el próximo ciclo lo reintenta solo. Al revés, un fallo de
     envío se comería el recordatorio en silencio — que es exactamente la clase
     de mudez que este módulo vino a matar.
+
+    La ventana de lookahead es POR FILA: cada tarea/evento se mira hasta su
+    anticipo más lejano (max(anticipos_min)), no un techo global. Así un
+    {1440,0} (avisar el día antes) entra a tiempo y un {0} (solo a la hora) no
+    se adelanta.
     """
-    todos = list(ANTICIPOS_MIN)
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
-            # Traemos lo que entró en la ventana de la campanada más lejana y a
-            # lo que le falta AL MENOS una campanada por sonar. `@>` es "contiene":
-            # NOT (avisos_enviados @> todos) = todavía no salieron todas.
+            # Traemos cada fila cuando entra en la ventana de SU campanada más
+            # lejana y todavía le falta al menos una por sonar. `@>` es
+            # "contiene": NOT (avisos_enviados @> anticipos_min) = aún no
+            # salieron todas las de esa fila.
             """
-            SELECT 'tareas' AS tabla, id, titulo, vence_en AS cuando, avisos_enviados
+            SELECT 'tareas' AS tabla, id, titulo, vence_en AS cuando,
+                   avisos_enviados, anticipos_min
               FROM tareas
              WHERE estado = 'pendiente' AND borrado_en IS NULL
                AND vence_en IS NOT NULL
-               AND vence_en <= now() + make_interval(mins => %s)
+               AND vence_en <= now() + make_interval(
+                     mins => (SELECT COALESCE(max(m), 0) FROM unnest(anticipos_min) m))
                AND vence_en >= now() - make_interval(mins => %s)
-               AND NOT (avisos_enviados @> %s::int[])
+               AND NOT (avisos_enviados @> anticipos_min)
             UNION ALL
-            SELECT 'eventos', id, titulo, inicia_en, avisos_enviados
+            SELECT 'eventos', id, titulo, inicia_en,
+                   avisos_enviados, anticipos_min
               FROM eventos
              WHERE borrado_en IS NULL
-               AND inicia_en <= now() + make_interval(mins => %s)
+               AND inicia_en <= now() + make_interval(
+                     mins => (SELECT COALESCE(max(m), 0) FROM unnest(anticipos_min) m))
                AND inicia_en >= now() - make_interval(mins => %s)
-               AND NOT (avisos_enviados @> %s::int[])
+               AND NOT (avisos_enviados @> anticipos_min)
              ORDER BY cuando
             """,
-            (ANTICIPO_MAX, GRACIA_MIN, todos, ANTICIPO_MAX, GRACIA_MIN, todos),
+            (GRACIA_MIN, GRACIA_MIN),
         )
         filas = await cur.fetchall()
 
@@ -129,13 +158,9 @@ async def revisar(bot) -> int:
         faltan = round(
             (f["cuando"] - datetime.now(timezone.utc)).total_seconds() / 60)
         enviados = set(f["avisos_enviados"] or ())
+        anticipos = f["anticipos_min"] or [0]
 
-        # Campanadas cuyo momento ya llegó (faltan <= minutos-antes) y que aún
-        # no sonaron. Si Lucy estuvo caída y el evento ya pasó, pueden "tocar"
-        # varias de una: mandamos UN solo mensaje —el de la situación real— y
-        # damos por sonadas todas las vencidas, para no disparar el "en 30 min"
-        # retroactivo al lado del "ya es la hora".
-        pendientes = {m for m in ANTICIPOS_MIN if m not in enviados and faltan <= m}
+        pendientes = _campanadas(anticipos, enviados, faltan)
         if not pendientes:
             continue
 
@@ -151,7 +176,7 @@ async def revisar(bot) -> int:
 
         await _avisar(bot, texto)
 
-        nuevos = sorted(enviados | {m for m in ANTICIPOS_MIN if faltan <= m})
+        nuevos = sorted(enviados | {m for m in anticipos if faltan <= m})
         async with db.pool.connection() as conn:
             await conn.execute(
                 f"UPDATE {f['tabla']} SET avisos_enviados = %s WHERE id = %s",
@@ -445,7 +470,7 @@ async def _preparar_salidas(bot) -> int:
                AND inicia_en <= now() + make_interval(mins => %s)
              ORDER BY inicia_en
             """,
-            (ANTICIPO_MAX + 5, PREAVISO_MIN),
+            (SALIDA_LEAD_MIN, PREAVISO_MIN),
         )
         filas = await cur.fetchall()
 
