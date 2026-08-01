@@ -814,6 +814,11 @@ async def vigilar_911(bot) -> int:
     Solo esto interrumpe. Si encuentra algo, avisa AL MOMENTO y lo deja como
     encargo para que el agente lo cuente con criterio; el resto del correo ni
     se toca — sigue esperando tranquilo al reporte de la mañana.
+
+    EXENTO de la regla de tarifa doble de DeepSeek, a propósito: la detección
+    en sí no gasta IA (mira remitente y asunto), y el encargo que sale cuando
+    encuentra algo es una emergencia. Aplazar tres horas el aviso de que se
+    cayó producción para ahorrar medio centavo es un mal negocio con nombre.
     """
     if not config.CORREO_CUENTAS:
         return 0
@@ -885,6 +890,14 @@ async def reporte_diario() -> int:
         return 0
     ahora = datetime.now(TZ)
     if not (REPORTE_DESDE <= ahora.hour < REPORTE_HASTA):
+        return 0
+    # Guarda dura de tarifa doble: este reporte clasifica con DeepSeek UNA
+    # llamada por correo, así que es el gasto automático más grande del día.
+    # Su ventana (7–12) ya es barata, y por eso esto hoy nunca dispara — está
+    # justamente para el día en que alguien mueva REPORTE_HASTA sin acordarse
+    # de la regla. La ventana dice CUÁNDO conviene; esto dice cuándo no se puede.
+    if config.es_horario_caro_deepseek(ahora):
+        log.info("Reporte de correo aplazado: tarifa doble de DeepSeek.")
         return 0
     hoy = ahora.date()
 

@@ -78,9 +78,26 @@ BRIEFING_HASTA = 12  # mediodía
 # que quedó colgado lo reubica en la semana que arranca — sin informes de
 # lo que no se hizo. "No quiero que me lo informe: si faltó algo, que lo
 # ponga en la nueva semana."
+#
+# ⚠️ HORARIO MOVIDO (1-ago-2026): era 21:00–24:00, que cae ENTERO adentro de la
+# franja de tarifa doble de DeepSeek (21:00–00:00). Es el único trabajo
+# automático de Lucy que gastaba IA ahí. Ahora sale a las 20:00 y la ventana
+# cierra a las 21:00, justo cuando abre lo caro. Se corrió hacia ATRÁS y no
+# hacia adelante a propósito: el plan es de la noche del domingo, y empujarlo
+# al lunes lo volvería un informe de una semana ya empezada.
 SEMANAL_DIA = 6      # domingo (weekday() de Python: lunes=0 … domingo=6)
-SEMANAL_DESDE = 21   # 9:00 PM — lo pidió Tiziano así (22-jul)
-SEMANAL_HASTA = 24   # la medianoche cierra sola: el lunes ya no es SEMANAL_DIA
+SEMANAL_DESDE = 20   # 8:00 PM
+SEMANAL_HASTA = 21   # cierra JUSTO cuando abre la tarifa doble
+
+# El rescate: una ventana de una hora es angosta, y si Lucy está caída o
+# redesplegando justo ahí el plan de la semana se perdería entero hasta el
+# domingo siguiente. Diferir no puede significar perder. Así que lo que no
+# salió el domingo sale el lunes temprano, ya en horario barato (las 06:00 son
+# el primer minuto sin recargo). El encargo se adapta: el lunes la semana no
+# "arranca mañana", arranca hoy.
+SEMANAL_RESCATE_DIA = 0      # lunes
+SEMANAL_RESCATE_DESDE = 6    # 6:00 AM
+SEMANAL_RESCATE_HASTA = 9    # 9:00 AM: más tarde ya pisa el briefing matinal
 
 
 async def _avisar(bot, texto: str) -> None:
@@ -198,8 +215,40 @@ async def revisar(bot) -> int:
     return avisos
 
 
+def _toca_semanal(ahora: datetime) -> bool:
+    """¿Este momento es hora de dejar el encargo del plan semanal?
+
+    Decisión pura (sin base ni Telegram), por eso se puede probar sola. Tres
+    condiciones, en este orden:
+
+    1. NUNCA dentro de una franja de tarifa doble de DeepSeek. Es una guarda
+       dura y va primero a propósito: si mañana alguien mueve las constantes de
+       arriba a un horario caro, esto lo frena igual. Una regla que solo vive
+       en dos números sueltos es una regla que se pierde en el próximo ajuste.
+    2. Domingo en la ventana normal (20:00–21:00), que es el caso de siempre.
+    3. Lunes temprano en la ventana de rescate, para lo que no salió el domingo
+       porque Lucy estuvo caída.
+    """
+    if config.es_horario_caro_deepseek(ahora):
+        return False
+    if ahora.weekday() == SEMANAL_DIA:
+        return SEMANAL_DESDE <= ahora.hour < SEMANAL_HASTA
+    if ahora.weekday() == SEMANAL_RESCATE_DIA:
+        return SEMANAL_RESCATE_DESDE <= ahora.hour < SEMANAL_RESCATE_HASTA
+    return False
+
+
+# Cuánto hacia atrás se mira para saber si el plan de ESTA semana ya salió.
+# Antes se miraba "desde las 00:00 de hoy", que alcanzaba cuando la única
+# ventana era la del domingo. Con el rescate del lunes ya no: el encargo del
+# domingo 20:00 y el rescate del lunes 06:00 son días distintos, y un corte por
+# medianoche los dejaría mandar el plan dos veces. 24 horas cubre esas 10 horas
+# de distancia de sobra y sigue lejísimos del plan de la semana pasada.
+SEMANAL_DEDUPE_H = 24
+
+
 async def _semanal() -> int:
-    """Deja el encargo del plan semanal, los domingos a la tarde.
+    """Deja el encargo del plan semanal, el domingo por la noche.
 
     Mismo patrón que el briefing: este módulo mira el reloj, el agente
     piensa. La diferencia está en el encargo: acá Lucy primero ORDENA la
@@ -207,12 +256,10 @@ async def _semanal() -> int:
     solo del futuro.
     """
     ahora = datetime.now(TZ)
-    if ahora.weekday() != SEMANAL_DIA:
-        return 0
-    if not (SEMANAL_DESDE <= ahora.hour < SEMANAL_HASTA):
+    if not _toca_semanal(ahora):
         return 0
 
-    hoy_arranca = ahora.replace(hour=0, minute=0, second=0, microsecond=0)
+    desde = ahora - timedelta(hours=SEMANAL_DEDUPE_H)
     async with db.pool.connection() as conn:
         cur = await conn.execute(
             """
@@ -222,23 +269,40 @@ async def _semanal() -> int:
                AND creado_en >= %s
              LIMIT 1
             """,
-            (hoy_arranca,),
+            (desde,),
         )
         if await cur.fetchone() is not None:
             return 0
 
+    rescate = ahora.weekday() == SEMANAL_RESCATE_DIA
     await db.guardar_en_bandeja(
         tipo_entrada="sistema",
-        contenido_raw=ENCARGO_SEMANAL,
+        contenido_raw=_encargo_semanal(rescate),
         chat_id=config.CHAT_ID_DUENO,
         origen="despertador",
     )
-    log.info("Encargo del plan semanal dejado en la bandeja.")
+    log.info("Encargo del plan semanal dejado en la bandeja%s.",
+             " (rescate del lunes)" if rescate else "")
     return 1
 
 
+def _encargo_semanal(rescate: bool = False) -> str:
+    """El encargo del plan semanal. En el rescate del lunes, la semana ya arrancó.
+
+    Es un detalle de una línea, pero de los que delatan a un robot: mandar el
+    lunes a las 6 AM un "prepará la semana que arranca mañana lunes" hace que
+    todo lo que siga se lea como escrito por un cron.
+
+    Va por `{cuando}` y no por un reemplazo de texto a propósito: si alguien
+    reescribe el encargo y se lleva puesto el hueco, esto revienta al toque en
+    vez de mandar callado el día equivocado.
+    """
+    return ENCARGO_SEMANAL.format(
+        cuando="arranca hoy lunes" if rescate else "arranca mañana lunes")
+
+
 ENCARGO_SEMANAL = (
-    "Prepará la semana que arranca mañana lunes. En DOS tiempos:\n"
+    "Prepará la semana que {cuando}. En DOS tiempos:\n"
     "PRIMERO, ordená la casa vos sola, sin contarle nada: consultá las "
     "tareas vencidas sin hacer y las estancadas, y a cada una que siga "
     "teniendo sentido ponele con editar una fecha nueva dentro de la semana "
@@ -457,6 +521,12 @@ async def _preparar_salidas(bot) -> int:
     responder ninguna pregunta; si le falta algo, que pregunte como siempre".
 
     Cada pieza en su oficio: este módulo mira el reloj, el agente piensa.
+
+    EXENTO de la regla de tarifa doble de DeepSeek, a propósito: la hora no la
+    elige Lucy, la elige la cita. Un encargo de salida aplazado hasta que baje
+    la tarifa llega cuando Tiziano ya debería estar manejando — no ahorra, no
+    sirve. Lo mismo vale para los recordatorios de `revisar`, que además no
+    gastan IA: son texto armado acá.
     """
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)

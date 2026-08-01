@@ -57,6 +57,14 @@ async def indexar_pendientes() -> int:
     Corre como rama lateral del bucle: si falla, la comprensión no se entera.
     Solo toma filas en estados finales — indexar algo a medio procesar sería
     fotografiar una conversación por la mitad.
+
+    NO lleva la guarda de tarifa doble de DeepSeek (config.es_horario_caro_
+    deepseek), y la ausencia es deliberada: esto es el único ciclo automático
+    de Lucy que corre 24/7 gastando IA, pero la IA que gasta es de OpenAI
+    (text-embedding-3-small), que cobra igual a toda hora. Aplazarlo siete
+    horas por día no ahorraría un centavo y dejaría la memoria semántica ciega
+    a lo hablado de noche. Si algún día el indexado pasa a DeepSeek, ACÁ va la
+    guarda — y con ella un test de que lo diferido no se pierde.
     """
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
