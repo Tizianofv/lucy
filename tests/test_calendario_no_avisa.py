@@ -109,8 +109,8 @@ class FakeConn:
     """Registra los SQL emitidos. `filas` es lo que devuelve el SELECT grande.
 
     Las filas se sirven UNA sola vez, al primer cursor. `revisar` sigue con sus
-    ramas laterales (salidas, briefing, semanal, recurrentes) y esas tienen que
-    ver una base vacía: acá probamos los avisos, no ellas.
+    ramas laterales (briefing, semanal, recurrentes) y esas tienen que ver una
+    base vacía: acá probamos los avisos, no ellas.
     """
 
     def __init__(self, filas=None):
@@ -165,16 +165,22 @@ class FakePool:
 def _instalar(conn):
     """Pone la base falsa y calla las ramas laterales de `revisar`.
 
-    guardar_en_bandeja se stubea para que el briefing y el plan semanal no
-    dependan de a qué hora se corran los tests.
+    guardar_en_bandeja se stubea (y se CAPTURA en `conn.encargos`) para que el
+    briefing y el plan semanal no dependan de a qué hora se corran los tests, y
+    para poder mirar qué encargos deja el despertador.
     """
     db.pool = FakePool(conn)
+    conn.encargos = []
 
     async def _nada(*a, **k):
         return None
 
+    async def _capturar(**k):
+        conn.encargos.append(k.get("contenido_raw", ""))
+        return None
+
     db.registrar_aviso = _nada
-    db.guardar_en_bandeja = _nada
+    db.guardar_en_bandeja = _capturar
 
 
 class _BotFalso:
@@ -341,7 +347,39 @@ async def test_un_anticipo_pedido_sobre_una_cita_de_google_vuelve_a_sonar():
     assert "Clases Itla" in bot.enviados[0]["text"]
 
 
+# ---------------------------------------------------------------------------
+# 6) El encargo de salida se ELIMINÓ (13-ago-2026)
+# ---------------------------------------------------------------------------
+async def test_no_queda_encargo_de_salida():
+    """Una cita con lugar dentro de la vieja ventana NO genera ningún encargo.
+
+    Hasta el 13-ago-2026, ~2h antes de una cita con lugar el despertador dejaba
+    un "Prepará la salida" que hacía a Lucy calcular ruta y tráfico y avisar a
+    qué hora arrancar. Tiziano lo mandó a quitar entero: "lo de Lucy de calcular
+    el tráfico lo quitas también... creo que no es útil".
+
+    Este test es el que se entera si alguien lo revive sin querer. Ojo con la
+    frontera: lo que murió es que Lucy hable PRIMERO. Las herramientas `viaje`
+    y `buscar_lugar` siguen vivas para cuando él PREGUNTA.
+    """
+    conn = FakeConn(filas=[])
+    _instalar(conn)
+    await despertador.revisar(_BotFalso())
+
+    assert not hasattr(despertador, "_preparar_salidas"), (
+        "_preparar_salidas volvió a existir: el encargo de salida se eliminó")
+    for c in (getattr(despertador, "PREAVISO_MIN", None),
+              getattr(despertador, "SALIDA_LEAD_MIN", None)):
+        assert c is None, "las constantes del encargo de salida se eliminaron"
+
+    salidas = [e for e in conn.encargos if "salida" in e.lower()]
+    assert salidas == [], f"el despertador dejó un encargo de salida: {salidas}"
+    assert not any("preaviso_en" in s for s, _ in conn.sqls), (
+        "preaviso_en quedó huérfana: nadie debería leerla ni escribirla")
+
+
 _TESTS = [
+    test_no_queda_encargo_de_salida,
     test_evento_de_google_entra_sin_campanadas,
     test_el_resync_no_pisa_un_recordatorio_pedido_a_mano,
     test_la_query_filtra_las_filas_sin_campanadas,

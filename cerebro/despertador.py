@@ -55,18 +55,15 @@ log = logging.getLogger("lucy.despertador")
 # retroactiva de golpe. La avalancha es justo lo que el despertador vino a evitar.
 GRACIA_MIN = 120
 
-# Cuánto antes se PREPARA una cita con lugar: la pregunta de salida ("¿desde
-# dónde vas a salir?") sale con este margen, para que dé tiempo a calcular la
-# hora de arrancar y crear el recordatorio de salida. Pedido de Tiziano,
-# 21-jul: "si tengo una reunión a las 3, dos horas antes debería preguntarme
-# dónde estoy".
-PREAVISO_MIN = 120
-
-# Piso de la ventana de preparación de salida: no tiene sentido preparar la
-# salida de una cita que arranca en cinco minutos. 35' da aire para calcular la
-# hora de arranque y crear el recordatorio de salida. (Antes se derivaba de
-# ANTICIPO_MAX+5, que desapareció al volverse los anticipos una lista por-fila.)
-SALIDA_LEAD_MIN = 35
+# El encargo de salida MURIÓ el 13-ago-2026. Vivía acá: ~2h antes de una cita
+# con lugar, Lucy calculaba la ruta con el tráfico del momento y le decía a qué
+# hora arrancar ("salí 2:05 desde CDS"). Lo pidió Tiziano el 21-jul y lo mandó
+# a quitar él mismo: "lo de Lucy de calcular el tráfico lo quitas también, pero
+# no solo quita que lo pida sino toda esa programación, creo que no es útil".
+# Con él se fueron PREAVISO_MIN, SALIDA_LEAD_MIN y _preparar_salidas.
+# Lo que NO se fue: `viaje` y `buscar_lugar` siguen siendo herramientas del
+# agente, así que si él PREGUNTA "¿cuánto tardo en llegar?" Lucy contesta con
+# el tráfico real. Se murió el aviso automático, no la capacidad de responder.
 
 # La ventana del briefing matinal (Nivel 5, req 24): a partir de qué hora se
 # arma, y hasta cuándo tiene sentido mandarlo. Si Lucy estuvo caída toda la
@@ -227,7 +224,6 @@ async def revisar(bot) -> int:
         log.info("Aviso enviado: %s#%s (%s, faltan %s)",
                  f["tabla"], f["id"], f["titulo"], faltan)
 
-    avisos += await _preparar_salidas(bot)
     avisos += await _briefing()
     avisos += await _semanal()
     await _reprogramar_recurrentes()
@@ -472,7 +468,7 @@ async def _reprogramar_recurrentes() -> int:
 async def _briefing() -> int:
     """Deja el encargo del briefing una vez por día, en la ventana matinal.
 
-    Mismo patrón que las salidas: este módulo solo mira el reloj, el agente
+    Cada pieza en su oficio: este módulo solo mira el reloj, el agente
     piensa. El encargo cae en la bandeja como [sistema], y el agente consulta
     la agenda REAL y redacta el resumen — acá no se arma ningún texto de
     briefing, porque armarlo sin mirar los datos sería opinar sin consultar.
@@ -526,67 +522,3 @@ async def _briefing() -> int:
     )
     log.info("Encargo del briefing matinal dejado en la bandeja.")
     return 1
-
-
-async def _preparar_salidas(bot) -> int:
-    """Citas con lugar se preparan ~2h antes (reqs 22/26) — SIN preguntar.
-
-    El despertador no le habla a Tiziano: le deja un ENCARGO al agente en la
-    bandeja (tipo 'sistema'). El agente lo toma como cualquier mensaje, junta
-    lo que ya sabe —última ubicación, lugares con nombre, rutas guardadas—
-    y le habla a Tiziano una sola vez, con la respuesta: "salí 2:05 desde
-    CDS". Solo pregunta si de verdad le falta algo. Pedido explícito de
-    Tiziano (21-jul): "debería decírmelo por su cuenta, sin que yo tenga que
-    responder ninguna pregunta; si le falta algo, que pregunte como siempre".
-
-    Cada pieza en su oficio: este módulo mira el reloj, el agente piensa.
-
-    EXENTO de la regla de tarifa doble de DeepSeek, a propósito: la hora no la
-    elige Lucy, la elige la cita. Un encargo de salida aplazado hasta que baje
-    la tarifa llega cuando Tiziano ya debería estar manejando — no ahorra, no
-    sirve. Lo mismo vale para los recordatorios de `revisar`, que además no
-    gastan IA: son texto armado acá.
-    """
-    async with db.pool.connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(
-            """
-            SELECT id, titulo, lugar, inicia_en
-              FROM eventos
-             WHERE borrado_en IS NULL AND preaviso_en IS NULL
-               AND lugar IS NOT NULL AND lugar <> ''
-               AND inicia_en >  now() + make_interval(mins => %s)
-               AND inicia_en <= now() + make_interval(mins => %s)
-             ORDER BY inicia_en
-            """,
-            (SALIDA_LEAD_MIN, PREAVISO_MIN),
-        )
-        filas = await cur.fetchall()
-
-    for f in filas:
-        hora = f["inicia_en"].astimezone(TZ).strftime("%I:%M %p").lstrip("0")
-        encargo = (
-            f"Prepará la salida para la cita #{f['id']}: «{f['titulo']}» en "
-            f"{f['lugar']} a las {hora}. Averiguá desde dónde sale (ubicacion "
-            f"/ lugares) y cuánto tarda (notas con etiqueta 'ruta'); creá la "
-            f"tarea «Salir para {f['titulo']}» a la hora correcta y avisale "
-            f"en una línea. Si tenés todo, no le preguntes nada."
-        )
-        await db.guardar_en_bandeja(
-            tipo_entrada="sistema",
-            contenido_raw=encargo,
-            chat_id=config.CHAT_ID_DUENO,
-            origen="despertador",
-        )
-
-        async with db.pool.connection() as conn:
-            await conn.execute(
-                "UPDATE eventos SET preaviso_en = now() WHERE id = %s", (f["id"],))
-            await crud._registrar(
-                conn, accion="avisar", tabla="eventos", registro_id=f["id"],
-                motivo=f"Encargo de salida al agente: {f['titulo']} en "
-                       f"{f['lugar']} ({hora})",
-            )
-        log.info("Encargo de salida: eventos#%s (%s)", f["id"], f["titulo"])
-
-    return len(filas)

@@ -72,8 +72,9 @@ CHAT_ID_DUENO = int(os.environ["CHAT_ID_DUENO"])
 # sea. Hacerlo esperar para ahorrar centavos sería cobrarle el ahorro en su
 # tiempo, que es justo lo que Lucy existe para no hacer. Tampoco se difiere una
 # emergencia (la vigilancia 911 del correo) ni nada atado a un compromiso con
-# hora fija (el preaviso de salida de una cita): diferirlos no ahorra, los
-# rompe.
+# hora fija: diferirlos no ahorra, los rompe. (El ejemplo de esto último era el
+# preaviso de salida de una cita, que murió el 13-ago-2026; el principio sigue
+# valiendo para lo próximo que se ate a una hora que Lucy no elige.)
 #
 # Formato: (hora_desde, hora_hasta) en HORAS LOCALES, con el `hasta` EXCLUSIVO.
 VENTANAS_CARAS_DEEPSEEK = ((21, 24), (2, 6))
