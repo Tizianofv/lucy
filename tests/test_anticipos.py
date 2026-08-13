@@ -4,6 +4,11 @@ Cubren las tres piezas del cambio del 30-jul (default = un solo aviso a la hora;
 anticipado opt-in por fila):
   · crud._anticipos: normalización (garantiza el 0, dedupe, orden, basura).
   · crud.crear_desde_interpretacion: qué anticipos_min termina en el INSERT.
+  · crud.editar: el MISMO invariante por el otro camino (13-ago-2026). Editar
+    era el agujero: "recordámelo 30 min antes" sobre algo que ya existe guardaba
+    {30} sin el 0, y esa fila no volvía a sonar a la hora. Acá se ata, junto con
+    su excepción: la lista VACÍA sigue significando silencio (los eventos
+    espejados de Google), y la normalización NO puede convertirla en {0}.
   · despertador._campanadas: la decisión pura de qué campanada suena ahora,
     incluida la ventana por-fila (un {1440,0} dispara a tiempo, un {0} no se
     adelanta) y la fila vieja (que llega con {0} por el default de la columna).
@@ -172,6 +177,29 @@ def test_basura_no_roba_la_campanada_a_la_hora():
     assert crud._anticipos(["30", 60]) == [60, 30, 0]  # strings numéricas valen
 
 
+def test_escalar_suelto_es_un_anticipo_no_una_lista_de_digitos():
+    # Un "30" sin corchetes es UN anticipo. Leído como iterable daría [3, 0]:
+    # basura silenciosa justo donde el helper promete que no la hay.
+    assert crud._anticipos(30) == [30, 0]
+    assert crud._anticipos("30") == [30, 0]
+
+
+def test_vacio_es_silencio_solo_cuando_se_pide():
+    # Al CREAR, vacío = "no me dijeron nada" = el default, que suena.
+    assert crud._anticipos([]) == [0]
+    # Al EDITAR, vacío = una decisión: esta fila no avisa nunca. Es como están
+    # los 48 eventos espejados de Google desde el 13-ago; volverlos a [0] sería
+    # reencender exactamente lo que se apagó.
+    assert crud._anticipos([], vacio_es_silencio=True) == []
+    assert crud._anticipos((), vacio_es_silencio=True) == []
+    # Un null no es una lista vacía: no es una decisión, es un dato que falta.
+    # Gana el invariante (y la columna es NOT NULL, así que [] tampoco serviría
+    # de excusa para escribir NULL ahí).
+    assert crud._anticipos(None, vacio_es_silencio=True) == [0]
+    # Y con contenido, la excepción no cambia nada: el 0 se garantiza igual.
+    assert crud._anticipos([30], vacio_es_silencio=True) == [30, 0]
+
+
 # ---------------------------------------------------------------------------
 # 4) Qué anticipos_min llega al INSERT (crud.crear_desde_interpretacion)
 # ---------------------------------------------------------------------------
@@ -200,6 +228,139 @@ async def test_crear_cita_con_dia_antes_inserta_1440_0():
         1, {"clasificacion": "cita", "titulo": "Dentista",
             "cuando": "2026-08-02T15:00:00", "anticipos_min": [1440, 0]})
     assert conn.anticipos_insertados == [1440, 0]
+
+
+# ---------------------------------------------------------------------------
+# 4bis) El mismo invariante por el camino de EDITAR (crud.editar)
+#
+# El agujero del 13-ago: `editar` armaba el UPDATE con los cambios crudos, así
+# que un {"anticipos_min": [30]} entraba sin pasar por _anticipos. Estos tests
+# miran lo único que importa — qué valor llega a la columna en el UPDATE.
+# ---------------------------------------------------------------------------
+class _CurEditar:
+    """Cursor de la fila: sirve los SELECT * (antes y después del UPDATE)."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._row = None
+
+    async def execute(self, sql, params=None):
+        s = " ".join(sql.split())
+        if not s.startswith("SELECT * FROM"):
+            raise AssertionError(f"SQL no modelado por _CurEditar: {s[:90]}")
+        self._row = dict(self._conn.fila)
+        return self
+
+    async def fetchone(self):
+        return self._row
+
+
+class FakeConnEditar:
+    """Modela lo justo para crud.editar sobre UNA fila viva.
+
+    Guarda el UPDATE como dict columna→valor (`campos_guardados`): es la única
+    pregunta de estos tests, y mirar el SQL crudo ataría el test a la forma de
+    la cadena en vez de a la decisión.
+    """
+
+    def __init__(self, fila):
+        self.fila = dict(fila)
+        self.campos_guardados: dict | None = None
+        self._logid = 2000
+
+    def cursor(self, row_factory=None):
+        return _CurEditar(self)
+
+    async def execute(self, sql, params=None):
+        s = " ".join(sql.split())
+        p = params or ()
+
+        if s.startswith("UPDATE"):
+            asignaciones = s.split(" SET ", 1)[1].split(" WHERE ")[0]
+            columnas = [a.split("=")[0].strip() for a in asignaciones.split(", ")]
+            self.campos_guardados = dict(zip(columnas, p))
+            self.fila.update(self.campos_guardados)  # el SELECT de después lo ve
+            return _Cur(None)
+
+        if s.startswith("INSERT INTO log_acciones"):
+            self._logid += 1
+            return _Cur((self._logid,))
+
+        raise AssertionError(f"SQL no modelado por FakeConnEditar: {s[:90]}")
+
+
+def _fila_tarea(**extra):
+    fila = {"id": 69, "bandeja_id": 1, "titulo": "Cambiar el bombillo",
+            "detalle": None, "vence_en": datetime(2026, 8, 20, 14, 0),
+            "estado": "pendiente", "recurrencia": None, "pospuesta_veces": 0,
+            "anticipos_min": [0], "avisos_enviados": [], "borrado_en": None,
+            "creado_en": datetime(2026, 8, 1, 9, 0)}
+    fila.update(extra)
+    return fila
+
+
+def _fila_evento(**extra):
+    fila = {"id": 12, "bandeja_id": None, "titulo": "Sesión Sala A",
+            "inicia_en": datetime(2026, 8, 20, 9, 0), "termina_en": None,
+            "lugar": None, "notas": None, "anticipos_min": [],
+            "avisos_enviados": [], "gcal_id": "abc123", "borrado_en": None,
+            "creado_en": datetime(2026, 8, 1, 9, 0)}
+    fila.update(extra)
+    return fila
+
+
+async def test_editar_30_min_antes_no_pierde_la_campanada_a_la_hora():
+    # EL AGUJERO. "Recordámelo 30 minutos antes" sobre algo que ya existe es
+    # una edición: antes guardaba [30] y esa tarea no volvía a sonar a la hora.
+    conn = FakeConnEditar(_fila_tarea())
+    _instalar(conn)
+    await crud.editar("tareas", 69, {"anticipos_min": [30]}, motivo="test")
+    assert conn.campos_guardados["anticipos_min"] == [30, 0]
+
+
+async def test_editar_normaliza_dedup_y_orden():
+    conn = FakeConnEditar(_fila_tarea())
+    _instalar(conn)
+    await crud.editar("tareas", 69, {"anticipos_min": [0, 60, 60, 30]}, motivo="t")
+    assert conn.campos_guardados["anticipos_min"] == [60, 30, 0]
+
+
+async def test_editar_basura_no_roba_la_campanada_a_la_hora():
+    conn = FakeConnEditar(_fila_tarea())
+    _instalar(conn)
+    await crud.editar("tareas", 69, {"anticipos_min": [-5, "x"]}, motivo="t")
+    assert conn.campos_guardados["anticipos_min"] == [0]
+
+
+async def test_editar_no_convierte_el_silencio_de_google_en_campanada():
+    # La contracara, y es la que puede doler: un evento espejado de Google vive
+    # con anticipos_min = [] a propósito (13-ago). Apagarlo a mano tiene que
+    # seguir siendo posible; normalizar a [0] reencendería los 48 avisos
+    # duplicados que Tiziano pidió apagar.
+    conn = FakeConnEditar(_fila_evento(anticipos_min=[30, 0]))
+    _instalar(conn)
+    await crud.editar("eventos", 12, {"anticipos_min": []}, motivo="t")
+    assert conn.campos_guardados["anticipos_min"] == []
+
+
+async def test_editar_enciende_una_cita_de_google_si_la_pide():
+    # El camino inverso, el que promete el prompt del agente: sobre una cita de
+    # Google muda, editar {"anticipos_min": [30]} la vuelve a encender — con su
+    # 0 incluido, como cualquier otra fila.
+    conn = FakeConnEditar(_fila_evento())
+    _instalar(conn)
+    await crud.editar("eventos", 12, {"anticipos_min": [30]}, motivo="t")
+    assert conn.campos_guardados["anticipos_min"] == [30, 0]
+
+
+async def test_editar_no_inventa_anticipos_en_otras_ediciones():
+    # editar es genérico para ocho tablas: la normalización toca SOLO esa
+    # columna y solo cuando viene. Un cambio de título no puede arrastrar un
+    # anticipos_min al UPDATE.
+    conn = FakeConnEditar(_fila_tarea(anticipos_min=[30]))
+    _instalar(conn)
+    await crud.editar("tareas", 69, {"titulo": "Otro título"}, motivo="t")
+    assert conn.campos_guardados == {"titulo": "Otro título"}
 
 
 # ---------------------------------------------------------------------------
@@ -241,9 +402,17 @@ _TESTS = [
     test_treinta_min_antes,
     test_normaliza_dedup_y_orden,
     test_basura_no_roba_la_campanada_a_la_hora,
+    test_escalar_suelto_es_un_anticipo_no_una_lista_de_digitos,
+    test_vacio_es_silencio_solo_cuando_se_pide,
     test_crear_tarea_default_inserta_0,
     test_crear_tarea_con_anticipo_inserta_30_0,
     test_crear_cita_con_dia_antes_inserta_1440_0,
+    test_editar_30_min_antes_no_pierde_la_campanada_a_la_hora,
+    test_editar_normaliza_dedup_y_orden,
+    test_editar_basura_no_roba_la_campanada_a_la_hora,
+    test_editar_no_convierte_el_silencio_de_google_en_campanada,
+    test_editar_enciende_una_cita_de_google_si_la_pide,
+    test_editar_no_inventa_anticipos_en_otras_ediciones,
     test_lookahead_por_fila_dispara_1440_a_tiempo,
     test_default_0_no_se_adelanta,
     test_fila_vieja_default_0_sigue_funcionando,

@@ -47,7 +47,7 @@ def _fecha(iso: str | None) -> datetime | None:
         return None
 
 
-def _anticipos(v) -> list[int]:
+def _anticipos(v, *, vacio_es_silencio: bool = False) -> list[int]:
     """Normaliza los minutos-antes de aviso: garantiza el 0, dedupe, ordena.
 
     El 0 (la campanada a la hora exacta) SIEMPRE está: es el default y el ancla
@@ -56,7 +56,21 @@ def _anticipos(v) -> list[int]:
     final: [30, 0]— por legibilidad; el despertador no depende del orden (usa
     `@>`, contención de conjuntos). Negativos y basura se descartan en silencio:
     un anticipo mal formado no puede robarle a la fila su aviso a la hora.
+
+    `vacio_es_silencio=True` (lo usa `editar`) es la ÚNICA excepción al 0: una
+    lista vacía explícita se respeta como "esta fila no avisa nunca". Eso es lo
+    que significa '{}' desde el 13-ago-2026 —así entran los eventos espejados
+    de Google Calendar, que Google ya recuerda por su cuenta— y también es la
+    forma de apagar un aviso a mano. Al CREAR no aplica y no debe aplicar: ahí
+    "vacío" es "no me dijeron nada", que es el default, y el default suena.
     """
+    if vacio_es_silencio and isinstance(v, (list, tuple, set, frozenset)) and not v:
+        return []
+    # Un escalar suelto es UN anticipo, no una lista. Sin esto, un "30" que
+    # viniera sin corchetes se leería carácter por carácter y daría [3, 0]:
+    # basura silenciosa en vez del anticipo que pidieron.
+    if isinstance(v, (int, float, str)):
+        v = [v]
     nums: set[int] = set()
     for x in (v or []):
         try:
@@ -367,6 +381,23 @@ async def editar(
     campos = {k: _adaptar(v) for k, v in cambios.items() if k not in NO_EDITABLES}
     if not campos:
         raise ValueError("No hay nada que cambiar.")
+
+    # El invariante del 0 vale por ACÁ TAMBIÉN (13-ago-2026). `crear` normaliza
+    # con _anticipos desde el principio; `editar` no lo hacía, y era el camino
+    # más transitado: "recordámelo 30 minutos antes" sobre algo que YA existe
+    # es una edición, no una creación. Llegaba {"anticipos_min": [30]} y se
+    # guardaba tal cual — esa fila avisaba 30' antes y NUNCA a la hora, que es
+    # justo la campanada que el helper existe para garantizar. Se encontró así
+    # en producción (tarea #69, con avisos_enviados={30}: la anticipada sonó, la
+    # de la hora no sonó nunca).
+    #   Se toca SOLO esta columna, por nombre: `editar` es genérico para ocho
+    # tablas y no tiene por qué saber nada del resto. Y con
+    # vacio_es_silencio=True, porque acá una lista VACÍA es una decisión, no un
+    # olvido: convertirla en [0] volvería a encender los eventos espejados de
+    # Google que se apagaron esta misma mañana.
+    if "anticipos_min" in campos:
+        campos["anticipos_min"] = _anticipos(
+            campos["anticipos_min"], vacio_es_silencio=True)
 
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
