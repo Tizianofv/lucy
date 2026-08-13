@@ -155,6 +155,26 @@ async def _guardar(cal: dict, ev: dict) -> None:
 
     Un evento cancelado en Google se archiva acá (soft-delete): la agenda de
     Lucy tiene que reflejar que ya no está, pero sin perder el rastro.
+
+    ⚠️ `anticipos_min = '{}'` (13-ago-2026, pedido de Tiziano): un evento que
+    entra por acá NACE MUDO. La lista vacía es "ninguna campanada", y el
+    despertador ya la saltea sola. La razón es que Google Calendar YA le manda
+    su propio recordatorio: cada aviso de Lucy sobre un evento espejado le
+    llegaba DUPLICADO —eran 2 a 8 por día, casi todos sesiones de las salas—
+    y una alarma repetida es la forma más rápida de que las alarmas se ignoren.
+    Lucy sigue VIENDO estos eventos igual que siempre (briefing, plan semanal,
+    choques, consultas): lo que se apagó es que hable ella sola de ellos.
+
+    Dos detalles que NO son accidentes:
+    · El default de la columna sigue siendo '{0}' y las citas NATIVAS de Lucy
+      —las que Tiziano le pide por Telegram, gcal_id NULL— lo conservan. El
+      silencio se decide por el ORIGEN del evento, no por la maquinaria: los
+      recordatorios propios de Tiziano no se tocan.
+    · `anticipos_min` NO está en el DO UPDATE a propósito. Si Tiziano pide
+      "recordame 30 min antes de esa reunión", el agente le edita la fila y esa
+      elección tiene que SOBREVIVIR al próximo sync (que corre cada pocos
+      minutos). Ponerlo en el UPDATE le borraría el recordatorio que pidió, en
+      silencio y a los minutos — el peor error posible de este cambio.
     """
     gcal_id = ev["id"]
     inicia = _parse_dt(ev.get("start"))
@@ -176,8 +196,8 @@ async def _guardar(cal: dict, ev: dict) -> None:
             """
             INSERT INTO eventos
               (titulo, inicia_en, termina_en, lugar,
-               gcal_id, gcal_cal_id, gcal_calendar)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+               gcal_id, gcal_cal_id, gcal_calendar, anticipos_min)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, '{}')
             ON CONFLICT (gcal_cal_id, gcal_id) WHERE gcal_id IS NOT NULL
             DO UPDATE SET
               titulo = EXCLUDED.titulo, inicia_en = EXCLUDED.inicia_en,

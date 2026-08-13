@@ -8,9 +8,11 @@ mentira que no se pudiera: Telegram deja que el bot escriba primero. Nadie le
 había construido esa parte.
 
 Esta es esa parte. Mira el reloj cada media vuelta del bucle y avisa de cada
-tarea con hora y cada cita, en los momentos que fija la columna `anticipos_min`
-de CADA fila (default: {0} = una sola campanada a la hora exacta; el anticipado
-es opt-in por recordatorio). `avisos_enviados` guarda qué campanadas ya
+tarea con hora y de cada cita PROPIA de Lucy, en los momentos que fija la
+columna `anticipos_min` de CADA fila (default: {0} = una sola campanada a la
+hora exacta; el anticipado es opt-in por recordatorio). Las citas espejadas de
+Google Calendar entran mudas (anticipos_min vacío) porque Google ya manda su
+recordatorio y el de Lucy llegaba duplicado. `avisos_enviados` guarda qué campanadas ya
 sonaron, para que cada una suene UNA sola vez: el pilar de silencio inteligente
 aplica más que nunca cuando Lucy es la que inicia — cada interrupción tiene que
 ganarse el derecho a existir, y una alarma repetida es la forma más rápida de
@@ -137,6 +139,14 @@ async def revisar(bot) -> int:
     anticipo más lejano (max(anticipos_min)), no un techo global. Así un
     {1440,0} (avisar el día antes) entra a tiempo y un {0} (solo a la hora) no
     se adelanta.
+
+    Y una fila con anticipos_min VACÍO no avisa nunca (`cardinality > 0`). Así
+    es como entran los eventos espejados de Google Calendar desde el 13-ago-2026:
+    Google ya manda su propio recordatorio, y el de Lucy le llegaba duplicado.
+    El corte es por el ORIGEN del evento, no por la maquinaria — las tareas de
+    Tiziano y las citas que él le pide a Lucy siguen sonando exactamente igual,
+    y si pide un aviso sobre una cita de Google, editarle anticipos_min la
+    vuelve a encender.
     """
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -151,6 +161,7 @@ async def revisar(bot) -> int:
               FROM tareas
              WHERE estado = 'pendiente' AND borrado_en IS NULL
                AND vence_en IS NOT NULL
+               AND cardinality(anticipos_min) > 0
                AND vence_en <= now() + make_interval(
                      mins => (SELECT COALESCE(max(m), 0) FROM unnest(anticipos_min) m))
                AND vence_en >= now() - make_interval(mins => %s)
@@ -160,6 +171,7 @@ async def revisar(bot) -> int:
                    avisos_enviados, anticipos_min
               FROM eventos
              WHERE borrado_en IS NULL
+               AND cardinality(anticipos_min) > 0
                AND inicia_en <= now() + make_interval(
                      mins => (SELECT COALESCE(max(m), 0) FROM unnest(anticipos_min) m))
                AND inicia_en >= now() - make_interval(mins => %s)
@@ -175,7 +187,14 @@ async def revisar(bot) -> int:
         faltan = round(
             (f["cuando"] - datetime.now(timezone.utc)).total_seconds() / 60)
         enviados = set(f["avisos_enviados"] or ())
-        anticipos = f["anticipos_min"] or [0]
+        # Una lista VACÍA significa "esta fila no avisa" — es como entran los
+        # eventos espejados de Google (ver cerebro/calendario._guardar). La
+        # query ya los deja afuera; esto es el cinturón además del tirante.
+        # ⚠️ No volver a escribir `or [0]` acá: convertiría ese silencio
+        # deliberado en una campanada, que es justo lo que se vino a apagar.
+        anticipos = list(f["anticipos_min"] or ())
+        if not anticipos:
+            continue
 
         pendientes = _campanadas(anticipos, enviados, faltan)
         if not pendientes:
