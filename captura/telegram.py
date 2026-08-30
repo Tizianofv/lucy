@@ -55,36 +55,6 @@ async def recibir_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await _capturar(msg, tipo_entrada="audio", archivo_id=archivo.file_id)
 
 
-async def recibir_ubicacion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Pins y ubicación en vivo. Es lo que le permite a Lucy saber dónde está
-    Tiziano sin preguntar (reqs 22/26).
-
-    La ubicación en vivo llega como EDICIONES del mensaje original, una por
-    latido. Esas se guardan en silencio: confirmar cada latido sería un ✅
-    cada pocos segundos — la muerte por cortesía. Solo el pin inicial recibe
-    respuesta.
-    """
-    msg = update.effective_message
-    loc = msg.location
-    es_latido = update.edited_message is not None
-    await db.guardar_ubicacion(
-        loc.latitude, loc.longitude,
-        en_vivo=es_latido or loc.live_period is not None,
-    )
-    if not es_latido:
-        if loc.live_period:
-            await msg.reply_text(
-                "📍 Ubicación en vivo activa — te sigo mientras dure.")
-        else:
-            # Un pin es una foto del momento: aclaramos que no es seguimiento,
-            # para que no crea que Lucy lo verá moverse (fue la confusión de
-            # Tiziano el 21-jul).
-            await msg.reply_text(
-                "📍 Anoté dónde estás ahora. (Si querés que te siga mientras "
-                "te movés, mandá *Ubicación en tiempo real* desde 📎.)",
-                parse_mode="Markdown")
-
-
 async def recibir_foto(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Fotos: tickets, carteles, tarjetas de visita.
 

@@ -30,7 +30,6 @@ from captura.telegram import (
     recibir_audio,
     recibir_foto,
     recibir_texto,
-    recibir_ubicacion,
 )
 
 logging.basicConfig(
@@ -156,12 +155,6 @@ def main() -> None:
         MessageHandler((filters.VOICE | filters.AUDIO) & solo_dueno, recibir_audio)
     )
     app.add_handler(MessageHandler(filters.PHOTO & solo_dueno, recibir_foto))
-    # UpdateType.MESSAGES incluye mensajes Y ediciones: la ubicación en vivo
-    # llega como ediciones del pin original, un latido por movimiento.
-    app.add_handler(MessageHandler(
-        filters.LOCATION & filters.UpdateType.MESSAGES & solo_dueno,
-        recibir_ubicacion,
-    ))
 
     # Los botones ✅/🗑 de las tarjetas de interpretación. El candado del chat
     # se revisa adentro: los callbacks no pasan por los filtros de mensajes.

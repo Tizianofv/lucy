@@ -140,23 +140,12 @@ HERRAMIENTAS DISPONIBLES:
   es una orden del momento (obedecela y ya), no una regla para guardar. Guardá
   lo que vale para SIEMPRE, no lo de una vez.
 
-· ubicacion  {}
-  Dónde está Tiziano según su última ubicación COMPARTIDA: coordenadas, hace
-  cuántos minutos, y el lugar con nombre en el que cae. OJO — no es un GPS en
-  vivo: es la última vez que él compartió su posición por Telegram.
-   · Fresca (menos de ~30 min): usála sin preguntar.
-   · Vieja o inexistente: NO la des como su posición actual. Decile desde
-     cuándo es y pedile que comparta su ubicación. Y si necesita que lo sepas
-     mientras se mueve (camino a algún lado), explicale que puede mandar
-     "Ubicación en tiempo real": 📎 Adjuntar → Ubicación → "Compartir mi
-     ubicación en tiempo real" → elegí el tiempo. Así te llega sola y no te
-     la vuelve a preguntar mientras dure.
-
 · lugar  {"nombre": "el estudio", "lat": 0, "lon": 0, "radio_m": 300}
-  Nombra un lugar de su mundo. Sin lat/lon usa su última ubicación: cuando
-  diga "estoy en el estudio" (y haya pin reciente) o "guardá este lugar
-  como X", esta es la herramienta. Los lugares con nombre son lo que vuelve
-  útil la ubicación.
+  Nombra un lugar de su mundo con sus coordenadas. lat/lon son OBLIGATORIOS:
+  sacalos de buscar_lugar. Cuando confirme cuál sucursal o dirección es, esta
+  es la herramienta para no volver a preguntárselo nunca más.
+  Lucy NO sabe dónde está Tiziano: no hay rastreo. Si hace falta el punto de
+  partida, se lo preguntás.
 
 · buscar_lugar  {"texto": "la sirena"}
   Busca un lugar por nombre en Google Maps y devuelve varios candidatos, cada
@@ -169,16 +158,17 @@ HERRAMIENTAS DISPONIBLES:
    · NINGUNO → pedile más detalle (sector, avenida).
   Cuando confirme cuál es, ofrecé guardarlo con `lugar` (pasando su lat/lon)
   para no volver a preguntar.
-  "¿CUÁL ME QUEDA MÁS CERCA?" NO es una pregunta para devolverle: es trabajo
-  tuyo. buscar_lugar te da las sucursales con coordenadas y `ubicacion` te da
-  dónde está él; compará y respondé cuál es la más cercana con su tiempo. Y
-  NUNCA listes sucursales de memoria: las de verdad salen de buscar_lugar,
-  las inventadas lo mandan al lugar equivocado.
+  "¿CUÁL ME QUEDA MÁS CERCA?": como no sabés dónde está, preguntale desde
+  dónde sale —una sola pregunta— y después compará con viaje usando las
+  coordenadas de cada candidato. Respondé cuál es la más cercana con su
+  tiempo, no le devuelvas la lista. Y NUNCA listes sucursales de memoria:
+  las de verdad salen de buscar_lugar, las inventadas lo mandan al lugar
+  equivocado.
 
 · viaje  {"destino": "", "desde": "", "dest_lat": 0, "dest_lon": 0}
-  Cuánto se tarda AHORA, con el tráfico real. Sin "desde", parte de su última
-  ubicación. Preferila a las rutas guardadas: el tráfico de hoy le gana a la
-  memoria de la semana pasada.
+  Cuánto se tarda AHORA, con el tráfico real. "desde" es OBLIGATORIO: Lucy no
+  sabe dónde está él, así que preguntáselo si no lo dijo. Preferila a las
+  rutas guardadas: el tráfico de hoy le gana a la memoria de la semana pasada.
   El destino, en orden de preferencia:
    1. dest_lat/dest_lon → coordenadas exactas (de buscar_lugar o de un lugar
       guardado). SIN AMBIGÜEDAD posible: es la mejor opción.
@@ -515,17 +505,6 @@ async def _ejecutar_herramienta(
             que = await crud.deshacer(int(args.get("accion") or 0))
             return f"OK: revertí {que}."
 
-        if nombre == "ubicacion":
-            u = await db.ultima_ubicacion()
-            if u is None:
-                return ("No hay ninguna ubicación compartida todavía. "
-                        "Habría que pedirle un pin.")
-            donde = f"dentro de '{u['lugar']}'" if u["lugar"] else \
-                "en un punto sin lugar con nombre"
-            return (f"Hace {u['hace_min']} min estaba {donde} "
-                    f"(lat {u['lat']:.5f}, lon {u['lon']:.5f}"
-                    f"{', ubicación en vivo' if u['en_vivo'] else ''}).")
-
         if nombre == "lugar":
             resultado, log_id = await crud.guardar_lugar(
                 str(args.get("nombre") or ""),
@@ -646,7 +625,7 @@ async def _ejecutar_herramienta(
 
         return (f"ERROR: no existe la herramienta '{nombre}'. Las que hay: "
                 "consultar, crear, editar, archivar, deshacer, perfil, "
-                "preferencia, correo, ubicacion, lugar, buscar_lugar, viaje, "
+                "preferencia, correo, lugar, buscar_lugar, viaje, "
                 "recordar, preguntar, responder.")
 
     except crud.FaltanDatos as e:

@@ -114,22 +114,17 @@ async def calcular(
                 "cuánto tarda.")
 
     # ── Origen ───────────────────────────────────────────────────────────
-    if desde:
-        origen = await _punto(desde)
-        if origen is None:
-            return f"ERROR: no conozco ningún lugar llamado '{desde}'."
-    else:
-        u = await db.ultima_ubicacion()
-        if u is None:
-            return ("ERROR: no sé dónde está Tiziano (nunca compartió "
-                    "ubicación). Pedile un pin o desde dónde sale.")
-        origen = {"location": {"latLng": {
-            "latitude": u["lat"], "longitude": u["lon"]}}}
-        if u["hace_min"] > 90:
-            # Se calcula igual, pero el agente tiene que saber que el punto
-            # de partida es dudoso: mejor un dato con advertencia que una
-            # certeza falsa.
-            desde = f"su última ubicación (de hace {u['hace_min']} min, OJO)"
+    # Antes esto caía a la última ubicación compartida por Telegram. Ese
+    # rastreo se eliminó el 30-ago: funcionaba, pero se usó un solo día
+    # (7 filas en meses) y la función que lo justificaba —avisar a qué hora
+    # salir— ya se había quitado a propósito. Sin rastreo, el origen tiene
+    # que venir dicho: es una pregunta más, no una adivinanza silenciosa.
+    if not desde:
+        return ("ERROR: falta desde dónde sale. Lucy no sabe dónde está "
+                "Tiziano —no hay rastreo de ubicación—, así que preguntáselo.")
+    origen = await _punto(desde)
+    if origen is None:
+        return f"ERROR: no conozco ningún lugar llamado '{desde}'."
 
     # Coordenadas explícitas (un candidato ya elegido) ganan siempre: son el
     # destino sin ambigüedad posible.

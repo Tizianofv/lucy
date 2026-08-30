@@ -570,21 +570,20 @@ async def guardar_lugar(
 ) -> tuple[str, int | None]:
     """Nombra un lugar del mundo de Tiziano ("CDS", "el estudio", "casa").
 
-    Sin coordenadas usa la última ubicación compartida: el gesto natural es
-    "estoy en el estudio" + un pin, o el pin primero y el nombre después.
-    Si el lugar ya existía, actualiza sus coordenadas (se mudó, o el pin
-    viejo era malo) — el log guarda el antes, como siempre.
+    Las coordenadas son obligatorias y salen de buscar_lugar. Antes se podían
+    omitir y se tomaba la última ubicación compartida por Telegram, pero ese
+    rastreo se eliminó el 30-ago: sin él, adivinar el punto sería inventarlo.
+    Si el lugar ya existía, actualiza sus coordenadas (se mudó, o las viejas
+    estaban mal) — el log guarda el antes, como siempre.
     """
     nombre = (nombre or "").strip()
     if not nombre:
         raise ValueError("Sin nombre no hay lugar.")
 
     if lat is None or lon is None:
-        u = await db.ultima_ubicacion()
-        if u is None:
-            raise ValueError(
-                "no tengo ninguna ubicación suya; pedile que comparta un pin.")
-        lat, lon = u["lat"], u["lon"]
+        raise ValueError(
+            "las coordenadas del lugar; buscalas con buscar_lugar y pasá "
+            "lat/lon.")
 
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)

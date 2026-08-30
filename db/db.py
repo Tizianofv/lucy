@@ -390,47 +390,6 @@ async def ultimos_intercambios(
     return list(reversed(filas))
 
 
-async def guardar_ubicacion(lat: float, lon: float, en_vivo: bool) -> None:
-    """Cada pin o latido de ubicación en vivo cae acá. Captura pura, sin IA."""
-    async with pool.connection() as conn:
-        await conn.execute(
-            "INSERT INTO ubicaciones (lat, lon, en_vivo) VALUES (%s, %s, %s)",
-            (lat, lon, en_vivo),
-        )
-
-
-async def ultima_ubicacion() -> dict | None:
-    """La última posición conocida, con su edad en minutos y el lugar con
-    nombre en el que cae (si cae en alguno).
-
-    La distancia usa la aproximación equirectangular, que a escala de una
-    ciudad erra por centímetros: Haversine acá sería precisión de avión para
-    un problema de motoconcho.
-    """
-    async with pool.connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(
-            """
-            SELECT u.lat, u.lon, u.en_vivo,
-                   round(extract(epoch FROM (now() - u.ts)) / 60)::int AS hace_min,
-                   (SELECT l.nombre FROM lugares l
-                     WHERE l.borrado_en IS NULL
-                       AND 111320 * sqrt(
-                             pow(l.lat - u.lat, 2) +
-                             pow((l.lon - u.lon) * cos(radians(u.lat)), 2)
-                           ) <= l.radio_m
-                     ORDER BY 111320 * sqrt(
-                             pow(l.lat - u.lat, 2) +
-                             pow((l.lon - u.lon) * cos(radians(u.lat)), 2))
-                     LIMIT 1) AS lugar
-              FROM ubicaciones u
-             ORDER BY u.ts DESC
-             LIMIT 1
-            """
-        )
-        return await cur.fetchone()
-
-
 async def lugar_por_nombre(nombre: str) -> dict | None:
     """Un lugar con nombre de Tiziano, o None si no existe con ese nombre."""
     async with pool.connection() as conn:
