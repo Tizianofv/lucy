@@ -163,6 +163,19 @@ def normalizar_monto(texto: str) -> Decimal:
     if not limpio or not any(c.isdigit() for c in limpio):
         raise ErrorDeParseo(f"no encontré ningún número en {crudo!r}")
 
+    # Un número TIENE que terminar en dígito. Sin esta guarda, "254.90." entraba
+    # por la rama de "miles repetido" (porque hay un punto también en la parte
+    # entera), se le borraban todos los separadores y salía 25490: un ×100 en
+    # silencio. Y con la asimetría más fea posible — los montos de cuatro cifras
+    # sí reventaban, así que fallaba justo en los cotidianos y se portaba bien en
+    # los grandes. Lo encontró un subagente-testigo el 30-ago sobre este mismo
+    # módulo, cuyo docstring prometía exactamente lo contrario.
+    if not limpio[-1].isdigit():
+        raise ErrorDeParseo(
+            f"{crudo!r} no termina en dígito. Casi siempre es que el patrón que "
+            "lo capturó se llevó puntuación de la frase; ancla el monto a "
+            r"[\d.,]*\d en vez de [\d.,]+.")
+
     ult_coma, ult_punto = limpio.rfind(","), limpio.rfind(".")
 
     if ult_coma >= 0 and ult_punto >= 0:
@@ -229,14 +242,23 @@ def normalizar_fecha(texto: str) -> datetime:
         return datetime(int(yyyy), int(mm), int(dd), hora,
                         int(mi or 0), int(ss or 0))
 
-    # "8 de julio de 2026" / "08-jul-2026"
-    m = re.search(r"(\d{1,2})\s*(?:de\s+|-)([a-záéíóú]+)\.?\s*(?:de\s+|-)(\d{4})",
+    # Mes en letras: "8 de julio de 2026", "08-jul-2026" y el formato de la App
+    # de Banreservas, "02 de Marzo 2026 - 09:03 PM" (sin "de" antes del año, y
+    # con la hora colgando de un guion).
+    m = re.search(r"(\d{1,2})\s*(?:de\s+|-)([a-z]+)\.?\s*(?:de\s+|-|\s)\s*(\d{4})"
+                  r"(?:\s*-\s*(\d{1,2}):(\d{2})\s*([ap])\.?m\.?)?",
                   _sin_acentos(crudo).lower())
     if m:
-        dd, mes_txt, yyyy = m.groups()
+        dd, mes_txt, yyyy, hh, mi, ampm = m.groups()
         for nombre, num in _MESES_ES.items():
             if _sin_acentos(nombre).startswith(mes_txt[:3]):
-                return datetime(int(yyyy), num, int(dd))
+                hora = int(hh) if hh else 0
+                if ampm:
+                    if ampm == "p" and hora != 12:
+                        hora += 12
+                    elif ampm == "a" and hora == 12:
+                        hora = 0
+                return datetime(int(yyyy), num, int(dd), hora, int(mi or 0))
 
     raise ErrorDeParseo(f"no reconozco la fecha {crudo!r}")
 

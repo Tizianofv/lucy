@@ -41,7 +41,7 @@ _TAGS = re.compile(r"(?s)<[^>]+>")
 _SCRIPTS = re.compile(r"(?is)<(script|style).*?</\1>")
 
 # "Monto: DOP 254.90" / "Monto: RD$ 1,500.00" / "Monto: DOP$ 12,267.85"
-_MONTO = re.compile(r"Monto:\s*([A-Z]{2,3}\$?|\$)\s*([\d.,]+)", re.I)
+_MONTO = re.compile(r"Monto:\s*([A-Z]{2,3}\$?|\$)\s*([\d.,]*\d)", re.I)
 _TARJETA = re.compile(r"tarjeta\s+([A-Z][A-Z ]*?)\s*[•·•]+\s*(\d{4})", re.I)
 _CUENTA = re.compile(r"[Cc]uenta(?: de [A-Za-z]+)?\s*[•·•]+\s*(\d{4})")
 
@@ -70,7 +70,13 @@ def _campo(texto: str, etiqueta: str, hasta: str | None = None) -> str:
     """
     fin = hasta or (r"(?:Monto|Estado|Comercio|Fecha(?: de transacci[oó]n)?|"
                     r"N[uú]mero de aprobaci[oó]n|Remitente|Origen|Banco Origen|"
-                    r"Destino|Transacci[oó]n|Cuenta|Recibido por)\s*:|$")
+                    r"Destino|Transacci[oó]n|Cuenta)\s*:"
+                    # El pie del correo NO lleva dos puntos: "Recibido por los
+                    # valores indicados en este comprobante. Este correo fue
+                    # enviado a...". Exigirle ':' hacía que el corte no
+                    # disparara nunca y que `referencia` se tragara 380
+                    # caracteres de pie, con el correo del titular dentro.
+                    r"|Recibido por los valores|Este correo fue enviado|$")
     m = re.search(rf"{etiqueta}\s*:\s*(.*?)\s*(?={fin})", texto, re.I)
     return m.group(1).strip() if m else ""
 
@@ -182,3 +188,85 @@ def parsear(correo: CorreoCrudo) -> list[Movimiento]:
 
 
 registrar(REMITENTE, parsear, asunto=ASUNTO)
+
+
+# ═══ La App: comprobantes de pago ════════════════════════════════════════
+#
+# Otro remitente, otro formato: notificacionestubancoapp@ manda 43 comprobantes
+# con asunto "Recibo de la transacción", todos del mismo tipo. Los campos vienen
+# etiquetados como en notificaciones@, pero con dos diferencias que muerden:
+#
+#   · La FECHA va en español con la hora colgando de un guion: "02 de Marzo
+#     2026 - 09:03 PM". La maneja normalizar_fecha.
+#   · Hay UN SEGUNDO MONTO: "Impuestos: DOP 0.75". Anclar el monto a "Monto:"
+#     es lo que evita registrar el impuesto como si fuera la transacción.
+
+REMITENTE_APP = "notificacionestubancoapp@banreservas.com"
+ASUNTO_APP = r"Recibo de la transacci[oó]n|Comprobante de Pago"
+
+_APP_MONTO = re.compile(r"Monto:\s*([A-Z]{2,3}\$?)\s*([\d.,]*\d)", re.I)
+_APP_TIPO = re.compile(r"Transacci[oó]n:\s*(.+?)\s+Origen:", re.I)
+_APP_ORIGEN = re.compile(r"Origen:\s*(.+?)\s*,\s*Cuenta", re.I)
+_APP_DESTINO = re.compile(r"Destino:\s*(.+?)\s*,\s*Cuenta", re.I)
+_APP_FECHA = re.compile(r"Fecha de transacci[oó]n:\s*(.+?)\s+(?:Impuestos|N[uú]mero)",
+                        re.I)
+_APP_NUM = re.compile(r"N[uú]mero de transacci[oó]n:?\s*(\S+)", re.I)
+
+
+def parsear_app(correo: CorreoCrudo) -> list[Movimiento]:
+    """Comprobante de pago hecho desde la App Banreservas.
+
+    DIRECCIÓN — el punto delicado. El correo dice "fue realizada desde tu App",
+    o sea que quien lo recibe es quien pagó: por defecto es un GASTO. En los 43
+    de la muestra eso acierta 41 veces (Origen es Rosi en 40 y Tiziano en 1).
+
+    Las otras 2 llegaron al buzón de CDS con Origen JOSE APOLINAR BRETON
+    FERNANDEZ y concepto "reserva estudio marzo 3, 10-11": es un cliente
+    pagando una sesión, o sea un INGRESO del estudio, y acá quedarían mal
+    marcadas como gasto.
+
+    No se arregla adivinando desde el parser. Se arregla con el registro de
+    titulares propios (t-09): si el Origen NO es de la casa y el Destino SÍ, el
+    movimiento es un ingreso. Por eso este parser guarda las DOS partes en
+    `contraparte` — "ORIGEN → DESTINO" — para que ese paso tenga con qué
+    corregir sin volver a abrir los correos.
+    """
+    texto = _texto(correo)
+    if not texto:
+        raise ErrorDeParseo("comprobante de la App sin cuerpo legible")
+
+    mm = _APP_MONTO.search(texto)
+    mf = _APP_FECHA.search(texto)
+    if not mm or not mf:
+        raise ErrorDeParseo("comprobante de la App sin Monto o sin Fecha")
+
+    mo, md = _APP_ORIGEN.search(texto), _APP_DESTINO.search(texto)
+    origen = " ".join(mo.group(1).split()) if mo else ""
+    destino = " ".join(md.group(1).split()) if md else ""
+    if not origen and not destino:
+        raise ErrorDeParseo("comprobante de la App sin Origen ni Destino")
+
+    tipo_txt = _APP_TIPO.search(texto)
+    num = _APP_NUM.search(texto)
+    fecha = normalizar_fecha(mf.group(1))
+
+    partes_ref = ["BNR app"]
+    if tipo_txt:
+        partes_ref.append(" ".join(tipo_txt.group(1).split()))
+    if num:
+        partes_ref.append(f"nº {num.group(1)}")
+    partes_ref.append(f"{fecha:%H:%M}")
+    partes_ref.append(correo.cuenta)
+
+    return [Movimiento(
+        banco=BANCO, canal="transferencia", tipo="gasto", fecha=fecha,
+        # Anclado a "Monto:" a propósito: el correo trae también
+        # "Impuestos: DOP 0.75", y un patrón de moneda suelto lo confundiría.
+        monto=normalizar_monto(mm.group(2)),
+        moneda=normalizar_moneda(mm.group(1)),
+        contraparte=f"{origen or '?'} → {destino or '?'}",
+        estado="aprobada",
+        referencia=" · ".join(partes_ref))]
+
+
+registrar(REMITENTE_APP, parsear_app, asunto=ASUNTO_APP)
