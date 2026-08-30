@@ -270,3 +270,83 @@ def parsear_app(correo: CorreoCrudo) -> list[Movimiento]:
 
 
 registrar(REMITENTE_APP, parsear_app, asunto=ASUNTO_APP)
+
+
+# ═══ Depósitos hechos en sucursal ════════════════════════════════════════
+#
+# Llegan por el remitente notificaciones@ pero con asunto propio, así que el
+# parser general no los ve y hasta el 30-ago se descartaban EN SILENCIO: un
+# ingreso real desaparecía sin dejar rastro ni error. Lo encontró el testigo
+# de t-04b.
+#
+# Usan la plantilla de comprobante, con dos diferencias:
+#   · La contraparte se llama "Depositante:", no "Origen:".
+#   · Hay TRES montos — "Monto: DOP 500.00", "Efectivo DOP 500.00" y
+#     "Cheques: 0 DOP 0.00". Anclar a "Monto:" evita registrar el cero.
+
+ASUNTO_DEPOSITO = r"Dep(?:[oó]sito)?\.? de ahorros|Dep de ahorros"
+
+# El corte va contra la siguiente ETIQUETA conocida, nunca contra una coma
+# suelta. Dos motivos, los dos reales:
+#   · Las razones sociales dominicanas llevan coma: el corpus ya tiene
+#     "CENTRO DE TECNOLOGIA UNIVERSAL, SRL". Cortar en la coma la trunca.
+#   · Si la etiqueta llega VACÍA —pasa en este banco: los dos correos de
+#     transferencia en proceso traen "Remitente:" sin valor— un cortador laxo
+#     se salta la etiqueta vacía y se traga el campo siguiente entero, nombre
+#     de etiqueta incluido. Salía "Destino: ROSILIS ROMERO" como depositante y
+#     la guarda de `if not depositante` no disparaba nunca: código muerto.
+_DEP_FIN = (r"(?=\s*(?:-\s*ID|Destino|Cuenta est[aá]ndar|Fecha de transacci[oó]n|"
+            r"Oficina de atenci[oó]n|Cajero|N[uú]mero de transacci[oó]n|"
+            r"Comentario)\s*:?|$)")
+_DEP_DEPOSITANTE = re.compile(rf"Depositante:\s*(.*?)\s*{_DEP_FIN}", re.I)
+_DEP_DESTINO = re.compile(rf"Destino:\s*(.*?)\s*{_DEP_FIN}", re.I)
+
+
+def parsear_deposito(correo: CorreoCrudo) -> list[Movimiento]:
+    """Depósito recibido en una oficina comercial. Siempre es un INGRESO.
+
+    A diferencia de las transferencias de la App —donde la dirección depende de
+    quién sea de la casa— acá no hay ambigüedad: alguien fue a una sucursal y
+    puso dinero en la cuenta. Entra.
+    """
+    texto = _texto(correo)
+    if not texto:
+        raise ErrorDeParseo("comprobante de depósito sin cuerpo legible")
+
+    mm = _APP_MONTO.search(texto)
+    mf = _APP_FECHA.search(texto) or re.search(
+        r"Fecha de transacci[oó]n:\s*(.+?)\s+(?:Oficina|Cajero|N[uú]mero)", texto, re.I)
+    if not mm or not mf:
+        raise ErrorDeParseo("comprobante de depósito sin Monto o sin Fecha")
+
+    md, mdest = _DEP_DEPOSITANTE.search(texto), _DEP_DESTINO.search(texto)
+    depositante = " ".join(md.group(1).split()) if md else ""
+    destino = " ".join(mdest.group(1).split()) if mdest else ""
+    if not depositante:
+        raise ErrorDeParseo("comprobante de depósito sin Depositante")
+
+    fecha = normalizar_fecha(mf.group(1))
+    num = _APP_NUM.search(texto)
+    oficina = re.search(r"Oficina de atenci[oó]n:\s*(.+?)\s+(?:Cajero|N[uú]mero)",
+                        texto, re.I)
+
+    partes = ["BNR depósito"]
+    if oficina:
+        partes.append(" ".join(oficina.group(1).split()))
+    if num:
+        partes.append(f"nº {num.group(1)}")
+    partes.append(f"{fecha:%H:%M}")
+    partes.append(correo.cuenta)
+
+    return [Movimiento(
+        banco=BANCO, canal="transferencia", tipo="ingreso", fecha=fecha,
+        # Anclado a "Monto:": el comprobante trae también "Efectivo DOP 500.00"
+        # y "Cheques: 0 DOP 0.00", y ese cero no es la transacción.
+        monto=normalizar_monto(mm.group(2)),
+        moneda=normalizar_moneda(mm.group(1)),
+        contraparte=f"{depositante}" + (f" → {destino}" if destino else ""),
+        estado="aprobada",
+        referencia=" · ".join(partes))]
+
+
+registrar(REMITENTE, parsear_deposito, asunto=ASUNTO_DEPOSITO)

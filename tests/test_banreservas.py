@@ -26,6 +26,7 @@ from cerebro.bancos.banreservas import (  # noqa: E402
     REMITENTE_APP,
     parsear,
     parsear_app,
+    parsear_deposito,
 )
 from cerebro.bancos.contrato import (  # noqa: E402
     CorreoCrudo,
@@ -202,6 +203,84 @@ def test_app_limitacion_conocida_de_direccion():
     assert parsear_app(_correo_app())[0].tipo == "gasto"
 
 
+# ── Depósitos en sucursal (se descartaban en silencio) ───────────────────
+
+DEPOSITO = ("Comprobante de Pago - Banreservas ¡Transacción realizada! Te "
+            "notificamos que la siguiente transacción fue realizada desde una "
+            "oficina comercial: Monto: DOP 500.00 Valores recibidos en: Efectivo "
+            "DOP 500.00 Cheques: 0 DOP 0.00 Deposito a cuenta Transacción: 021N - "
+            "Dep de ahorros sin libreta Depositante: JEAN SAUL TOUT PUISSANT - ID "
+            "***5873 Destino: ROSILIS ROMERO, DOP - ***8354 Cuenta estándar: DOP - "
+            "DO46BRRD0***************8354 Fecha de transacción: 16 DE ABRIL DEL "
+            "2026 - 12:30 P. M. Oficina de atención: 690 - OFIC VILLA FRANCISCA "
+            "Cajero: U31292 Número de transacción: 260416006900050275")
+
+
+def _correo_dep_texto(texto: str) -> CorreoCrudo:
+    return CorreoCrudo(remitente=REMITENTE,
+                       asunto="Notificación - Dep de ahorros sin libreta",
+                       fecha_correo=datetime(2026, 4, 16), html="",
+                       texto=texto, cuenta="rosilisr04@gmail.com", uid="1")
+
+
+def _correo_dep() -> CorreoCrudo:
+    return _correo_dep_texto(DEPOSITO)
+
+
+def test_deposito_llega_a_un_parser():
+    """Hasta el 30-ago este correo devolvía [] y el ingreso desaparecía sin
+    error: el remitente estaba registrado pero ningún asunto casaba."""
+    assert buscar_parser(REMITENTE,
+                         "Notificación - Dep de ahorros sin libreta") is not None
+
+
+def test_deposito_es_ingreso():
+    m = parsear_deposito(_correo_dep())[0]
+    assert m.tipo == "ingreso" and m.monto == Decimal("500.00")
+    assert "JEAN SAUL" in m.contraparte and "ROSILIS" in m.contraparte
+
+
+def test_deposito_no_agarra_el_cero_de_cheques():
+    """El comprobante trae tres cantidades: "Monto: DOP 500.00", "Efectivo DOP
+    500.00" y "Cheques: 0 DOP 0.00". El cero no es la transacción — y además un
+    monto de 0 lo rechazaría el contrato, así que se vería como un fallo."""
+    assert parsear_deposito(_correo_dep())[0].monto == Decimal("500.00")
+
+
+def test_deposito_sin_depositante_revienta():
+    """Si "Depositante:" llega vacío —pasa en este banco: los 2 correos de
+    transferencia en proceso traen "Remitente:" vacío— el corte por coma suelta
+    se saltaba la etiqueta vacía y se tragaba el campo siguiente ENTERO, nombre
+    de etiqueta incluido. Salía "Destino: ROSILIS ROMERO" como depositante, y la
+    guarda de más abajo nunca disparaba: era código muerto."""
+    vacio = DEPOSITO.replace("Depositante: JEAN SAUL TOUT PUISSANT - ID ***5873 ",
+                             "Depositante: ")
+    assert _revienta(parsear_deposito, _correo_dep_texto(vacio))
+
+
+def test_deposito_razon_social_con_coma():
+    """Cortar en una coma suelta trunca las razones sociales dominicanas. El
+    corpus ya tiene "CENTRO DE TECNOLOGIA UNIVERSAL, SRL" como contraparte
+    real."""
+    empresa = DEPOSITO.replace("JEAN SAUL TOUT PUISSANT - ID ***5873",
+                               "CENTRO DE TECNOLOGIA UNIVERSAL, SRL - ID ***5873")
+    m = parsear_deposito(_correo_dep_texto(empresa))[0]
+    assert "SRL" in m.contraparte, f"truncó la razón social: {m.contraparte!r}"
+
+
+def test_deposito_contraparte_no_arrastra_etiquetas():
+    """Misma comprobación de largo que cazó el pie del correo en `referencia`."""
+    m = parsear_deposito(_correo_dep())[0]
+    assert "Cuenta" not in m.contraparte and "Fecha" not in m.contraparte
+    assert len(m.contraparte) < 80, f"arrastró texto de al lado: {m.contraparte!r}"
+
+
+def test_fecha_de_sucursal():
+    """"16 DE ABRIL DEL 2026 - 12:30 P. M." — con "DEL" antes del año y la marca
+    de tarde partida en dos con puntos. Cuarta notación de fecha del proyecto."""
+    assert parsear_deposito(_correo_dep())[0].fecha == datetime(2026, 4, 16, 12, 30)
+
+
 # ── Regresiones: lo que encontró el testigo el 30-ago-2026 ───────────────
 
 PIE = (" Recibido por los valores indicados en este comprobante. Este correo fue "
@@ -252,9 +331,12 @@ def test_contra_los_fixtures_reales():
     ok, fallos, tipos, largos = 0, [], {}, [0]
     for f in sorted(FIXTURES.glob("*.eml")):
         msg = email.message_from_bytes(f.read_bytes())
+        # Se enruta con buscar_parser, NO con un asunto fijo. Filtrar por
+        # asunto exacto dejaba fuera los depósitos de sucursal —y cualquier
+        # asunto que se añada mañana— sin que ningún test se pusiera rojo.
         if REMITENTE not in _cab(msg.get("From")).lower():
             continue
-        if _cab(msg.get("Subject")).strip() != ASUNTO:
+        if buscar_parser(REMITENTE, _cab(msg.get("Subject")).strip()) is None:
             continue
         plano = html = ""
         for p in (msg.walk() if msg.is_multipart() else [msg]):
@@ -264,11 +346,12 @@ def test_contra_los_fixtures_reales():
                 plano = d
             elif p.get_content_type() == "text/html" and not html:
                 html = d
-        c = CorreoCrudo(remitente=REMITENTE, asunto=ASUNTO,
+        asunto_real = _cab(msg.get("Subject")).strip()
+        c = CorreoCrudo(remitente=REMITENTE, asunto=asunto_real,
                         fecha_correo=datetime(2026, 1, 1), html=html, texto=plano,
                         cuenta="x@y.com", uid=f.stem)
         try:
-            for mv in parsear(c):
+            for mv in buscar_parser(REMITENTE, asunto_real)(c):
                 ok += 1
                 k = f"{mv.canal}/{mv.tipo}"
                 tipos[k] = tipos.get(k, 0) + 1
@@ -278,7 +361,8 @@ def test_contra_los_fixtures_reales():
 
     print(f"     ({ok} correos reales parseados, {tipos})")
     assert not fallos, "fallaron:\n  " + "\n  ".join(fallos[:5])
-    assert ok == 58, f"esperaba 58, hubo {ok}"
+    # 58 del asunto general + 1 depósito de sucursal.
+    assert ok == 59, f"esperaba 59, hubo {ok}"
     # La referencia sale del pie del correo, así que si el corte se rompe otra
     # vez lo hace en TODOS a la vez. Se comprueba sobre los reales, no solo
     # sobre el texto armado: el pie de verdad es más largo y más sucio.
@@ -288,8 +372,9 @@ def test_contra_los_fixtures_reales():
     # Los cuatro tipos que confirmó el testigo el 30-ago.
     assert tipos.get("tarjeta/gasto") == 53
     assert tipos.get("transferencia/gasto") == 2
-    assert tipos.get("transferencia/ingreso") == 2
     assert tipos.get("nomina/ingreso") == 1
+    assert tipos.get("transferencia/ingreso") == 3, (
+        "2 transferencias recibidas + 1 depósito de sucursal")
 
 
 def test_contra_los_fixtures_de_la_app():

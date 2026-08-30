@@ -245,8 +245,11 @@ def normalizar_fecha(texto: str) -> datetime:
     # Mes en letras: "8 de julio de 2026", "08-jul-2026" y el formato de la App
     # de Banreservas, "02 de Marzo 2026 - 09:03 PM" (sin "de" antes del año, y
     # con la hora colgando de un guion).
-    m = re.search(r"(\d{1,2})\s*(?:de\s+|-)([a-z]+)\.?\s*(?:de\s+|-|\s)\s*(\d{4})"
-                  r"(?:\s*-\s*(\d{1,2}):(\d{2})\s*([ap])\.?m\.?)?",
+    # "de"/"del" antes del año, y la marca de tarde con espacios y puntos
+    # sueltos: los comprobantes de sucursal de Banreservas escriben
+    # "16 DE ABRIL DEL 2026 - 12:30 P. M.".
+    m = re.search(r"(\d{1,2})\s*(?:del?\s+|-)([a-z]+)\.?\s*(?:del?\s+|-|\s)\s*(\d{4})"
+                  r"(?:\s*-\s*(\d{1,2}):(\d{2})\s*([ap])\s*\.?\s*m\s*\.?)?",
                   _sin_acentos(crudo).lower())
     if m:
         dd, mes_txt, yyyy, hh, mi, ampm = m.groups()
