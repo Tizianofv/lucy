@@ -16,6 +16,12 @@ env/
 *.sql.gz
 backups/
 
+# Correos bancarios crudos (fixtures de los parsers). Son movimientos reales de
+# Tiziano y de Rosi: montos, comercios y últimos dígitos de tarjeta. Se quedan
+# en la máquina, igual que los backups. Si algún día hacen falta en el repo para
+# CI, van redactados y a mano — nunca por volcado automático.
+tests/fixtures/**/*.eml
+
 # Editores / SO
 .vscode/
 .idea/
