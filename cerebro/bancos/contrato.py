@@ -210,12 +210,16 @@ def normalizar_fecha(texto: str) -> datetime:
     """
     crudo = (texto or "").strip()
 
-    # "08/07/2026 04:07 pm"  (el formato de BHD)
-    m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})"
+    # "08/07/2026 04:07 pm" (BHD, Banreservas) y "06/05/26" (Banesco, año de
+    # dos dígitos). El año corto se expande a 20xx: son correos de alertas
+    # bancarias, no registros históricos — no hay ningún 1926 posible acá.
+    m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})(?!\d)"
                   r"(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap])\.?m\.?)?",
                   crudo, re.I)
     if m:
         dd, mm, yyyy, hh, mi, ss, ampm = m.groups()
+        if len(yyyy) == 2:
+            yyyy = f"20{yyyy}"
         hora = int(hh) if hh else 0
         if ampm:
             if ampm.lower() == "p" and hora != 12:
