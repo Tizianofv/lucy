@@ -120,9 +120,15 @@ def _sin_acentos(v: str) -> str:
                    if not unicodedata.combining(c))
 
 
+# Las notaciones que mandan los bancos de verdad. Banreservas usa TRES distintas
+# dentro del mismo remitente y el mismo asunto: "DOP 254.90" en los consumos,
+# "RD$ 1,500.00" en las transferencias recibidas y "DOP$ 12,267.85" en la nómina.
+# Esa última —código ISO pegado al símbolo— es la que nadie inventaría de cabeza.
 _MONEDAS_CONOCIDAS = {
-    "RD": "DOP", "RD$": "DOP", "DOP": "DOP", "PESOS": "DOP", "$RD": "DOP",
-    "US": "USD", "US$": "USD", "USD": "USD", "DOLARES": "USD", "$US": "USD",
+    "RD": "DOP", "RD$": "DOP", "DOP": "DOP", "DOP$": "DOP", "PESOS": "DOP",
+    "$RD": "DOP", "RD$$": "DOP",
+    "US": "USD", "US$": "USD", "USD": "USD", "USD$": "USD", "DOLARES": "USD",
+    "$US": "USD",
 }
 
 
