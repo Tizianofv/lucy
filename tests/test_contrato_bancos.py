@@ -206,12 +206,13 @@ def test_ruteo_por_remitente_exacto():
     assert buscar_parser("infopb@bhd.com.do", "lo que sea") is None
 
 
-def test_apap_guion_vs_sin_guion():
-    """En APAP `no-reply@` es transaccional y `noreply@` es publicidad. Un
-    enrutador que normalizara el guión los mezclaría."""
-    registrar("no-reply@apap.com.do", _falso)
-    assert buscar_parser("no-reply@apap.com.do", "Transferencia ACH") is _falso
-    assert buscar_parser("noreply@apap.com.do", "Transferencia ACH") is None
+def test_guion_vs_sin_guion():
+    """Caso real de APAP: `no-reply@` es transaccional y `noreply@` publicidad.
+    Se prueba con un dominio inventado a propósito — usar el real haría que este
+    test dependiera de qué parsers estén registrados en producción."""
+    registrar("no-reply@banco-de-prueba.test", _falso)
+    assert buscar_parser("no-reply@banco-de-prueba.test", "Transferencia") is _falso
+    assert buscar_parser("noreply@banco-de-prueba.test", "Transferencia") is None
 
 
 def test_un_remitente_con_varios_asuntos():

@@ -33,4 +33,4 @@ from cerebro.bancos.contrato import (  # noqa: F401
 from cerebro.bancos import bhd  # noqa: F401,E402
 from cerebro.bancos import banreservas  # noqa: F401,E402
 from cerebro.bancos import banesco  # noqa: F401,E402
-# from cerebro.bancos import apap  # noqa: F401
+from cerebro.bancos import apap  # noqa: F401,E402
