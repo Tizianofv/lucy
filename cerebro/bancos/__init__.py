@@ -30,4 +30,5 @@ from cerebro.bancos.contrato import (  # noqa: F401
 
 # Los parsers por banco se importan acá abajo a medida que existan. El import
 # es el que los registra; sin él, `parsear()` no los encuentra.
-# from cerebro.bancos import bhd, banesco, banreservas, apap  # noqa: F401
+from cerebro.bancos import bhd  # noqa: F401,E402
+# from cerebro.bancos import banesco, banreservas, apap  # noqa: F401
