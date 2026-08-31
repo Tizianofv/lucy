@@ -108,6 +108,7 @@ CATEGORIAS = [
     "Salud",
     "Seguros",
     "Cuidado personal",
+    "Hogar",
     "Ropa y hogar",
     "Reparaciones del hogar",
     "Equipos y tecnología",
@@ -118,6 +119,13 @@ CATEGORIAS = [
     "Impuestos",
     "Regalos y donaciones",
     "Mascotas",
+    # Un proyecto concreto, no un rubro. Va cerca del final porque se toca
+    # menos que el supermercado, pero por encima de "Otros" porque cuando se
+    # usa se usa a propósito: la gracia es poder filtrar /movimientos por él y
+    # ver cuánto lleva costando, que es una pregunta que ninguna categoría de
+    # rubro puede contestar. Sin palabras clave: un proyecto lo decide una
+    # persona, no el nombre del comercio.
+    "Proyecto Inés",
     # Acá NO hay categorías de ingreso, y es una decisión de Tiziano: el
     # dinero que entra no hace falta clasificarlo. La cola solo trae gastos
     # (db.sin_clasificar), así que un ingreso nunca pide categoría — antes sí
