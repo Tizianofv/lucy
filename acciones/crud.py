@@ -457,17 +457,33 @@ async def editar(
         if desconocidas:
             raise ValueError(f"Esa tabla no tiene: {', '.join(sorted(desconocidas))}")
 
-        # Un ingreso no lleva categoría: las categorías dicen en qué se gastó.
-        # La única excepción es la marca "No suma". La regla vive en
-        # categorias.py porque hay dos puertas —panel y Telegram— y una regla
-        # que solo se aplica en una no es una regla.
-        if tabla == "movimientos" and "categoria" in campos:
+        # Un ingreso no lleva categoría: los rubros dicen EN QUÉ se gastó. La
+        # única excepción es la marca "No suma".
+        #
+        # SE COMPRUEBA EL PAR QUE VA A QUEDAR, no solo lo que se está tocando.
+        # La primera versión miraba esto solo si "categoria" venía en los
+        # cambios, así que editar únicamente `tipo` —"el M-86 en realidad es un
+        # ingreso"— se saltaba las dos validaciones y dejaba un ingreso con
+        # categoría "Restaurantes". Lo encontró el testigo; es exactamente el
+        # estado que esta regla existe para impedir.
+        if tabla == "movimientos" and ("categoria" in campos or "tipo" in campos):
             from cerebro.bancos.categorias import categoria_permitida
-            if not categoria_permitida(antes.get("tipo"), campos["categoria"]):
-                raise ValueError(
-                    f"Un movimiento de tipo '{antes.get('tipo')}' no lleva "
-                    f"categoría '{campos['categoria']}'. Los ingresos solo se "
-                    "pueden marcar como 'No suma'.")
+            tipo_final = campos.get("tipo", antes.get("tipo"))
+            cat_final = campos.get("categoria", antes.get("categoria"))
+            if not categoria_permitida(tipo_final, cat_final):
+                if "categoria" in campos:
+                    # La pidió explícitamente y no corresponde: es un error, no
+                    # una consecuencia. Se rechaza en vez de arreglarlo a medias.
+                    raise ValueError(
+                        f"Un movimiento de tipo '{tipo_final}' no lleva "
+                        f"categoría '{cat_final}'. Los ingresos solo se pueden "
+                        "marcar como 'No suma'.")
+                # Cambió el TIPO y el rubro dejó de tener sentido. No es pérdida
+                # de dato: ese rubro solo significaba algo mientras era gasto, y
+                # el valor viejo queda en log_acciones, así que se puede deshacer.
+                # Reventar acá obligaría a Tiziano a dar dos órdenes para decir
+                # una sola cosa.
+                campos["categoria"] = None
 
         # Posponer se cuenta solo (req 28): una tarea pendiente que se mueve
         # para MÁS TARDE es una posposición, lo diga Tiziano con esa palabra o

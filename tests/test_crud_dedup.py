@@ -321,6 +321,92 @@ def test_el_agente_conoce_el_codigo_y_las_categorias_del_codigo():
     assert not a_mano, f"categorías copiadas a mano en el prompt: {a_mano}"
 
 
+class _ConnMovimiento:
+    """Conexión de mentira mínima para ejercitar `editar` sobre movimientos.
+
+    Existe porque el test que había NO EJECUTABA `editar`: hacía grep sobre el
+    código fuente buscando las palabras "CATEGORIAS" y "aprender_categoria".
+    Eso comprueba que el texto está escrito, no que la validación corra — y el
+    hueco que encontró el testigo (cambiar `tipo` sin tocar `categoria` saltaba
+    las dos comprobaciones) vive justo en el camino que ese grep no recorría.
+    """
+
+    def __init__(self, fila):
+        self.fila = dict(fila)
+        self.logs: list[tuple] = []
+
+    def cursor(self, row_factory=None):
+        return self
+
+    async def execute(self, sql, params=None):
+        s = " ".join(sql.split())
+        if s.startswith("SELECT * FROM movimientos"):
+            self._ultimo = dict(self.fila)
+        elif s.startswith("UPDATE movimientos SET"):
+            cols = [c.split("=")[0].strip()
+                    for c in s[len("UPDATE movimientos SET"):].split("WHERE")[0].split(",")]
+            for col, val in zip(cols, params):
+                self.fila[col] = val
+            self._ultimo = None
+        elif "INSERT INTO log_acciones" in s:
+            self.logs.append(params)
+            self._ultimo = (1,)
+        else:
+            self._ultimo = None
+        return self
+
+    async def fetchone(self):
+        return self._ultimo
+
+
+class _PoolMovimiento:
+    def __init__(self, conn):
+        self._c = conn
+
+    def connection(self):
+        return _PoolCM(self._c) if "_PoolCM" in globals() else _CM(self._c)
+
+
+class _CM:
+    def __init__(self, c):
+        self._c = c
+
+    async def __aenter__(self):
+        return self._c
+
+    async def __aexit__(self, *a):
+        return False
+
+
+async def test_cambiar_el_tipo_no_puede_dejar_un_rubro_en_un_ingreso():
+    """Lo encontró el testigo. `editar` comprobaba `categoria_permitida` SOLO
+    si "categoria" venía en los cambios. Editar únicamente `tipo` —"el M-86 en
+    realidad es un ingreso"— saltaba las dos validaciones y dejaba un ingreso
+    con categoría "Restaurantes": justo el estado que la regla dice que no
+    puede existir, y que ensucia los totales por rubro con dinero que entró.
+    """
+    from acciones import crud
+    conn = _ConnMovimiento({"id": 86, "tipo": "gasto", "categoria": "Restaurantes",
+                            "contraparte": "SM NACIONAL", "bandeja_id": None,
+                            "borrado_en": None})
+    real_pool, real_aprender = db.pool, db.aprender_categoria
+
+    async def _nada(*a, **k):
+        return None
+
+    db.pool = _PoolMovimiento(conn)
+    db.aprender_categoria = _nada
+    try:
+        await crud.editar("movimientos", 86, {"tipo": "ingreso"}, "corrijo tipo")
+    finally:
+        db.pool, db.aprender_categoria = real_pool, real_aprender
+
+    assert conn.fila["tipo"] == "ingreso", "no aplicó el cambio pedido"
+    assert not conn.fila["categoria"], (
+        f"quedó un ingreso con categoría {conn.fila['categoria']!r}: "
+        "los rubros dicen EN QUÉ se gastó, y esto ya no es un gasto")
+
+
 def _sincrono(fn):
     """Envuelve un test síncrono para el runner, que espera corrutinas."""
     async def envuelto():
@@ -375,6 +461,7 @@ _TESTS = [
     _sincrono(test_un_monto_ilegible_no_se_guarda_como_cero),
     _sincrono(test_la_categoria_por_telegram_pasa_por_el_mismo_vocabulario),
     _sincrono(test_el_agente_conoce_el_codigo_y_las_categorias_del_codigo),
+    test_cambiar_el_tipo_no_puede_dejar_un_rubro_en_un_ingreso,
 ]
 
 
