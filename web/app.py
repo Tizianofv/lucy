@@ -197,8 +197,20 @@ async def categorias(request: Request):
                     "lista cerrada", rechazados)
     # Se vuelve a la pantalla de donde vino, con sus filtros puestos. Mandarlo
     # siempre a la cola le haría perder el filtro que estaba mirando, que en
-    # /movimientos es la mitad del trabajo. Solo se aceptan rutas propias: un
-    # destino que venga del formulario y no se compruebe es un redirect abierto.
+    # /movimientos es la mitad del trabajo.
+    #
+    # EL startswith NO ES DECORATIVO, y conviene saber qué frena antes de
+    # "simplificarlo". Comprobado a mano contra Starlette el 31-ago:
+    #
+    #   "//evil.com"        Location: //evil.com — redirect ABIERTO, es una URL
+    #                       protocolo-relativa y se va del sitio. Lo frena ESTA
+    #                       línea y nada más.
+    #   "https://evil.com"  igual de abierto. La misma línea.
+    #   "/movimientos" + CR/LF   Starlette lo percent-codifica solo, así que la
+    #                       inyección de cabeceras ya está tapada río abajo.
+    #                       No dependemos de eso igual.
+    #   "/movimientos/../x" pasa, y es inofensivo: sigue siendo una ruta de este
+    #                       mismo sitio, y todas piden sesión.
     volver = str(formulario.get("volver", "")).strip()
     if not volver.startswith("/movimientos"):
         volver = "/sin-clasificar"
