@@ -425,6 +425,19 @@ async def editar(
         campos["anticipos_min"] = _anticipos(
             campos["anticipos_min"], vacio_es_silencio=True)
 
+    # La categoría es vocabulario CERRADO, y tiene que serlo por los dos
+    # caminos. El panel ya la valida; sin esto, corregir por Telegram podía
+    # meter "supermercado" en minúscula o "Súper" y partir el total en dos para
+    # siempre. Un vocabulario que solo se respeta en una de las dos puertas no
+    # es un vocabulario cerrado.
+    if tabla == "movimientos" and "categoria" in campos:
+        from cerebro.bancos.categorias import CATEGORIAS
+        valor = (campos["categoria"] or "").strip() or None
+        if valor is not None and valor not in CATEGORIAS:
+            raise ValueError(
+                f"'{valor}' no es una categoría. Son: {', '.join(CATEGORIAS)}")
+        campos["categoria"] = valor
+
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
@@ -474,6 +487,19 @@ async def editar(
             antes=antes, despues=despues, motivo=motivo,
             bandeja_id=antes.get("bandeja_id"),
         )
+
+    # Y APRENDE, igual que el panel. Sin esto había dos puertas que hacían
+    # cosas distintas: corregir "SM NACIONAL" en la pantalla enseñaba para
+    # siempre, y corregir el mismo comercio por Telegram arreglaba una fila y
+    # nada más — la próxima compra volvía a la cola. Dos caminos que dan
+    # resultados distintos para la misma corrección es cómo se pierde la
+    # confianza en los dos.
+    if (tabla == "movimientos" and "categoria" in campos
+            and campos["categoria"] and antes.get("contraparte")):
+        from cerebro.bancos.categorias import normalizar_comercio
+        await db.aprender_categoria(
+            normalizar_comercio(antes["contraparte"]), campos["categoria"])
+
     return despues, log_id
 
 

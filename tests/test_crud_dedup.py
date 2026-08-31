@@ -286,6 +286,41 @@ async def test_cita_mismo_titulo_inicio_distinto_si_crea():
     assert len(conn.eventos) == 2, "otra hora de inicio = otra cita"
 
 
+def test_la_categoria_por_telegram_pasa_por_el_mismo_vocabulario():
+    """Corregir por Telegram tiene que ser tan estricto como corregir en el
+    panel. El panel ya valida contra la lista cerrada; sin esto, un "ponelo en
+    supermercado" en minúscula partía el total en dos para siempre. Un
+    vocabulario que solo se respeta en una de las dos puertas no es cerrado.
+    """
+    import inspect
+    from acciones import crud
+    fuente = inspect.getsource(crud.editar)
+    assert "CATEGORIAS" in fuente, "editar no valida la categoría"
+    assert "aprender_categoria" in fuente, (
+        "corregir por Telegram no enseña, y por el panel sí: dos caminos que "
+        "dan resultados distintos para la misma corrección")
+
+
+def test_el_agente_conoce_el_codigo_y_las_categorias_del_codigo():
+    """El prompt no puede llevar la lista de categorías copiada a mano: se
+    desincroniza el día que se agregue una, y el agente le ofrecería a Tiziano
+    categorías que ya no existen. Se inyecta desde CATEGORIAS."""
+    import os
+    import re
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    fuente = open(os.path.join(raiz, "cerebro", "agente.py"),
+                  encoding="utf-8").read()
+    assert "EL CÓDIGO M-####" in fuente, "el agente no sabe leer M-0086"
+    assert "{CATEGORIAS}" in fuente, "el marcador de categorías desapareció"
+    assert 'HERRAMIENTAS.replace(' in fuente, (
+        "las categorías ya no se inyectan desde el código")
+    # Y ninguna categoría puede estar escrita a mano en el prompt.
+    from cerebro.bancos.categorias import CATEGORIAS
+    bloque = fuente[fuente.index("HERRAMIENTAS = "):fuente.index("{CATEGORIAS}")]
+    a_mano = [c for c in CATEGORIAS if f'"{c}"' in bloque]
+    assert not a_mano, f"categorías copiadas a mano en el prompt: {a_mano}"
+
+
 def _sincrono(fn):
     """Envuelve un test síncrono para el runner, que espera corrutinas."""
     async def envuelto():
@@ -338,6 +373,8 @@ _TESTS = [
     # envuelven acá en vez de volverlos async por una razón de plomería.
     _sincrono(test_el_monto_manual_no_pasa_por_float),
     _sincrono(test_un_monto_ilegible_no_se_guarda_como_cero),
+    _sincrono(test_la_categoria_por_telegram_pasa_por_el_mismo_vocabulario),
+    _sincrono(test_el_agente_conoce_el_codigo_y_las_categorias_del_codigo),
 ]
 
 

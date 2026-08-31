@@ -41,6 +41,7 @@ import cerebro.deepseek as motor
 import cerebro.memoria as memoria
 import cerebro.viaje as viaje
 import config
+from cerebro.bancos.categorias import CATEGORIAS
 import db.db as db
 
 log = logging.getLogger("lucy.agente")
@@ -115,6 +116,21 @@ HERRAMIENTAS DISPONIBLES:
   Cambia algo que ya existe. Marcar hecha una tarea =
   cambios {"estado": "hecha", "completado_en": "<ahora en ISO>"}.
   Consultá antes para encontrar el id correcto: editar a ciegas es adivinar.
+
+  EL CÓDIGO M-####. El panel muestra cada movimiento con un código —M-0086— que
+  es su id: M-0086 es movimientos.id = 86. Cuando Tiziano lo nombre ("el M-0086
+  es Colmado", "M-174 ponelo en No suma", "el 86 es de la casa del papá"), ya
+  tenés el id: NO hace falta consultar para encontrarlo. Sí conviene consultar
+  para VER qué es antes de cambiarlo, y para poder decirle qué tocaste.
+  Los ceros a la izquierda no cuentan: M-0086, M-86 y 86 son el mismo.
+
+  CATEGORÍAS: vocabulario cerrado. Solo estas, tal cual, con tildes y mayúscula:
+  {CATEGORIAS}
+  Si lo que pide no está en la lista, NO inventes ni elijas la más parecida:
+  decíle cuáles hay. Y "No suma" es la marca del dinero que solo pasa por la
+  cuenta (el de terceros): no entra en ningún total, ni de gasto ni de ingreso.
+  Al cambiar una categoría el sistema APRENDE ese comercio solo — no anuncies
+  que lo guardaste aparte, ya está hecho.
 
 · perfil  {"tipo": "persona|proyecto", "nombre": "Rosi",
            "alias": ["la flaca"], "relacion": "hermana",
@@ -387,7 +403,12 @@ def _sistema(preferencias: list[dict] | None = None) -> str:
         f"Ahora es {motor._ahora_txt()} (zona {motor.TZ.key}, UTC-4, sin "
         "horario de verano).\n\n"
         f"{bloque}"
-        f"{consultar.ESQUEMA}\n\n{HERRAMIENTAS}"
+        # Las categorías se inyectan DESDE EL CÓDIGO, no copiadas a mano en el
+        # texto: una lista duplicada se desincroniza el día que se agregue una,
+        # y el agente le ofrecería a Tiziano categorías que ya no existen.
+        f"{consultar.ESQUEMA}\n\n"
+        + HERRAMIENTAS.replace(
+            "{CATEGORIAS}", ", ".join(f'"{c}"' for c in CATEGORIAS))
     )
 
 
