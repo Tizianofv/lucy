@@ -102,6 +102,7 @@ CATEGORIAS = [
     "Colmado",
     "Restaurantes",
     "Combustible",
+    "Vehículo",
     "Transporte",
     "Servicios del hogar",
     "Salud",
@@ -165,7 +166,7 @@ CLAVES = {
     "CLUB NACO": "Restaurantes", "RESTAURANT": "Restaurantes",
     "CAFETERIA": "Restaurantes", "PIZZA": "Restaurantes",
     "HELADOS BON": "Restaurantes", "GRAN MURALLA": "Restaurantes",
-    "SAZON": "Restaurantes", "ALTANERA": "Restaurantes",
+    "SAZON": "Restaurantes",
     "MCDONALD": "Restaurantes", "BURGER": "Restaurantes",
     "WENDYS": "Restaurantes", "DOMINO": "Restaurantes",
     "ADRIAN TROPICAL": "Restaurantes", "PANADERIA": "Restaurantes",
@@ -173,6 +174,15 @@ CLAVES = {
     "SHELL": "Combustible", "TEXACO": "Combustible",
     "TOTAL BELLA": "Combustible", "SIGMA": "Combustible",
     "ESTACION": "Combustible",
+
+    # Vehículo es el gasto del carro que NO es la gasolina: lavado, goma,
+    # mantenimiento, repuestos. "LA ALTANERA" estaba de restaurante porque yo
+    # deduje el rubro del nombre, que es exactamente lo que el módulo dice no
+    # hacer; es un carwash, y lo dijo Tiziano.
+    "ALTANERA": "Vehículo", "CAR WASH": "Vehículo", "CARWASH": "Vehículo",
+    "AUTO LAVADO": "Vehículo", "AUTOLAVADO": "Vehículo",
+    "LAVADO": "Vehículo", "GOMERA": "Vehículo", "REPUESTOS": "Vehículo",
+    "TALLER": "Vehículo",
 
     "UBER EATS": "Restaurantes", "UBER *EATS": "Restaurantes",
     "UBER": "Transporte", "RDVIAL": "Transporte", "PEAJE": "Transporte",
