@@ -94,9 +94,13 @@ class _Registro:
         self.movimientos: list = []
         self.estado: dict = {}
         self.huellas: set = set()
+        self.tipos: list[str] = []
+        self.contenidos: list[str] = []
 
     async def guardar_en_bandeja(self, **kw):
         self.orden.append(f"bandeja:{kw.get('origen')}")
+        self.tipos.append(kw.get("tipo_entrada"))
+        self.contenidos.append(kw.get("contenido_raw") or "")
         return len(self.orden)
 
     async def guardar_movimiento(self, mov, bandeja_id=None, categoria=None):
@@ -331,6 +335,68 @@ def test_el_canario_detecta_un_banco_mudo():
     assert res.bancos_mudos() == ["bhd.com.do"]
     res.por_banco_extraidos["bhd.com.do"] = 12
     assert res.bancos_mudos() == []
+
+
+# ── Regresiones críticas del 30-ago-2026 ─────────────────────────────────
+
+def test_el_crudo_no_entra_en_la_cola_del_agente():
+    """CRÍTICO. Los correos bancarios se archivaban con tipo_entrada="sistema",
+    que es uno de los tipos que `tomar_pendientes` reclama. Cada correo de banco
+    se habría convertido en un turno completo del agente: el HTML entero a
+    DeepSeek y un mensaje a Telegram por correo, hasta MAX_POR_PASADA por
+    pasada. Y siendo "sistema", las herramientas crear/editar quedaban abiertas
+    a texto escrito por el banco."""
+    if not FIXTURES.exists():
+        return
+    reg = _montar(_correos_reales(3))
+    _correr(consumos.revisar())
+    tipos_archivo = [t for t in reg.tipos if t != "sistema"]
+    assert tipos_archivo, "no archivó nada"
+    import db.db as _db
+    import inspect
+    firma = inspect.signature(_db.tomar_pendientes)
+    reclamados = firma.parameters["tipos"].default
+    for t in reg.tipos:
+        if t == "sistema":
+            continue
+        assert t not in reclamados, (
+            f"el crudo se archiva como {t!r}, que la cola del agente reclama: "
+            f"cada correo de banco sería un turno completo del agente")
+
+
+def test_el_duplicado_cuenta_como_senal_de_vida():
+    """Un duplicado PRUEBA que el parser funciona: parseó, calculó el hash y
+    coincidió. Contarlo como cero movimientos hacía que el canario gritara
+    "dejé de entender a este banco" justo cuando funcionaba bien. Y tras
+    renumerarse un buzón se recosecha todo, así que los cinco bancos avisarían
+    a la vez de que cambiaron su plantilla el mismo día."""
+    if not FIXTURES.exists():
+        return
+    correos = _correos_reales(2)
+    reg = _montar(correos)
+    _correr(consumos.revisar())                      # primera pasada: entran
+    reg.estado.clear()                               # como si se renumerara
+    _IMAPFalso.correos_a_servir = [(u + 900, c) for u, c in correos]
+    res2 = _correr(consumos.revisar())               # todos duplicados
+    assert res2.duplicados >= 1, "el montaje no produjo duplicados"
+    assert res2.bancos_mudos() == [], (
+        f"gritó por bancos que funcionan: {res2.bancos_mudos()}")
+
+
+def test_el_aviso_lleva_el_error_concreto():
+    """La línea de diagnóstico buscaba el dominio del banco dentro de un fallo
+    formateado con la cuenta de Gmail delante, así que nunca casaba y el aviso
+    salía siempre sin el único dato accionable."""
+    reg = _montar([])
+    consumos._ultimo_aviso.clear()
+    res = consumos.Resumen()
+    res.por_banco_vistos = {"bhd.com.do": 3}
+    res.por_banco_extraidos = {}
+    res.fallos = ["tizianofv@gmail.com#12 [BHD Notificación] "
+                  "(bhd.com.do): no encontré <tbody>"]
+    _correr(consumos.avisar_si_hay_bancos_mudos(res))
+    assert "no encontré <tbody>" in reg.contenidos[0], (
+        "el aviso salió sin el error concreto")
 
 
 # ── El canario avisa ─────────────────────────────────────────────────────

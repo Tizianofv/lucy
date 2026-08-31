@@ -102,11 +102,22 @@ class Resumen:
     fallos: list[str] = field(default_factory=list)
     por_banco_vistos: dict = field(default_factory=dict)
     por_banco_extraidos: dict = field(default_factory=dict)
+    por_banco_duplicados: dict = field(default_factory=dict)
 
     def bancos_mudos(self) -> list[str]:
-        """Bancos cuyos correos llegaron pero no produjeron ni un movimiento."""
+        """Bancos cuyos correos llegaron y no produjeron NINGÚN movimiento.
+
+        Un duplicado cuenta como señal de vida: prueba que el parser funcionó —
+        parseó, calculó la huella y coincidió con una que ya estaba. Contarlo
+        como cero hacía gritar al canario justo cuando el banco funcionaba bien.
+        Y el caso no es raro: cuando un buzón se renumera se recosecha todo, y
+        entonces los cinco bancos avisarían a la vez de haber cambiado su
+        plantilla el mismo día. Eso entrena a ignorar el aviso.
+        """
         return [b for b, n in self.por_banco_vistos.items()
-                if n > 0 and self.por_banco_extraidos.get(b, 0) == 0]
+                if n > 0
+                and self.por_banco_extraidos.get(b, 0) == 0
+                and self.por_banco_duplicados.get(b, 0) == 0]
 
 
 def _cosechar_sync(cuenta: dict, remitentes: list[str], desde_uid: int,
@@ -286,8 +297,17 @@ async def revisar() -> Resumen:
                 continue          # publicidad, encuestas, OTP: no son dinero
 
             # INVARIANTE 1: el crudo se guarda ANTES de parsear.
+            #
+            # tipo_entrada="banco" y NO "sistema". `tomar_pendientes` reclama
+            # ("texto","audio","foto","sistema","email"), así que con "sistema"
+            # cada correo bancario se habría convertido en un turno completo del
+            # agente: el HTML entero a DeepSeek y un mensaje a Telegram por
+            # correo, hasta MAX_POR_PASADA por pasada. Y peor: siendo "sistema",
+            # el guardarraíl SOLO_A_MANO de agente.py solo bloquea `archivar` y
+            # `preferencia` — `crear` y `editar` quedaban abiertas a texto que
+            # escribe el banco. Esto es archivo, no encargo: nadie lo procesa.
             bandeja_id = await db.guardar_en_bandeja(
-                tipo_entrada="sistema", contenido_raw=crudo.html or crudo.texto,
+                tipo_entrada="banco", contenido_raw=crudo.html or crudo.texto,
                 chat_id=config.CHAT_ID_DUENO, origen="banco")
             res.guardados_crudos += 1
 
@@ -302,6 +322,8 @@ async def revisar() -> Resumen:
                 guardado = await db.guardar_movimiento(mov, bandeja_id=bandeja_id)
                 if guardado is None:
                     res.duplicados += 1
+                    res.por_banco_duplicados[banco] = \
+                        res.por_banco_duplicados.get(banco, 0) + 1
                 else:
                     res.extraidos += 1
                     res.por_banco_extraidos[banco] = \
@@ -335,7 +357,14 @@ async def avisar_si_hay_bancos_mudos(res: Resumen) -> int:
         if _ultimo_aviso.get(banco) == hoy:
             continue
         vistos = res.por_banco_vistos.get(banco, 0)
-        muestra = next((f for f in res.fallos if banco in f), "")
+        # El fallo se formatea con la cuenta de GMAIL delante, no con el
+        # dominio del banco, así que buscar el dominio no casaba nunca y el
+        # aviso salía siempre sin el único dato accionable. Se busca en todo el
+        # texto del fallo, que sí incluye el asunto y el mensaje del error.
+        muestra = next((f for f in res.fallos
+                        if banco.split(".")[0].lower() in f.lower()), "")
+        if not muestra and res.fallos:
+            muestra = res.fallos[0]
         await db.guardar_en_bandeja(
             tipo_entrada="sistema",
             contenido_raw=(
