@@ -1018,7 +1018,7 @@ async def poner_categoria(movimiento_id: int, categoria: str) -> None:
     cumple en ningún lado.
     """
     from cerebro.bancos.categorias import (
-        categoria_permitida, normalizar_comercio)
+        categoria_permitida, normalizar_comercio, se_aprende)
 
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -1055,6 +1055,6 @@ async def poner_categoria(movimiento_id: int, categoria: str) -> None:
     # volvería a ser trabajo manual, que es como muere este tipo de sistema.
     # (Va fuera del `async with` porque aprender_categoria pide su propia
     # conexión al pool. Ya estaba así; acá solo se le quitó un SELECT de más.)
-    if antes and antes.get("contraparte") and categoria:
+    if antes and antes.get("contraparte") and se_aprende(categoria):
         await aprender_categoria(normalizar_comercio(antes["contraparte"]),
                                  categoria)

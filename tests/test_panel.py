@@ -426,6 +426,16 @@ def test_las_pantallas_se_pintan_de_verdad():
             setattr(base, n, fn)
 
 
+def test_las_dos_puertas_respetan_que_la_marca_no_se_aprende():
+    import inspect
+    import db.db as base
+    from acciones import crud
+    assert "se_aprende" in inspect.getsource(base.poner_categoria), (
+        "el panel volvería a enseñar la marca")
+    assert "se_aprende" in inspect.getsource(crud.editar), (
+        "Telegram volvería a enseñar la marca")
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):

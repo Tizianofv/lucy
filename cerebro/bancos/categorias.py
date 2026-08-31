@@ -170,6 +170,25 @@ CATEGORIAS = [
 NO_SUMAN = ("No suma",)
 
 
+def se_aprende(categoria: str | None) -> bool:
+    """¿Corregir a esta categoría debe enseñar el comercio para siempre?
+
+    NO para las marcas de NO_SUMAN, y esto costó caro descubrirlo. "No suma" no
+    dice nada del COMERCIO: dice algo de ese movimiento concreto —que ese dinero
+    solo pasaba por la cuenta—. Aprenderlo del comercio es una generalización
+    falsa.
+
+    El caso real: los dos pagos de EDESUR del 4-ago son idénticos salvo el
+    monto; uno es la luz de esta casa y el otro la del papá de Rosi. Marcar el
+    segundo como "No suma" enseñó `EDESUR PAGA TODO ONLINE → No suma`, así que
+    a partir de ahí TODOS los pagos de EDESUR —el propio incluido— habrían
+    entrado marcados y desaparecido de los totales sin que nadie lo viera.
+
+    Un rubro sí se aprende: "SM NACIONAL es Supermercado" vale para siempre.
+    """
+    return bool(categoria) and categoria not in NO_SUMAN
+
+
 def categoria_permitida(tipo: str, categoria: str | None) -> bool:
     """¿Le corresponde esa categoría a un movimiento de ese tipo?
 

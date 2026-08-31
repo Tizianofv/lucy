@@ -261,6 +261,25 @@ def test_la_comida_a_domicilio_no_es_transporte():
     assert cat.categoria_de("UBER*RIDES") == "Transporte"
 
 
+def test_la_marca_no_suma_nunca_se_aprende_del_comercio():
+    """Costó caro descubrirlo. "No suma" no dice nada del COMERCIO: dice algo de
+    ese movimiento —que ese dinero solo pasaba por la cuenta—. Aprenderlo del
+    comercio es una generalización falsa.
+
+    El caso real: los dos pagos de EDESUR del 4-ago son idénticos salvo el
+    monto; uno es la luz de esta casa y el otro la del papá de Rosi. Marcar el
+    segundo enseñó `EDESUR PAGA TODO ONLINE → No suma`, así que a partir de ahí
+    TODOS los pagos de EDESUR —el propio incluido— habrían entrado marcados y
+    desaparecido de los totales sin que nadie lo viera.
+    """
+    from cerebro.bancos.categorias import NO_SUMAN, se_aprende
+    for marca in NO_SUMAN:
+        assert not se_aprende(marca), f"{marca!r} se estaría aprendiendo"
+    # Un rubro sí: "SM NACIONAL es Supermercado" vale para siempre.
+    assert se_aprende("Supermercado")
+    assert not se_aprende("") and not se_aprende(None)
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):

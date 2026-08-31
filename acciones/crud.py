@@ -524,8 +524,9 @@ async def editar(
     # nada más — la próxima compra volvía a la cola. Dos caminos que dan
     # resultados distintos para la misma corrección es cómo se pierde la
     # confianza en los dos.
+    from cerebro.bancos.categorias import se_aprende as _se_aprende
     if (tabla == "movimientos" and "categoria" in campos
-            and campos["categoria"] and antes.get("contraparte")):
+            and _se_aprende(campos["categoria"]) and antes.get("contraparte")):
         from cerebro.bancos.categorias import normalizar_comercio
         await db.aprender_categoria(
             normalizar_comercio(antes["contraparte"]), campos["categoria"])
