@@ -207,6 +207,11 @@ REMITENTE_PAGOS = "pagoselectronicos@popularenlinea.com"
 # un pagador fabricado ensucia el aprendizaje de categorías para siempre.
 SIN_PAGADOR = "(el comprobante no dice quién pagó)"
 
+# La "Empresa Generadora" trae el CANAL cuando la transferencia la hizo uno
+# mismo por la web, y el NOMBRE DEL PAGADOR cuando la manda una empresa. Se
+# enumeran los canales para poder distinguirlos: lo que no está acá, es alguien.
+_CANALES_PDF = {"IBANKING", "APP POPULAR", "INTERNET BANKING", "SUCURSAL"}
+
 # El monto es el único número con dos decimales del comprobante. Si aparece más
 # de uno, el formato cambió y hay que mirarlo: elegir "el primero" sería fingir
 # que se entendió.
@@ -214,9 +219,6 @@ _PDF_MONTO = re.compile(r"\b\d{1,3}(?:,\d{3})*\.\d{2}\b")
 _PDF_MONEDA = re.compile(r"\b(PESOS DOMINICANOS|D[OÓ]LARES(?:\s+\w+)?)\b", re.I)
 _PDF_FECHA = re.compile(
     r"\b\d{2}-(?:ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)-\d{4}\b", re.I)
-# "CR a Cta. de MARILANDIA VARGAS" — el CR/DB dice el sentido dentro del PDF.
-_PDF_BENEF = re.compile(r"\b(CR|DB)\s+a\s+Cta\.\s*de\s+(.+?)\s*$",
-                        re.I | re.M)
 _PDF_TIPO = re.compile(r"NOTIFICACION\s+(CREDITO|DEBITO)", re.I)
 
 
@@ -237,6 +239,70 @@ def _texto_de_pdf(datos: bytes) -> str:
         return ""
 
 
+def _campos_del_comprobante(texto: str, nombre: str) -> dict:
+    """Los datos del comprobante, anclados al MONTO y validados.
+
+    El PDF sale de `extract_text` desarmado: todas las etiquetas primero y
+    todos los valores después. Leer "el valor número 14" se rompería en
+    silencio al mover un campo, así que el ancla es el monto —lo único con dos
+    decimales— y desde ahí se leen los vecinos, que el propio banco pone
+    siempre en el mismo bloque:
+
+        <monto>
+        <nombre del beneficiario>
+        <identificación>
+        BANCO <lo que sea>
+        <cuenta enmascarada>
+
+    Y se COMPRUEBA que ese bloque sea el que parece: si no aparece un "BANCO
+    ..." justo después, no se adivina — se levanta la mano. Ese "BANCO" es la
+    validación que convierte una lectura posicional en una lectura anclada.
+    """
+    lineas = [l.strip() for l in texto.splitlines() if l.strip()]
+    i_monto = next((i for i, l in enumerate(lineas)
+                    if _PDF_MONTO.fullmatch(l)), None)
+    if i_monto is None:
+        raise ErrorDeParseo(f"{nombre}: no encuentro el monto.")
+
+    cola = lineas[i_monto + 1:i_monto + 6]
+    if not any(l.upper().startswith("BANCO") for l in cola):
+        raise ErrorDeParseo(
+            f"{nombre}: después del monto no viene el bloque del beneficiario "
+            f"(esperaba un 'BANCO ...' entre {cola!r}). El formato cambió y "
+            "adivinar acá daría una contraparte inventada.")
+    if not cola:
+        raise ErrorDeParseo(f"{nombre}: no encuentro a quién se le transfirió.")
+    return {"monto": lineas[i_monto], "beneficiario": cola[0]}
+
+
+def _pagador(texto: str) -> str:
+    """Quién paga, si el comprobante lo dice.
+
+    El primer VALOR del documento es la "Empresa Generadora". En un pago de
+    empresa trae el nombre real —LEON ROJO PUBLICID— y en una transferencia que
+    uno mismo hace por la web trae el CANAL, que no es un pagador; por eso los
+    canales se enumeran y lo que no está en la lista se toma por un nombre.
+
+    Se ancla a "Número de Referencia", que es la ÚLTIMA etiqueta del formulario:
+    `extract_text` escupe todas las etiquetas primero y todos los valores
+    después, así que el primer valor es la línea siguiente. Sin ese ancla se
+    leía la primera línea del archivo, que es la etiqueta "Empresa Generadora :
+    Nombre:" — y eso fue exactamente lo que pasó al escribirlo.
+    """
+    lineas = [l.strip() for l in texto.splitlines() if l.strip()]
+    corte = next((i for i, l in enumerate(lineas)
+                  if "Número de Referencia" in l or "Numero de Referencia" in l),
+                 None)
+    if corte is None or corte + 1 >= len(lineas):
+        return SIN_PAGADOR
+    primero = lineas[corte + 1]
+    # Si quedó una etiqueta, es que el formulario cambió: mejor decir que no se
+    # sabe que poner "Posición:" de pagador.
+    if ":" in primero or primero.upper() in _CANALES_PDF:
+        return SIN_PAGADOR
+    return primero
+
+
 def parsear_comprobante_pdf(correo: CorreoCrudo) -> list[Movimiento]:
     """El comprobante de transferencia que viaja como PDF adjunto."""
     movs: list[Movimiento] = []
@@ -244,13 +310,10 @@ def parsear_comprobante_pdf(correo: CorreoCrudo) -> list[Movimiento]:
         texto = _texto_de_pdf(datos)
         tipo_doc = _PDF_TIPO.search(texto)
         if not tipo_doc:
-            # No es un comprobante. El buzón también recibe PDF de marketing
-            # ("Resumen-Webinar-Seguridad-en-la-Era-de-la-IA.pdf"), y esos no
-            # son un fallo: se ignoran sin ruido.
+            # No es un comprobante. El buzón también recibe PDF de marketing, y
+            # esos no son un fallo: se ignoran sin ruido.
             continue
 
-        # dict.fromkeys y no set: quita repetidos conservando el orden, para
-        # que el mensaje de error muestre los montos como salen en el papel.
         montos = list(dict.fromkeys(_PDF_MONTO.findall(texto)))
         if len(montos) != 1:
             raise ErrorDeParseo(
@@ -261,42 +324,35 @@ def parsear_comprobante_pdf(correo: CorreoCrudo) -> list[Movimiento]:
         moneda = _PDF_MONEDA.search(texto)
         if not moneda:
             raise ErrorDeParseo(f"{nombre}: no dice la moneda.")
-        cruda = moneda.group(1).upper()
-        divisa = "DOP" if cruda.startswith("PESOS") else "USD"
+        divisa = "DOP" if moneda.group(1).upper().startswith("PESOS") else "USD"
 
         fechas = _PDF_FECHA.findall(texto)
         if not fechas:
             raise ErrorDeParseo(f"{nombre}: no encuentro la fecha.")
-        # La última es la Fecha Efectiva —cuándo se movió el dinero— y es la que
-        # importa; la primera es la de emisión del documento.
+        # La última es la Fecha Efectiva —cuándo se movió el dinero—; la
+        # primera es la de emisión del documento.
         cuando = normalizar_fecha(fechas[-1])
 
-        benef = _PDF_BENEF.search(texto)
-        if not benef:
-            raise ErrorDeParseo(
-                f"{nombre}: no encuentro a quién se le transfirió. Sin "
-                "contraparte el movimiento no se puede deduplicar ni clasificar.")
-        sentido, quien = benef.group(1).upper(), benef.group(2).strip()
+        campos = _campos_del_comprobante(texto, nombre)
+        quien = campos["beneficiario"]
+        es_credito = tipo_doc.group(1).upper() == "CREDITO"
 
-        # `origen → destino`, que es lo que propios.reclasificar() sabe leer. El
-        # origen va vacío de nombre porque el comprobante no lo trae, y eso hace
-        # justo lo correcto: no es de la casa, el destino sí, luego ingreso.
-        es_credito = tipo_doc.group(1).upper() == "CREDITO" and sentido == "CR"
-        contraparte = (f"{SIN_PAGADOR} {FLECHA} {quien}" if es_credito
-                       else f"{quien} {FLECHA} {SIN_PAGADOR}")
+        # `origen → destino`, que es lo que propios.reclasificar() sabe leer.
+        # Quién decide si esto entra o sale NO es este parser: es el registro de
+        # cuentas propias. Un parser lee un papel, y el papel no dice de quién
+        # es la cuenta.
+        de = _pagador(texto)
+        contraparte = (f"{de} {FLECHA} {quien}" if es_credito
+                       else f"{quien} {FLECHA} {de}")
+
         movs.append(Movimiento(
             banco=BANCO,
-            # El canal es "transferencia", el vocabulario cerrado del contrato.
-            # "IBANKING" es el sistema por el que se hizo, no lo que es — y el
-            # contrato rechazándolo hizo exactamente lo que tiene que hacer.
             canal="transferencia",
-            # Provisional: es lo que dice el papel leído solo. Quien tiene la
-            # última palabra es propios.reclasificar(), que sí sabe qué cuentas
-            # son de la casa. Si el registro está vacío, esto es lo que queda —
-            # y por eso el default es el literal, no una corazonada.
+            # Provisional: es el papel leído solo. La última palabra la tiene
+            # propios.reclasificar(), que sí sabe qué cuentas son de la casa.
             tipo="gasto" if es_credito else "ingreso",
             fecha=cuando,
-            monto=normalizar_monto(montos[0]),
+            monto=normalizar_monto(campos["monto"]),
             moneda=normalizar_moneda(divisa),
             contraparte=contraparte,
             estado="aprobada",

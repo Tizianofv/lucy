@@ -344,6 +344,55 @@ def test_quien_decide_el_signo_es_el_registro_y_no_el_parser():
     assert Propios(casa + ["MARILANDIA VARGAS"]).reclasificar(m).tipo == "ingreso"
 
 
+def test_un_pago_de_empresa_tambien_se_lee():
+    """El 31-ago el canario gritó "cambiaron el formato". No habían cambiado
+    nada: llegó un comprobante de un tipo que yo no había visto —PAGOS A
+    TERCEROS de una empresa— y mi parser sacaba el beneficiario de la frase
+    "CR a Cta. de X", que es lo que el banco escribe en las transferencias que
+    uno mismo hace. En un pago de empresa la descripción es real ("Adelanto 50
+    Cot 2026-005"), así que no había de dónde sacarlo.
+
+    Eran RD$29,000 de un cliente. Asumí una convención que solo valía para los
+    cuatro comprobantes que tenía delante.
+    """
+    m = buscar_parser(REMITENTE_PAGOS, "Notificaciones Popular")(
+        _con_pdf("cds_18341.eml"))[0]
+    assert m.monto == Decimal("29000.00")
+    assert m.moneda == "DOP"
+    assert m.fecha.date().isoformat() == "2026-08-31"
+    # El beneficiario sale del bloque anclado al monto, no de la descripción.
+    assert "ROSILIS" in m.contraparte
+    # Y acá SÍ se sabe quién paga: en un pago de empresa la "Empresa
+    # Generadora" trae el nombre real, no el canal.
+    assert m.contraparte.startswith("LEON ROJO PUBLICID")
+
+
+def test_en_una_transferencia_propia_no_se_inventa_el_pagador():
+    """Ahí la "Empresa Generadora" trae IBANKING, que es el canal por el que se
+    hizo — no una persona. Ponerlo de pagador sería inventar."""
+    m = buscar_parser(REMITENTE_PAGOS, "Notificaciones Popular")(
+        _con_pdf("rosilisr04_30565.eml"))[0]
+    assert m.contraparte.startswith("(el comprobante no dice quién pagó)")
+
+
+def test_si_el_bloque_del_beneficiario_no_esta_revienta():
+    """El beneficiario se lee anclado al monto, y se COMPRUEBA que después
+    venga el "BANCO ..." que confirma que ese bloque es el que parece. Sin esa
+    comprobación, mover un campo daría una contraparte inventada en silencio —
+    y una contraparte inventada ensucia el aprendizaje de categorías para
+    siempre."""
+    from cerebro.bancos import popular
+    real = popular._texto_de_pdf
+    popular._texto_de_pdf = lambda _: (
+        "NOTIFICACION CREDITO\n31-ago-2026\nPESOS DOMINICANOS\n"
+        "29,000.00\nALGO QUE NO ES UN BLOQUE\nOTRA COSA")
+    try:
+        assert _revienta(popular.parsear_comprobante_pdf,
+                         _con_pdf("cds_18341.eml"))
+    finally:
+        popular._texto_de_pdf = real
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):
