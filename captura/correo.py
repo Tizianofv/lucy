@@ -254,55 +254,6 @@ def _sin_leer_sync(cuenta: dict, dias: int, limite: int) -> list[dict]:
             pass
 
 
-def _cosechar(cuenta: dict, desde_uid: int) -> tuple[int, int, list[dict]]:
-    """SÍNCRONO (corre en un hilo). Conecta, lee lo nuevo, filtra barato.
-
-    Devuelve (uidvalidity, uid_mas_alto_visto, candidatos). Los candidatos son
-    los que pasaron el filtro barato; el juicio de la IA se hace afuera, en el
-    mundo async, para no mezclar el IMAP bloqueante con las llamadas al modelo.
-    """
-    M = imaplib.IMAP4_SSL(SERVIDOR, 993)
-    try:
-        M.login(cuenta["user"], cuenta["pass"])
-        M.select("INBOX", readonly=True)
-        uidvalidity = int(M.response("UIDVALIDITY")[1][0])
-
-        # UID > desde_uid = solo lo que llegó después del puntero.
-        typ, data = M.uid("search", None, f"UID {desde_uid + 1}:*")
-        uids = [int(x) for x in data[0].split()]
-        # Gmail devuelve al menos el último aunque no supere el puntero: filtramos.
-        uids = sorted(u for u in uids if u > desde_uid)
-        if not uids:
-            return uidvalidity, desde_uid, []
-
-        top = max(uids)
-        candidatos = []
-        for uid in uids[:MAX_POR_DIA]:
-            typ, d = M.uid("fetch", str(uid), "(BODY.PEEK[])")
-            if not d or not d[0]:
-                continue
-            msg = email.message_from_bytes(d[0][1])
-            motivo = _es_ruido(msg)
-            if motivo:
-                continue  # descartado barato, ni se menciona
-            candidatos.append({
-                "uid": uid,
-                "from": _texto(msg.get("From")),
-                "subject": _texto(msg.get("Subject")),
-                "snippet": _snippet(msg),
-            })
-        # Avanzamos el puntero al tope VISTO, no solo al procesado: el correo
-        # vive en Gmail, no en la bandeja. Si la IA falla en juzgar uno, no se
-        # "pierde" (sigue en el buzón); reprocesarlo en bucle sí sería un
-        # problema. Mirar hacia adelante gana.
-        return uidvalidity, top, candidatos
-    finally:
-        try:
-            M.logout()
-        except Exception:
-            pass
-
-
 async def clasificar(cand: dict, reglas: str = "") -> dict:
     """Clasifica UN correo: ámbito, área y nivel. From+Subject alcanza, y expone
     mucho menos que mandar el cuerpo entero a la IA.
@@ -577,28 +528,6 @@ async def leer(cuenta: str, uid: str) -> dict | None:
         log.warning("No pude leer el correo uid=%s de %s.", uid, cuenta,
                     exc_info=True)
         return None
-
-
-async def revisar_ahora() -> list[dict]:
-    """Revisión on-demand: lo mismo que el reporte matinal, pero cuando Tiziano
-    lo pide ("revisá si llegó algo"). Devuelve los relevantes para que el agente
-    los resuma en su respuesta; NO deja encargo ni marca el reporte del día."""
-    relevantes: list[dict] = []
-    fallos: list[str] = []
-    for cuenta in config.CORREO_CUENTAS:
-        try:
-            relevantes += await _relevantes_de(cuenta, None)  # None = no marca reporte
-        except Exception as e:
-            fallos.append(f"{cuenta.get('user', '?')} ({type(e).__name__}: {e})")
-            log.warning("Falló la revisión de %s.", cuenta.get("user", "?"),
-                        exc_info=True)
-    # Mismo principio que en buscar(): si no se pudo mirar, no se dice "no llegó
-    # nada". Un buzón que no se pudo abrir no es un buzón vacío.
-    if fallos and not relevantes:
-        raise RuntimeError(
-            "no pude revisar el correo — " + "; ".join(fallos) +
-            ". NO es que no haya llegado nada: la revisión falló.")
-    return relevantes
 
 
 async def _pendientes_de(cuenta: dict, reglas: str = "") -> list[dict]:
