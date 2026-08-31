@@ -747,6 +747,42 @@ async def resumen_por_mes(meses: int = 12) -> list[dict]:
         return await cur.fetchall()
 
 
+async def gasto_por_categoria(mes: str | None = None) -> list[dict]:
+    """Gasto por categoría, con la MONEDA como parte de la agrupación.
+
+    La moneda va en el GROUP BY y no se convierte: sumar DOP con USD da un
+    número que no significa nada, y este panel existe justo para no cometer ese
+    error. Un total de "175,000" que en realidad son 154,000 pesos más 228
+    dólares no es un total, es una confusión con formato de número.
+
+    Los traspasos quedan fuera —no son gasto, son dinero cambiando de bolsillo—
+    y los ingresos también: no se clasifican.
+
+    `mes` en formato 'YYYY-MM'; sin él, todo lo que haya.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT coalesce(nullif(categoria, ''), '— sin clasificar —') AS categoria,
+                   moneda, sum(monto) AS total, count(*) AS n
+              FROM movimientos
+             WHERE borrado_en IS NULL AND tipo = 'gasto'
+               AND (%s IS NULL OR to_char(fecha, 'YYYY-MM') = %s)
+             GROUP BY 1, 2
+             ORDER BY 2, 3 DESC
+            """, (mes, mes))
+        return await cur.fetchall()
+
+
+async def meses_con_movimientos() -> list[str]:
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT DISTINCT to_char(fecha, 'YYYY-MM') FROM movimientos "
+            "WHERE borrado_en IS NULL ORDER BY 1 DESC")
+        return [r[0] for r in await cur.fetchall()]
+
+
 async def sin_clasificar(limite: int = 100) -> list[dict]:
     """La cola de corrección: los GASTOS que entraron sin categoría.
 

@@ -91,7 +91,7 @@ async def entrar(request: Request, t: str = ""):
 
 
 @app.get("/", response_class=HTMLResponse)
-async def resumen(request: Request):
+async def resumen(request: Request, mes: str = ""):
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     filas = await db.resumen_por_mes()
@@ -101,8 +101,23 @@ async def resumen(request: Request):
     for f in filas:
         meses.setdefault(f["mes"], {}).setdefault(f["moneda"], {})[f["tipo"]] = f["total"]
     salud = await db.salud_ingesta()
+
+    # El desglose por categoría, con la moneda SEPARADA. Se arma acá y no en la
+    # plantilla: {moneda: [filas ordenadas de mayor a menor]}. Que cada moneda
+    # tenga su propia tabla no es un detalle de presentación — es la única forma
+    # de que nadie lea "45,000" y crea que incluye los dólares.
+    disponibles = await db.meses_con_movimientos()
+    elegido = mes if mes in disponibles else (disponibles[0] if disponibles else None)
+    por_moneda: dict = {}
+    for f in await db.gasto_por_categoria(elegido):
+        por_moneda.setdefault(f["moneda"], []).append(f)
+    totales = {mo: sum(f["total"] for f in fs) for mo, fs in por_moneda.items()}
+
     return plantillas.TemplateResponse(
-        request, "resumen.html", {"meses": meses, "salud": salud})
+        request, "resumen.html",
+        {"meses": meses, "salud": salud, "por_moneda": por_moneda,
+         "totales": totales, "mes_elegido": elegido,
+         "meses_disponibles": disponibles})
 
 
 @app.get("/sin-clasificar", response_class=HTMLResponse)
