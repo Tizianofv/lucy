@@ -207,4 +207,51 @@ CREATE TABLE movimientos (
 );
 CREATE INDEX idx_movimientos_fecha ON movimientos(fecha);
 
+-- Los lugares con nombre de su vida ("CDS", "el estudio", "casa"): son lo que
+-- convierte unas coordenadas en un dato con significado.
+CREATE TABLE lugares (
+  id         BIGSERIAL PRIMARY KEY,
+  creado_en  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  nombre     TEXT NOT NULL,
+  lat        DOUBLE PRECISION NOT NULL,
+  lon        DOUBLE PRECISION NOT NULL,
+  radio_m    INT NOT NULL DEFAULT 300,      -- dentro de este radio "está ahí"
+  borrado_en TIMESTAMPTZ
+);
 
+-- ═══ Todo lo que Lucy hace, queda escrito (pilares + Nivel 7 desde el día 1) ═══
+CREATE TABLE log_acciones (
+  id          BIGSERIAL PRIMARY KEY,
+  ts          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  actor       TEXT NOT NULL,        -- 'lucy' | 'tiziano'
+  accion      TEXT NOT NULL,        -- crear | editar | borrar | restaurar | clasificar
+  tabla       TEXT NOT NULL,
+  registro_id BIGINT NOT NULL,
+  antes       JSONB,                -- estado previo → esto ES el "deshacer"
+  despues     JSONB,
+  motivo      TEXT,                 -- la explicación de Lucy (req 36, gratis desde hoy)
+  bandeja_id  BIGINT REFERENCES bandeja(id)
+);
+
+-- ═══ El latido del respaldo (pilar #40) ═══
+-- Una fila por backup que TERMINÓ bien. No es contabilidad: es la única forma
+-- de que Lucy sepa si todavía tiene respaldo. Hasta el 30-ago-2026 esa verdad
+-- vivía solo en los nombres de archivo de una carpeta de Google Drive que el
+-- proceso de Railway no puede ver — así que nadie adentro del sistema podía
+-- notar que hacía 25 días que no se respaldaba nada.
+--
+-- Se escribe DESPUÉS de cerrar el archivo, nunca antes: la fila significa "el
+-- archivo existe y está completo". Un backup que revienta a la mitad no deja
+-- fila, y a las 48 horas el despertador avisa. Un respaldo que falla callado
+-- es peor que no tener respaldo: da la confianza sin dar la copia.
+CREATE TABLE backups (
+  id       BIGSERIAL PRIMARY KEY,
+  hecho_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  archivo  TEXT NOT NULL,        -- nombre del .json.gz (sin ruta: la ruta cambia por máquina)
+  bytes    BIGINT NOT NULL,      -- tamaño comprimido; si se desploma, algo se rompió
+  tablas   INT NOT NULL,
+  filas    INT NOT NULL,
+  esquema  TEXT,                 -- 'pg_dump' | 'catalogo' — cómo se guardó la estructura
+  origen   TEXT                  -- qué máquina lo corrió: delata que dependemos de una sola
+);
+CREATE INDEX idx_backups_hecho_en ON backups(hecho_en DESC);
