@@ -99,6 +99,7 @@ def normalizar_comercio(texto: str) -> str:
 # más se toca tiene que estar arriba.
 CATEGORIAS = [
     "Supermercado",
+    "Colmado",
     "Restaurantes",
     "Combustible",
     "Transporte",
@@ -157,6 +158,12 @@ CLAVES = {
     # "MAXIMO GOMEZ DIS" es la red de Nacional en la avenida, no un comercio
     # distinto; sale así en los correos del BHD.
     "MAXIMO GOMEZ DIS": "Supermercado",
+
+    # El colmado es categoría aparte del supermercado a propósito: son la misma
+    # compra hecha en otro sitio y con otra frecuencia —diaria y chica contra
+    # semanal y grande— y juntarlas esconde exactamente el gasto que uno quiere
+    # ver. "COLMADON" entra solo, porque la clave casa en inicio de palabra.
+    "COLMADO": "Colmado",
 
     "CLUB NACO": "Restaurantes", "RESTAURANT": "Restaurantes",
     "CAFETERIA": "Restaurantes", "PIZZA": "Restaurantes",
