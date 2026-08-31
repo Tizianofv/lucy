@@ -9,17 +9,17 @@
   <input type="date" name="desde" value="{{ desde }}">
   <input type="date" name="hasta" value="{{ hasta }}">
   <select name="tipo">
-    <option value="">todo</option>
+    <option value="">Todos los tipos</option>
     {% for t in ('gasto','ingreso','transferencia') %}
     <option value="{{ t }}" {{ 'selected' if tipo==t }}>{{ t }}</option>{% endfor %}
   </select>
   <select name="banco">
-    <option value="">cualquier banco</option>
+    <option value="">Todos los bancos</option>
     {% for b in bancos %}
     <option value="{{ b }}" {{ 'selected' if banco==b }}>{{ b }}</option>{% endfor %}
   </select>
   <select name="categoria">
-    <option value="">cualquier categoría</option>
+    <option value="">Todas las categorías</option>
     {% for c in categorias %}
     <option value="{{ c }}" {{ 'selected' if categoria==c }}>{{ c }}</option>{% endfor %}
   </select>
