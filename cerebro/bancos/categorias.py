@@ -126,6 +126,15 @@ CATEGORIAS = [
     # ver cuánto lleva costando, que es una pregunta que ninguna categoría de
     # rubro puede contestar. Sin palabras clave: un proyecto lo decide una
     # persona, no el nombre del comercio.
+    # Las tres siguientes no son RUBROS, son a QUIÉN le corresponde el gasto.
+    # Conviven con los rubros en la misma lista a propósito: un movimiento
+    # tiene una sola categoría, y cuando el gasto es de CDS eso pesa más que
+    # si fue restaurante o gasolina. Si algún día hace falta saber las dos
+    # cosas a la vez, eso es otra columna y no otra categoría.
+    # Sin palabras clave: a quién le toca un gasto lo decide una persona, no
+    # el nombre del comercio.
+    "CDS",
+    "ACD",
     "Proyecto Inés",
     # Acá NO hay categorías de ingreso, y es una decisión de Tiziano: el
     # dinero que entra no hace falta clasificarlo. La cola solo trae gastos
