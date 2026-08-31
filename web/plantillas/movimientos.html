@@ -23,8 +23,39 @@
     {% for c in categorias %}
     <option value="{{ c }}" {{ 'selected' if categoria==c }}>{{ c }}</option>{% endfor %}
   </select>
-  <button>Filtrar</button>
+  {# El botón se queda: si el JS no corre, el filtro tiene que seguir
+     funcionando. Con JS se esconde, porque un botón que no hace falta invita a
+     preguntarse si hizo algo. #}
+  <button id="btn-filtrar">Filtrar</button>
 </form>
+
+<script>
+(function () {
+  var filtros = document.querySelector('form.filtros');
+  if (!filtros) return;
+  var btn = document.getElementById('btn-filtrar');
+  if (btn) btn.style.display = 'none';
+
+  filtros.addEventListener('change', function () {
+    // Si hay categorías tocadas y sin guardar, filtrar las perdería — que es
+    // el mismo error que tenía la cola cuando cada fila era su formulario.
+    // Antes de recargar hay que preguntar, no tragarse el trabajo del otro.
+    var edicion = document.querySelector('form[action="/categorias"]');
+    var sucio = false;
+    if (edicion) {
+      edicion.querySelectorAll('select[name^="cat_"]').forEach(function (s) {
+        var previo = edicion.querySelector('input[name="prev_' +
+                       s.name.slice(4) + '"]');
+        if (previo && s.value !== previo.value) sucio = true;
+      });
+    }
+    if (sucio && !confirm(
+        'Tenés categorías cambiadas sin guardar. Si filtrás ahora se pierden. ' +
+        '¿Filtrar igual?')) return;
+    filtros.submit();
+  });
+})();
+</script>
 {% if not movs %}
 <p class="vacio">Nada con esos filtros.</p>
 {% else %}

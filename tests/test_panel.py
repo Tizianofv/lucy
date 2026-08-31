@@ -199,6 +199,22 @@ def test_el_redirect_no_acepta_destinos_de_afuera():
         "el destino del redirect no se está comprobando")
 
 
+def test_el_filtro_no_se_traga_las_categorias_sin_guardar():
+    """Filtrar recarga la página. Si eso pasa con categorías tocadas y sin
+    guardar, se pierden — el mismo error que tenía la cola cuando cada fila era
+    su propio formulario. Filtrar solo se dispara tras avisar."""
+    import os
+    html = open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "web", "plantillas",
+        "movimientos.html"), encoding="utf-8").read()
+    assert "filtros.addEventListener('change'" in html, (
+        "los filtros ya no se aplican solos")
+    assert "confirm(" in html and "sin guardar" in html, (
+        "filtrar puede perder cambios sin avisar")
+    assert "<button id=\"btn-filtrar\">" in html, (
+        "sin JS el filtro tiene que seguir funcionando con su botón")
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):
