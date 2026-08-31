@@ -790,6 +790,32 @@ async def salud_ingesta() -> dict:
                 "patrones_propios": propios}
 
 
+async def categorias_aprendidas() -> dict:
+    """{comercio_normalizado: categoria} — lo que el sistema ya sabe."""
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT comercio, categoria FROM categorias_aprendidas "
+            "WHERE borrado_en IS NULL")
+        return {r[0]: r[1] for r in await cur.fetchall()}
+
+
+async def aprender_categoria(comercio_norm: str, categoria: str) -> None:
+    """Guarda la corrección. Un comercio tiene UNA categoría: la última gana,
+    porque una corrección nueva sobre el mismo sitio es un cambio de opinión,
+    no un conflicto."""
+    if not comercio_norm or not categoria:
+        return
+    async with pool.connection() as conn:
+        await conn.execute(
+            """
+            INSERT INTO categorias_aprendidas (comercio, categoria)
+            VALUES (%s, %s)
+            ON CONFLICT (comercio) DO UPDATE
+              SET categoria = EXCLUDED.categoria, borrado_en = NULL,
+                  creado_en = now()
+            """, (comercio_norm, categoria))
+
+
 async def poner_categoria(movimiento_id: int, categoria: str) -> None:
     """La única escritura del panel. Pasa por log_acciones como todo lo demás:
     una corrección hecha desde la web tiene que ser tan auditable y tan
@@ -811,3 +837,14 @@ async def poner_categoria(movimiento_id: int, categoria: str) -> None:
             (movimiento_id,
              json.dumps(antes or {}, default=str, ensure_ascii=False),
              json.dumps({"categoria": categoria}, ensure_ascii=False)))
+
+        # Y se APRENDE: sin esto, corregir el mismo comercio la semana que viene
+        # volvería a ser trabajo manual, que es como muere este tipo de sistema.
+        cur2 = conn.cursor(row_factory=dict_row)
+        await cur2.execute("SELECT contraparte FROM movimientos WHERE id = %s",
+                           (movimiento_id,))
+        fila = await cur2.fetchone()
+    if fila and fila.get("contraparte") and categoria:
+        from cerebro.bancos.categorias import normalizar_comercio
+        await aprender_categoria(normalizar_comercio(fila["contraparte"]),
+                                 categoria)

@@ -47,6 +47,7 @@ import cerebro.bancos as bancos
 import config
 import db.db as db
 from cerebro.bancos.contrato import CorreoCrudo, ErrorDeParseo
+from cerebro.bancos.categorias import Categorizador
 from cerebro.bancos.propios import Propios
 
 log = logging.getLogger("lucy.consumos")
@@ -256,6 +257,12 @@ async def revisar() -> Resumen:
         return res
 
     registro = await _propios()
+    try:
+        cat = Categorizador(await db.categorias_aprendidas())
+    except Exception:
+        # Sin tabla todavía: los movimientos entran sin categoría y van a la
+        # cola del panel, que es de donde salen las correcciones. No inventamos.
+        cat = Categorizador()
 
     for cuenta in config.CORREO_CUENTAS:
         user = cuenta.get("user", "?")
@@ -319,7 +326,9 @@ async def revisar() -> Resumen:
 
             for mov in movs:
                 mov = registro.reclasificar(mov)
-                guardado = await db.guardar_movimiento(mov, bandeja_id=bandeja_id)
+                guardado = await db.guardar_movimiento(
+                    mov, bandeja_id=bandeja_id,
+                    categoria=cat.categoria_de(mov.contraparte))
                 if guardado is None:
                     res.duplicados += 1
                     res.por_banco_duplicados[banco] = \

@@ -57,3 +57,20 @@ COMMENT ON COLUMN consumos_estado.uidvalidity IS
   'silencio tras una migración del buzón.';
 COMMIT;
 
+
+-- ═══════════════════════════════════════════════════════════
+-- 4. categorias_aprendidas → lo que el sistema aprende cuando corriges una
+--    categoría en el panel. Sin esto, corregir el mismo comercio la semana que
+--    viene volvería a ser trabajo manual.
+BEGIN;
+CREATE TABLE IF NOT EXISTS categorias_aprendidas (
+  comercio    TEXT PRIMARY KEY,
+  categoria   TEXT NOT NULL,
+  creado_en   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  borrado_en  TIMESTAMPTZ
+);
+COMMENT ON COLUMN categorias_aprendidas.comercio IS
+  'Comercio NORMALIZADO (cerebro/bancos/categorias.py): sin acentos, sin '
+  'sucursal, sin sufijo de ciudad. Guardar el nombre crudo obligaría a corregir '
+  'el mismo sitio una vez por cada forma en que el banco lo escribe.';
+COMMIT;
