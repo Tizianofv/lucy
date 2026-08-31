@@ -1,39 +1,5 @@
 {% extends "base.html" %}{% set activo='resumen' %}
 {% block titulo %}Resumen
-{% if por_moneda %}
-<h2 style="margin-top:1.8rem">En qué se va el dinero</h2>
-<form class="filtros" method="get" style="margin-bottom:.8rem">
-  <select name="mes" onchange="this.form.submit()">
-    {% for m in meses_disponibles %}
-    <option value="{{ m }}" {{ 'selected' if m == mes_elegido }}>{{ m }}</option>
-    {% endfor %}
-  </select>
-  <noscript><button>Ver</button></noscript>
-</form>
-
-{# UNA TABLA POR MONEDA, y no una columna más. Si DOP y USD comparten tabla, el
-   ojo suma la columna sin querer y "175,000" resulta ser 154,000 pesos más 228
-   dólares — que no es un total, es una confusión con formato de número. #}
-{% for moneda, filas in por_moneda.items() %}
-<h3 style="margin:1.2rem 0 .3rem">{{ moneda }}</h3>
-<div class="scroll"><table>
-  <tr><th>Categoría</th><th class="num">Gasto</th><th class="num">%</th><th class="num">n</th></tr>
-  {% for f in filas %}
-  <tr>
-    <td>{{ f.categoria }}</td>
-    <td class="num gasto">{{ f.total|pesos }}</td>
-    <td class="num suave">{{ (100 * f.total / totales[moneda])|round|int }}%</td>
-    <td class="num suave">{{ f.n }}</td>
-  </tr>
-  {% endfor %}
-  <tr><th>Total {{ moneda }}</th><th class="num">{{ totales[moneda]|pesos }}</th>
-      <th></th><th></th></tr>
-</table></div>
-{% endfor %}
-<p class="suave">«— sin clasificar —» no es una categoría: es lo que falta por
-corregir en la cola. Mientras pese, el resto de los porcentajes vale menos de lo
-que aparenta.</p>
-{% endif %}
 {% endblock %}
 {% block cuerpo %}
 <h1>Resumen por mes</h1>
@@ -86,11 +52,21 @@ Lo que se vea acá antes de esa fecha es lo que se anotó a mano por Telegram.</
 <h3 style="margin:1.2rem 0 .3rem">{{ moneda }}</h3>
 <div class="scroll"><table>
   <tr><th>Categoría</th><th class="num">Gasto</th><th class="num">%</th><th class="num">n</th></tr>
-  {% for f in filas %}
+  {% for f in filas if not f.no_suma %}
   <tr>
     <td>{{ f.categoria }}</td>
     <td class="num gasto">{{ f.total|pesos }}</td>
-    <td class="num suave">{{ (100 * f.total / totales[moneda])|round|int }}%</td>
+    <td class="num suave">{{ (100 * f.total / totales[moneda])|round|int if totales[moneda] }}%</td>
+    <td class="num suave">{{ f.n }}</td>
+  </tr>
+  {% endfor %}
+  {# Las que no suman van DEBAJO del total y marcadas. Esconderlas sería otra
+     forma de mentir: el circuito tiene que poder auditarse entero. #}
+  {% for f in filas if f.no_suma %}
+  <tr class="suave">
+    <td>{{ f.categoria }} <span class="suave">· no cuenta</span></td>
+    <td class="num suave">{{ f.total|pesos }}</td>
+    <td class="num suave">—</td>
     <td class="num suave">{{ f.n }}</td>
   </tr>
   {% endfor %}

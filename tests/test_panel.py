@@ -215,6 +215,39 @@ def test_el_filtro_no_se_traga_las_categorias_sin_guardar():
         "sin JS el filtro tiene que seguir funcionando con su botón")
 
 
+def test_las_plantillas_compilan_y_el_titulo_es_solo_un_titulo():
+    """Dos fallos reales, y los dos los metí con un replace descuidado.
+
+    Una plantilla que no compila tumba la pantalla entera en producción, y
+    ningún test la miraba. Peor fue el segundo: al añadir el resumen por
+    categorías, el bloque entero se insertó DENTRO de `{% block titulo %}` —
+    porque el replace pegó en el primer `{% endblock %}` del archivo, que era el
+    del título—. La página salía con media pantalla metida en la etiqueta
+    <title> y la sección repetida abajo.
+
+    Por eso no basta con que compile: el título tiene que ser texto corto.
+    """
+    import pathlib
+    from decimal import Decimal
+
+    from jinja2 import Environment, FileSystemLoader
+    raiz = pathlib.Path(__file__).parent.parent / "web" / "plantillas"
+    entorno = Environment(loader=FileSystemLoader(str(raiz)))
+    entorno.filters["pesos"] = lambda v: f"{Decimal(v):,.2f}" if v is not None else "—"
+
+    for archivo in sorted(raiz.glob("*.html")):
+        entorno.get_template(archivo.name)          # revienta si no compila
+        fuente = archivo.read_text(encoding="utf-8")
+        if "{% block titulo %}" not in fuente:
+            continue
+        titulo = fuente.split("{% block titulo %}")[1].split("{% endblock %}")[0]
+        assert "<" not in titulo, (
+            f"{archivo.name}: hay HTML dentro del bloque del título "
+            f"({titulo.strip()[:60]!r}) — se coló contenido de la página")
+        assert len(titulo.strip()) < 40, (
+            f"{archivo.name}: el título mide {len(titulo.strip())} caracteres")
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):

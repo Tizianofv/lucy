@@ -730,7 +730,15 @@ async def listar_cuentas_propias() -> list[dict]:
 # error que costaba RD$657,400 al año.
 
 async def resumen_por_mes(meses: int = 12) -> list[dict]:
-    """Gasto e ingreso por mes y moneda. Los traspasos quedan fuera."""
+    """Gasto e ingreso por mes y moneda.
+
+    Fuera quedan los traspasos —no son gasto, es dinero cambiando de bolsillo—
+    y las categorías que NO SUMAN: el dinero de terceros que solo pasa por la
+    cuenta. Contarlo inflaba agosto en RD$43,312 de ingreso y RD$41,500 de
+    gasto a la vez, así que el neto salía casi bien por casualidad mientras
+    cada cifra por separado era falsa.
+    """
+    from cerebro.bancos.categorias import NO_SUMAN
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
@@ -740,10 +748,11 @@ async def resumen_por_mes(meses: int = 12) -> list[dict]:
               FROM movimientos
              WHERE borrado_en IS NULL
                AND tipo <> 'transferencia'
+               AND coalesce(categoria, '') <> ALL(%s)
                AND fecha >= date_trunc('month', now()) - (%s || ' months')::interval
              GROUP BY 1, 2, 3
              ORDER BY 1 DESC, 2, 3
-            """, (meses,))
+            """, (list(NO_SUMAN), meses))
         return await cur.fetchall()
 
 
@@ -758,14 +767,20 @@ async def gasto_por_categoria(mes: str | None = None) -> list[dict]:
     Los traspasos quedan fuera —no son gasto, son dinero cambiando de bolsillo—
     y los ingresos también: no se clasifican.
 
+    Las categorías que NO SUMAN salen igual, con la bandera `no_suma` puesta:
+    esconderlas sería otra forma de mentir. Se muestran aparte y no entran en
+    el total, que es distinto de no mostrarlas.
+
     `mes` en formato 'YYYY-MM'; sin él, todo lo que haya.
     """
+    from cerebro.bancos.categorias import NO_SUMAN
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
             """
             SELECT coalesce(nullif(categoria, ''), '— sin clasificar —') AS categoria,
-                   moneda, sum(monto) AS total, count(*) AS n
+                   moneda, sum(monto) AS total, count(*) AS n,
+                   coalesce(categoria, '') = ANY(%s) AS no_suma
               FROM movimientos
              WHERE borrado_en IS NULL AND tipo = 'gasto'
                -- El ::text NO es adorno: sin él Postgres no puede deducir el
@@ -773,9 +788,11 @@ async def gasto_por_categoria(mes: str | None = None) -> list[dict]:
                -- IndeterminateDatatype, que en el panel se ve como un
                -- Internal Server Error en la portada.
                AND (%s::text IS NULL OR to_char(fecha, 'YYYY-MM') = %s)
-             GROUP BY 1, 2
+             -- El 5 es la bandera `no_suma`: se calcula desde `categoria`, y
+             -- Postgres exige agruparla igual que a la propia categoría.
+             GROUP BY 1, 2, 5
              ORDER BY 2, 3 DESC
-            """, (mes, mes))
+            """, (list(NO_SUMAN), mes, mes))
         return await cur.fetchall()
 
 

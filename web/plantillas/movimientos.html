@@ -80,7 +80,11 @@
   <td class="suave">{{ m.banco or '—' }}</td>
   <td>{{ m.contraparte }}<div class="suave">{{ m.referencia or '' }}</div></td>
   <td>
-    {% if m.tipo == 'gasto' %}
+    {# Se edita en TODOS los tipos, ingresos incluidos. Los ingresos no van a la
+       cola —no hace falta clasificarlos uno por uno— pero sí tienen que poder
+       marcarse: los RD$43,312 de intereses del certificado del papá de Rosi
+       entran como "ingreso" y no son ingreso de esta casa. Sin poder tocarlos,
+       la categoría que no suma no serviría para la mitad del circuito. #}
     <input type="hidden" name="prev_{{ m.id }}" value="{{ m.categoria or '' }}">
     <select name="cat_{{ m.id }}" style="width:11rem">
       <option value="">— sin categoría —</option>
@@ -88,10 +92,6 @@
       <option value="{{ c }}" {{ 'selected' if m.categoria == c }}>{{ c }}</option>
       {% endfor %}
     </select>
-    {% else %}
-    {# Los ingresos y traspasos no se clasifican, así que tampoco se editan. #}
-    <span class="suave">—</span>
-    {% endif %}
   </td>
   <td class="num {{ m.tipo }}">{{ m.monto|pesos }} {{ m.moneda }}</td>
 </tr>

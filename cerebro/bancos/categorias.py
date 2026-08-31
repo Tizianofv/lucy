@@ -123,7 +123,26 @@ CATEGORIAS = [
     # las había, y lo único que hacían era empujar hacia abajo lo que de verdad
     # hay que corregir.
     "Otros",
+    # NO SUMA. Va al final porque no es una categoría de gasto: es la marca de
+    # que ese dinero nunca fue de la casa. Ver NO_SUMAN.
+    "Dinero de terceros",
 ]
+
+# Las categorías que NO entran en ningún total.
+#
+# Nace de un circuito real: el papá de Rosi tiene un certificado en APAP; los
+# intereses caen en la cuenta de la casa, de ahí se paga la luz de SU casa y el
+# resto se le transfiere. Tres movimientos —RD$43,312 de "ingreso", RD$30,518 y
+# ~RD$11,000 de "gasto"— que no son ni ingreso ni gasto de nadie de esta casa.
+# Se compensaban entre sí, así que el neto quedaba casi bien por casualidad y
+# cada cifra por separado era falsa. "Servicios del hogar" figuraba como la
+# segunda categoría del mes en buena parte por una factura ajena.
+#
+# Por qué una categoría y no una tabla de terceros: la marca vive donde ya se
+# mira y se corrige, sin inventar una pantalla nueva ni un registro que alguien
+# tenga que mantener. El movimiento SIGUE VISIBLE en /movimientos —el circuito
+# se puede auditar entero— y solo se cae de los totales.
+NO_SUMAN = ("Dinero de terceros",)
 
 # ── La red de seguridad ──────────────────────────────────────────────────
 #
