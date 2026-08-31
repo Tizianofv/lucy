@@ -165,9 +165,15 @@ class FakePool:
 def _instalar(conn):
     """Pone la base falsa y calla las ramas laterales de `revisar`.
 
-    guardar_en_bandeja se stubea (y se CAPTURA en `conn.encargos`) para que el
-    briefing y el plan semanal no dependan de a qué hora se corran los tests, y
-    para poder mirar qué encargos deja el despertador.
+    guardar_en_bandeja se stubea (y se CAPTURA en `conn.encargos`) para poder
+    mirar qué encargos deja el despertador.
+
+    _briefing y _semanal se anulan ENTERAS, no solo su escritura. Stubear
+    guardar_en_bandeja evita que toquen la base pero no que devuelvan 1, y ese 1
+    se suma al contador que estos tests leen: `revisar()` devuelve avisos de
+    calendario MÁS briefing MÁS plan semanal. Con solo la escritura callada,
+    todo este archivo pasaba de noche y fallaba de 7 a 12 de la mañana — un test
+    que depende de la hora a la que se corre no está probando nada.
     """
     db.pool = FakePool(conn)
     conn.encargos = []
@@ -175,12 +181,17 @@ def _instalar(conn):
     async def _nada(*a, **k):
         return None
 
+    async def _cero():
+        return 0
+
     async def _capturar(**k):
         conn.encargos.append(k.get("contenido_raw", ""))
         return None
 
     db.registrar_aviso = _nada
     db.guardar_en_bandeja = _capturar
+    despertador._briefing = _cero
+    despertador._semanal = _cero
 
 
 class _BotFalso:
