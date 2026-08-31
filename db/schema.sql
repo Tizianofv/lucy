@@ -206,9 +206,19 @@ CREATE TABLE movimientos (
   -- Las dos siguientes llegaron con la ingesta bancaria y vivieron un tiempo
   -- solo en la migración: la base real las tenía y este archivo no.
   hash_contenido TEXT,                         -- clave de dedupe del correo
-  -- aprobada | declinada | pendiente. Solo las aprobadas cuentan en los
-  -- totales: una declinada es dinero que no salió, y una retención se cuenta
-  -- cuando llega el cargo real, no antes.
+  -- aprobada | declinada | pendiente.
+  --
+  -- NO cuentan las DECLINADAS: ese dinero no salió.
+  --
+  -- Las PENDIENTES sí cuentan, y esto se midió antes de decidirlo. Parecía que
+  -- una retención debía esperar al cargo real para no contarse dos veces —
+  -- pero sobre los 461 movimientos del corpus, 10 de 12 retenciones NUNCA se
+  -- liquidan en un segundo correo. Para las tarjetas en dólares el aviso de
+  -- retención es el ÚNICO registro que manda el banco: Railway, Amazon Prime y
+  -- Anthropic llegan así todos los meses. Excluirlas borraba gastos reales.
+  --
+  -- Si alguna se duplicara, se ve: sale en "posibles duplicados" de /salud.
+  -- Contar de más se nota; contar de menos, no.
   estado      TEXT NOT NULL DEFAULT 'aprobada'
               CHECK (estado IN ('aprobada', 'declinada', 'pendiente')),
   banco       TEXT,                            -- BHD | Banreservas | ... | NULL a mano

@@ -748,7 +748,7 @@ async def resumen_por_mes(meses: int = 12) -> list[dict]:
               FROM movimientos
              WHERE borrado_en IS NULL
                AND tipo <> 'transferencia'
-               AND estado = 'aprobada'
+               AND estado <> 'declinada'
                AND coalesce(categoria, '') <> ALL(%s)
                AND fecha >= date_trunc('month', now()) - (%s || ' months')::interval
              GROUP BY 1, 2, 3
@@ -784,7 +784,7 @@ async def gasto_por_categoria(mes: str | None = None) -> list[dict]:
                    coalesce(categoria, '') = ANY(%s) AS no_suma
               FROM movimientos
              WHERE borrado_en IS NULL AND tipo = 'gasto'
-               AND estado = 'aprobada'
+               AND estado <> 'declinada'
                -- El ::text NO es adorno: sin él Postgres no puede deducir el
                -- tipo del parámetro cuando llega NULL y tira
                -- IndeterminateDatatype, que en el panel se ve como un
@@ -846,7 +846,7 @@ async def gastos_de_cada_categoria(mes: str | None = None) -> list[dict]:
                    coalesce(nullif(categoria, ''), '— sin clasificar —') AS categoria
               FROM movimientos
              WHERE borrado_en IS NULL AND tipo = 'gasto'
-               AND estado = 'aprobada'
+               AND estado <> 'declinada'
                AND (%s::text IS NULL OR to_char(fecha, 'YYYY-MM') = %s)
              ORDER BY monto DESC
             """, (mes, mes))
@@ -884,8 +884,10 @@ async def sin_clasificar(limite: int = 100) -> list[dict]:
              WHERE borrado_en IS NULL
                AND (categoria IS NULL OR categoria = '')
                AND tipo = 'gasto'
-               -- Una compra rechazada no hay que clasificarla: no pasó.
-               AND estado = 'aprobada'
+               -- Una compra rechazada no hay que clasificarla: no pasó. Una
+               -- retención SÍ: para las tarjetas en dólares es el único aviso
+               -- que manda el banco, así que ese gasto es real.
+               AND estado <> 'declinada'
              ORDER BY monto DESC
              LIMIT %s
             """, (limite,))

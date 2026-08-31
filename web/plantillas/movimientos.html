@@ -92,8 +92,10 @@ solo el número.</p>
   <td class="suave">{{ m.fecha }}</td>
   <td class="suave">{{ m.banco or '—' }}</td>
   <td>{{ m.contraparte }}
-    {% if m.estado and m.estado != 'aprobada' %}
-    <strong class="suave"> · {{ m.estado }}, no cuenta</strong>
+    {% if m.estado == 'declinada' %}
+    <strong class="suave"> · declinada, no cuenta</strong>
+    {% elif m.estado == 'pendiente' %}
+    <span class="suave"> · retención</span>
     {% endif %}
     <div class="suave">{{ m.referencia or '' }}</div></td>
   <td>

@@ -277,13 +277,40 @@ def test_una_compra_rechazada_no_es_un_gasto():
 
     for consulta in (base.resumen_por_mes, base.gasto_por_categoria,
                      base.gastos_de_cada_categoria, base.sin_clasificar):
-        assert "estado = 'aprobada'" in inspect.getsource(consulta), (
-            f"{consulta.__name__} cuenta movimientos que no ocurrieron")
+        fuente = inspect.getsource(consulta)
+        assert "estado <> 'declinada'" in fuente, (
+            f"{consulta.__name__} cuenta compras que el banco rechazó")
+        # Y NO puede filtrar por 'aprobada': eso dejaría fuera las retenciones,
+        # que sí son gasto real. Ver el test de abajo.
+        assert "estado = 'aprobada'" not in fuente, (
+            f"{consulta.__name__} descarta las retenciones, que sí ocurrieron")
 
     # El detalle SÍ los muestra: quedan fuera del total, no fuera de la vista.
-    assert "estado = 'aprobada'" not in inspect.getsource(
-        base.movimientos_filtrados), (
-        "/movimientos tiene que seguir mostrándolos, marcados")
+    assert "estado" not in inspect.getsource(base.movimientos_filtrados).split(
+        "WHERE")[1], "/movimientos tiene que seguir mostrándolos, marcados"
+
+
+def test_una_retencion_si_es_un_gasto():
+    """Lo vio Tiziano: "el cobro de Railway, Amazon y Anthropic en agosto no
+    están, y esos servicios se pagaron en agosto".
+
+    Yo había excluido las retenciones con el argumento de que el cargo real
+    llega después y si no se contarían dos veces. MEDIDO sobre los 461
+    movimientos del corpus: 10 de 12 retenciones NUNCA se liquidan en un
+    segundo correo. Para las tarjetas en dólares el aviso de retención es el
+    ÚNICO registro que manda el banco — Railway, Amazon Prime y Anthropic
+    llegan así todos los meses.
+
+    Excluirlas borraba gastos reales, en silencio. Si alguna se duplicara se
+    ve, porque sale en "posibles duplicados" de /salud: contar de más se nota,
+    contar de menos no.
+    """
+    import inspect
+    import db.db as base
+    for consulta in (base.resumen_por_mes, base.gasto_por_categoria,
+                     base.gastos_de_cada_categoria):
+        assert "'pendiente'" not in inspect.getsource(consulta), (
+            f"{consulta.__name__} vuelve a excluir las retenciones")
 
 
 def test_el_estado_se_puede_recuperar_de_la_huella():
