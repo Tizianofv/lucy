@@ -170,6 +170,26 @@ CATEGORIAS = [
 NO_SUMAN = ("No suma",)
 
 
+# ── Los comercios que el sistema NO debe clasificar solo ────────────────
+#
+# Un mismo comercio que significa cosas distintas según el movimiento. No es
+# que falte información para adivinar: es que la respuesta correcta depende de
+# algo que el correo no dice, y ninguna cantidad de reglas lo va a sacar.
+#
+# EDESUR es el caso: hay DOS contratos —la luz de esta casa y la de la casa del
+# papá de Rosi— y los dos pagos llegan con el texto IDÉNTICO, la misma tarjeta y
+# el mismo día. Se comprobó contra los siete pagos de abril a agosto: ni la
+# tarjeta ni el monto los separan (el monto parecía servir hasta que la casa se
+# atrasó un mes y pagó doble, que es justo cuando la regla habría marcado como
+# "no cuenta" un gasto propio de once mil pesos).
+#
+# Así que el sistema NO adivina: los manda a la cola del panel, donde Tiziano
+# pone cuál es cuál en treinta segundos. Declinar es la respuesta correcta
+# cuando la información no está — y callarse la duda sería peor, porque un
+# gasto ajeno contado como propio no se ve.
+AMBIGUOS = ("EDESUR",)
+
+
 def se_aprende(categoria: str | None) -> bool:
     """¿Corregir a esta categoría debe enseñar el comercio para siempre?
 
@@ -367,6 +387,11 @@ class Categorizador:
         norm = normalizar_comercio(comercio)
         if not norm:
             return None
+        # Los ambiguos cortan ANTES que lo aprendido: si no, la primera
+        # corrección se convertiría en la respuesta para siempre, que es
+        # exactamente lo que acá no se puede hacer.
+        if any(re.search(r"\b" + re.escape(a), norm) for a in AMBIGUOS):
+            return None
         if norm in self.aprendidas:
             return self.aprendidas[norm]
         for clave in sorted(self.aprendidas, key=len, reverse=True):
@@ -386,7 +411,7 @@ class Categorizador:
                 return categoria
         return None
 
-    def aprender(self, comercio: str, categoria: str) -> str:
+    def aprender(self, comercio: str, categoria: str) -> str:  # noqa: D401
         """Registra una corrección. Devuelve la clave con la que quedó guardada.
 
         Se aprende del comercio NORMALIZADO, así que corregir
@@ -394,6 +419,9 @@ class Categorizador:
         "SM NACIONAL MAXIMO GOM" la próxima vez.
         """
         norm = normalizar_comercio(comercio)
-        if norm:
+        # Un ambiguo no se aprende: fijar la respuesta es justo lo que no se
+        # puede hacer con un comercio que significa dos cosas distintas.
+        if norm and not any(re.search(r"\b" + re.escape(a), norm)
+                            for a in AMBIGUOS):
             self.aprendidas[norm] = categoria
         return norm

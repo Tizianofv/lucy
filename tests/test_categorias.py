@@ -12,6 +12,7 @@ Correr:  python3 tests/test_categorias.py
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -161,13 +162,30 @@ def test_cuantos_comercios_distintos_hay_de_verdad():
     c = Categorizador()
     faltan = [x for x in todos]
     correcciones = 0
+    # Los AMBIGUOS se saltan al elegir qué corregir. No es maquillar el número:
+    # es que una persona no gasta veinte correcciones en un comercio que, por
+    # diseño, vuelve a preguntar cada mes. EDESUR tiene dos contratos y esta
+    # cifra mide lo que el sistema puede APRENDER, no lo que hay que mirar
+    # siempre. Sin esta línea el bucle se comía las veinte correcciones en
+    # EDESUR y la cobertura caía del 44% al 17%.
+    from cerebro.bancos.categorias import AMBIGUOS
+    def _ambiguo(x):
+        return any(re.search(r"\b" + re.escape(a), x) for a in AMBIGUOS)
+
     while faltan and correcciones < 20:
-        pend = Counter(normalizar_comercio(x) for x in faltan)
-        c.aprender(pend.most_common(1)[0][0], "X")
+        pend = [(k, n) for k, n in
+                Counter(normalizar_comercio(x) for x in faltan).most_common()
+                if not _ambiguo(k)]
+        if not pend:
+            break
+        c.aprender(pend[0][0], "X")
         correcciones += 1
         faltan = [x for x in faltan if c.categoria_de(x) is None]
+    ambiguos_pendientes = [x for x in faltan if _ambiguo(normalizar_comercio(x))]
     cubierto = len(todos) - len(faltan)
     pct = 100 * cubierto // len(todos)
+    print(f"     ({len(ambiguos_pendientes)} consumos son de comercios AMBIGUOS: "
+          "se miran a mano siempre, por diseño)")
     print(f"     (20 correcciones cubrirían {cubierto}/{len(todos)} consumos = {pct}%)")
     assert pct >= 35, (
         f"20 correcciones solo cubren {pct}%: la normalización empeoró y "
@@ -278,6 +296,31 @@ def test_la_marca_no_suma_nunca_se_aprende_del_comercio():
     # Un rubro sí: "SM NACIONAL es Supermercado" vale para siempre.
     assert se_aprende("Supermercado")
     assert not se_aprende("") and not se_aprende(None)
+
+
+def test_edesur_nunca_se_clasifica_solo():
+    """Hay DOS contratos de EDESUR —la luz de esta casa y la de la casa del
+    papá de Rosi— y los dos pagos llegan con el texto IDÉNTICO, la misma
+    tarjeta y el mismo día. Comprobado contra los siete pagos de abril a
+    agosto: ni la tarjeta ni el monto los separan.
+
+    El monto parecía servir hasta que la casa se atrasó un mes y pagó doble —
+    justo cuando la regla habría marcado como "no cuenta" un gasto propio de
+    once mil pesos, en silencio. Así que el sistema declina y lo manda a la
+    cola. Declinar es la respuesta correcta cuando la información no está.
+    """
+    from cerebro.bancos.categorias import Categorizador, CLAVES
+    # Ni con la palabra clave, ni con una corrección previa aprendida.
+    cat = Categorizador({"EDESUR PAGA TODO ONLINE": "Servicios del hogar"}, CLAVES)
+    assert cat.categoria_de("EDESUR PAGA TODO ONLINE") is None
+    assert cat.categoria_de("EDESUR") is None
+    # Y aprender uno no fija la respuesta para el siguiente.
+    cat.aprender("EDESUR PAGA TODO ONLINE", "No suma")
+    assert cat.categoria_de("EDESUR PAGA TODO ONLINE") is None
+
+    # Las otras distribuidoras NO son ambiguas: ahí solo hay un contrato.
+    assert cat.categoria_de("EDEESTE PAGA TODO") == "Servicios del hogar"
+    assert cat.categoria_de("CAASD") == "Servicios del hogar"
 
 
 if __name__ == "__main__":
