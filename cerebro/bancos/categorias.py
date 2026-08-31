@@ -133,8 +133,11 @@ CATEGORIAS = [
     # cosas a la vez, eso es otra columna y no otra categoría.
     # Sin palabras clave: a quién le toca un gasto lo decide una persona, no
     # el nombre del comercio.
-    "CDS",
-    "ACD",
+    # Una sola, con la barra, como "Teléfono/Internet": son dos siglas de la
+    # misma cosa a efectos de este panel, y separarlas obligaba a decidir en
+    # cada gasto compartido cuál de las dos poner — una decisión que no aporta
+    # nada y que se toma distinto cada vez.
+    "CDS/ACD",
     "Proyecto Inés",
     # Acá NO hay categorías de ingreso, y es una decisión de Tiziano: el
     # dinero que entra no hace falta clasificarlo. La cola solo trae gastos
