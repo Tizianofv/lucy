@@ -180,7 +180,7 @@ async def resumen(request: Request, mes: str = ""):
         request, "resumen.html",
         {"meses": meses, "salud": salud, "por_moneda": por_moneda,
          "totales": totales, "mes_elegido": elegido,
-         "meses_disponibles": disponibles})
+         "detalle": detalle, "meses_disponibles": disponibles})
 
 
 @app.get("/sin-clasificar", response_class=HTMLResponse)
@@ -309,7 +309,7 @@ async def movimientos(request: Request, desde: str = "", hasta: str = "",
          # que todavía no usa nadie.
          "todas": CATEGORIAS,
          # Para los ingresos y traspasos, solo las marcas — no los rubros.
-         "no_suman": NO_SUMAN, "detalle": detalle, "guardados": guardados,
+         "no_suman": NO_SUMAN, "guardados": guardados,
          "volver": str(request.url.path) + (
              "?" + str(request.url.query) if request.url.query else "")})
 

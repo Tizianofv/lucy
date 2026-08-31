@@ -328,6 +328,95 @@ def test_el_detalle_de_una_categoria_se_abre_sin_javascript():
         "categoría, los gastos en USD aparecerían dentro de la fila de DOP")
 
 
+def _peticion(ruta="/", query=b""):
+    """Un Request mínimo, con la cookie de sesión buena.
+
+    No hace falta cliente HTTP: Starlette renderiza la plantilla al CONSTRUIR
+    la TemplateResponse, así que llamar a la función de la ruta ya dispara
+    cualquier variable indefinida.
+    """
+    from starlette.requests import Request
+    import web.app as panel
+    galleta = f"{panel.COOKIE}={auth.crear_token(DUENO, auth.VIDA_SESION)}"
+    return Request({"type": "http", "http_version": "1.1", "method": "GET",
+                    "scheme": "https", "server": ("t", 443), "path": ruta,
+                    "root_path": "", "query_string": query,
+                    "headers": [(b"host", b"t"), (b"cookie", galleta.encode())],
+                    "app": panel.app})
+
+
+def test_las_pantallas_se_pintan_de_verdad():
+    """El test que había miraba el HTML con grep y decía verde mientras la
+    portada devolvía Internal Server Error: la plantilla usaba `detalle` y la
+    ruta no lo pasaba. Es la TERCERA vez hoy que un test comprueba que el
+    código CONTIENE algo en vez de comprobar que FUNCIONA — las otras dos
+    fueron el redirect y la validación de categorías.
+
+    Esto llama a cada ruta con la base falseada y exige que la página se pinte.
+    Una variable que la plantilla usa y la ruta no manda se cae acá.
+    """
+    import asyncio
+    from decimal import Decimal
+
+    import db.db as base
+    import web.app as panel
+
+    async def _resumen_mes():
+        return [{"mes": "2026-08", "moneda": "DOP", "tipo": "gasto",
+                 "total": Decimal("100"), "n": 1}]
+
+    async def _por_categoria(mes=None):
+        return [{"categoria": "Seguros", "moneda": "DOP",
+                 "total": Decimal("100"), "n": 1, "no_suma": False}]
+
+    async def _detalle(mes=None):
+        return [{"id": 7, "fecha": "2026-08-04", "banco": "bhd",
+                 "contraparte": "SEGUROS SURA", "monto": Decimal("100"),
+                 "moneda": "DOP", "categoria": "Seguros"}]
+
+    async def _meses():
+        return ["2026-08"]
+
+    async def _salud():
+        return {"cuentas": [], "automaticos": 1, "ultimo": None,
+                "patrones_propios": 3}
+
+    async def _movs(*a, **k):
+        return [{"id": 7, "fecha": "2026-08-04", "tipo": "gasto",
+                 "monto": Decimal("100"), "moneda": "DOP",
+                 "contraparte": "SEGUROS SURA", "categoria": "Seguros",
+                 "referencia": "x", "banco": "bhd"}]
+
+    async def _lista(*a, **k):
+        return ["Seguros"]
+
+    guardado = {n: getattr(base, n) for n in (
+        "resumen_por_mes", "gasto_por_categoria", "gastos_de_cada_categoria",
+        "meses_con_movimientos", "salud_ingesta", "movimientos_filtrados",
+        "sin_clasificar", "categorias_usadas", "bancos_usados")}
+    base.resumen_por_mes = _resumen_mes
+    base.gasto_por_categoria = _por_categoria
+    base.gastos_de_cada_categoria = _detalle
+    base.meses_con_movimientos = _meses
+    base.salud_ingesta = _salud
+    base.movimientos_filtrados = _movs
+    base.sin_clasificar = _movs
+    base.categorias_usadas = _lista
+    base.bancos_usados = _lista
+    try:
+        bucle = asyncio.new_event_loop()
+        for nombre, corutina in (
+                ("/", panel.resumen(_peticion("/"))),
+                ("/movimientos", panel.movimientos(_peticion("/movimientos"))),
+                ("/sin-clasificar", panel.cola(_peticion("/sin-clasificar")))):
+            r = bucle.run_until_complete(corutina)
+            assert r.status_code == 200, f"{nombre} devolvió {r.status_code}"
+            assert len(r.body) > 200, f"{nombre} salió vacía"
+    finally:
+        for n, fn in guardado.items():
+            setattr(base, n, fn)
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):
