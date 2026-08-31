@@ -1,0 +1,40 @@
+{% extends "base.html" %}{% set activo='salud' %}
+{% block titulo %}Salud{% endblock %}
+{% block cuerpo %}
+<h1>Salud del sistema</h1>
+<p class="suave">Un cero en el resumen puede significar dos cosas opuestas: que
+no gastaste, o que el sistema dejó de mirar. Esta pantalla dice cuál de las dos.</p>
+
+{% if not s.cuentas %}
+<div class="aviso"><b>La lectura de correos no ha corrido nunca.</b>
+<div class="suave">Es lo esperado antes del 1 de septiembre de 2026.</div></div>
+{% elif atraso and atraso > umbral %}
+<div class="aviso"><b>Hace {{ atraso.days }}d {{ (atraso.seconds//3600) }}h que
+no se revisa el correo.</b>
+<div class="suave">Debería revisarse cada 15 minutos. Si esto no baja, algo
+dejó de correr.</div></div>
+{% else %}
+<div class="aviso ok"><b>Revisando con normalidad.</b></div>
+{% endif %}
+
+<div class="tarjeta">
+  <table>
+    <tr><td>Movimientos leídos del correo</td><td class="num">{{ s.automaticos }}</td></tr>
+    <tr><td>Último movimiento automático</td><td class="num suave">{{ s.ultimo or '—' }}</td></tr>
+    <tr><td>Patrones de la casa cargados</td><td class="num">{{ s.patrones_propios }}</td></tr>
+  </table>
+  {% if s.patrones_propios == 0 %}
+  <p class="suave" style="color:var(--gasto)">Sin patrones cargados, mover plata
+  entre cuentas propias se cuenta como gasto.</p>
+  {% endif %}
+</div>
+
+<h2>Buzones</h2>
+<div class="tarjeta"><table>
+<tr><th>Cuenta</th><th class="num">Último correo</th><th class="num">Revisado</th></tr>
+{% for c in s.cuentas %}
+<tr><td>{{ c.cuenta }}</td><td class="num suave">#{{ c.ultimo_uid }}</td>
+    <td class="num suave">{{ c.actualizado_en.strftime('%d/%m %H:%M') }}</td></tr>
+{% endfor %}
+</table></div>
+{% endblock %}

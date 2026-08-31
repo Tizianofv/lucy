@@ -51,6 +51,10 @@ except ValueError:
 # hace .strip() del JSON entero — se lee tal cual viene de la variable.
 GOOGLE_SA_KEY = os.environ.get("GOOGLE_SA_KEY", "")
 
+# Dónde vive el panel de finanzas. Vacío = no hay panel, y Lucy lo dice en vez
+# de mandar un enlace roto.
+PANEL_URL = os.environ.get("PANEL_URL", "").rstrip("/")
+
 # Candado de seguridad (pilar): Lucy SOLO le responde a este chat.
 # Cualquier otro que le escriba es ignorado sin más.
 CHAT_ID_DUENO = int(os.environ["CHAT_ID_DUENO"])

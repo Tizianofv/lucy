@@ -1,0 +1,36 @@
+{% extends "base.html" %}{% set activo='movs' %}
+{% block titulo %}Movimientos{% endblock %}
+{% block cuerpo %}
+<h1>Movimientos</h1>
+<form class="filtros" method="get">
+  <input type="date" name="desde" value="{{ desde }}">
+  <input type="date" name="hasta" value="{{ hasta }}">
+  <select name="tipo">
+    <option value="">todo</option>
+    {% for t in ('gasto','ingreso','transferencia') %}
+    <option value="{{ t }}" {{ 'selected' if tipo==t }}>{{ t }}</option>{% endfor %}
+  </select>
+  <select name="categoria">
+    <option value="">cualquier categoría</option>
+    {% for c in categorias %}
+    <option value="{{ c }}" {{ 'selected' if categoria==c }}>{{ c }}</option>{% endfor %}
+  </select>
+  <button>Filtrar</button>
+</form>
+{% if not movs %}
+<p class="vacio">Nada con esos filtros.</p>
+{% else %}
+<div class="scroll"><table>
+<tr><th>Fecha</th><th>Quién</th><th>Categoría</th><th class="num">Monto</th></tr>
+{% for m in movs %}
+<tr>
+  <td class="suave">{{ m.fecha }}</td>
+  <td>{{ m.contraparte }}<div class="suave">{{ m.referencia or '' }}</div></td>
+  <td class="suave">{{ m.categoria or '—' }}</td>
+  <td class="num {{ m.tipo }}">{{ m.monto|pesos }} {{ m.moneda }}</td>
+</tr>
+{% endfor %}
+</table></div>
+<p class="suave">{{ movs|length }} movimientos.</p>
+{% endif %}
+{% endblock %}

@@ -205,6 +205,13 @@ HERRAMIENTAS DISPONIBLES:
      vinieron en el buscar previo. Resumí o citá lo que pida; no inventes nada
      que no esté en el cuerpo. Leerlo NO lo marca como leído en Gmail.
 
+· panel  {}
+  El enlace al panel de finanzas: gastos por mes, lo que falta clasificar y el
+  detalle. Dáselo cuando pida "el panel", "ver mis gastos", "el resumen del mes"
+  o cualquier cosa que se conteste mejor con una tabla que con una frase. El
+  enlace vence en 10 minutos y solo sirve para él: no lo reenvíes a nadie ni lo
+  repitas en la conversación más de lo necesario.
+
 · recordar  {"texto": "lo que acordamos del depósito", "n": 5}
   Busca por SIGNIFICADO en todo lo que se han dicho (tus respuestas
   incluidas). Para "¿qué te dije de...?", "¿cuándo hablamos de...?" y todo
@@ -625,7 +632,7 @@ async def _ejecutar_herramienta(
 
         return (f"ERROR: no existe la herramienta '{nombre}'. Las que hay: "
                 "consultar, crear, editar, archivar, deshacer, perfil, "
-                "preferencia, correo, lugar, buscar_lugar, viaje, "
+                "preferencia, correo, lugar, buscar_lugar, viaje, panel, "
                 "recordar, preguntar, responder.")
 
     except crud.FaltanDatos as e:
@@ -765,6 +772,15 @@ async def atender(fila: dict, texto: str, bot) -> None:
             continue
 
         # ── responder: el final feliz ────────────────────────────────────
+        if nombre == "panel":
+            if not config.PANEL_URL:
+                return ("ERROR: no hay panel configurado (falta PANEL_URL). "
+                        "Decíselo así, no inventes un enlace.")
+            import web.auth as _auth
+            token = _auth.crear_token(config.CHAT_ID_DUENO)
+            return (f"OK: mandale este enlace, vence en 10 minutos — "
+                    f"{config.PANEL_URL}/entrar?t={token}")
+
         if nombre == "responder":
             salida = str(args.get("texto") or "")
             markup = botones.teclado_deshacer(acciones[-1]) if acciones else None

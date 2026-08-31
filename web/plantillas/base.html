@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block titulo %}Finanzas{% endblock %}</title>
+<style>
+  /* Sin build de JS y sin framework: el panel tiene que seguir abriendo dentro
+     de tres años sin que nadie actualice nada. */
+  :root{--fondo:#faf9f7;--papel:#fff;--texto:#1a1a1a;--suave:#6b6b6b;
+        --linea:#e4e2de;--gasto:#b3261e;--ingreso:#1e6b3a;--acento:#2b4c7e}
+  @media(prefers-color-scheme:dark){:root{--fondo:#16181c;--papel:#1e2126;
+        --texto:#e8e6e3;--suave:#9a9894;--linea:#2c3037;--gasto:#f2867c;
+        --ingreso:#6cc38b;--acento:#8ab4f8}}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--fondo);color:var(--texto);
+       font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+  header{background:var(--papel);border-bottom:1px solid var(--linea);
+         padding:.9rem 1rem;position:sticky;top:0;z-index:2}
+  nav{display:flex;gap:1.2rem;flex-wrap:wrap;max-width:60rem;margin:0 auto}
+  nav a{color:var(--suave);text-decoration:none;font-size:.94rem}
+  nav a.on{color:var(--texto);font-weight:600}
+  main{max-width:60rem;margin:0 auto;padding:1.2rem 1rem 4rem}
+  h1{font-size:1.4rem;margin:.4rem 0 1.2rem}
+  h2{font-size:1.05rem;margin:2rem 0 .6rem;color:var(--suave);
+     font-weight:600;letter-spacing:.02em}
+  table{width:100%;border-collapse:collapse;font-size:.94rem}
+  th{text-align:left;color:var(--suave);font-weight:600;font-size:.82rem;
+     text-transform:uppercase;letter-spacing:.04em;padding:.5rem .6rem;
+     border-bottom:1px solid var(--linea)}
+  td{padding:.6rem;border-bottom:1px solid var(--linea);vertical-align:top}
+  .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .gasto{color:var(--gasto)} .ingreso{color:var(--ingreso)}
+  .suave{color:var(--suave);font-size:.86rem}
+  .tarjeta{background:var(--papel);border:1px solid var(--linea);
+           border-radius:10px;padding:1rem;margin-bottom:1rem}
+  .vacio{color:var(--suave);padding:2.5rem 1rem;text-align:center}
+  .aviso{background:var(--papel);border-left:3px solid var(--gasto);
+         padding:.8rem 1rem;border-radius:0 8px 8px 0;margin-bottom:1.2rem}
+  .ok{border-left-color:var(--ingreso)}
+  input,select,button{font:inherit;padding:.45rem .6rem;border-radius:7px;
+    border:1px solid var(--linea);background:var(--fondo);color:var(--texto)}
+  button{background:var(--acento);color:#fff;border:0;cursor:pointer}
+  form.filtros{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1.2rem}
+  /* La tabla ancha se desplaza sola en el móvil en vez de romper la página. */
+  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+</style></head><body>
+<header><nav>
+  <a href="/" class="{{ 'on' if activo=='resumen' }}">Resumen</a>
+  <a href="/sin-clasificar" class="{{ 'on' if activo=='cola' }}">Sin clasificar</a>
+  <a href="/movimientos" class="{{ 'on' if activo=='movs' }}">Movimientos</a>
+  <a href="/salud" class="{{ 'on' if activo=='salud' }}">Salud</a>
+</nav></header>
+<main>{% block cuerpo %}{% endblock %}</main>
+</body></html>

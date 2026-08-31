@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 from telegram import Update
 from telegram.error import Conflict
@@ -44,6 +45,7 @@ log = logging.getLogger("lucy")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 _tarea_interpretacion: asyncio.Task | None = None
+_tarea_panel: asyncio.Task | None = None
 
 
 async def _al_arrancar(app) -> None:
@@ -93,8 +95,27 @@ async def _al_arrancar(app) -> None:
     global _tarea_interpretacion
     _tarea_interpretacion = asyncio.create_task(interpretar.bucle(app.bot))
 
+    # El panel web es una TAREA MÁS de este proceso, no un servicio aparte.
+    # Un servicio nuevo en Railway movería la factura; una ruta añadida a un
+    # proceso que ya corre no cuesta nada medible. Si no puede levantar, Lucy
+    # sigue igual: el panel es para mirar, no para que ella funcione.
+    global _tarea_panel
+    try:
+        import uvicorn
+        from web.app import app as panel
+        puerto = int(os.environ.get("PORT", "8080"))
+        cfg = uvicorn.Config(panel, host="0.0.0.0", port=puerto,
+                             log_level="warning", access_log=False)
+        _tarea_panel = asyncio.create_task(uvicorn.Server(cfg).serve())
+        log.info("Panel de finanzas escuchando en el puerto %s.", puerto)
+    except Exception:
+        log.exception("No pude levantar el panel; Lucy sigue sin él.")
+
 
 async def _al_apagar(app) -> None:
+    if _tarea_panel is not None:
+        _tarea_panel.cancel()
+        await asyncio.gather(_tarea_panel, return_exceptions=True)
     if _tarea_interpretacion is not None:
         _tarea_interpretacion.cancel()
         # Esperamos a que muera de verdad: si el proceso se apaga con una

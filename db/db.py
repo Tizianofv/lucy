@@ -689,3 +689,125 @@ async def listar_cuentas_propias() -> list[dict]:
         await cur.execute(
             "SELECT patron FROM cuentas_propias WHERE borrado_en IS NULL")
         return await cur.fetchall()
+
+
+# ── Consultas del panel web (web/app.py) ─────────────────────────────────
+#
+# Todas excluyen `borrado_en IS NOT NULL` y, cuando suman dinero, filtran
+# `tipo <> 'transferencia'` y `estado` no aplica (la tabla no lo guarda):
+# un traspaso entre cuentas propias no es gasto ni ingreso, y sumarlo fue el
+# error que costaba RD$657,400 al año.
+
+async def resumen_por_mes(meses: int = 12) -> list[dict]:
+    """Gasto e ingreso por mes y moneda. Los traspasos quedan fuera."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT to_char(fecha, 'YYYY-MM') AS mes, moneda, tipo,
+                   sum(monto) AS total, count(*) AS n
+              FROM movimientos
+             WHERE borrado_en IS NULL
+               AND tipo <> 'transferencia'
+               AND fecha >= date_trunc('month', now()) - (%s || ' months')::interval
+             GROUP BY 1, 2, 3
+             ORDER BY 1 DESC, 2, 3
+            """, (meses,))
+        return await cur.fetchall()
+
+
+async def sin_clasificar(limite: int = 100) -> list[dict]:
+    """La cola de corrección: lo que entró sin categoría.
+
+    Es la pantalla que paga el panel — cada corrección acá es una regla que el
+    sistema aprende. Se ordena por monto: si solo se van a corregir diez, que
+    sean los diez que más pesan.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT id, fecha, tipo, monto, moneda, contraparte, referencia
+              FROM movimientos
+             WHERE borrado_en IS NULL
+               AND (categoria IS NULL OR categoria = '')
+               AND tipo <> 'transferencia'
+             ORDER BY monto DESC
+             LIMIT %s
+            """, (limite,))
+        return await cur.fetchall()
+
+
+async def movimientos_filtrados(desde=None, hasta=None, tipo: str | None = None,
+                                categoria: str | None = None,
+                                limite: int = 300) -> list[dict]:
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT id, fecha, tipo, monto, moneda, contraparte, categoria,
+                   referencia
+              FROM movimientos
+             WHERE borrado_en IS NULL
+               AND (%s::date IS NULL OR fecha >= %s::date)
+               AND (%s::date IS NULL OR fecha <= %s::date)
+               AND (%s::text IS NULL OR tipo = %s::text)
+               AND (%s::text IS NULL OR categoria = %s::text)
+             ORDER BY fecha DESC, id DESC
+             LIMIT %s
+            """, (desde, desde, hasta, hasta, tipo, tipo, categoria, categoria,
+                  limite))
+        return await cur.fetchall()
+
+
+async def categorias_usadas() -> list[str]:
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT DISTINCT categoria FROM movimientos "
+            "WHERE borrado_en IS NULL AND categoria IS NOT NULL "
+            "AND categoria <> '' ORDER BY 1")
+        return [r[0] for r in await cur.fetchall()]
+
+
+async def salud_ingesta() -> dict:
+    """Lo que hace falta para creerle al panel: cuándo miró por última vez y
+    si hay algo entrando. Un panel que no dice desde cuándo no sabe nada es un
+    panel que miente por omisión."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT cuenta, ultimo_uid, actualizado_en FROM consumos_estado "
+            "ORDER BY cuenta")
+        cuentas = await cur.fetchall()
+        cur2 = await conn.execute(
+            "SELECT count(*), max(creado_en) FROM movimientos "
+            "WHERE borrado_en IS NULL AND hash_contenido IS NOT NULL")
+        n, ultimo = await cur2.fetchone()
+        cur3 = await conn.execute(
+            "SELECT count(*) FROM cuentas_propias WHERE borrado_en IS NULL")
+        propios = (await cur3.fetchone())[0]
+        return {"cuentas": cuentas, "automaticos": n, "ultimo": ultimo,
+                "patrones_propios": propios}
+
+
+async def poner_categoria(movimiento_id: int, categoria: str) -> None:
+    """La única escritura del panel. Pasa por log_acciones como todo lo demás:
+    una corrección hecha desde la web tiene que ser tan auditable y tan
+    reversible como una hecha por Telegram."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute("SELECT categoria FROM movimientos WHERE id = %s",
+                          (movimiento_id,))
+        antes = await cur.fetchone()
+        await conn.execute("UPDATE movimientos SET categoria = %s WHERE id = %s",
+                           (categoria or None, movimiento_id))
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo)
+            VALUES ('panel', 'editar', 'movimientos', %s, %s, %s,
+                    'corrección desde el panel web')
+            """,
+            (movimiento_id,
+             json.dumps(antes or {}, default=str, ensure_ascii=False),
+             json.dumps({"categoria": categoria}, ensure_ascii=False)))
