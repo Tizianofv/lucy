@@ -36,5 +36,16 @@ export DATABASE_URL
 echo "$(date '+%F %T') · arranca" >> "$REGISTRO"
 python3 db/backup.py >> "$REGISTRO" 2>&1
 CODIGO=$?
+echo "$(date '+%F %T') · verifico el respaldo" >> "$REGISTRO"
+python3 tools/verificar_respaldo.py >> "$REGISTRO" 2>&1
+VER=$?
+if [[ $VER -ne 0 ]]; then
+  # Un respaldo roto que nadie mira es peor que no tener respaldo: apaga la
+  # alarma de las 48 horas sin proteger nada. Se marca como fallo de la tarea
+  # entera para que quede en el log de launchd y no solo en este archivo.
+  echo "$(date '+%F %T') · EL RESPALDO NO PASÓ LA VERIFICACIÓN" >> "$REGISTRO"
+  CODIGO=$VER
+fi
+
 echo "$(date '+%F %T') · termina con código $CODIGO" >> "$REGISTRO"
 exit $CODIGO
