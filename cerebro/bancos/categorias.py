@@ -109,6 +109,7 @@ CATEGORIAS = [
     "Seguros",
     "Cuidado personal",
     "Ropa y hogar",
+    "Reparaciones del hogar",
     "Equipos y tecnología",
     "Educación",
     "Software y suscripciones",
@@ -219,6 +220,20 @@ CLAVES = {
     "LABORATORIO": "Salud", "HOSPITAL": "Salud", "CEDIMAT": "Salud",
 
     "SEGUROS": "Seguros", "MAPFRE": "Seguros", "HUMANO": "Seguros",
+
+    # Reparaciones: la ferretería, el plomero, la pintura. Va aparte de "Ropa
+    # y hogar" —que es lo que se compra para la casa— porque una gotera y un
+    # juego de sábanas no se miran con el mismo ojo: uno es imprevisto y el
+    # otro es gusto. Nada de apellidos acá: "OCHOA" es una ferretería conocida
+    # Y un apellido dominicano corriente, y las transferencias a personas
+    # llevan nombre; casaría la mitad de ellas.
+    "FERRETERIA": "Reparaciones del hogar",
+    "TUBERIA": "Reparaciones del hogar",
+    "PLOMER": "Reparaciones del hogar",
+    "CERRAJER": "Reparaciones del hogar",
+    "PINTURAS": "Reparaciones del hogar",
+    "SHERWIN": "Reparaciones del hogar",
+    "MATERIALES DE CONST": "Reparaciones del hogar",
 
     "SALON": "Cuidado personal", "BARBER": "Cuidado personal",
     "PELUQUERIA": "Cuidado personal",

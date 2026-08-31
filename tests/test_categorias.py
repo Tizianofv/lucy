@@ -182,10 +182,16 @@ def test_la_clave_casa_en_inicio_de_palabra_y_no_en_cualquier_parte():
     transporte. Nadie lo nota, porque un movimiento MAL categorizado no cae en
     ninguna cola: se va derecho al total."""
     cat = Categorizador(claves=CLAVES)
-    # Solo el primero discrimina de verdad con las CLAVES de hoy; los otros
-    # están porque son las trampas que aparecerían al agregar claves nuevas.
-    for texto in ("TUBERIAS Y CONEXIONES", "COLEGIO SANTA ANA",
-                  "CARBONELL SRL", "ABONOS DEL CARIBE"):
+    # "TUBERIAS Y CONEXIONES" ahora SÍ tiene categoría, y está bien: desde que
+    # existe "Reparaciones del hogar", "TUBERIA" es una clave legítima que casa
+    # al principio de la palabra. Lo que este test vigila no es que no tenga
+    # categoría, es que no tenga LA EQUIVOCADA: con subcadena cruda, "UBER"
+    # casaba dentro de "TUBERIA" y una compra de plomería se contaba como
+    # transporte. Afirmar `is None` confundía el síntoma con el fallo, y al
+    # agregar una clave buena el test se puso rojo sin que nada se rompiera.
+    assert cat.categoria_de("TUBERIAS Y CONEXIONES") != "Transporte", (
+        "'UBER' volvió a casar por dentro de 'TUBERIA'")
+    for texto in ("COLEGIO SANTA ANA", "CARBONELL SRL", "ABONOS DEL CARIBE"):
         assert cat.categoria_de(texto) is None, (
             f"{texto!r} casó con una clave por adentro de una palabra")
 
