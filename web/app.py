@@ -85,6 +85,27 @@ def _leer_codigo(texto: str) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _alfabetico(cs):
+    """Las categorías ordenadas para el desplegable, sin que las tildes manden.
+
+    Un sort() crudo pone "Educación" y "Teléfono/Internet" fuera de sitio,
+    porque la Ó y la É van después de la Z en el orden de los códigos. Se
+    ordena por el texto sin acentos para que salga como lo esperaría alguien
+    buscando con el pulgar.
+
+    CATEGORIAS mantiene su orden por frecuencia de uso —es lo que ve el agente
+    de Telegram y lo que documenta el módulo—; acá se reordena solo para
+    mostrar, que es donde Tiziano lo pidió.
+    """
+    import unicodedata
+
+    def clave(c):
+        return "".join(x for x in unicodedata.normalize("NFD", c)
+                       if not unicodedata.combining(x)).upper()
+
+    return sorted(cs, key=clave)
+
+
 plantillas.env.filters["pesos"] = _pesos
 plantillas.env.filters["codigo"] = _codigo
 
@@ -197,8 +218,8 @@ async def cola(request: Request, guardados: int = 0):
     # opciones garantizadas a fallar en silencio.
     return plantillas.TemplateResponse(
         request, "sin_clasificar.html",
-        {"movs": await db.sin_clasificar(), "categorias": CATEGORIAS,
-         "guardados": guardados})
+        {"movs": await db.sin_clasificar(),
+         "categorias": _alfabetico(CATEGORIAS), "guardados": guardados})
 
 
 @app.post("/categorias")
@@ -307,7 +328,7 @@ async def movimientos(request: Request, desde: str = "", hasta: str = "",
          # nadie usó no devuelve nada. `todas` es para EDITAR, y tiene que ser
          # el vocabulario completo o no se podría corregir hacia una categoría
          # que todavía no usa nadie.
-         "todas": CATEGORIAS,
+         "todas": _alfabetico(CATEGORIAS),
          # Para los ingresos y traspasos, solo las marcas — no los rubros.
          "no_suman": NO_SUMAN, "guardados": guardados,
          "volver": str(request.url.path) + (

@@ -436,6 +436,25 @@ def test_las_dos_puertas_respetan_que_la_marca_no_se_aprende():
         "Telegram volvería a enseñar la marca")
 
 
+def test_las_categorias_salen_en_orden_alfabetico_de_verdad():
+    """Pedido de Tiziano. Un sorted() crudo no alcanza: la Ó y la É van después
+    de la Z en el orden de los códigos, así que "Educación" y
+    "Teléfono/Internet" quedarían al final. Se ordena por el texto sin acentos.
+
+    CATEGORIAS conserva su orden por frecuencia —es lo que ve el agente de
+    Telegram y lo que documenta el módulo—; el alfabético es solo para mostrar.
+    """
+    import web.app as panel
+    from cerebro.bancos.categorias import CATEGORIAS
+    orden = panel._alfabetico(CATEGORIAS)
+    assert set(orden) == set(CATEGORIAS), "se perdió o duplicó alguna categoría"
+    assert orden.index("Educación") < orden.index("Entretenimiento"), (
+        "las tildes están mandando en el orden")
+    assert orden.index("Teléfono/Internet") < orden.index("Transporte")
+    assert orden.index("Vehículo") == len(orden) - 1
+    assert orden[0] == "Banco y comisiones"
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):
