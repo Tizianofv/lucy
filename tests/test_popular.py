@@ -280,9 +280,12 @@ def test_el_comprobante_dice_a_quien_y_en_que_sentido():
         _con_pdf("rosilisr04_30565.eml"))[0]
     assert m.monto == Decimal("56000.00")
     assert m.moneda == "DOP"
-    assert m.contraparte == "MARILANDIA VARGAS"
-    # CREDITO a un tercero = el dinero SALE de la casa. Si el beneficiario fuera
-    # una cuenta propia, propios.py lo pasa a traspaso después; acá no se adivina.
+    # `origen → destino`: la forma que propios.reclasificar() sabe leer. El
+    # origen va sin nombre porque el comprobante NO dice quién pagó — trae al
+    # banco emisor y al beneficiario, y nada más.
+    assert m.contraparte == "(el comprobante no dice quién pagó) → MARILANDIA VARGAS"
+    # Provisional: es el papel leído solo. Quién decide de verdad es el registro
+    # de cuentas propias — ver el test de abajo.
     assert m.tipo == "gasto"
     assert m.fecha.date().isoformat() == "2026-05-19"
     # La referencia sale del nombre del archivo: identifica el comprobante y no
@@ -315,6 +318,30 @@ def test_un_comprobante_con_dos_montos_revienta_en_vez_de_adivinar():
                          _con_pdf("rosilisr04_30565.eml"))
     finally:
         popular._texto_de_pdf = real
+
+
+def test_quien_decide_el_signo_es_el_registro_y_no_el_parser():
+    """La corrección que costó RD$187,000 de signo.
+
+    Yo leí "NOTIFICACION CREDITO a un tercero en otro banco" como dinero que
+    sale. Estaba al revés: esa cuenta es de la hermana de Tiziano y algunos
+    clientes depositan ahí, así que son INGRESOS.
+
+    La lección no es acordarse de este caso: es que un parser no puede saber de
+    qué lado del mostrador está. Eso lo sabe el registro de cuentas propias, y
+    la regla ya existía —"solo el DESTINO es de la casa → ingreso"—. Emitiendo
+    la contraparte como `origen → destino`, el mismo código deja como gasto una
+    transferencia a un tercero de verdad, sin tocar el parser.
+    """
+    from cerebro.bancos.propios import Propios
+    m = buscar_parser(REMITENTE_PAGOS, "Notificaciones Popular")(
+        _con_pdf("rosilisr04_31790.eml"))[0]
+    casa = ["ROSILIS", "FAJARDOVARGAS", "TIZIANOFAJARDO"]
+
+    # Sin la cuenta registrada, se queda como lo literal del papel.
+    assert Propios(casa).reclasificar(m).tipo == "gasto"
+    # Con la cuenta de la hermana registrada, es lo que de verdad es.
+    assert Propios(casa + ["MARILANDIA VARGAS"]).reclasificar(m).tipo == "ingreso"
 
 
 if __name__ == "__main__":

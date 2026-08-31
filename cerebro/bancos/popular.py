@@ -34,6 +34,7 @@ from __future__ import annotations
 import html as _html
 import re
 
+from cerebro.bancos.propios import FLECHA
 from cerebro.bancos.contrato import (
     CorreoCrudo,
     ErrorDeParseo,
@@ -182,12 +183,29 @@ registrar(REMITENTE_INFO, parsear_cargo_bajo_balance,
 # lo que ES: el monto es lo único con dos decimales, la moneda está enumerada,
 # el beneficiario va detrás de "CR a Cta. de".
 #
-# LA DIRECCIÓN DEL DINERO. El PDF dice "NOTIFICACION CREDITO" y el beneficiario
-# NO es el titular del buzón: es un tercero en otro banco. O sea que el dinero
-# SALE. Si el beneficiario resultara ser una cuenta de la casa, `propios.py` lo
-# reclasifica a traspaso más adelante — acá no se adivina eso.
+# LA DIRECCIÓN DEL DINERO NO SE DECIDE ACÁ, y esa es la corrección importante.
+#
+# Yo había leído "NOTIFICACION CREDITO a un tercero en otro banco" como dinero
+# que sale, y estaba al revés: la cuenta beneficiaria es de la hermana de
+# Tiziano, y algunos clientes depositan ahí. Son RD$187,000 de INGRESO que iban
+# a entrar como gasto — el signo cambiado en la cifra más grande del banco.
+#
+# La lección no es "acordarse de este caso": es que un parser no puede saber de
+# qué lado del mostrador está. Eso lo sabe el registro de cuentas propias, y
+# `propios.reclasificar()` ya tiene la regla exacta —"solo el DESTINO es de la
+# casa → ingreso"—. Por eso la contraparte se emite como `origen → destino`: es
+# la forma que ese registro sabe leer. Si mañana el beneficiario es un tercero
+# de verdad, la misma regla lo deja como gasto sin que nadie toque este archivo.
+#
+# El comprobante NO dice quién pagó: trae al banco emisor y al beneficiario, y
+# nada más. Se dice así, con la misma fórmula que ya usa el parser de arriba,
+# en vez de inventar un pagador.
 
 REMITENTE_PAGOS = "pagoselectronicos@popularenlinea.com"
+
+# El comprobante no trae al pagador. Se dice, no se inventa: un movimiento con
+# un pagador fabricado ensucia el aprendizaje de categorías para siempre.
+SIN_PAGADOR = "(el comprobante no dice quién pagó)"
 
 # El monto es el único número con dos decimales del comprobante. Si aparece más
 # de uno, el formato cambió y hay que mirarlo: elegir "el primero" sería fingir
@@ -260,20 +278,27 @@ def parsear_comprobante_pdf(correo: CorreoCrudo) -> list[Movimiento]:
                 "contraparte el movimiento no se puede deduplicar ni clasificar.")
         sentido, quien = benef.group(1).upper(), benef.group(2).strip()
 
-        # CREDITO a un tercero = el dinero sale de acá. Si el tercero resultara
-        # ser una cuenta de la casa, propios.py lo pasa a traspaso después.
+        # `origen → destino`, que es lo que propios.reclasificar() sabe leer. El
+        # origen va vacío de nombre porque el comprobante no lo trae, y eso hace
+        # justo lo correcto: no es de la casa, el destino sí, luego ingreso.
         es_credito = tipo_doc.group(1).upper() == "CREDITO" and sentido == "CR"
+        contraparte = (f"{SIN_PAGADOR} {FLECHA} {quien}" if es_credito
+                       else f"{quien} {FLECHA} {SIN_PAGADOR}")
         movs.append(Movimiento(
             banco=BANCO,
             # El canal es "transferencia", el vocabulario cerrado del contrato.
             # "IBANKING" es el sistema por el que se hizo, no lo que es — y el
             # contrato rechazándolo hizo exactamente lo que tiene que hacer.
             canal="transferencia",
+            # Provisional: es lo que dice el papel leído solo. Quien tiene la
+            # última palabra es propios.reclasificar(), que sí sabe qué cuentas
+            # son de la casa. Si el registro está vacío, esto es lo que queda —
+            # y por eso el default es el literal, no una corazonada.
             tipo="gasto" if es_credito else "ingreso",
             fecha=cuando,
             monto=normalizar_monto(montos[0]),
             moneda=normalizar_moneda(divisa),
-            contraparte=quien,
+            contraparte=contraparte,
             estado="aprobada",
             # El nombre del archivo identifica el comprobante y no depende de
             # dónde caiga cada campo dentro del PDF.
