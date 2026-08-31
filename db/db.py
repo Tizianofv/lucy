@@ -834,6 +834,31 @@ async def aprender_categoria(comercio_norm: str, categoria: str) -> None:
             """, (comercio_norm, categoria))
 
 
+async def olvidar_categoria(movimiento_id: int) -> None:
+    """Borra lo aprendido del comercio de ese movimiento.
+
+    Va junto con vaciar la categoría a mano: sin esto, quitar una categoría
+    equivocada duraba hasta la próxima compra en el mismo sitio, porque la regla
+    aprendida seguía viva y volvía a ponerla — y esa vez sin pasar por ninguna
+    cola, o sea sin que nadie se enterara. Corregir tiene que corregir de
+    verdad; si no, el panel enseña a desconfiar de él.
+
+    Es borrado suave, como todo acá: queda la fila con borrado_en.
+    """
+    from cerebro.bancos.categorias import normalizar_comercio
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute("SELECT contraparte FROM movimientos WHERE id = %s",
+                          (movimiento_id,))
+        fila = await cur.fetchone()
+        if not fila or not fila.get("contraparte"):
+            return
+        await conn.execute(
+            "UPDATE categorias_aprendidas SET borrado_en = now() "
+            "WHERE comercio = %s AND borrado_en IS NULL",
+            (normalizar_comercio(fila["contraparte"]),))
+
+
 async def poner_categoria(movimiento_id: int, categoria: str) -> None:
     """La única escritura del panel. Pasa por log_acciones como todo lo demás:
     una corrección hecha desde la web tiene que ser tan auditable y tan

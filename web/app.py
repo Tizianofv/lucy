@@ -16,7 +16,11 @@ CUATRO PANTALLAS, y el orden no es casual:
                     sistema aprende, y si solo se corrigen diez, que sean los
                     diez que más pesan.
 
-  /movimientos      El detalle, filtrable.
+  /movimientos      El detalle, filtrable — y donde se CAMBIA una categoría ya
+                    puesta. Sin esa segunda parte, un error quedaba fijo para
+                    siempre: la cola solo trae lo que no tiene categoría, así
+                    que una mal puesta no volvía nunca y encima seguía
+                    enseñándole lo mismo al sistema en cada compra siguiente.
 
   /salud            Desde cuándo el sistema no sabe nada. Un panel que no dice
                     cuándo miró por última vez miente por omisión: un cero puede
@@ -143,18 +147,32 @@ async def categorias(request: Request):
     for campo, valor in formulario.items():
         if not campo.startswith("cat_"):
             continue
-        limpia = str(valor).strip()
-        if not limpia:          # sin elegir: esa fila se queda como está
-            continue
-        if limpia not in CATEGORIAS:
-            rechazados += 1
-            continue
         try:
             mid = int(campo[4:])
         except ValueError:
             rechazados += 1
             continue
+
+        limpia = str(valor).strip()
+        # `prev_<id>` es lo que la fila tenía cuando se pintó la pantalla. Sin
+        # eso no se puede distinguir "no toqué esta fila" de "la vacié a
+        # propósito": en la cola todo llega vacío y saltarse los vacíos está
+        # bien, pero en /movimientos vaciar una es justamente cómo se deshace
+        # una categoría equivocada.
+        previa = str(formulario.get(f"prev_{mid}", "")).strip()
+        if limpia == previa:
+            continue
+        if limpia and limpia not in CATEGORIAS:
+            rechazados += 1
+            continue
+
         await db.poner_categoria(mid, limpia)
+        if not limpia and previa:
+            # Vaciarla también DESAPRENDE el comercio. Si no, la corrección
+            # duraba hasta la próxima compra en el mismo sitio: la regla vieja
+            # seguía viva y volvía a ponerle la categoría que se acababa de
+            # quitar, sin pasar por ninguna cola.
+            await db.olvidar_categoria(mid)
         guardados += 1
 
     if rechazados:
@@ -162,13 +180,22 @@ async def categorias(request: Request):
         # este proyecto paga por que todo sea auditable.
         log.warning("Panel: %s categoría(s) rechazadas por no estar en la "
                     "lista cerrada", rechazados)
-    return RedirectResponse(f"/sin-clasificar?guardados={guardados}",
+    # Se vuelve a la pantalla de donde vino, con sus filtros puestos. Mandarlo
+    # siempre a la cola le haría perder el filtro que estaba mirando, que en
+    # /movimientos es la mitad del trabajo. Solo se aceptan rutas propias: un
+    # destino que venga del formulario y no se compruebe es un redirect abierto.
+    volver = str(formulario.get("volver", "")).strip()
+    if not volver.startswith("/movimientos"):
+        volver = "/sin-clasificar"
+    sep = "&" if "?" in volver else "?"
+    return RedirectResponse(f"{volver}{sep}guardados={guardados}",
                             status_code=303)
 
 
 @app.get("/movimientos", response_class=HTMLResponse)
 async def movimientos(request: Request, desde: str = "", hasta: str = "",
-                      tipo: str = "", categoria: str = "", banco: str = ""):
+                      tipo: str = "", categoria: str = "", banco: str = "",
+                      guardados: int = 0):
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
 
@@ -184,7 +211,14 @@ async def movimientos(request: Request, desde: str = "", hasta: str = "",
         request, "movimientos.html",
         {"movs": movs, "categorias": await db.categorias_usadas(),
          "bancos": await db.bancos_usados(), "desde": desde, "hasta": hasta,
-         "tipo": tipo, "categoria": categoria, "banco": banco})
+         "tipo": tipo, "categoria": categoria, "banco": banco,
+         # `categorias` (las usadas) es para el FILTRO: filtrar por una que
+         # nadie usó no devuelve nada. `todas` es para EDITAR, y tiene que ser
+         # el vocabulario completo o no se podría corregir hacia una categoría
+         # que todavía no usa nadie.
+         "todas": CATEGORIAS, "guardados": guardados,
+         "volver": str(request.url.path) + (
+             "?" + str(request.url.query) if request.url.query else "")})
 
 
 @app.get("/salud", response_class=HTMLResponse)

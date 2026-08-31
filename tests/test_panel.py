@@ -160,6 +160,45 @@ def test_no_hay_categorias_de_ingreso_en_el_vocabulario():
             "clasifican")
 
 
+def test_una_categoria_ya_puesta_se_puede_cambiar():
+    """El caso que de verdad importa: una categoría EQUIVOCADA. La cola solo
+    trae las que no tienen ninguna, así que sin esta pantalla un error quedaba
+    fijo para siempre — y peor, seguía enseñándole lo mismo al sistema en cada
+    compra siguiente. Corregirlo tenía que pasar por pedírselo a Claude, o sea
+    que cada corrección costaba dinero."""
+    import os
+    html = open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "web", "plantillas",
+        "movimientos.html"), encoding="utf-8").read()
+    assert 'action="/categorias"' in html, "la tabla no se puede editar"
+    assert "prev_{{ m.id }}" in html, (
+        "sin el valor previo no se distingue 'no la toqué' de 'la vacié'")
+    assert "'selected' if m.categoria == c" in html, (
+        "el desplegable tiene que venir con la categoría actual puesta")
+
+
+def test_vaciar_una_categoria_tambien_desaprende():
+    """Si no, quitar una categoría equivocada duraba hasta la próxima compra en
+    el mismo sitio: la regla aprendida seguía viva y volvía a ponerla, esa vez
+    sin pasar por ninguna cola."""
+    import inspect
+    import web.app as panel
+    fuente = inspect.getsource(panel.categorias)
+    assert "olvidar_categoria" in fuente
+    import db.db as base
+    assert hasattr(base, "olvidar_categoria")
+
+
+def test_el_redirect_no_acepta_destinos_de_afuera():
+    """`volver` viene del formulario. Un destino que no se comprueba es un
+    redirect abierto: basta un POST con volver=https://otro-sitio."""
+    import inspect
+    import web.app as panel
+    fuente = inspect.getsource(panel.categorias)
+    assert 'startswith("/movimientos")' in fuente, (
+        "el destino del redirect no se está comprobando")
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):

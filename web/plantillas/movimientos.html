@@ -2,6 +2,9 @@
 {% block titulo %}Movimientos{% endblock %}
 {% block cuerpo %}
 <h1>Movimientos</h1>
+{% if guardados %}
+<p class="vacio">Guardado{{ 's' if guardados > 1 }} {{ guardados }}.</p>
+{% endif %}
 <form class="filtros" method="get">
   <input type="date" name="desde" value="{{ desde }}">
   <input type="date" name="hasta" value="{{ hasta }}">
@@ -25,6 +28,18 @@
 {% if not movs %}
 <p class="vacio">Nada con esos filtros.</p>
 {% else %}
+{# La categoría se puede CAMBIAR acá, no solo poner. Sin esta pantalla, una
+   categoría equivocada no volvía nunca: /sin-clasificar solo trae las que no
+   tienen ninguna, así que un error quedaba fijo y encima seguía enseñándole lo
+   mismo al sistema en cada compra siguiente. Un error que no se puede corregir
+   es peor que un hueco, porque el hueco al menos se ve.
+   prev_<id> lleva lo que había: el servidor solo toca las filas que cambiaron,
+   y así distinguir "no la toqué" de "la vacié a propósito" no depende de
+   adivinar. #}
+<form method="post" action="/categorias">
+<input type="hidden" name="volver" value="{{ volver }}">
+<div class="barra"><button>Guardar cambios</button>
+  <span class="suave">Cambiá la categoría en la fila que haga falta.</span></div>
 <div class="scroll"><table>
 <tr><th>Fecha</th><th>Banco</th><th>Quién</th><th>Categoría</th>
     <th class="num">Monto</th></tr>
@@ -33,11 +48,26 @@
   <td class="suave">{{ m.fecha }}</td>
   <td class="suave">{{ m.banco or '—' }}</td>
   <td>{{ m.contraparte }}<div class="suave">{{ m.referencia or '' }}</div></td>
-  <td class="suave">{{ m.categoria or '—' }}</td>
+  <td>
+    {% if m.tipo == 'gasto' %}
+    <input type="hidden" name="prev_{{ m.id }}" value="{{ m.categoria or '' }}">
+    <select name="cat_{{ m.id }}" style="width:11rem">
+      <option value="">— sin categoría —</option>
+      {% for c in todas %}
+      <option value="{{ c }}" {{ 'selected' if m.categoria == c }}>{{ c }}</option>
+      {% endfor %}
+    </select>
+    {% else %}
+    {# Los ingresos y traspasos no se clasifican, así que tampoco se editan. #}
+    <span class="suave">—</span>
+    {% endif %}
+  </td>
   <td class="num {{ m.tipo }}">{{ m.monto|pesos }} {{ m.moneda }}</td>
 </tr>
 {% endfor %}
 </table></div>
+<div class="barra"><button>Guardar cambios</button></div>
+</form>
 <p class="suave">{{ movs|length }} movimientos.
 {% if movs|selectattr('banco','none')|list %}
 Los que muestran «—» en Banco se anotaron a mano por Telegram antes de que
