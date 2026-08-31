@@ -91,7 +91,11 @@ solo el número.</p>
   <td class="suave"><code>{{ m.id|codigo }}</code></td>
   <td class="suave">{{ m.fecha }}</td>
   <td class="suave">{{ m.banco or '—' }}</td>
-  <td>{{ m.contraparte }}<div class="suave">{{ m.referencia or '' }}</div></td>
+  <td>{{ m.contraparte }}
+    {% if m.estado and m.estado != 'aprobada' %}
+    <strong class="suave"> · {{ m.estado }}, no cuenta</strong>
+    {% endif %}
+    <div class="suave">{{ m.referencia or '' }}</div></td>
   <td>
     {# UN INGRESO NO LLEVA CATEGORÍA. Las categorías dicen EN QUÉ se gastó, y
        el dinero que entra no se gastó en nada — ofrecerle "Supermercado" a un

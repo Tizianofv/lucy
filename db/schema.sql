@@ -206,6 +206,10 @@ CREATE TABLE movimientos (
   -- Las dos siguientes llegaron con la ingesta bancaria y vivieron un tiempo
   -- solo en la migración: la base real las tenía y este archivo no.
   hash_contenido TEXT,                         -- clave de dedupe del correo
+  -- aprobada | declinada | pendiente. Solo las aprobadas cuentan en los
+  -- totales: una declinada es dinero que no salió, y una retención se cuenta
+  -- cuando llega el cargo real, no antes.
+  estado      TEXT NOT NULL DEFAULT 'aprobada',
   banco       TEXT,                            -- BHD | Banreservas | ... | NULL a mano
   borrado_en  TIMESTAMPTZ
 );

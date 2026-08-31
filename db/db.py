@@ -658,15 +658,15 @@ async def guardar_movimiento(mov, bandeja_id: int | None = None,
             """
             INSERT INTO movimientos
               (bandeja_id, tipo, fecha, monto, moneda, contraparte,
-               categoria, referencia, hash_contenido, banco)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+               categoria, referencia, hash_contenido, banco, estado)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (hash_contenido) WHERE hash_contenido IS NOT NULL
               DO NOTHING
             RETURNING id
             """,
             (bandeja_id, mov.tipo, mov.fecha.date(), str(mov.monto), mov.moneda,
              mov.contraparte, categoria, mov.referencia, mov.clave_dedupe(),
-             mov.banco),
+             mov.banco, mov.estado),
         )
         fila = await cur.fetchone()
         return fila[0] if fila else None
@@ -748,6 +748,7 @@ async def resumen_por_mes(meses: int = 12) -> list[dict]:
               FROM movimientos
              WHERE borrado_en IS NULL
                AND tipo <> 'transferencia'
+               AND estado = 'aprobada'
                AND coalesce(categoria, '') <> ALL(%s)
                AND fecha >= date_trunc('month', now()) - (%s || ' months')::interval
              GROUP BY 1, 2, 3
@@ -783,6 +784,7 @@ async def gasto_por_categoria(mes: str | None = None) -> list[dict]:
                    coalesce(categoria, '') = ANY(%s) AS no_suma
               FROM movimientos
              WHERE borrado_en IS NULL AND tipo = 'gasto'
+               AND estado = 'aprobada'
                -- El ::text NO es adorno: sin él Postgres no puede deducir el
                -- tipo del parámetro cuando llega NULL y tira
                -- IndeterminateDatatype, que en el panel se ve como un
@@ -844,6 +846,7 @@ async def gastos_de_cada_categoria(mes: str | None = None) -> list[dict]:
                    coalesce(nullif(categoria, ''), '— sin clasificar —') AS categoria
               FROM movimientos
              WHERE borrado_en IS NULL AND tipo = 'gasto'
+               AND estado = 'aprobada'
                AND (%s::text IS NULL OR to_char(fecha, 'YYYY-MM') = %s)
              ORDER BY monto DESC
             """, (mes, mes))
@@ -881,6 +884,8 @@ async def sin_clasificar(limite: int = 100) -> list[dict]:
              WHERE borrado_en IS NULL
                AND (categoria IS NULL OR categoria = '')
                AND tipo = 'gasto'
+               -- Una compra rechazada no hay que clasificarla: no pasó.
+               AND estado = 'aprobada'
              ORDER BY monto DESC
              LIMIT %s
             """, (limite,))
@@ -909,7 +914,7 @@ async def movimientos_filtrados(desde=None, hasta=None, tipo: str | None = None,
         await cur.execute(
             """
             SELECT id, fecha, tipo, monto, moneda, contraparte, categoria,
-                   referencia, banco
+                   referencia, banco, estado
               FROM movimientos
              WHERE borrado_en IS NULL
                AND (%s::date IS NULL OR fecha >= %s::date)

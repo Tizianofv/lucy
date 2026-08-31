@@ -258,6 +258,34 @@ def test_ningun_movimiento_real_colisiona_con_otro_distinto():
         "movimientos distintos que la guardia descartaría como duplicados")
 
 
+def test_una_compra_rechazada_no_es_un_gasto():
+    """M-0017: un intento en un cajero con el PIN mal. El banco avisa igual y el
+    parser lo marcaba `estado='declinada'` desde el primer día — pero la columna
+    NO EXISTÍA en la tabla, así que se guardaba idéntico a una compra real y
+    sumaba a los totales.
+
+    Medido sobre los 466 movimientos del corpus: 23 declinadas por DOP
+    21,386.56 y 12 retenciones por DOP 3,693.07. Cerca de RD$60,000 al año de
+    gasto que no ocurrió. Y las retenciones además se cuentan OTRA VEZ cuando
+    llega el cargo de verdad.
+    """
+    import inspect
+    import db.db as base
+    inserta = inspect.getsource(base.guardar_movimiento)
+    assert "estado" in inserta, "el estado no se guarda: se pierde al insertar"
+    assert "mov.estado" in inserta
+
+    for consulta in (base.resumen_por_mes, base.gasto_por_categoria,
+                     base.gastos_de_cada_categoria, base.sin_clasificar):
+        assert "estado = 'aprobada'" in inspect.getsource(consulta), (
+            f"{consulta.__name__} cuenta movimientos que no ocurrieron")
+
+    # El detalle SÍ los muestra: quedan fuera del total, no fuera de la vista.
+    assert "estado = 'aprobada'" not in inspect.getsource(
+        base.movimientos_filtrados), (
+        "/movimientos tiene que seguir mostrándolos, marcados")
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):
