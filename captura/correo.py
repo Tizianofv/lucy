@@ -530,6 +530,33 @@ async def leer(cuenta: str, uid: str) -> dict | None:
         return None
 
 
+def destino_del_reporte(cuenta: dict) -> int:
+    """A qué chat va el reporte de ESTE buzón.
+
+    Sin el campo `reporte_a`, va al dueño — que es como se comportaba antes y
+    por eso no rompe nada existente. Con él, el buzón se puede escanear para
+    bancos sin que su correspondencia aparezca en el briefing de otra persona.
+
+    Es la línea que separa "Lucy lee el correo de Rosi para sacar sus
+    movimientos" de "Lucy le cuenta a Tiziano lo que le escriben a Rosi". Son
+    cosas distintas y el sistema tiene que poder hacer la primera sin la
+    segunda.
+
+    `reporte_a: 0` (o false) = este buzón NO genera reporte para nadie.
+    """
+    v = cuenta.get("reporte_a", cuenta.get("reporte", True))
+    if v is True:
+        return config.CHAT_ID_DUENO
+    if v is False or v == 0:
+        return 0
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        log.warning("reporte_a inválido en %s (%r): mando al dueño.",
+                    cuenta.get("user"), v)
+        return config.CHAT_ID_DUENO
+
+
 async def _pendientes_de(cuenta: dict, reglas: str = "") -> list[dict]:
     """Los correos SIN LEER de esta cuenta que todavía no se informaron, ya
     clasificados. Es la materia prima del reporte.
@@ -863,13 +890,21 @@ async def reporte_diario() -> int:
         return 0
 
     reglas = await _reglas()
-    pendientes: list[dict] = []
+    # Los correos se agrupan POR DESTINO, no en un solo montón: cada buzón
+    # informa a quien le corresponde. Hoy todos van al dueño porque ninguna
+    # cuenta declara `reporte_a`, pero la estructura ya no lo obliga.
+    por_destino: dict[int, list[dict]] = {}
     for cuenta in config.CORREO_CUENTAS:
+        destino = destino_del_reporte(cuenta)
+        if not destino:
+            continue          # buzón que se lee para bancos y nada más
         try:
-            pendientes += await _pendientes_de(cuenta, reglas)
+            por_destino.setdefault(destino, []).extend(
+                await _pendientes_de(cuenta, reglas))
         except Exception:
             log.warning("Falló la revisión de %s; sigo con las demás.",
                         cuenta.get("user", "?"), exc_info=True)
+    pendientes = [c for lista in por_destino.values() for c in lista]
 
     # Marcamos el día aunque no haya nada, para no reintentar toda la mañana.
     for c, e in zip(config.CORREO_CUENTAS, estados):
@@ -881,12 +916,17 @@ async def reporte_diario() -> int:
         log.info("Reporte de correo: nada sin leer que no se haya informado.")
         return 0
 
-    bandeja_id = await db.guardar_en_bandeja(
-        tipo_entrada="sistema",
-        contenido_raw=_encargo(pendientes),
-        chat_id=config.CHAT_ID_DUENO,
-        origen="correo",
-    )
+    # Un encargo POR DESTINO. Juntarlos mandaría el correo de una persona al
+    # chat de otra, que es exactamente lo que este cambio existe para impedir.
+    bandeja_id = None
+    for destino, lista in por_destino.items():
+        if not lista:
+            continue
+        bid = await db.guardar_en_bandeja(
+            tipo_entrada="sistema", contenido_raw=_encargo(lista),
+            chat_id=destino, origen="correo")
+        if destino == config.CHAT_ID_DUENO or bandeja_id is None:
+            bandeja_id = bid
     for c in pendientes:
         cl = c["clasificacion"]
         await db.marcar_correo_reportado(
