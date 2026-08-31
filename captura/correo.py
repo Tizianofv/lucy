@@ -616,6 +616,34 @@ async def _pendientes_de(cuenta: dict, reglas: str = "") -> list[dict]:
     ya = await db.correos_ya_reportados(
         cuenta["user"], [c["uid"] for c in crudos])
     nuevos = [c for c in crudos if c["uid"] not in ya]
+
+    # Los correos de los bancos que la ingesta ya sabe leer NO entran al
+    # reporte. Cada consumo con tarjeta llega como un correo y el clasificador
+    # lo marcaría "accion" —hay una regla explícita para eso en
+    # SISTEMA_CLASIFICA—, así que con varias compras al día el briefing matinal
+    # se convertiría en una lista de compras que Tiziano ya puede ver mejor en
+    # el panel. Y cada uno costaría una llamada a DeepSeek.
+    #
+    # Se filtra por REMITENTE REGISTRADO, no por una lista aparte: así, cuando
+    # se añada un banco nuevo, deja de ensuciar el reporte solo, sin que nadie
+    # se acuerde de tocar este archivo.
+    if nuevos:
+        try:
+            import cerebro.bancos as _bancos
+            de_bancos = set(_bancos.remitentes_registrados())
+        except Exception:
+            de_bancos = set()
+        if de_bancos:
+            def _dir(remitente: str) -> str:
+                r = remitente or ""
+                if "<" in r:
+                    r = r.split("<")[-1].split(">")[0]
+                return r.strip().lower()
+            antes = len(nuevos)
+            nuevos = [c for c in nuevos if _dir(c["from"]) not in de_bancos]
+            if antes != len(nuevos):
+                log.info("Reporte: %s correos bancarios fuera (los lee la "
+                         "ingesta).", antes - len(nuevos))
     if not nuevos:
         return []
 
