@@ -106,6 +106,49 @@ def test_un_correo_normal_del_mismo_dominio_si_pasa():
     assert len(salida) == 1, "un humano del banco no es una alerta automática"
 
 
+def test_el_canario_no_adivina_la_causa():
+    """El 31-ago el aviso dijo "casi seguro cambiaron el formato del correo" y
+    era falso: había llegado un pago de cliente de un tipo que el parser no
+    cubría, con el formato del banco intacto. La alarma acertó el SÍNTOMA y se
+    inventó la CAUSA, y una conjetura dentro de una alarma se lee como un hecho
+    — manda a arreglar lo que no está roto.
+
+    Lo que el canario sabe es que llegaron correos y no salió ningún
+    movimiento. Eso es lo que puede decir.
+    """
+    import asyncio
+
+    import db.db as base
+    from captura import consumos
+
+    capturado = []
+
+    async def _falso(**k):
+        capturado.append(k.get("contenido_raw", ""))
+        return 1
+
+    real = base.guardar_en_bandeja
+    base.guardar_en_bandeja = _falso
+    try:
+        res = consumos.Resumen()
+        res.por_banco_vistos = {"popularenlinea.com": 1}
+        res.fallos = ["x#1 [asunto]: no encuentro a quién se le transfirió."]
+        consumos._ultimo_aviso.clear()
+        asyncio.new_event_loop().run_until_complete(
+            consumos.avisar_si_hay_bancos_mudos(res))
+    finally:
+        base.guardar_en_bandeja = real
+
+    assert capturado, "el canario no dejó ningún aviso"
+    texto = capturado[0]
+    for conjetura in ("casi seguro", "seguramente", "cambiaron el formato del correo"):
+        assert conjetura not in texto.split("NO DIGAS POR QUÉ PASÓ")[0], (
+            f"el aviso vuelve a adivinar la causa: {conjetura!r}")
+    # Y sigue diciendo lo que sí sabe, que es lo que lo hace útil.
+    assert "no salió ni un movimiento" in texto
+    assert "no se perdió nada" in texto
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):

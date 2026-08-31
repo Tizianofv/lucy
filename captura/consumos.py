@@ -405,13 +405,22 @@ async def avisar_si_hay_bancos_mudos(res: Resumen) -> int:
             contenido_raw=(
                 f"AVISO: dejé de entender los correos de {banco}. Llegaron "
                 f"{vistos} correos suyos en esta revisión y no salió ni un "
-                f"movimiento — casi seguro cambiaron el formato del correo.\n\n"
+                f"movimiento.\n\n"
                 + (f"El error fue: {muestra}\n\n" if muestra else "")
                 + "Decíselo a Tiziano en una línea, sin alarmar: los correos "
-                "están guardados y no se perdió nada, pero sus gastos de ese "
-                "banco NO están entrando a la base hasta que se arregle el "
+                "están guardados y no se perdió nada, pero sus movimientos de "
+                "ese banco NO están entrando a la base hasta que se arregle el "
                 "parser. Es importante que lo sepa: un sistema de gastos que se "
-                "queda callado parece decir que no gastó nada."),
+                "queda callado parece decir que no gastó nada.\n\n"
+                "NO DIGAS POR QUÉ PASÓ. Esto detecta un síntoma —llegaron "
+                "correos y no salió ningún movimiento— y las causas posibles "
+                "son varias: que el banco cambiara su plantilla, o que llegara "
+                "un tipo de correo que el parser todavía no cubre, o un fallo "
+                "en un adjunto. El 31-ago este mismo aviso dijo \"casi seguro "
+                "cambiaron el formato\" y era falso: era un pago de cliente de "
+                "un tipo nuevo, y el formato estaba intacto. Una conjetura "
+                "dentro de una alarma se lee como un hecho y manda a arreglar "
+                "lo que no está roto."),
             chat_id=config.CHAT_ID_DUENO, origen="banco")
         _ultimo_aviso[banco] = hoy
         avisados += 1
