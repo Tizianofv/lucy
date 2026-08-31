@@ -19,13 +19,19 @@ los que más pesan. Cada corrección le enseña algo al sistema.</p>
   <td>
     <form method="post" action="/categoria" style="display:flex;gap:.4rem">
       <input type="hidden" name="movimiento_id" value="{{ m.id }}">
-      <input name="categoria" list="cats" placeholder="categoría" style="width:9rem">
+      {# <select>, no <input list>: un datalist SUGIERE y acepta cualquier
+         texto, así que con el pulgar y el autocorrector salía "supermercdo",
+         el servidor lo rechazaba y el redirect era idéntico al del éxito.
+         Aquí el vocabulario cerrado se cierra de verdad, en la pantalla. #}
+      <select name="categoria" style="width:11rem">
+        <option value="">— elegir —</option>
+        {% for c in categorias %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+      </select>
       <button>Guardar</button>
     </form>
   </td>
 </tr>
 {% endfor %}
 </table></div>
-<datalist id="cats">{% for c in categorias %}<option value="{{ c }}">{% endfor %}</datalist>
 {% endif %}
 {% endblock %}

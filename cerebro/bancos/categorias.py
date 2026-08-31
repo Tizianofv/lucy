@@ -45,8 +45,12 @@ import re
 import unicodedata
 
 # Sufijos de ciudad y país que los bancos pegan al final del comercio.
+# El \b antes del grupo NO es adorno: sin él, "DO|RD|US" casan dentro de la
+# última palabra y "SUPERMERCADO" se normaliza a "SUPERMERCA", "BONUS" a "BON"
+# y "PESCADO" a "PESCA". Como las claves también pasan por acá, eso convertía
+# claves largas y seguras en muñones cortos y peligrosos.
 _COLAS = re.compile(
-    r"\s*(SANTO\s*DOMINGO(DO)?|SANTIAGO|SDQ|STO\s*DGO|DO|RD|US|USA|"
+    r"\s*\b(SANTO\s*DOMINGO(DO)?|SANTIAGO|SDQ|STO\s*DGO|DO|RD|US|USA|"
     r"REP\s*DOM(INICANA)?)\s*$", re.I)
 # Prefijos de las redes de pago: "*BNS ", "CCN ", "TPV ", "POS ".
 _CABEZAS = re.compile(r"^\s*[*#]?\s*(BNS|CCN|TPV|POS|PDV|VTA)\s+", re.I)
@@ -63,6 +67,11 @@ def normalizar_comercio(texto: str) -> str:
     t = "".join(c for c in unicodedata.normalize("NFD", texto or "")
                 if not unicodedata.combining(c)).upper()
     t = t.replace("&", " Y ")
+    # El apóstrofo se BORRA, no se cambia por espacio: "WENDY'S" tiene que dar
+    # "WENDYS" y no "WENDY S", que parte el nombre en dos y hace que la clave
+    # del comercio deje de casar mientras el nombre de pila suelto empieza a
+    # casar solo. Vale para todas las comillas que meten los bancos.
+    t = re.sub(r"[\u2019\u02bc'`]", "", t)
     for _ in range(3):          # los prefijos vienen apilados: "*BNS CCN ..."
         nuevo = _CABEZAS.sub("", t)
         if nuevo == t:
@@ -98,6 +107,7 @@ CATEGORIAS = [
     "Seguros",
     "Cuidado personal",
     "Ropa y hogar",
+    "Equipos y tecnología",
     "Educación",
     "Software y suscripciones",
     "Entretenimiento",
@@ -134,8 +144,10 @@ CATEGORIAS = [
 #      no cae en ninguna cola y desvía el total sin que nadie lo note. El costo
 #      de faltar es un minuto; el de sobrar es un número equivocado.
 #
-# Por eso acá no está "ENFOQUE DIGITAL" —que aparece en el corpus real y no sé
-# qué es— ni las transferencias a personas. Esas van a la cola, que es su sitio.
+# Por eso acá no están las transferencias a personas: van a la cola, que es su
+# sitio. "ENFOQUE DIGITAL" sí está, pero no por deducción — estaba en la cola
+# hasta que Tiziano dijo que es una tienda de equipos de foto y video. Eso es
+# exactamente el circuito que el panel existe para cerrar.
 CLAVES = {
     # Supermercados dominicanos
     "SM NACIONAL": "Supermercado", "SUPERMERCADO": "Supermercado",
@@ -151,13 +163,14 @@ CLAVES = {
     "HELADOS BON": "Restaurantes", "GRAN MURALLA": "Restaurantes",
     "SAZON": "Restaurantes", "ALTANERA": "Restaurantes",
     "MCDONALD": "Restaurantes", "BURGER": "Restaurantes",
-    "WENDY": "Restaurantes", "DOMINO": "Restaurantes",
+    "WENDYS": "Restaurantes", "DOMINO": "Restaurantes",
     "ADRIAN TROPICAL": "Restaurantes", "PANADERIA": "Restaurantes",
 
     "SHELL": "Combustible", "TEXACO": "Combustible",
     "TOTAL BELLA": "Combustible", "SIGMA": "Combustible",
     "ESTACION": "Combustible",
 
+    "UBER EATS": "Restaurantes", "UBER *EATS": "Restaurantes",
     "UBER": "Transporte", "RDVIAL": "Transporte", "PEAJE": "Transporte",
     "PARQUEO": "Transporte",
 
@@ -183,12 +196,18 @@ CLAVES = {
 
     "CINEMA": "Entretenimiento", "CARIBBEAN CINEMAS": "Entretenimiento",
 
-    "COMISION": "Banco y comisiones", "BANCO": "Banco y comisiones",
-    "BANRESERVAS": "Banco y comisiones",
+    # Solo el cargo, nunca el nombre del banco. "BANCO" y "BANRESERVAS" casaban
+    # 10 movimientos del corpus y su significado real era "el texto menciona un
+    # banco", no "esto es una comisión": convertían transferencias entre
+    # personas en gasto bancario. Un nombre de pila como clave —"WENDY", que
+    # capturaba 7 transferencias a una señora y 1 restaurante— es el mismo error.
+    "COMISION": "Banco y comisiones", "SOBREGIRO": "Banco y comisiones",
 
     "DGII": "Impuestos", "IMPUESTO": "Impuestos",
 
     "INTERESES": "Intereses",
+
+    "ENFOQUE DIGITAL": "Equipos y tecnología",
 
     "VETERINARIA": "Mascotas", "PETSHOP": "Mascotas",
 }

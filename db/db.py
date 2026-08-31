@@ -846,6 +846,14 @@ async def poner_categoria(movimiento_id: int, categoria: str) -> None:
             "SELECT categoria, contraparte FROM movimientos WHERE id = %s",
             (movimiento_id,))
         antes = await cur.fetchone()
+        if antes is None:
+            # El movimiento no existe. Sin esto se escribía igual una fila de
+            # log_acciones con antes='{}' —auditoría de una edición que nunca
+            # pasó, y que `deshacer` rechaza después con "no guardó con qué
+            # volver atrás"—. Basura permanente en la tabla que ES el deshacer.
+            log.warning("poner_categoria sobre movimiento inexistente: %s",
+                        movimiento_id)
+            return
         await conn.execute("UPDATE movimientos SET categoria = %s WHERE id = %s",
                            (categoria or None, movimiento_id))
         await conn.execute(
@@ -861,8 +869,8 @@ async def poner_categoria(movimiento_id: int, categoria: str) -> None:
 
     # Y se APRENDE: sin esto, corregir el mismo comercio la semana que viene
     # volvería a ser trabajo manual, que es como muere este tipo de sistema.
-    # Fuera del `async with`: aprender_categoria pide su propia conexión, y
-    # pedirla desde adentro puede quedarse esperando su turno en el pool.
+    # (Va fuera del `async with` porque aprender_categoria pide su propia
+    # conexión al pool. Ya estaba así; acá solo se le quitó un SELECT de más.)
     if antes and antes.get("contraparte") and categoria:
         await aprender_categoria(normalizar_comercio(antes["contraparte"]),
                                  categoria)

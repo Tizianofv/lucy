@@ -108,12 +108,14 @@ async def cola(request: Request):
     # El desplegable ofrece el VOCABULARIO COMPLETO, no las categorías ya
     # usadas. Con base vacía "las ya usadas" son cero, y una cola de corrección
     # cuyo desplegable está vacío no se puede usar: no hay forma de empezar.
-    # Se le suma lo que haya en la base por si alguna vez entró algo a mano.
-    usadas = await db.categorias_usadas()
-    categorias = CATEGORIAS + [c for c in usadas if c not in CATEGORIAS]
+    #
+    # Y ofrece EXACTAMENTE lo que POST /categoria acepta, ni una más. Sumarle
+    # las categorías heredadas de la base parecía generoso y era una trampa:
+    # ponía en el desplegable opciones que la validación rechaza siempre, o sea
+    # opciones garantizadas a fallar en silencio.
     return plantillas.TemplateResponse(
         request, "sin_clasificar.html",
-        {"movs": await db.sin_clasificar(), "categorias": categorias})
+        {"movs": await db.sin_clasificar(), "categorias": CATEGORIAS})
 
 
 @app.post("/categoria")

@@ -294,6 +294,42 @@ def test_schema_sql_declara_lo_que_el_codigo_usa():
             f"'{necesario}' se usa en el código y no está en db/schema.sql")
 
 
+def test_las_columnas_que_el_codigo_inserta_existen_en_el_esquema():
+    """La lista de arriba se escribe A MANO, y por eso no sirve sola: cuando la
+    ingesta bancaria agregó `hash_contenido` y `banco` a movimientos, la
+    migración las creó en la base real, el archivo del repo se quedó atrás y
+    ningún test se enteró — las 19 suites en verde sobre un schema.sql que no
+    podía guardar un movimiento.
+
+    Este test no confía en ninguna lista: saca los nombres de columna del propio
+    INSERT del código y los busca en el esquema. Lo que el código escribe tiene
+    que estar declarado, y el que agregue una columna se entera acá y no en
+    producción seis meses después.
+    """
+    import re
+    fuente = open(os.path.join(_ROOT, "db", "db.py"), encoding="utf-8").read()
+    esquema = open(os.path.join(_ROOT, "db", "schema.sql"), encoding="utf-8").read()
+
+    faltan = []
+    for tabla, crudo in re.findall(
+            r"INSERT\s+INTO\s+(\w+)\s*\(([^)]*)\)", fuente, re.I | re.S):
+        declarado = re.search(
+            r"CREATE TABLE (?:IF NOT EXISTS )?%s\s*\((.*?)\n\);" % tabla,
+            esquema, re.I | re.S)
+        if not declarado:
+            faltan.append(f"{tabla}: la tabla entera no está en schema.sql")
+            continue
+        cuerpo = declarado.group(1)
+        for col in (c.strip() for c in crudo.replace("\n", " ").split(",")):
+            if col and not re.search(r"^\s*%s\s" % re.escape(col), cuerpo,
+                                     re.I | re.M):
+                faltan.append(f"{tabla}.{col}")
+
+    assert not faltan, (
+        "el código inserta columnas que db/schema.sql no declara: "
+        + ", ".join(faltan))
+
+
 _TESTS = [
     test_backup_reciente_no_avisa,
     test_a_las_47_horas_todavia_calla,
@@ -311,6 +347,7 @@ _TESTS = [
     test_la_rotacion_se_lleva_el_esquema_con_su_json,
     test_la_clave_de_la_base_no_va_en_la_linea_de_comandos,
     test_schema_sql_declara_lo_que_el_codigo_usa,
+    test_las_columnas_que_el_codigo_inserta_existen_en_el_esquema,
 ]
 
 

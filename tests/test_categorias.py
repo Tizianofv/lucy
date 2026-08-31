@@ -182,6 +182,8 @@ def test_la_clave_casa_en_inicio_de_palabra_y_no_en_cualquier_parte():
     transporte. Nadie lo nota, porque un movimiento MAL categorizado no cae en
     ninguna cola: se va derecho al total."""
     cat = Categorizador(claves=CLAVES)
+    # Solo el primero discrimina de verdad con las CLAVES de hoy; los otros
+    # están porque son las trampas que aparecerían al agregar claves nuevas.
     for texto in ("TUBERIAS Y CONEXIONES", "COLEGIO SANTA ANA",
                   "CARBONELL SRL", "ABONOS DEL CARIBE"):
         assert cat.categoria_de(texto) is None, (
@@ -208,6 +210,49 @@ def test_ninguna_clave_apunta_a_una_categoria_inventada():
 def test_el_vocabulario_no_tiene_duplicados_ni_variantes_de_caja():
     bajas = [c.lower() for c in CATEGORIAS]
     assert len(bajas) == len(set(bajas)), "hay categorías repetidas"
+
+
+def test_la_normalizacion_no_se_come_el_final_de_la_palabra():
+    """_COLAS quita el sufijo de ciudad —"SDQ", "SANTO DOMINGO", "RD"— pero sin
+    frontera de palabra se comía las últimas letras de cualquier cosa terminada
+    en DO, RD o US: "SUPERMERCADO" quedaba en "SUPERMERCA" y "BONUS" en "BON".
+    Y como las CLAVES también se normalizan, eso convertía claves largas y
+    seguras en muñones de tres letras — justo lo que el comentario prohíbe."""
+    for entero in ("SUPERMERCADO", "BONUS", "PESCADO", "HELADO", "ALTUS"):
+        assert normalizar_comercio(entero) == entero, (
+            f"la normalización mutiló {entero!r} → {normalizar_comercio(entero)!r}")
+    # Y sigue quitando lo que sí es cola de ciudad:
+    assert normalizar_comercio("SM NACIONAL MAXIMO GOM SANTO DOMINGODO") == \
+        "SM NACIONAL MAXIMO GOM"
+
+
+def test_ningun_nombre_de_pila_hace_de_clave_de_comercio():
+    """"WENDY" capturaba 8 movimientos del corpus y 7 eran transferencias a una
+    señora que se llama Wendy: 87% de error. Un nombre de pila no identifica un
+    comercio, y peor, se come justo las transferencias a personas que el módulo
+    dice mandar a la cola a propósito."""
+    cat = Categorizador(claves=CLAVES)
+    assert cat.categoria_de(
+        "ROSILIS YANELY ROMERO JIMENEZ → WENDY MARISOL CANELA CRUZ") is None
+    assert cat.categoria_de("WENDY'S TIRADENTES") == "Restaurantes"
+
+
+def test_mencionar_un_banco_no_es_una_comision_bancaria():
+    """"BANCO" capturaba 10 movimientos y significaba "el texto nombra un
+    banco", no "esto es un cargo del banco": convertía transferencias entre
+    personas en gasto bancario. La clave tiene que nombrar el CARGO."""
+    cat = Categorizador(claves=CLAVES)
+    for texto in ("BANCO RESERVAS R.D 010",
+                  "ROSILIS YANELY ROMERO JIMENEZ · BANCO MULTIPLE BHD S.A.",
+                  "BANCO POPULAR DOMINICANO, C. POR A."):
+        assert cat.categoria_de(texto) is None, f"{texto!r} → gasto bancario"
+    assert cat.categoria_de("COMISION POR MANEJO") == "Banco y comisiones"
+
+
+def test_la_comida_a_domicilio_no_es_transporte():
+    cat = Categorizador(claves=CLAVES)
+    assert cat.categoria_de("UBER * EATS PENDING") == "Restaurantes"
+    assert cat.categoria_de("UBER*RIDES") == "Transporte"
 
 
 if __name__ == "__main__":

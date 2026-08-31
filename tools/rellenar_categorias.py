@@ -42,27 +42,31 @@ def main() -> int:
             "WHERE borrado_en IS NULL")}
         cat = Categorizador(aprendidas, CLAVES)
 
+        # `categoria` se trae aunque el WHERE ya la filtre: el log de auditoría
+        # tiene que decir qué había DE VERDAD. Escribir {"categoria": null} a
+        # ojo es inventar el valor en la única tabla que sirve para deshacer, y
+        # las filas que tenían cadena vacía volverían a NULL al revertirlas.
         filas = conn.execute(
-            "SELECT id, contraparte, monto, moneda FROM movimientos "
+            "SELECT id, contraparte, monto, moneda, categoria FROM movimientos "
             "WHERE borrado_en IS NULL AND (categoria IS NULL OR categoria = '') "
             "ORDER BY monto DESC").fetchall()
 
         tocados, quedan = [], []
-        for mid, cp, monto, moneda in filas:
+        for mid, cp, monto, moneda, previa in filas:
             c = cat.categoria_de(cp or "")
-            (tocados if c else quedan).append((mid, cp, monto, moneda, c))
+            (tocados if c else quedan).append((mid, cp, monto, moneda, c, previa))
 
-        for _, cp, monto, moneda, c in tocados:
+        for _, cp, monto, moneda, c, _prev in tocados:
             print(f"  {monto:>10,.2f} {moneda}  {c:<26} {normalizar_comercio(cp or '')[:38]}")
         print(f"\n  {len(tocados)} con categoría · {len(quedan)} quedan para la cola")
-        for _, cp, monto, moneda, _ in quedan:
+        for _, cp, monto, moneda, _c, _prev in quedan:
             print(f"     cola: {monto:>9,.2f} {moneda}  {normalizar_comercio(cp or '')[:38]}")
 
         if not aplicar:
             print("\nEn seco. Con --aplicar escribe.")
             return 0
 
-        for mid, cp, _, _, c in tocados:
+        for mid, cp, _, _, c, previa in tocados:
             conn.execute("UPDATE movimientos SET categoria = %s WHERE id = %s",
                          (c, mid))
             conn.execute(
@@ -72,7 +76,7 @@ def main() -> int:
                 VALUES ('relleno', 'editar', 'movimientos', %s, %s, %s,
                         'categoría puesta por la red de palabras clave')
                 """,
-                (mid, json.dumps({"categoria": None}),
+                (mid, json.dumps({"categoria": previa}),
                  json.dumps({"categoria": c}, ensure_ascii=False)))
         conn.commit()
         print(f"\n  Escritos {len(tocados)}.")

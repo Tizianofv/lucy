@@ -203,6 +203,10 @@ CREATE TABLE movimientos (
   persona_id  BIGINT REFERENCES personas(id),  -- "¿cuánto le pagué a Juan?"
   proyecto_id BIGINT REFERENCES proyectos(id), -- "¿cuánto llevo gastado en X?"
   notas       TEXT,
+  -- Las dos siguientes llegaron con la ingesta bancaria y vivieron un tiempo
+  -- solo en la migración: la base real las tenía y este archivo no.
+  hash_contenido TEXT,                         -- clave de dedupe del correo
+  banco       TEXT,                            -- BHD | Banreservas | ... | NULL a mano
   borrado_en  TIMESTAMPTZ
 );
 CREATE INDEX idx_movimientos_fecha ON movimientos(fecha);
@@ -255,3 +259,35 @@ CREATE TABLE backups (
   origen   TEXT                  -- qué máquina lo corrió: delata que dependemos de una sola
 );
 CREATE INDEX idx_backups_hecho_en ON backups(hecho_en DESC);
+
+-- ── Ingesta bancaria (migración 2026-08-30) ─────────────────────────
+-- Vivieron un tiempo solo en la migración: la base real las tenía y este
+-- archivo no, así que `psql -f db/schema.sql` daba una base que no podía
+-- ingerir un solo correo. Un esquema versionado que no describe la base
+-- real es peor que no tener ninguno, porque se le cree.
+CREATE TABLE IF NOT EXISTS consumos_estado (
+  cuenta         TEXT PRIMARY KEY,
+  uidvalidity    BIGINT,
+  ultimo_uid     BIGINT NOT NULL DEFAULT 0,
+  desde_fecha    DATE NOT NULL DEFAULT DATE '2026-09-01',
+  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+COMMENT ON TABLE consumos_estado IS
+  'Cursor de la ingesta de movimientos. Separado de correo_estado a propósito: '
+  'el reporte matinal y la ingesta recorren el buzón con criterios distintos y '
+  'compartir puntero deja ciego al que avanza más lento.';
+COMMENT ON COLUMN consumos_estado.uidvalidity IS
+  'Si el servidor lo cambia, los UID viejos dejan de significar nada y hay que '
+  'reiniciar el cursor. Sin esta comprobación la ingesta se saltaría correos en '
+  'silencio tras una migración del buzón.';
+
+CREATE TABLE IF NOT EXISTS categorias_aprendidas (
+  comercio    TEXT PRIMARY KEY,
+  categoria   TEXT NOT NULL,
+  creado_en   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  borrado_en  TIMESTAMPTZ
+);
+COMMENT ON COLUMN categorias_aprendidas.comercio IS
+  'Comercio NORMALIZADO (cerebro/bancos/categorias.py): sin acentos, sin '
+  'sucursal, sin sufijo de ciudad. Guardar el nombre crudo obligaría a corregir '
+  'el mismo sitio una vez por cada forma en que el banco lo escribe.';
