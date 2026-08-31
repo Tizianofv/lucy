@@ -327,4 +327,7 @@ async def salud(request: Request):
         atraso = datetime.now(ultimo.tzinfo) - ultimo
     return plantillas.TemplateResponse(
         request, "salud.html",
-        {"s": s, "atraso": atraso, "umbral": timedelta(hours=2)})
+        {"s": s, "atraso": atraso, "umbral": timedelta(hours=2),
+         # Se muestran, no se fusionan: equivocarse borrando pierde un gasto
+         # real en silencio, y lo silencioso es lo que este panel combate.
+         "duplicados": await db.posibles_duplicados()})

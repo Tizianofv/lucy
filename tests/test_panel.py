@@ -390,10 +390,17 @@ def test_las_pantallas_se_pintan_de_verdad():
     async def _lista(*a, **k):
         return ["Seguros"]
 
+    async def _duplicados():
+        return [{"banco": "bhd", "cuando": "2026-08-05T11:08",
+                 "monto": Decimal("2823.07"), "moneda": "DOP",
+                 "ids": [92, 93],
+                 "contrapartes": ["ALTICE HOGAR", "Tricom - IB BHDLeon"]}]
+
     guardado = {n: getattr(base, n) for n in (
         "resumen_por_mes", "gasto_por_categoria", "gastos_de_cada_categoria",
         "meses_con_movimientos", "salud_ingesta", "movimientos_filtrados",
-        "sin_clasificar", "categorias_usadas", "bancos_usados")}
+        "sin_clasificar", "categorias_usadas", "bancos_usados",
+        "posibles_duplicados")}
     base.resumen_por_mes = _resumen_mes
     base.gasto_por_categoria = _por_categoria
     base.gastos_de_cada_categoria = _detalle
@@ -403,12 +410,14 @@ def test_las_pantallas_se_pintan_de_verdad():
     base.sin_clasificar = _movs
     base.categorias_usadas = _lista
     base.bancos_usados = _lista
+    base.posibles_duplicados = _duplicados
     try:
         bucle = asyncio.new_event_loop()
         for nombre, corutina in (
                 ("/", panel.resumen(_peticion("/"))),
                 ("/movimientos", panel.movimientos(_peticion("/movimientos"))),
-                ("/sin-clasificar", panel.cola(_peticion("/sin-clasificar")))):
+                ("/sin-clasificar", panel.cola(_peticion("/sin-clasificar"))),
+                ("/salud", panel.salud(_peticion("/salud")))):
             r = bucle.run_until_complete(corutina)
             assert r.status_code == 200, f"{nombre} devolvió {r.status_code}"
             assert len(r.body) > 200, f"{nombre} salió vacía"

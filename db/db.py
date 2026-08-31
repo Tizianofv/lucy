@@ -796,6 +796,39 @@ async def gasto_por_categoria(mes: str | None = None) -> list[dict]:
         return await cur.fetchall()
 
 
+async def posibles_duplicados() -> list[dict]:
+    """Pares que huelen a la misma operación contada dos veces.
+
+    Mismo banco, mismo MINUTO, mismo monto y misma moneda, con la contraparte
+    escrita distinta. Pasa cuando un banco manda dos correos por una sola
+    operación: BHD avisa del "Pago de Servicio" Y lo repite en su alerta
+    genérica de transacciones, escribiendo el comercio de dos formas
+    ("ALTICE HOGAR" y "Tricom - IB BHDLeon"). El dedupe no los junta porque la
+    huella incluye la contraparte.
+
+    SE MUESTRA, NO SE FUSIONA. Medido sobre los 466 movimientos del corpus
+    entero: UN caso. Con n=1 no hay evidencia para una regla automática, y
+    equivocarse borrando pierde un gasto real EN SILENCIO — que es peor que
+    contarlo dos veces, porque contarlo dos veces se ve. Que decida una persona.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT split_part(hash_contenido, '|', 1) AS banco,
+                   split_part(hash_contenido, '|', 2) AS cuando,
+                   monto, moneda,
+                   array_agg(id ORDER BY id)          AS ids,
+                   array_agg(contraparte ORDER BY id) AS contrapartes
+              FROM movimientos
+             WHERE borrado_en IS NULL AND hash_contenido IS NOT NULL
+             GROUP BY 1, 2, 3, 4
+            HAVING count(DISTINCT contraparte) > 1
+             ORDER BY 3 DESC
+            """)
+        return await cur.fetchall()
+
+
 async def gastos_de_cada_categoria(mes: str | None = None) -> list[dict]:
     """Los gastos uno por uno, para poder abrir una categoría y ver qué hay.
 

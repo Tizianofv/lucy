@@ -1,5 +1,24 @@
 {% extends "base.html" %}{% set activo='salud' %}
-{% block titulo %}Salud{% endblock %}
+{% block titulo %}Salud{% if duplicados %}
+<h2 style="margin-top:1.8rem">Posibles duplicados</h2>
+<p class="suave">Mismo banco, mismo minuto y mismo monto, con el comercio escrito
+de dos formas. Suele ser un banco mandando dos correos por una sola operación.
+No se juntan solos: borrar el que no era pierde un gasto de verdad y no se
+notaría. Mirá los dos en /movimientos y borrá el que sobre.</p>
+<div class="scroll"><table>
+<tr><th>Cuándo</th><th>Banco</th><th class="num">Monto</th><th>Los dos</th></tr>
+{% for d in duplicados %}
+<tr>
+  <td class="suave">{{ d.cuando }}</td>
+  <td class="suave">{{ d.banco }}</td>
+  <td class="num">{{ d.monto|pesos }} {{ d.moneda }}</td>
+  <td>{% for i in d.ids %}<code>{{ i|codigo }}</code>
+      {{ d.contrapartes[loop.index0][:30] }}<br>{% endfor %}</td>
+</tr>
+{% endfor %}
+</table></div>
+{% endif %}
+{% endblock %}
 {% block cuerpo %}
 <h1>Salud del sistema</h1>
 <p class="suave">Un cero en el resumen puede significar dos cosas opuestas: que
@@ -37,4 +56,23 @@ dejó de correr.</div></div>
     <td class="num suave">{{ c.actualizado_en.strftime('%d/%m %H:%M') }}</td></tr>
 {% endfor %}
 </table></div>
+{% if duplicados %}
+<h2 style="margin-top:1.8rem">Posibles duplicados</h2>
+<p class="suave">Mismo banco, mismo minuto y mismo monto, con el comercio escrito
+de dos formas. Suele ser un banco mandando dos correos por una sola operación.
+No se juntan solos: borrar el que no era pierde un gasto de verdad y no se
+notaría. Mirá los dos en /movimientos y borrá el que sobre.</p>
+<div class="scroll"><table>
+<tr><th>Cuándo</th><th>Banco</th><th class="num">Monto</th><th>Los dos</th></tr>
+{% for d in duplicados %}
+<tr>
+  <td class="suave">{{ d.cuando }}</td>
+  <td class="suave">{{ d.banco }}</td>
+  <td class="num">{{ d.monto|pesos }} {{ d.moneda }}</td>
+  <td>{% for i in d.ids %}<code>{{ i|codigo }}</code>
+      {{ d.contrapartes[loop.index0][:30] }}<br>{% endfor %}</td>
+</tr>
+{% endfor %}
+</table></div>
+{% endif %}
 {% endblock %}
