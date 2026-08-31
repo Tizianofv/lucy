@@ -590,3 +590,53 @@ async def guardar_movimiento(mov, bandeja_id: int | None = None,
         )
         fila = await cur.fetchone()
         return fila[0] if fila else None
+
+
+# ── Ingesta de movimientos bancarios (captura/consumos.py) ───────────────
+
+async def leer_estado_consumos(cuenta: str) -> dict | None:
+    """Cursor de la ingesta para una cuenta. None si nunca se ha corrido."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT uidvalidity, ultimo_uid, desde_fecha FROM consumos_estado "
+            "WHERE cuenta = %s", (cuenta,))
+        return await cur.fetchone()
+
+
+async def guardar_estado_consumos(cuenta: str, uidvalidity: int,
+                                  ultimo_uid: int, desde_fecha,
+                                  reiniciar: bool = False) -> None:
+    """Avanza el cursor. Nunca retrocede, SALVO que el buzón se haya renumerado.
+
+    El GREATEST está para que dos pasadas solapadas no se pisen: la lenta no
+    puede hacer que la rápida vuelva a mirar lo que ya miró. Pero cuando cambia
+    el UIDVALIDITY los UID viejos dejan de significar nada, y un GREATEST
+    incondicional dejaría el puntero clavado en un número del buzón anterior —
+    la cuenta ciega para siempre, en silencio. Por eso `reiniciar` lo reemplaza.
+    """
+    async with pool.connection() as conn:
+        await conn.execute(
+            """
+            INSERT INTO consumos_estado
+              (cuenta, uidvalidity, ultimo_uid, desde_fecha, actualizado_en)
+            VALUES (%s, %s, %s, %s, now())
+            ON CONFLICT (cuenta) DO UPDATE SET
+              uidvalidity    = EXCLUDED.uidvalidity,
+              ultimo_uid     = CASE WHEN %s THEN EXCLUDED.ultimo_uid
+                                    ELSE GREATEST(consumos_estado.ultimo_uid,
+                                                  EXCLUDED.ultimo_uid) END,
+              desde_fecha    = EXCLUDED.desde_fecha,
+              actualizado_en = now()
+            """,
+            (cuenta, uidvalidity, ultimo_uid, desde_fecha, reiniciar),
+        )
+
+
+async def listar_cuentas_propias() -> list[dict]:
+    """Los patrones que identifican a la casa. Lista vacía si no hay tabla."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT patron FROM cuentas_propias WHERE borrado_en IS NULL")
+        return await cur.fetchall()
