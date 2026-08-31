@@ -286,6 +286,46 @@ async def test_cita_mismo_titulo_inicio_distinto_si_crea():
     assert len(conn.eventos) == 2, "otra hora de inicio = otra cita"
 
 
+def _sincrono(fn):
+    """Envuelve un test síncrono para el runner, que espera corrutinas."""
+    async def envuelto():
+        return fn()
+    envuelto.__name__ = fn.__name__
+    return envuelto
+
+
+def test_el_monto_manual_no_pasa_por_float():
+    """El camino manual —cuando Tiziano le dice a Lucy "gasté 500"— era el ÚNICO
+    sitio del sistema donde el dinero pasaba por float. El automático ya usaba
+    Decimal de punta a punta.
+
+    Postgres redondea al guardar en NUMERIC(12,2), así que hoy no se ve nada
+    raro. El punto es que el error entra ANTES de guardar, y una cifra torcida
+    que nace de un redondeo no deja rastro de dónde salió.
+    """
+    from decimal import Decimal
+    from acciones.crud import _monto_exacto
+    assert _monto_exacto("1234.56") == Decimal("1234.56")
+    assert isinstance(_monto_exacto(500), Decimal)
+    # Positivo SIEMPRE: el signo lo da `tipo`, y guardarlo dos veces es cómo se
+    # termina restando un ingreso.
+    assert _monto_exacto(-500) == Decimal("500")
+    assert _monto_exacto("0.10") * 3 == Decimal("0.30")
+
+
+def test_un_monto_ilegible_no_se_guarda_como_cero():
+    """Tragarse la basura como 0.00 anotaría un gasto de cero pesos que nadie
+    entendería después. Si el clasificador manda algo que no es un número, eso
+    es un fallo suyo y tiene que verse."""
+    from acciones.crud import _monto_exacto
+    for basura in ("quinientos", "", None, "12,50,30"):
+        try:
+            _monto_exacto(basura)
+            assert False, f"{basura!r} no debería haber pasado"
+        except ValueError:
+            pass
+
+
 _TESTS = [
     test_tarea_mismo_titulo_misma_fecha_no_crea_segunda,
     test_tarea_mismo_titulo_fecha_distinta_si_crea,
@@ -294,6 +334,10 @@ _TESTS = [
     test_tarea_hecha_no_bloquea,
     test_cita_mismo_titulo_mismo_inicio_no_crea_segunda,
     test_cita_mismo_titulo_inicio_distinto_si_crea,
+    # Los dos de abajo son síncronos; el runner hace `await t()`, así que se
+    # envuelven acá en vez de volverlos async por una razón de plomería.
+    _sincrono(test_el_monto_manual_no_pasa_por_float),
+    _sincrono(test_un_monto_ilegible_no_se_guarda_como_cero),
 ]
 
 
