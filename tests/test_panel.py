@@ -12,6 +12,7 @@ import os
 import sys
 import time
 import types
+from decimal import Decimal
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -283,6 +284,34 @@ def test_la_regla_del_ingreso_vale_en_las_dos_puertas():
         "el panel no comprueba que la categoría le corresponda al tipo")
     assert "categoria_permitida" in inspect.getsource(crud.editar), (
         "Telegram no comprueba que la categoría le corresponda al tipo")
+
+
+def test_la_categoria_que_no_suma_no_suma():
+    """Se llama "No suma" y sumaba. La consulta la marcaba bien y la plantilla
+    la pintaba debajo del total, pero el sum() que arma ese total recorría TODAS
+    las filas: el "TOTAL DOP" incluía RD$36,164 de dinero de terceros.
+
+    Marcar y mostrar aparte no es lo mismo que excluir, y el nombre de la
+    categoría promete lo segundo.
+    """
+    import inspect
+    import web.app as panel
+    fuente = inspect.getsource(panel.resumen)
+    assert 'if not f["no_suma"]' in fuente, (
+        "el total del resumen por categoría volvió a sumar las que no suman")
+
+    # Y la comprobación de verdad, sobre la aritmética y no sobre el texto:
+    filas = [{"categoria": "Supermercado", "moneda": "DOP",
+              "total": Decimal("100"), "n": 1, "no_suma": False},
+             {"categoria": "No suma", "moneda": "DOP",
+              "total": Decimal("900"), "n": 1, "no_suma": True}]
+    por_moneda: dict = {}
+    for f in filas:
+        por_moneda.setdefault(f["moneda"], []).append(f)
+    totales = {mo: sum(f["total"] for f in fs if not f["no_suma"])
+               for mo, fs in por_moneda.items()}
+    assert totales["DOP"] == Decimal("100"), (
+        f"el total quedó en {totales['DOP']}: la marcada se coló")
 
 
 if __name__ == "__main__":

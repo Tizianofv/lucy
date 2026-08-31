@@ -162,7 +162,12 @@ async def resumen(request: Request, mes: str = ""):
     por_moneda: dict = {}
     for f in await db.gasto_por_categoria(elegido):
         por_moneda.setdefault(f["moneda"], []).append(f)
-    totales = {mo: sum(f["total"] for f in fs) for mo, fs in por_moneda.items()}
+    # El total EXCLUYE las que no suman. Que la consulta las marque y la
+    # plantilla las pinte debajo no alcanzaba: este sum() las recorría todas, y
+    # el "TOTAL DOP" incluía el dinero de terceros. La marca servía para
+    # mirarlas aparte y no para lo único que su nombre promete.
+    totales = {mo: sum(f["total"] for f in fs if not f["no_suma"])
+               for mo, fs in por_moneda.items()}
 
     return plantillas.TemplateResponse(
         request, "resumen.html",
