@@ -52,7 +52,13 @@ _INTERES = re.compile(r"Monto inter[eé]s:\s*([\d.,]*\d)", re.I)
 _MONEDA_SUELTA = re.compile(r"Moneda:\s*(RD|US|DOP|USD)\b", re.I)
 # APAP mete espacios (&nbsp;) DENTRO de la fecha: "16/04/ 2026". Se toleran
 # acá y se limpian antes de normalizar; el contrato no acepta espacios.
-_FECHA = re.compile(r"Fecha(?:\s+de\s+\w+)?:\s*"
+# NUNCA capturar "Fecha de vencimiento": el pago de intereses no trae fecha de
+# pago, solo la de vencimiento del certificado. Capturarla hacía que los pagos
+# de TODOS los meses salieran con la misma fecha (la del vencimiento) y, con el
+# mismo monto y la misma contraparte, produjeran la MISMA huella de dedupe: tres
+# acreditaciones reales colapsaban en una y RD$94,725.00 se descartaban en
+# silencio como "ya visto".
+_FECHA = re.compile(r"Fecha(?!\s+de\s+vencimiento)(?:\s+de\s+\w+)?:\s*"
                     r"(\d{1,2}\s*/\s*\d{1,2}\s*/\s*\d{2,4})", re.I)
 _HORA = re.compile(r"Hora:\s*(\d{1,2}):(\d{1,2})", re.I)
 _REF = re.compile(r"N[uú]mero de referencia:\s*([A-Z0-9]+)", re.I)
@@ -102,7 +108,7 @@ def _texto(correo: CorreoCrudo) -> str:
     return " ".join(crudo.replace("&nbsp;", " ").replace("\xa0", " ").split())
 
 
-def _fecha_con_hora(texto: str):
+def _fecha_con_hora(texto: str, correo: CorreoCrudo | None = None):
     """Fecha + hora, tolerando que APAP mande la hora corrupta.
 
     En la muestra hay "Hora: 92:20" y "Hora: 70:90": no son horas. No es un
@@ -112,6 +118,10 @@ def _fecha_con_hora(texto: str):
     """
     mf = _FECHA.search(texto)
     if not mf:
+        # El pago de intereses no trae fecha de pago. La del correo es la única
+        # disponible y es fiable: el aviso llega el día de la acreditación.
+        if correo is not None:
+            return correo.fecha_correo
         raise ErrorDeParseo("correo de APAP sin 'Fecha:'")
     fecha = normalizar_fecha(re.sub(r"\s+", "", mf.group(1)))
     mh = _HORA.search(texto)
@@ -153,10 +163,12 @@ def parsear(correo: CorreoCrudo) -> list[Movimiento]:
     es_interes = canal == "interes"
 
     monto, moneda = _monto_y_moneda(texto, es_interes)
-    fecha = _fecha_con_hora(texto)
+    fecha = _fecha_con_hora(texto, correo)
 
     if es_interes:
-        contraparte = "APAP · intereses de certificado"
+        mt = _TARJETA.search(texto)
+        contraparte = ("APAP · intereses del certificado "
+                       + (f"••{mt.group(1)}" if mt else "(sin número)"))
     else:
         mb = _BENEF.search(texto)
         contraparte = " ".join(mb.group(1).split()) if mb else ""

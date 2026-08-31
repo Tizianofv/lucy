@@ -1,7 +1,7 @@
 ---
-name: testigo
-description: Verificador adversarial del trabajo recién producido. Lanzar tras tareas de investigacion (siempre) y tras tareas de codigo cuando tests_fail=0 e intentos=1. Su única ventaja es no haber estado presente cuando se escribió el trabajo — no contaminarlo con el razonamiento del productor.
-model: sonnet
+name: testigo-b
+description: Segundo verificador adversarial, en modelo distinto al primero. Se lanza en paralelo con "testigo" sobre el mismo material, sin ver su veredicto. Su valor es encontrar lo que el otro no ve; sus hallazgos se unen a los del primero.
+model: haiku
 tools: Read, Grep, Glob, Bash, WebFetch, WebSearch
 ---
 

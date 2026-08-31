@@ -105,11 +105,17 @@ class Movimiento:
         la misma tripleta fecha+monto+comercio. Incluye la hora exacta
         porque `movimientos.fecha` es DATE y sin ella dos cafés del mismo
         día serían indistinguibles.
+
+        Y incluye el ESTADO: BHD puede mandar en el mismo minuto un consumo
+        aprobado y su gemelo declinado por el mismo monto y comercio (pasa con
+        los reintentos de cobro). Sin el estado comparten huella, se guarda uno
+        solo, y cuál sobrevive depende del orden de ingesta — con la mitad de
+        probabilidad de que el gasto real se pierda y quede el rechazado.
         """
         return "|".join((
             self.banco, self.fecha.isoformat(timespec="minutes"),
             str(self.monto), self.moneda,
-            _sin_acentos(self.contraparte).upper(),
+            _sin_acentos(self.contraparte).upper(), self.estado,
         ))
 
 

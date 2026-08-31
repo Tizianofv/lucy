@@ -555,3 +555,38 @@ async def choques_de_evento(evento_id: int) -> list[dict]:
             (evento_id,),
         )
         return await cur.fetchall()
+
+
+async def guardar_movimiento(mov, bandeja_id: int | None = None,
+                             categoria: str | None = None) -> int | None:
+    """Guarda un Movimiento parseado de un correo. Devuelve el id, o None si ya estaba.
+
+    None NO es un error: significa que este movimiento ya se había guardado. Pasa
+    de verdad — Banco Popular manda la misma transacción dos veces con segundos
+    de diferencia — y también cada vez que la ingesta reprocesa un correo tras un
+    fallo. Quien llama debe contarlo como "ya visto", no como fallo.
+
+    La huella es `Movimiento.clave_dedupe()` y el que decide es el índice único
+    parcial de la migración 001, no una consulta previa: con un SELECT antes del
+    INSERT, dos ejecuciones simultáneas de la ingesta se colarían las dos.
+
+    `monto` viaja como str a propósito. La columna es NUMERIC(12,2) y el
+    movimiento trae Decimal; pasar por float perdería centavos justo en la
+    conversión, que es el único sitio donde este sistema podría perderlos.
+    """
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            INSERT INTO movimientos
+              (bandeja_id, tipo, fecha, monto, moneda, contraparte,
+               categoria, referencia, hash_contenido)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (hash_contenido) WHERE hash_contenido IS NOT NULL
+              DO NOTHING
+            RETURNING id
+            """,
+            (bandeja_id, mov.tipo, mov.fecha.date(), str(mov.monto), mov.moneda,
+             mov.contraparte, categoria, mov.referencia, mov.clave_dedupe()),
+        )
+        fila = await cur.fetchone()
+        return fila[0] if fila else None
