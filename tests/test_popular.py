@@ -32,6 +32,7 @@ from cerebro.bancos.contrato import (  # noqa: E402
 from cerebro.bancos.popular import (  # noqa: E402
     REMITENTE_INFO,
     REMITENTE_NOTIF,
+    REMITENTE_PAGOS,
     parsear_cargo_bajo_balance,
     parsear_reverso_sobregiro,
     parsear_transferencia_recibida,
@@ -233,6 +234,87 @@ def test_contra_los_fixtures_reales_y_los_duplicados():
         f"esperaba 13 movimientos distintos, hubo {len(claves)} — si sube, "
         "clave_dedupe dejó de reconocer los duplicados de Popular")
     assert repetidas == 3, "los 3 pares duplicados que confirmó el testigo"
+
+
+# ── Los comprobantes que viajan en PDF ───────────────────────────────────
+
+def _pdfs_de(nombre_eml):
+    """(nombre, bytes) de los PDF adjuntos de un fixture."""
+    msg = email.message_from_bytes((FIXTURES / nombre_eml).read_bytes())
+    return tuple((p.get_filename(), p.get_payload(decode=True) or b"")
+                 for p in msg.walk()
+                 if (p.get_filename() or "").lower().endswith(".pdf"))
+
+
+def _con_pdf(nombre_eml, remitente=REMITENTE_PAGOS, asunto="Notificaciones Popular"):
+    return CorreoCrudo(remitente=remitente, asunto=asunto,
+                       fecha_correo=datetime(2026, 6, 1, 9, 0), html="",
+                       texto="", cuenta="rosilisr04@gmail.com", uid="1",
+                       adjuntos=_pdfs_de(nombre_eml))
+
+
+def test_el_dinero_del_popular_estaba_en_los_adjuntos():
+    """DOP 187,000 en cuatro transferencias: casi cinco veces todo lo que hay en
+    los CUERPOS de los correos del Popular. El cuerpo no trae una sola cifra —
+    el comprobante entero va dentro del PDF— y yo los había descartado como
+    inparseables sin abrirlos."""
+    total = Decimal("0")
+    vistos = 0
+    for eml in ("rosilisr04_30565.eml", "rosilisr04_30823.eml",
+                "rosilisr04_31335.eml", "rosilisr04_31790.eml"):
+        correo = _con_pdf(eml)
+        # Vía buscar_parser, no llamando a la función a mano: si el registro del
+        # remitente se rompe, el movimiento desaparece y el test tiene que verlo.
+        parser = buscar_parser(correo.remitente, correo.asunto)
+        assert parser, f"{eml}: buscar_parser no encuentra el parser"
+        movs = parser(correo)
+        assert len(movs) == 1, f"{eml}: {len(movs)} movimientos"
+        total += movs[0].monto
+        vistos += 1
+    assert vistos == 4
+    assert total == Decimal("187000.00"), f"recuperado {total}, esperaba 187000.00"
+
+
+def test_el_comprobante_dice_a_quien_y_en_que_sentido():
+    m = buscar_parser(REMITENTE_PAGOS, "Notificaciones Popular")(
+        _con_pdf("rosilisr04_30565.eml"))[0]
+    assert m.monto == Decimal("56000.00")
+    assert m.moneda == "DOP"
+    assert m.contraparte == "MARILANDIA VARGAS"
+    # CREDITO a un tercero = el dinero SALE de la casa. Si el beneficiario fuera
+    # una cuenta propia, propios.py lo pasa a traspaso después; acá no se adivina.
+    assert m.tipo == "gasto"
+    assert m.fecha.date().isoformat() == "2026-05-19"
+    # La referencia sale del nombre del archivo: identifica el comprobante y no
+    # depende de dónde caiga cada campo dentro del PDF.
+    assert "PE2026051903805" in m.referencia
+
+
+def test_un_pdf_de_publicidad_no_inventa_un_movimiento():
+    """Al buzón también llegan PDF que no son comprobantes. Ignorarlos es lo
+    correcto; convertirlos en un movimiento de cero pesos, no."""
+    correo = CorreoCrudo(
+        remitente=REMITENTE_PAGOS, asunto="Notificaciones Popular",
+        fecha_correo=datetime(2026, 6, 1), html="", texto="",
+        cuenta="tizianofv@gmail.com", uid="1",
+        adjuntos=_pdfs_de("tizianofv_127746.eml"))
+    assert buscar_parser(REMITENTE_PAGOS, "x")(correo) == []
+
+
+def test_un_comprobante_con_dos_montos_revienta_en_vez_de_adivinar():
+    """El monto es lo único con dos decimales. Si aparecieran dos, el formato
+    cambió: elegir el primero daría una cifra equivocada SIN avisar, que es el
+    modo de fallo que este proyecto trata como el peor."""
+    from cerebro.bancos import popular
+    real = popular._texto_de_pdf
+    popular._texto_de_pdf = lambda _: (
+        "NOTIFICACION CREDITO\nCR a Cta. de FULANO\n19-may-2026\n"
+        "PESOS DOMINICANOS\n56,000.00\n1,234.56")
+    try:
+        assert _revienta(popular.parsear_comprobante_pdf,
+                         _con_pdf("rosilisr04_30565.eml"))
+    finally:
+        popular._texto_de_pdf = real
 
 
 if __name__ == "__main__":

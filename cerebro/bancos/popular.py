@@ -165,3 +165,120 @@ registrar(REMITENTE_NOTIF, parsear_reverso_sobregiro,
 # notificaciones: acá el asunto pesa más que el remitente.
 registrar(REMITENTE_INFO, parsear_cargo_bajo_balance,
           asunto=r"cargo comisi[oó]n por bajo balance")
+
+
+# ── Comprobantes en PDF (pagoselectronicos@) ─────────────────────────────
+#
+# Estas cuatro transferencias son DOP 187,000 — casi cinco veces todo el dinero
+# que hay en los CUERPOS de los correos del Popular. El cuerpo del correo no
+# trae una sola cifra: el comprobante entero va dentro de un PDF adjunto, y yo
+# los había descartado como inparseables sin abrirlos.
+#
+# POR QUÉ SE ANCLA A PATRONES Y NO A POSICIONES. `extract_text` devuelve el
+# formulario desarmado: todas las etiquetas primero y todos los valores después,
+# en un orden que depende de cómo el generador dibujó el PDF. Leer "el valor
+# número 14" funcionaría con estos cuatro y se rompería en silencio —dando otra
+# cifra, no un error— el día que el banco mueva un campo. Cada dato se busca por
+# lo que ES: el monto es lo único con dos decimales, la moneda está enumerada,
+# el beneficiario va detrás de "CR a Cta. de".
+#
+# LA DIRECCIÓN DEL DINERO. El PDF dice "NOTIFICACION CREDITO" y el beneficiario
+# NO es el titular del buzón: es un tercero en otro banco. O sea que el dinero
+# SALE. Si el beneficiario resultara ser una cuenta de la casa, `propios.py` lo
+# reclasifica a traspaso más adelante — acá no se adivina eso.
+
+REMITENTE_PAGOS = "pagoselectronicos@popularenlinea.com"
+
+# El monto es el único número con dos decimales del comprobante. Si aparece más
+# de uno, el formato cambió y hay que mirarlo: elegir "el primero" sería fingir
+# que se entendió.
+_PDF_MONTO = re.compile(r"\b\d{1,3}(?:,\d{3})*\.\d{2}\b")
+_PDF_MONEDA = re.compile(r"\b(PESOS DOMINICANOS|D[OÓ]LARES(?:\s+\w+)?)\b", re.I)
+_PDF_FECHA = re.compile(
+    r"\b\d{2}-(?:ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)-\d{4}\b", re.I)
+# "CR a Cta. de MARILANDIA VARGAS" — el CR/DB dice el sentido dentro del PDF.
+_PDF_BENEF = re.compile(r"\b(CR|DB)\s+a\s+Cta\.\s*de\s+(.+?)\s*$",
+                        re.I | re.M)
+_PDF_TIPO = re.compile(r"NOTIFICACION\s+(CREDITO|DEBITO)", re.I)
+
+
+def _texto_de_pdf(datos: bytes) -> str:
+    """El texto del PDF. Cadena vacía si no se puede leer.
+
+    pypdf se importa acá adentro y no arriba: si algún día falta la
+    dependencia, lo único que deja de funcionar es este parser, y no se cae el
+    import de todo el módulo de bancos con él.
+    """
+    try:
+        import io
+
+        from pypdf import PdfReader
+        r = PdfReader(io.BytesIO(datos))
+        return "\n".join(p.extract_text() or "" for p in r.pages)
+    except Exception:
+        return ""
+
+
+def parsear_comprobante_pdf(correo: CorreoCrudo) -> list[Movimiento]:
+    """El comprobante de transferencia que viaja como PDF adjunto."""
+    movs: list[Movimiento] = []
+    for nombre, datos in correo.adjuntos:
+        texto = _texto_de_pdf(datos)
+        tipo_doc = _PDF_TIPO.search(texto)
+        if not tipo_doc:
+            # No es un comprobante. El buzón también recibe PDF de marketing
+            # ("Resumen-Webinar-Seguridad-en-la-Era-de-la-IA.pdf"), y esos no
+            # son un fallo: se ignoran sin ruido.
+            continue
+
+        # dict.fromkeys y no set: quita repetidos conservando el orden, para
+        # que el mensaje de error muestre los montos como salen en el papel.
+        montos = list(dict.fromkeys(_PDF_MONTO.findall(texto)))
+        if len(montos) != 1:
+            raise ErrorDeParseo(
+                f"{nombre}: esperaba UN monto con decimales y encontré "
+                f"{len(montos)} ({montos[:4]}). El formato del comprobante "
+                "cambió; elegir uno a ojo daría una cifra equivocada sin avisar.")
+
+        moneda = _PDF_MONEDA.search(texto)
+        if not moneda:
+            raise ErrorDeParseo(f"{nombre}: no dice la moneda.")
+        cruda = moneda.group(1).upper()
+        divisa = "DOP" if cruda.startswith("PESOS") else "USD"
+
+        fechas = _PDF_FECHA.findall(texto)
+        if not fechas:
+            raise ErrorDeParseo(f"{nombre}: no encuentro la fecha.")
+        # La última es la Fecha Efectiva —cuándo se movió el dinero— y es la que
+        # importa; la primera es la de emisión del documento.
+        cuando = normalizar_fecha(fechas[-1])
+
+        benef = _PDF_BENEF.search(texto)
+        if not benef:
+            raise ErrorDeParseo(
+                f"{nombre}: no encuentro a quién se le transfirió. Sin "
+                "contraparte el movimiento no se puede deduplicar ni clasificar.")
+        sentido, quien = benef.group(1).upper(), benef.group(2).strip()
+
+        # CREDITO a un tercero = el dinero sale de acá. Si el tercero resultara
+        # ser una cuenta de la casa, propios.py lo pasa a traspaso después.
+        es_credito = tipo_doc.group(1).upper() == "CREDITO" and sentido == "CR"
+        movs.append(Movimiento(
+            banco=BANCO,
+            # El canal es "transferencia", el vocabulario cerrado del contrato.
+            # "IBANKING" es el sistema por el que se hizo, no lo que es — y el
+            # contrato rechazándolo hizo exactamente lo que tiene que hacer.
+            canal="transferencia",
+            tipo="gasto" if es_credito else "ingreso",
+            fecha=cuando,
+            monto=normalizar_monto(montos[0]),
+            moneda=normalizar_moneda(divisa),
+            contraparte=quien,
+            estado="aprobada",
+            # El nombre del archivo identifica el comprobante y no depende de
+            # dónde caiga cada campo dentro del PDF.
+            referencia=nombre.removesuffix(".pdf").removesuffix(".PDF")))
+    return movs
+
+
+registrar(REMITENTE_PAGOS, parsear_comprobante_pdf)

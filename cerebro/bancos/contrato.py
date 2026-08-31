@@ -313,6 +313,18 @@ class CorreoCrudo:
     cuenta: str         # buzón donde llegó — sirve para atribuir a CDS/ACD
     uid: str
 
+    # Los adjuntos, como (nombre, bytes). Vacío en casi todos los correos.
+    #
+    # Existe por Banco Popular: sus notificaciones de transferencia traen el
+    # cuerpo VACÍO de cifras y el monto solo dentro de un PDF. Son las cuatro
+    # transferencias más grandes de todo el corpus de Popular —DOP 187,000— y
+    # yo las había descartado como inparseables sin abrir el adjunto.
+    #
+    # Va con default para no romper a los otros parsers ni a sus tests: un
+    # contrato compartido que cambia de forma obliga a tocar los cinco bancos a
+    # la vez, y eso es exactamente lo que este proyecto no puede permitirse.
+    adjuntos: tuple[tuple[str, bytes], ...] = ()
+
 
 # ── Registro de parsers ──────────────────────────────────────────────────
 #

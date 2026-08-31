@@ -65,6 +65,11 @@ SERVIDOR = "imap.gmail.com"
 # contra una ráfaga rara, no un límite operativo.
 MAX_POR_PASADA = 200
 
+# Tope por adjunto. Los comprobantes del Popular pesan ~40 KB; 5 MB deja
+# muchísimo margen y a la vez impide que un correo con un adjunto enorme se
+# lleve la memoria del proceso, que es compartida con el bot.
+MAX_ADJUNTO = 5 * 1024 * 1024
+
 _MESES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 
@@ -195,8 +200,20 @@ def _a_correo_crudo(cuenta: str, uid: int, crudo: bytes) -> CorreoCrudo | None:
     """Bytes de un correo → CorreoCrudo, o None si no tiene cuerpo legible."""
     msg = email.message_from_bytes(crudo)
     plano = html = ""
+    adjuntos: list[tuple[str, bytes]] = []
     for parte in (msg.walk() if msg.is_multipart() else [msg]):
         if parte.get_content_maintype() != "text":
+            # Solo PDF, y solo hasta MAX_ADJUNTO. Bajar cualquier adjunto
+            # metería en memoria las imágenes de firma y los banners que los
+            # bancos mandan en cada correo, que no dicen nada y pesan.
+            nombre = parte.get_filename() or ""
+            if nombre.lower().endswith(".pdf"):
+                try:
+                    datos = parte.get_payload(decode=True) or b""
+                except Exception:
+                    datos = b""
+                if 0 < len(datos) <= MAX_ADJUNTO:
+                    adjuntos.append((nombre, datos))
             continue
         try:
             d = (parte.get_payload(decode=True) or b"").decode(
@@ -216,7 +233,8 @@ def _a_correo_crudo(cuenta: str, uid: int, crudo: bytes) -> CorreoCrudo | None:
     return CorreoCrudo(
         remitente=_direccion(_texto(msg.get("From"))),
         asunto=_texto(msg.get("Subject")).strip(),
-        fecha_correo=fc, html=html, texto=plano, cuenta=cuenta, uid=str(uid))
+        fecha_correo=fc, html=html, texto=plano, cuenta=cuenta, uid=str(uid),
+        adjuntos=tuple(adjuntos))
 
 
 async def _propios() -> Propios:
