@@ -437,6 +437,8 @@ async def editar(
             raise ValueError(
                 f"'{valor}' no es una categoría. Son: {', '.join(CATEGORIAS)}")
         campos["categoria"] = valor
+        # Si además NO le corresponde a este tipo de movimiento, se rechaza más
+        # abajo, cuando ya se leyó la fila y se sabe si es gasto o ingreso.
 
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -454,6 +456,18 @@ async def editar(
         desconocidas = set(campos) - set(antes)
         if desconocidas:
             raise ValueError(f"Esa tabla no tiene: {', '.join(sorted(desconocidas))}")
+
+        # Un ingreso no lleva categoría: las categorías dicen en qué se gastó.
+        # La única excepción es la marca "No suma". La regla vive en
+        # categorias.py porque hay dos puertas —panel y Telegram— y una regla
+        # que solo se aplica en una no es una regla.
+        if tabla == "movimientos" and "categoria" in campos:
+            from cerebro.bancos.categorias import categoria_permitida
+            if not categoria_permitida(antes.get("tipo"), campos["categoria"]):
+                raise ValueError(
+                    f"Un movimiento de tipo '{antes.get('tipo')}' no lleva "
+                    f"categoría '{campos['categoria']}'. Los ingresos solo se "
+                    "pueden marcar como 'No suma'.")
 
         # Posponer se cuenta solo (req 28): una tarea pendiente que se mueve
         # para MÁS TARDE es una posposición, lo diga Tiziano con esa palabra o

@@ -43,7 +43,7 @@ from fastapi.templating import Jinja2Templates
 import config
 import db.db as db
 import web.auth as auth
-from cerebro.bancos.categorias import CATEGORIAS
+from cerebro.bancos.categorias import CATEGORIAS, NO_SUMAN
 
 log = logging.getLogger("lucy.panel")
 
@@ -295,7 +295,9 @@ async def movimientos(request: Request, desde: str = "", hasta: str = "",
          # nadie usó no devuelve nada. `todas` es para EDITAR, y tiene que ser
          # el vocabulario completo o no se podría corregir hacia una categoría
          # que todavía no usa nadie.
-         "todas": CATEGORIAS, "guardados": guardados,
+         "todas": CATEGORIAS,
+         # Para los ingresos y traspasos, solo las marcas — no los rubros.
+         "no_suman": NO_SUMAN, "guardados": guardados,
          "volver": str(request.url.path) + (
              "?" + str(request.url.query) if request.url.query else "")})
 

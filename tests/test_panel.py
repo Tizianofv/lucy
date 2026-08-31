@@ -250,6 +250,41 @@ def test_buscar_por_codigo_manda_sobre_los_demas_filtros():
     assert "id = %s::bigint" in sql, "el filtro por código no llega al SQL"
 
 
+def test_un_ingreso_no_lleva_categoria():
+    """Las categorías dicen EN QUÉ se gastó, y el dinero que entra no se gastó
+    en nada: ofrecerle "Supermercado" a un ingreso responde una pregunta que
+    nadie hizo, y ensucia los totales por categoría con dinero que no es gasto.
+
+    La ÚNICA excepción es "No suma", que no es un rubro sino una marca — los
+    intereses del certificado del papá de Rosi entran como ingreso y no son
+    ingreso de esta casa. Sin eso, la mitad de ese circuito quedaría contada.
+    """
+    from cerebro.bancos.categorias import categoria_permitida
+    assert categoria_permitida("gasto", "Supermercado")
+    assert not categoria_permitida("ingreso", "Supermercado")
+    assert not categoria_permitida("transferencia", "CDS")
+    assert categoria_permitida("ingreso", "No suma")
+    # Quitarle la categoría siempre se puede: es cómo se deshace un error.
+    assert categoria_permitida("ingreso", None)
+    assert categoria_permitida("gasto", "")
+    # Y lo que no está en el vocabulario no pasa por ningún tipo.
+    assert not categoria_permitida("gasto", "supermercado")
+
+
+def test_la_regla_del_ingreso_vale_en_las_dos_puertas():
+    """La pantalla ya no ofrece rubros en un ingreso, pero eso no basta: un POST
+    a mano o una pestaña vieja los mandarían igual. Y por Telegram no hay
+    pantalla que valga. Una regla que solo se aplica en una de las dos puertas
+    no es una regla."""
+    import inspect
+    import db.db as base
+    from acciones import crud
+    assert "categoria_permitida" in inspect.getsource(base.poner_categoria), (
+        "el panel no comprueba que la categoría le corresponda al tipo")
+    assert "categoria_permitida" in inspect.getsource(crud.editar), (
+        "Telegram no comprueba que la categoría le corresponda al tipo")
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):

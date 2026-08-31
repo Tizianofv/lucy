@@ -166,6 +166,31 @@ CATEGORIAS = [
 # se puede auditar entero— y solo se cae de los totales.
 NO_SUMAN = ("No suma",)
 
+
+def categoria_permitida(tipo: str, categoria: str | None) -> bool:
+    """¿Le corresponde esa categoría a un movimiento de ese tipo?
+
+    UN INGRESO NO LLEVA CATEGORÍA. Las categorías dicen EN QUÉ se gastó, y el
+    dinero que entra no se gastó en nada: ponerle "Supermercado" a un ingreso es
+    responder una pregunta que nadie hizo, y encima ensucia los totales por
+    categoría con dinero que no es gasto.
+
+    La ÚNICA excepción son las marcas de NO_SUMAN, que no son rubros: los
+    intereses del certificado del papá de Rosi entran como ingreso y no son
+    ingreso de esta casa. Sin poder marcarlos, la mitad de ese circuito quedaría
+    contada de más.
+
+    Vive acá y no en la pantalla porque hay DOS puertas —el panel y Telegram— y
+    una regla que solo se aplica en una no es una regla.
+    """
+    if not categoria:
+        return True                    # sacarle la categoría siempre se puede
+    if categoria not in CATEGORIAS:
+        return False
+    if tipo == "gasto":
+        return True
+    return categoria in NO_SUMAN
+
 # ── La red de seguridad ──────────────────────────────────────────────────
 #
 # Palabras clave → categoría, para lo que nunca se ha corregido. Se prueban de

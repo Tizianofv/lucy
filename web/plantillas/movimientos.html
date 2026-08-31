@@ -93,15 +93,18 @@ solo el número.</p>
   <td class="suave">{{ m.banco or '—' }}</td>
   <td>{{ m.contraparte }}<div class="suave">{{ m.referencia or '' }}</div></td>
   <td>
-    {# Se edita en TODOS los tipos, ingresos incluidos. Los ingresos no van a la
-       cola —no hace falta clasificarlos uno por uno— pero sí tienen que poder
-       marcarse: los RD$43,312 de intereses del certificado del papá de Rosi
-       entran como "ingreso" y no son ingreso de esta casa. Sin poder tocarlos,
-       la categoría que no suma no serviría para la mitad del circuito. #}
+    {# UN INGRESO NO LLEVA CATEGORÍA. Las categorías dicen EN QUÉ se gastó, y
+       el dinero que entra no se gastó en nada — ofrecerle "Supermercado" a un
+       ingreso es ofrecer una respuesta a una pregunta que nadie hizo.
+       La ÚNICA excepción es "No suma", que no es un rubro sino una marca: los
+       RD$43,312 de intereses del certificado del papá de Rosi entran como
+       ingreso y no son ingreso de esta casa. Sin eso, la mitad de ese circuito
+       quedaría fuera de alcance. Por eso en ingresos y traspasos el desplegable
+       tiene dos opciones y no veintisiete. #}
     <input type="hidden" name="prev_{{ m.id }}" value="{{ m.categoria or '' }}">
     <select name="cat_{{ m.id }}" style="width:11rem">
       <option value="">— sin categoría —</option>
-      {% for c in todas %}
+      {% for c in (todas if m.tipo == 'gasto' else no_suman) %}
       <option value="{{ c }}" {{ 'selected' if m.categoria == c }}>{{ c }}</option>
       {% endfor %}
     </select>

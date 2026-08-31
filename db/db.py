@@ -963,12 +963,13 @@ async def poner_categoria(movimiento_id: int, categoria: str) -> None:
     promesa del panel —una corrección vale para siempre— se cumple acá o no se
     cumple en ningún lado.
     """
-    from cerebro.bancos.categorias import normalizar_comercio
+    from cerebro.bancos.categorias import (
+        categoria_permitida, normalizar_comercio)
 
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
-            "SELECT categoria, contraparte FROM movimientos WHERE id = %s",
+            "SELECT categoria, contraparte, tipo FROM movimientos WHERE id = %s",
             (movimiento_id,))
         antes = await cur.fetchone()
         if antes is None:
@@ -978,6 +979,10 @@ async def poner_categoria(movimiento_id: int, categoria: str) -> None:
             # volver atrás"—. Basura permanente en la tabla que ES el deshacer.
             log.warning("poner_categoria sobre movimiento inexistente: %s",
                         movimiento_id)
+            return
+        if not categoria_permitida(antes.get("tipo"), categoria):
+            log.warning("Categoría %r no corresponde a un movimiento de tipo "
+                        "%r (id %s)", categoria, antes.get("tipo"), movimiento_id)
             return
         await conn.execute("UPDATE movimientos SET categoria = %s WHERE id = %s",
                            (categoria or None, movimiento_id))
