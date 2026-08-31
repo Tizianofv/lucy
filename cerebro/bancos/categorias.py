@@ -123,9 +123,12 @@ CATEGORIAS = [
     # las había, y lo único que hacían era empujar hacia abajo lo que de verdad
     # hay que corregir.
     "Otros",
-    # NO SUMA. Va al final porque no es una categoría de gasto: es la marca de
-    # que ese dinero nunca fue de la casa. Ver NO_SUMAN.
-    "Dinero de terceros",
+    # Va al final porque no es una categoría de gasto: es una MARCA. Y se llama
+    # "No suma" a secas por pedido de Tiziano, que tiene razón — el nombre tiene
+    # que decir qué HACE, no de dónde viene el dinero. "Dinero de terceros"
+    # obligaba a acordarse de que además no contaba; así se lee en el
+    # desplegable y ya está dicho. Ver NO_SUMAN.
+    "No suma",
 ]
 
 # Las categorías que NO entran en ningún total.
@@ -142,7 +145,7 @@ CATEGORIAS = [
 # mira y se corrige, sin inventar una pantalla nueva ni un registro que alguien
 # tenga que mantener. El movimiento SIGUE VISIBLE en /movimientos —el circuito
 # se puede auditar entero— y solo se cae de los totales.
-NO_SUMAN = ("Dinero de terceros",)
+NO_SUMAN = ("No suma",)
 
 # ── La red de seguridad ──────────────────────────────────────────────────
 #
