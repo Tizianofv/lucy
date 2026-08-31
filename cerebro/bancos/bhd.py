@@ -168,3 +168,106 @@ def parsear_consumo(correo: CorreoCrudo) -> list[Movimiento]:
 
 
 registrar(REMITENTE, parsear_consumo, asunto=ASUNTO_CONSUMO)
+
+
+# ═══ Transferencias y pagos de servicio ══════════════════════════════════
+#
+# Mismo remitente, otro formato: sin tabla, con etiquetas en prosa. Y a
+# diferencia del consumo, acá el ASUNTO decide la dirección del dinero:
+#
+#   9  "Transacciones entre productos BHD y a otros Bancos"  → gasto
+#   6  "Transacciones entre mis productos"                   → TRASPASO
+#   1  "Pago de Servicio e Impuestos"                        → gasto
+#
+# Los 6 del medio son el caso de contar doble más caro del proyecto. Uno de
+# ellos dice literalmente "Descripción: Pago TC · Monto: RD$ 110,000.00": es el
+# pago de la tarjeta de crédito. Esos consumos YA se registraron uno a uno
+# cuando se pasó la tarjeta; el pago solo mueve la plata de la cuenta a la
+# tarjeta. Contarlo como gasto duplicaría ciento diez mil pesos de una sola vez.
+# Por eso va como tipo='transferencia', fuera de los totales de gasto.
+
+import html as _html  # noqa: E402
+
+ASUNTO_TRANSFERENCIA = (r"Transacciones entre (?:mis productos|productos BHD)|"
+                        r"Pago de Servicio e Impuestos")
+
+_ETIQUETAS = (r"Producto origen|Producto destino|Descripci[oó]n|Monto|"
+              r"Beneficiario|N[uú]mero de confirmaci[oó]n|N[uú]mero de referencia|"
+              r"Fecha y hora de la transacci[oó]n|Tipo de transacci[oó]n|"
+              r"Proveedor del servicio|Servicio|Nota")
+_T_MONTO = re.compile(r"Monto:\s*([A-Z]{2,3}\$?)\s*([\d.,]*\d)", re.I)
+
+
+def _campo_bhd(texto: str, etiqueta: str) -> str:
+    """Valor de "Etiqueta: valor", cortando SIEMPRE en la siguiente etiqueta.
+
+    Es la tercera vez en este proyecto que un corte laxo se lleva el campo de
+    al lado, así que acá se corta contra la lista completa de etiquetas desde
+    el principio.
+    """
+    m = re.search(rf"{etiqueta}\s*:\s*(.*?)\s*(?=(?:{_ETIQUETAS})\s*:|$)",
+                  texto, re.I)
+    return " ".join(m.group(1).split()) if m else ""
+
+
+def _texto_plano(correo: CorreoCrudo) -> str:
+    """Cuerpo legible. Decodifica las entidades HTML, que en estos correos
+    llegan sin resolver: "N&uacute;mero de confirmaci&oacute;n"."""
+    crudo = correo.html or ""
+    if crudo.strip():
+        crudo = re.sub(r"(?is)<(script|style).*?</\1>", " ", crudo)
+        crudo = re.sub(r"(?s)<[^>]+>", " ", crudo)
+    else:
+        crudo = correo.texto or ""
+    return " ".join(_html.unescape(crudo).replace("\xa0", " ").split())
+
+
+def parsear_transferencia(correo: CorreoCrudo) -> list[Movimiento]:
+    texto = _texto_plano(correo)
+    if not texto:
+        raise ErrorDeParseo("transferencia de BHD sin cuerpo legible")
+
+    asunto = _sin_acentos_min(correo.asunto or "")
+    if "entre mis productos" in asunto:
+        canal, tipo = "traspaso", "transferencia"
+    elif "pago de servicio" in asunto:
+        canal, tipo = "servicio", "gasto"
+    elif "entre productos bhd" in asunto:
+        canal, tipo = "transferencia", "gasto"
+    else:
+        raise ErrorDeParseo(
+            f"asunto de transferencia BHD no reconocido: {correo.asunto!r}")
+
+    mm = _T_MONTO.search(texto)
+    if not mm:
+        raise ErrorDeParseo("transferencia de BHD sin 'Monto:'")
+    fecha_txt = _campo_bhd(texto, r"Fecha y hora de la transacci[oó]n")
+    if not fecha_txt:
+        raise ErrorDeParseo("transferencia de BHD sin fecha")
+    fecha = normalizar_fecha(fecha_txt)
+
+    beneficiario = _campo_bhd(texto, "Beneficiario")
+    proveedor = _campo_bhd(texto, r"Proveedor del servicio")
+    descripcion = _campo_bhd(texto, r"Descripci[oó]n")
+    contraparte = proveedor or beneficiario or descripcion
+    if not contraparte:
+        raise ErrorDeParseo("transferencia de BHD sin beneficiario ni proveedor")
+
+    partes = ["BHD"]
+    if descripcion and descripcion != contraparte:
+        partes.append(descripcion)
+    conf = _campo_bhd(texto, r"N[uú]mero de confirmaci[oó]n")
+    if conf:
+        partes.append(f"conf {conf}")
+    partes.append(f"{fecha:%H:%M}")
+    partes.append(correo.cuenta)
+
+    return [Movimiento(
+        banco=BANCO, canal=canal, tipo=tipo, fecha=fecha,
+        monto=normalizar_monto(mm.group(2)),
+        moneda=normalizar_moneda(mm.group(1)),
+        contraparte=contraparte, estado="aprobada",
+        referencia=" · ".join(partes))]
+
+
+registrar(REMITENTE, parsear_transferencia, asunto=ASUNTO_TRANSFERENCIA)

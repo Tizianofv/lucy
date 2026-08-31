@@ -197,13 +197,15 @@ def _correo(remitente, asunto):
 
 
 def test_ruteo_por_remitente_exacto():
-    """Lo que salió de los correos reales: bhd.com.do tiene tres remitentes y
-    solo `alertas@` es transaccional; `info@` es publicidad."""
-    registrar("alertas@bhd.com.do", _falso)
-    assert buscar_parser("alertas@bhd.com.do", "BHD Notificación") is _falso
-    assert buscar_parser("ALERTAS@BHD.COM.DO", "BHD Notificación") is _falso
-    assert buscar_parser("info@bhd.com.do", "BHD Notificación") is None
-    assert buscar_parser("infopb@bhd.com.do", "lo que sea") is None
+    """Lo que salió de los correos reales: un mismo dominio puede tener un
+    remitente transaccional y otros de publicidad (bhd.com.do tiene tres, y solo
+    `alertas@` mueve dinero). Se prueba con un dominio inventado: usar los reales
+    acopla este test a qué parsers estén registrados en producción."""
+    registrar("alertas@banco-de-prueba.test", _falso)
+    assert buscar_parser("alertas@banco-de-prueba.test", "Notificación") is _falso
+    assert buscar_parser("ALERTAS@BANCO-DE-PRUEBA.TEST", "Notificación") is _falso
+    assert buscar_parser("info@banco-de-prueba.test", "Notificación") is None
+    assert buscar_parser("infopb@banco-de-prueba.test", "lo que sea") is None
 
 
 def test_guion_vs_sin_guion():
@@ -216,24 +218,27 @@ def test_guion_vs_sin_guion():
 
 
 def test_un_remitente_con_varios_asuntos():
-    """`alertas@bhd.com.do` manda consumos Y traspasos entre cuentas propias:
-    mismo remitente, formatos y significados distintos."""
+    """Un remitente puede mandar cosas distintas con formatos distintos — es el
+    caso real de `alertas@bhd.com.do`, que manda consumos Y traspasos entre
+    cuentas propias. Con dominio inventado, por lo mismo que arriba."""
     def _traspaso(correo):
         return []
-    registrar("alertas@bhd.com.do", _traspaso, asunto=r"entre mis productos")
-    assert buscar_parser("alertas@bhd.com.do",
+    registrar("alertas@banco-de-prueba.test", _traspaso,
+              asunto=r"entre mis productos")
+    assert buscar_parser("alertas@banco-de-prueba.test",
                          "Transacciones entre mis productos") is _traspaso
 
 
 def test_asuntos_ignorados():
-    """Traen monto pero no son movimientos. Parsearlos inventaría gastos."""
-    registrar("alertas@bhd.com.do", _falso)
-    assert buscar_parser("alertas@bhd.com.do",
-                         "Código de validación de compra") is None
-    assert buscar_parser("no-reply@apap.com.do",
-                         "Afiliación Nuevo Beneficiario") is None
-    assert buscar_parser("alertas@bhd.com.do",
-                         "Estado de cuenta de tu tarjeta") is None
+    """Traen monto pero no son movimientos. Parsearlos inventaría gastos.
+    ASUNTOS_IGNORADOS actúa ANTES de mirar el remitente, así que se comprueba
+    con uno inventado y vale igual para todos."""
+    registrar("alertas@banco-de-prueba.test", _falso)
+    for asunto in ("Código de validación de compra",
+                   "Afiliación Nuevo Beneficiario",
+                   "Estado de cuenta de tu tarjeta",
+                   "Notificación de cambio de contraseña"):
+        assert buscar_parser("alertas@banco-de-prueba.test", asunto) is None, asunto
 
 
 if __name__ == "__main__":

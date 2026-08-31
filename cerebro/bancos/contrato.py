@@ -226,8 +226,11 @@ def normalizar_fecha(texto: str) -> datetime:
     # "08/07/2026 04:07 pm" (BHD, Banreservas) y "06/05/26" (Banesco, año de
     # dos dígitos). El año corto se expande a 20xx: son correos de alertas
     # bancarias, no registros históricos — no hay ningún 1926 posible acá.
+    # Entre la fecha y la hora cada banco pone lo suyo: BHD usa " - " en las
+    # transferencias y " | " en los pagos de servicio, y un espacio pelado en
+    # los consumos. El separador es opcional.
     m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4}|\d{2})(?!\d)"
-                  r"(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap])\.?m\.?)?",
+                  r"(?:\s*[-|]?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([ap])\.?m\.?)?",
                   crudo, re.I)
     if m:
         dd, mm, yyyy, hh, mi, ss, ampm = m.groups()

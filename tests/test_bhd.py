@@ -29,7 +29,10 @@ from email.header import decode_header
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from cerebro.bancos.bhd import parsear_consumo  # noqa: E402
+from cerebro.bancos.bhd import (  # noqa: E402
+    parsear_consumo,
+    parsear_transferencia,
+)
 from cerebro.bancos.contrato import (  # noqa: E402
     CorreoCrudo,
     ErrorDeParseo,
@@ -191,6 +194,84 @@ def test_otp_no_llega_al_parser():
 def test_ruteo_registrado():
     assert buscar_parser("alertas@bhd.com.do", ASUNTO) is parsear_consumo
     assert buscar_parser("info@bhd.com.do", ASUNTO) is None
+
+
+# ── Transferencias y pagos de servicio (sin tabla, en prosa) ─────────────
+
+TRASPASO = ("Estimado(a): ROSILIS YANELY ROMERO A continuaci&oacute;n la "
+            "informaci&oacute;n relacionada a tu transacci&oacute;n: Producto "
+            "origen: DO47BCBH000000000XXXXXXX0013 Producto destino: "
+            "XXXXXXXXXXXX9804 Descripci&oacute;n: Pago TC Monto: RD$ 110,000.00 "
+            "Beneficiario: ROSILIS ROMERO N&uacute;mero de confirmaci&oacute;n: "
+            "W02-1784-5754-9256-6 Fecha y hora de la transacci&oacute;n: "
+            "20/07/2026 - 3:24 PM Tipo de transacci&oacute;n: Transacciones entre "
+            "mis productos")
+
+A_TERCERO = TRASPASO.replace("Descripci&oacute;n: Pago TC", "Descripci&oacute;n: Botell&oacute;n Criscar") \
+                    .replace("Beneficiario: ROSILIS ROMERO",
+                             "Beneficiario: PEREZ MARTINEZ, LUIS ALBERTO") \
+                    .replace("Monto: RD$ 110,000.00", "Monto: RD$ 170.00")
+
+SERVICIO = ("Estimado(a): ROSILIS YANELY ROMERO Has realizado exitosamente el "
+            "pago de un servicio. Producto origen: XXXXXXXXXXXX9804 Monto: RD$ "
+            "2823.07 N&uacute;mero de referencia: 1110400280 Proveedor del "
+            "servicio: ALTICE HOGAR Servicio: Voz Data y Cable "
+            "Descripci&oacute;n: Pago Telefono Internet 8095285695 "
+            "N&uacute;mero de confirmaci&oacute;n: W20-1785-9425-2387-5 Fecha y "
+            "hora de la transacci&oacute;n: 05/08/2026 |  11:08 AM")
+
+
+def _correo_t(texto: str, asunto: str) -> CorreoCrudo:
+    return CorreoCrudo(remitente="alertas@bhd.com.do", asunto=asunto,
+                       fecha_correo=datetime(2026, 7, 20), html=texto, texto="",
+                       cuenta="rosilisr04@gmail.com", uid="1")
+
+
+def test_pago_de_tarjeta_no_es_un_gasto_nuevo():
+    """EL caso de contar doble del proyecto. "Pago TC" por RD$110,000 mueve
+    plata de la cuenta a la tarjeta: esos consumos YA se registraron uno a uno
+    cuando se pasó la tarjeta. Como gasto, duplicaría ciento diez mil pesos."""
+    m = parsear_transferencia(_correo_t(TRASPASO,
+                                        "Transacciones entre mis productos"))[0]
+    assert m.tipo == "transferencia", "un pago de tarjeta no es gasto nuevo"
+    assert m.canal == "traspaso" and m.monto == Decimal("110000.00")
+
+
+def test_transferencia_a_tercero_si_es_gasto():
+    m = parsear_transferencia(_correo_t(
+        A_TERCERO, "Transacciones entre productos BHD y a otros Bancos"))[0]
+    assert m.tipo == "gasto" and m.monto == Decimal("170.00")
+    assert "PEREZ MARTINEZ" in m.contraparte
+
+
+def test_pago_de_servicio():
+    m = parsear_transferencia(_correo_t(SERVICIO, "Pago de Servicio e Impuestos"))[0]
+    assert m.tipo == "gasto" and m.canal == "servicio"
+    assert m.contraparte == "ALTICE HOGAR" and m.monto == Decimal("2823.07")
+
+
+def test_entidades_html_se_decodifican():
+    """Estos correos llegan con las entidades sin resolver:
+    "N&uacute;mero de confirmaci&oacute;n". Sin decodificarlas, ningún campo
+    con acento se encuentra."""
+    m = parsear_transferencia(_correo_t(SERVICIO, "Pago de Servicio e Impuestos"))[0]
+    assert "&" not in m.contraparte and "&" not in m.referencia
+    assert "conf W20-1785-9425-2387-5" in m.referencia
+
+
+def test_fecha_con_separadores_raros():
+    """BHD usa " - " en las transferencias y " | " en los pagos de servicio."""
+    a = parsear_transferencia(_correo_t(TRASPASO,
+                                        "Transacciones entre mis productos"))[0]
+    b = parsear_transferencia(_correo_t(SERVICIO, "Pago de Servicio e Impuestos"))[0]
+    assert a.fecha == datetime(2026, 7, 20, 15, 24)
+    assert b.fecha == datetime(2026, 8, 5, 11, 8)
+
+
+def test_beneficiario_no_arrastra_la_etiqueta_siguiente():
+    m = parsear_transferencia(_correo_t(A_TERCERO,
+                                        "Transacciones entre productos BHD y a otros Bancos"))[0]
+    assert "mero" not in m.contraparte and "confirmaci" not in m.contraparte
 
 
 # ── Capa 2: los 161 correos reales ───────────────────────────────────────
