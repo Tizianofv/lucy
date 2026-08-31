@@ -75,7 +75,14 @@ _TRANSF_MONTO = re.compile(r"Monto:\s*([A-Z]{2,3}\$?)\s*([\d.,]*\d)", re.I)
 _TRANSF_FECHA = re.compile(r"Fecha de la Transacci[oó]n:\s*([\d/]+)", re.I)
 _TRANSF_REF = re.compile(r"No\.?\s*Referencia:\s*(\S+)", re.I)
 _TRANSF_BANCO = re.compile(r"Banco (?:Emisor|Beneficiario):\s*(.+?)\s*"
-                           r"(?=Cuenta|No\.|Fecha|$)", re.I)
+                           r"(?=Cuenta|No\.|Fecha|Nombre|Concepto|$)", re.I)
+# El NOMBRE del titular del otro extremo. Sin él, la contraparte era solo el
+# nombre del banco y el registro de la casa (cerebro/bancos/propios.py) no tenía
+# ningún nombre que reconocer: un "PAGO TC" de RD$35,000 hacia una cuenta propia
+# se contaba como gasto real. Banesco era el único de los cinco que descartaba
+# este campo.
+_TRANSF_NOMBRE = re.compile(r"Nombre del Beneficiario:\s*(.+?)\s*"
+                            r"(?=Cuenta|No\.|Fecha|Banco|Concepto|$)", re.I)
 
 
 def _texto(correo: CorreoCrudo) -> str:
@@ -133,6 +140,15 @@ def parsear_consumo(correo: CorreoCrudo) -> list[Movimiento]:
 
 
 def _transferencia(correo: CorreoCrudo, tipo: str) -> list[Movimiento]:
+    """`tipo` decide de quién es el nombre que va en la contraparte.
+
+    En una transferencia SALIENTE el "Nombre del Beneficiario" es el otro
+    extremo, y es justo lo que el registro de la casa necesita para reconocer un
+    traspaso a cuenta propia. En una RECIBIDA ese mismo campo somos nosotros:
+    ponerlo ahí haría que el registro se reconozca a sí mismo y marque como
+    traspaso un ingreso que vino de fuera. Ahí la contraparte es el banco
+    emisor, que es todo lo que Banesco informa del remitente.
+    """
     texto = _texto(correo)
     mm = _TRANSF_MONTO.search(texto)
     mf = _TRANSF_FECHA.search(texto)
@@ -141,7 +157,13 @@ def _transferencia(correo: CorreoCrudo, tipo: str) -> list[Movimiento]:
             "transferencia de Banesco sin Monto o sin Fecha de la Transacción")
     banco = _TRANSF_BANCO.search(texto)
     ref = _TRANSF_REF.search(texto)
-    otro = " ".join(banco.group(1).split()) if banco else "(banco no informado)"
+    banco_txt = " ".join(banco.group(1).split()) if banco else ""
+    nombre_txt = ""
+    if tipo == "gasto":                       # saliente: el beneficiario es el otro
+        nombre = _TRANSF_NOMBRE.search(texto)
+        nombre_txt = " ".join(nombre.group(1).split()) if nombre else ""
+    # El nombre primero: es lo que el registro de la casa necesita reconocer.
+    otro = " · ".join(x for x in (nombre_txt, banco_txt) if x) or "(no informado)"
     return [Movimiento(
         banco=BANCO, canal="transferencia", tipo=tipo,
         fecha=normalizar_fecha(mf.group(1)),
