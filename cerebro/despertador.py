@@ -110,6 +110,92 @@ async def _avisar(bot, texto: str) -> None:
     await db.registrar_aviso(config.CHAT_ID_DUENO, texto)
 
 
+# ── El respaldo que no está (30-ago-2026) ────────────────────────────────────
+#
+# Los backups de la base corrían todos los días a las 20:00 hasta el 29-jul y
+# después dejaron de correr. Nadie se enteró durante 25 días. No fue un fallo:
+# `db/backup.py` nunca tuvo quien lo llamara desde adentro del sistema —corría
+# desde una PC— y la única prueba de que un backup había ocurrido era un archivo
+# en una carpeta de Google Drive que Railway no ve.
+#
+# Un respaldo que falla en silencio es PEOR que no tener respaldo: el que no lo
+# tiene lo sabe y actúa; el que cree tenerlo descubre la verdad el único día en
+# que ya no se puede hacer nada. Por eso esto entra al despertador, que es
+# justamente el módulo de las cosas que Lucy dice sin que le hablen.
+#
+# 48 horas y no 24: un backup diario que se saltó un día puede ser la PC apagada
+# una noche, y avisar por eso sería enseñarle a ignorar el aviso. Dos días sin
+# copia ya no es un tropiezo, es una tendencia.
+BACKUP_MAX_H = 48
+
+# Cada cuánto se REPITE el aviso mientras el problema siga. Diario: lo bastante
+# seguido para que no se olvide, lo bastante espaciado para que no se vuelva
+# ruido de fondo. Un aviso cada 5 minutos —que es lo que pasaría sin esto— se
+# convierte en un aviso que no se lee, y ahí volvemos al silencio por otra vía.
+BACKUP_REAVISO_H = 24
+
+
+def _hay_que_avisar(ultimo_backup, ultimo_aviso, ahora) -> bool:
+    """¿Toca gritar por el respaldo? Decisión pura: sin base y sin Telegram.
+
+    `ultimo_backup` None significa que NUNCA hubo uno registrado, y eso avisa
+    igual que uno viejo — es el caso de la base recién migrada, y es el caso
+    real de hoy. Tratar "nunca" como "todavía no sabemos" sería reinventar el
+    silencio que esto vino a romper.
+    """
+    if ultimo_backup is not None:
+        if ahora - ultimo_backup < timedelta(hours=BACKUP_MAX_H):
+            return False
+    if ultimo_aviso is not None:
+        if ahora - ultimo_aviso < timedelta(hours=BACKUP_REAVISO_H):
+            return False
+    return True
+
+
+def _texto_backup(ultimo_backup, ahora) -> str:
+    """El aviso. Dice la fecha exacta y qué hacer: un grito sin salida es ruido."""
+    if ultimo_backup is None:
+        cuando = ("No tengo registrado NINGÚN respaldo. Puede ser que nunca haya "
+                  "corrido desde que llevo la cuenta.")
+    else:
+        dias = (ahora - ultimo_backup).days
+        local = ultimo_backup.astimezone(TZ)
+        cuando = (f"El último fue hace {dias} día{'s' if dias != 1 else ''} "
+                  f"({local.strftime('%d/%m a las %H:%M')}).")
+    return (
+        f"{db.AVISO_BACKUP_PREFIJO}\n\n"
+        f"{cuando}\n\n"
+        "Si la base se pierde ahora, se pierde todo lo que hay desde esa fecha: "
+        "la bandeja, las tareas, las citas, los movimientos.\n\n"
+        "Para respaldar ya:\n"
+        "`python db/backup.py`\n\n"
+        "Te lo vuelvo a recordar en un día si sigue igual."
+    )
+
+
+async def revisar_backup(bot) -> int:
+    """Avisa por Telegram si hace más de 48h que no hay respaldo. Devuelve 1 si avisó.
+
+    Es barato —dos SELECT chicos— así que puede correr seguido sin costar nada;
+    quien decide la frecuencia real del MENSAJE es BACKUP_REAVISO_H, no cada
+    cuánto se llame a esta función.
+
+    No se aplaza por la tarifa doble de DeepSeek: esto no gasta IA (es un texto
+    fijo, no pasa por el agente) y además es de la clase de avisos que no se
+    difieren, igual que la vigilancia 911. Ahorrar centavos posponiendo la noticia
+    de que no hay respaldo sería el peor negocio posible.
+    """
+    ahora = datetime.now(timezone.utc)
+    ultimo = await db.ultimo_backup()
+    hecho_en = ultimo["hecho_en"] if ultimo else None
+    if not _hay_que_avisar(hecho_en, await db.ultimo_aviso_de_backup(), ahora):
+        return 0
+
+    await _avisar(bot, _texto_backup(hecho_en, ahora))
+    log.warning("Avisé que no hay respaldo desde %s.", hecho_en or "nunca")
+    return 1
+
+
 def _campanadas(anticipos, enviados, faltan: int) -> set[int]:
     """Cuáles de los minutos-antes de una fila deben sonar AHORA.
 

@@ -217,6 +217,19 @@ async def bucle(bot) -> None:
             except Exception:
                 log.warning("La ingesta bancaria tropezó; reintento en la "
                             "próxima.", exc_info=True)
+        # El respaldo se chequea cada ~10 min (120 vueltas). Son dos SELECT
+        # chicos, y quien decide cuándo sale el MENSAJE es el despertador
+        # (48h sin backup, y después un recordatorio por día). Chequear seguido
+        # y avisar poco es a propósito: lo que no puede pasar es que Lucy tarde
+        # en enterarse, y lo que tampoco puede pasar es que lo repita hasta que
+        # se lo ignore. Los 25 días de agosto sin respaldo entraron justo por
+        # ese hueco — nada adentro del sistema estaba mirando.
+        if vuelta % 120 == 0:
+            try:
+                await despertador.revisar_backup(bot)
+            except Exception:
+                log.warning("No pude revisar el estado del respaldo; sigo igual.",
+                            exc_info=True)
         # El calendario se jala cada ~5 min (60 vueltas): las sesiones del
         # estudio no cambian cada segundo, y consultar 10 calendarios más
         # seguido gastaría cuota sin ganar frescura útil.

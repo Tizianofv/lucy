@@ -89,7 +89,36 @@ CREATE TABLE correo_estado (
   cuenta         TEXT PRIMARY KEY,
   uidvalidity    BIGINT,
   ultimo_uid     BIGINT NOT NULL DEFAULT 0,
-  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now()
+  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- Fecha del último reporte matinal ya emitido. Vive en la base y no en
+  -- memoria a propósito: un redespliegue a media mañana no puede hacer que el
+  -- reporte del día salga dos veces.
+  ultimo_reporte DATE
+);
+
+-- Memoria de qué correos ya se le informaron a Tiziano, con la clasificación
+-- que se les dio. Es lo que permite mirar los SIN LEER en vez de consumir un
+-- puntero: sin esta tabla, un correo que él no marque leído reaparecería cada
+-- mañana hasta el fin de los tiempos. Informado una vez, informado.
+--
+-- Guardar el nivel/ámbito/área no es adorno: es lo que después deja contestar
+-- "¿por qué no me avisaste de esto?" con datos en la mano.
+--
+-- leido_en se llena recién cuando el reporte LLEGÓ de verdad (ver
+-- captura/correo.py::confirmar_leidos): marcar leído antes sería escribirle
+-- una mentira en su propio buzón.
+CREATE TABLE correo_reportado (
+  cuenta       TEXT NOT NULL,
+  uid          BIGINT NOT NULL,
+  reportado_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  nivel        TEXT,                          -- 911 | accion | enterarte | mencion
+  ambito       TEXT,                          -- laboral | personal
+  area         TEXT,                          -- infraestructura | cds_clientes | ...
+  asunto       TEXT,
+  bandeja_id   BIGINT REFERENCES bandeja(id), -- el encargo del reporte que lo mencionó
+  leido_en     TIMESTAMPTZ,                   -- NULL = informado pero aún sin marcar en Gmail
+  -- (cuenta, uid) es la clave del ON CONFLICT de db.marcar_correo_reportado.
+  PRIMARY KEY (cuenta, uid)
 );
 
 -- ═══ Entidades (bandeja_id = trazabilidad, borrado_en = reversibilidad) ═══
@@ -214,3 +243,26 @@ CREATE TABLE log_acciones (
   motivo      TEXT,                 -- la explicación de Lucy (req 36, gratis desde hoy)
   bandeja_id  BIGINT REFERENCES bandeja(id)
 );
+
+-- ═══ El latido del respaldo (pilar #40) ═══
+-- Una fila por backup que TERMINÓ bien. No es contabilidad: es la única forma
+-- de que Lucy sepa si todavía tiene respaldo. Hasta el 30-ago-2026 esa verdad
+-- vivía solo en los nombres de archivo de una carpeta de Google Drive que el
+-- proceso de Railway no puede ver — así que nadie adentro del sistema podía
+-- notar que hacía 25 días que no se respaldaba nada.
+--
+-- Se escribe DESPUÉS de cerrar el archivo, nunca antes: la fila significa "el
+-- archivo existe y está completo". Un backup que revienta a la mitad no deja
+-- fila, y a las 48 horas el despertador avisa. Un respaldo que falla callado
+-- es peor que no tener respaldo: da la confianza sin dar la copia.
+CREATE TABLE backups (
+  id       BIGSERIAL PRIMARY KEY,
+  hecho_en TIMESTAMPTZ NOT NULL DEFAULT now(),
+  archivo  TEXT NOT NULL,        -- nombre del .json.gz (sin ruta: la ruta cambia por máquina)
+  bytes    BIGINT NOT NULL,      -- tamaño comprimido; si se desploma, algo se rompió
+  tablas   INT NOT NULL,
+  filas    INT NOT NULL,
+  esquema  TEXT,                 -- 'pg_dump' | 'catalogo' — cómo se guardó la estructura
+  origen   TEXT                  -- qué máquina lo corrió: delata que dependemos de una sola
+);
+CREATE INDEX idx_backups_hecho_en ON backups(hecho_en DESC);
