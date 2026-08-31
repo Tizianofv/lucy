@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
@@ -16,6 +17,12 @@ from config import DATABASE_URL
 
 # Pool de conexiones reutilizables. Se abre al arrancar el bot (ver main.py).
 pool = AsyncConnectionPool(DATABASE_URL, open=False)
+
+# La firma del aviso de respaldo en la bandeja. Es a la vez lo primero que
+# Tiziano lee y la clave con la que se busca el aviso anterior, así que vive en
+# un solo lugar: dos copias de este texto se desincronizan y el aviso pasa a
+# repetirse en cada vuelta del bucle.
+AVISO_BACKUP_PREFIJO = "🚨 Sin respaldo de la base"
 
 
 async def abrir() -> None:
@@ -337,6 +344,48 @@ async def guardar_estado_correo(
             """,
             (cuenta, uidvalidity, ultimo_uid, ultimo_reporte),
         )
+
+
+async def ultimo_backup() -> dict | None:
+    """El último respaldo que terminó bien. None = nunca hubo ninguno.
+
+    Es la única forma que tiene Lucy de saber si todavía tiene copia. Antes esa
+    verdad vivía solo en los nombres de archivo de una carpeta de Google Drive
+    que el contenedor de Railway no puede ver — por eso los backups se pudieron
+    caer el 29-jul-2026 y pasar 25 días sin que nadie se enterara.
+
+    El None NO es un caso raro que haya que suavizar: significa "no hay
+    respaldo", y se tiene que leer exactamente así.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT hecho_en, archivo, bytes, tablas, filas, esquema, origen "
+            "FROM backups ORDER BY hecho_en DESC LIMIT 1"
+        )
+        return await cur.fetchone()
+
+
+async def ultimo_aviso_de_backup() -> datetime | None:
+    """Cuándo salió el último aviso de backup atrasado (para no repetirlo cada vuelta).
+
+    Se busca en la bandeja, que es donde `despertador._avisar` deja todo lo que
+    Lucy dice por su cuenta: el registro del aviso ES la memoria de que el aviso
+    salió. Mismo patrón que el dedupe del encargo semanal — no hace falta una
+    tabla nueva para acordarse de algo que ya quedó escrito.
+    """
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            SELECT creado_en FROM bandeja
+             WHERE origen = 'despertador' AND tipo_entrada = 'aviso'
+               AND respuesta_lucy LIKE %s
+             ORDER BY creado_en DESC LIMIT 1
+            """,
+            (AVISO_BACKUP_PREFIJO + "%",),
+        )
+        fila = await cur.fetchone()
+        return fila[0] if fila else None
 
 
 async def listar_preferencias() -> list[dict]:
