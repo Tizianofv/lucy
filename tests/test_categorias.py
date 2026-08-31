@@ -17,6 +17,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from cerebro.bancos.categorias import (  # noqa: E402
+    CATEGORIAS, CLAVES,
     Categorizador,
     normalizar_comercio,
 )
@@ -171,6 +172,42 @@ def test_cuantos_comercios_distintos_hay_de_verdad():
     assert pct >= 35, (
         f"20 correcciones solo cubren {pct}%: la normalización empeoró y "
         "corregir a mano dejó de valer la pena")
+
+
+# ── El vocabulario y la red de palabras clave ────────────────────────────
+
+def test_la_clave_casa_en_inicio_de_palabra_y_no_en_cualquier_parte():
+    """La trampa que costó reescribir el casamiento: con subcadena cruda,
+    "UBER" casa dentro de "TUBERIA" y una compra de plomería queda contada como
+    transporte. Nadie lo nota, porque un movimiento MAL categorizado no cae en
+    ninguna cola: se va derecho al total."""
+    cat = Categorizador(claves=CLAVES)
+    for texto in ("TUBERIAS Y CONEXIONES", "COLEGIO SANTA ANA",
+                  "CARBONELL SRL", "ABONOS DEL CARIBE"):
+        assert cat.categoria_de(texto) is None, (
+            f"{texto!r} casó con una clave por adentro de una palabra")
+
+
+def test_la_clave_si_deja_pasar_el_plural_y_el_sufijo():
+    """Anclar al inicio de palabra no puede volverse coincidencia exacta: los
+    bancos escriben el mismo sitio de varias formas, y "SUPERMERCADO" tiene que
+    seguir cubriendo "SUPERMERCADOS BRAVO"."""
+    cat = Categorizador(claves=CLAVES)
+    assert cat.categoria_de("SUPERMERCADOS BRAVO") == "Supermercado"
+    assert cat.categoria_de("SUPERMERCADO NACIONAL #12 SDQ") == "Supermercado"
+
+
+def test_ninguna_clave_apunta_a_una_categoria_inventada():
+    """Una clave que devuelve una categoría fuera de la lista mete un valor que
+    el desplegable no ofrece: el movimiento queda con una categoría que nadie
+    puede volver a elegir, y el filtro del panel nunca la encuentra."""
+    fuera = sorted({v for v in CLAVES.values() if v not in CATEGORIAS})
+    assert not fuera, f"categorías fuera del vocabulario: {fuera}"
+
+
+def test_el_vocabulario_no_tiene_duplicados_ni_variantes_de_caja():
+    bajas = [c.lower() for c in CATEGORIAS]
+    assert len(bajas) == len(set(bajas)), "hay categorías repetidas"
 
 
 if __name__ == "__main__":

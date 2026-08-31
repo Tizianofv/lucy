@@ -70,7 +70,13 @@ class _Conn:
     async def execute(self, sql, args):
         self.sql_visto = " ".join(sql.split())
         self.args_vistos = args
-        huella = args[-1]
+        # La huella se localiza por su posición en la lista de COLUMNAS del
+        # INSERT, no por ser el último parámetro. Asumir "el último" hizo que
+        # este doble se rompiera al añadir la columna `banco`, y un doble que se
+        # rompe al crecer el esquema esconde el fallo real detrás de ruido.
+        cols = sql.split("(", 1)[1].split(")", 1)[0]
+        cols = [c.strip() for c in cols.replace("\n", " ").split(",")]
+        huella = args[cols.index("hash_contenido")]
         if huella is not None and huella in self.huellas:
             return _Cursor(None)          # ON CONFLICT DO NOTHING → sin RETURNING
         self.huellas.add(huella)
@@ -136,7 +142,10 @@ def test_el_monto_no_pasa_por_float():
     sitio donde este sistema podría perder centavos."""
     db.pool = _Pool()
     _correr(db.guardar_movimiento(_mov(monto=Decimal("0.10"))))
-    monto = db.pool.ultima.args_vistos[3]
+    args = db.pool.ultima.args_vistos
+    sql = db.pool.ultima.sql_visto
+    cols = [c.strip() for c in sql.split("(", 1)[1].split(")", 1)[0].split(",")]
+    monto = args[cols.index("monto")]
     assert isinstance(monto, str), f"llegó como {type(monto).__name__}"
     assert monto == "0.10"
 
@@ -145,7 +154,10 @@ def test_la_huella_es_la_del_contrato():
     db.pool = _Pool()
     m = _mov()
     _correr(db.guardar_movimiento(m))
-    assert db.pool.ultima.args_vistos[-1] == m.clave_dedupe()
+    args = db.pool.ultima.args_vistos
+    sql = db.pool.ultima.sql_visto
+    cols = [c.strip() for c in sql.split("(", 1)[1].split(")", 1)[0].split(",")]
+    assert args[cols.index("hash_contenido")] == m.clave_dedupe()
 
 
 def test_deja_pasar_los_creados_a_mano():

@@ -10,6 +10,11 @@
     {% for t in ('gasto','ingreso','transferencia') %}
     <option value="{{ t }}" {{ 'selected' if tipo==t }}>{{ t }}</option>{% endfor %}
   </select>
+  <select name="banco">
+    <option value="">cualquier banco</option>
+    {% for b in bancos %}
+    <option value="{{ b }}" {{ 'selected' if banco==b }}>{{ b }}</option>{% endfor %}
+  </select>
   <select name="categoria">
     <option value="">cualquier categoría</option>
     {% for c in categorias %}
@@ -21,16 +26,23 @@
 <p class="vacio">Nada con esos filtros.</p>
 {% else %}
 <div class="scroll"><table>
-<tr><th>Fecha</th><th>Quién</th><th>Categoría</th><th class="num">Monto</th></tr>
+<tr><th>Fecha</th><th>Banco</th><th>Quién</th><th>Categoría</th>
+    <th class="num">Monto</th></tr>
 {% for m in movs %}
 <tr>
   <td class="suave">{{ m.fecha }}</td>
+  <td class="suave">{{ m.banco or '—' }}</td>
   <td>{{ m.contraparte }}<div class="suave">{{ m.referencia or '' }}</div></td>
   <td class="suave">{{ m.categoria or '—' }}</td>
   <td class="num {{ m.tipo }}">{{ m.monto|pesos }} {{ m.moneda }}</td>
 </tr>
 {% endfor %}
 </table></div>
-<p class="suave">{{ movs|length }} movimientos.</p>
+<p class="suave">{{ movs|length }} movimientos.
+{% if movs|selectattr('banco','none')|list %}
+Los que muestran «—» en Banco se anotaron a mano por Telegram antes de que
+existiera la lectura de correos: nadie registró de dónde salieron, y no se
+inventa. Los que entren desde ahora siempre traen su banco.
+{% endif %}</p>
 {% endif %}
 {% endblock %}

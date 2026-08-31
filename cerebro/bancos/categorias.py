@@ -78,6 +78,122 @@ def normalizar_comercio(texto: str) -> str:
     return " ".join(t.split())
 
 
+# ── El vocabulario ───────────────────────────────────────────────────────
+#
+# Lista CERRADA, como las otras de este proyecto (moneda, estado, tipo). No es
+# rigidez por gusto: si el panel deja escribir la categoría a mano, en tres
+# meses hay "Supermercado", "supermercado", "Super" y "Comida/super" y ningún
+# total sirve. Se agrega una categoría editando esta lista, a propósito.
+#
+# El orden es el del desplegable, y está puesto por frecuencia de uso esperada
+# —no alfabético— porque esto se maneja con el pulgar en el celular y lo que
+# más se toca tiene que estar arriba.
+CATEGORIAS = [
+    "Supermercado",
+    "Restaurantes",
+    "Combustible",
+    "Transporte",
+    "Servicios del hogar",
+    "Salud",
+    "Seguros",
+    "Cuidado personal",
+    "Ropa y hogar",
+    "Educación",
+    "Software y suscripciones",
+    "Entretenimiento",
+    "Banco y comisiones",
+    "Impuestos",
+    "Regalos y donaciones",
+    "Mascotas",
+    # Las últimas cuatro son de INGRESO. Van en la misma lista y no en una
+    # aparte porque la cola del panel no separa por tipo: ahí caen los ingresos
+    # sin clasificar igual que los gastos, y sin estas cuatro los intereses del
+    # certificado de APAP no se podrían clasificar nunca — se quedarían en la
+    # cola para siempre, empujando hacia abajo lo que sí hace falta corregir.
+    "Salario",
+    "Intereses",
+    "Ingresos varios",
+    "Otros",
+]
+
+# ── La red de seguridad ──────────────────────────────────────────────────
+#
+# Palabras clave → categoría, para lo que nunca se ha corregido. Se prueban de
+# MÁS LARGA a más corta (lo hace el constructor), así que una clave específica
+# le gana a una genérica sin que haya que pensar en el orden acá.
+#
+# DOS REGLAS al agregar claves, las dos aprendidas rompiendo algo:
+#
+#   1. La clave tiene que empezar donde empieza una palabra del comercio, y de
+#      eso se encarga `categoria_de`. Por eso "UBER" y "DGII" pueden ser cortas
+#      sin ensuciar: no van a casar dentro de "TUBERIA" ni de nada. Lo que sí
+#      sigue prohibido es la palabra corta y GENÉRICA —"BON", "OLE"— que sí
+#      empieza palabras ajenas de verdad.
+#   2. Ante la duda, NO poner la clave. Un movimiento sin categoría cae en la
+#      cola del panel y se corrige una vez y para siempre; uno mal categorizado
+#      no cae en ninguna cola y desvía el total sin que nadie lo note. El costo
+#      de faltar es un minuto; el de sobrar es un número equivocado.
+#
+# Por eso acá no está "ENFOQUE DIGITAL" —que aparece en el corpus real y no sé
+# qué es— ni las transferencias a personas. Esas van a la cola, que es su sitio.
+CLAVES = {
+    # Supermercados dominicanos
+    "SM NACIONAL": "Supermercado", "SUPERMERCADO": "Supermercado",
+    "PLAZA LAMA": "Supermercado", "JUMBO": "Supermercado",
+    "SUPERMERCADOS BRAVO": "Supermercado", "LA SIRENA": "Supermercado",
+    "PRICESMART": "Supermercado",
+    # "MAXIMO GOMEZ DIS" es la red de Nacional en la avenida, no un comercio
+    # distinto; sale así en los correos del BHD.
+    "MAXIMO GOMEZ DIS": "Supermercado",
+
+    "CLUB NACO": "Restaurantes", "RESTAURANT": "Restaurantes",
+    "CAFETERIA": "Restaurantes", "PIZZA": "Restaurantes",
+    "HELADOS BON": "Restaurantes", "GRAN MURALLA": "Restaurantes",
+    "SAZON": "Restaurantes", "ALTANERA": "Restaurantes",
+    "MCDONALD": "Restaurantes", "BURGER": "Restaurantes",
+    "WENDY": "Restaurantes", "DOMINO": "Restaurantes",
+    "ADRIAN TROPICAL": "Restaurantes", "PANADERIA": "Restaurantes",
+
+    "SHELL": "Combustible", "TEXACO": "Combustible",
+    "TOTAL BELLA": "Combustible", "SIGMA": "Combustible",
+    "ESTACION": "Combustible",
+
+    "UBER": "Transporte", "RDVIAL": "Transporte", "PEAJE": "Transporte",
+    "PARQUEO": "Transporte",
+
+    "EDESUR": "Servicios del hogar", "EDEESTE": "Servicios del hogar",
+    "EDENORTE": "Servicios del hogar", "CLARO": "Servicios del hogar",
+    "ALTICE": "Servicios del hogar", "CAASD": "Servicios del hogar",
+    "INAPA": "Servicios del hogar",
+
+    "FARMACIA": "Salud", "FARMACONSUMO": "Salud", "CLINICA": "Salud",
+    "LABORATORIO": "Salud", "HOSPITAL": "Salud", "CEDIMAT": "Salud",
+
+    "SEGUROS": "Seguros", "MAPFRE": "Seguros", "HUMANO": "Seguros",
+
+    "SALON": "Cuidado personal", "BARBER": "Cuidado personal",
+    "PELUQUERIA": "Cuidado personal",
+
+    "CANVA": "Software y suscripciones", "NETFLIX": "Software y suscripciones",
+    "SPOTIFY": "Software y suscripciones", "GOOGLE": "Software y suscripciones",
+    "MICROSOFT": "Software y suscripciones", "ADOBE": "Software y suscripciones",
+    "OPENAI": "Software y suscripciones", "ANTHROPIC": "Software y suscripciones",
+    "GITHUB": "Software y suscripciones", "DROPBOX": "Software y suscripciones",
+    "AMAZON": "Software y suscripciones",
+
+    "CINEMA": "Entretenimiento", "CARIBBEAN CINEMAS": "Entretenimiento",
+
+    "COMISION": "Banco y comisiones", "BANCO": "Banco y comisiones",
+    "BANRESERVAS": "Banco y comisiones",
+
+    "DGII": "Impuestos", "IMPUESTO": "Impuestos",
+
+    "INTERESES": "Intereses",
+
+    "VETERINARIA": "Mascotas", "PETSHOP": "Mascotas",
+}
+
+
 class Categorizador:
     """Decide la categoría de un comercio. Sin base de datos: lógica pura.
 
@@ -120,7 +236,14 @@ class Categorizador:
             if norm.startswith(clave + " ") or clave.startswith(norm + " "):
                 return self.aprendidas[clave]
         for clave, categoria in self.claves:
-            if clave and clave in norm:
+            # Casa en INICIO DE PALABRA, no en cualquier parte. La diferencia no
+            # es cosmética: con subcadena cruda, "UBER" casa dentro de "TUBERIA"
+            # y "OLE" dentro de "COLEGIO", y una compra de plomería termina
+            # contada como transporte sin que nadie lo vea. Anclar al principio
+            # de la palabra deja pasar el plural y el sufijo —"SUPERMERCADO"
+            # sigue casando con "SUPERMERCADOS"— que es justo lo que sí se
+            # quiere, porque los bancos escriben el mismo sitio de varias formas.
+            if clave and re.search(r"\b" + re.escape(clave), norm):
                 return categoria
         return None
 

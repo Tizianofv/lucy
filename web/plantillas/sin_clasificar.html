@@ -8,10 +8,12 @@
 <p class="suave">Ordenados por monto: si solo vas a corregir unos pocos, que sean
 los que más pesan. Cada corrección le enseña algo al sistema.</p>
 <div class="scroll"><table>
-<tr><th>Fecha</th><th>Quién</th><th class="num">Monto</th><th>Categoría</th></tr>
+<tr><th>Fecha</th><th>Banco</th><th>Quién</th><th class="num">Monto</th>
+    <th>Categoría</th></tr>
 {% for m in movs %}
 <tr>
   <td class="suave">{{ m.fecha }}</td>
+  <td class="suave">{{ m.banco or '—' }}</td>
   <td>{{ m.contraparte }}<div class="suave">{{ m.referencia or '' }}</div></td>
   <td class="num {{ m.tipo }}">{{ m.monto|pesos }} {{ m.moneda }}</td>
   <td>

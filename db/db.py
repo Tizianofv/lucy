@@ -628,14 +628,15 @@ async def guardar_movimiento(mov, bandeja_id: int | None = None,
             """
             INSERT INTO movimientos
               (bandeja_id, tipo, fecha, monto, moneda, contraparte,
-               categoria, referencia, hash_contenido)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+               categoria, referencia, hash_contenido, banco)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (hash_contenido) WHERE hash_contenido IS NOT NULL
               DO NOTHING
             RETURNING id
             """,
             (bandeja_id, mov.tipo, mov.fecha.date(), str(mov.monto), mov.moneda,
-             mov.contraparte, categoria, mov.referencia, mov.clave_dedupe()),
+             mov.contraparte, categoria, mov.referencia, mov.clave_dedupe(),
+             mov.banco),
         )
         fila = await cur.fetchone()
         return fila[0] if fila else None
@@ -727,7 +728,7 @@ async def sin_clasificar(limite: int = 100) -> list[dict]:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
             """
-            SELECT id, fecha, tipo, monto, moneda, contraparte, referencia
+            SELECT id, fecha, tipo, monto, moneda, contraparte, referencia, banco
               FROM movimientos
              WHERE borrado_en IS NULL
                AND (categoria IS NULL OR categoria = '')
@@ -738,25 +739,35 @@ async def sin_clasificar(limite: int = 100) -> list[dict]:
         return await cur.fetchall()
 
 
+async def bancos_usados() -> list[str]:
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT DISTINCT banco FROM movimientos WHERE borrado_en IS NULL "
+            "AND banco IS NOT NULL ORDER BY 1")
+        return [r[0] for r in await cur.fetchall()]
+
+
 async def movimientos_filtrados(desde=None, hasta=None, tipo: str | None = None,
                                 categoria: str | None = None,
+                                banco: str | None = None,
                                 limite: int = 300) -> list[dict]:
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
             """
             SELECT id, fecha, tipo, monto, moneda, contraparte, categoria,
-                   referencia
+                   referencia, banco
               FROM movimientos
              WHERE borrado_en IS NULL
                AND (%s::date IS NULL OR fecha >= %s::date)
                AND (%s::date IS NULL OR fecha <= %s::date)
                AND (%s::text IS NULL OR tipo = %s::text)
                AND (%s::text IS NULL OR categoria = %s::text)
+               AND (%s::text IS NULL OR banco = %s::text)
              ORDER BY fecha DESC, id DESC
              LIMIT %s
             """, (desde, desde, hasta, hasta, tipo, tipo, categoria, categoria,
-                  limite))
+                  banco, banco, limite))
         return await cur.fetchall()
 
 
@@ -819,11 +830,21 @@ async def aprender_categoria(comercio_norm: str, categoria: str) -> None:
 async def poner_categoria(movimiento_id: int, categoria: str) -> None:
     """La única escritura del panel. Pasa por log_acciones como todo lo demás:
     una corrección hecha desde la web tiene que ser tan auditable y tan
-    reversible como una hecha por Telegram."""
+    reversible como una hecha por Telegram.
+
+    Y ADEMÁS ENSEÑA. Corregir un movimiento y no aprender del comercio deja el
+    trabajo a medias: la próxima compra en el mismo sitio vuelve a caer en la
+    cola, y a la tercera vez que uno corrige "SM NACIONAL" deja de corregir. La
+    promesa del panel —una corrección vale para siempre— se cumple acá o no se
+    cumple en ningún lado.
+    """
+    from cerebro.bancos.categorias import normalizar_comercio
+
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        await cur.execute("SELECT categoria FROM movimientos WHERE id = %s",
-                          (movimiento_id,))
+        await cur.execute(
+            "SELECT categoria, contraparte FROM movimientos WHERE id = %s",
+            (movimiento_id,))
         antes = await cur.fetchone()
         await conn.execute("UPDATE movimientos SET categoria = %s WHERE id = %s",
                            (categoria or None, movimiento_id))
@@ -838,13 +859,10 @@ async def poner_categoria(movimiento_id: int, categoria: str) -> None:
              json.dumps(antes or {}, default=str, ensure_ascii=False),
              json.dumps({"categoria": categoria}, ensure_ascii=False)))
 
-        # Y se APRENDE: sin esto, corregir el mismo comercio la semana que viene
-        # volvería a ser trabajo manual, que es como muere este tipo de sistema.
-        cur2 = conn.cursor(row_factory=dict_row)
-        await cur2.execute("SELECT contraparte FROM movimientos WHERE id = %s",
-                           (movimiento_id,))
-        fila = await cur2.fetchone()
-    if fila and fila.get("contraparte") and categoria:
-        from cerebro.bancos.categorias import normalizar_comercio
-        await aprender_categoria(normalizar_comercio(fila["contraparte"]),
+    # Y se APRENDE: sin esto, corregir el mismo comercio la semana que viene
+    # volvería a ser trabajo manual, que es como muere este tipo de sistema.
+    # Fuera del `async with`: aprender_categoria pide su propia conexión, y
+    # pedirla desde adentro puede quedarse esperando su turno en el pool.
+    if antes and antes.get("contraparte") and categoria:
+        await aprender_categoria(normalizar_comercio(antes["contraparte"]),
                                  categoria)

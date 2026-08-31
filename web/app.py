@@ -39,6 +39,7 @@ from fastapi.templating import Jinja2Templates
 import config
 import db.db as db
 import web.auth as auth
+from cerebro.bancos.categorias import CATEGORIAS
 
 log = logging.getLogger("lucy.panel")
 
@@ -104,25 +105,40 @@ async def resumen(request: Request):
 async def cola(request: Request):
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
+    # El desplegable ofrece el VOCABULARIO COMPLETO, no las categorías ya
+    # usadas. Con base vacía "las ya usadas" son cero, y una cola de corrección
+    # cuyo desplegable está vacío no se puede usar: no hay forma de empezar.
+    # Se le suma lo que haya en la base por si alguna vez entró algo a mano.
+    usadas = await db.categorias_usadas()
+    categorias = CATEGORIAS + [c for c in usadas if c not in CATEGORIAS]
     return plantillas.TemplateResponse(
         request, "sin_clasificar.html",
-        {"movs": await db.sin_clasificar(),
-         "categorias": await db.categorias_usadas()})
+        {"movs": await db.sin_clasificar(), "categorias": categorias})
 
 
 @app.post("/categoria")
 async def categoria(request: Request, movimiento_id: int = Form(...),
                     categoria: str = Form("")):
-    """La única escritura del panel. Queda en log_acciones como todo lo demás."""
+    """La única escritura del panel. Queda en log_acciones como todo lo demás.
+
+    La categoría se comprueba contra la lista cerrada. El desplegable ya solo
+    ofrece esas, pero un vocabulario que solo se respeta si el formulario se
+    porta bien no es un vocabulario cerrado: basta un POST a mano para meter
+    "supermercado" en minúscula y partir el total en dos para siempre.
+    """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
-    await db.poner_categoria(movimiento_id, categoria.strip())
+    limpia = categoria.strip()
+    # "" es legítimo: es sacarle la categoría a un movimiento mal corregido.
+    if limpia and limpia not in CATEGORIAS:
+        return RedirectResponse("/sin-clasificar", status_code=303)
+    await db.poner_categoria(movimiento_id, limpia)
     return RedirectResponse("/sin-clasificar", status_code=303)
 
 
 @app.get("/movimientos", response_class=HTMLResponse)
 async def movimientos(request: Request, desde: str = "", hasta: str = "",
-                      tipo: str = "", categoria: str = ""):
+                      tipo: str = "", categoria: str = "", banco: str = ""):
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
 
@@ -133,11 +149,12 @@ async def movimientos(request: Request, desde: str = "", hasta: str = "",
             return None
 
     movs = await db.movimientos_filtrados(
-        _f(desde), _f(hasta), tipo or None, categoria or None)
+        _f(desde), _f(hasta), tipo or None, categoria or None, banco or None)
     return plantillas.TemplateResponse(
         request, "movimientos.html",
         {"movs": movs, "categorias": await db.categorias_usadas(),
-         "desde": desde, "hasta": hasta, "tipo": tipo, "categoria": categoria})
+         "bancos": await db.bancos_usados(), "desde": desde, "hasta": hasta,
+         "tipo": tipo, "categoria": categoria, "banco": banco})
 
 
 @app.get("/salud", response_class=HTMLResponse)

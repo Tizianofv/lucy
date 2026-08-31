@@ -47,7 +47,7 @@ import cerebro.bancos as bancos
 import config
 import db.db as db
 from cerebro.bancos.contrato import CorreoCrudo, ErrorDeParseo
-from cerebro.bancos.categorias import Categorizador
+from cerebro.bancos.categorias import CLAVES, Categorizador
 from cerebro.bancos.propios import Propios
 
 log = logging.getLogger("lucy.consumos")
@@ -258,11 +258,13 @@ async def revisar() -> Resumen:
 
     registro = await _propios()
     try:
-        cat = Categorizador(await db.categorias_aprendidas())
+        cat = Categorizador(await db.categorias_aprendidas(), CLAVES)
     except Exception:
-        # Sin tabla todavía: los movimientos entran sin categoría y van a la
-        # cola del panel, que es de donde salen las correcciones. No inventamos.
-        cat = Categorizador()
+        # Sin tabla de aprendidas todavía: se sigue con la red de palabras
+        # clave, que no depende de la base. Lo que la red no sepa entra sin
+        # categoría y va a la cola del panel, que es de donde salen las
+        # correcciones. No inventamos.
+        cat = Categorizador(claves=CLAVES)
 
     for cuenta in config.CORREO_CUENTAS:
         user = cuenta.get("user", "?")
