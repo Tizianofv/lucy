@@ -59,7 +59,34 @@ def _pesos(v) -> str:
     return f"{Decimal(v):,.2f}" if v is not None else "—"
 
 
+def _codigo(mid) -> str:
+    """El id del movimiento, en la forma que se dice en voz alta: M-0086.
+
+    NO es una columna nueva. El id de Postgres ya es único y estable, así que
+    guardar además un código sería guardar dos veces el mismo hecho — y dos
+    copias del mismo hecho se desincronizan, siempre. Esto es presentación.
+
+    Solo dígitos a propósito: nada de letras que se confundan al dictarlo (0/O,
+    1/l). Y el prefijo M- para que se reconozca como código de movimiento
+    cuando aparezca suelto en un mensaje.
+    """
+    return f"M-{int(mid):04d}" if mid is not None else "—"
+
+
+def _leer_codigo(texto: str) -> int | None:
+    """'M-0086', 'm86', '  86  ' → 86. Cualquier otra cosa → None.
+
+    Acepta las formas en que una persona lo escribe de verdad: con prefijo o
+    sin él, con ceros o sin ellos, en mayúscula o minúscula. Un buscador que
+    exige el formato exacto es un buscador que no se usa.
+    """
+    import re as _re
+    m = _re.fullmatch(r"\s*[mM]?[-\s]*0*(\d{1,18})\s*", texto or "")
+    return int(m.group(1)) if m else None
+
+
 plantillas.env.filters["pesos"] = _pesos
+plantillas.env.filters["codigo"] = _codigo
 
 
 def _destino_seguro(volver: str) -> str:
@@ -244,7 +271,7 @@ async def categorias(request: Request):
 @app.get("/movimientos", response_class=HTMLResponse)
 async def movimientos(request: Request, desde: str = "", hasta: str = "",
                       tipo: str = "", categoria: str = "", banco: str = "",
-                      guardados: int = 0):
+                      codigo: str = "", guardados: int = 0):
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
 
@@ -254,13 +281,16 @@ async def movimientos(request: Request, desde: str = "", hasta: str = "",
         except ValueError:
             return None
 
+    buscado = _leer_codigo(codigo)
     movs = await db.movimientos_filtrados(
-        _f(desde), _f(hasta), tipo or None, categoria or None, banco or None)
+        _f(desde), _f(hasta), tipo or None, categoria or None, banco or None,
+        buscado)
     return plantillas.TemplateResponse(
         request, "movimientos.html",
         {"movs": movs, "categorias": await db.categorias_usadas(),
          "bancos": await db.bancos_usados(), "desde": desde, "hasta": hasta,
          "tipo": tipo, "categoria": categoria, "banco": banco,
+         "codigo": codigo, "codigo_ilegible": bool(codigo.strip()) and buscado is None,
          # `categorias` (las usadas) es para el FILTRO: filtrar por una que
          # nadie usó no devuelve nada. `todas` es para EDITAR, y tiene que ser
          # el vocabulario completo o no se podría corregir hacia una categoría

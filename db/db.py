@@ -844,7 +844,12 @@ async def bancos_usados() -> list[str]:
 async def movimientos_filtrados(desde=None, hasta=None, tipo: str | None = None,
                                 categoria: str | None = None,
                                 banco: str | None = None,
+                                codigo: int | None = None,
                                 limite: int = 300) -> list[dict]:
+    """El detalle, filtrable. `codigo` es el id del movimiento —el M-0086 que
+    muestra el panel— y cuando viene, manda sobre todo lo demás: buscar uno
+    concreto y que los otros filtros lo escondan sería la forma más rápida de
+    hacer creer que no existe."""
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
@@ -858,10 +863,11 @@ async def movimientos_filtrados(desde=None, hasta=None, tipo: str | None = None,
                AND (%s::text IS NULL OR tipo = %s::text)
                AND (%s::text IS NULL OR categoria = %s::text)
                AND (%s::text IS NULL OR banco = %s::text)
+               AND (%s::bigint IS NULL OR id = %s::bigint)
              ORDER BY fecha DESC, id DESC
              LIMIT %s
             """, (desde, desde, hasta, hasta, tipo, tipo, categoria, categoria,
-                  banco, banco, limite))
+                  banco, banco, codigo, codigo, limite))
         return await cur.fetchall()
 
 

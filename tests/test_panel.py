@@ -213,6 +213,43 @@ def test_el_redirect_no_acepta_destinos_de_afuera():
         assert panel._destino_seguro(bueno) == bueno.strip(), bueno
 
 
+def test_el_codigo_se_lee_como_lo_escribe_una_persona():
+    """El código NO es una columna nueva: el id de Postgres ya es único y
+    estable, y guardar además un código sería guardar dos veces el mismo hecho
+    — dos copias del mismo hecho se desincronizan, siempre. Esto es
+    presentación, y el buscador tiene que aceptar las formas en que alguien lo
+    escribe de verdad: un buscador que exige el formato exacto no se usa."""
+    import web.app as panel
+    assert panel._codigo(86) == "M-0086"
+    assert panel._codigo(1234) == "M-1234"
+    assert panel._codigo(None) == "—"
+    for escrito in ("M-0086", "m-0086", "m86", "86", " M 86 ", "0086"):
+        assert panel._leer_codigo(escrito) == 86, escrito
+    # Lo que no es un código no puede colarse como uno: devolver 0 o None por
+    # error haría que el filtro escondiera todo sin decir por qué.
+    for basura in ("abc", "", "M-", "8 6", "86abc", None):
+        assert panel._leer_codigo(basura) is None, repr(basura)
+
+
+def test_el_codigo_solo_lleva_digitos():
+    """Se dicta en voz alta y se teclea a mano. Con letras aparecen los pares
+    que todo el mundo confunde —0 y O, 1 y l— y el código deja de servir para
+    lo único que existe: referirse a un movimiento sin equivocarse."""
+    import web.app as panel
+    for mid in (1, 42, 999, 123456):
+        cuerpo = panel._codigo(mid).removeprefix("M-")
+        assert cuerpo.isdigit(), panel._codigo(mid)
+
+
+def test_buscar_por_codigo_manda_sobre_los_demas_filtros():
+    """Buscar uno concreto y que los otros filtros lo escondan sería la forma
+    más rápida de hacer creer que no existe."""
+    import inspect
+    import db.db as base
+    sql = inspect.getsource(base.movimientos_filtrados)
+    assert "id = %s::bigint" in sql, "el filtro por código no llega al SQL"
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):

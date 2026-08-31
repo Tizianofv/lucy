@@ -2,12 +2,21 @@
 {% block titulo %}Movimientos{% endblock %}
 {% block cuerpo %}
 <h1>Movimientos</h1>
+{% if codigo_ilegible %}
+<p class="vacio">No entendí «{{ codigo }}» como código. Se escribe M-0086, o
+solo el número.</p>
+{% endif %}
 {% if guardados %}
 <p class="vacio">Guardado{{ 's' if guardados > 1 }} {{ guardados }}.</p>
 {% endif %}
 <form class="filtros" method="get">
   <input type="date" name="desde" value="{{ desde }}">
   <input type="date" name="hasta" value="{{ hasta }}">
+  {# El buscador por código va PRIMERO y no dispara el auto-filtro al teclear:
+     un campo de texto que recarga en cada letra es inusable. Se busca con Enter
+     o con el botón. #}
+  <input name="codigo" value="{{ codigo }}" placeholder="código (M-0086)"
+         style="width:9rem" data-sin-auto>
   <select name="tipo">
     <option value="">Todos los tipos</option>
     {% for t in ('gasto','ingreso','transferencia') %}
@@ -36,7 +45,10 @@
   var btn = document.getElementById('btn-filtrar');
   if (btn) btn.style.display = 'none';
 
-  filtros.addEventListener('change', function () {
+  filtros.addEventListener('change', function (ev) {
+    // El campo de código se excluye del auto-filtro: teclear no puede recargar
+    // la página a media palabra.
+    if (ev.target && ev.target.hasAttribute('data-sin-auto')) return;
     // Si hay categorías tocadas y sin guardar, filtrar las perdería — que es
     // el mismo error que tenía la cola cuando cada fila era su formulario.
     // Antes de recargar hay que preguntar, no tragarse el trabajo del otro.
@@ -72,10 +84,11 @@
 <div class="barra"><button>Guardar cambios</button>
   <span class="suave">Cambiá la categoría en la fila que haga falta.</span></div>
 <div class="scroll"><table>
-<tr><th>Fecha</th><th>Banco</th><th>Quién</th><th>Categoría</th>
+<tr><th>Código</th><th>Fecha</th><th>Banco</th><th>Quién</th><th>Categoría</th>
     <th class="num">Monto</th></tr>
 {% for m in movs %}
 <tr>
+  <td class="suave"><code>{{ m.id|codigo }}</code></td>
   <td class="suave">{{ m.fecha }}</td>
   <td class="suave">{{ m.banco or '—' }}</td>
   <td>{{ m.contraparte }}<div class="suave">{{ m.referencia or '' }}</div></td>
