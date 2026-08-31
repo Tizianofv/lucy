@@ -286,6 +286,32 @@ def test_una_compra_rechazada_no_es_un_gasto():
         "/movimientos tiene que seguir mostrándolos, marcados")
 
 
+def test_el_estado_se_puede_recuperar_de_la_huella():
+    """El primer backfill buscaba el estado en el TEXTO de la referencia
+    ("rechazo:", "declinad") y solo recuperaba las declinadas: el parser no
+    escribe nada ahí cuando una transferencia queda en proceso, así que las
+    PENDIENTES se quedaban en el DEFAULT 'aprobada'. Eran tres en producción.
+    Lo encontró el testigo.
+
+    El dato nunca se había perdido: `clave_dedupe()` pone el estado como último
+    campo de la huella, y la huella no está cifrada. Este test fija ese contrato
+    — si alguien cambia el orden de los campos, el backfill que lo lee se
+    rompería en silencio.
+    """
+    from cerebro.bancos.contrato import Movimiento
+    for estado in ("aprobada", "declinada", "pendiente"):
+        mov = Movimiento(banco="bhd", canal="tarjeta", tipo="gasto",
+                         fecha=datetime(2026, 8, 5, 11, 8),
+                         monto=Decimal("2823.07"), moneda="DOP",
+                         contraparte="ALTICE HOGAR", estado=estado,
+                         referencia="x")
+        campos = mov.clave_dedupe().split("|")
+        assert campos[5] == estado, (
+            f"el estado ya no es el campo 6 de la huella: {campos}")
+        # Es el campo que lee la migración 2026-08-31b (split_part con 6).
+        assert len(campos) >= 6
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):

@@ -209,7 +209,8 @@ CREATE TABLE movimientos (
   -- aprobada | declinada | pendiente. Solo las aprobadas cuentan en los
   -- totales: una declinada es dinero que no salió, y una retención se cuenta
   -- cuando llega el cargo real, no antes.
-  estado      TEXT NOT NULL DEFAULT 'aprobada',
+  estado      TEXT NOT NULL DEFAULT 'aprobada'
+              CHECK (estado IN ('aprobada', 'declinada', 'pendiente')),
   banco       TEXT,                            -- BHD | Banreservas | ... | NULL a mano
   borrado_en  TIMESTAMPTZ
 );
