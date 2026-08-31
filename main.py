@@ -51,6 +51,16 @@ _tarea_panel: asyncio.Task | None = None
 async def _al_arrancar(app) -> None:
     await db.abrir()
     log.info("Pool de Postgres abierto. Lucy escuchando solo a %s.", config.CHAT_ID_DUENO)
+    # Se avisa fuerte y se sigue: una tabla que falta rompe UNA función, no
+    # Lucy entera, y tumbar el arranque por eso dejaría a Tiziano sin bot. Pero
+    # tiene que salir en el log del arranque, porque en el bucle se pierde entre
+    # los reintentos — así estuvo `backups`, reventando cada 10 minutos sin que
+    # nadie lo viera.
+    faltan = await db.tablas_que_faltan()
+    if faltan:
+        log.error("FALTAN TABLAS EN LA BASE: %s. Están en db/schema.sql y no "
+                  "en Postgres; lo que las use va a fallar en silencio. "
+                  "Corré la migración que corresponda.", ", ".join(faltan))
 
     # La IA se chequea, pero su falla NO tumba a Lucy: capturar no puede
     # depender de que la IA esté viva (es el principio del Nivel 1). Cerebro y

@@ -310,6 +310,24 @@ def test_las_columnas_que_el_codigo_inserta_existen_en_el_esquema():
     fuente = open(os.path.join(_ROOT, "db", "db.py"), encoding="utf-8").read()
     esquema = open(os.path.join(_ROOT, "db", "schema.sql"), encoding="utf-8").read()
 
+    # Primero las TABLAS: db.py no puede leer de una que el esquema no declara.
+    # "cuentas_propias" vivió así —en la base real y no en el archivo— y una
+    # instalación nueva habría vuelto a contar los traspasos como gasto.
+    declaradas = {t.lower() for t in re.findall(
+        r"CREATE TABLE (?:IF NOT EXISTS )?(\w+)", esquema, re.I)}
+    # Las palabras clave van en MAYÚSCULA y sin re.I a propósito: el SQL de
+    # este archivo se escribe así, y en minúscula la expresión pescaría los
+    # `from cerebro import ...` de Python como si fueran tablas.
+    usadas = {t.lower() for t in re.findall(
+        r"(?:FROM|INSERT INTO|UPDATE|JOIN)\s+([a-zA-Z_]{3,})\b", fuente)}
+    # No son tablas de la aplicación: una función de Postgres, la palabra de
+    # "UPDATE ... SET", la de "FOR UPDATE SKIP LOCKED" y el catálogo del
+    # sistema, que Postgres trae solo.
+    usadas -= {"unnest", "set", "skip", "information_schema"}
+    sin_declarar = sorted(usadas - declaradas)
+    assert not sin_declarar, (
+        f"db.py usa tablas que db/schema.sql no declara: {sin_declarar}")
+
     faltan = []
     for tabla, crudo in re.findall(
             r"INSERT\s+INTO\s+(\w+)\s*\(([^)]*)\)", fuente, re.I | re.S):

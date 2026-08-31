@@ -291,3 +291,16 @@ COMMENT ON COLUMN categorias_aprendidas.comercio IS
   'Comercio NORMALIZADO (cerebro/bancos/categorias.py): sin acentos, sin '
   'sucursal, sin sufijo de ciudad. Guardar el nombre crudo obligaría a corregir '
   'el mismo sitio una vez por cada forma en que el banco lo escribe.';
+
+-- Registro de cuentas propias de la casa. Estaba en la base real y no acá: es
+-- la tabla que separa un traspaso entre cuentas de un gasto de verdad, o sea
+-- la que evita volver a contar RD$657,400 al año que no se gastaron.
+CREATE TABLE IF NOT EXISTS cuentas_propias (
+  id         BIGSERIAL PRIMARY KEY,
+  creado_en  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  patron     TEXT NOT NULL,        -- nombre o dígitos de cuenta, normalizado
+  clase      TEXT NOT NULL,        -- 'nombre' | 'cuenta'
+  banco      TEXT,
+  notas      TEXT,
+  borrado_en TIMESTAMPTZ
+);

@@ -33,6 +33,36 @@ async def abrir() -> None:
     await pool.open(wait=True, timeout=30)
 
 
+async def tablas_que_faltan() -> list[str]:
+    """Las tablas que db/schema.sql declara y la base real NO tiene.
+
+    Existe por un fallo concreto: `backups` estaba en el archivo del repo y no
+    en la base de Railway, así que el chequeo de respaldo reventaba cada diez
+    minutos con UndefinedTable — y como el bucle atrapa la excepción y sigue,
+    reventaba EN SILENCIO. Lucy pasó semanas sin poder avisar que no había
+    respaldo, que es justo lo que ese aviso vino a arreglar.
+
+    Ningún test hermético puede ver esto: los dobles de conexión responden lo
+    que uno quiera. Solo se sabe preguntándole a la base de verdad, y el momento
+    de preguntar es al arrancar, cuando el log todavía lo lee alguien.
+    """
+    import os
+    import re
+    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
+    try:
+        with open(ruta, encoding="utf-8") as f:
+            declaradas = {t.lower() for t in re.findall(
+                r"CREATE TABLE (?:IF NOT EXISTS )?(\w+)", f.read(), re.I)}
+    except OSError:
+        return []
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'public'")
+        reales = {r[0].lower() for r in await cur.fetchall()}
+    return sorted(declaradas - reales)
+
+
 async def cerrar() -> None:
     await pool.close()
 
