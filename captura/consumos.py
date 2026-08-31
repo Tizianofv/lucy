@@ -51,6 +51,12 @@ from cerebro.bancos.propios import Propios
 
 log = logging.getLogger("lucy.consumos")
 
+# Último día en que se avisó de un banco mudo. El throttle vive en memoria a
+# propósito: un aviso de más tras un redespliegue es barato, y una tabla nueva
+# solo para no repetir una advertencia sería más maquinaria de la que el
+# problema pide. Lo que NO puede pasar es avisar cada 15 minutos.
+_ultimo_aviso: dict = {}
+
 SERVIDOR = "imap.gmail.com"
 
 # Tope de correos nuevos por cuenta y pasada. Con cinco bancos y pocas
@@ -307,3 +313,44 @@ async def revisar() -> Resumen:
     log.info("Ingesta: %s vistos, %s movimientos, %s duplicados, %s fallos.",
              res.vistos, res.extraidos, res.duplicados, len(res.fallos))
     return res
+
+
+async def avisar_si_hay_bancos_mudos(res: Resumen) -> int:
+    """El canario. Deja un encargo si algún banco dejó de producir movimientos.
+
+    Un banco mudo —correos que llegan pero no producen ni un movimiento— es la
+    firma de que cambió su plantilla. Sin este aviso el sistema no se rompe: se
+    queda callado, y un sistema de gastos callado se lee como "no gastaste
+    nada". Esa es la peor manera de fallar que tiene este proyecto, y la que
+    lleva toda la conversación intentando evitarse.
+
+    Un aviso por banco y por día. Devuelve cuántos avisos dejó.
+    """
+    mudos = res.bancos_mudos()
+    if not mudos:
+        return 0
+    hoy = datetime.now().date()
+    avisados = 0
+    for banco in mudos:
+        if _ultimo_aviso.get(banco) == hoy:
+            continue
+        vistos = res.por_banco_vistos.get(banco, 0)
+        muestra = next((f for f in res.fallos if banco in f), "")
+        await db.guardar_en_bandeja(
+            tipo_entrada="sistema",
+            contenido_raw=(
+                f"AVISO: dejé de entender los correos de {banco}. Llegaron "
+                f"{vistos} correos suyos en esta revisión y no salió ni un "
+                f"movimiento — casi seguro cambiaron el formato del correo.\n\n"
+                + (f"El error fue: {muestra}\n\n" if muestra else "")
+                + "Decíselo a Tiziano en una línea, sin alarmar: los correos "
+                "están guardados y no se perdió nada, pero sus gastos de ese "
+                "banco NO están entrando a la base hasta que se arregle el "
+                "parser. Es importante que lo sepa: un sistema de gastos que se "
+                "queda callado parece decir que no gastó nada."),
+            chat_id=config.CHAT_ID_DUENO, origen="banco")
+        _ultimo_aviso[banco] = hoy
+        avisados += 1
+        log.warning("Canario: %s mudo (%s correos, 0 movimientos).",
+                    banco, vistos)
+    return avisados

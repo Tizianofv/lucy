@@ -333,6 +333,31 @@ def test_el_canario_detecta_un_banco_mudo():
     assert res.bancos_mudos() == []
 
 
+# ── El canario avisa ─────────────────────────────────────────────────────
+
+def test_el_canario_avisa_una_vez_por_dia():
+    """Un banco mudo tiene que avisar, y avisar UNA vez: el bucle corre cada 15
+    minutos, así que sin throttle serían 96 avisos al día del mismo banco."""
+    reg = _montar([])
+    consumos._ultimo_aviso.clear()
+    res = consumos.Resumen()
+    res.por_banco_vistos = {"bhd.com.do": 12}
+    res.por_banco_extraidos = {}
+    assert _correr(consumos.avisar_si_hay_bancos_mudos(res)) == 1
+    assert _correr(consumos.avisar_si_hay_bancos_mudos(res)) == 0, "avisó dos veces"
+    assert len(reg.orden) == 1 and reg.orden[0] == "bandeja:banco"
+
+
+def test_el_canario_callado_cuando_todo_va_bien():
+    """Un canario que avisa sin motivo se aprende a ignorar."""
+    _montar([])
+    consumos._ultimo_aviso.clear()
+    res = consumos.Resumen()
+    res.por_banco_vistos = {"bhd.com.do": 12}
+    res.por_banco_extraidos = {"bhd.com.do": 12}
+    assert _correr(consumos.avisar_si_hay_bancos_mudos(res)) == 0
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):

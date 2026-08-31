@@ -20,6 +20,7 @@ import logging
 import openai
 import telegram.error
 
+import captura.consumos as consumos
 import captura.correo as correo
 import cerebro.agente as agente
 import cerebro.calendario as calendario
@@ -205,6 +206,17 @@ async def bucle(bot) -> None:
             except Exception:
                 log.warning("La vigilancia 911 tropezó; sigo igual.",
                             exc_info=True)
+        # La ingesta bancaria cada ~15 min (180 vueltas). No corre más seguido
+        # porque una alerta de consumo no es urgente —el gasto ya ocurrió— y
+        # abrir Gmail cada rato no gana nada. El canario va pegado y DESPUÉS:
+        # solo puede avisar sobre una revisión que de verdad ocurrió.
+        if vuelta % 180 == 0:
+            try:
+                res = await consumos.revisar()
+                await consumos.avisar_si_hay_bancos_mudos(res)
+            except Exception:
+                log.warning("La ingesta bancaria tropezó; reintento en la "
+                            "próxima.", exc_info=True)
         # El calendario se jala cada ~5 min (60 vueltas): las sesiones del
         # estudio no cambian cada segundo, y consultar 10 calendarios más
         # seguido gastaría cuota sin ganar frescura útil.
