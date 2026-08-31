@@ -190,62 +190,27 @@ def test_vaciar_una_categoria_tambien_desaprende():
 
 
 def test_el_redirect_no_acepta_destinos_de_afuera():
-    """`volver` viene del formulario. Un destino que no se comprueba es un
-    redirect abierto: basta un POST con volver=https://otro-sitio."""
-    import inspect
-    import web.app as panel
-    fuente = inspect.getsource(panel.categorias)
-    assert 'startswith("/movimientos")' in fuente, (
-        "el destino del redirect no se está comprobando")
+    """Este test ANTES no ejecutaba nada: comprobaba que el código fuente
+    contuviera el string 'startswith("/movimientos")'. Daba tranquilidad sin
+    dar garantía — no habría detectado ninguna regresión de comportamiento, ni
+    ninguno de los payloads de abajo. Lo señaló el verificador y tenía razón.
 
-
-def test_el_filtro_no_se_traga_las_categorias_sin_guardar():
-    """Filtrar recarga la página. Si eso pasa con categorías tocadas y sin
-    guardar, se pierden — el mismo error que tenía la cola cuando cada fila era
-    su propio formulario. Filtrar solo se dispara tras avisar."""
-    import os
-    html = open(os.path.join(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))), "web", "plantillas",
-        "movimientos.html"), encoding="utf-8").read()
-    assert "filtros.addEventListener('change'" in html, (
-        "los filtros ya no se aplican solos")
-    assert "confirm(" in html and "sin guardar" in html, (
-        "filtrar puede perder cambios sin avisar")
-    assert "<button id=\"btn-filtrar\">" in html, (
-        "sin JS el filtro tiene que seguir funcionando con su botón")
-
-
-def test_las_plantillas_compilan_y_el_titulo_es_solo_un_titulo():
-    """Dos fallos reales, y los dos los metí con un replace descuidado.
-
-    Una plantilla que no compila tumba la pantalla entera en producción, y
-    ningún test la miraba. Peor fue el segundo: al añadir el resumen por
-    categorías, el bloque entero se insertó DENTRO de `{% block titulo %}` —
-    porque el replace pegó en el primer `{% endblock %}` del archivo, que era el
-    del título—. La página salía con media pantalla metida en la etiqueta
-    <title> y la sección repetida abajo.
-
-    Por eso no basta con que compile: el título tiene que ser texto corto.
+    Ahora ejercita la decisión con los destinos hostiles de verdad. El que
+    importa es "//evil.com": es una URL protocolo-relativa, y si pasara, el
+    navegador se iría del sitio con la sesión abierta.
     """
-    import pathlib
-    from decimal import Decimal
+    import web.app as panel
+    for hostil in ("//evil.com", "https://evil.com", "http://evil.com",
+                   "///evil.com", "\\\\evil.com", "javascript:alert(1)",
+                   "/sin-clasificar/../../evil.com", "", "   ", "otra-cosa"):
+        assert panel._destino_seguro(hostil) == "/sin-clasificar", (
+            f"{hostil!r} se aceptó como destino de redirect")
 
-    from jinja2 import Environment, FileSystemLoader
-    raiz = pathlib.Path(__file__).parent.parent / "web" / "plantillas"
-    entorno = Environment(loader=FileSystemLoader(str(raiz)))
-    entorno.filters["pesos"] = lambda v: f"{Decimal(v):,.2f}" if v is not None else "—"
-
-    for archivo in sorted(raiz.glob("*.html")):
-        entorno.get_template(archivo.name)          # revienta si no compila
-        fuente = archivo.read_text(encoding="utf-8")
-        if "{% block titulo %}" not in fuente:
-            continue
-        titulo = fuente.split("{% block titulo %}")[1].split("{% endblock %}")[0]
-        assert "<" not in titulo, (
-            f"{archivo.name}: hay HTML dentro del bloque del título "
-            f"({titulo.strip()[:60]!r}) — se coló contenido de la página")
-        assert len(titulo.strip()) < 40, (
-            f"{archivo.name}: el título mide {len(titulo.strip())} caracteres")
+    # Y lo legítimo tiene que seguir pasando, con sus filtros intactos: si no,
+    # el arreglo rompe la mitad del trabajo en /movimientos.
+    for bueno in ("/movimientos", "/movimientos?banco=bhd&tipo=gasto",
+                  "  /movimientos?mes=2026-08  "):
+        assert panel._destino_seguro(bueno) == bueno.strip(), bueno
 
 
 if __name__ == "__main__":

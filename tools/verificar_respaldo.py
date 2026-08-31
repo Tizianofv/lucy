@@ -14,12 +14,15 @@ QUÉ COMPRUEBA, en orden de gravedad:
      el día que hace falta.
   2. Que estén TODAS las tablas que la base real tiene. Una tabla que existe en
      Postgres y no en el respaldo es una pérdida total silenciosa.
-  3. Que las filas cuadren con la base, con margen para lo que creció desde que
-     se tomó la copia. El margen es 10% o tres filas, lo que sea mayor: en una
-     tabla de cuatro, una fila nueva es el 25% y la alarma saltaría por algo
-     normal. Lo que NO se tolera es que falten filas de verdad.
-  4. Que el dinero esté entero: los montos guardados como texto decimal y no
-     como float, y que sumen lo mismo que en la base.
+  3. Que las filas cuadren, contando solo las que YA EXISTÍAN cuando se tomó la
+     copia (por `creado_en`). Así la comparación es exacta y no hace falta
+     tolerancia: lo que había, tiene que estar. Las pocas tablas sin `creado_en`
+     no se pueden acotar por fecha y ahí queda una tolerancia aproximada.
+  4. Que el dinero esté entero: los montos como texto decimal y no como float,
+     y que sumen EXACTO lo mismo que en la base — por moneda separada, y solo
+     sobre las filas que ya existían cuando se tomó la copia. Sin tolerancia:
+     acotando por fecha de creación no hace falta ninguna, y una tolerancia
+     porcentual sobre un total que crece salta por lo normal.
   5. Que el esquema venga con las columnas de cada tabla, para poder
      reconstruirla.
 
@@ -90,22 +93,35 @@ def main() -> int:
         else:
             print(f"  ✓ las {len(reales)} tablas de la base están en el respaldo")
 
-        # 3. Las filas cuadran (con margen por lo que creció después).
+        # 3. Las filas cuadran. Mismo principio que el dinero: se cuentan solo
+        # las que YA EXISTÍAN cuando se tomó la copia, usando `creado_en`. Con
+        # un simple "respaldo vs base" la alarma saltaba por lo normal —
+        # Tiziano clasificó cuatro comercios después del respaldo y
+        # `categorias_aprendidas` dio 24 vs 28—, y una alarma que salta por lo
+        # normal se aprende a ignorar. Las tablas SIN `creado_en` no se pueden
+        # acotar por fecha, así que ahí sí queda la tolerancia de antes.
+        con_fecha = {t for (t,) in conn.execute(
+            "SELECT DISTINCT table_name FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND column_name = 'creado_en'")}
         cortas = []
         for t in reales:
             if t not in tablas:
                 continue
-            n_real = conn.execute(f'SELECT count(*) FROM "{t}"').fetchone()[0]
-            n_copia = len(tablas[t])
-            # El margen es 10% O TRES FILAS, lo que sea mayor. El porcentaje
-            # solo no sirve: en una tabla de cuatro filas, una fila añadida
-            # después del respaldo es el 25% y hacía saltar la alarma por algo
-            # que es normal —yo mismo registré una cuenta propia una hora
-            # después de la copia—. Una alarma que salta por lo normal es una
-            # alarma que se aprende a ignorar, y este proyecto ya pagó por eso.
-            margen = max(3, int(n_real * 0.1))
-            if n_copia < n_real - margen:
-                cortas.append(f"{t}: respaldo {n_copia} vs base {n_real}")
+            if t in con_fecha:
+                n_real = conn.execute(
+                    f'SELECT count(*) FROM "{t}" WHERE creado_en <= %s',
+                    (generado,)).fetchone()[0]
+                n_copia = sum(1 for f in tablas[t]
+                              if f.get("creado_en")
+                              and str(f["creado_en"]) <= generado)
+                if n_copia != n_real:      # exacto: lo que había tiene que estar
+                    cortas.append(f"{t}: respaldo {n_copia} vs base {n_real}")
+            else:
+                n_real = conn.execute(f'SELECT count(*) FROM "{t}"').fetchone()[0]
+                n_copia = len(tablas[t])
+                if n_copia < n_real - max(3, int(n_real * 0.1)):
+                    cortas.append(f"{t}: respaldo {n_copia} vs base {n_real} "
+                                  "(sin creado_en, comparación aproximada)")
         if cortas:
             problemas.append("tablas con menos filas de las esperadas: "
                              + "; ".join(cortas))
@@ -122,20 +138,49 @@ def main() -> int:
         else:
             print(f"  ✓ los {len(movs)} montos están como texto decimal, no float")
 
-        suma_copia = sum(Decimal(str(m["monto"])) for m in movs
-                         if m.get("monto") is not None and not m.get("borrado_en"))
-        suma_real = conn.execute(
-            "SELECT coalesce(sum(monto), 0) FROM movimientos "
-            "WHERE borrado_en IS NULL").fetchone()[0]
-        if suma_copia > suma_real:
-            problemas.append(f"el respaldo suma MÁS dinero que la base "
-                             f"({suma_copia} vs {suma_real})")
-        elif suma_real - suma_copia > suma_real * Decimal("0.1"):
-            problemas.append(f"al respaldo le falta dinero: {suma_copia} "
-                             f"vs {suma_real} en la base")
+        # El dinero se compara SOLO contra las filas que ya existían cuando se
+        # tomó la copia, y SEPARADO POR MONEDA. Las dos cosas son correcciones
+        # de algo que escribí mal hace unas horas:
+        #
+        #   · Comparar el total del respaldo contra el total de la base es
+        #     comparar contra un blanco móvil: la base crece, y con un 10% de
+        #     tolerancia bastaba que entrara un 11% de movimientos nuevos para
+        #     que gritara "este respaldo NO es de fiar" sobre uno sano. Una
+        #     alarma que salta por lo normal se aprende a ignorar. Acotando por
+        #     `creado_en <= generado` la comparación es EXACTA y no hace falta
+        #     ninguna tolerancia: lo que había, tiene que estar.
+        #   · Sumaba DOP con USD en una sola cifra — el error que este proyecto
+        #     entero existe para no cometer, cometido en la herramienta que
+        #     vigila que el dinero esté entero.
+        #
+        # No se filtra por borrado_en: una fila borrada DESPUÉS del respaldo
+        # sigue estando en él, y tiene que seguir estando.
+        por_moneda_copia: dict = {}
+        for m in movs:
+            if m.get("monto") is None or not m.get("creado_en"):
+                continue
+            if str(m["creado_en"]) > generado:
+                continue                     # entró después: no le toca estar
+            por_moneda_copia[m.get("moneda") or "?"] = (
+                por_moneda_copia.get(m.get("moneda") or "?", Decimal(0))
+                + Decimal(str(m["monto"])))
+
+        cur = conn.execute(
+            "SELECT moneda, sum(monto) FROM movimientos "
+            "WHERE creado_en <= %s GROUP BY 1 ORDER BY 1", (generado,))
+        descuadres = []
+        for moneda, suma_real_m in cur.fetchall():
+            suma_copia_m = por_moneda_copia.get(moneda, Decimal(0))
+            if suma_copia_m != suma_real_m:
+                descuadres.append(
+                    f"{moneda}: respaldo {suma_copia_m:,.2f} vs base "
+                    f"{suma_real_m:,.2f} (faltan {suma_real_m - suma_copia_m:,.2f})")
+        if descuadres:
+            problemas.append("el dinero no cuadra — " + "; ".join(descuadres))
         else:
-            print(f"  ✓ el dinero cuadra: {suma_copia:,.2f} en el respaldo, "
-                  f"{suma_real:,.2f} en la base")
+            cuadre = " · ".join(f"{mo} {v:,.2f}"
+                                for mo, v in sorted(por_moneda_copia.items()))
+            print(f"  ✓ el dinero cuadra EXACTO por moneda: {cuadre}")
 
     # 5. El esquema alcanza para reconstruir.
     sin_columnas = [t for t in tablas if not esquema.get(t)]

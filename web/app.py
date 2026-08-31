@@ -62,6 +62,30 @@ def _pesos(v) -> str:
 plantillas.env.filters["pesos"] = _pesos
 
 
+def _destino_seguro(volver: str) -> str:
+    """A dónde se puede volver después de guardar. Solo rutas propias.
+
+    Vive en su propia función para poder PROBARLA. Antes la decisión estaba
+    suelta dentro del endpoint y su test se limitaba a comprobar que el código
+    fuente contuviera cierto texto —daba tranquilidad sin dar garantía, y no
+    habría detectado ninguna regresión de comportamiento—.
+
+    EL startswith NO ES DECORATIVO. Comprobado contra Starlette el 31-ago:
+
+      "//evil.com"        Location: //evil.com — redirect ABIERTO: es una URL
+                          protocolo-relativa y se va del sitio. Lo frena esto
+                          y nada más.
+      "https://evil.com"  igual de abierto. Lo mismo.
+      con CR/LF           Starlette lo percent-codifica sola, así que la
+                          inyección de cabeceras está tapada río abajo. No
+                          dependemos de eso igual.
+      "/movimientos/../x" pasa, y es inofensivo: sigue siendo ruta de este
+                          mismo sitio, y todas piden sesión.
+    """
+    limpio = (volver or "").strip()
+    return limpio if limpio.startswith("/movimientos") else "/sin-clasificar"
+
+
 def _sesion(request: Request) -> int | None:
     return auth.validar(request.cookies.get(COOKIE))
 
@@ -211,11 +235,9 @@ async def categorias(request: Request):
     #                       No dependemos de eso igual.
     #   "/movimientos/../x" pasa, y es inofensivo: sigue siendo una ruta de este
     #                       mismo sitio, y todas piden sesión.
-    volver = str(formulario.get("volver", "")).strip()
-    if not volver.startswith("/movimientos"):
-        volver = "/sin-clasificar"
-    sep = "&" if "?" in volver else "?"
-    return RedirectResponse(f"{volver}{sep}guardados={guardados}",
+    destino = _destino_seguro(str(formulario.get("volver", "")))
+    sep = "&" if "?" in destino else "?"
+    return RedirectResponse(f"{destino}{sep}guardados={guardados}",
                             status_code=303)
 
 

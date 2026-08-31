@@ -105,6 +105,7 @@ CATEGORIAS = [
     "Vehículo",
     "Transporte",
     "Servicios del hogar",
+    "Teléfono/Internet",
     "Salud",
     "Seguros",
     "Cuidado personal",
@@ -219,10 +220,16 @@ CLAVES = {
     "UBER": "Transporte", "RDVIAL": "Transporte", "PEAJE": "Transporte",
     "PARQUEO": "Transporte",
 
+    # Servicios del hogar es lo que llega por tubería o por cable de la luz.
     "EDESUR": "Servicios del hogar", "EDEESTE": "Servicios del hogar",
-    "EDENORTE": "Servicios del hogar", "CLARO": "Servicios del hogar",
-    "ALTICE": "Servicios del hogar", "CAASD": "Servicios del hogar",
+    "EDENORTE": "Servicios del hogar", "CAASD": "Servicios del hogar",
     "INAPA": "Servicios del hogar",
+
+    # Teléfono e internet van aparte desde que Tiziano lo pidió: es el gasto
+    # que más fácil se infla sin que nadie lo mire —una línea de más, un plan
+    # que subió— y mezclado con la luz y el agua no se distingue.
+    "CLARO": "Teléfono/Internet", "ALTICE": "Teléfono/Internet",
+    "VIVA": "Teléfono/Internet", "WIND TELECOM": "Teléfono/Internet",
 
     "FARMACIA": "Salud", "FARMACONSUMO": "Salud", "CLINICA": "Salud",
     "LABORATORIO": "Salud", "HOSPITAL": "Salud", "CEDIMAT": "Salud",
