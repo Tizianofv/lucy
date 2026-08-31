@@ -314,6 +314,20 @@ def test_la_categoria_que_no_suma_no_suma():
         f"el total quedó en {totales['DOP']}: la marcada se coló")
 
 
+def test_el_detalle_de_una_categoria_se_abre_sin_javascript():
+    """El resumen es la pantalla que más se mira y la que menos puede fallar.
+    Con <details> se despliega aunque el JS no cargue; con JavaScript, un día
+    no abre y no hay forma de saber por qué."""
+    import os
+    html = open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "web", "plantillas",
+        "resumen.html"), encoding="utf-8").read()
+    assert "<details>" in html and "<summary" in html
+    assert "detalle.get((moneda, f.categoria)" in html, (
+        "el detalle tiene que ir por moneda Y categoría: si se agrupa solo por "
+        "categoría, los gastos en USD aparecerían dentro de la fila de DOP")
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):

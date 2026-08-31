@@ -54,7 +54,23 @@ Lo que se vea acá antes de esa fecha es lo que se anotó a mano por Telegram.</
   <tr><th>Categoría</th><th class="num">Gasto</th><th class="num">%</th><th class="num">n</th></tr>
   {% for f in filas if not f.no_suma %}
   <tr>
-    <td>{{ f.categoria }}</td>
+    <td>
+      {# <details> y no JavaScript: si el JS no carga, esto sigue abriendo. El
+         resumen es la pantalla que más se mira y la que menos puede fallar. #}
+      <details>
+        <summary style="cursor:pointer">{{ f.categoria }}</summary>
+        <table style="margin:.4rem 0 .6rem">
+          {% for m in detalle.get((moneda, f.categoria), []) %}
+          <tr>
+            <td class="suave"><code>{{ m.id|codigo }}</code></td>
+            <td class="suave">{{ m.fecha }}</td>
+            <td>{{ m.contraparte }}</td>
+            <td class="num">{{ m.monto|pesos }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </details>
+    </td>
     <td class="num gasto">{{ f.total|pesos }}</td>
     <td class="num suave">{{ (100 * f.total / totales[moneda])|round|int if totales[moneda] }}%</td>
     <td class="num suave">{{ f.n }}</td>
@@ -64,7 +80,21 @@ Lo que se vea acá antes de esa fecha es lo que se anotó a mano por Telegram.</
      forma de mentir: el circuito tiene que poder auditarse entero. #}
   {% for f in filas if f.no_suma %}
   <tr class="suave">
-    <td>{{ f.categoria }} <span class="suave">· no cuenta</span></td>
+    <td>
+      <details>
+        <summary style="cursor:pointer">{{ f.categoria }} · no cuenta</summary>
+        <table style="margin:.4rem 0 .6rem">
+          {% for m in detalle.get((moneda, f.categoria), []) %}
+          <tr>
+            <td class="suave"><code>{{ m.id|codigo }}</code></td>
+            <td class="suave">{{ m.fecha }}</td>
+            <td>{{ m.contraparte }}</td>
+            <td class="num">{{ m.monto|pesos }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </details>
+    </td>
     <td class="num suave">{{ f.total|pesos }}</td>
     <td class="num suave">—</td>
     <td class="num suave">{{ f.n }}</td>

@@ -796,6 +796,27 @@ async def gasto_por_categoria(mes: str | None = None) -> list[dict]:
         return await cur.fetchall()
 
 
+async def gastos_de_cada_categoria(mes: str | None = None) -> list[dict]:
+    """Los gastos uno por uno, para poder abrir una categoría y ver qué hay.
+
+    Se traen TODOS los del mes en una sola consulta y se agrupan en memoria, en
+    vez de una consulta por categoría cuando alguien despliega: son ~130 filas y
+    la alternativa es abrir la base cada vez que se hace clic.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT id, fecha, banco, contraparte, monto, moneda,
+                   coalesce(nullif(categoria, ''), '— sin clasificar —') AS categoria
+              FROM movimientos
+             WHERE borrado_en IS NULL AND tipo = 'gasto'
+               AND (%s::text IS NULL OR to_char(fecha, 'YYYY-MM') = %s)
+             ORDER BY monto DESC
+            """, (mes, mes))
+        return await cur.fetchall()
+
+
 async def meses_con_movimientos() -> list[str]:
     async with pool.connection() as conn:
         cur = await conn.execute(

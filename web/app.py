@@ -162,6 +162,13 @@ async def resumen(request: Request, mes: str = ""):
     por_moneda: dict = {}
     for f in await db.gasto_por_categoria(elegido):
         por_moneda.setdefault(f["moneda"], []).append(f)
+
+    # El detalle de cada categoría, para poder desplegarla. Se pide una vez y
+    # se agrupa acá: son ~130 filas, y la alternativa —una consulta por clic—
+    # abriría la base cada vez que alguien tiene curiosidad.
+    detalle: dict = {}
+    for m in await db.gastos_de_cada_categoria(elegido):
+        detalle.setdefault((m["moneda"], m["categoria"]), []).append(m)
     # El total EXCLUYE las que no suman. Que la consulta las marque y la
     # plantilla las pinte debajo no alcanzaba: este sum() las recorría todas, y
     # el "TOTAL DOP" incluía el dinero de terceros. La marca servía para
@@ -302,7 +309,7 @@ async def movimientos(request: Request, desde: str = "", hasta: str = "",
          # que todavía no usa nadie.
          "todas": CATEGORIAS,
          # Para los ingresos y traspasos, solo las marcas — no los rubros.
-         "no_suman": NO_SUMAN, "guardados": guardados,
+         "no_suman": NO_SUMAN, "detalle": detalle, "guardados": guardados,
          "volver": str(request.url.path) + (
              "?" + str(request.url.query) if request.url.query else "")})
 
