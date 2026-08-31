@@ -768,7 +768,11 @@ async def gasto_por_categoria(mes: str | None = None) -> list[dict]:
                    moneda, sum(monto) AS total, count(*) AS n
               FROM movimientos
              WHERE borrado_en IS NULL AND tipo = 'gasto'
-               AND (%s IS NULL OR to_char(fecha, 'YYYY-MM') = %s)
+               -- El ::text NO es adorno: sin él Postgres no puede deducir el
+               -- tipo del parámetro cuando llega NULL y tira
+               -- IndeterminateDatatype, que en el panel se ve como un
+               -- Internal Server Error en la portada.
+               AND (%s::text IS NULL OR to_char(fecha, 'YYYY-MM') = %s)
              GROUP BY 1, 2
              ORDER BY 2, 3 DESC
             """, (mes, mes))

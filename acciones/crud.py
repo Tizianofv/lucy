@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 
 from psycopg.rows import dict_row
 
@@ -35,6 +36,31 @@ class FaltanDatos(Exception):
     No es un fallo de Lucy: es que el mensaje no traía la información. Se le
     dice a Tiziano qué falta, en vez de inventarlo o de tragarse el mensaje.
     """
+
+
+def _monto_exacto(valor) -> Decimal:
+    """El monto, en Decimal y siempre positivo. Nunca float.
+
+    Este es el ÚNICO sitio del sistema donde el dinero pasaba por float: el
+    camino automático (los correos del banco) ya usa Decimal de punta a punta, y
+    este es el camino manual — cuando Tiziano le dice a Lucy "gasté 500".
+
+    float no representa exactamente los decimales de base 10: 0.10 + 0.10 + 0.10
+    da 0.30000000000000004. Postgres redondea al guardar en NUMERIC(12,2), así
+    que hoy no se ve nada raro; el problema es que el error entra ANTES de
+    guardar, y un día con la cifra equivocada nadie va a saber de dónde salió.
+    Con Decimal no hay que confiar en que el redondeo tape nada.
+
+    Positivo SIEMPRE: el signo lo da `tipo` (gasto | ingreso), como dice el
+    esquema. Guardar el signo dos veces es cómo se termina restando un ingreso.
+    """
+    try:
+        return abs(Decimal(str(valor)))
+    except (InvalidOperation, ValueError, TypeError):
+        # Que llegue basura acá es un fallo del clasificador, no del usuario, y
+        # tragárselo como 0.00 sería anotar un gasto de cero pesos que nadie
+        # entendería después.
+        raise ValueError(f"monto no numérico: {valor!r}")
 
 
 def _fecha(iso: str | None) -> datetime | None:
@@ -282,7 +308,7 @@ async def crear_desde_interpretacion(
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                 """,
                 (bandeja_id, clas, (cuando or datetime.now(TZ)).date(),
-                 abs(float(r["monto"])), str(r.get("moneda") or "DOP"),
+                 _monto_exacto(r["monto"]), str(r.get("moneda") or "DOP"),
                  str(r.get("contraparte") or r.get("lugar")
                      or r.get("persona") or "") or None,
                  str(r.get("referencia") or "") or None,
