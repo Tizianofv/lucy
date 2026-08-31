@@ -393,6 +393,41 @@ def test_si_el_bloque_del_beneficiario_no_esta_revienta():
         popular._texto_de_pdf = real
 
 
+def test_los_canales_son_una_sola_lista():
+    """Lo encontró testigo-b. Había DOS listas de canales —una regex para los
+    correos y un set para los PDF— y no coincidían: "CAJERO" estaba en la
+    primera y faltaba en la segunda. Consecuencia: un comprobante generado por
+    cajero ponía "CAJERO" de PAGADOR, como si fuera una persona.
+
+    El arreglo no es agregar CAJERO a la segunda lista: es que haya UNA. Dos
+    copias del mismo hecho se desincronizan, siempre — es la tercera vez hoy
+    que este proyecto tropieza con eso.
+    """
+    import re
+    from cerebro.bancos import popular
+    del_regex = {c.replace(r"\s+", " ") for c in popular._CANALES.split("|")}
+    assert del_regex == set(popular._CANALES_PDF), (
+        f"las dos listas de canales difieren: "
+        f"solo en el regex {sorted(del_regex - set(popular._CANALES_PDF))}, "
+        f"solo en el PDF {sorted(set(popular._CANALES_PDF) - del_regex)}")
+
+
+def test_un_comprobante_por_cajero_no_pone_cajero_de_pagador():
+    from cerebro.bancos import popular
+    real = popular._texto_de_pdf
+    popular._texto_de_pdf = lambda _: (
+        "Número de Referencia: Monto :\nCAJERO\nTRANSFERENCIA A CUENTA\n"
+        "0005422\n19-may-2026\nPESOS DOMINICANOS\n56,000.00\n"
+        "MARILANDIA VARGAS\n00201449139\nBANCO BANESCO\n982*****55\n"
+        "287791829\nNOTIFICACION CREDITO")
+    try:
+        m = popular.parsear_comprobante_pdf(_con_pdf("rosilisr04_30565.eml"))[0]
+    finally:
+        popular._texto_de_pdf = real
+    assert m.contraparte.startswith("(el comprobante no dice quién pagó)"), (
+        f"un canal se coló como pagador: {m.contraparte!r}")
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):

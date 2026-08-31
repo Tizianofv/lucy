@@ -57,7 +57,14 @@ REMITENTE_INFO = "popularteinforma@popularenlinea.com"
 # transaccion") y solo frenaba por accidente en el primer carácter acentuado.
 # Afectaba a los 4 correos de este tipo, el 100%. Quitar el re.I del grupo no
 # alcanzaría: el texto que sigue empieza con "Si" en mayúscula.
-_CANALES = r"APP\s+POPULAR|IBANKING|INTERNET\s+BANKING|SUCURSAL|CAJERO"
+# LOS CANALES, EN UN SOLO SITIO. Había dos listas —esta regex para los correos
+# y un set aparte para los PDF— y no coincidían: "CAJERO" estaba en una y
+# faltaba en la otra, así que un comprobante generado por cajero ponía "CAJERO"
+# de PAGADOR, como si fuera una persona. Lo encontró testigo-b.
+# Dos copias del mismo hecho se desincronizan, siempre. Acá se escriben una vez
+# y las dos formas —el set y la alternancia del regex— se derivan.
+CANALES = ("APP POPULAR", "IBANKING", "INTERNET BANKING", "SUCURSAL", "CAJERO")
+_CANALES = "|".join(c.replace(" ", r"\s+") for c in CANALES)
 _TRANSF = re.compile(
     r"Monto\s+Fecha\s+Canal\s+(?P<moneda>RD|USD?)\$?\s*(?P<monto>[\d.,]*\d)\s+"
     rf"(?P<fecha>\d{{1,2}}/\d{{1,2}}/\d{{2,4}})\s+(?P<canal>{_CANALES})", re.I)
@@ -210,7 +217,8 @@ SIN_PAGADOR = "(el comprobante no dice quién pagó)"
 # La "Empresa Generadora" trae el CANAL cuando la transferencia la hizo uno
 # mismo por la web, y el NOMBRE DEL PAGADOR cuando la manda una empresa. Se
 # enumeran los canales para poder distinguirlos: lo que no está acá, es alguien.
-_CANALES_PDF = {"IBANKING", "APP POPULAR", "INTERNET BANKING", "SUCURSAL"}
+# Sale de CANALES, la lista única de arriba: mantener dos ya costó un fallo.
+_CANALES_PDF = set(CANALES)
 
 # El monto es el único número con dos decimales del comprobante. Si aparece más
 # de uno, el formato cambió y hay que mirarlo: elegir "el primero" sería fingir
