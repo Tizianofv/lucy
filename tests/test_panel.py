@@ -120,6 +120,46 @@ def test_el_dinero_se_formatea_sin_mezclar_monedas():
     assert "$" not in panel._pesos(Decimal("10"))
 
 
+# ── La cola de corrección ────────────────────────────────────────────────
+
+def test_la_cola_se_guarda_entera_de_una_vez():
+    """Un formulario por fila hacía que guardar una recargara la página y se
+    llevara puesto lo que ya estaba elegido en las demás: marcar y guardar de
+    uno en uno. Con cuarenta movimientos eso no lo hace nadie, y una cola que no
+    se corrige no le enseña nada al sistema — el defecto de usabilidad se comía
+    la función entera."""
+    import os
+    html = open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "web", "plantillas",
+        "sin_clasificar.html"), encoding="utf-8").read()
+    assert html.count("<form") == 1, (
+        f"hay {html.count('<form')} formularios: uno por fila vuelve a perder "
+        "lo seleccionado en las demás al guardar")
+    assert "{% for m in movs %}" in html and "cat_{{ m.id }}" in html, (
+        "los campos tienen que ir nombrados por id; emparejar listas paralelas "
+        "por posición se rompe en cuanto una fila va vacía")
+
+
+def test_la_cola_no_pide_clasificar_ingresos():
+    """El dinero que entra no se clasifica. Un ingreso en la cola no aportaba
+    nada y sí quitaba: empujaba hacia abajo un gasto que sí hay que mirar."""
+    import inspect
+    import db.db as base
+    sql = inspect.getsource(base.sin_clasificar)
+    assert "tipo = 'gasto'" in sql, (
+        "la cola volvió a traer ingresos o traspasos")
+
+
+def test_no_hay_categorias_de_ingreso_en_el_vocabulario():
+    """Si los ingresos no se clasifican, ofrecer "Salario" o "Intereses" es
+    ofrecer opciones que nada puede usar."""
+    from cerebro.bancos.categorias import CATEGORIAS
+    for prohibida in ("Salario", "Intereses", "Ingresos varios"):
+        assert prohibida not in CATEGORIAS, (
+            f"'{prohibida}' es categoría de ingreso y los ingresos no se "
+            "clasifican")
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):

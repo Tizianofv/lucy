@@ -32,7 +32,7 @@ import logging
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
@@ -102,40 +102,68 @@ async def resumen(request: Request):
 
 
 @app.get("/sin-clasificar", response_class=HTMLResponse)
-async def cola(request: Request):
+async def cola(request: Request, guardados: int = 0):
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     # El desplegable ofrece el VOCABULARIO COMPLETO, no las categorías ya
     # usadas. Con base vacía "las ya usadas" son cero, y una cola de corrección
     # cuyo desplegable está vacío no se puede usar: no hay forma de empezar.
     #
-    # Y ofrece EXACTAMENTE lo que POST /categoria acepta, ni una más. Sumarle
+    # Y ofrece EXACTAMENTE lo que POST /categorias acepta, ni una más. Sumarle
     # las categorías heredadas de la base parecía generoso y era una trampa:
     # ponía en el desplegable opciones que la validación rechaza siempre, o sea
     # opciones garantizadas a fallar en silencio.
     return plantillas.TemplateResponse(
         request, "sin_clasificar.html",
-        {"movs": await db.sin_clasificar(), "categorias": CATEGORIAS})
+        {"movs": await db.sin_clasificar(), "categorias": CATEGORIAS,
+         "guardados": guardados})
 
 
-@app.post("/categoria")
-async def categoria(request: Request, movimiento_id: int = Form(...),
-                    categoria: str = Form("")):
+@app.post("/categorias")
+async def categorias(request: Request):
     """La única escritura del panel. Queda en log_acciones como todo lo demás.
 
-    La categoría se comprueba contra la lista cerrada. El desplegable ya solo
-    ofrece esas, pero un vocabulario que solo se respeta si el formulario se
-    porta bien no es un vocabulario cerrado: basta un POST a mano para meter
-    "supermercado" en minúscula y partir el total en dos para siempre.
+    Guarda TODA la tabla de una vez. Antes era una fila por envío, y como cada
+    guardado recargaba la página, se llevaba puesto lo que ya estaba elegido en
+    las demás filas: había que marcar y guardar de uno en uno. Con cuarenta
+    movimientos eso no lo hace nadie, y una cola que no se corrige no le enseña
+    nada al sistema — o sea que el defecto de usabilidad se comía la función.
+
+    Los campos vienen como cat_<id>. La categoría se comprueba contra la lista
+    cerrada: el desplegable ya solo ofrece esas, pero un vocabulario que solo se
+    respeta si el formulario se porta bien no es un vocabulario cerrado — basta
+    un POST a mano para meter "supermercado" en minúscula y partir el total en
+    dos para siempre.
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
-    limpia = categoria.strip()
-    # "" es legítimo: es sacarle la categoría a un movimiento mal corregido.
-    if limpia and limpia not in CATEGORIAS:
-        return RedirectResponse("/sin-clasificar", status_code=303)
-    await db.poner_categoria(movimiento_id, limpia)
-    return RedirectResponse("/sin-clasificar", status_code=303)
+
+    formulario = await request.form()
+    guardados, rechazados = 0, 0
+    for campo, valor in formulario.items():
+        if not campo.startswith("cat_"):
+            continue
+        limpia = str(valor).strip()
+        if not limpia:          # sin elegir: esa fila se queda como está
+            continue
+        if limpia not in CATEGORIAS:
+            rechazados += 1
+            continue
+        try:
+            mid = int(campo[4:])
+        except ValueError:
+            rechazados += 1
+            continue
+        await db.poner_categoria(mid, limpia)
+        guardados += 1
+
+    if rechazados:
+        # Un rechazo que no deja rastro en ningún lado es un fallo silencioso, y
+        # este proyecto paga por que todo sea auditable.
+        log.warning("Panel: %s categoría(s) rechazadas por no estar en la "
+                    "lista cerrada", rechazados)
+    return RedirectResponse(f"/sin-clasificar?guardados={guardados}",
+                            status_code=303)
 
 
 @app.get("/movimientos", response_class=HTMLResponse)

@@ -116,14 +116,11 @@ CATEGORIAS = [
     "Impuestos",
     "Regalos y donaciones",
     "Mascotas",
-    # Las últimas cuatro son de INGRESO. Van en la misma lista y no en una
-    # aparte porque la cola del panel no separa por tipo: ahí caen los ingresos
-    # sin clasificar igual que los gastos, y sin estas cuatro los intereses del
-    # certificado de APAP no se podrían clasificar nunca — se quedarían en la
-    # cola para siempre, empujando hacia abajo lo que sí hace falta corregir.
-    "Salario",
-    "Intereses",
-    "Ingresos varios",
+    # Acá NO hay categorías de ingreso, y es una decisión de Tiziano: el
+    # dinero que entra no hace falta clasificarlo. La cola solo trae gastos
+    # (db.sin_clasificar), así que un ingreso nunca pide categoría — antes sí
+    # las había, y lo único que hacían era empujar hacia abajo lo que de verdad
+    # hay que corregir.
     "Otros",
 ]
 
@@ -211,8 +208,6 @@ CLAVES = {
     "COMISION": "Banco y comisiones", "SOBREGIRO": "Banco y comisiones",
 
     "DGII": "Impuestos", "IMPUESTO": "Impuestos",
-
-    "INTERESES": "Intereses",
 
     "ENFOQUE DIGITAL": "Equipos y tecnología",
 

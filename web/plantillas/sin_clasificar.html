@@ -2,36 +2,72 @@
 {% block titulo %}Sin clasificar{% endblock %}
 {% block cuerpo %}
 <h1>Sin clasificar</h1>
+{% if guardados %}
+{# El aviso existe porque antes el éxito y el rechazo devolvían el MISMO
+   redirect: no había forma de distinguir "se guardó" de "no se guardó". #}
+<p class="vacio">Guardado{{ 's' if guardados > 1 }} {{ guardados }}. Cada uno queda
+aprendido: ese comercio no vuelve a la cola.</p>
+{% endif %}
 {% if not movs %}
 <p class="vacio">Nada pendiente de clasificar. 👌</p>
 {% else %}
 <p class="suave">Ordenados por monto: si solo vas a corregir unos pocos, que sean
 los que más pesan. Cada corrección le enseña algo al sistema.</p>
-<div class="scroll"><table>
-<tr><th>Fecha</th><th>Banco</th><th>Quién</th><th class="num">Monto</th>
-    <th>Categoría</th></tr>
-{% for m in movs %}
-<tr>
-  <td class="suave">{{ m.fecha }}</td>
-  <td class="suave">{{ m.banco or '—' }}</td>
-  <td>{{ m.contraparte }}<div class="suave">{{ m.referencia or '' }}</div></td>
-  <td class="num {{ m.tipo }}">{{ m.monto|pesos }} {{ m.moneda }}</td>
-  <td>
-    <form method="post" action="/categoria" style="display:flex;gap:.4rem">
-      <input type="hidden" name="movimiento_id" value="{{ m.id }}">
+
+{# UN SOLO formulario para toda la tabla, no uno por fila.
+   Con un formulario por fila, guardar una recargaba la página y se llevaba
+   puesto todo lo que ya estaba elegido en las demás sin enviar: había que
+   marcar-guardar-esperar, marcar-guardar-esperar, una vez por movimiento. Con
+   nueve filas es molesto; con cuarenta nadie lo hace, y una cola que no se
+   corrige es una cola que no enseña nada.
+   Cada select se llama cat_<id> en vez de repetir "categoria": emparejar dos
+   listas paralelas por posición se rompe en cuanto una fila va vacía. #}
+<form method="post" action="/categorias">
+  <div class="barra">
+    <button>Guardar los marcados</button>
+    <span class="suave" id="cuenta"></span>
+  </div>
+  <div class="scroll"><table>
+  <tr><th>Fecha</th><th>Banco</th><th>Quién</th><th class="num">Monto</th>
+      <th>Categoría</th></tr>
+  {% for m in movs %}
+  <tr>
+    <td class="suave">{{ m.fecha }}</td>
+    <td class="suave">{{ m.banco or '—' }}</td>
+    <td>{{ m.contraparte }}<div class="suave">{{ m.referencia or '' }}</div></td>
+    <td class="num {{ m.tipo }}">{{ m.monto|pesos }} {{ m.moneda }}</td>
+    <td>
       {# <select>, no <input list>: un datalist SUGIERE y acepta cualquier
          texto, así que con el pulgar y el autocorrector salía "supermercdo",
          el servidor lo rechazaba y el redirect era idéntico al del éxito.
          Aquí el vocabulario cerrado se cierra de verdad, en la pantalla. #}
-      <select name="categoria" style="width:11rem">
+      <select name="cat_{{ m.id }}" style="width:11rem">
         <option value="">— elegir —</option>
         {% for c in categorias %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
       </select>
-      <button>Guardar</button>
-    </form>
-  </td>
-</tr>
-{% endfor %}
-</table></div>
+    </td>
+  </tr>
+  {% endfor %}
+  </table></div>
+  <div class="barra"><button>Guardar los marcados</button></div>
+</form>
+
+{# El contador es una comodidad, no un requisito: si el JS no corre, el
+   formulario sigue funcionando igual. Nada de esto decide nada — quien decide
+   qué se guarda es el servidor. #}
+<script>
+(function () {
+  var f = document.querySelector('form[action="/categorias"]');
+  var c = document.getElementById('cuenta');
+  if (!f || !c) return;
+  function contar() {
+    var n = 0;
+    f.querySelectorAll('select').forEach(function (s) { if (s.value) n++; });
+    c.textContent = n ? n + ' marcado' + (n > 1 ? 's' : '') : '';
+  }
+  f.addEventListener('change', contar);
+  contar();
+})();
+</script>
 {% endif %}
 {% endblock %}

@@ -328,9 +328,15 @@ async def revisar() -> Resumen:
 
             for mov in movs:
                 mov = registro.reclasificar(mov)
+                # Solo los GASTOS se categorizan. El dinero que entra no se
+                # clasifica —decisión de Tiziano— y adivinarle categoría a un
+                # ingreso además sale mal: la contraparte de un ingreso es quien
+                # paga, no un comercio, así que la red casaría el nombre del
+                # banco o de una persona y lo llamaría gasto bancario.
                 guardado = await db.guardar_movimiento(
                     mov, bandeja_id=bandeja_id,
-                    categoria=cat.categoria_de(mov.contraparte))
+                    categoria=(cat.categoria_de(mov.contraparte)
+                               if mov.tipo == "gasto" else None))
                 if guardado is None:
                     res.duplicados += 1
                     res.por_banco_duplicados[banco] = \

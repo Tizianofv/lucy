@@ -49,6 +49,7 @@ def main() -> int:
         filas = conn.execute(
             "SELECT id, contraparte, monto, moneda, categoria FROM movimientos "
             "WHERE borrado_en IS NULL AND (categoria IS NULL OR categoria = '') "
+            "AND tipo = 'gasto' "  # los ingresos no se clasifican
             "ORDER BY monto DESC").fetchall()
 
         tocados, quedan = [], []

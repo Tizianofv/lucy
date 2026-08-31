@@ -718,11 +718,18 @@ async def resumen_por_mes(meses: int = 12) -> list[dict]:
 
 
 async def sin_clasificar(limite: int = 100) -> list[dict]:
-    """La cola de corrección: lo que entró sin categoría.
+    """La cola de corrección: los GASTOS que entraron sin categoría.
 
     Es la pantalla que paga el panel — cada corrección acá es una regla que el
     sistema aprende. Se ordena por monto: si solo se van a corregir diez, que
     sean los diez que más pesan.
+
+    Solo gastos, por decisión de Tiziano: el dinero que entra no hace falta
+    clasificarlo. Meter los ingresos acá no aportaba nada y sí quitaba — cada
+    ingreso sin categoría empujaba hacia abajo un gasto que sí hay que mirar, y
+    la cola vale exactamente por lo que uno alcanza a corregir antes de
+    aburrirse. Los traspasos quedan fuera por lo mismo y desde antes: no son
+    gasto, son dinero cambiando de bolsillo.
     """
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -732,7 +739,7 @@ async def sin_clasificar(limite: int = 100) -> list[dict]:
               FROM movimientos
              WHERE borrado_en IS NULL
                AND (categoria IS NULL OR categoria = '')
-               AND tipo <> 'transferencia'
+               AND tipo = 'gasto'
              ORDER BY monto DESC
              LIMIT %s
             """, (limite,))
