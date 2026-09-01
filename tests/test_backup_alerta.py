@@ -77,7 +77,16 @@ if _ROOT not in sys.path:
 import db.db as db  # noqa: E402
 from cerebro import despertador  # noqa: E402
 
-AHORA = datetime(2026, 8, 30, 17, 0, tzinfo=timezone.utc)
+# AHORA es el reloj DE VERDAD, no una fecha fija.
+#
+# Estaba clavado en el 30-ago-2026 17:00, y los tests que pasan `AHORA` a mano
+# a `_hay_que_avisar` funcionaban igual — pero `revisar_backup` usa el now()
+# real. El 1-sep, "un respaldo de 3 horas antes de AHORA" quedó a 53 horas de
+# ahora, cruzó el umbral de 48 y el test se puso rojo solo, sin que nadie
+# tocara nada. Es el SEGUNDO test con fecha fija que se cae por el calendario
+# el mismo día (el otro fue el de calendario, que fallaba de 7 a 12 de la
+# mañana). Un test que depende de cuándo se corre no prueba nada.
+AHORA = datetime.now(timezone.utc)
 
 
 # ---------------------------------------------------------------------------
