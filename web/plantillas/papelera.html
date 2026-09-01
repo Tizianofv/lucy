@@ -1,0 +1,36 @@
+{% extends "base.html" %}{% set activo='papelera' %}
+{% block titulo %}Papelera{% endblock %}
+{% block cuerpo %}
+<h1>Papelera</h1>
+{% if restaurado %}<p class="vacio">Restaurado. Ya volvió a las listas.</p>{% endif %}
+{% if not movs %}
+<p class="vacio">La papelera está vacía.</p>
+{% else %}
+<p class="suave">Lo borrado sale de los totales y de las listas al instante, pero
+no se destruye: se puede traer de vuelta durante {{ dias }} días. Después se
+borra de verdad — y siempre justo después de un respaldo verificado, así que
+todavía quedaría dentro de una copia.</p>
+<div class="scroll"><table>
+<tr><th>Código</th><th>Fecha</th><th>Quién</th><th class="num">Monto</th>
+    <th>Le quedan</th><th></th></tr>
+{% for m in movs %}
+<tr>
+  <td class="suave"><code>{{ m.id|codigo }}</code></td>
+  <td class="suave">{{ m.fecha }}</td>
+  <td>{{ m.contraparte }}<div class="suave">{{ m.categoria or '' }}</div></td>
+  <td class="num {{ m.tipo }}">{{ m.monto|pesos }} {{ m.moneda }}</td>
+  <td class="suave">
+    {% if m.dias > 0 %}{{ m.dias }} día{{ 's' if m.dias != 1 }}
+    {% else %}<strong>se borra esta noche</strong>{% endif %}
+  </td>
+  <td>
+    <form method="post" action="/restaurar" style="margin:0">
+      <input type="hidden" name="movimiento_id" value="{{ m.id }}">
+      <button>Restaurar</button>
+    </form>
+  </td>
+</tr>
+{% endfor %}
+</table></div>
+{% endif %}
+{% endblock %}

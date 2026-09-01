@@ -335,6 +335,51 @@ async def movimientos(request: Request, desde: str = "", hasta: str = "",
              "?" + str(request.url.query) if request.url.query else "")})
 
 
+@app.post("/borrar")
+async def borrar(request: Request):
+    """A la papelera, no al vacío. Sale de las listas y vuelve si hace falta."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    destino = _destino_seguro(str(formulario.get("volver", "")))
+    try:
+        mid = int(str(formulario.get("movimiento_id", "")))
+    except ValueError:
+        return RedirectResponse(destino, status_code=303)
+    await db.a_la_papelera(mid)
+    sep = "&" if "?" in destino else "?"
+    return RedirectResponse(f"{destino}{sep}borrado=1", status_code=303)
+
+
+@app.post("/restaurar")
+async def restaurar(request: Request):
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    try:
+        mid = int(str(formulario.get("movimiento_id", "")))
+    except ValueError:
+        return RedirectResponse("/papelera", status_code=303)
+    await db.restaurar(mid)
+    return RedirectResponse("/papelera?restaurado=1", status_code=303)
+
+
+@app.get("/papelera", response_class=HTMLResponse)
+async def papelera(request: Request, restaurado: int = 0):
+    """Lo borrado, con los días que le quedan.
+
+    Existe para que "borrar" no dé miedo: sale de las listas al instante y se
+    puede traer de vuelta durante 30 días. Lo que no se ve no se recupera, así
+    que la papelera se muestra con el plazo delante.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    return plantillas.TemplateResponse(
+        request, "papelera.html",
+        {"movs": await db.papelera(), "dias": db.DIAS_EN_PAPELERA,
+         "restaurado": restaurado})
+
+
 @app.get("/salud", response_class=HTMLResponse)
 async def salud(request: Request):
     if not auth.puede_entrar(_sesion(request)):

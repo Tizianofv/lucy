@@ -47,5 +47,15 @@ if [[ $VER -ne 0 ]]; then
   CODIGO=$VER
 fi
 
+# La papelera se vacía DESPUÉS del respaldo y SOLO si se verificó. Ese orden es
+# lo único que hace aceptable un DELETE real en este proyecto: lo que se
+# destruye ya está dentro de una copia buena tomada hace segundos.
+if [[ $CODIGO -eq 0 ]]; then
+  echo "$(date '+%F %T') · vacío la papelera (>30 días)" >> "$REGISTRO"
+  python3 tools/vaciar_papelera.py --aplicar >> "$REGISTRO" 2>&1
+else
+  echo "$(date '+%F %T') · NO vacío la papelera: el respaldo no está bien" >> "$REGISTRO"
+fi
+
 echo "$(date '+%F %T') · termina con código $CODIGO" >> "$REGISTRO"
 exit $CODIGO

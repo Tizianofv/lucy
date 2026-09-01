@@ -327,12 +327,20 @@ def test_las_columnas_que_el_codigo_inserta_existen_en_el_esquema():
     # Las palabras clave van en MAYÚSCULA y sin re.I a propósito: el SQL de
     # este archivo se escribe así, y en minúscula la expresión pescaría los
     # `from cerebro import ...` de Python como si fueran tablas.
-    usadas = {t.lower() for t in re.findall(
-        r"(?:FROM|INSERT INTO|UPDATE|JOIN)\s+([a-zA-Z_]{3,})\b", fuente)}
-    # No son tablas de la aplicación: una función de Postgres, la palabra de
-    # "UPDATE ... SET", la de "FOR UPDATE SKIP LOCKED" y el catálogo del
-    # sistema, que Postgres trae solo.
-    usadas -= {"unnest", "set", "skip", "information_schema"}
+    # Lo que sigue a FROM/INSERT INTO/UPDATE/JOIN, descartando lo que va
+    # seguido de "(" — eso es una FUNCIÓN, no una tabla. Sin ese descarte,
+    # `EXTRACT(DAY FROM now() - borrado_en)` hacía que "now" contara como tabla
+    # que falta en el esquema. Ir añadiendo excepciones a mano una por una es
+    # perder la carrera contra el SQL que se escriba mañana.
+    usadas = set()
+    for m in re.finditer(r"(?:FROM|INSERT INTO|UPDATE|JOIN)\s+([a-zA-Z_]{3,})",
+                         fuente):
+        if fuente[m.end():m.end() + 1] == "(":
+            continue
+        usadas.add(m.group(1).lower())
+    # Palabras de sintaxis SQL que la expresión pesca sin ser tablas, y el
+    # catálogo del sistema, que Postgres trae solo.
+    usadas -= {"set", "skip", "information_schema"}
     sin_declarar = sorted(usadas - declaradas)
     assert not sin_declarar, (
         f"db.py usa tablas que db/schema.sql no declara: {sin_declarar}")

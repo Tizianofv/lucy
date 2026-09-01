@@ -2,6 +2,9 @@
 {% block titulo %}Movimientos{% endblock %}
 {% block cuerpo %}
 <h1>Movimientos</h1>
+{% if request.query_params.get('borrado') %}
+<p class="vacio">A la papelera. Se puede recuperar durante 30 días.</p>
+{% endif %}
 {% if codigo_ilegible %}
 <p class="vacio">No entendí «{{ codigo }}» como código. Se escribe M-0086, o
 solo el número.</p>
@@ -85,7 +88,7 @@ solo el número.</p>
   <span class="suave">Cambiá la categoría en la fila que haga falta.</span></div>
 <div class="scroll"><table>
 <tr><th>Código</th><th>Fecha</th><th>Banco</th><th>Quién</th><th>Categoría</th>
-    <th class="num">Monto</th></tr>
+    <th class="num">Monto</th><th></th></tr>
 {% for m in movs %}
 <tr>
   <td class="suave"><code>{{ m.id|codigo }}</code></td>
@@ -116,6 +119,14 @@ solo el número.</p>
     </select>
   </td>
   <td class="num {{ m.tipo }}">{{ m.monto|pesos }} {{ m.moneda }}</td>
+  <td>
+    {# formaction en vez de un <form> anidado: la tabla ya vive dentro del
+       formulario de categorías, y un <form> dentro de otro es HTML inválido —
+       los navegadores lo descartan y el botón dejaría de funcionar. #}
+    <button formaction="/borrar" name="movimiento_id" value="{{ m.id }}"
+            title="A la papelera; se puede recuperar 30 días"
+            onclick="return confirm('¿Mandar {{ m.id|codigo }} a la papelera? Se puede recuperar durante 30 días.')">🗑</button>
+  </td>
 </tr>
 {% endfor %}
 </table></div>

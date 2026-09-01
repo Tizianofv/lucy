@@ -834,6 +834,95 @@ async def gasto_por_categoria(mes: str | None = None) -> list[dict]:
         return await cur.fetchall()
 
 
+DIAS_EN_PAPELERA = 30
+
+
+async def papelera() -> list[dict]:
+    """Lo borrado que todavía se puede recuperar, con los días que le quedan."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT id, fecha, banco, tipo, monto, moneda, contraparte,
+                   categoria, borrado_en,
+                   %s - EXTRACT(DAY FROM now() - borrado_en)::int AS dias
+              FROM movimientos
+             WHERE borrado_en IS NOT NULL
+             ORDER BY borrado_en DESC
+            """, (DIAS_EN_PAPELERA,))
+        return await cur.fetchall()
+
+
+async def a_la_papelera(movimiento_id: int, motivo: str = "borrado desde el panel") -> bool:
+    """Saca un movimiento de las listas sin destruirlo. Devuelve si tocó algo."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT * FROM movimientos WHERE id = %s AND borrado_en IS NULL",
+            (movimiento_id,))
+        antes = await cur.fetchone()
+        if antes is None:
+            return False
+        await conn.execute(
+            "UPDATE movimientos SET borrado_en = now() WHERE id = %s",
+            (movimiento_id,))
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo)
+            VALUES ('panel', 'borrar', 'movimientos', %s, %s, %s, %s)
+            """,
+            (movimiento_id, json.dumps(antes, default=str, ensure_ascii=False),
+             json.dumps({"borrado_en": "ahora"}), motivo))
+        return True
+
+
+async def restaurar(movimiento_id: int) -> bool:
+    """Lo saca de la papelera y vuelve a las listas."""
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "UPDATE movimientos SET borrado_en = NULL "
+            "WHERE id = %s AND borrado_en IS NOT NULL RETURNING id",
+            (movimiento_id,))
+        if await cur.fetchone() is None:
+            return False
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo)
+            VALUES ('panel', 'editar', 'movimientos', %s, %s, %s,
+                    'restaurado desde la papelera')
+            """,
+            (movimiento_id, json.dumps({"borrado_en": "tenía fecha"}),
+             json.dumps({"borrado_en": None})))
+        return True
+
+
+async def vaciar_papelera(dias: int = DIAS_EN_PAPELERA) -> int:
+    """Borra DE VERDAD lo que lleva más de `dias` en la papelera.
+
+    Esto rompe a propósito el pilar "nunca DELETE real" que este módulo
+    declara, y por eso hay dos condiciones que no se negocian:
+
+    1. Corre DESPUÉS del respaldo nocturno y solo si el respaldo se verificó.
+       Así lo que se destruye está siempre dentro de al menos una copia buena.
+       Borrar antes de respaldar sería la única forma de perder algo de verdad.
+    2. La fila de log_acciones NO se toca. Ahí queda el `antes` completo en
+       JSON, así que incluso después del DELETE hay rastro de qué había y quién
+       lo borró — lo que se pierde es la fila viva, no la memoria.
+
+    Treinta días es la promesa que se le hizo a Tiziano: sale de la lista al
+    instante, se puede recuperar un mes, y después se va.
+    """
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "DELETE FROM movimientos "
+            " WHERE borrado_en IS NOT NULL "
+            "   AND borrado_en < now() - make_interval(days => %s) "
+            "RETURNING id", (dias,))
+        return len(await cur.fetchall())
+
+
 async def posibles_duplicados() -> list[dict]:
     """Pares que huelen a la misma operación contada dos veces.
 

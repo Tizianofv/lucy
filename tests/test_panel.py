@@ -404,6 +404,12 @@ def test_las_pantallas_se_pintan_de_verdad():
     async def _lista(*a, **k):
         return ["Seguros"]
 
+    async def _papelera():
+        return [{"id": 9, "fecha": "2026-08-04", "banco": "bhd", "tipo": "gasto",
+                 "monto": Decimal("100"), "moneda": "DOP",
+                 "contraparte": "X", "categoria": None,
+                 "borrado_en": "2026-08-20", "dias": 12}]
+
     async def _duplicados():
         return [{"banco": "bhd", "cuando": "2026-08-05T11:08",
                  "monto": Decimal("2823.07"), "moneda": "DOP",
@@ -414,7 +420,7 @@ def test_las_pantallas_se_pintan_de_verdad():
         "resumen_por_mes", "gasto_por_categoria", "gastos_de_cada_categoria",
         "meses_con_movimientos", "salud_ingesta", "movimientos_filtrados",
         "sin_clasificar", "categorias_usadas", "bancos_usados",
-        "posibles_duplicados")}
+        "posibles_duplicados", "papelera")}
     base.resumen_por_mes = _resumen_mes
     base.gasto_por_categoria = _por_categoria
     base.gastos_de_cada_categoria = _detalle
@@ -425,13 +431,15 @@ def test_las_pantallas_se_pintan_de_verdad():
     base.categorias_usadas = _lista
     base.bancos_usados = _lista
     base.posibles_duplicados = _duplicados
+    base.papelera = _papelera
     try:
         bucle = asyncio.new_event_loop()
         for nombre, corutina in (
                 ("/", panel.resumen(_peticion("/"))),
                 ("/movimientos", panel.movimientos(_peticion("/movimientos"))),
                 ("/sin-clasificar", panel.cola(_peticion("/sin-clasificar"))),
-                ("/salud", panel.salud(_peticion("/salud")))):
+                ("/salud", panel.salud(_peticion("/salud"))),
+                ("/papelera", panel.papelera(_peticion("/papelera")))):
             r = bucle.run_until_complete(corutina)
             assert r.status_code == 200, f"{nombre} devolvió {r.status_code}"
             assert len(r.body) > 200, f"{nombre} salió vacía"
@@ -523,6 +531,45 @@ def test_pedir_el_panel_cierra_el_turno():
     assert (fuente.index("async def _fin_del_turno")
             < fuente.index("while pasos < MAX_PASOS")), (
         "_fin_del_turno se define después de usarse")
+
+
+def test_borrar_es_una_papelera_y_no_el_vacio():
+    """Pedido de Tiziano: poder borrar, pero que salga de la lista y se destruya
+    a los 30 días. La base ya guardaba `borrado_en` en todo; lo que faltaba era
+    poder usarlo desde el panel y que se vaciara sola.
+
+    El borrado definitivo corre DESPUÉS del respaldo nocturno y SOLO si el
+    respaldo se verificó. Ese orden es lo único que hace aceptable un DELETE
+    real en un proyecto cuyo primer pilar dice "nunca DELETE real": lo que se
+    destruye ya está dentro de una copia buena tomada hace segundos. Al revés
+    sería la única forma de perder algo de verdad.
+    """
+    import inspect
+    import os
+
+    import db.db as base
+    assert base.DIAS_EN_PAPELERA == 30
+    borrado = inspect.getsource(base.a_la_papelera)
+    assert "DELETE" not in borrado.upper(), (
+        "el botón de borrar tiene que mandar a la papelera, no destruir")
+    assert "borrado_en = now()" in borrado
+
+    purga = inspect.getsource(base.vaciar_papelera)
+    assert "DELETE FROM movimientos" in purga
+    assert "borrado_en IS NOT NULL" in purga, (
+        "la purga podría llevarse filas vivas")
+
+    # Y el orden: el vaciado SOLO si el respaldo salió bien.
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    guion = open(os.path.join(raiz, "tools", "respaldo_diario.sh"),
+                 encoding="utf-8").read()
+    i = guion.index("vaciar_papelera")
+    antes = guion[:i]
+    assert "verificar_respaldo.py" in antes, (
+        "la papelera se vacía ANTES de verificar el respaldo: al revés es la "
+        "única forma de perder algo de verdad")
+    assert "if [[ $CODIGO -eq 0 ]]" in antes, (
+        "se vacía la papelera aunque el respaldo haya fallado")
 
 
 if __name__ == "__main__":
