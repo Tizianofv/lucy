@@ -750,6 +750,23 @@ async def atender(fila: dict, texto: str, bot) -> None:
 
     pasos = 0       # herramientas ejecutadas de verdad
     tropiezos = 0   # turnos vacíos o mal formados: no cuentan como paso
+    async def _fin_del_turno(salida: str) -> None:
+        """Manda el texto y cierra la fila, igual que `responder`.
+
+        Existe porque el bloque del panel hacía `return texto` desde dentro
+        de atender() —creyendo que devolvía el resultado de una
+        herramienta— y eso dejaba la fila en 'procesando' sin enviar nada.
+        Cerrar un turno son cuatro pasos, y hacerlos a mano en cada rama es
+        cómo se olvida uno.
+        """
+        await _enviar(bot, salida, **responder_kw)
+        await db.guardar_respuesta(bandeja_id, salida)
+        await db.guardar_interpretacion(
+            bandeja_id, "orden", {"dialogo": dialogo[-30:]},
+            estado="procesado")
+        await _cerrar_pendiente()
+        log.info("#%s resuelto en %s paso(s) (panel)", bandeja_id, pasos)
+
     log.info("#%s atender: contexto listo, arranco los pasos", bandeja_id)
     while pasos < MAX_PASOS and tropiezos < MAX_TROPIEZOS:
         import time as _t
@@ -805,10 +822,20 @@ async def atender(fila: dict, texto: str, bot) -> None:
             continue
 
         # ── responder: el final feliz ────────────────────────────────────
+        # PANEL: cierra el turno mandando el enlace. Ojo con los `return` de
+        # acá — estamos DENTRO de atender(), no en un despachador que devuelve
+        # el resultado de una herramienta. Un `return` con el texto salía del
+        # turno sin enviar nada, sin marcar la fila como procesada y sin
+        # registrar una línea: el mensaje se quedaba en 'procesando' para
+        # siempre y Lucy no contestaba nunca. Le pasó al "Dame el panel" de
+        # Rosi y, esta misma mañana, al "Tienes la página para ver los gastos?"
+        # de Tiziano. Desde fuera se ve como que Lucy está rota.
         if nombre == "panel":
             if not config.PANEL_URL:
-                return ("ERROR: no hay panel configurado (falta PANEL_URL). "
-                        "Decíselo así, no inventes un enlace.")
+                await _fin_del_turno(
+                    "No tengo el panel configurado, así que no te puedo mandar "
+                    "el enlace. Falta PANEL_URL.")
+                return
             import web.auth as _auth
             # El enlace se emite para QUIEN LO PIDE, no para el dueño. Estaba
             # clavado en CHAT_ID_DUENO —cuando solo él podía entrar daba igual—
@@ -818,11 +845,13 @@ async def atender(fila: dict, texto: str, bot) -> None:
             # distinguir. `chat_id` sale de la fila de la bandeja: es el chat
             # que escribió, no una constante.
             if not _auth.puede_entrar(chat_id):
-                return ("ERROR: ese chat no tiene acceso al panel. Decíselo "
-                        "así, sin mandarle ningún enlace.")
+                await _fin_del_turno("No tenés acceso al panel de finanzas.")
+                return
             token = _auth.crear_token(chat_id)
-            return (f"OK: mandale este enlace, vence en 10 minutos — "
-                    f"{config.PANEL_URL}/entrar?t={token}")
+            await _fin_del_turno(
+                f"Acá está el panel — vence en 10 minutos:\n"
+                f"{config.PANEL_URL}/entrar?t={token}")
+            return
 
         if nombre == "responder":
             salida = str(args.get("texto") or "")

@@ -492,6 +492,39 @@ def test_el_enlace_del_panel_se_emite_para_quien_lo_pide():
         "no comprueba que quien pide pueda entrar antes de darle una llave")
 
 
+def test_pedir_el_panel_cierra_el_turno():
+    """El bloque del panel hacía `return texto` desde DENTRO de atender(),
+    como si devolviera el resultado de una herramienta a un despachador. No lo
+    es: ese return salía del turno entero sin enviar nada, sin marcar la fila
+    como procesada y sin registrar una línea. El mensaje se quedaba en
+    'procesando' para siempre.
+
+    Le pasó al "Dame el panel" de Rosi el 1-sep, y esa misma mañana al
+    "Tienes la página para ver los gastos?" de Tiziano. Desde fuera se ve
+    exactamente igual que "Lucy está rota": no contesta y no hay error.
+    """
+    import os
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    fuente = open(os.path.join(raiz, "cerebro", "agente.py"),
+                  encoding="utf-8").read()
+    i = fuente.index('if nombre == "panel"')
+    bloque = fuente[i:fuente.index('if nombre == "responder"', i)]
+    assert "_fin_del_turno" in bloque, (
+        "el panel no cierra el turno: la fila se queda en 'procesando'")
+    # Y ningún `return` que devuelva texto, que es la forma del error.
+    for linea in bloque.splitlines():
+        limpia = linea.strip()
+        if limpia.startswith("return") and limpia != "return":
+            raise AssertionError(
+                f"el panel vuelve a devolver texto en vez de enviarlo: {limpia[:60]}")
+
+    # El ayudante tiene que estar definido ANTES del bucle, o la primera vuelta
+    # revienta con NameError.
+    assert (fuente.index("async def _fin_del_turno")
+            < fuente.index("while pasos < MAX_PASOS")), (
+        "_fin_del_turno se define después de usarse")
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):
