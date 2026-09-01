@@ -407,6 +407,35 @@ async def test_cambiar_el_tipo_no_puede_dejar_un_rubro_en_un_ingreso():
         "los rubros dicen EN QUÉ se gastó, y esto ya no es un gasto")
 
 
+def test_el_agente_no_duplica_un_movimiento_que_ya_trajo_el_banco():
+    """El 1-sep, procesando "dame todas las tareas pendientes", Lucy anotó una
+    transferencia de RD$18,280 que el correo de Banreservas ya había guardado.
+
+    El camino automático calcula una huella y ON CONFLICT lo frena; el manual
+    no tiene huella, así que nada lo paraba. Y ninguna comparación de texto los
+    hubiera juntado: el banco escribió "ROSILIS ... → WENDY MARISOL CANELA
+    CRUZ" y el agente "WENDY MARISOL CANELA CRUZ".
+
+    Se compara por fecha, monto y moneda — lo único que las dos versiones no
+    pueden escribir distinto — y solo contra filas que vinieron del banco
+    (hash_contenido no nulo).
+    """
+    import inspect
+    from acciones import crud
+    fuente = inspect.getsource(crud.crear_desde_interpretacion)
+    # El límite es el INSERT, que es donde acaba de verdad la comprobación —
+    # no un número de caracteres a ojo, que ya me falló antes: un comentario
+    # largo empuja la línea fuera y el test falla por su propio recorte.
+    i = fuente.index("tabla = \"movimientos\"")
+    bloque = fuente[i:fuente.index("INSERT INTO movimientos", i)]
+    assert "hash_contenido IS NOT NULL" in bloque, (
+        "no compara contra lo que trajo el banco")
+    for campo in ("fecha = %s", "monto = %s", "moneda = %s"):
+        assert campo in bloque, f"la comparación no usa {campo}"
+    assert "FaltanDatos" in bloque, (
+        "tiene que avisar, no crear en silencio ni tragárselo")
+
+
 def _sincrono(fn):
     """Envuelve un test síncrono para el runner, que espera corrutinas."""
     async def envuelto():
@@ -461,6 +490,7 @@ _TESTS = [
     _sincrono(test_un_monto_ilegible_no_se_guarda_como_cero),
     _sincrono(test_la_categoria_por_telegram_pasa_por_el_mismo_vocabulario),
     _sincrono(test_el_agente_conoce_el_codigo_y_las_categorias_del_codigo),
+    _sincrono(test_el_agente_no_duplica_un_movimiento_que_ya_trajo_el_banco),
     test_cambiar_el_tipo_no_puede_dejar_un_rubro_en_un_ingreso,
 ]
 

@@ -296,6 +296,43 @@ async def crear_desde_interpretacion(
 
         else:  # gasto | ingreso — misma tabla, lo distingue `tipo`
             tabla = "movimientos"
+
+            # ¿Ya lo trajo el correo del banco? El camino automático calcula
+            # una huella y ON CONFLICT lo frena; este camino no tiene huella,
+            # así que sin esta comprobación el agente puede anotar de nuevo un
+            # movimiento que la ingesta ya registró.
+            #
+            # Pasó el 1-sep: procesando "dame todas las tareas pendientes",
+            # Lucy anotó una transferencia de RD$18,280 que el correo de
+            # Banreservas ya había guardado. Los dos con el mismo número de
+            # referencia y el mismo día, escritos distinto — "WENDY MARISOL
+            # CANELA CRUZ" contra "ROSILIS ... → WENDY MARISOL CANELA CRUZ" —
+            # así que ninguna comparación de texto los hubiera juntado.
+            #
+            # Se compara por fecha, monto y moneda, que es lo que ninguna de
+            # las dos versiones puede escribir distinto. NO se crea nada: se
+            # devuelve el que ya está, para que el agente se lo diga en vez de
+            # duplicar en silencio. Dos gastos iguales el mismo día existen,
+            # pero es mucho más raro que este caso, y equivocarse acá cuesta
+            # una pregunta — mientras que duplicar cuesta un total falso.
+            gemelo = await conn.execute(
+                """
+                SELECT id FROM movimientos
+                 WHERE borrado_en IS NULL
+                   AND fecha = %s AND monto = %s AND moneda = %s
+                   AND hash_contenido IS NOT NULL
+                 ORDER BY id DESC LIMIT 1
+                """,
+                ((cuando or datetime.now(TZ)).date(), _monto_exacto(r["monto"]),
+                 str(r.get("moneda") or "DOP")),
+            )
+            fila_gemela = await gemelo.fetchone()
+            if fila_gemela:
+                raise FaltanDatos(
+                    f"Ese movimiento ya está: el correo del banco lo registró "
+                    f"como M-{fila_gemela[0]:04d} (mismo día, mismo monto). No "
+                    "lo anoté otra vez. Si de verdad son dos gastos distintos, "
+                    "decímelo y lo agrego.")
             # abs() a propósito: el monto se guarda siempre positivo y la
             # dirección la da `tipo`. Si el modelo devolviera -2300 para un
             # gasto, un monto negativo con tipo='gasto' sumaría al revés en
