@@ -27,7 +27,10 @@ log = logging.getLogger("lucy.memoria")
 
 # Placeholder por el mismo motivo que en whisper/vision: con la key vacía el
 # SDK revienta al construir el cliente y se lleva puesto el import.
-cliente = AsyncOpenAI(api_key=OPENAI_API_KEY or "sin-key")
+# Con timeout explícito: sin él, una llamada colgada congela el bucle de
+# interpretación entero, que procesa de uno en uno. Ver deepseek.py.
+cliente = AsyncOpenAI(api_key=OPENAI_API_KEY or "sin-key",
+                      timeout=30.0, max_retries=2)
 
 MODELO = "text-embedding-3-small"
 DIMENSIONES = 1536

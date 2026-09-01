@@ -408,7 +408,7 @@ def test_el_helper_no_se_coló_en_el_camino_conversacional():
             f"{archivo} está en el camino conversacional: no puede diferir por tarifa")
 
 
-_TESTS = [
+_TESTS_BASE = [
     test_borde_2059_es_barato,
     test_borde_2100_es_caro,
     test_borde_2359_es_caro,
@@ -461,6 +461,31 @@ async def _main():
             print(f"ERROR {t.__name__}: {type(e).__name__}: {e}")
     print(f"\n{len(_TESTS) - fallos}/{len(_TESTS)} en verde")
     return fallos
+
+
+def test_ningun_cliente_de_ia_puede_quedarse_esperando_para_siempre():
+    """El bucle de interpretación procesa los mensajes DE UNO EN UNO, así que
+    una sola llamada colgada congela a Lucy entera: no contesta a nadie, y no
+    hay error ni log que lo diga porque está esperando, no fallando.
+
+    Pasó el 1-sep con el "Dame el panel" de Rosi. El turno estuvo siete minutos
+    sin producir un solo paso, con el proceso vivo y el panel respondiendo — que
+    desde fuera se ve idéntico a "Lucy está rota".
+    """
+    import os
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for archivo in ("deepseek.py", "vision.py", "whisper.py", "memoria.py"):
+        fuente = open(os.path.join(raiz, "cerebro", archivo),
+                      encoding="utf-8").read()
+        i = fuente.find("AsyncOpenAI(")
+        assert i > 0, f"{archivo}: no encuentro el cliente"
+        argumentos = fuente[i:fuente.index(")", i)]
+        assert "timeout=" in argumentos, (
+            f"{archivo}: el cliente no tiene timeout — una llamada colgada "
+            "congelaría el bucle entero")
+
+
+_TESTS = _TESTS_BASE + [test_ningun_cliente_de_ia_puede_quedarse_esperando_para_siempre]
 
 
 if __name__ == "__main__":

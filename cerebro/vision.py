@@ -31,7 +31,10 @@ log = logging.getLogger("lucy.vision")
 
 # Placeholder por el mismo motivo que en deepseek.py: con la key vacía el SDK
 # falla al construir el cliente y se lleva puesto el import del módulo entero.
-cliente = AsyncOpenAI(api_key=OPENAI_API_KEY or "sin-key")
+# Con timeout explícito: sin él, una llamada colgada congela el bucle de
+# interpretación entero, que procesa de uno en uno. Ver deepseek.py.
+cliente = AsyncOpenAI(api_key=OPENAI_API_KEY or "sin-key",
+                      timeout=60.0, max_retries=2)
 
 MODELO = "gpt-4o-mini"
 

@@ -29,8 +29,26 @@ from config import DEEPSEEK_API_KEY, TZ
 # captura — exactamente lo contrario de lo que promete config.py. Con él, el
 # cliente existe, verificar_modelo() falla a los gritos en el log, y el Nivel 1
 # sigue vivo recibiendo mensajes.
+# TIMEOUT Y REINTENTOS EXPLÍCITOS. El cliente venía sin ninguno de los dos, y
+# eso no es un detalle de robustez: el bucle de interpretación procesa los
+# mensajes DE UNO EN UNO, así que una sola llamada colgada congela a Lucy
+# entera — no contesta a nadie, y no hay error ni log que lo diga porque está
+# esperando, no fallando.
+#
+# Pasó el 1-sep con el "Dame el panel" de Rosi: el turno se quedó siete minutos
+# sin producir un solo paso, con el proceso vivo y el panel respondiendo. Desde
+# fuera se ve idéntico a "Lucy no funciona".
+#
+# 90 s es holgado para una respuesta normal (las de este proyecto tardan 20-40)
+# y corto frente a los 12 pasos de un turno. Al vencer, la excepción es
+# pasajera y el mensaje vuelve a la cola con espera, que es lo que ya sabe
+# hacer interpretar.py.
+TIMEOUT_S = 90.0
+
 cliente = AsyncOpenAI(
-    api_key=DEEPSEEK_API_KEY or "sin-key", base_url="https://api.deepseek.com"
+    api_key=DEEPSEEK_API_KEY or "sin-key", base_url="https://api.deepseek.com",
+    timeout=TIMEOUT_S,
+    max_retries=2,
 )
 
 MODELO = "deepseek-v4-flash"
