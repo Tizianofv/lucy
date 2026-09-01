@@ -480,7 +480,10 @@ def test_el_enlace_del_panel_se_emite_para_quien_lo_pide():
     fuente = open(os.path.join(raiz, "cerebro", "agente.py"),
                   encoding="utf-8").read()
     i = fuente.index('if nombre == "panel"')
-    bloque = fuente[i:i + 900]
+    # La ventana llega hasta la herramienta siguiente, no un número de
+    # caracteres a ojo: un comentario largo empujaba la línea fuera y el
+    # test fallaba por su propio recorte, no por el código.
+    bloque = fuente[i:fuente.index('if nombre == "responder"', i)]
     assert "crear_token(chat_id)" in bloque, (
         "el enlace no se emite para quien lo pide")
     assert "config.CHAT_ID_DUENO" not in bloque, (
