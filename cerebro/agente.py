@@ -798,7 +798,17 @@ async def atender(fila: dict, texto: str, bot) -> None:
                 return ("ERROR: no hay panel configurado (falta PANEL_URL). "
                         "Decíselo así, no inventes un enlace.")
             import web.auth as _auth
-            token = _auth.crear_token(config.CHAT_ID_DUENO)
+            # El enlace se emite para QUIEN LO PIDE, no para el dueño. Estaba
+            # clavado en CHAT_ID_DUENO —cuando solo él podía entrar daba igual—
+            # y desde que Rosi tiene acceso ya no: le habría mandado una llave
+            # emitida a nombre de Tiziano. Funcionaría, y sería mentira; el día
+            # que haya permisos distintos por persona, no habría a quién
+            # distinguir. `chat_id` sale de la fila de la bandeja: es el chat
+            # que escribió, no una constante.
+            if not _auth.puede_entrar(chat_id):
+                return ("ERROR: ese chat no tiene acceso al panel. Decíselo "
+                        "así, sin mandarle ningún enlace.")
+            token = _auth.crear_token(chat_id)
             return (f"OK: mandale este enlace, vence en 10 minutos — "
                     f"{config.PANEL_URL}/entrar?t={token}")
 

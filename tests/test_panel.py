@@ -469,6 +469,26 @@ def test_las_categorias_salen_en_orden_alfabetico_de_verdad():
     assert orden[0] == "Banco y comisiones"
 
 
+def test_el_enlace_del_panel_se_emite_para_quien_lo_pide():
+    """Estaba clavado en CHAT_ID_DUENO. Mientras solo entraba Tiziano daba
+    igual; desde que Rosi tiene acceso, pedirle el panel le habría mandado una
+    llave emitida a nombre de él. Funcionaría —y sería mentira— y el día que
+    haya permisos por persona no habría a quién distinguir."""
+    # Se lee el archivo como texto: importar cerebro.agente pide `telegram`,
+    # que no está en el entorno de tests.
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    fuente = open(os.path.join(raiz, "cerebro", "agente.py"),
+                  encoding="utf-8").read()
+    i = fuente.index('if nombre == "panel"')
+    bloque = fuente[i:i + 900]
+    assert "crear_token(chat_id)" in bloque, (
+        "el enlace no se emite para quien lo pide")
+    assert "config.CHAT_ID_DUENO" not in bloque, (
+        "vuelve a emitir el enlace a nombre del dueño")
+    assert "puede_entrar(chat_id)" in bloque, (
+        "no comprueba que quien pide pueda entrar antes de darle una llave")
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):
