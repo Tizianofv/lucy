@@ -59,6 +59,20 @@ def test_no_se_puede_falsificar_sin_el_secreto():
         assert auth.validar(falso) is None, falso
 
 
+def test_la_lista_de_la_casa_esta_vacia_por_defecto():
+    """Quién ve las finanzas de la casa es una enumeración explícita que
+    alguien escribió a mano, no una condición que pueda volverse verdadera por
+    accidente. Sin CHAT_IDS_CASA, solo entra el dueño."""
+    import config
+    assert config.CHAT_IDS_PERMITIDOS[0] == config.CHAT_ID_DUENO
+    assert len(set(config.CHAT_IDS_PERMITIDOS)) == len(
+        config.CHAT_IDS_PERMITIDOS), "hay chats duplicados en la lista"
+    assert not os.environ.get("CHAT_IDS_CASA"), (
+        "este test corre sin la variable puesta")
+    assert config.CHAT_IDS_PERMITIDOS == (config.CHAT_ID_DUENO,), (
+        "sin CHAT_IDS_CASA no puede entrar nadie más que el dueño")
+
+
 def test_otro_chat_no_entra_aunque_su_token_sea_valido():
     """Un token bien firmado para OTRO chat es válido como token y aun así no
     puede entrar. Son dos preguntas distintas: si el token es auténtico, y si

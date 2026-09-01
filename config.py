@@ -59,6 +59,22 @@ PANEL_URL = os.environ.get("PANEL_URL", "").rstrip("/")
 # Cualquier otro que le escriba es ignorado sin más.
 CHAT_ID_DUENO = int(os.environ["CHAT_ID_DUENO"])
 
+# Quién más puede usar a Lucy y ver el panel. Lista de chat_id separados por
+# coma en la variable CHAT_IDS_CASA — vacía por defecto, así que si nadie la
+# pone, todo sigue exactamente como estaba.
+#
+# Es UNA lista y no un booleano a propósito: "quién ve las finanzas de la casa"
+# tiene que ser una enumeración explícita que alguien escribió a mano, no una
+# condición que se pueda volver verdadera por accidente.
+CHAT_IDS_CASA = tuple(
+    int(x) for x in os.environ.get("CHAT_IDS_CASA", "").replace(";", ",").split(",")
+    if x.strip()
+)
+
+# Todos los que pueden entrar, con el dueño siempre dentro.
+CHAT_IDS_PERMITIDOS = (CHAT_ID_DUENO,) + tuple(
+    c for c in CHAT_IDS_CASA if c != CHAT_ID_DUENO)
+
 
 # ── Tarifa doble de DeepSeek (regla de Tiziano, 1-ago-2026) ───────────────────
 #

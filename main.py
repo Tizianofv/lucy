@@ -50,7 +50,7 @@ _tarea_panel: asyncio.Task | None = None
 
 async def _al_arrancar(app) -> None:
     await db.abrir()
-    log.info("Pool de Postgres abierto. Lucy escuchando solo a %s.", config.CHAT_ID_DUENO)
+    log.info("Pool de Postgres abierto. Lucy escuchando a %s.", config.CHAT_IDS_PERMITIDOS)
     # Se avisa fuerte y se sigue: una tabla que falta rompe UNA función, no
     # Lucy entera, y tumbar el arranque por eso dejaría a Tiziano sin bot. Pero
     # tiene que salir en el log del arranque, porque en el bucle se pierde entre
@@ -183,8 +183,32 @@ def main() -> None:
         .build()
     )
 
-    # Candado de seguridad: solo procesamos mensajes del chat de Tiziano.
-    solo_dueno = filters.Chat(config.CHAT_ID_DUENO)
+    # Candado de seguridad: solo los chats de la casa (el dueño y quien esté
+    # en CHAT_IDS_CASA). Sin esa variable, solo el dueño.
+    solo_dueno = filters.Chat(config.CHAT_IDS_PERMITIDOS)
+
+    # Y un handler para los DEMÁS chats, que antes no existía. Sin él, un
+    # mensaje de alguien no autorizado se descartaba sin dejar rastro — y por
+    # eso no había forma de averiguar el chat_id de Rosi para darle acceso:
+    # Telegram no deja que un bot escriba primero, y su mensaje no se guardaba.
+    # Ahora se registra el id en el log y se le contesta que no tiene acceso,
+    # en vez de dejarla hablando sola con un bot mudo.
+    async def _chat_desconocido(update, context):
+        chat = update.effective_chat
+        quien = update.effective_user
+        log.warning("Mensaje de un chat SIN acceso · chat_id=%s · %s %s (@%s). "
+                    "Para darle acceso, agregá ese id a CHAT_IDS_CASA.",
+                    chat.id, getattr(quien, "first_name", ""),
+                    getattr(quien, "last_name", "") or "",
+                    getattr(quien, "username", "") or "sin_usuario")
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text="Todavía no tenés acceso a Lucy. Pedíselo a Tiziano.")
+
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND
+                       & ~filters.Chat(config.CHAT_IDS_PERMITIDOS),
+                       _chat_desconocido), group=1)
 
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND & solo_dueno, recibir_texto)

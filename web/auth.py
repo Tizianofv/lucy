@@ -69,7 +69,11 @@ def validar(token: str | None) -> int | None:
 
 
 def puede_entrar(chat_id: int | None) -> bool:
-    """Hoy solo el dueño. Cuando Rosi tenga su panel (t-14), acá se amplía —
-    y ese cambio hay que hacerlo a propósito, no por descuido: es la única
-    línea que decide quién ve las finanzas de la casa."""
-    return chat_id is not None and chat_id == config.CHAT_ID_DUENO
+    """Quién ve las finanzas de la casa. La lista sale de CHAT_IDS_PERMITIDOS,
+    que es el dueño más lo que haya en la variable CHAT_IDS_CASA de Railway.
+
+    Vacía por defecto: si nadie la escribe a mano, solo entra el dueño. Que sea
+    una enumeración explícita y no una condición es deliberado — esta es la
+    única línea que decide quién ve cuánto gasta esta casa, y no puede volverse
+    permisiva por accidente."""
+    return chat_id is not None and chat_id in config.CHAT_IDS_PERMITIDOS
