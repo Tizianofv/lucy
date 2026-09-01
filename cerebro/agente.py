@@ -752,12 +752,18 @@ async def atender(fila: dict, texto: str, bot) -> None:
     tropiezos = 0   # turnos vacíos o mal formados: no cuentan como paso
     log.info("#%s atender: contexto listo, arranco los pasos", bandeja_id)
     while pasos < MAX_PASOS and tropiezos < MAX_TROPIEZOS:
+        import time as _t
+        _t0 = _t.monotonic()
+        log.info("#%s → llamo al modelo (paso %s, %s mensajes)",
+                 bandeja_id, pasos + 1, len(mensajes))
         crudo = (await motor.cliente.chat.completions.create(
             model=motor.MODELO,
             messages=mensajes,
             response_format={"type": "json_object"},
             temperature=0,
         )).choices[0].message.content or ""
+        log.info("#%s ← el modelo respondió en %.1fs (%s caracteres)",
+                 bandeja_id, _t.monotonic() - _t0, len(crudo))
 
         # Vacío: DeepSeek razonó y no escribió nada. NO lo metemos al contexto
         # —verse a sí mismo en blanco lo confunde y encadena más vacíos— y lo
