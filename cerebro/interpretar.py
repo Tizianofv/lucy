@@ -210,6 +210,21 @@ async def bucle(bot) -> None:
         # porque una alerta de consumo no es urgente —el gasto ya ocurrió— y
         # abrir Gmail cada rato no gana nada. El canario va pegado y DESPUÉS:
         # solo puede avisar sobre una revisión que de verdad ocurrió.
+        # El rescate de huérfanos también acá, cada ~10 min (120 vueltas), no
+        # solo al arrancar. Un mensaje reclamado 3 minutos antes de un
+        # redespliegue queda huérfano, y el rescate del arranque lo SALTA con
+        # razón —su margen de 10 minutos existe para no pisar un turno vivo—;
+        # como después no hay otro reinicio, se quedaba atascado para siempre.
+        # Le pasó al "Dame el panel" de Rosi.
+        if vuelta % 120 == 0:
+            try:
+                n = await db.rescatar_procesando()
+                if n:
+                    log.warning("Rescatados %s mensajes huérfanos en marcha.", n)
+            except Exception:
+                log.warning("El rescate de huérfanos tropezó; sigo.",
+                            exc_info=True)
+
         if vuelta % 180 == 0:
             try:
                 res = await consumos.revisar()

@@ -454,6 +454,17 @@ def test_un_mensaje_no_puede_quedarse_en_procesando_para_siempre():
     assert "rescatar_procesando" in arranque, (
         "el rescate existe pero nadie lo llama al arrancar")
 
+    # Y también en marcha. Al arrancar NO alcanza: un mensaje reclamado tres
+    # minutos antes de un redespliegue queda huérfano, el rescate del arranque
+    # lo salta —su margen de 10 minutos existe para no pisar un turno vivo— y
+    # como después no hay otro reinicio, se queda atascado para siempre. Le
+    # pasó al "Dame el panel" de Rosi.
+    bucle = open(os.path.join(raiz, "cerebro", "interpretar.py"),
+                 encoding="utf-8").read()
+    assert "rescatar_procesando" in bucle, (
+        "el rescate solo corre al arrancar: un huérfano sin reinicio posterior "
+        "se queda atascado para siempre")
+
 
 if __name__ == "__main__":
     fallidos = 0
