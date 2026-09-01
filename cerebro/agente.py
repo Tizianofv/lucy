@@ -703,6 +703,11 @@ async def atender(fila: dict, texto: str, bot) -> None:
     """
     bandeja_id = fila["id"]
     chat_id = fila["chat_id"]
+    # Traza de diagnóstico (1-sep): el "Dame el panel" de Rosi se quedaba en
+    # 'procesando' sin producir un solo paso NI un error, y el bucle seguía
+    # dando vueltas — o sea que atender() volvía en silencio. Sin una marca de
+    # entrada no hay forma de saber si llegó siquiera.
+    log.info("#%s atender: entro (chat %s)", bandeja_id, chat_id)
 
     # ── Contexto: la ventana abierta (si la hay) + la memoria corta ──────
     pendiente = await db.buscar_esperando_respuesta(chat_id, bandeja_id)
@@ -745,6 +750,7 @@ async def atender(fila: dict, texto: str, bot) -> None:
 
     pasos = 0       # herramientas ejecutadas de verdad
     tropiezos = 0   # turnos vacíos o mal formados: no cuentan como paso
+    log.info("#%s atender: contexto listo, arranco los pasos", bandeja_id)
     while pasos < MAX_PASOS and tropiezos < MAX_TROPIEZOS:
         crudo = (await motor.cliente.chat.completions.create(
             model=motor.MODELO,
