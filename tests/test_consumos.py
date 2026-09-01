@@ -424,6 +424,37 @@ def test_el_canario_callado_cuando_todo_va_bien():
     assert _correr(consumos.avisar_si_hay_bancos_mudos(res)) == 0
 
 
+def test_un_mensaje_no_puede_quedarse_en_procesando_para_siempre():
+    """Tiziano escribió tres veces y Lucy nunca contestó. La causa: cada
+    redespliegue mata el contenedor, y si un mensaje ya estaba reclamado
+    —`tomar_pendientes` lo marca 'procesando'— nadie lo devuelve a la cola. Se
+    quedaba ahí para siempre. Uno llevaba desde el 30 de agosto.
+
+    El rescate corre al ARRANCAR, que es justo después del despliegue que las
+    dejó huérfanas, y sube `intentos` para que un mensaje que MATE el proceso no
+    tumbe a Lucy en cada arranque: al tercero pasa a 'error' y se queda quieto.
+    """
+    import inspect
+
+    import os
+
+    import db.db as base
+
+    assert hasattr(base, "rescatar_procesando"), "no hay rescate"
+    sql = inspect.getsource(base.rescatar_procesando)
+    assert "estado = 'procesando'" in sql
+    assert "intentos + 1" in sql, (
+        "sin subir intentos, un mensaje que mata el proceso se reclama para "
+        "siempre y tumba a Lucy en cada arranque")
+    assert "'error'" in sql, "no hay tope: el rescate podría ciclar"
+    # Y tiene que llamarse al arrancar, no solo existir. Se lee main.py como
+    # texto: importarlo pide `telegram`, que no está en el entorno de tests.
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    arranque = open(os.path.join(raiz, "main.py"), encoding="utf-8").read()
+    assert "rescatar_procesando" in arranque, (
+        "el rescate existe pero nadie lo llama al arrancar")
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):

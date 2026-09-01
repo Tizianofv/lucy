@@ -109,6 +109,42 @@ async def guardar_en_bandeja(
         return row[0]
 
 
+async def rescatar_procesando(minutos: int = 10, max_intentos: int = 3) -> int:
+    """Devuelve a la cola los mensajes que quedaron en 'procesando'.
+
+    `tomar_pendientes` marca 'procesando' al reclamar una fila. Si el proceso
+    muere entre eso y el final del turno —un redespliegue, que en este proyecto
+    pasa varias veces al día— NADIE la devuelve: se queda en 'procesando' para
+    siempre y Tiziano escribe algo y Lucy nunca contesta. Pasó con tres
+    mensajes suyos, uno del 30 de agosto.
+
+    Se llama al ARRANCAR, que es justo después del redespliegue que las dejó
+    huérfanas. El margen de minutos evita pisar un turno que de verdad está
+    corriendo en otro contenedor: durante un despliegue conviven dos unos
+    segundos, y un turno normal no llega a diez minutos.
+
+    Los intentos suben. Si un mensaje concreto es el que MATA el proceso, sin
+    esto volvería a reclamarse eternamente y tumbaría a Lucy en cada arranque;
+    al tercer intento pasa a 'error' y se queda quieto, visible, sin bloquear
+    a los demás.
+    """
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            UPDATE bandeja
+               SET estado = CASE WHEN intentos + 1 >= %s THEN 'error'
+                                 ELSE 'sin_procesar' END,
+                   intentos = intentos + 1,
+                   error_detalle = CASE WHEN intentos + 1 >= %s
+                       THEN 'Se quedó en procesando tras varios arranques: puede '
+                            'ser el mensaje que mata el proceso.' END
+             WHERE estado = 'procesando'
+               AND creado_en < now() - make_interval(mins => %s)
+            RETURNING id
+            """, (max_intentos, max_intentos, minutos))
+        return len(await cur.fetchall())
+
+
 async def tomar_pendientes(
     tipos: tuple[str, ...] = ("texto", "audio", "foto", "sistema", "email"),
     limite: int = 5,

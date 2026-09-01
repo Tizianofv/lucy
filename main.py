@@ -56,6 +56,14 @@ async def _al_arrancar(app) -> None:
     # tiene que salir en el log del arranque, porque en el bucle se pierde entre
     # los reintentos — así estuvo `backups`, reventando cada 10 minutos sin que
     # nadie lo viera.
+    # Lo primero tras abrir el pool: rescatar lo que el redespliegue anterior
+    # dejó a medias. Sin esto, un mensaje reclamado justo cuando el contenedor
+    # muere se queda en 'procesando' para siempre y Lucy no contesta nunca.
+    rescatados = await db.rescatar_procesando()
+    if rescatados:
+        log.warning("Rescatados %s mensajes que quedaron en 'procesando' "
+                    "(el arranque anterior murió a mitad de turno).", rescatados)
+
     faltan = await db.tablas_que_faltan()
     if faltan:
         log.error("FALTAN TABLAS EN LA BASE: %s. Están en db/schema.sql y no "
