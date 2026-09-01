@@ -421,5 +421,30 @@ async def _main():
     return fallos
 
 
+def test_el_plan_semanal_no_puede_gastarse_los_pasos_reordenando():
+    """El 1-sep este encargo se comió 9 de los 12 pasos del agente reubicando
+    tareas —una llamada al modelo por cada una— y no llegó a mandar el mensaje.
+    Tiziano estuvo diez minutos sin recibir nada mientras Lucy le movía tareas
+    en silencio.
+
+    Un plan semanal que reordena y no avisa es lo peor de las dos cosas: hizo
+    cambios y no los contó. El presupuesto de pasos es FIJO y el trabajo no, así
+    que el trabajo se acota — subir MAX_PASOS movería el precipicio, no lo
+    quitaría.
+    """
+    from cerebro import despertador
+    encargo = despertador.ENCARGO_SEMANAL.format(cuando="arranca hoy lunes")
+    assert despertador.MAX_REUBICADAS < despertador.MAX_PASOS if hasattr(
+        despertador, "MAX_PASOS") else True
+    assert str(despertador.MAX_REUBICADAS) in encargo, (
+        "el encargo no dice cuántas puede reubicar: vuelve a ser ilimitado")
+    assert "no a todas" in encargo
+    assert "obligatorio" in encargo, (
+        "el mensaje tiene que ser innegociable, o se lo come el reordenamiento")
+
+
+_TESTS.append(test_el_plan_semanal_no_puede_gastarse_los_pasos_reordenando)
+
+
 if __name__ == "__main__":
     sys.exit(asyncio.run(_main()))

@@ -402,13 +402,30 @@ def _encargo_semanal(rescate: bool = False) -> str:
         cuando="arranca hoy lunes" if rescate else "arranca mañana lunes")
 
 
+# EL PRESUPUESTO DE PASOS ES FIJO Y EL TRABAJO NO: por eso hay un tope.
+#
+# El 1-sep este encargo se comió 9 de los 12 pasos del agente reubicando tareas
+# —una llamada al modelo por cada una, medio minuto cada una— y no llegó a
+# mandar el mensaje. Tiziano estuvo diez minutos sin recibir nada mientras Lucy
+# le movía tareas en silencio. Un plan semanal que reordena y no avisa es lo
+# peor de las dos cosas: hizo cambios y no los contó.
+#
+# El arreglo no es subir MAX_PASOS —eso mueve el precipicio, no lo quita— sino
+# acotar el trabajo para que SIEMPRE quede presupuesto para hablar. Lo que no
+# entre se dice en una línea, que es información y no deuda.
+MAX_REUBICADAS = 5
+
 ENCARGO_SEMANAL = (
     "Prepará la semana que {cuando}. En DOS tiempos:\n"
     "PRIMERO, ordená la casa vos sola, sin contarle nada: consultá las "
-    "tareas vencidas sin hacer y las estancadas, y a cada una que siga "
-    "teniendo sentido ponele con editar una fecha nueva dentro de la semana "
-    "entrante (que sume posposición está bien, para eso existe). Si alguna "
-    "te parece que ya murió, no la borres callada: preguntale solo por esa.\n"
+    "tareas vencidas sin hacer y las estancadas, y ponele con editar una "
+    "fecha nueva dentro de la semana entrante A LAS " + str(MAX_REUBICADAS) +
+    " MÁS IMPORTANTES que sigan teniendo sentido — no a todas (que sume "
+    "posposición está bien, para eso existe). El mensaje del SEGUNDO tiempo "
+    "es obligatorio: si te quedás sin pasos reubicando, no llega, y entonces "
+    "moviste cosas sin contarlo, que es peor que no moverlas. Si quedan más "
+    "sin reubicar, no las toques: decí cuántas son en una línea. Si alguna te "
+    "parece que ya murió, no la borres callada: preguntale solo por esa.\n"
     "SEGUNDO, mandale UN mensaje mirando SOLO hacia adelante: las citas de "
     "la semana con hora y lugar (si dos chocan, decilo), lo que vence cada "
     "día, y lo que reubicaste YA INTEGRADO como parte del plan — sin decir "
