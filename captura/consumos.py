@@ -7,13 +7,23 @@ llamaba: 461 movimientos parseados eran cero filas en la base.
 TRES INVARIANTES QUE NO SE NEGOCIAN
 -----------------------------------
 
-1. CRUDO ANTES QUE NADA. El correo entero se guarda en `bandeja` antes de
-   intentar parsearlo. Es la regla de oro del proyecto —la misma que hace que
-   `captura/` no importe `cerebro/`— y acá vale doble: si un banco cambia su
-   plantilla, el correo ya está guardado y el parser se arregla después contra
-   un dato que no se perdió. Un parser que falla sobre un correo guardado es
-   una tarde de trabajo; sobre un correo que nunca se guardó, es un movimiento
-   que no existió nunca.
+1. EL CRUDO SE GUARDA ANTES DE PARSEAR — Y SOLO SI HAY PARSER. Cuando un
+   correo calza con un parser, su cuerpo se guarda en `bandeja` ANTES de
+   intentar parsearlo: si el banco cambió su plantilla, el parser se arregla
+   después contra un dato que no se perdió.
+
+   Lo que este invariante NO dice, porque el código no lo hace: un correo que
+   no calza con ningún parser se DESCARTA. No entra en bandeja. Solo se cuenta
+   (ver `Resumen.sin_ruta`) y su rastro queda en Gmail, sin marcar y sin
+   borrar. Los adjuntos tampoco se guardan nunca: de un correo parseado queda
+   el HTML o el texto, no el PDF.
+
+   Esto estuvo declarado como "el correo entero se guarda antes de intentar
+   parsearlo" mientras el código hacía otra cosa, y la alerta del canario
+   repetía esa promesa a Tiziano ("están guardados, no se perdió nada"). Un
+   invariante declarado y no cumplido es peor que no declarar ninguno: se le
+   cree. Si algún día se quiere que sea cierto, hay que MOVER el guardado
+   arriba del `if parser is None`, no reescribir esta línea.
 
 2. NO SE MARCA NADA COMO LEÍDO. La sesión IMAP es readonly y todo se pide con
    BODY.PEEK. El reporte matinal define "leído" como "ya te lo conté a vos", y
@@ -39,7 +49,7 @@ import email
 import imaplib
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from email.header import decode_header
 from email.utils import parsedate_to_datetime
 
@@ -52,11 +62,31 @@ from cerebro.bancos.propios import Propios
 
 log = logging.getLogger("lucy.consumos")
 
-# Último día en que se avisó de un banco mudo. El throttle vive en memoria a
-# propósito: un aviso de más tras un redespliegue es barato, y una tabla nueva
-# solo para no repetir una advertencia sería más maquinaria de la que el
-# problema pide. Lo que NO puede pasar es avisar cada 15 minutos.
+# Último día en que se avisó de cada cosa. La clave es (remitente, señal) para
+# que las dos señales de un mismo remitente no se tapen entre ellas. El throttle
+# vive en memoria a propósito: un aviso de más tras un redespliegue es barato, y
+# una tabla nueva solo para no repetir una advertencia sería más maquinaria de
+# la que el problema pide. Lo que NO puede pasar es avisar cada 15 minutos.
 _ultimo_aviso: dict = {}
+
+# ── El latido de la cosecha ──────────────────────────────────────────────
+#
+# Todas las señales del canario son sobre los BANCOS: hablan de correos que
+# llegaron. Ninguna dice nada cuando no llega ninguno porque la maquinaria
+# nuestra dejó de mirar — credenciales vencidas, IMAP caído, la búsqueda
+# fallando, la pasada reventando entera. Eso se ve exactamente igual que "no
+# gastaste nada", que es la peor manera de fallar que tiene este proyecto.
+#
+# Seis horas: la pasada corre cada ~15 minutos, así que seis horas son ~24
+# pasadas seguidas sin una sola cosecha buena. Ningún hipo transitorio dura eso.
+LATIDO_HORAS = 6
+
+# Cuándo se cosechó bien por última vez, y desde cuándo está vivo este proceso.
+# En memoria, igual que el throttle: un redespliegue reinicia la cuenta y a lo
+# sumo retrasa el aviso seis horas. La alternativa era una columna nueva en
+# producción, que es una decisión de Tiziano y no de este cambio.
+_ultima_cosecha = None
+_arranque = datetime.now()
 
 SERVIDOR = "imap.gmail.com"
 
@@ -93,37 +123,83 @@ def _direccion(remitente: str) -> str:
     return r.strip().lower()
 
 
+@dataclass(frozen=True)
+class Fallo:
+    """Un correo que no se pudo convertir en movimiento, CON su remitente.
+
+    El remitente viaja aparte del texto a propósito. Antes `fallos` era una
+    lista de strings y el aviso buscaba el banco por substring dentro de esa
+    frase; cuando no casaba, agarraba `fallos[0]` — el primero de la lista, de
+    cualquier banco. Pegar el error de otro banco dentro de una alarma es peor
+    que no mostrar ninguno: manda a arreglar lo que no está roto.
+
+    `remitente` va vacío cuando el fallo no es de un correo sino de la cuenta
+    entera (no se pudo abrir el buzón, no se pudo cosechar).
+    """
+    remitente: str
+    detalle: str
+
+    def __str__(self) -> str:
+        return self.detalle
+
+
 @dataclass
 class Resumen:
-    """Lo que pasó en una pasada. Alimenta el canario de cambio de formato.
+    """Lo que pasó en una pasada. Alimenta el canario.
 
-    `vistos` vs `extraidos` es la señal: si un banco cambia su plantilla, los
-    correos siguen llegando (vistos sube) pero dejan de producir movimientos
-    (extraidos se queda en cero). Ese par, por banco, es lo que hay que vigilar.
+    Los cuatro contadores van POR REMITENTE EXACTO, no por dominio. El dominio
+    mezclaba cosas que no se parecen: de `popularenlinea.com` salen el buzón de
+    notificaciones (puro movimiento) y el de marketing (130 publicidades al año
+    y 8 cargos reales), y contarlos juntos hacía gritar al canario casi todos
+    los días. El enrutado ya va por remitente exacto; el canario también.
+
+      · `enrutados`  — correos suyos que calzaron con algún parser.
+      · `producidos` — de esos, cuántos dieron al menos un movimiento. Un
+                       duplicado cuenta: prueba que el parser corrió, calculó
+                       la huella y coincidió con una que ya estaba.
+      · `reventados` — de esos, cuántos levantaron ErrorDeParseo.
+      · `sin_ruta`   — correos suyos que no calzaron con ningún parser.
     """
     vistos: int = 0
     guardados_crudos: int = 0
     extraidos: int = 0
     duplicados: int = 0
-    fallos: list[str] = field(default_factory=list)
-    por_banco_vistos: dict = field(default_factory=dict)
-    por_banco_extraidos: dict = field(default_factory=dict)
-    por_banco_duplicados: dict = field(default_factory=dict)
+    fallos: list = field(default_factory=list)          # list[Fallo]
+    enrutados: dict = field(default_factory=dict)
+    producidos: dict = field(default_factory=dict)
+    reventados: dict = field(default_factory=dict)
+    sin_ruta: dict = field(default_factory=dict)
 
-    def bancos_mudos(self) -> list[str]:
-        """Bancos cuyos correos llegaron y no produjeron NINGÚN movimiento.
+    def remitentes_reventados(self) -> list[str]:
+        """SEÑAL A: un parser calzó y no pudo leer el correo. Avisa SIEMPRE.
 
-        Un duplicado cuenta como señal de vida: prueba que el parser funcionó —
-        parseó, calculó la huella y coincidió con una que ya estaba. Contarlo
-        como cero hacía gritar al canario justo cuando el banco funcionaba bien.
-        Y el caso no es raro: cuando un buzón se renumera se recosecha todo, y
-        entonces los cinco bancos avisarían a la vez de haber cambiado su
-        plantilla el mismo día. Eso entrena a ignorar el aviso.
+        No mira la clase del remitente ni cuántos otros correos suyos salieron
+        bien. Un remitente que parsea diez y revienta en uno no es "mudo" —con
+        la señal vieja nadie se enteraba nunca de ese uno—, y cada uno de esos
+        es un movimiento que no está en la base.
         """
-        return [b for b, n in self.por_banco_vistos.items()
-                if n > 0
-                and self.por_banco_extraidos.get(b, 0) == 0
-                and self.por_banco_duplicados.get(b, 0) == 0]
+        return sorted(r for r, n in self.reventados.items() if n > 0)
+
+    def remitentes_mudos(self) -> list[str]:
+        """SEÑAL B: llegaron correos suyos y NINGUNO calzó con un parser.
+
+        Es la firma de que cambió el asunto, o de que apareció un tipo de aviso
+        que todavía no cubrimos. Solo avisa para los remitentes
+        `transaccional`: en uno `mixto` esto es el día a día (ver
+        CLASES_REMITENTE en cerebro/bancos/contrato.py).
+
+        Pide `enrutados == 0`: si aunque sea uno calzó, al remitente se le
+        sigue entendiendo, y lo que no calzó es la publicidad de siempre.
+        """
+        return sorted(r for r, n in self.sin_ruta.items()
+                      if n > 0
+                      and self.enrutados.get(r, 0) == 0
+                      and bancos.clase_de_remitente(r) == "transaccional")
+
+    def error_de(self, remitente: str) -> str:
+        """El error de ESE remitente, o "" si no hay ninguno. Sin fallback."""
+        return next((f.detalle for f in self.fallos
+                     if f.remitente == remitente), "")
 
 
 def _cosechar_sync(cuenta: dict, remitentes: list[str], desde_uid: int,
@@ -154,16 +230,26 @@ def _cosechar_sync(cuenta: dict, remitentes: list[str], desde_uid: int,
 
         uids: set[int] = set()
         desde = _fecha_imap(desde_fecha)
+        busquedas_rotas = 0
         for rem in remitentes:
             try:
                 typ, data = M.uid("search", None, "FROM", f'"{rem}"',
                                   "SINCE", desde)
             except Exception:
+                busquedas_rotas += 1
                 log.warning("SEARCH falló para %s en %s", rem,
                             cuenta.get("user"), exc_info=True)
                 continue
             if data and data[0]:
                 uids.update(int(x) for x in data[0].split())
+
+        # Una búsqueda rota se salta, pero TODAS rotas no es "no llegó nada":
+        # es un buzón que no se pudo consultar, y devolver cero correos lo
+        # haría indistinguible de un día tranquilo — hasta para el latido.
+        if remitentes and busquedas_rotas == len(remitentes):
+            raise RuntimeError(
+                f"las {busquedas_rotas} búsquedas fallaron en "
+                f"{cuenta.get('user')}: el buzón no se pudo consultar")
 
         nuevos = sorted(u for u in uids if u > desde_uid)
         if not nuevos:
@@ -263,8 +349,10 @@ async def revisar() -> Resumen:
     """Una pasada completa: buzones → bandeja → movimientos.
 
     Devuelve el Resumen para que quien la llame decida si avisar (ver
-    `Resumen.bancos_mudos`). Esta función no manda mensajes a nadie.
+    `Resumen.remitentes_reventados` y `Resumen.remitentes_mudos`). Esta
+    función no manda mensajes a nadie.
     """
+    global _ultima_cosecha
     res = Resumen()
     if not config.CORREO_CUENTAS:
         return res
@@ -296,9 +384,15 @@ async def revisar() -> Resumen:
                 _cosechar_sync, cuenta, remitentes, desde_uid, desde_fecha,
                 uidv_previa)
         except Exception as e:
-            res.fallos.append(f"{user}: {type(e).__name__}: {e}")
+            res.fallos.append(Fallo("", f"{user}: {type(e).__name__}: {e}"))
             log.warning("No pude cosechar %s.", user, exc_info=True)
             continue
+
+        # El latido se marca acá y no al final: lo que prueba que la
+        # maquinaria funciona es haber podido ABRIR el buzón y buscar, no que
+        # haya venido algo. Un día sin movimientos es normal; un día sin poder
+        # mirar, no.
+        _ultima_cosecha = datetime.now()
 
         # Si el buzón se renumeró, el cursor guardado no puede seguir mandando:
         # se le dice a la base que lo reemplace en vez de quedarse con el mayor.
@@ -309,21 +403,27 @@ async def revisar() -> Resumen:
             crudo = _a_correo_crudo(user, correo_bytes["uid"],
                                     correo_bytes["crudo"])
             if crudo is None:
-                res.fallos.append(f"{user}#{correo_bytes['uid']}: sin cuerpo")
+                res.fallos.append(
+                    Fallo("", f"{user}#{correo_bytes['uid']}: sin cuerpo"))
                 continue
 
-            # El conteo del canario va ANTES de buscar parser. Si un banco
-            # cambia el ASUNTO (no la plantilla), buscar_parser deja de calzar y
-            # el banco desaparecía de por_banco_vistos: bancos_mudos() devolvía
-            # [] justo cuando había dejado de entenderse a ese banco.
-            banco = crudo.remitente.split("@")[-1]
-            res.por_banco_vistos[banco] = res.por_banco_vistos.get(banco, 0) + 1
+            # Los contadores del canario van por REMITENTE EXACTO y ANTES de
+            # buscar parser. Si un banco cambia el ASUNTO (no la plantilla),
+            # buscar_parser deja de calzar; contarlo solo cuando calza dejaría
+            # al canario ciego justo cuando dejamos de entender a ese banco.
+            rem = crudo.remitente
 
             parser = bancos.buscar_parser(crudo.remitente, crudo.asunto)
             if parser is None:
-                continue          # publicidad, encuestas, OTP: no son dinero
+                # Publicidad, encuestas, OTP… o el asunto que cambió. Este
+                # correo se DESCARTA: no entra en bandeja, solo se cuenta.
+                res.sin_ruta[rem] = res.sin_ruta.get(rem, 0) + 1
+                continue
+            res.enrutados[rem] = res.enrutados.get(rem, 0) + 1
 
-            # INVARIANTE 1: el crudo se guarda ANTES de parsear.
+            # INVARIANTE 1: el crudo se guarda ANTES de parsear. Solo se
+            # llega acá con un parser en la mano; el correo sin parser ya se
+            # descartó arriba, contado y sin pasar por bandeja.
             #
             # tipo_entrada="banco" y NO "sistema". `tomar_pendientes` reclama
             # ("texto","audio","foto","sistema","email"), así que con "sistema"
@@ -341,8 +441,14 @@ async def revisar() -> Resumen:
             try:
                 movs = parser(crudo)
             except ErrorDeParseo as e:
-                res.fallos.append(f"{user}#{crudo.uid} [{crudo.asunto[:40]}]: {e}")
+                res.reventados[rem] = res.reventados.get(rem, 0) + 1
+                res.fallos.append(Fallo(
+                    rem, f"{user}#{crudo.uid} [{crudo.asunto[:40]}]: {e}"))
                 continue
+            if movs:
+                # Al menos un movimiento: el parser corrió entero. Cuenta como
+                # señal de vida aunque después todos resulten duplicados.
+                res.producidos[rem] = res.producidos.get(rem, 0) + 1
 
             for mov in movs:
                 mov = registro.reclasificar(mov)
@@ -357,12 +463,8 @@ async def revisar() -> Resumen:
                                if mov.tipo == "gasto" else None))
                 if guardado is None:
                     res.duplicados += 1
-                    res.por_banco_duplicados[banco] = \
-                        res.por_banco_duplicados.get(banco, 0) + 1
                 else:
                     res.extraidos += 1
-                    res.por_banco_extraidos[banco] = \
-                        res.por_banco_extraidos.get(banco, 0) + 1
 
         await db.guardar_estado_consumos(user, uidvalidity, tope, desde_fecha,
                                          reiniciar=renumerado)
@@ -372,58 +474,147 @@ async def revisar() -> Resumen:
     return res
 
 
-async def avisar_si_hay_bancos_mudos(res: Resumen) -> int:
-    """El canario. Deja un encargo si algún banco dejó de producir movimientos.
+def _no_adivines(sintoma: str) -> str:
+    """El bloque que cierra TODOS los avisos de este módulo, palabra por palabra.
 
-    Un banco mudo —correos que llegan pero no producen ni un movimiento— es la
-    firma de que cambió su plantilla. Sin este aviso el sistema no se rompe: se
-    queda callado, y un sistema de gastos callado se lee como "no gastaste
-    nada". Esa es la peor manera de fallar que tiene este proyecto, y la que
-    lleva toda la conversación intentando evitarse.
-
-    Un aviso por banco y por día. Devuelve cuántos avisos dejó.
+    Nació de un aviso del 31-ago que conjeturó mal la causa y mandó a arreglar
+    lo que no estaba roto. Lo único que cambia entre una alarma y otra es el
+    SÍNTOMA que cada una detecta: pegarle a las tres el síntoma de la primera
+    sería meter un dato falso dentro del párrafo que existe para no meter datos
+    falsos. Con `sintoma="llegaron correos y no salió ningún movimiento"` el
+    texto es idéntico, letra por letra, al que ya estaba.
     """
-    mudos = res.bancos_mudos()
-    if not mudos:
-        return 0
+    return ("NO DIGAS POR QUÉ PASÓ. Esto detecta un síntoma —" + sintoma +
+            "— y las causas posibles "
+            "son varias: que el banco cambiara su plantilla, o que llegara "
+            "un tipo de correo que el parser todavía no cubre, o un fallo "
+            "en un adjunto. El 31-ago este mismo aviso dijo \"casi seguro "
+            "cambiaron el formato\" y era falso: era un pago de cliente de "
+            "un tipo nuevo, y el formato estaba intacto. Una conjetura "
+            "dentro de una alarma se lee como un hecho y manda a arreglar "
+            "lo que no está roto.")
+
+# Lo único cierto que se puede decir del correo que no se pudo leer. La sesión
+# de la ingesta es readonly y usa BODY.PEEK: mirar no cambia el buzón.
+_SIGUE_EN_GMAIL = ("Los correos siguen en Gmail, sin marcar y sin borrar.")
+
+
+async def avisar_si_hay_bancos_mudos(res: Resumen) -> int:
+    """El canario. Deja un encargo por cada señal que se encendió.
+
+    Dos señales, y son distintas — por eso son dos avisos y no uno:
+
+      A · `reventados > 0` — un parser calzó con el correo y no pudo leerlo.
+          Avisa SIEMPRE, para cualquier remitente. Antes esta señal estaba
+          ahogada dentro de "el banco quedó mudo": un remitente que parsea diez
+          y revienta en uno no está mudo, así que de ese uno no se enteraba
+          nadie. Cada uno es un movimiento que no está en la base.
+
+      B · `sin_ruta > 0` y `enrutados == 0` — llegaron correos suyos y ninguno
+          calzó con un parser. Solo para remitentes `transaccional`.
+
+    Un aviso por remitente, por señal y por día. Devuelve cuántos avisos dejó.
+
+    Esta función NO dice que no se perdió nada, porque no es verdad: el correo
+    sin parser se descarta. Ver el INVARIANTE 1 arriba.
+    """
     hoy = datetime.now().date()
     avisados = 0
-    for banco in mudos:
-        if _ultimo_aviso.get(banco) == hoy:
+
+    for rem in res.remitentes_reventados():
+        if _ultimo_aviso.get((rem, "reventado")) == hoy:
             continue
-        vistos = res.por_banco_vistos.get(banco, 0)
-        # El fallo se formatea con la cuenta de GMAIL delante, no con el
-        # dominio del banco, así que buscar el dominio no casaba nunca y el
-        # aviso salía siempre sin el único dato accionable. Se busca en todo el
-        # texto del fallo, que sí incluye el asunto y el mensaje del error.
-        muestra = next((f for f in res.fallos
-                        if banco.split(".")[0].lower() in f.lower()), "")
-        if not muestra and res.fallos:
-            muestra = res.fallos[0]
+        n = res.reventados.get(rem, 0)
+        ok = res.producidos.get(rem, 0)
+        error = res.error_de(rem)
         await db.guardar_en_bandeja(
             tipo_entrada="sistema",
             contenido_raw=(
-                f"AVISO: dejé de entender los correos de {banco}. Llegaron "
-                f"{vistos} correos suyos en esta revisión y no salió ni un "
-                f"movimiento.\n\n"
-                + (f"El error fue: {muestra}\n\n" if muestra else "")
-                + "Decíselo a Tiziano en una línea, sin alarmar: los correos "
-                "están guardados y no se perdió nada, pero sus movimientos de "
-                "ese banco NO están entrando a la base hasta que se arregle el "
-                "parser. Es importante que lo sepa: un sistema de gastos que se "
-                "queda callado parece decir que no gastó nada.\n\n"
-                "NO DIGAS POR QUÉ PASÓ. Esto detecta un síntoma —llegaron "
-                "correos y no salió ningún movimiento— y las causas posibles "
-                "son varias: que el banco cambiara su plantilla, o que llegara "
-                "un tipo de correo que el parser todavía no cubre, o un fallo "
-                "en un adjunto. El 31-ago este mismo aviso dijo \"casi seguro "
-                "cambiaron el formato\" y era falso: era un pago de cliente de "
-                "un tipo nuevo, y el formato estaba intacto. Una conjetura "
-                "dentro de una alarma se lee como un hecho y manda a arreglar "
-                "lo que no está roto."),
+                f"AVISO: {n} correo(s) de {rem} calzaron con su parser y no se "
+                "pudieron leer en esta revisión"
+                + (f" (otros {ok} sí produjeron movimiento)." if ok else ".")
+                + "\n\n"
+                + (f"El error fue: {error}\n\n" if error
+                   else "No tengo el texto del error de ESTE remitente; el "
+                        "detalle está en los logs.\n\n")
+                + "Decíselo a Tiziano en una línea, sin alarmar: esos "
+                "movimientos NO están entrando a la base hasta que se arregle "
+                "el parser. El cuerpo de esos correos sí quedó guardado en la "
+                "bandeja de Lucy —se guarda antes de parsear—, pero no sus "
+                f"adjuntos. {_SIGUE_EN_GMAIL}\n\n"
+                + _no_adivines("un correo calzó con su parser y el parser no "
+                               "pudo leerlo")),
             chat_id=config.CHAT_ID_DUENO, origen="banco")
-        _ultimo_aviso[banco] = hoy
+        _ultimo_aviso[(rem, "reventado")] = hoy
         avisados += 1
-        log.warning("Canario: %s mudo (%s correos, 0 movimientos).",
-                    banco, vistos)
+        log.warning("Canario: %s reventó en %s correos (%s con movimiento).",
+                    rem, n, ok)
+
+    for rem in res.remitentes_mudos():
+        if _ultimo_aviso.get((rem, "sin_ruta")) == hoy:
+            continue
+        n = res.sin_ruta.get(rem, 0)
+        await db.guardar_en_bandeja(
+            tipo_entrada="sistema",
+            contenido_raw=(
+                f"AVISO: dejé de entender los correos de {rem}. Llegaron {n} "
+                "correos suyos en esta revisión y ninguno calzó con un parser: "
+                "no salió ni un movimiento.\n\n"
+                "Decíselo a Tiziano en una línea, sin alarmar: sus movimientos "
+                "NO están entrando a la base hasta que se arregle. Y decile la "
+                "verdad de lo que pasó con esos correos: se descartaron. "
+                f"{_SIGUE_EN_GMAIL} Lucy no guardó copia del cuerpo ni de los "
+                "adjuntos, así que cuando esto se arregle hay que ir a "
+                "buscarlos al buzón.\n\n"
+                "Es importante que lo sepa: un sistema de gastos que se queda "
+                "callado parece decir que no gastó nada.\n\n"
+                + _no_adivines("llegaron correos y no salió ningún "
+                               "movimiento")),
+            chat_id=config.CHAT_ID_DUENO, origen="banco")
+        _ultimo_aviso[(rem, "sin_ruta")] = hoy
+        avisados += 1
+        log.warning("Canario: %s mudo (%s correos, ninguno enrutado).", rem, n)
+
     return avisados
+
+
+async def avisar_si_no_hay_latido() -> int:
+    """El latido de la cosecha: ¿hace cuánto que no se puede mirar el buzón?
+
+    El canario de arriba habla de los BANCOS y necesita que lleguen correos
+    para decir algo. Este habla de NUESTRA maquinaria y no necesita ninguno:
+    credenciales vencidas, IMAP caído, la búsqueda fallando o la pasada
+    reventando entera producen exactamente el mismo silencio que un día sin
+    gastos, y hasta hoy nada de eso avisaba.
+
+    Un aviso por día. Devuelve 1 si avisó, 0 si no.
+    """
+    if not config.CORREO_CUENTAS or not list(bancos.remitentes_registrados()):
+        return 0                      # nada que cosechar: no hay latido que pedir
+    referencia = _ultima_cosecha or _arranque
+    silencio = datetime.now() - referencia
+    if silencio <= timedelta(hours=LATIDO_HORAS):
+        return 0
+    hoy = datetime.now().date()
+    if _ultimo_aviso.get(("__latido__", "cosecha")) == hoy:
+        return 0
+    horas = int(silencio.total_seconds() // 3600)
+    nunca = _ultima_cosecha is None
+    await db.guardar_en_bandeja(
+        tipo_entrada="sistema",
+        contenido_raw=(
+            f"AVISO: hace {horas} horas que no consigo revisar ningún buzón "
+            "en busca de movimientos"
+            + (" — desde que Lucy arrancó, ni una sola vez." if nunca else ".")
+            + f" La revisión corre cada ~15 minutos, así que son unas "
+            f"{horas * 4} pasadas seguidas sin poder cosechar.\n\n"
+            "Decíselo a Tiziano en una línea, sin alarmar: mientras esto dure, "
+            "el panel y el resumen de gastos están al día solo hasta esa hora. "
+            "Un cero de estos días significa 'no miré', no 'no gastaste'. "
+            f"{_SIGUE_EN_GMAIL}\n\n"
+            + _no_adivines("hace horas que ninguna revisión de buzón "
+                           "termina bien")),
+        chat_id=config.CHAT_ID_DUENO, origen="banco")
+    _ultimo_aviso[("__latido__", "cosecha")] = hoy
+    log.warning("Latido: %s horas sin cosechar (nunca=%s).", horas, nunca)
+    return 1

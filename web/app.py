@@ -33,7 +33,7 @@ proyecto de mantenimiento, y el tiempo es justo lo que este proyecto no tiene.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import FastAPI, Request
@@ -391,9 +391,19 @@ async def salud(request: Request):
     if s["cuentas"]:
         ultimo = max(c["actualizado_en"] for c in s["cuentas"])
         atraso = datetime.now(ultimo.tzinfo) - ultimo
+    # Una línea por banco, sin umbral y sin aviso: dice desde cuándo no entra
+    # nada de cada uno y deja que la lea quien sabe si eso es raro. Ponerle un
+    # número inventado a "cada cuánto debería llegar algo del BHD" fabricaría
+    # una alarma que grita en falso, y ya tuvimos una.
+    por_banco = await db.silencio_por_banco()
+    ahora = datetime.now(timezone.utc)
+    for b in por_banco:
+        b["dias"] = ((ahora - b["ultimo"]).days
+                     if b.get("ultimo") is not None else None)
     return plantillas.TemplateResponse(
         request, "salud.html",
         {"s": s, "atraso": atraso, "umbral": timedelta(hours=2),
+         "por_banco": por_banco,
          # Se muestran, no se fusionan: equivocarse borrando pierde un gasto
          # real en silencio, y lo silencioso es lo que este panel combate.
          "duplicados": await db.posibles_duplicados()})

@@ -171,8 +171,19 @@ registrar(REMITENTE_NOTIF, parsear_reverso_sobregiro,
           asunto=r"Reverso a cuenta por sobregiro")
 # El cargo por bajo balance sale del buzón de MARKETING, no del de
 # notificaciones: acá el asunto pesa más que el remitente.
+#
+# Y por eso mismo este remitente va marcado `mixto`, el ÚNICO de los cinco
+# bancos: de sus 154 correos en un año, 130 son publicidad y 8 son un cargo
+# real. Para el canario eso significa que "llegaron correos suyos y ninguno
+# calzó con un parser" es su estado normal, no una avería — con la clase por
+# defecto gritaría casi todos los días y enseñaría a ignorar la alarma.
+#
+# Marcarlo NO lo desregistra: los 8 cargos al año se siguen leyendo, y si uno
+# de esos revienta al parsearse el canario avisa igual (esa señal no mira la
+# clase). Lo que se apaga es solo el "de este no entendí nada".
 registrar(REMITENTE_INFO, parsear_cargo_bajo_balance,
-          asunto=r"cargo comisi[oó]n por bajo balance")
+          asunto=r"cargo comisi[oó]n por bajo balance",
+          clase="mixto")
 
 
 # ── Comprobantes en PDF (pagoselectronicos@) ─────────────────────────────

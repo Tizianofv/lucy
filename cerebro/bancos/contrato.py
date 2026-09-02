@@ -52,6 +52,23 @@ CANALES = ("tarjeta", "transferencia", "traspaso", "nomina", "servicio", "intere
 
 ESTADOS = ("aprobada", "declinada", "reversada", "pendiente")
 
+# Cómo se comporta un remitente, para el canario de la ingesta. No describe al
+# parser: describe al BUZÓN del banco.
+#
+#   transaccional — de esta dirección solo llegan movimientos. Que llegue algo
+#                   que ningún parser sabe leer es una señal: o cambió el
+#                   asunto, o hay un tipo de aviso que todavía no cubrimos.
+#   mixto         — de esta dirección llega publicidad Y, de vez en cuando, un
+#                   movimiento. Que la mayoría de sus correos no calce con
+#                   ningún parser es lo NORMAL, y gritar por eso es entrenar a
+#                   ignorar la alarma.
+#
+# Es un vocabulario cerrado, como los demás de este módulo, y el default es
+# `transaccional` — el lado seguro: un remitente sin marcar sigue avisando.
+# Marcar `mixto` por parecido o por intuición deja ese remitente MUDO para
+# siempre, que es el único error irreversible que se puede cometer acá.
+CLASES_REMITENTE = ("transaccional", "mixto")
+
 
 class ErrorDeParseo(ValueError):
     """Un correo que no se pudo convertir en movimiento.
@@ -337,7 +354,8 @@ class CorreoCrudo:
 #     Un enrutador que normalizara el guión los mezclaría.
 
 Parser = Callable[[CorreoCrudo], list[Movimiento]]
-_REGISTRO: list[tuple[str, re.Pattern | None, Parser]] = []
+# (remitente, patrón de asunto o None, parser, clase del remitente)
+_REGISTRO: list[tuple[str, "re.Pattern | None", Parser, str]] = []
 
 # Asuntos que traen un monto pero NO son un movimiento. Se listan explícito
 # para que nadie los parsee por accidente: un código de validación de compra
@@ -350,15 +368,23 @@ ASUNTOS_IGNORADOS = (
 )
 
 
-def registrar(remitente: str, parser: Parser, asunto: str | None = None) -> None:
+def registrar(remitente: str, parser: Parser, asunto: str | None = None,
+              clase: str = "transaccional") -> None:
     """Ata un parser a un remitente exacto, opcionalmente filtrando por asunto.
 
     Un mismo remitente puede tener varios parsers: `alertas@bhd.com.do` manda
     consumos de tarjeta Y traspasos entre cuentas propias, con formatos y
     significados distintos. El orden de registro NO importa (ver buscar_parser).
+
+    `clase` es para el canario, no para el enrutado (ver CLASES_REMITENTE). El
+    default es `transaccional` a propósito: quien agregue un banco nuevo y no
+    piense en esto se queda con el remitente que AVISA, no con el mudo.
     """
+    if clase not in CLASES_REMITENTE:
+        raise ErrorDeParseo(
+            f"clase de remitente '{clase}' no está en {CLASES_REMITENTE}")
     patron = re.compile(asunto, re.I) if asunto else None
-    _REGISTRO.append((remitente.strip().lower(), patron, parser))
+    _REGISTRO.append((remitente.strip().lower(), patron, parser, clase))
 
 
 def buscar_parser(remitente: str, asunto: str) -> Parser | None:
@@ -374,7 +400,7 @@ def buscar_parser(remitente: str, asunto: str) -> Parser | None:
         return None
     rem = (remitente or "").strip().lower()
     general = None
-    for esperado, patron, parser in _REGISTRO:
+    for esperado, patron, parser, _clase in _REGISTRO:
         if rem != esperado:
             continue
         if patron is not None:
@@ -398,6 +424,24 @@ def parsear(correo: CorreoCrudo) -> list[Movimiento]:
     return parser(correo)
 
 
+def clase_de_remitente(remitente: str) -> str:
+    """`transaccional` o `mixto` para ese remitente exacto. Ver CLASES_REMITENTE.
+
+    Dos reglas, las dos hacia el lado que avisa:
+
+      · un remitente que nadie registró es `transaccional`. No lo conocemos, así
+        que no tenemos derecho a callarlo.
+      · un remitente con varios registros es `mixto` SOLO si todos sus registros
+        lo son. Basta que una de sus entradas se considere transaccional para
+        que el remitente entero siga avisando.
+    """
+    rem = (remitente or "").strip().lower()
+    clases = {c for r, _, _, c in _REGISTRO if r == rem}
+    if not clases:
+        return "transaccional"
+    return "mixto" if clases == {"mixto"} else "transaccional"
+
+
 def remitentes_registrados() -> Iterable[str]:
     """Para la búsqueda IMAP: a quién hay que ir a buscar."""
-    return sorted({rem for rem, _, _ in _REGISTRO})
+    return sorted({rem for rem, _, _, _ in _REGISTRO})

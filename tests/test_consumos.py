@@ -294,9 +294,9 @@ def test_uidvalidity_nueva_reinicia_el_cursor_de_verdad():
 
 def test_el_canario_ve_los_correos_sin_parser():
     """Si un banco cambia el ASUNTO (no la plantilla), buscar_parser devuelve
-    None, el banco desaparece de por_banco_vistos y bancos_mudos() da []. El
-    canario está para detectar que dejamos de entender a un banco: tiene que
-    contar los correos de un remitente registrado aunque no calce el asunto."""
+    None. El canario está para detectar que dejamos de entender a un banco:
+    tiene que contar esos correos como `sin_ruta` de su remitente exacto,
+    aunque no calce ningún asunto."""
     if not FIXTURES.exists():
         return
     base = _correos_reales(1)[0][1]
@@ -307,7 +307,7 @@ def test_el_canario_ve_los_correos_sin_parser():
         res = _correr(consumos.revisar())
     finally:
         consumos.bancos.buscar_parser = original
-    assert res.bancos_mudos(), (
+    assert res.remitentes_mudos(), (
         "un remitente registrado cuyos correos ya no calzan ningún asunto tiene "
         "que salir en el canario")
 
@@ -326,15 +326,15 @@ def test_extrae_movimientos_de_correos_reales():
 
 
 def test_el_canario_detecta_un_banco_mudo():
-    """vistos > 0 y extraidos == 0 para un banco es la señal de que cambió su
-    plantilla. Es lo único que separa "no gastaste nada" de "dejé de entender
-    los correos"."""
+    """Correos que llegan y ninguno calza con un parser es la señal de que
+    dejamos de entender a ese remitente. Es lo único que separa "no gastaste
+    nada" de "dejé de entender los correos"."""
     res = consumos.Resumen()
-    res.por_banco_vistos = {"bhd.com.do": 12, "apap.com.do": 3}
-    res.por_banco_extraidos = {"apap.com.do": 3}
-    assert res.bancos_mudos() == ["bhd.com.do"]
-    res.por_banco_extraidos["bhd.com.do"] = 12
-    assert res.bancos_mudos() == []
+    res.sin_ruta = {"alertas@bhd.com.do": 12, "no-reply@apap.com.do": 3}
+    res.enrutados = {"no-reply@apap.com.do": 3}
+    assert res.remitentes_mudos() == ["alertas@bhd.com.do"]
+    res.enrutados["alertas@bhd.com.do"] = 12
+    assert res.remitentes_mudos() == []
 
 
 # ── Regresiones críticas del 30-ago-2026 ─────────────────────────────────
@@ -379,21 +379,25 @@ def test_el_duplicado_cuenta_como_senal_de_vida():
     _IMAPFalso.correos_a_servir = [(u + 900, c) for u, c in correos]
     res2 = _correr(consumos.revisar())               # todos duplicados
     assert res2.duplicados >= 1, "el montaje no produjo duplicados"
-    assert res2.bancos_mudos() == [], (
-        f"gritó por bancos que funcionan: {res2.bancos_mudos()}")
+    assert res2.remitentes_mudos() == [], (
+        f"gritó por bancos que funcionan: {res2.remitentes_mudos()}")
+    assert res2.remitentes_reventados() == [], (
+        f"gritó por bancos que funcionan: {res2.remitentes_reventados()}")
 
 
 def test_el_aviso_lleva_el_error_concreto():
     """La línea de diagnóstico buscaba el dominio del banco dentro de un fallo
     formateado con la cuenta de Gmail delante, así que nunca casaba y el aviso
-    salía siempre sin el único dato accionable."""
+    salía siempre sin el único dato accionable. Ahora el fallo lleva su
+    remitente aparte y se selecciona por igualdad."""
     reg = _montar([])
     consumos._ultimo_aviso.clear()
     res = consumos.Resumen()
-    res.por_banco_vistos = {"bhd.com.do": 3}
-    res.por_banco_extraidos = {}
-    res.fallos = ["tizianofv@gmail.com#12 [BHD Notificación] "
-                  "(bhd.com.do): no encontré <tbody>"]
+    res.enrutados = {"alertas@bhd.com.do": 3}
+    res.reventados = {"alertas@bhd.com.do": 3}
+    res.fallos = [consumos.Fallo(
+        "alertas@bhd.com.do",
+        "tizianofv@gmail.com#12 [BHD Notificación]: no encontré <tbody>")]
     _correr(consumos.avisar_si_hay_bancos_mudos(res))
     assert "no encontré <tbody>" in reg.contenidos[0], (
         "el aviso salió sin el error concreto")
@@ -407,8 +411,7 @@ def test_el_canario_avisa_una_vez_por_dia():
     reg = _montar([])
     consumos._ultimo_aviso.clear()
     res = consumos.Resumen()
-    res.por_banco_vistos = {"bhd.com.do": 12}
-    res.por_banco_extraidos = {}
+    res.sin_ruta = {"alertas@bhd.com.do": 12}
     assert _correr(consumos.avisar_si_hay_bancos_mudos(res)) == 1
     assert _correr(consumos.avisar_si_hay_bancos_mudos(res)) == 0, "avisó dos veces"
     assert len(reg.orden) == 1 and reg.orden[0] == "bandeja:banco"
@@ -419,8 +422,8 @@ def test_el_canario_callado_cuando_todo_va_bien():
     _montar([])
     consumos._ultimo_aviso.clear()
     res = consumos.Resumen()
-    res.por_banco_vistos = {"bhd.com.do": 12}
-    res.por_banco_extraidos = {"bhd.com.do": 12}
+    res.enrutados = {"alertas@bhd.com.do": 12}
+    res.producidos = {"alertas@bhd.com.do": 12}
     assert _correr(consumos.avisar_si_hay_bancos_mudos(res)) == 0
 
 

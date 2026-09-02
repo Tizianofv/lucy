@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -61,6 +61,16 @@ async def main() -> int:
          lambda: db.movimientos_filtrados(
              date(2026, 8, 1), date(2026, 8, 31), "gasto", None, "bhd")),
         ("leer_estado_consumos", lambda: db.leer_estado_consumos("tizianofv@gmail.com")),
+        # El candado del reporte de correo: compara un TIMESTAMPTZ contra un
+        # datetime con zona, usa LIKE con el prefijo escapado y devuelve los
+        # chat_id que ya recibieron lo suyo. Si esta no corre, el reporte
+        # matinal sale ~100 veces por mañana.
+        ("destinos_con_encargo_hoy",
+         lambda: db.destinos_con_encargo_hoy(
+             "correo", "Reporte de correo de la mañana.",
+             datetime.now(timezone.utc).replace(hour=0, minute=0, second=0,
+                                                microsecond=0))),
+        ("silencio_por_banco", lambda: db.silencio_por_banco()),
     ]
 
     rojas = []

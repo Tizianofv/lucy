@@ -12,6 +12,7 @@ import os
 import sys
 import time
 import types
+from datetime import datetime, timezone
 from decimal import Decimal
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -410,6 +411,10 @@ def test_las_pantallas_se_pintan_de_verdad():
                  "contraparte": "X", "categoria": None,
                  "borrado_en": "2026-08-20", "dias": 12}]
 
+    async def _por_banco():
+        return [{"banco": "bhd", "n": 12,
+                 "ultimo": datetime(2026, 8, 30, 11, 0, tzinfo=timezone.utc)}]
+
     async def _duplicados():
         return [{"banco": "bhd", "cuando": "2026-08-05T11:08",
                  "monto": Decimal("2823.07"), "moneda": "DOP",
@@ -420,7 +425,7 @@ def test_las_pantallas_se_pintan_de_verdad():
         "resumen_por_mes", "gasto_por_categoria", "gastos_de_cada_categoria",
         "meses_con_movimientos", "salud_ingesta", "movimientos_filtrados",
         "sin_clasificar", "categorias_usadas", "bancos_usados",
-        "posibles_duplicados", "papelera")}
+        "posibles_duplicados", "papelera", "silencio_por_banco")}
     base.resumen_por_mes = _resumen_mes
     base.gasto_por_categoria = _por_categoria
     base.gastos_de_cada_categoria = _detalle
@@ -431,6 +436,7 @@ def test_las_pantallas_se_pintan_de_verdad():
     base.categorias_usadas = _lista
     base.bancos_usados = _lista
     base.posibles_duplicados = _duplicados
+    base.silencio_por_banco = _por_banco
     base.papelera = _papelera
     try:
         bucle = asyncio.new_event_loop()

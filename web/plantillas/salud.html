@@ -48,6 +48,25 @@ dejó de correr.</div></div>
   {% endif %}
 </div>
 
+<h2>Por banco</h2>
+<p class="suave">Cuándo entró el último movimiento automático de cada banco.
+Esta tabla no avisa de nada y no tiene umbral: nadie declaró cada cuánto
+"debería" llegar algo de cada banco, y ponerle un número inventado sería una
+alarma que grita en falso. Está acá para que la respuesta esté escrita cuando
+la busques. Un banco que no aparece nunca dio un movimiento automático.</p>
+<div class="tarjeta"><table>
+<tr><th>Banco</th><th class="num">Movimientos</th><th class="num">Último</th>
+    <th class="num">Hace</th></tr>
+{% for b in por_banco %}
+<tr><td>{{ b.banco }}</td><td class="num">{{ b.n }}</td>
+    <td class="num suave">{{ b.ultimo.strftime('%d/%m %H:%M') if b.ultimo else '—' }}</td>
+    <td class="num suave">{{ (b.dias ~ ' d') if b.dias is not none else '—' }}</td></tr>
+{% else %}
+<tr><td colspan="4" class="suave">Todavía no entró ningún movimiento
+    automático de ningún banco.</td></tr>
+{% endfor %}
+</table></div>
+
 <h2>Buzones</h2>
 <div class="tarjeta"><table>
 <tr><th>Cuenta</th><th class="num">Último correo</th><th class="num">Revisado</th></tr>

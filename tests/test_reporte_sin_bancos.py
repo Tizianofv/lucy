@@ -131,8 +131,10 @@ def test_el_canario_no_adivina_la_causa():
     base.guardar_en_bandeja = _falso
     try:
         res = consumos.Resumen()
-        res.por_banco_vistos = {"popularenlinea.com": 1}
-        res.fallos = ["x#1 [asunto]: no encuentro a quién se le transfirió."]
+        res.sin_ruta = {"notificaciones@popularenlinea.com": 1}
+        res.fallos = [consumos.Fallo(
+            "notificaciones@popularenlinea.com",
+            "x#1 [asunto]: no encuentro a quién se le transfirió.")]
         consumos._ultimo_aviso.clear()
         asyncio.new_event_loop().run_until_complete(
             consumos.avisar_si_hay_bancos_mudos(res))
@@ -146,7 +148,16 @@ def test_el_canario_no_adivina_la_causa():
             f"el aviso vuelve a adivinar la causa: {conjetura!r}")
     # Y sigue diciendo lo que sí sabe, que es lo que lo hace útil.
     assert "no salió ni un movimiento" in texto
-    assert "no se perdió nada" in texto
+
+    # Lo que ya NO dice, porque era falso en las tres partes: el correo sin
+    # parser no se guarda en bandeja, no se conserva el cuerpo y no se
+    # conservan los adjuntos. "Están guardados, no se perdió nada" mandaba a
+    # Tiziano a no ir a buscarlos, que es lo único que había que hacer.
+    for mentira in ("no se perdió nada", "están guardados"):
+        assert mentira not in texto.lower(), (
+            f"el aviso vuelve a prometer algo que el código no hace: {mentira!r}")
+    # Lo único cierto que sí puede decir: la sesión de la ingesta es readonly.
+    assert "siguen en Gmail, sin marcar y sin borrar" in texto
 
 
 if __name__ == "__main__":

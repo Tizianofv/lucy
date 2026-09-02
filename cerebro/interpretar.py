@@ -232,6 +232,16 @@ async def bucle(bot) -> None:
             except Exception:
                 log.warning("La ingesta bancaria tropezó; reintento en la "
                             "próxima.", exc_info=True)
+            # El latido va APARTE del try de arriba y después: es el aviso de
+            # que la cosecha no está corriendo, así que tiene que sobrevivir
+            # justo al caso en que la cosecha revienta. Dentro del mismo try,
+            # la excepción de `revisar()` se lo saltaría — y ese es exactamente
+            # el silencio que este aviso existe para romper.
+            try:
+                await consumos.avisar_si_no_hay_latido()
+            except Exception:
+                log.warning("El latido de la cosecha tropezó; sigo igual.",
+                            exc_info=True)
         # El respaldo se chequea cada ~10 min (120 vueltas). Son dos SELECT
         # chicos, y quien decide cuándo sale el MENSAJE es el despertador
         # (48h sin backup, y después un recordatorio por día). Chequear seguido

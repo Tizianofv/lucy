@@ -275,6 +275,41 @@ async def guardar_respuesta(bandeja_id: int, texto: str) -> None:
         )
 
 
+async def destinos_con_encargo_hoy(origen: str, prefijo: str, desde) -> set[int]:
+    """A qué chats ya se les dejó HOY un encargo que empieza con `prefijo`.
+
+    Es el candado de "esto ya salió hoy" de los procesos que hablan una vez al
+    día: la marca es la PROPIA fila que el proceso deja, no una tabla aparte.
+    Un candado que lee lo mismo que escribe no puede quedarse abierto porque a
+    nadie se le ocurrió inicializar una fila — que es exactamente como el
+    reporte de correo llegó a salir ~100 veces por mañana.
+
+    Devuelve un conjunto de `chat_id` y no un booleano porque el candado es POR
+    DESTINATARIO. Un booleano global se cierra en cuanto ALGUIEN recibió lo
+    suyo, y el resto de los destinos se quedan sin su encargo del día sin que
+    nada lo registre: el reporte de correo tiene un destino por buzón
+    (`reporte_a`), así que "ya salió hoy" solo tiene sentido preguntado con
+    nombre y apellido.
+
+    El precio, y hay que decirlo: depende del TEXTO del encargo. Quien cambie
+    esa primera frase abre el candado. Por eso el prefijo vive en una constante
+    del módulo que lo escribe y hay un test que ata las dos puntas.
+    """
+    patron = prefijo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            SELECT DISTINCT chat_id FROM bandeja
+             WHERE origen = %s AND tipo_entrada = 'sistema'
+               AND contenido_raw LIKE %s
+               AND creado_en >= %s
+               AND chat_id IS NOT NULL
+            """,
+            (origen, patron + "%", desde),
+        )
+        return {f[0] for f in await cur.fetchall()}
+
+
 async def leer_estado_correo(cuenta: str) -> dict | None:
     """Estado de lectura de una cuenta. None si es la primera vez.
 
@@ -1085,6 +1120,32 @@ async def salud_ingesta() -> dict:
         propios = (await cur3.fetchone())[0]
         return {"cuentas": cuentas, "automaticos": n, "ultimo": ultimo,
                 "patrones_propios": propios}
+
+
+async def silencio_por_banco() -> list[dict]:
+    """Cuántos movimientos automáticos lleva cada banco y cuándo entró el último.
+
+    Es PASIVA a propósito: se muestra en /salud y no empuja ningún aviso. Sin
+    una expectativa declarada por Tiziano —cada cuánto "debería" llegar algo de
+    cada banco—, ponerle un umbral sería inventarse la segunda alarma que grita
+    en falso. Lo que sí puede hacer es que, cuando él mire, la respuesta a
+    "¿hace cuánto que no entra nada del BHD?" esté escrita.
+
+    Solo los automáticos (`hash_contenido IS NOT NULL`): un movimiento cargado a
+    mano no dice nada sobre si la ingesta de ese banco funciona.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT banco, count(*) AS n, max(creado_en) AS ultimo
+              FROM movimientos
+             WHERE borrado_en IS NULL AND hash_contenido IS NOT NULL
+               AND banco IS NOT NULL AND banco <> ''
+             GROUP BY banco
+             ORDER BY banco
+            """)
+        return await cur.fetchall()
 
 
 async def categorias_aprendidas() -> dict:

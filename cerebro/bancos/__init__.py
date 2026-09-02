@@ -12,6 +12,7 @@ Uso:
 from cerebro.bancos.contrato import (  # noqa: F401
     ASUNTOS_IGNORADOS,
     CANALES,
+    CLASES_REMITENTE,
     ESTADOS,
     MONEDAS,
     TIPOS,
@@ -19,6 +20,7 @@ from cerebro.bancos.contrato import (  # noqa: F401
     ErrorDeParseo,
     Movimiento,
     buscar_parser,
+    clase_de_remitente,
     normalizar_estado,
     normalizar_fecha,
     normalizar_monto,

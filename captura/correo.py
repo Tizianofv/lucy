@@ -48,6 +48,14 @@ REPORTE_HASTA = 12  # mediodía
 # pasen el filtro barato; el tope es un cinturón contra una ráfaga rara.
 MAX_POR_DIA = 60
 
+# La primera frase del encargo que el reporte deja en la bandeja, y a la vez la
+# MARCA de "hoy ya salió": el candado de una vez al día busca ESTA constante en
+# la bandeja (ver reporte_diario). Por eso vive en un solo sitio y `_encargo()`
+# la usa para armar el texto — si alguien reescribe la frase en el encargo sin
+# tocar el candado, el candado se abre y el reporte vuelve a salir cien veces.
+# `tests/test_reporte_una_vez_al_dia.py` ata las dos puntas.
+MARCA_ENCARGO = "Reporte de correo de la mañana."
+
 # Hasta dónde mira hacia atrás el reporte. Lo eligió Tiziano el 26-jul: 7 días.
 # Lo anterior queda como pasado — en la cuenta del estudio hay ~2.900 sin leer
 # acumulados, y arrastrarlos sería empezar la relación con una deuda imposible.
@@ -669,7 +677,7 @@ def _encargo(pendientes: list[dict]) -> str:
         lineas += (f"\n\n[mencion] {len(menciones)} correos sin importancia, "
                    f"de: {listado}")
     return (
-        "Reporte de correo de la mañana. Estos son los correos SIN LEER que "
+        f"{MARCA_ENCARGO} Estos son los correos SIN LEER que "
         "todavía no le informaste a Tiziano, ya clasificados por vos misma "
         f"(nivel|área):\n\n{lineas}\n\n"
         "Armá UN mensaje, en este orden y con este detalle — es la política que "
@@ -865,6 +873,11 @@ async def reporte_diario() -> int:
     """Una vez al día, en la mañana: junta lo sin leer no informado, lo clasifica
     y deja el encargo del reporte. Devuelve cuántos correos entraron.
 
+    UNA VEZ AL DÍA de verdad: la marca de que el reporte ya salió es el propio
+    encargo en la bandeja (ver el candado más abajo). El bucle llama a esto
+    cada ~3 minutos, así que de 7 a 12 son ~100 llamadas: todas menos la que
+    deja el encargo tienen que salir por el candado.
+
     Los correos quedan anotados como "reportados" con el id del encargo, pero
     NO se marcan leídos todavía: eso pasa recién cuando el mensaje llegó de
     verdad (ver confirmar_leidos). Leído significa "ya te informé", así que
@@ -883,10 +896,30 @@ async def reporte_diario() -> int:
     if config.es_horario_caro_deepseek(ahora):
         log.info("Reporte de correo aplazado: tarifa doble de DeepSeek.")
         return 0
-    hoy = ahora.date()
-
-    estados = [await db.leer_estado_correo(c["user"]) for c in config.CORREO_CUENTAS]
-    if estados and all(e and e.get("ultimo_reporte") == hoy for e in estados):
+    # EL CANDADO DE "HOY YA SALIÓ", UNO POR DESTINATARIO. La marca es el PROPIO
+    # encargo que este reporte deja en la bandeja, igual que el briefing matinal
+    # (cerebro/despertador.py::_briefing). No una tabla aparte.
+    #
+    # Antes la marca era `correo_estado.ultimo_reporte`, y no cerraba nunca: la
+    # condición pedía una fila por CADA cuenta, el único sitio que escribía esa
+    # fila era el `if e:` de más abajo —que solo actualiza filas que ya
+    # existen— y el bloque que las creaba se había borrado. Sin fila, el
+    # candado quedaba abierto y el reporte entraba en cada vuelta del bucle:
+    # ~100 salidas por mañana en vez de una. Un candado que lee lo mismo que
+    # escribe no se puede romper por falta de inicialización.
+    #
+    # Y se pregunta POR DESTINO, no en global. Cada buzón informa al chat que
+    # dice su `reporte_a`, así que "¿ya salió el reporte de hoy?" sin decir de
+    # quién tiene la respuesta equivocada: si el dueño recibió el suyo a las
+    # 7:10, un candado global deja al destino de las 9:00 sin nada hasta mañana
+    # y sin rastro. Un destino, un candado, un reporte por día.
+    hoy_arranca = ahora.replace(hour=0, minute=0, second=0, microsecond=0)
+    ya_reportados = await db.destinos_con_encargo_hoy(
+        "correo", MARCA_ENCARGO, hoy_arranca)
+    destinos = {d for d in map(destino_del_reporte, config.CORREO_CUENTAS) if d}
+    if not destinos - ya_reportados:
+        # Todos los que informan a alguien ya informaron. Se sale ANTES de
+        # abrir IMAP: son ~100 vueltas por mañana.
         return 0
 
     reglas = await _reglas()
@@ -898,6 +931,8 @@ async def reporte_diario() -> int:
         destino = destino_del_reporte(cuenta)
         if not destino:
             continue          # buzón que se lee para bancos y nada más
+        if destino in ya_reportados:
+            continue          # ese chat ya tuvo su reporte hoy
         try:
             por_destino.setdefault(destino, []).extend(
                 await _pendientes_de(cuenta, reglas))
@@ -906,13 +941,13 @@ async def reporte_diario() -> int:
                         cuenta.get("user", "?"), exc_info=True)
     pendientes = [c for lista in por_destino.values() for c in lista]
 
-    # Marcamos el día aunque no haya nada, para no reintentar toda la mañana.
-    for c, e in zip(config.CORREO_CUENTAS, estados):
-        if e:
-            await db.guardar_estado_correo(
-                c["user"], e["uidvalidity"], e["ultimo_uid"], hoy)
-
     if not pendientes:
+        # Sin encargo no hay marca, así que una mañana sin correo se vuelve a
+        # mirar en la próxima vuelta. Es barato —mirar no clasifica, y sin
+        # correos nuevos no hay ni una llamada a DeepSeek— y es la consecuencia
+        # de que la marca sea el encargo: no hubo reporte, así que el reporte
+        # del día sigue pendiente. El primero que llegue antes del mediodía lo
+        # dispara; lo que llegue DESPUÉS de ese ya espera a mañana.
         log.info("Reporte de correo: nada sin leer que no se haya informado.")
         return 0
 
