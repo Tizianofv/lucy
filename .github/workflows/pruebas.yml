@@ -9,9 +9,18 @@
 #   * El corpus de correos bancarios reales (`tests/fixtures/**/*.eml`) son
 #     movimientos de Tiziano y de Rosi y está fuera de git (.gitignore:23). Las
 #     pruebas que lo necesitan salen SALTADAS con su motivo, nunca en verde.
-#     El paso «Qué no se pudo probar acá» las lista en el resumen del job.
+#     El último paso las lista en el resumen del job.
 #   * `tools/humo.py` (acople con la base) necesita DATABASE_URL de producción y
 #     no corre acá. Sigue siendo un paso a mano antes de desplegar algo con SQL.
+#
+# Y una cosa que este workflow SÍ tiene que resolver, porque si no el freno no
+# sirve desde fuera: EL LOG DE UNA CORRIDA NO SE PUEDE LEER SIN SER ADMIN
+# (`GET /repos/:o/:r/actions/jobs/:id/logs` → 403 aunque el repo sea público;
+# comprobado el 4-sep-2026). Por eso el último paso imprime cada prueba en rojo
+# como `::error file=…,line=…::…`: eso crea anotaciones en el check run, que sí
+# son públicas —`GET /repos/:o/:r/check-runs/:id/annotations` → 200 sin
+# autenticar— y salen dibujadas en la página de la corrida. El porqué completo,
+# en la cabecera de .github/resumen_pruebas.py.
 
 name: pruebas
 
@@ -51,6 +60,6 @@ jobs:
       - name: Suite
         run: python -m pytest --junitxml=informe.xml
 
-      - name: Qué no se pudo probar acá
+      - name: Qué falló y qué no se pudo probar acá
         if: always()
         run: python .github/resumen_pruebas.py informe.xml
