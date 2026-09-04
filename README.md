@@ -37,6 +37,10 @@ crudo *antes* de que la IA lo toque, así nada se pierde aunque la IA falle.
 
 ## Correr en local
 
+0. Python **3.12** — lo dice `.python-version` y es lo que corre en Railway. Con
+   3.9 los pines de `requirements.txt` no se instalan siquiera
+   (`psycopg[binary]==3.2.3` no tiene rueda para 3.9). Ver
+   [Correr las pruebas](#correr-las-pruebas) si hace falta bajar un 3.12 aislado.
 1. `python -m venv .venv && .venv\Scripts\activate` (Windows)
 2. `pip install -r requirements.txt`
 3. Copiar `.env.example` a `.env` y completar los valores.
@@ -45,6 +49,63 @@ crudo *antes* de que la IA lo toque, así nada se pierde aunque la IA falle.
    de fecha: `psql "$DATABASE_URL" -f db/migrations/<fecha>_<nombre>.sql`
    (son idempotentes: correr una dos veces no hace nada la segunda).
 6. `python main.py`
+
+## Correr las pruebas
+
+Un comando, y no hace falta acordarse de ninguna bandera:
+
+```bash
+pytest
+```
+
+Eso es todo. La configuración vive en `pytest.ini` y ya trae `asyncio_mode = auto`,
+que es lo que hace que las pruebas `async def` **corran**. Sin esa línea
+`pytest` se las salta en silencio y la suite se ve más verde de lo que es:
+medido el 4-sep-2026 contra `6f7d4da`, sin ella eran 300 pasadas y con ella 327.
+Veintisiete pruebas que nadie había corrido nunca.
+
+Las dependencias de prueba están fijadas aparte, en `requirements-dev.txt`, y no
+se instalan en Railway:
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+```
+
+**Sobre Python 3.12, que es lo que dice `.python-version` y lo que corre en
+Railway.** No es un detalle: `psycopg[binary]==3.2.3` no tiene rueda para 3.9, así
+que bajo 3.9 los pines de `requirements.txt` ni siquiera se instalan, y un verde
+sacado de un entorno con otras versiones no dice nada sobre lo que va a pasar en
+producción. Si en tu máquina no hay un 3.12, `uv` baja uno aislado:
+
+```bash
+uv python install 3.12
+uv venv --python 3.12 .venv
+uv pip install -r requirements.txt -r requirements-dev.txt
+```
+
+### Lo que no siempre se puede probar
+
+El corpus de correos bancarios (`tests/fixtures/**/*.eml`) son movimientos reales
+de Tiziano y de Rosi, y está fuera de git a propósito (`.gitignore:23`). Donde no
+está —un runner limpio de GitHub, una compu recién clonada— las pruebas que lo
+necesitan salen **SALTADAS con su motivo**, nunca en verde y nunca en rojo: se
+dice que no corrieron. Son 30 de 353. En la máquina que sí tiene el corpus, corren
+todas y `pytest.ini` no cambia nada.
+
+Cada archivo sigue teniendo su bloque `__main__`, así que `python3 tests/test_x.py`
+también funciona. Pero ése no carga `conftest.py`: sin el corpus, las pruebas que
+lo necesitan revientan en vez de saltarse. Para la suite completa, `pytest`.
+
+### El freno
+
+`.github/workflows/pruebas.yml` corre todo esto en cada push y en cada pull
+request, sobre 3.12 y con las versiones fijadas. El resumen del job lista una por
+una las pruebas que no se pudieron correr, y falla si ese número sube.
+
+**Lo que el freno NO cubre:** `tools/humo.py`, que es el que ve los errores de
+acople con la base. Necesita `DATABASE_URL` de producción y sigue siendo un paso a
+mano antes de desplegar cualquier cosa que toque SQL. Las suites son herméticas y
+por construcción no ven esos errores.
 
 ## Deploy
 
