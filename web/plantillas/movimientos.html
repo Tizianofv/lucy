@@ -12,6 +12,25 @@ solo el número.</p>
 {% if guardados %}
 <p class="vacio">Guardado{{ 's' if guardados > 1 }} {{ guardados }}.</p>
 {% endif %}
+{% if request.query_params.get('efectivo') %}
+<p class="vacio">Gasto en efectivo guardado como
+<code>{{ request.query_params.get('efectivo')|int|codigo }}</code>.</p>
+{% endif %}
+{# Un rechazo tiene que DECIR qué pasó. Un formulario que vuelve en blanco sin
+   explicación se lee como "se guardó" y el gasto se pierde sin que nadie lo
+   note — que es justo el fallo silencioso que este panel existe para evitar. #}
+{% set err = request.query_params.get('error') %}
+{% if err %}
+<p class="vacio">No se guardó:
+{% if err == 'concepto' %}el concepto va vacío o pasa de 200 caracteres.
+{% elif err == 'monto' %}el monto tiene que ser un número mayor que cero, con
+  dos decimales como mucho. No se redondea: 1.234 se rechaza.
+{% elif err == 'fecha' %}la fecha no se entiende, es del futuro, o es
+  demasiado vieja. Se guarda lo que ya se gastó, no lo que se va a gastar.
+{% elif err == 'categoria' %}esa categoría no está en la lista.
+{% else %}el formulario no se pudo leer.
+{% endif %}</p>
+{% endif %}
 <form class="filtros" method="get">
   <input type="date" name="desde" value="{{ desde }}">
   <input type="date" name="hasta" value="{{ hasta }}">
@@ -71,6 +90,45 @@ solo el número.</p>
   });
 })();
 </script>
+{# HERMANO del formulario de categorías, NUNCA adentro: la tabla vive dentro de
+   <form action="/categorias"> y un <form> dentro de otro es HTML inválido — el
+   navegador lo descarta y el botón deja de hacer nada, en silencio. Es lo mismo
+   que ya obligó a usar formaction en el botón de la papelera.
+
+   Plegado en un <details> para no empujar la tabla hacia abajo cuando no se
+   usa, y sin JavaScript: se abre con un toque aunque el JS no cargue. #}
+<details class="efectivo">
+<summary>+ Gasto en efectivo</summary>
+<form method="post" action="/efectivo">
+  <input type="hidden" name="volver" value="{{ volver }}">
+  <p><label>Concepto<br>
+    <input name="concepto" maxlength="200" required
+           placeholder="parqueo en la Zona Colonial" style="width:22rem"></label></p>
+  <p><label>Monto<br>
+    {# inputmode decimal: en el celular abre el teclado numérico. step 0.01
+       porque la columna es NUMERIC(12,2) y el servidor rechaza el tercer
+       decimal en vez de redondearlo. #}
+    <input name="monto" type="number" step="0.01" min="0.01" required
+           inputmode="decimal" placeholder="0.00" style="width:9rem"></label> RD$</p>
+  <p><label>Fecha<br>
+    {# Viene con hoy puesta y se puede cambiar. min y max los pone el servidor
+       con SU reloj de Santo Domingo, los mismos dos valores que valida la ruta:
+       la pantalla no ofrece lo que el servidor va a rechazar. #}
+    <input name="fecha" type="date" value="{{ hoy }}" min="{{ piso_fecha }}"
+           max="{{ hoy }}" required></label></p>
+  <p><label>Categoría<br>
+    <select name="categoria" style="width:14rem">
+      <option value="">— sin categoría —</option>
+      {% for c in todas %}
+      <option value="{{ c }}">{{ c }}</option>
+      {% endfor %}
+    </select></label></p>
+  <p><button>Agregar en efectivo</button></p>
+  <p class="suave">Se guarda en pesos, marcado como efectivo. Si lo dejás sin
+  categoría, aparece en «Sin clasificar».</p>
+</form>
+</details>
+
 {% if not movs %}
 <p class="vacio">Nada con esos filtros.</p>
 {% else %}

@@ -71,6 +71,12 @@ async def main() -> int:
              datetime.now(timezone.utc).replace(hour=0, minute=0, second=0,
                                                 microsecond=0))),
         ("silencio_por_banco", lambda: db.silencio_por_banco()),
+        # El filtro que contesta "¿cuánto gasté en efectivo?". No hay columna
+        # de método de pago: los gastos en efectivo se marcan con
+        # banco='efectivo', así que esta es LA consulta de esa función. Es una
+        # LECTURA — humo.py no escribe nada, y menos en producción.
+        ("movimientos_filtrados (banco=efectivo)",
+         lambda: db.movimientos_filtrados(None, None, None, None, "efectivo")),
     ]
 
     rojas = []

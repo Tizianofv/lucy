@@ -33,6 +33,7 @@ proyecto de mantenimiento, y el tiempo es justo lo que este proyecto no tiene.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -43,7 +44,8 @@ from fastapi.templating import Jinja2Templates
 import config
 import db.db as db
 import web.auth as auth
-from cerebro.bancos.categorias import CATEGORIAS, NO_SUMAN
+from cerebro.bancos.categorias import (CATEGORIAS, NO_SUMAN,
+                                       categoria_permitida)
 
 log = logging.getLogger("lucy.panel")
 
@@ -132,6 +134,80 @@ def _destino_seguro(volver: str) -> str:
     """
     limpio = (volver or "").strip()
     return limpio if limpio.startswith("/movimientos") else "/sin-clasificar"
+
+
+# El monto, en la única forma que se acepta: dígitos, y como mucho dos
+# decimales. Se compila una vez.
+#
+# LOS CENTAVOS DE MÁS SE RECHAZAN, NO SE REDONDEAN. La columna es
+# NUMERIC(12,2), así que Postgres guardaría 1.234 como 1.23 sin decir nada —
+# y redondear dinero en silencio es exactamente lo que este proyecto no hace.
+# Diez dígitos enteros es más de lo que cabe en NUMERIC(12,2) sin la parte
+# decimal, así que un número absurdamente largo se frena acá y no en la base.
+_MONTO = re.compile(r"^\d{1,10}(\.\d{1,2})?$")
+
+# El suelo de la fecha. NO es una regla de negocio sobre hasta cuándo se puede
+# cargar hacia atrás: es una malla contra un dígito del año que se resbaló.
+#
+# `date.fromisoformat` acepta tan contento "0026-09-04" y "1926-09-04", y una
+# fila guardada en el año 26 no vuelve a aparecer en ninguna pantalla que
+# alguien mire —el resumen va por mes, y ese mes nadie lo abre— así que el
+# gasto se pierde EN SILENCIO, que es la familia de fallo que este panel
+# combate. Los registros de Lucy empiezan en 2026; el suelo se deja seis años
+# por debajo, deliberadamente flojo, para que ningún registro tardío legítimo
+# lo toque y solo caiga el año mal tecleado.
+PISO_FECHA = date(2020, 1, 1)
+
+
+def _monto_valido(texto: str):
+    """El texto del formulario → Decimal, o None si no es un monto.
+
+    Vive en su propia función para poder PROBARLA sin levantar la app, igual
+    que `_destino_seguro`. Un validador que solo se ejercita a través del
+    endpoint se prueba a medias.
+    """
+    limpio = (texto or "").strip()
+    if not _MONTO.fullmatch(limpio):
+        return None
+    valor = Decimal(limpio)
+    # Cero no es un gasto, y negativo no puede llegar (el patrón no lo deja):
+    # el monto se guarda SIEMPRE positivo y la dirección la da `tipo`.
+    return valor if valor > 0 else None
+
+
+def _fecha_valida(texto: str, hoy: date):
+    """El texto del formulario → date, o None si no es una fecha que se pueda
+    guardar. `hoy` se pasa para poder probar el borde sin depender del reloj.
+
+    TRES COSAS SE RECHAZAN, y ninguna se arregla adivinando:
+
+    1. Lo que no parsea —vacío, "abc", "2026-13-45", "2026-02-30"—. Acá NO se
+       cae a la fecha de hoy: guardar una fila con una fecha que la persona no
+       eligió es el error silencioso que se estaría tapando. Se rechaza y se
+       avisa.
+    2. EL FUTURO. Un gasto en efectivo es plata que YA salió; una fecha por
+       venir no es un gasto, es un plan, y Lucy no tiene planes de gasto. Peor:
+       ensucia el resumen de un mes que todavía no cerró.
+    3. Lo anterior a PISO_FECHA (ver arriba).
+
+    "Hoy" es hoy EN SANTO DOMINGO, del reloj del servidor, y el mismo valor va
+    al `max` del campo en la pantalla. Que las dos puntas salgan de la misma
+    fuente es lo que evita que un navegador en otra zona horaria ofrezca un día
+    que el servidor considera futuro.
+    """
+    try:
+        f = date.fromisoformat((texto or "").strip())
+    except ValueError:
+        return None
+    if f > hoy or f < PISO_FECHA:
+        return None
+    return f
+
+
+def _hoy() -> date:
+    """Hoy en Santo Domingo. Una sola definición, usada por el validador y por
+    el `max` del campo de fecha: si se separan, se contradicen."""
+    return datetime.now(config.TZ).date()
 
 
 def _sesion(request: Request) -> int | None:
@@ -224,7 +300,10 @@ async def cola(request: Request, guardados: int = 0):
 
 @app.post("/categorias")
 async def categorias(request: Request):
-    """La única escritura del panel. Queda en log_acciones como todo lo demás.
+    """Guardar las categorías corregidas. Queda en log_acciones como todo lo demás.
+
+    (Era "la única escritura del panel" hasta que se sumó POST /efectivo, que
+    carga un gasto en efectivo. Ahora son dos, y las dos dejan su huella.)
 
     Guarda TODA la tabla de una vez. Antes era una fila por envío, y como cada
     guardado recargaba la página, se llevaba puesto lo que ya estaba elegido en
@@ -331,8 +410,69 @@ async def movimientos(request: Request, desde: str = "", hasta: str = "",
          "todas": _alfabetico(CATEGORIAS),
          # Para los ingresos y traspasos, solo las marcas — no los rubros.
          "no_suman": NO_SUMAN, "guardados": guardados,
+         # Para el formulario de efectivo: la fecha viene con hoy puesta y
+         # acotada entre el piso y hoy. Los mismos dos valores que valida el
+         # servidor, para que la pantalla no ofrezca lo que la ruta rechaza.
+         "hoy": _hoy().isoformat(), "piso_fecha": PISO_FECHA.isoformat(),
          "volver": str(request.url.path) + (
              "?" + str(request.url.query) if request.url.query else "")})
+
+
+@app.post("/efectivo")
+async def efectivo(request: Request):
+    """Un gasto en efectivo, escrito a mano. La segunda escritura del panel.
+
+    POR QUÉ ACÁ Y NO EN /sin-clasificar: esa pantalla es la cola de corrección
+    y tiene un test que exige UN SOLO <form> en su plantilla; un segundo
+    formulario ahí rompe la razón por la que ese test existe. /movimientos es
+    el registro —es donde vas a mirar si quedó— y es donde vive el filtro por
+    banco que hace útil la marca.
+
+    EL FORMULARIO NO PREGUNTA EL MÉTODO DE PAGO. Elegir "efectivo" en un
+    formulario que solo carga efectivo es una decisión que no existe: antes de
+    manejar el caso, se borra.
+
+    Nada de lo que se rechaza devuelve un 500: todo sale por un 303 de vuelta a
+    la pantalla, con `?error=` para que se vea qué pasó. Y cada rechazo deja
+    una línea en el log del servidor, como hace /categorias con las categorías
+    que no pasan: un rechazo sin rastro es un fallo silencioso.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+
+    formulario = await request.form()
+    destino = _destino_seguro(str(formulario.get("volver", "")))
+
+    def _vuelta(clave: str):
+        log.warning("Panel: gasto en efectivo rechazado por %s", clave)
+        sep = "&" if "?" in destino else "?"
+        return RedirectResponse(f"{destino}{sep}error={clave}", status_code=303)
+
+    concepto = str(formulario.get("concepto", "")).strip()
+    if not concepto or len(concepto) > 200:
+        return _vuelta("concepto")
+
+    monto = _monto_valido(str(formulario.get("monto", "")))
+    if monto is None:
+        return _vuelta("monto")
+
+    fecha = _fecha_valida(str(formulario.get("fecha", "")), _hoy())
+    if fecha is None:
+        return _vuelta("fecha")
+
+    # La categoría se comprueba contra la lista cerrada AUNQUE el desplegable
+    # ya solo ofrezca esas. Mismo motivo que en /categorias: basta un POST a
+    # mano para meter "supermercado" en minúscula y partir el total en dos para
+    # siempre. Vacía se acepta: la fila cae sola en /sin-clasificar, que es lo
+    # que ya hace todo lo demás sin categoría.
+    categoria = str(formulario.get("categoria", "")).strip()
+    if categoria and (categoria not in CATEGORIAS
+                      or not categoria_permitida("gasto", categoria)):
+        return _vuelta("categoria")
+
+    mid = await db.crear_gasto_en_efectivo(concepto, monto, categoria, fecha)
+    sep = "&" if "?" in destino else "?"
+    return RedirectResponse(f"{destino}{sep}efectivo={mid}", status_code=303)
 
 
 @app.post("/borrar")

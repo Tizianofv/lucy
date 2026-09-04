@@ -869,6 +869,73 @@ async def gasto_por_categoria(mes: str | None = None) -> list[dict]:
         return await cur.fetchall()
 
 
+async def crear_gasto_en_efectivo(concepto: str, monto, categoria: str | None,
+                                  fecha) -> int:
+    """Un gasto pagado en efectivo, cargado a mano desde el panel.
+
+    NO HAY COLUMNA DE MÉTODO DE PAGO, y no hace falta una: `banco` es la
+    columna que dice DE DÓNDE SALIÓ LA PLATA, y "efectivo" es una respuesta
+    legítima a esa pregunta. Se llama `banco` porque hasta hoy la única fuente
+    eran correos de bancos, no porque el concepto sea "banco". Con eso,
+    "¿cuánto gasté en efectivo?" se contesta con el filtro que ya existe
+    (`movimientos_filtrados(banco="efectivo")`) y la opción aparece sola en el
+    desplegable, porque `bancos_usados()` lo arma desde la base.
+
+    `hash_contenido` va NULO y ES LO MÁS IMPORTANTE DE ESTA FILA. Es lo que
+    distingue "vino de un correo" de "lo escribió una persona", y por eso deja
+    la fila fuera de los contadores de ingesta de /salud
+    (`salud_ingesta`, `silencio_por_banco`) y fuera de `posibles_duplicados`,
+    las tres consultas que filtran por `hash_contenido IS NOT NULL`. Un gasto
+    en efectivo no dice nada sobre si la lectura de correos funciona.
+
+    Sin guarda de duplicados, al revés que el alta por Telegram
+    (`acciones/crud.py`): ahí el riesgo es chocar con un movimiento que el
+    correo del banco ya trajo, y acá eso no puede pasar porque NINGÚN BANCO
+    MANDA UN CORREO POR UN PAGO EN EFECTIVO. Dos cafés de RD$150 el mismo día
+    son normales, y el 303 del endpoint ya evita el duplicado por refrescar.
+
+    `monto` viaja como str por el mismo motivo que en `guardar_movimiento()`:
+    la columna es NUMERIC(12,2) y pasar por float perdería centavos justo en
+    la conversión.
+
+    La fila y su huella en log_acciones se escriben en el MISMO bloque de
+    conexión, o sea en la misma transacción, igual que `a_la_papelera()`: o
+    entran las dos o no entra ninguna. Un movimiento sin su línea de log es un
+    movimiento que no se puede deshacer, y el deshacer de este proyecto ES
+    log_acciones.
+
+    La acción se registra como 'crear' y no como otra palabra porque es lo que
+    `deshacer()` sabe revertir: su rama de 'crear' hace
+    `SET borrado_en = now()`, o sea lo manda a la papelera.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            INSERT INTO movimientos
+              (bandeja_id, tipo, fecha, monto, moneda, contraparte,
+               categoria, referencia, hash_contenido, banco)
+            VALUES (NULL, 'gasto', %s, %s, 'DOP', %s, %s, NULL, NULL,
+                    'efectivo')
+            RETURNING *
+            """,
+            (fecha, str(monto), concepto, categoria or None))
+        # RETURNING * y no una fila reconstruida a mano: `despues` tiene que
+        # ser lo que de verdad quedó guardado —con el id, el creado_en y los
+        # defaults que puso Postgres—, no lo que creíamos estar mandando.
+        fila = await cur.fetchone()
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo)
+            VALUES ('panel', 'crear', 'movimientos', %s, NULL, %s,
+                    'gasto en efectivo cargado desde el panel')
+            """,
+            (fila["id"],
+             json.dumps(fila, default=str, ensure_ascii=False)))
+        return fila["id"]
+
+
 DIAS_EN_PAPELERA = 30
 
 
@@ -1200,7 +1267,8 @@ async def olvidar_categoria(movimiento_id: int) -> None:
 
 
 async def poner_categoria(movimiento_id: int, categoria: str) -> None:
-    """La única escritura del panel. Pasa por log_acciones como todo lo demás:
+    """La escritura de la cola de corrección. Pasa por log_acciones como todo
+    lo demás (la otra escritura del panel es `crear_gasto_en_efectivo`):
     una corrección hecha desde la web tiene que ser tan auditable y tan
     reversible como una hecha por Telegram.
 
