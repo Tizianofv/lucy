@@ -110,14 +110,57 @@ def pytest_runtest_call(item):
 # meterles fixtures de pytest rompería esa segunda forma de correrlos.
 
 import sys  # noqa: E402
+import sysconfig  # noqa: E402
 
 
 _RAIZ = pathlib.Path(__file__).parent.resolve()
+
+# Las carpetas del INTÉRPRETE y de los paquetes instalados.
+#
+# «Vive dentro del repo» no alcanza para decir «es de Lucy»: en la máquina de
+# Tiziano el venv y el Python que baja `uv` viven DENTRO de la carpeta de
+# trabajo, y sus rutas resuelven así:
+#
+#   <repo>/.venv/lib/python3.12/site-packages/pytest/__init__.py
+#   <repo>/.uv-python/cpython-3.12.13-macos-aarch64-none/lib/python3.12/os.py
+#
+# Sin esta exclusión el fixture de abajo daba por «módulo de Lucy» a `os`, a
+# `asyncio`, a `pytest`, a `pydantic` y a todo lo demás — 517 módulos en vez de
+# 25 — y guardaba y restauraba la biblioteca estándar entera después de cada una
+# de las 353 pruebas.
+#
+# Eso no era solo caro: TAPABA fallos ajenos. Una prueba que le escribe encima a
+# `asyncio.to_thread` y no lo devuelve quedaba limpiada acá por accidente, y la
+# suite salía verde. En GitHub el intérprete vive FUERA del checkout
+# (/opt/hostedtoolcache/Python/...), no se limpiaba nada, y la primera corrida
+# del freno —4-sep-2026, commit 347ff14— salió con 8 fallos en
+# tests/test_reporte_una_vez_al_dia.py que en esta Mac nadie podía ver.
+#
+# Se excluye por las rutas que declara `sysconfig`, y no por los nombres
+# `.venv` / `.uv-python`, para que siga valiendo si mañana el entorno se llama
+# de otra forma o se crea con otra herramienta.
+_ENTORNO = tuple({
+    pathlib.Path(p).resolve()
+    for p in (sys.prefix, sys.base_prefix,
+              sysconfig.get_path("stdlib"), sysconfig.get_path("platstdlib"),
+              sysconfig.get_path("purelib"), sysconfig.get_path("platlib"),
+              sysconfig.get_path("data"))
+    if p
+})
+
 _ES_DEL_PROYECTO: dict = {}
 
 
+def _del_entorno(ruta: pathlib.Path) -> bool:
+    """¿Ese archivo es del intérprete o de un paquete instalado, y no de Lucy?"""
+    return any(e == ruta or e in ruta.parents for e in _ENTORNO)
+
+
 def _modulos_del_proyecto():
-    """Módulos ya importados cuyo archivo vive dentro del repo, menos los tests.
+    """Módulos ya importados cuyo archivo es CÓDIGO DE LUCY.
+
+    O sea: vive dentro del repo, no es una prueba, y no pertenece al intérprete
+    ni a los paquetes instalados (ver `_ENTORNO`).
 
     La clasificación se cachea por nombre de módulo: sin caché, resolver la ruta
     de cada módulo en cada una de las 353 pruebas costaba 10.9 s de suite.
@@ -143,6 +186,8 @@ def _modulos_del_proyecto():
         except (OSError, ValueError):
             continue
         if raiz not in ruta.parents:
+            continue
+        if _del_entorno(ruta):
             continue
         if ruta.name == "conftest.py" or "tests" in ruta.relative_to(raiz).parts:
             continue

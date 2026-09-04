@@ -54,8 +54,35 @@ def _correr(c):
     return asyncio.get_event_loop_policy().new_event_loop().run_until_complete(c)
 
 
+class _AsyncioConHilo:
+    """Un `asyncio` que solo cambia `to_thread`; todo lo demás es el de verdad.
+
+    Se pone sobre `correo.asyncio` —un atributo de un módulo DE LUCY, que el
+    conftest devuelve a su sitio al terminar cada prueba— y NO sobre el módulo
+    `asyncio` del proceso.
+
+    La versión anterior hacía `correo.asyncio.to_thread = ...`, que es escribirle
+    encima a la biblioteca estándar: quedaba puesto para el resto de la sesión y
+    nadie lo devolvía. Toda prueba posterior que leyera correo recibía ESTOS dos
+    crudos en vez de los suyos. El 4-sep-2026 eso dejó 8 pruebas de
+    tests/test_reporte_una_vez_al_dia.py en rojo en la primera corrida del freno
+    en GitHub (commit 347ff14) —`reporte_diario` devolvía 2 donde se esperaba 1—
+    mientras en la Mac salían verdes, porque ahí el venv vive dentro del repo y
+    el conftest limpiaba `asyncio` por accidente.
+    """
+
+    def __init__(self, crudos):
+        self._crudos = crudos
+
+    def to_thread(self, fn, *a, **k):
+        return _hecho(self._crudos)
+
+    def __getattr__(self, nombre):
+        return getattr(asyncio, nombre)
+
+
 def _montar(crudos):
-    correo.asyncio.to_thread = lambda fn, *a, **k: _hecho(crudos)
+    correo.asyncio = _AsyncioConHilo(crudos)
 
     async def _ya(cuenta, uids):
         return set()
