@@ -1,0 +1,8 @@
+# Solo para correr las pruebas. NO se instala en Railway: el despliegue usa
+# requirements.txt y nada más.
+#
+# Van fijadas por la misma razón que las de producción: sin fijar, la suite
+# corre distinto según el día en que alguien creó su venv, y un verde deja de
+# significar lo mismo para dos personas.
+pytest==9.1.1
+pytest-asyncio==1.4.0

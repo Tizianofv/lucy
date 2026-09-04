@@ -27,3 +27,11 @@ tests/fixtures/**/*.eml
 .idea/
 .DS_Store
 Thumbs.db
+
+# Entorno de pruebas: el Python 3.12 aislado y los cachés que baja uv. Pesan
+# cientos de MB y son de esta máquina. uv y pytest escriben su propio .gitignore
+# dentro de cada carpeta, pero eso es un detalle de esas herramientas y no una
+# garantía: acá queda dicho explícitamente.
+.uv-cache/
+.uv-python/
+.pytest_cache/
