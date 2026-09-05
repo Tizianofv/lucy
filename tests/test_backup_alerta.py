@@ -338,9 +338,25 @@ def test_las_columnas_que_el_codigo_inserta_existen_en_el_esquema():
         if fuente[m.end():m.end() + 1] == "(":
             continue
         usadas.add(m.group(1).lower())
-    # Palabras de sintaxis SQL que la expresión pesca sin ser tablas, y el
-    # catálogo del sistema, que Postgres trae solo.
-    usadas -= {"set", "skip", "information_schema"}
+    # Palabras de sintaxis SQL que la expresión pesca sin ser tablas.
+    usadas -= {"set", "skip"}
+    # El catálogo del sistema, que Postgres trae solo y ningún esquema declara:
+    # `information_schema.*` y todo lo que empieza por `pg_`. El prefijo `pg_`
+    # está RESERVADO por Postgres para sus propios objetos, así que sacarlo de
+    # aquí no afloja nada — ninguna tabla de Lucy puede llamarse así. Se pasó
+    # de una lista de nombres sueltos a la regla el 5-sep-2026, cuando
+    # `objetos_que_faltan()` empezó a consultar pg_index/pg_class/pg_constraint/
+    # pg_namespace: con la lista escrita a mano habría que venir a añadir un
+    # nombre por cada consulta nueva al catálogo, y el que se olvide de hacerlo
+    # ve un rojo que no significa nada.
+    del_catalogo = {t for t in usadas
+                    if t.startswith("pg_") or t == "information_schema"}
+    usadas -= del_catalogo
+    # Y que el descarte no se lleve por delante una tabla de verdad: ninguna
+    # de las que db/schema.sql declara puede haber caído en él.
+    assert not (del_catalogo & declaradas), (
+        f"el descarte del catálogo se comió tablas declaradas: "
+        f"{sorted(del_catalogo & declaradas)}")
     sin_declarar = sorted(usadas - declaradas)
     assert not sin_declarar, (
         f"db.py usa tablas que db/schema.sql no declara: {sin_declarar}")

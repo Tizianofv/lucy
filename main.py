@@ -81,6 +81,17 @@ async def _al_arrancar(app) -> None:
                   "así, las respuestas de Lucy y las del panel pueden dar "
                   "números distintos.", "; ".join(descuadre))
 
+    # Y un nivel al lado: los ÍNDICES y las RESTRICCIONES. Es la parte del
+    # esquema que hasta el 5-sep-2026 no miraba nadie, y donde vivían las tres
+    # derivas de ese día. La que muerde fuerte es `idx_movimientos_hash`: sin
+    # él, el ON CONFLICT de guardar_movimiento revienta y no entra un solo
+    # movimiento bancario — ruidoso, pero recién a la primera ingesta, o sea
+    # hasta 15 minutos después de que este log ya nadie lo mire.
+    objetos = await db.objetos_que_faltan()
+    if objetos:
+        log.error("db/schema.sql NO DECLARA LA MISMA FORMA QUE LA BASE: %s.",
+                  "; ".join(objetos))
+
     # La IA se chequea, pero su falla NO tumba a Lucy: capturar no puede
     # depender de que la IA esté viva (es el principio del Nivel 1). Cerebro y
     # oído se chequean por separado porque son proveedores distintos: que se
