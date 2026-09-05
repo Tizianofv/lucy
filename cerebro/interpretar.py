@@ -185,6 +185,34 @@ async def bucle(bot) -> None:
                 log.warning("No pude indexar memoria; reintento en la próxima.",
                             exc_info=True)
         if vuelta % 36 == 0:  # chequeo barato cada ~3 min; solo abre Gmail 1x/día
+            # PENDIENTE, Y NO ES DE ESTE ARCHIVO NI DE ESTE ARREGLO (5-sep-2026).
+            #
+            # Este `await` es directo: no hay `create_task`. Mientras
+            # `reporte_diario()` trabaja, el bucle NO vuelve al `for` de arriba,
+            # así que Lucy deja de contestarle a Tiziano por Telegram hasta que
+            # termine. Nadie decidió eso; salió de que todo cuelga del mismo
+            # `await`.
+            #
+            # Medido con un arnés de IMAP falso el 5-sep-2026, un buzón con
+            # 2.000 sin leer en la ventana disparaba 2.000 descargas de cuerpo
+            # completo y 2.000 llamadas a DeepSeek, secuenciales. Hoy son 2.000
+            # cabeceras, 60 cuerpos y 60 llamadas (ver `MAX_CLASIFICA_POR_VUELTA`
+            # en captura/correo.py): el bloqueo bajó mucho, pero NO desapareció
+            # — quedan las 2.000 cabeceras, una por fetch IMAP y en serie.
+            #
+            # Por qué no se arregla acá: no es un `create_task` y ya.
+            #   · `reporte_diario()` y `confirmar_leidos()` están acoplados POR
+            #     ORDEN a propósito ("mandar primero, marcar después"), y el
+            #     candado de una-vez-al-día se apoya en que estas llamadas no se
+            #     solapen: dos tareas a la vez pueden pasar el candado juntas y
+            #     dejar dos encargos.
+            #   · Y no es solo el correo. En este mismo bucle hay seis ramas más
+            #     con `await` directo — despertador, memoria, 911, rescate de
+            #     huérfanos, ingesta bancaria, calendario. Sacar una sola del
+            #     camino deja las otras seis igual.
+            # O sea: qué ramas se desacoplan del camino del mensaje, y con qué
+            # garantías de orden, es un diseño de este bucle — no un renglón
+            # dentro del arreglo del reporte de correo.
             try:
                 await correo.reporte_diario()
             except Exception:

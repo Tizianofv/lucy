@@ -2,8 +2,8 @@
 """En el camino del correo no se cae nada en silencio, y cada correo queda
 atado al encargo que de verdad lo informó.
 
-Dos defectos, medidos contra producción el 5-sep-2026, que eran el mismo:
-correos que se pierden de vista.
+Tres defectos, medidos el 5-sep-2026, que eran el mismo: correos que se pierden
+de vista, y una vuelta de trabajo que nadie acota.
 
 1. EL TOPE DESCARTABA CALLADO. `_sin_leer_sync` cortaba en los 60 UIDs más
    nuevos, y lo hacía ANTES de que nadie pudiera descontar los que ya se habían
@@ -23,6 +23,13 @@ correos que se pierden de vista.
    `correos_por_marcar_leidos` y `olvidar_reportados_fallidos` deciden por ese
    id, así que el reporte de una persona que sale bien marcaba como leídos
    —"ya te informé"— correos de otra cuyo reporte nunca llegó.
+
+3. Y QUITAR EL TOPE ENTERO FUE QUITAR DE MÁS. El tope hacía dos cosas: acotar
+   el trabajo de una vuelta (bien) y descartar lo que no cabía (mal). Sin nada
+   en su lugar, un buzón con 2.000 sin leer disparaba 2.000 descargas de cuerpo
+   completo y 2.000 llamadas a DeepSeek, en serie y sin techo — medido con este
+   mismo IMAP falso. Hoy el cupo acota lo caro y no descarta a nadie: lo que no
+   entra se informa igual, dicho como lo que es.
 
 Estas pruebas manejan el `_sin_leer_sync` DE VERDAD contra un IMAP de mentira,
 en vez de sustituirlo por un doble. Es a propósito: un tope que vuelva a
@@ -135,6 +142,7 @@ class _BaseFalsa:
     def __init__(self, ya_reportados=()):
         self.encargos: list[dict] = []            # id implícito = índice + 1
         self.marcados: list[dict] = []
+        self.clasificados: list[int] = []         # uids que gastaron DeepSeek
         self._ya = set(ya_reportados)
 
     async def guardar_en_bandeja(self, **kw):
@@ -189,9 +197,15 @@ def _montar(buzon, ya_reportados=(), rompe_al_traer_cuerpo=False):
               "correos_ya_reportados", "listar_preferencias",
               "destinos_con_encargo_hoy"):
         setattr(db, n, getattr(base, n))
-    correo.clasificar = lambda c, r="": _hecho(
-        {"ambito": "laboral", "area": "cds_clientes", "nivel": "accion",
-         "asunto_corto": c["subject"][:120], "motivo": ""})
+    def _clasificar(c, r=""):
+        # Anota el uid: cada llamada acá es una llamada a DeepSeek, que es
+        # exactamente el trabajo caro que el cupo tiene que acotar.
+        base.clasificados.append(c["uid"])
+        return _hecho(
+            {"ambito": "laboral", "area": "cds_clientes", "nivel": "accion",
+             "asunto_corto": c["subject"][:120], "motivo": ""})
+
+    correo.clasificar = _clasificar
     return base
 
 
@@ -294,6 +308,135 @@ def test_la_911_avisa_aunque_no_consiga_bajar_el_cuerpo():
     assert avisados == 1, (
         f"se avisó {avisados} veces: el fallo al bajar el cuerpo se comió la alerta")
     assert "Deploy failed" in base.encargos[0]["contenido_raw"]
+
+
+# ── 1-bis. Acotar SIN descartar: las dos mitades, por separado ────────────
+#
+# El tope viejo hacía dos cosas a la vez y solo una estaba mal: acotaba el
+# trabajo de una vuelta (bien) y descartaba lo que no cabía (mal). Las dos
+# pruebas de acá abajo las separan, y cada una muerde por su lado:
+#   · la primera se pone roja si vuelve el descarte,
+#   · la segunda se pone roja si se va el límite.
+# Ninguna arregla la otra: quitar el cupo pone roja la segunda, y volver a
+# recortar la lista pone roja la primera.
+
+
+def _buzon_de_un_dia_malo(n: int) -> list[tuple]:
+    """`n` correos sin leer, ninguno ruido evidente — o sea, `n` candidatos a
+    gastar una llamada a DeepSeek. Es la «ráfaga rara» del comentario original."""
+    return [(i, _eml(f"Persona {i} <p{i}@ejemplo.com>", f"asunto {i}"))
+            for i in range(1, n + 1)]
+
+
+def test_un_dia_malo_no_deja_ni_un_correo_fuera_del_reporte():
+    """ACOTAR NO PUEDE VOLVER A SIGNIFICAR DESCARTAR.
+
+    500 correos sin leer contra un cupo de trabajo mucho más chico. Los que no
+    entran en el cupo se informan igual —agrupados y dichos como lo que son— y
+    quedan atados a un encargo. Lo que NO puede pasar es que alguno no llegue a
+    ninguna parte: eso es lo que hacía el tope de 60 y lo que se cae de la
+    ventana de 7 días sin que a nadie le conste que existió.
+
+    Todo lo que se compara sale del buzón falso y de la constante del módulo. Si
+    mañana el cupo sube, baja o cambia de nombre, esta prueba sigue diciendo lo
+    mismo: no se pierde ni uno.
+    """
+    from datetime import datetime
+    buzon = _buzon_de_un_dia_malo(500)
+    assert len(buzon) > correo.MAX_CLASIFICA_POR_VUELTA, (
+        "el buzón de la prueba no desborda el cupo: no prueba nada")
+    base = _montar(buzon)
+    config.CORREO_CUENTAS = [CUENTA]
+    correo.datetime = _Reloj(datetime(2026, 9, 2, 7, 10, tzinfo=config.TZ))
+    config.es_horario_caro_deepseek = lambda ahora: False
+
+    cuantos = _correr(correo.reporte_diario())
+    assert cuantos == len(buzon), (
+        f"el buzón tiene {len(buzon)} sin leer y el reporte informó {cuantos}")
+
+    marcados = {m["uid"] for m in base.marcados}
+    perdidos = sorted({u for u, _ in buzon} - marcados)
+    assert not perdidos, (
+        f"{len(perdidos)} correos no quedaron atados a ningún encargo "
+        f"(uids {perdidos[:5]}…): se descartaron en silencio")
+
+    # Y el encargo tiene que DECIRLO: el total, y que hubo correos que no se
+    # miraron con criterio. Un correo contado en la base pero ausente del texto
+    # sigue siendo un correo que Tiziano no sabe que llegó.
+    texto = base.encargos[0]["contenido_raw"]
+    assert f"{len(buzon)} correos SIN LEER" in texto, (
+        f"el encargo no dice cuántos correos llegaron: {texto[:200]!r}")
+    sin_juzgar = len(buzon) - len(base.clasificados)
+    assert f"[{correo.SIN_CLASIFICAR}] {sin_juzgar} correos" in texto, (
+        f"el encargo no nombra los {sin_juzgar} que no se alcanzaron a mirar: "
+        "eso es descartar callado con otro nombre")
+
+
+def test_el_trabajo_de_una_vuelta_esta_acotado():
+    """Y LO CONTRARIO: quitar el cupo entero también es un defecto.
+
+    Con 500 sin leer y sin cupo salían 500 descargas de cuerpo completo y 500
+    llamadas a DeepSeek, secuenciales, mientras el bucle que atiende a Tiziano
+    esperaba. Lo caro de una vuelta tiene que estar acotado por
+    `MAX_CLASIFICA_POR_VUELTA`, y las dos mitades caras se miden por separado:
+    lo que se le pide a DeepSeek y lo que se le pide a Gmail.
+    """
+    buzon = _buzon_de_un_dia_malo(500)
+    cupo = correo.MAX_CLASIFICA_POR_VUELTA
+    assert len(buzon) > cupo, "el buzón de la prueba no desborda el cupo"
+    base = _montar(buzon)
+
+    salida = _correr(correo._pendientes_de(CUENTA, ""))
+    assert len(salida) == len(buzon), "esto lo cubre la prueba de arriba"
+
+    assert len(base.clasificados) == cupo, (
+        f"el buzón trae {len(buzon)} correos y se gastaron "
+        f"{len(base.clasificados)} llamadas a DeepSeek; el cupo es {cupo}")
+
+    cuerpos = [uid for uid, pieza in _IMAPFalso.ultimo.pedidos
+               if "HEADER" not in pieza]
+    assert len(cuerpos) <= cupo, (
+        f"se bajó el cuerpo completo de {len(cuerpos)} correos de {len(buzon)}; "
+        f"el techo es {cupo}. Bajar el cuerpo de todos es la mitad del costo")
+
+
+def test_el_cupo_se_lo_lleva_lo_mas_viejo():
+    """El orden es lo que el tope viejo tenía al revés: se quedaba con los MÁS
+    NUEVOS, así que lo viejo no recibía atención nunca y encima se caía de la
+    ventana. Lo más viejo lleva más esperando: el cupo es suyo.
+
+    El uid de IMAP crece con la llegada al buzón, así que «más viejo» es «uid
+    más chico». Lo esperado se calcula desde el buzón, no se escribe a mano.
+    """
+    buzon = _buzon_de_un_dia_malo(200)
+    cupo = correo.MAX_CLASIFICA_POR_VUELTA
+    base = _montar(buzon)
+    _correr(correo._pendientes_de(CUENTA, ""))
+    mas_viejos = sorted(u for u, _ in buzon)[:cupo]
+    assert sorted(base.clasificados) == mas_viejos, (
+        f"el cupo se gastó en {sorted(base.clasificados)[:3]}… y los más viejos "
+        f"del buzón son {mas_viejos[:3]}…")
+
+
+def test_el_reporte_no_baja_el_cuerpo_de_lo_que_no_lo_muestra():
+    """El par barato/caro que la vigilancia 911 ya hacía bien y el reporte no.
+
+    Un buzón de puro ruido evidente (`no-reply`) no gasta ni una llamada a la IA
+    —eso ya era así— y tampoco tiene que gastar una sola descarga de cuerpo: las
+    menciones salen en el encargo con el nombre del remitente y nada más.
+    """
+    buzon = [(i, _eml(f"Boletín <no-reply@marca{i}.com>", f"oferta {i}"))
+             for i in range(1, 41)]
+    base = _montar(buzon)
+    salida = _correr(correo._pendientes_de(CUENTA, ""))
+    assert len(salida) == len(buzon), "el ruido se informa igual, como mención"
+    assert base.clasificados == [], (
+        f"el ruido evidente gastó {len(base.clasificados)} llamadas a DeepSeek")
+    cuerpos = [uid for uid, pieza in _IMAPFalso.ultimo.pedidos
+               if "HEADER" not in pieza]
+    assert cuerpos == [], (
+        f"bajó {len(cuerpos)} cuerpos completos de correos que en el reporte "
+        "solo llevan el nombre del remitente")
 
 
 # ── 2. Cada correo, atado a SU encargo ────────────────────────────────────
