@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 from datetime import datetime
 
 import psycopg
@@ -63,6 +65,124 @@ async def abrir() -> None:
     await pool.open(wait=True, timeout=30)
 
 
+RUTA_SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "schema.sql")
+
+
+def columnas_declaradas(ruta: str = RUTA_SCHEMA) -> dict[str, list[str]]:
+    """{tabla: [columnas]} tal como lo declara db/schema.sql y sus migraciones.
+
+    Una sola fuente para "qué columnas tiene esta tabla". La usan dos cosas
+    que antes lo sabían por separado:
+
+      · columnas_que_faltan(), acá abajo, para comparar contra Postgres.
+      · cerebro/consultar.py, para ARMAR el esquema que ve el modelo en vez de
+        tenerlo copiado a mano. Esa copia se había separado de la tabla: le
+        faltaban 17 columnas, tres de ellas de `movimientos` —estado, banco,
+        hash_contenido—, y sin `estado` Lucy no podía excluir las compras
+        declinadas que el panel sí excluye.
+
+    Las migraciones se leen también: una columna puede vivir un tiempo solo
+    ahí antes de que alguien la baje a schema.sql. Así llegó
+    `movimientos.hash_contenido`.
+    """
+    def sin_comentarios(txt: str) -> str:
+        return "\n".join(l.split("--")[0] for l in txt.splitlines())
+
+    with open(ruta, encoding="utf-8") as f:
+        crudo = f.read()
+
+    tablas: dict[str, list[str]] = {}
+    for m in re.finditer(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+)\s*\((.*?)\n\);",
+                         crudo, re.S | re.I):
+        # Cortar por comas de PRIMER NIVEL: un CHECK (x IN ('a','b')) trae
+        # comas propias que no separan columnas.
+        piezas: list[str] = []
+        pieza, profundidad = "", 0
+        for ch in sin_comentarios(m.group(2)):
+            if ch == "(":
+                profundidad += 1
+            elif ch == ")":
+                profundidad -= 1
+            if ch == "," and profundidad == 0:
+                piezas.append(pieza)
+                pieza = ""
+            else:
+                pieza += ch
+        piezas.append(pieza)
+
+        columnas: list[str] = []
+        for p in piezas:
+            palabras = p.split()
+            if not palabras:
+                continue
+            primera = palabras[0].lower()
+            # Las restricciones de tabla no son columnas.
+            if primera in ("primary", "unique", "foreign", "check",
+                           "constraint", "exclude", "like"):
+                continue
+            columnas.append(primera)
+        tablas[m.group(1).lower()] = columnas
+
+    migraciones = os.path.join(os.path.dirname(ruta), "migrations")
+    if os.path.isdir(migraciones):
+        for nombre in sorted(os.listdir(migraciones)):
+            if not nombre.endswith(".sql"):
+                continue
+            with open(os.path.join(migraciones, nombre), encoding="utf-8") as f:
+                txt = sin_comentarios(f.read())
+            for m in re.finditer(
+                    r"ALTER TABLE\s+(\w+)\s+ADD COLUMN"
+                    r"(?:\s+IF NOT EXISTS)?\s+(\w+)", txt, re.I | re.S):
+                tabla, col = m.group(1).lower(), m.group(2).lower()
+                if tabla in tablas and col not in tablas[tabla]:
+                    tablas[tabla].append(col)
+    return tablas
+
+
+async def columnas_que_faltan() -> list[str]:
+    """Dónde NO coinciden db/schema.sql y las columnas de la base real.
+
+    Existe por el mismo fallo que tablas_que_faltan() pero un nivel más abajo,
+    y ese ya ocurrió: `movimientos.banco` existía en Postgres y NO en
+    db/schema.sql. Nadie se enteró hasta que algo reventó.
+
+    Ahora eso cuesta más caro, y por eso este chequeo: el esquema que ve el
+    modelo al escribir SQL se ARMA desde db/schema.sql. Si el archivo se atrasa
+    respecto de la base, Lucy deja de saber que una columna existe — y una
+    columna que no conoce es una columna por la que no puede filtrar. Fue
+    exactamente lo que pasó con `estado`: sumaba compras que el banco había
+    rechazado, mientras el panel las excluía.
+
+    Se miran las DOS direcciones porque duelen distinto:
+      · en el archivo y no en la base → la consulta revienta, ruidoso.
+      · en la base y no en el archivo → el modelo no la ve, silencioso. Éste
+        es el peligroso, y el que no tenía detector.
+
+    Ningún test hermético puede ver esto: hay que preguntarle a la base.
+    """
+    declaradas = columnas_declaradas()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema = 'public'")
+        reales: dict[str, set[str]] = {}
+        for tabla, col in await cur.fetchall():
+            reales.setdefault(tabla.lower(), set()).add(col.lower())
+
+    problemas: list[str] = []
+    for tabla, columnas in declaradas.items():
+        if tabla not in reales:
+            continue  # eso lo reporta tablas_que_faltan(), no se dice dos veces
+        for col in sorted(set(columnas) - reales[tabla]):
+            problemas.append(f"{tabla}.{col}: en db/schema.sql, no en la base")
+        for col in sorted(reales[tabla] - set(columnas)):
+            problemas.append(
+                f"{tabla}.{col}: en la base, no en db/schema.sql "
+                "(Lucy no sabe que existe)")
+    return sorted(problemas)
+
+
 async def tablas_que_faltan() -> list[str]:
     """Las tablas que db/schema.sql declara y la base real NO tiene.
 
@@ -76,11 +196,8 @@ async def tablas_que_faltan() -> list[str]:
     que uno quiera. Solo se sabe preguntándole a la base de verdad, y el momento
     de preguntar es al arrancar, cuando el log todavía lo lee alguien.
     """
-    import os
-    import re
-    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
     try:
-        with open(ruta, encoding="utf-8") as f:
+        with open(RUTA_SCHEMA, encoding="utf-8") as f:
             declaradas = {t.lower() for t in re.findall(
                 r"CREATE TABLE (?:IF NOT EXISTS )?(\w+)", f.read(), re.I)}
     except OSError:
@@ -846,9 +963,22 @@ async def listar_cuentas_propias() -> list[dict]:
 # ── Consultas del panel web (web/app.py) ─────────────────────────────────
 #
 # Todas excluyen `borrado_en IS NOT NULL` y, cuando suman dinero, filtran
-# `tipo <> 'transferencia'` y `estado` no aplica (la tabla no lo guarda):
-# un traspaso entre cuentas propias no es gasto ni ingreso, y sumarlo fue el
-# error que costaba RD$657,400 al año.
+# `tipo <> 'transferencia'`: un traspaso entre cuentas propias no es gasto ni
+# ingreso, y sumarlo fue el error que costaba RD$657,400 al año.
+#
+# Y filtran `estado <> 'declinada'`, que es plata que el banco rechazó. Este
+# comentario decía "`estado` no aplica (la tabla no lo guarda)" — quedó viejo
+# el 31-ago-2026, cuando la migración agregó la columna y las cuatro consultas
+# de abajo empezaron a usarla. Se corrige acá porque un comentario que niega
+# una columna es la forma barata de que el próximo la pase por alto: es
+# exactamente lo que le pasó al esquema que ve Lucy en cerebro/consultar.py.
+#
+# EL MISMO CRITERIO VALE PARA EL SQL QUE ESCRIBE LUCY. Estas consultas y el
+# prompt de cerebro/consultar.py contestan LA MISMA pregunta por dos caminos:
+# si filtran distinto, Tiziano recibe dos números. El candado que lo sujeta es
+# tests/test_esquema_del_modelo.py::test_lucy_y_el_panel_filtran_lo_mismo, que
+# lee la fuente de estas cuatro funciones. Cambiar acá el criterio sin cambiar
+# el prompt pone ese test en rojo, a propósito.
 
 async def resumen_por_mes(meses: int = 12) -> list[dict]:
     """Gasto e ingreso por mes y moneda.

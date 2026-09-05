@@ -43,7 +43,6 @@ async def main() -> int:
     # para pegarle a las ramas que rompen: None donde el SQL hace `IS NULL`
     # sobre un parámetro, que es exactamente lo que tiró la portada.
     pruebas = [
-        ("tablas_que_faltan", lambda: db.tablas_que_faltan()),
         ("resumen_por_mes", lambda: db.resumen_por_mes()),
         ("gasto_por_categoria (sin mes)", lambda: db.gasto_por_categoria(None)),
         ("gasto_por_categoria (con mes)", lambda: db.gasto_por_categoria("2026-08")),
@@ -80,6 +79,7 @@ async def main() -> int:
     ]
 
     rojas = []
+    descuadres: list[str] = []
     try:
         for nombre, fn in pruebas:
             try:
@@ -89,13 +89,45 @@ async def main() -> int:
             except Exception as e:
                 rojas.append((nombre, e))
                 print(f"  ✗ {nombre:<38} {type(e).__name__}: {e}")
+
+        # Éstas NO se miden por "corrió sin reventar": lo que importa es lo que
+        # DEVUELVEN. Devolver una lista con problemas y salir en verde era el
+        # fallo callado que este archivo existe para no repetir — así estuvo
+        # `tablas_que_faltan` hasta el 4-sep-2026: imprimía "✓ ... 2" y nadie
+        # entendía que ese 2 eran dos tablas faltantes.
+        for nombre, fn in (("tablas_que_faltan", db.tablas_que_faltan),
+                           ("columnas_que_faltan", db.columnas_que_faltan)):
+            try:
+                hallazgos = await fn()
+            except Exception as e:
+                rojas.append((nombre, e))
+                print(f"  ✗ {nombre:<38} {type(e).__name__}: {e}")
+                continue
+            if hallazgos:
+                descuadres += hallazgos
+                print(f"  ✗ {nombre:<38} {len(hallazgos)} descuadre(s)")
+                for h in hallazgos:
+                    print(f"      · {h}")
+            else:
+                print(f"  ✓ {nombre:<38} cuadra")
     finally:
         await db.cerrar()
 
-    if rojas:
-        print(f"\n  {len(rojas)} consulta(s) NO corren contra la base real.")
+    if rojas or descuadres:
+        if rojas:
+            print(f"\n  {len(rojas)} consulta(s) NO corren contra la base real.")
+        if descuadres:
+            # Por qué esto frena un despliegue: el esquema que ve Lucy al
+            # escribir SQL se arma desde db/schema.sql. Si el archivo y la base
+            # no cuadran, hay columnas que Lucy no sabe que existen y por las
+            # que, por lo tanto, no filtra. No revienta: contesta otro número
+            # que el panel.
+            print(f"\n  {len(descuadres)} descuadre(s) entre db/schema.sql y la "
+                  "base. Lucy y el panel pueden dar números distintos hasta "
+                  "que se arreglen.")
         return 1
-    print(f"\n  Las {len(pruebas)} corren contra la base real.")
+    print(f"\n  Las {len(pruebas)} corren contra la base real, y db/schema.sql "
+          "cuadra con ella.")
     return 0
 
 

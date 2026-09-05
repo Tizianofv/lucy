@@ -24,10 +24,12 @@ from __future__ import annotations
 
 import json
 import logging
+import textwrap
 
 from psycopg.rows import dict_row
 
 import db.db as db
+from cerebro.bancos.categorias import NO_SUMAN
 from cerebro.deepseek import MODELO, TZ, _ahora_txt, cliente
 
 log = logging.getLogger("lucy.consultar")
@@ -37,56 +39,133 @@ log = logging.getLogger("lucy.consultar")
 LIMITE_FILAS = 200
 TIMEOUT_SQL = "10s"
 
-ESQUEMA = """\
-TABLAS (PostgreSQL). Todas las fechas son timestamptz salvo aviso.
 
-bandeja — todo lo que Tiziano le mandó a Lucy, crudo. Es el historial completo.
-  id, creado_en, origen, tipo_entrada ('texto'|'audio'|'foto'),
-  contenido_raw (lo que escribió), transcripcion (lo que Whisper oyó o lo que
-  se leyó en la foto), estado, clasificacion, interpretacion (jsonb),
-  procesado_en
-  · estado: 'sin_procesar'|'procesando'|'esperando_confirmacion'|'procesado'|
-            'descartado'|'error'
+# ── El esquema que ve el modelo ──────────────────────────────────────────
+#
+# LA LISTA DE COLUMNAS NO SE ESCRIBE A MANO. Se arma leyendo db/schema.sql.
+#
+# Por qué. Hasta el 4-sep-2026 este texto era una copia a mano de la tabla, y
+# se había separado de ella sin que nadie se enterara: le faltaban 17 columnas
+# de las 9 tablas que describe. Tres eran de `movimientos` —estado, banco,
+# hash_contenido—, así que Lucy no sabía que `estado` existe y no podía
+# excluir las compras declinadas. El panel sí las excluye, en sus cuatro
+# consultas: db.resumen_por_mes, db.gasto_por_categoria,
+# db.gastos_de_cada_categoria y db.sin_clasificar. (Se nombran por función y no
+# por número de línea a propósito: las referencias que había acá —822, 858,
+# 1076, 1117— ya apuntaban a otro sitio, porque db/db.py creció 120 líneas.)
+# Los dos caminos contestaban números distintos a la misma pregunta, y el de
+# Telegram contaba dinero que nunca salió.
+#
+# Agregar las tres columnas a mano habría arreglado el síntoma de hoy y dejado
+# el mecanismo intacto: la copia se vuelve a separar la próxima vez que alguien
+# agregue una columna. Así que la lista sale ahora de db/schema.sql, que es la
+# misma fuente que ya usa db.tablas_que_faltan(). Lo único escrito a mano son
+# los SIGNIFICADOS, que no se pueden deducir de un CREATE TABLE.
+#
+# Lo que esto NO cubre: que db/schema.sql se separe de la base REAL de Railway.
+# Ya pasó una vez (`movimientos.banco` existía en Postgres y no en el archivo).
+# Eso se pone rojo por otro lado: db.columnas_que_faltan(), que corre al
+# arrancar (main.py) y en tools/humo.py.
 
-tareas — cosas por hacer.
-  id, bandeja_id, creado_en, titulo, detalle, vence_en, recurrencia,
-  prioridad, proyecto_id, persona_id, estado ('pendiente'|'hecha'|'pospuesta'),
-  pospuesta_veces, completado_en, avisos_enviados, borrado_en
-  · recurrencia: NULL = una sola vez. Con texto ('cada 8 horas', 'diaria',
-    'semanal'...) la tarea se reprograma sola al marcarse hecha: hay UNA
-    fila por tarea recurrente, no una por ocurrencia.
+# Las tablas que Lucy VE cuando escribe SQL. Es una decisión, no un descarte
+# automático: son los datos de Tiziano. El orden es el del texto.
+TABLAS_DE_TIZIANO = ("bandeja", "tareas", "eventos", "notas", "movimientos",
+                     "personas", "lugares", "proyectos", "log_acciones")
 
-eventos — citas y compromisos con hora. Agenda UNIFICADA: las que creó Lucy
-  y las que vienen de Google Calendar (personal + estudio) viven juntas acá.
-  id, bandeja_id, creado_en, titulo, inicia_en, termina_en, lugar,
-  persona_id, proyecto_id, notas, gcal_id, gcal_calendar, borrado_en
-  · gcal_calendar: de qué calendario de Google vino ('Tiziano Fajardo Vargas'
-    = su personal; 'CDS Sala P', 'CDS GRABACIONES', etc. = el estudio). NULL =
-    cita que creó Lucy por Telegram.
-  · gcal_id: NULL = nativa de Lucy; con valor = espejo de un evento de Google.
+# Las que NO ve, con el motivo. Están acá y no simplemente ausentes para que
+# una tabla NUEVA no entre en silencio por ninguno de los dos lados: el test
+# `test_el_esquema_sale_de_la_tabla` exige que toda tabla de schema.sql esté
+# en una de las dos listas.
+TABLAS_DE_MAQUINARIA = {
+    "preferencias": "ajustes de Lucy, no datos de Tiziano",
+    "correo_estado": "cursor de la ingesta de correo",
+    "correo_reportado": "control de a qué correo ya se le avisó",
+    "consumos_estado": "cursor de la ingesta bancaria",
+    "backups": "latido del respaldo",
+    "categorias_aprendidas": "memoria del clasificador, no un dato consultable",
+    "cuentas_propias": "patrones de cuentas para detectar traspasos",
+}
 
-notas — información guardada sin acción asociada.
-  id, bandeja_id, creado_en, contenido, etiquetas (text[]; 'idea' marca las
-  ideas), proyecto_id, persona_id, borrado_en
+# Una línea por tabla, para que el modelo sepa qué es antes de mirar columnas.
+TITULOS = {
+    "bandeja": "todo lo que Tiziano le mandó a Lucy, crudo. Es el historial "
+               "completo.",
+    "tareas": "cosas por hacer.",
+    "eventos": "citas y compromisos con hora. Agenda UNIFICADA: las que creó "
+               "Lucy y las que vienen de Google Calendar (personal + estudio) "
+               "viven juntas acá.",
+    "notas": "información guardada sin acción asociada.",
+    "movimientos": "TODA la plata, entre o salga.",
+    "personas": "gente de su vida.",
+    "lugares": 'los lugares con nombre de su vida ("CDS", "el estudio", '
+               '"casa").',
+    "proyectos": "los proyectos de su vida y de CDS.",
+    "log_acciones": "todo lo que Lucy hizo, con el antes y el después.",
+}
 
-movimientos — TODA la plata, entre o salga.
-  id, bandeja_id, creado_en, tipo ('gasto'|'ingreso'|'transferencia'),
-  fecha (DATE), monto (numeric), moneda (normalmente 'DOP'), contraparte
-  (el comercio si salió, quién pagó si entró), categoria, referencia
-  (No. de comprobante), persona_id, proyecto_id, notas, borrado_en
+# El significado de una columna, cuando el nombre no alcanza. Es lo ÚNICO
+# escrito a mano de esta parte. Una clave que ya no exista en schema.sql pone
+# el test en rojo: una nota huérfana es la señal de que la tabla cambió.
+NOTAS_DE_COLUMNA = {
+    ("bandeja", "tipo_entrada"): "'texto'|'audio'|'foto'",
+    ("bandeja", "contenido_raw"): "lo que escribió",
+    ("bandeja", "transcripcion"): "lo que Whisper oyó o lo que se leyó en la foto",
+    ("bandeja", "respuesta_lucy"): "lo que Lucy le contestó: su mitad de la charla",
+    ("bandeja", "interpretacion"): "jsonb",
+    ("bandeja", "embedding"): "vector; no sirve para contar ni sumar",
+    ("bandeja", "archivo_id"): "maquinaria de Telegram",
+    ("bandeja", "chat_id"): "maquinaria de Telegram",
+    ("bandeja", "telegram_msg_id"): "maquinaria de Telegram",
+    ("bandeja", "hash_contenido"): "maquinaria: idempotencia de la captura",
+    ("bandeja", "intentos"): "maquinaria: cola de reintentos",
+    ("bandeja", "reintentar_despues"): "maquinaria: cola de reintentos",
+    ("tareas", "estado"): "'pendiente'|'hecha'|'pospuesta'",
+    ("tareas", "avisos_enviados"): "int[]: minutos-antes que ya se avisaron",
+    ("tareas", "anticipos_min"): "int[]: minutos-antes a los que hay que avisar",
+    ("eventos", "avisos_enviados"): "int[]: minutos-antes que ya se avisaron",
+    ("eventos", "anticipos_min"): "int[]: minutos-antes a los que hay que avisar",
+    ("eventos", "preaviso_en"): "HUÉRFANA desde el 13-ago-2026: ya no se lee "
+                                "ni se escribe, no la uses",
+    ("eventos", "gcal_cal_id"): "id del calendario en Google",
+    ("notas", "etiquetas"): "text[]; 'idea' marca las ideas",
+    ("movimientos", "tipo"): "'gasto'|'ingreso'|'transferencia'",
+    ("movimientos", "fecha"): "DATE, ya en hora local",
+    ("movimientos", "monto"): "numeric, SIEMPRE positivo",
+    ("movimientos", "moneda"): "normalmente 'DOP'",
+    ("movimientos", "contraparte"): "el comercio si salió, quién pagó si entró",
+    ("movimientos", "referencia"): "No. de comprobante",
+    ("movimientos", "estado"): "'aprobada'|'declinada'|'pendiente' — ver "
+                               "MODISMO 6, es el que más engaña",
+    ("movimientos", "banco"): "de dónde salió la plata: 'BHD', 'Banreservas', "
+                              "'efectivo'… NULL si no se dijo",
+    ("movimientos", "hash_contenido"): "huella del correo del banco; NULL = "
+                                       "cargado a mano desde el panel",
+    ("personas", "alias"): "text[]",
+    ("log_acciones", "antes"): "jsonb",
+    ("log_acciones", "despues"): "jsonb",
+}
 
-personas — gente de su vida.
-  id, creado_en, nombre, alias (text[]), relacion, notas, borrado_en
+# Lo que no cabe al lado del nombre de una columna. Va debajo de cada tabla.
+NOTAS_DE_TABLA = {
+    "bandeja": [
+        "estado: 'sin_procesar'|'procesando'|'esperando_confirmacion'|"
+        "'esperando_respuesta'|'procesado'|'descartado'|'error'",
+    ],
+    "tareas": [
+        "recurrencia: NULL = una sola vez. Con texto ('cada 8 horas', "
+        "'diaria', 'semanal'...) la tarea se reprograma sola al marcarse "
+        "hecha: hay UNA fila por tarea recurrente, no una por ocurrencia.",
+    ],
+    "eventos": [
+        "gcal_calendar: de qué calendario de Google vino ('Tiziano Fajardo "
+        "Vargas' = su personal; 'CDS Sala P', 'CDS GRABACIONES', etc. = el "
+        "estudio). NULL = cita que creó Lucy por Telegram.",
+        "gcal_id: NULL = nativa de Lucy; con valor = espejo de un evento de "
+        "Google.",
+    ],
+}
 
-lugares — los lugares con nombre de su vida ("CDS", "el estudio", "casa").
-  id, creado_en, nombre, lat, lon, radio_m, borrado_en
-
-proyectos — id, creado_en, nombre, descripcion, estado, borrado_en
-
-log_acciones — todo lo que Lucy hizo, con el antes y el después.
-  id, ts, actor, accion, tabla, registro_id, antes (jsonb), despues (jsonb),
-  motivo, bandeja_id
-
+MODISMOS = """\
 MODISMOS DE LA CASA — respetarlos o las respuestas van a ser falsas:
 
 1. BORRADO SUAVE. Nada se borra de verdad. tareas, eventos, notas,
@@ -110,8 +189,96 @@ MODISMOS DE LA CASA — respetarlos o las respuestas van a ser falsas:
    syntax for type date" — `movimientos.fecha` YA es fecha local, y para el
    día de hoy usá (now() AT TIME ZONE 'America/Santo_Domingo')::date.
 
-5. UNA TAREA PENDIENTE es estado='pendiente' AND borrado_en IS NULL.\
+5. UNA TAREA PENDIENTE es estado='pendiente' AND borrado_en IS NULL.
+
+6. LAS DECLINADAS NO CUENTAN, Y NO HACE FALTA QUE TE LO PIDAN.
+   movimientos.estado vale 'aprobada', 'declinada' o 'pendiente'.
+   · 'declinada' = el banco rechazó la compra. ESA PLATA NUNCA SALIÓ.
+   · 'pendiente' = una retención. SÍ es gasto real: para las tarjetas en
+     dólares el aviso de retención es el único registro que manda el banco
+     (Railway, Amazon Prime, Anthropic llegan así todos los meses).
+   Entonces, en TODA suma, conteo, promedio o ranking de movimientos, poné
+   siempre "AND estado <> 'declinada'", aunque la pregunta no lo mencione.
+   NUNCA uses "estado = 'aprobada'": eso borra las retenciones, que sí
+   ocurrieron. El panel de Tiziano filtra exactamente así, y si vos filtrás
+   distinto le vas a dar dos números diferentes a la misma pregunta.
+   Solo mostrá las declinadas cuando la pregunta sea sobre ellas ("¿qué
+   compras me rechazaron?") o pida el detalle sin totalizar.
+
+7. EL DINERO DE TERCEROS NO ENTRA EN NINGÚN TOTAL.
+   La categoría {no_suman} marca la plata que solo PASA por la cuenta (el
+   circuito del papá de Rosi: intereses que entran, la luz de su casa que
+   sale). No es ingreso ni gasto de esta casa, y contarla infló un mes en
+   RD$43,312 de ingreso y RD$41,500 de gasto a la vez.
+   En cualquier TOTAL de gasto o de ingreso agregá
+   "AND coalesce(categoria, '') <> ALL(ARRAY[{no_suman}])".
+   En un DETALLE (la lista de movimientos de un mes) mostralos, pero decí que
+   no cuentan. Es lo mismo que hace el panel.\
 """
+
+
+def _armar_bloques() -> dict[str, str]:
+    """{tabla: su trozo del prompt}, con la estructura sacada de schema.sql.
+
+    Se devuelve partido por tabla y no como un solo texto para que se pueda
+    comprobar POR TABLA que cada columna llegó. Mirar el prompt entero no
+    alcanza: `estado` existe en bandeja, tareas, proyectos y movimientos, así
+    que un test que busque "estado" en todo el texto pasa aunque el bloque de
+    `movimientos` lo haya perdido — que es exactamente el fallo que se está
+    arreglando.
+    """
+    declaradas = db.columnas_declaradas()
+    # Que esto reviente al importar es DELIBERADO. La alternativa —seguir con
+    # una lista vacía— es un prompt sin columnas, y un prompt sin columnas no
+    # deja a Lucy muda: la deja inventando SQL contra tablas que no conoce y
+    # contestando números falsos. Un arranque roto se ve en el primer log; un
+    # número falso no se ve nunca. Si schema.sql no está o no se puede leer,
+    # eso es un defecto de despliegue y tiene que gritar.
+    vacias = [t for t in TABLAS_DE_TIZIANO if not declaradas.get(t)]
+    if vacias:
+        raise ValueError(
+            f"db/schema.sql no declara columnas para {vacias}. Sin eso el "
+            "esquema que ve Lucy sale incompleto y sus respuestas dejan de "
+            "cuadrar con el panel.")
+
+    bloques: dict[str, str] = {}
+    for tabla in TABLAS_DE_TIZIANO:
+        piezas = []
+        for col in declaradas.get(tabla, []):
+            nota = NOTAS_DE_COLUMNA.get((tabla, col))
+            piezas.append(f"{col} ({nota})" if nota else col)
+        # break_long_words=False: sin esto textwrap parte por la mitad un
+        # 'esperando_respuesta' o un nombre de columna largo, y el modelo
+        # termina leyendo un identificador que no existe.
+        lineas = [
+            textwrap.fill(f"{tabla} — {TITULOS[tabla]}", width=76,
+                          subsequent_indent="  ", break_long_words=False),
+            textwrap.fill(", ".join(piezas), width=76, initial_indent="  ",
+                          subsequent_indent="  ", break_long_words=False),
+        ]
+        for nota in NOTAS_DE_TABLA.get(tabla, []):
+            lineas.append(textwrap.fill(nota, width=76, initial_indent="  · ",
+                                        subsequent_indent="    ",
+                                        break_long_words=False))
+        bloques[tabla] = "\n".join(lineas)
+    return bloques
+
+
+def _armar_esquema() -> str:
+    """El texto completo que ve el modelo: las tablas y los modismos."""
+    cabecera = (
+        "TABLAS (PostgreSQL). Todas las fechas son timestamptz salvo aviso.\n"
+        "Esta lista se arma sola desde el esquema real: son TODAS las "
+        "columnas\nque la tabla tiene, no un resumen.\n"
+    )
+    cuerpo = "\n\n".join(BLOQUES[t] for t in TABLAS_DE_TIZIANO)
+    modismos = MODISMOS.format(
+        no_suman=", ".join(f"'{c}'" for c in NO_SUMAN))
+    return f"{cabecera}\n{cuerpo}\n\n{modismos}"
+
+
+BLOQUES = _armar_bloques()
+ESQUEMA = _armar_esquema()
 
 INSTRUCCIONES_SQL = """\
 Sos la parte de Lucy que consulta la base de datos de Tiziano para responderle.

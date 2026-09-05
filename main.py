@@ -70,6 +70,17 @@ async def _al_arrancar(app) -> None:
                   "en Postgres; lo que las use va a fallar en silencio. "
                   "Corré la migración que corresponda.", ", ".join(faltan))
 
+    # Un nivel más abajo: las COLUMNAS. Importa el doble desde que el esquema
+    # que ve el modelo se arma desde db/schema.sql (cerebro/consultar.py): una
+    # columna que está en la base y no en el archivo es una columna por la que
+    # Lucy no sabe filtrar, y eso no revienta — devuelve un número equivocado.
+    # Fue lo que pasó con `movimientos.estado`: sumaba compras declinadas.
+    descuadre = await db.columnas_que_faltan()
+    if descuadre:
+        log.error("db/schema.sql NO CUADRA CON LA BASE: %s. Mientras eso siga "
+                  "así, las respuestas de Lucy y las del panel pueden dar "
+                  "números distintos.", "; ".join(descuadre))
+
     # La IA se chequea, pero su falla NO tumba a Lucy: capturar no puede
     # depender de que la IA esté viva (es el principio del Nivel 1). Cerebro y
     # oído se chequean por separado porque son proveedores distintos: que se
