@@ -18,13 +18,24 @@ ventana el día que se midió.
 
 POR QUÉ ESTAS PRUEBAS NO MIRAN CUATRO FILTROS. El arreglo no le puso un filtro
 a cada camino: les quitó a todos la capacidad de conseguir un buzón sin decir
-para qué lo quieren. `config.cuentas_de_correo(para=...)` es el único sitio del
-que sale un buzón con credenciales, y `test_nadie_lee_la_lista_cruda` —que
-recorre los .py que hay EN DISCO, no una lista escrita acá, y los lee con
-`ast.parse` en vez de buscarles texto— se pone rojo si algún archivo puede
-alcanzar la lista cruda por su cuenta, lo escriba como lo escriba. Un camino
-nuevo no puede olvidarse de filtrar: no puede conseguir el buzón. El porqué de
-leer el árbol y no el texto está entero arriba de la guarda, más abajo.
+para qué lo quieren. `config.cuentas_de_correo(para=...)` es el único sitio de
+los que SALEN DEL MÓDULO CONFIG, y `test_nadie_lee_la_lista_cruda` —que recorre
+los .py que hay EN DISCO, no una lista escrita acá, y los lee con `ast.parse`
+en vez de buscarles texto— se pone rojo si algún archivo puede alcanzar la
+lista cruda por ahí, lo escriba como lo escriba. Un camino nuevo no puede
+olvidarse de filtrar: no puede conseguir el buzón. El porqué de leer el árbol y
+no el texto está entero arriba de la guarda, más abajo.
+
+Y HASTA DÓNDE LLEGA ESTA GUARDA, dicho para que nadie la lea de más. Vigila el
+camino que pasa por el módulo `config`. NO vigila el otro sitio del que hoy
+salen buzones con credenciales: `tools/descubrir_bancos.py::_cuentas()` lee
+`os.environ["CORREO_CUENTAS"]` —y, si no está, el `.env` de la raíz— sin tocar
+config, y se queda con TODAS las cuentas, la marcada incluida. Está hecho a
+propósito («Igual que config.py, pero sin importarlo: este script tiene que
+correr sin el resto de las variables de Lucy») y es un script de mano, no un
+camino del bot. Se deja dicho acá porque una guarda que promete más de lo que
+cubre es peor que no tenerla; si eso tiene que cambiar, es decisión de Tiziano
+y no de esta prueba.
 
 Y LA OTRA MITAD, que tiene que seguir igual: BARRER NO ES MOSTRAR. El buzón
 marcado se sigue leyendo entero para sacar sus movimientos bancarios. Si estas
@@ -36,9 +47,13 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import builtins
+import configparser
+import json
 import os
 import sys
 import types
+from collections.abc import Mapping
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -409,35 +424,72 @@ def test_para_es_obligatorio_y_su_vocabulario_es_cerrado():
 # función. Una guarda que enumera formas de escribir algo siempre tiene una
 # forma más que no vio, y mientras tanto da tranquilidad falsa.
 #
-# DE DÓNDE SACA AHORA LO QUE COMPARA. De dos sitios, los dos reales:
+# LO MISMO PASÓ CON LA SEGUNDA VERSIÓN, y por la misma razón. La versión sobre
+# `ast` arregló el texto pero dejó DOS listas tecleadas a mano adentro, y las
+# dos tenían un agujero, medido el 5-sep-2026:
+#
+#   · `_FABRICAS_DE_MODULOS = {"importlib", "__import__", "eval", ...}` no
+#     incluía `sys`. Un archivo con `getattr(sys, "modules")["config"]` daba
+#     16 passed, cero infracciones, y devolvía las credenciales del buzón
+#     marcado.
+#   · La exención decía `rel.name in ("config.py", "conftest.py")`, o sea POR
+#     NOMBRE DE ARCHIVO. El mismo código, byte por byte, daba
+#     `captura/_utilidades.py → 1 failed` y `captura/conftest.py → 16 passed`.
+#     Bastaba con ponerle a un archivo de producción el nombre `conftest.py`.
+#
+# O sea: el criterio bueno («lo que no sé cuenta como rojo») estaba aplicado a
+# UN tramo del camino, y los otros dos tramos —de dónde sale un módulo, y quién
+# queda fuera de la vigilancia— seguían decidiéndose con una lista escrita a
+# mano. Blindar un tramo y dejar los demás da la sensación de haberlo resuelto.
+#
+# DE DÓNDE SACA AHORA LO QUE COMPARA. De cuatro sitios, los cuatro reales, y
+# ninguno tecleado:
 #
 #   1. `ast.parse` del archivo. El árbol ve igual `from config import
 #      CORREO_CUENTAS as CUENTAS` que `config.CORREO_CUENTAS`, porque el nombre
 #      está en el nodo y no en cómo se escribió. Los alias, los espacios, los
 #      paréntesis y los comentarios desaparecen antes de que se compare nada.
-#   2. `vars(config)`. Los atributos PERMITIDOS son los nombres públicos que el
-#      módulo config de verdad tiene hoy, menos el prohibido. Nadie los teclea
-#      acá: si config gana un nombre, entra solo; si pierde el prohibido, la
-#      guarda revienta en vez de quedarse verde vigilando un fantasma.
+#   2. `vars(config)` y `config.__name__`. Los atributos PERMITIDOS son los
+#      nombres públicos que el módulo config de verdad tiene hoy, menos el
+#      prohibido; y el nombre del módulo sale del módulo. Nadie los teclea acá:
+#      si config gana un nombre, entra solo; si pierde el prohibido, la guarda
+#      revienta en vez de quedarse verde vigilando un fantasma.
+#   3. `sys.modules`, para preguntarle a los objetos DE VERDAD si son un
+#      espacio del que puede salir un módulo. `sys.modules` es peligroso porque
+#      hoy tiene módulos dentro, no porque alguien escribiera su nombre en una
+#      lista; y `os.environ` no lo es porque hoy solo tiene strings. Eso lo
+#      contesta el objeto, no la guarda. No se importa nada nuevo: solo se mira
+#      lo que ya está cargado, así que no hay efectos de import.
+#   4. `pytest.ini`, `railway.json` y `config.__file__`, para saber quién queda
+#      fuera de la vigilancia. Un archivo es andamio de pruebas por DÓNDE VIVE
+#      y por QUIÉN LO CARGA, nunca por cómo se llama.
 #
-# Y EL CRITERIO ES «LO QUE NO SÉ CUENTA COMO ROJO», aplicado al trayecto
-# entero y no a un tramo. El módulo `config` solo se puede usar para UNA cosa:
-# leer uno de sus atributos permitidos, escrito como atributo. Cualquier otro
-# uso del objeto módulo —pasarlo, guardarlo, `getattr`-earlo, `vars`-earlo,
-# abrirle el `__dict__`— no se puede clasificar, y lo que no se puede
-# clasificar es rojo. Por eso una forma que nadie previó cae del lado rojo: no
-# hay que reconocerla, hay que fallar en reconocerla.
+# Y EL CRITERIO ES «LO QUE NO SÉ CUENTA COMO ROJO», aplicado al trayecto entero
+# y no a un tramo:
+#
+#   · El módulo `config` solo se puede usar para UNA cosa: leer uno de sus
+#     atributos permitidos, escrito como atributo o pedido por `getattr` con un
+#     literal. Cualquier otro uso del objeto módulo —pasarlo, guardarlo,
+#     `vars`-earlo, abrirle el `__dict__`— no se puede clasificar, y lo que no
+#     se puede clasificar es rojo.
+#   · De un espacio del que puede salir un módulo solo se puede sacar un nombre
+#     ESCRITO. Si la guarda no puede enumerar exactamente qué nombres se piden,
+#     es rojo. Por eso `getattr(sys, "modules")["config"]` cae sin que nadie
+#     haya tenido que apuntar `sys` en ningún sitio.
+#   · Un `getattr` con un nombre de atributo que la guarda no puede enumerar es
+#     rojo sobre CUALQUIER cosa, sea o no un módulo: ahí no hay nada que
+#     clasificar.
+#   · Un archivo que no se pueda clasificar como andamio de pruebas queda
+#     DENTRO de la vigilancia, nunca fuera.
+#
+# Por eso una forma que nadie previó cae del lado rojo: no hay que reconocerla,
+# hay que fallar en reconocerla.
 
 _PROHIBIDO = "CORREO_CUENTAS"
 
-# Maquinaria que fabrica un objeto módulo en tiempo de ejecución. No es una
-# lista de trucos: es el juego completo de puertas que el lenguaje ofrece para
-# conseguir un módulo sin nombrarlo, y da igual qué string se les pase. El
-# código de Lucy no importa módulos a mano en ningún sitio (medido: cero usos
-# fuera de tests/ y conftest.py), así que exigirlo no cuesta nada y cierra el
-# hueco que el árbol de sintaxis solo no puede ver.
-_FABRICAS_DE_MODULOS = frozenset({
-    "importlib", "__import__", "eval", "exec", "globals", "locals"})
+# El nombre con el que config vive en la tabla de módulos, sacado del módulo y
+# no tecleado: si mañana se renombra, esto lo sigue.
+_MODULO_CONFIG = config.__name__
 
 
 def _atributos_que_config_ofrece() -> set[str]:
@@ -450,31 +502,347 @@ def _atributos_que_config_ofrece() -> set[str]:
     return publicos - {_PROHIBIDO}
 
 
-def _es_el_modulo_config(nodo, nombres_locales: set[str]) -> bool:
+# ── Tramo 1: qué nombres puede pedir una expresión ────────────────────────
+#
+# Enumerar los strings que una expresión puede valer es lo que convierte
+# `getattr(config, "CORREO_" + "CUENTAS")` en el mismo nodo que
+# `config.CORREO_CUENTAS`. Y es también lo que deja pasar sin ruido el
+# `getattr(psycopg, n, None)` de `db/db.py`, donde `n` recorre una tupla de dos
+# literales: ahí sí se sabe qué se pide. `None` no significa "ningún string":
+# significa "no lo sé", que es la condición que dispara el rojo.
+#
+# Los nombres se miran POR ÁMBITO, no de corrido. Un archivo de 1.500 líneas
+# usa `n` en veinte funciones distintas; si se mezclaran todas, el `n` de
+# `db/db.py` valdría "no se sabe" por culpa de otra función que no tiene nada
+# que ver, y la guarda rojearía un uso legítimo.
+
+class _Ambito(dict):
+    """Los nombres de UN ámbito, encadenado al de afuera."""
+
+    def __init__(self, padre=None):
+        super().__init__()
+        self.padre = padre
+
+    def buscar(self, nombre, defecto=None):
+        amb = self
+        while amb is not None:
+            if dict.__contains__(amb, nombre):
+                return dict.__getitem__(amb, nombre)
+            amb = amb.padre
+        return defecto
+
+
+_ABREN_AMBITO = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
+                 ast.ClassDef, ast.ListComp, ast.SetComp, ast.DictComp,
+                 ast.GeneratorExp)
+
+
+def _cadenas(nodo, ambitos: dict) -> frozenset | None:
+    """Los strings que esta expresión puede valer. None = no se sabe."""
+    if isinstance(nodo, ast.Constant):
+        return frozenset({nodo.value}) if isinstance(nodo.value, str) \
+            else frozenset()
+    if isinstance(nodo, ast.Name):
+        amb = ambitos.get(id(nodo))
+        return amb.buscar(nodo.id) if amb is not None else None
+    if isinstance(nodo, ast.BinOp) and isinstance(nodo.op, ast.Add):
+        izq = _cadenas(nodo.left, ambitos)
+        der = _cadenas(nodo.right, ambitos)
+        if izq is None or der is None:
+            return None
+        return frozenset(a + b for a in izq for b in der)
+    if isinstance(nodo, (ast.Tuple, ast.List, ast.Set)):
+        partes = [_cadenas(e, ambitos) for e in nodo.elts]
+        if any(p is None for p in partes):
+            return None
+        return frozenset().union(*partes) if partes else frozenset()
+    if isinstance(nodo, ast.JoinedStr):
+        partes = [_cadenas(v, ambitos) for v in nodo.values]
+        if any(p is None or len(p) != 1 for p in partes):
+            return None
+        return frozenset({"".join(next(iter(p)) for p in partes)})
+    if isinstance(nodo, ast.Starred):
+        return _cadenas(nodo.value, ambitos)
+    if isinstance(nodo, ast.Slice):
+        # `x[:32]` corta, no pide un nombre. No hay ningún string en juego.
+        return frozenset()
+    return None
+
+
+def _repartir_ambitos(arbol) -> dict:
+    """A qué ámbito pertenece cada nodo del árbol."""
+    ambitos: dict = {}
+
+    def visitar(nodo, amb):
+        ambitos[id(nodo)] = amb
+        for hijo in ast.iter_child_nodes(nodo):
+            visitar(hijo, _Ambito(amb) if isinstance(hijo, _ABREN_AMBITO)
+                    else amb)
+
+    visitar(arbol, _Ambito())
+    return ambitos
+
+
+def _atar_cadenas(arbol, ambitos: dict) -> None:
+    """Ata cada nombre a los strings que puede valer, ámbito por ámbito.
+
+    Se repite hasta que deje de crecer, para que el orden en que aparecen las
+    asignaciones en el archivo no cambie el resultado.
+    """
+    def atar(destino, valor, amb):
+        if not isinstance(destino, ast.Name):
+            for hijo in ast.walk(destino):
+                if isinstance(hijo, ast.Name):
+                    amb[hijo.id] = None
+            return
+        anterior = amb.get(destino.id, "sin atar")   # solo ESTE ámbito
+        if anterior is None:
+            return
+        if valor is None:
+            amb[destino.id] = None
+        elif anterior == "sin atar":
+            amb[destino.id] = valor
+        else:
+            amb[destino.id] = anterior | valor
+
+    for _ in range(4):
+        for n in ast.walk(arbol):
+            amb = ambitos[id(n)]
+            if isinstance(n, ast.Assign):
+                for d in n.targets:
+                    atar(d, _cadenas(n.value, ambitos), amb)
+            elif isinstance(n, ast.AnnAssign) and n.value is not None:
+                atar(n.target, _cadenas(n.value, ambitos), amb)
+            elif isinstance(n, ast.AugAssign):
+                atar(n.target, None, amb)
+            elif isinstance(n, (ast.For, ast.AsyncFor)):
+                atar(n.target, _cadenas(n.iter, ambitos), amb)
+            elif isinstance(n, ast.comprehension):
+                atar(n.target, _cadenas(n.iter, ambitos), amb)
+            elif isinstance(n, ast.withitem) and n.optional_vars is not None:
+                atar(n.optional_vars, None, amb)
+            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                ast.Lambda)):
+                for a in (n.args.posonlyargs + n.args.args + n.args.kwonlyargs
+                          + ([n.args.vararg] if n.args.vararg else [])
+                          + ([n.args.kwarg] if n.args.kwarg else [])):
+                    amb[a.arg] = None
+            elif isinstance(n, ast.ExceptHandler) and n.name:
+                amb[n.name] = None
+
+
+# ── Tramo 2: de dónde sale un objeto módulo ───────────────────────────────
+#
+# Antes había una lista de "fábricas de módulos" tecleada a mano y le faltaba
+# `sys`; con `getattr(sys, "modules")["config"]` se sacaban las credenciales
+# del buzón marcado con la guarda en verde. Ahora la pregunta va al revés.
+#
+# Un objeto módulo entra a un archivo por UN solo camino clasificable: un
+# `import`. De ahí en adelante:
+#
+#   · Lo que se saca de dentro de un módulo por un nombre ESCRITO se resuelve
+#     al objeto que hay hoy en memoria, y se le pregunta a ÉL si es un espacio
+#     del que puede salir otro módulo. `sys.modules` lo es porque está lleno de
+#     módulos; `os.environ` no lo es porque está lleno de strings; `config.TZ`
+#     tampoco. Eso lo contesta el objeto, no una lista.
+#   · Lo que no se pudo resolver cuenta como que SÍ lo es.
+#   · De un espacio así solo se puede pedir un nombre que la guarda pueda
+#     enumerar. Si no puede, es rojo — y por eso `sys` no hace falta apuntarlo
+#     en ningún sitio.
+
+def _es_espacio_de_modulos(obj) -> bool:
+    """¿De este objeto se puede sacar un MÓDULO pidiéndole un nombre?"""
+    if isinstance(obj, types.ModuleType):
+        return True
+    if isinstance(obj, Mapping):
+        try:
+            valores = list(obj.values())
+        except Exception:
+            return True                       # no se pudo mirar → rojo
+        if any(isinstance(v, types.ModuleType) for v in valores):
+            return True
+        # El `__dict__` de un módulo es su espacio de nombres, aunque hoy no
+        # tenga ningún módulo adentro.
+        for m in list(sys.modules.values()):
+            if m is not None and getattr(m, "__dict__", None) is obj:
+                return True
+    return False
+
+
+def _objeto_ya_cargado(punteado: str):
+    """`(encontrado, objeto)` para un camino punteado, sin importar nada nuevo.
+
+    Solo mira lo que ya está en `sys.modules`: una guarda que importa módulos
+    para decidir dispara los efectos de import de código que no le toca correr.
+    """
+    partes = punteado.split(".")
+    for corte in range(len(partes), 0, -1):
+        base = sys.modules.get(".".join(partes[:corte]))
+        if base is None:
+            continue
+        obj = base
+        for p in partes[corte:]:
+            try:
+                obj = getattr(obj, p)
+            except Exception:
+                return False, None
+        return True, obj
+    return False, None
+
+
+def _punteado(nodo) -> str | None:
+    """`sys.modules` → "sys.modules"; cualquier otra forma → None."""
+    if isinstance(nodo, ast.Name):
+        return nodo.id
+    if isinstance(nodo, ast.Attribute):
+        base = _punteado(nodo.value)
+        return f"{base}.{nodo.attr}" if base else None
+    return None
+
+
+def _nombre_llamado(nodo) -> str | None:
+    """El nombre al que se llama, si se llama a un nombre suelto."""
+    return nodo.func.id if isinstance(nodo, ast.Call) and \
+        isinstance(nodo.func, ast.Name) else None
+
+
+class _Contexto:
+    """Lo que la guarda sabe de los nombres de UN archivo."""
+
+    def __init__(self, arbol):
+        self.ambitos = _repartir_ambitos(arbol)
+        _atar_cadenas(arbol, self.ambitos)
+        self.importados: dict[str, str] = {}   # nombre local → camino punteado
+        self.atados: set[str] = set()          # todo nombre que el archivo ata
+        self.locales_config: set[str] = set()  # nombres que SON el módulo
+        self.derivados: set[str] = set()       # nombres atados desde un espacio
+        self._leer_ataduras(arbol)
+        self._propagar(arbol)
+
+    def _leer_ataduras(self, arbol) -> None:
+        for n in ast.walk(arbol):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    local = a.asname or a.name.split(".")[0]
+                    self.importados[local] = a.name if a.asname else \
+                        a.name.split(".")[0]
+                    self.atados.add(local)
+                    # `import config` e `import config.algo` atan el módulo.
+                    if a.name == _MODULO_CONFIG or \
+                            a.name.startswith(_MODULO_CONFIG + "."):
+                        self.locales_config.add(local)
+            elif isinstance(n, ast.ImportFrom):
+                for a in n.names:
+                    if a.name == "*":
+                        continue
+                    local = a.asname or a.name
+                    self.importados[local] = f"{n.module}.{a.name}" \
+                        if n.module else a.name
+                    self.atados.add(local)
+                    # `from paquete import config` ata el módulo; `from config
+                    # import TZ` ata un atributo suyo, que no es lo mismo.
+                    if a.name == _MODULO_CONFIG:
+                        self.locales_config.add(local)
+            elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self.atados.add(n.name)
+                for a in (n.args.posonlyargs + n.args.args + n.args.kwonlyargs
+                          + ([n.args.vararg] if n.args.vararg else [])
+                          + ([n.args.kwarg] if n.args.kwarg else [])):
+                    self.atados.add(a.arg)
+            elif isinstance(n, ast.Lambda):
+                for a in (n.args.posonlyargs + n.args.args + n.args.kwonlyargs
+                          + ([n.args.vararg] if n.args.vararg else [])
+                          + ([n.args.kwarg] if n.args.kwarg else [])):
+                    self.atados.add(a.arg)
+            elif isinstance(n, ast.ClassDef):
+                self.atados.add(n.name)
+            elif isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store,
+                                                                ast.Del)):
+                self.atados.add(n.id)
+            elif isinstance(n, ast.ExceptHandler) and n.name:
+                self.atados.add(n.name)
+            elif isinstance(n, (ast.Global, ast.Nonlocal)):
+                self.atados.update(n.names)
+
+    def _propagar(self, arbol) -> None:
+        """Un nombre atado desde un espacio de módulos también lo es.
+
+        Se repite hasta que deje de crecer, para seguir cadenas como
+        `a = sys.modules`, `b = a`, `c = b`.
+        """
+        for _ in range(10):
+            antes = len(self.derivados)
+            for n in ast.walk(arbol):
+                destino = valor = None
+                if isinstance(n, ast.Assign) and len(n.targets) == 1:
+                    destino, valor = n.targets[0], n.value
+                elif isinstance(n, ast.AnnAssign) and n.value is not None:
+                    destino, valor = n.target, n.value
+                elif isinstance(n, (ast.For, ast.AsyncFor)):
+                    destino, valor = n.target, n.iter
+                if isinstance(destino, ast.Name) and valor is not None \
+                        and self.es_espacio(valor):
+                    self.derivados.add(destino.id)
+            if len(self.derivados) == antes:
+                return
+
+    def es_espacio(self, nodo) -> bool:
+        """¿De esta expresión puede salir un módulo si se le pide un nombre?"""
+        if isinstance(nodo, ast.Name):
+            if nodo.id in self.derivados or nodo.id in self.locales_config:
+                return True
+            if nodo.id in self.importados:
+                hay, obj = _objeto_ya_cargado(self.importados[nodo.id])
+                return _es_espacio_de_modulos(obj) if hay else True
+            # Un nombre que este archivo nunca ata y que tampoco es un builtin
+            # viene de fuera y no se puede clasificar.
+            return nodo.id not in self.atados and not hasattr(builtins, nodo.id)
+        if isinstance(nodo, ast.Attribute):
+            if not self.es_espacio(nodo.value):
+                return False
+            punteado = _punteado(nodo)
+            if punteado:
+                raiz = punteado.split(".")[0]
+                if raiz in self.importados:
+                    real = self.importados[raiz] + punteado[len(raiz):]
+                    hay, obj = _objeto_ya_cargado(real)
+                    if hay:
+                        return _es_espacio_de_modulos(obj)
+            return True                      # no se pudo resolver → rojo
+        if isinstance(nodo, ast.Subscript):
+            return self.es_espacio(nodo.value)
+        if isinstance(nodo, ast.Call):
+            if _nombre_llamado(nodo) == "getattr" and nodo.args:
+                return self.es_espacio(nodo.args[0])
+            libre = _nombre_llamado(nodo)
+            if libre and libre not in self.atados:
+                # Llamar SIN argumentos a un nombre que este archivo no ata es
+                # la forma de pedir un espacio de nombres entero: `globals()`,
+                # `locals()`, `vars()`. De ahí sale cualquier cosa que el
+                # archivo tenga a mano, módulos incluidos.
+                if not nodo.args and not nodo.keywords:
+                    return True
+                # Y pasarle un espacio a una función suelta devuelve otra vista
+                # del mismo espacio: `vars(mod)`, `list(sys.modules.values())`.
+                return any(self.es_espacio(a) for a in nodo.args)
+            # El resultado de llamar a un método NO se hereda: `hmac.new(...)`
+            # devuelve un objeto HMAC, no el módulo `hmac`. Tratarlo como
+            # espacio rojeaba `...hexdigest()[:32]` en web/auth.py sin que
+            # hubiera por dónde llegar a un módulo.
+            return False
+        return False
+
+
+def _es_el_modulo_config(nodo, locales: set[str]) -> bool:
     """¿Esta expresión ES el módulo config?
 
     Dos formas, y las dos se ven en el árbol: un nombre que un `import` ató al
     módulo (con alias o sin él), o el atributo `.config` de cualquier otra cosa
     — que es como se llega a config a través de un módulo que ya lo importó.
     """
-    if isinstance(nodo, ast.Name) and nodo.id in nombres_locales:
+    if isinstance(nodo, ast.Name) and nodo.id in locales:
         return True
-    return isinstance(nodo, ast.Attribute) and nodo.attr == "config"
-
-
-def _nombres_locales_del_modulo_config(arbol) -> set[str]:
-    """Con qué nombre conoce ESTE archivo al módulo config."""
-    nombres: set[str] = set()
-    for n in ast.walk(arbol):
-        if isinstance(n, ast.Import):
-            for a in n.names:
-                if a.name == "config" or a.name.startswith("config."):
-                    nombres.add(a.asname or a.name.split(".")[0])
-        elif isinstance(n, ast.ImportFrom):
-            for a in n.names:
-                if a.name == "config":
-                    nombres.add(a.asname or a.name)
-    return nombres
+    return isinstance(nodo, ast.Attribute) and nodo.attr == _MODULO_CONFIG
 
 
 def _infracciones(fuente, permitidos: set[str]) -> list[str]:
@@ -493,8 +861,11 @@ def _infracciones(fuente, permitidos: set[str]) -> list[str]:
         for hijo in ast.iter_child_nodes(padre):
             hijo._padre = padre                      # type: ignore[attr-defined]
 
-    locales = _nombres_locales_del_modulo_config(arbol)
+    ctx = _Contexto(arbol)
     malas: list[str] = []
+
+    def pedidos(nodo):
+        return _cadenas(nodo, ctx.ambitos)
 
     for n in ast.walk(arbol):
         # (a) El nombre prohibido escrito como atributo de lo que sea. Cubre
@@ -517,32 +888,71 @@ def _infracciones(fuente, permitidos: set[str]) -> list[str]:
                         f"línea {n.lineno}: `from {n.module} import *` trae "
                         "nombres que no puedo enumerar")
 
-        # (c) Maquinaria que fabrica módulos: no se puede saber qué consigue.
-        if isinstance(n, ast.Name) and n.id in _FABRICAS_DE_MODULOS:
-            malas.append(f"línea {n.lineno}: usa {n.id}, que puede devolver "
-                         "cualquier módulo y no se puede clasificar")
-        if isinstance(n, (ast.Import, ast.ImportFrom)):
-            raiz_mod = (n.module or "").split(".")[0] if isinstance(
-                n, ast.ImportFrom) else ""
-            modulos = [raiz_mod] if raiz_mod else [
-                a.name.split(".")[0] for a in n.names]
-            for m in modulos:
-                if m in _FABRICAS_DE_MODULOS:
-                    malas.append(f"línea {n.lineno}: importa {m}, que fabrica "
-                                 "objetos módulo que no se pueden clasificar")
-        if isinstance(n, ast.Attribute) and n.attr == "modules":
-            malas.append(f"línea {n.lineno}: toca la tabla de módulos; de ahí "
-                         "sale config sin nombrarlo")
+        # (c) Un atributo pedido por su nombre en tiempo de ejecución. Si la
+        #     guarda no puede enumerar qué nombres se piden no hay nada que
+        #     clasificar, y eso vale sobre cualquier objeto, sea módulo o no.
+        if _nombre_llamado(n) in ("getattr", "setattr", "delattr") and \
+                len(n.args) >= 2 and _nombre_llamado(n) not in ctx.atados:
+            quiere = pedidos(n.args[1])
+            if quiere is None:
+                malas.append(
+                    f"línea {n.lineno}: {_nombre_llamado(n)} con un nombre de "
+                    "atributo que no puedo enumerar; sin saber qué pide no hay "
+                    "nada que clasificar")
+            elif _PROHIBIDO in quiere:
+                malas.append(
+                    f"línea {n.lineno}: pide el atributo {_PROHIBIDO} por "
+                    f"{_nombre_llamado(n)}")
 
-        # (d) El objeto módulo usado para CUALQUIER otra cosa que no sea leer
-        #     uno de sus atributos permitidos. Acá caen `getattr(config, ...)`,
-        #     `vars(config)`, `config.__dict__`, `otro = config` y todo lo que
-        #     todavía no se le ocurrió a nadie.
-        if _es_el_modulo_config(n, locales):
+        # (d) Pedir por su nombre el MÓDULO config: `sys.modules["config"]`,
+        #     `importlib.import_module("config")`, `globals()["config"]`. El
+        #     nombre sale de `config.__name__`, no de acá.
+        if isinstance(n, ast.Call):
+            for arg in list(n.args) + [k.value for k in n.keywords]:
+                trae = pedidos(arg)
+                if trae and _MODULO_CONFIG in trae:
+                    malas.append(
+                        f"línea {n.lineno}: le pasa el nombre "
+                        f"{_MODULO_CONFIG!r} a una llamada; así se consigue el "
+                        "módulo sin nombrarlo en un import")
+
+        # (e) Un nombre sacado de un espacio del que puede salir un módulo. De
+        #     ahí solo se puede pedir un nombre que la guarda pueda enumerar:
+        #     si no puede, o si es uno de los dos prohibidos, es rojo. Acá cae
+        #     `sys.modules["config"]` y `getattr(sys, "modules")[...]` sin que
+        #     `sys` esté apuntado en ninguna lista.
+        if isinstance(n, ast.Subscript) and ctx.es_espacio(n.value):
+            claves = pedidos(n.slice)
+            donde = _punteado(n.value) or "un espacio de nombres"
+            prohibidas = {_PROHIBIDO, _MODULO_CONFIG}
+            if claves is None:
+                malas.append(
+                    f"línea {n.lineno}: saca de {donde} un nombre que no puedo "
+                    "enumerar; de ahí puede salir cualquier módulo")
+            elif claves & prohibidas:
+                cual = sorted(claves & prohibidas)
+                malas.append(
+                    f"línea {n.lineno}: saca {cual} de {donde}, que es "
+                    "exactamente la lista cruda o el módulo que la tiene")
+
+        # (f) El objeto módulo config usado para CUALQUIER otra cosa que no sea
+        #     leer uno de sus atributos permitidos. Acá caen `vars(config)`,
+        #     `config.__dict__`, `otro = config` y todo lo que todavía no se le
+        #     ocurrió a nadie.
+        if _es_el_modulo_config(n, ctx.locales_config):
             padre = getattr(n, "_padre", None)
             bien = (isinstance(padre, ast.Attribute)
                     and padre.value is n
                     and padre.attr in permitidos)
+            # Pedirle un atributo permitido por `getattr` con un literal es
+            # exactamente igual de clasificable que escribirlo con un punto: se
+            # sabe qué nombre se pide y se sabe que no es el prohibido.
+            if not bien and isinstance(padre, ast.Call) and \
+                    _nombre_llamado(padre) == "getattr" and \
+                    len(padre.args) >= 2 and padre.args[0] is n:
+                quiere = pedidos(padre.args[1])
+                bien = bool(quiere) and quiere is not None and \
+                    quiere <= permitidos
             if not bien:
                 como = (f".{padre.attr}" if isinstance(padre, ast.Attribute)
                         else type(padre).__name__ if padre else "suelto")
@@ -554,24 +964,170 @@ def _infracciones(fuente, permitidos: set[str]) -> list[str]:
     return sorted(set(malas))
 
 
+# ── Tramo 3: quién queda fuera de la vigilancia ───────────────────────────
+#
+# Antes era `rel.name in ("config.py", "conftest.py")`, o sea POR NOMBRE DE
+# ARCHIVO: bastaba con llamar `conftest.py` a un archivo de producción, en la
+# carpeta que fuera, para que la guarda dejara de mirarlo. Ahora la exención
+# sale de hechos comprobables sobre el archivo, y cada hecho se lee de un
+# artefacto real del repo:
+#
+#   · DÓNDE VIVE  → `pytest.ini`, campo `testpaths`, que es lo que pytest
+#     recoge de verdad. Y el `conftest.py` de la rootdir de pytest (la carpeta
+#     donde está `pytest.ini`), que es el otro sitio del que pytest carga
+#     andamio en este repo.
+#   · QUIÉN LO CARGA → el cierre de imports del `startCommand` de
+#     `railway.json`. Si un archivo se alcanza importando desde ahí, corre en
+#     producción y no puede ser andamio de pruebas, se llame como se llame.
+#   · Y aparte, el archivo que DEFINE la lista, que sale de `config.__file__`
+#     — del objeto módulo, no de un nombre tecleado.
+#
+# Un archivo que no encaje en ninguno de esos hechos queda DENTRO de la
+# vigilancia. `captura/conftest.py` no está bajo `testpaths`, no es el conftest
+# de la rootdir y no es config.py: se mira igual que `captura/_utilidades.py`.
+
+def _pytest_ini(raiz: Path, campo: str) -> list[str]:
+    """Un campo de `pytest.ini`, partido en palabras. Sin archivo, nada."""
+    ini = raiz / "pytest.ini"
+    if not ini.is_file():
+        return []
+    cfg = configparser.ConfigParser(allow_no_value=True,
+                                    comment_prefixes=(";", "#"))
+    try:
+        cfg.read_string(ini.read_text(encoding="utf-8"))
+    except configparser.Error:
+        return []
+    return cfg.get("pytest", campo, fallback="").split()
+
+
+def _testpaths(raiz: Path) -> list[Path]:
+    """Las carpetas que pytest recoge de verdad, leídas de `pytest.ini`."""
+    return [raiz / p for p in _pytest_ini(raiz, "testpaths")
+            if (raiz / p).is_dir()]
+
+
+def _carpetas_que_no_son_del_repo(raiz: Path) -> set[str]:
+    """Las carpetas que ni pytest ni la guarda recorren.
+
+    Sale de `norecursedirs` de `pytest.ini` —el venv, los cachés, `.git`— y no
+    de una lista escrita acá. Era la TERCERA lista tecleada de este archivo: si
+    mañana aparece otra carpeta de herramientas, se añade en pytest.ini una vez
+    y las dos cosas se enteran. Sin `pytest.ini` no se salta nada, que es el
+    lado seguro: más archivos mirados, no menos.
+    """
+    return set(_pytest_ini(raiz, "norecursedirs"))
+
+
+def _entradas_de_produccion(raiz: Path) -> list[Path]:
+    """Con qué archivo arranca Lucy en Railway, leído de `railway.json`."""
+    conf = raiz / "railway.json"
+    if not conf.exists():
+        return []
+    try:
+        datos = json.loads(conf.read_text(encoding="utf-8"))
+    except ValueError:
+        return []
+    orden = str(datos.get("deploy", {}).get("startCommand", ""))
+    return [raiz / t for t in orden.split()
+            if t.endswith(".py") and (raiz / t).is_file()]
+
+
+def _cierre_de_imports(raiz: Path, entradas: list[Path]) -> set[Path]:
+    """Los .py del repo a los que se llega importando desde `entradas`."""
+    visto: set[Path] = set()
+    pila = list(entradas)
+    while pila:
+        py = pila.pop()
+        py = py.resolve()
+        if py in visto or not py.is_file():
+            continue
+        visto.add(py)
+        try:
+            arbol = ast.parse(py.read_bytes())
+        except SyntaxError:
+            continue
+        punteados: set[str] = set()
+        for n in ast.walk(arbol):
+            if isinstance(n, ast.Import):
+                punteados.update(a.name for a in n.names)
+            elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
+                punteados.add(n.module)
+                punteados.update(f"{n.module}.{a.name}" for a in n.names
+                                 if a.name != "*")
+        for p in punteados:
+            trozos = p.split(".")
+            for cand in (raiz.joinpath(*trozos).with_suffix(".py"),
+                         raiz.joinpath(*trozos, "__init__.py")):
+                if cand.is_file():
+                    pila.append(cand)
+    return visto
+
+
+def _donde_vive_config() -> Path | None:
+    """Dónde vive `config.py` DENTRO del repo, preguntándole al módulo.
+
+    Sale de `config.__file__`, o sea del objeto módulo que estas pruebas ya
+    tienen importado, y se devuelve relativo a la raíz del repo. Si mañana
+    config se mueve de carpeta, esto se mueve con él sin que nadie lo edite.
+    """
+    donde = getattr(config, "__file__", None)
+    if not donde:
+        return None
+    try:
+        return Path(donde).resolve().relative_to(RAIZ)
+    except ValueError:
+        return None
+
+
+def _archivos_exentos(raiz: Path) -> set[Path]:
+    """Quién queda fuera de la vigilancia, y por qué hecho comprobable.
+
+    Nada de esto es un nombre de archivo tecleado: sale de `config.__file__`,
+    de `pytest.ini` y de `railway.json`. Y lo que no encaje se queda DENTRO.
+    """
+    produccion = _cierre_de_imports(raiz, _entradas_de_produccion(raiz))
+    exentos: set[Path] = set()
+
+    # El archivo que DEFINE la lista. Dónde vive lo dice el módulo de verdad,
+    # no un nombre tecleado; se guarda como camino RELATIVO al repo para que
+    # esto siga valiendo sobre una copia del árbol sacada a otra carpeta.
+    definidor = _donde_vive_config()
+    if definidor is not None and (raiz / definidor).is_file():
+        exentos.add((raiz / definidor).resolve())
+
+    # Andamio de pruebas: pytest lo carga Y no corre en producción. Los dos
+    # hechos a la vez; con uno solo no alcanza.
+    candidatos: set[Path] = set()
+    for carpeta in _testpaths(raiz):
+        candidatos.update(p.resolve() for p in carpeta.rglob("*.py"))
+    if (raiz / "pytest.ini").is_file() and (raiz / "conftest.py").is_file():
+        candidatos.add((raiz / "conftest.py").resolve())
+    exentos |= {p for p in candidatos if p not in produccion}
+    return exentos
+
+
 def _quienes_leen_la_lista_cruda(raiz: Path) -> dict[str, list[str]]:
     """Recorre los .py que hay EN DISCO bajo `raiz` y los clasifica.
 
-    Las exclusiones son por ROL, no por nombre:
-      · `config.py` es donde la lista se define y donde vive la puerta.
-      · `tests/` le escribe encima para montar buzones de mentira; es lo que
-        hace este mismo archivo unas funciones más arriba.
-      · `conftest.py` es andamio de pruebas del mismo rol que `tests/`: no
-        corre en producción y necesita `sys.modules` para aislar las pruebas
-        entre sí.
+    Ningún archivo se nombra acá. Qué carpetas no se recorren sale de
+    `norecursedirs` de pytest.ini; quién queda exento, de `_archivos_exentos`,
+    que lo deriva de `config.__file__`, de `testpaths` y del cierre de imports
+    del `startCommand` de railway.json. Lo que no encaje en esos hechos se
+    queda DENTRO de la vigilancia, que es el lado seguro del error.
+
+    Medido el 5-sep-2026 sobre este repo: 66 archivos .py, 29 exentos
+    (config.py, el conftest de la rootdir y los 27 de `tests/`), 37 vigilados,
+    0 culpables.
     """
     permitidos = _atributos_que_config_ofrece()
+    exentos = _archivos_exentos(raiz)
+    fuera = _carpetas_que_no_son_del_repo(raiz)
     culpables: dict[str, list[str]] = {}
     for py in sorted(raiz.rglob("*.py")):
         rel = py.relative_to(raiz)
-        if rel.parts[0] == "tests" or rel.name in ("config.py", "conftest.py"):
+        if any(p in fuera for p in rel.parts):
             continue
-        if any(p in (".venv", "venv", "__pycache__") for p in rel.parts):
+        if py.resolve() in exentos:
             continue
         motivos = _infracciones(py.read_bytes(), permitidos)
         if motivos:
@@ -595,10 +1151,20 @@ def test_nadie_lee_la_lista_cruda():
         "TODOS los buzones, incluidos los que no se le enseñan a Tiziano")
 
 
-# Ocho caminos nuevos, todos haciendo LO MISMO: devolver la lista cruda. Los
-# tres primeros son los que la guarda vieja midió el 5-sep-2026 (uno rojo, dos
-# verdes). Los cinco de abajo son las formas siguientes, las que se le habrían
-# escapado a un parche que solo añadiera las dos primeras al patrón.
+# Trece caminos nuevos, todos haciendo LO MISMO: devolver la lista cruda.
+#
+#   · Los tres primeros son los que la guarda de TEXTO midió el 5-sep-2026
+#     (uno rojo, dos verdes).
+#   · Del cuarto al octavo, las formas siguientes — las que se le habrían
+#     escapado a un parche que solo añadiera las dos primeras al patrón.
+#   · El noveno es EL AGUJERO que un testigo encontró en la guarda de `ast`:
+#     con `getattr(sys, "modules")` el nombre del atributo es un `ast.Constant`
+#     y no un `ast.Attribute`, así que la comprobación de `sys.modules` no
+#     disparaba, y `sys` no estaba en la lista de fábricas de módulos. Puesto
+#     como archivo real en `captura/`: 16 passed, cero infracciones, y la
+#     función devolvía las credenciales del buzón con `reporte_a: 0`.
+#   · Los cuatro últimos los buscó el agente que arregló el agujero, para no
+#     dar por bueno el arreglo con las mismas pruebas que lo motivaron.
 _ESQUIVES = {
     "el nombre escrito entero": """
 import config
@@ -660,9 +1226,64 @@ def _nombre():
 def cuentas():
     return [c for c in getattr(config, _nombre())]
 """,
+    "por la tabla de módulos, pedida con getattr": """
+import sys
+
+def cuentas():
+    modulo = getattr(sys, "modules")["config"]
+    return [c for c in getattr(modulo, "CORREO_CUENTAS")]
+""",
+    "la tabla de módulos guardada en una variable, con la clave armada": """
+import sys
+
+
+def _n():
+    return "con" + "fig"
+
+
+def cuentas():
+    tabla = sys.modules
+    return getattr(tabla[_n()], "CORREO_" + "CUENTAS")
+""",
+    "el módulo guardado como atributo de una clase": """
+import config
+
+
+class Caja:
+    mod = config
+
+
+def cuentas():
+    return [c for c in Caja.mod.CORREO_CUENTAS]
+""",
+    "el módulo pasado como valor por defecto de un parámetro": """
+import config
+
+
+def cuentas(_m=config):
+    return [c for c in _m.CORREO_CUENTAS]
+""",
+    "sys.modules.get() en vez del subíndice": """
+import sys
+
+
+def cuentas():
+    return [c for c in sys.modules.get("config").CORREO_CUENTAS]
+""",
+    # Éste cae por UN solo motivo: el nombre 'config' viajando dentro de una
+    # llamada. Ni el atributo se escribe, ni el módulo se ata a un nombre que
+    # la guarda reconozca. Si esa regla se cayera, esta forma volvería a pasar.
+    "traído por importlib y abierto con vars()": """
+import importlib
+
+
+def cuentas():
+    mod = importlib.import_module("config")
+    return [c for c in vars(mod)["CORREO_CUENTAS"]]
+""",
 }
 
-# Y lo que TIENE que seguir en verde: los tres usos legítimos que hay hoy en el
+# Y lo que TIENE que seguir en verde: los usos legítimos que hay hoy en el
 # repo, escritos igual que en `cerebro/`, `db/` y `captura/`.
 _LEGITIMOS = {
     "import config y un atributo suyo": """
@@ -686,15 +1307,40 @@ import config
 def cuentas():
     return [c["user"] for c in config.cuentas_de_correo("mostrar")]
 """,
+    "un atributo permitido pedido por getattr con literal": """
+import config
+
+
+def zona():
+    return getattr(config, "TZ", None)
+""",
+    "getattr sobre un módulo que no es config, con un nombre enumerable": """
+import psycopg
+
+
+ERRORES = tuple(getattr(psycopg, n, None)
+                for n in ("IntegrityError", "DataError"))
+""",
+    "cortar el resultado de un método": """
+import hashlib
+import hmac
+
+import config
+
+
+def firmar(carga: str) -> str:
+    return hmac.new(config.TELEGRAM_TOKEN.encode(), carga.encode(),
+                    hashlib.sha256).hexdigest()[:32]
+""",
 }
 
 
-def test_la_guarda_muerde_los_ocho_caminos_a_la_lista_cruda():
-    """Las ocho formas de arriba tienen que poner la guarda ROJA.
+def test_la_guarda_muerde_todos_los_caminos_a_la_lista_cruda():
+    """Cada forma de arriba tiene que poner la guarda ROJA.
 
     Se corre el archivo de verdad —`_quienes_leen_la_lista_cruda`, el mismo que
-    usa la prueba de arriba— sobre una carpeta temporal FUERA del repositorio,
-    con un .py por forma. No se escribe nada dentro del repo.
+    usa `test_nadie_lee_la_lista_cruda`— sobre una carpeta temporal FUERA del
+    repositorio, con un .py por forma. No se escribe nada dentro del repo.
     """
     import tempfile
 
@@ -707,8 +1353,8 @@ def test_la_guarda_muerde_los_ocho_caminos_a_la_lista_cruda():
         "tiene reporte_a: 0")
 
     # Y el recorrido del disco entero, no solo el clasificador: un archivo con
-    # cualquiera de las ocho formas, puesto en una carpeta como la del repo,
-    # tiene que aparecer en los culpables.
+    # cualquiera de las formas, puesto en una carpeta como la del repo, tiene
+    # que aparecer en los culpables.
     with tempfile.TemporaryDirectory() as tmp:
         raiz = Path(tmp)
         (raiz / "tests").mkdir()
@@ -718,6 +1364,250 @@ def test_la_guarda_muerde_los_ocho_caminos_a_la_lista_cruda():
     assert len(culpables) == len(_ESQUIVES), (
         f"el recorrido del disco solo señaló {sorted(culpables)} de "
         f"{len(_ESQUIVES)} archivos culpables")
+
+
+def test_la_guarda_muerde_el_camino_por_la_tabla_de_modulos():
+    """EL agujero de la versión anterior, con su código exacto.
+
+    `getattr(sys, "modules")` esquivaba las dos comprobaciones a la vez: el
+    nombre del atributo viajaba como `ast.Constant` en vez de `ast.Attribute`,
+    y `sys` no estaba en la lista tecleada de fábricas de módulos. Medido el
+    5-sep-2026 puesto en `captura/`: 16 passed, cero infracciones, y la función
+    devolvía de verdad los buzones con `reporte_a: 0` y sus credenciales.
+
+    Ahora cae por DOS motivos independientes, y ninguno de los dos nombra a
+    `sys`: sacar el nombre 'config' de un espacio del que pueden salir módulos,
+    y pedir el atributo prohibido por `getattr`.
+    """
+    fuente = _ESQUIVES["por la tabla de módulos, pedida con getattr"]
+    motivos = _infracciones(fuente, _atributos_que_config_ofrece())
+    assert len(motivos) >= 2, (
+        f"el camino por la tabla de módulos solo cayó por {motivos}; se espera "
+        "que caiga por el nombre del módulo y por el atributo pedido")
+    assert any(_MODULO_CONFIG in m for m in motivos), (
+        f"nadie vio que se estaba sacando el módulo {_MODULO_CONFIG!r} de un "
+        f"espacio de nombres: {motivos}")
+    assert any(_PROHIBIDO in m for m in motivos), (
+        f"nadie vio que se estaba pidiendo {_PROHIBIDO}: {motivos}")
+
+
+# ── Que un archivo esté exento NO puede depender de cómo se llame ─────────
+
+def _repo_de_mentira(raiz: Path) -> None:
+    """Un repo con la forma del de Lucy, para medir la exención sin tocar el
+    repo de verdad: `pytest.ini` con sus testpaths, `railway.json` con su
+    startCommand, un `main.py` que importa producción, y las carpetas."""
+    (raiz / "tests").mkdir()
+    (raiz / "captura").mkdir()
+    (raiz / "pytest.ini").write_text(
+        "[pytest]\ntestpaths = tests\nnorecursedirs = .venv __pycache__\n",
+        encoding="utf-8")
+    (raiz / "railway.json").write_text(
+        '{"deploy": {"startCommand": "python main.py"}}', encoding="utf-8")
+    (raiz / "main.py").write_text(
+        "import captura.correo\n", encoding="utf-8")
+    (raiz / "captura" / "__init__.py").write_text("", encoding="utf-8")
+    (raiz / "captura" / "correo.py").write_text("", encoding="utf-8")
+    (raiz / "conftest.py").write_text("import sys\n", encoding="utf-8")
+    (raiz / "tests" / "test_algo.py").write_text("", encoding="utf-8")
+
+
+def test_la_exencion_no_mira_el_nombre_del_archivo():
+    """El SEGUNDO agujero, medido: el mismo código, byte por byte, daba
+    `captura/_utilidades.py → 1 failed` y `captura/conftest.py → 16 passed`.
+
+    Bastaba con ponerle a un archivo de producción el nombre `conftest.py`, en
+    cualquier carpeta del repo, para que la guarda dejara de mirarlo — porque
+    la exención se decidía con `rel.name in ("config.py", "conftest.py")`, o
+    sea por el NOMBRE.
+
+    Ahora un archivo es andamio de pruebas por DÓNDE VIVE (bajo un `testpaths`
+    de pytest.ini, o el conftest de la rootdir) y por QUIÉN LO CARGA (que no
+    esté en el cierre de imports del `startCommand` de railway.json). El nombre
+    no entra en la cuenta, así que los dos archivos dan el MISMO veredicto.
+    """
+    import tempfile
+
+    fuga = _ESQUIVES["el nombre escrito entero"]
+    veredictos = {}
+    for donde in ("captura/_utilidades.py", "captura/conftest.py",
+                  "captura/config.py", "cerebro/conftest.py", "conftest2.py"):
+        with tempfile.TemporaryDirectory() as tmp:
+            raiz = Path(tmp)
+            _repo_de_mentira(raiz)
+            destino = raiz / donde
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            destino.write_text(fuga, encoding="utf-8")
+            veredictos[donde] = donde in _quienes_leen_la_lista_cruda(raiz)
+
+    assert all(veredictos.values()), (
+        f"la guarda dejó de mirar algún archivo por cómo se llama: "
+        f"{veredictos}. Los cinco tienen el MISMO código y ninguno es andamio "
+        "de pruebas: los cinco tienen que salir culpables")
+
+
+def test_el_andamio_de_pruebas_de_verdad_si_queda_exento():
+    """El control de la de arriba: si la exención dejara de existir, aquélla
+    pasaría igual y esto se pondría rojo. Las dos juntas fijan la línea.
+
+    El `conftest.py` de la rootdir y lo que vive bajo `testpaths` SÍ quedan
+    fuera: pytest los carga y no están en el cierre de imports de producción.
+    Es lo que deja que el conftest use `sys.modules` para aislar las pruebas.
+    """
+    import tempfile
+
+    fuga = _ESQUIVES["el nombre escrito entero"]
+    for donde in ("conftest.py", "tests/test_algo.py", "tests/hondo/aux.py"):
+        with tempfile.TemporaryDirectory() as tmp:
+            raiz = Path(tmp)
+            _repo_de_mentira(raiz)
+            destino = raiz / donde
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            destino.write_text(fuga, encoding="utf-8")
+            culpables = _quienes_leen_la_lista_cruda(raiz)
+            assert donde not in culpables, (
+                f"{donde} es andamio de pruebas y la guarda lo señaló igual: "
+                f"{culpables}. Eso convierte la guarda en un impuesto")
+
+
+def test_un_conftest_que_SI_corre_en_produccion_no_queda_exento():
+    """Los dos hechos, y hacen falta los dos.
+
+    Un `conftest.py` en la rootdir que además esté en el cierre de imports de
+    producción no es andamio: alguien lo importó desde `main.py`. Ahí la
+    exención se cae sola, sin que nadie tenga que acordarse de quitarlo de una
+    lista.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        raiz = Path(tmp)
+        _repo_de_mentira(raiz)
+        (raiz / "main.py").write_text("import conftest\n", encoding="utf-8")
+        (raiz / "conftest.py").write_text(
+            _ESQUIVES["el nombre escrito entero"], encoding="utf-8")
+        culpables = _quienes_leen_la_lista_cruda(raiz)
+    assert "conftest.py" in culpables, (
+        "un conftest.py importado desde el arranque de producción siguió "
+        f"exento: {culpables}")
+
+
+def test_las_exenciones_salen_de_artefactos_que_existen():
+    """Una exención derivada de un archivo que no está es una exención muda.
+
+    Si mañana desaparece `pytest.ini` o `railway.json`, o config se muda, esto
+    se pone rojo en vez de dejar de vigilar en silencio.
+    """
+    assert (RAIZ / "pytest.ini").is_file(), "sin pytest.ini no sé qué recoge pytest"
+    assert (RAIZ / "railway.json").is_file(), (
+        "sin railway.json no sé con qué arranca producción")
+    assert _testpaths(RAIZ) == [RAIZ / "tests"], (
+        f"testpaths de pytest.ini dejó de ser 'tests': {_testpaths(RAIZ)}")
+    assert _entradas_de_produccion(RAIZ) == [RAIZ / "main.py"], (
+        f"el startCommand de railway.json dejó de arrancar main.py: "
+        f"{_entradas_de_produccion(RAIZ)}")
+    assert _donde_vive_config() == Path("config.py"), (
+        f"config se mudó a {_donde_vive_config()}; la exención lo sigue sola, "
+        "pero conviene enterarse")
+
+    produccion = _cierre_de_imports(RAIZ, _entradas_de_produccion(RAIZ))
+    assert (RAIZ / "captura" / "correo.py").resolve() in produccion, (
+        "el cierre de imports no llegó a captura/correo.py, que sí corre en "
+        "producción: si el cierre se queda corto, la exención se ensancha")
+    assert (RAIZ / "conftest.py").resolve() not in produccion, (
+        "conftest.py aparece en el cierre de imports de producción")
+
+    exentos = _archivos_exentos(RAIZ)
+    assert (RAIZ / "config.py").resolve() in exentos
+    assert (RAIZ / "conftest.py").resolve() in exentos
+    assert (RAIZ / "captura" / "correo.py").resolve() not in exentos
+
+
+def test_un_getattr_con_nombre_desconocido_es_rojo_sobre_lo_que_sea():
+    """La regla que sostiene «lo que no sé cuenta como rojo» en su forma pura.
+
+    `getattr(obj, nombre)` con `nombre` sin enumerar no se puede clasificar: la
+    guarda no sabe si `obj` es config ni qué atributo se le pide. No hace falta
+    que sea sospechoso — hace falta que no se pueda descartar.
+
+    Es el único motivo por el que cae este archivo, así que si la regla se
+    quitara, esto se pondría rojo. Medido el 5-sep-2026: cuesta CERO falsos
+    positivos sobre los .py del repo: los 7 `getattr` que hay hoy en los
+    archivos vigilados (4 en main.py, 2 en cerebro/interpretar.py, 1 en
+    db/db.py) piden todos un nombre que sí se puede enumerar.
+    """
+    fuente = "def leer(obj, nombre):\n    return getattr(obj, nombre)\n"
+    motivos = _infracciones(fuente, _atributos_que_config_ofrece())
+    assert motivos, (
+        "un getattr con el nombre del atributo en una variable pasó limpio; "
+        "ahí no hay nada que clasificar y por eso tiene que ser rojo")
+
+
+def test_las_carpetas_saltadas_se_leen_de_pytest_ini_de_verdad():
+    """Que la lista de carpetas saltadas SALGA de pytest.ini, no que coincida.
+
+    Con la lista tecleada a mano —`(".venv", "venv", "__pycache__")`, que es lo
+    que había— el resultado de hoy es el mismo, así que comprobar los nombres
+    no distingue una cosa de la otra. Esto sí: se monta un repo cuyo
+    `norecursedirs` nombra una carpeta que ninguna lista tecleada tendría, y se
+    exige que la guarda la respete.
+    """
+    import tempfile
+
+    fuga = _ESQUIVES["el nombre escrito entero"]
+    with tempfile.TemporaryDirectory() as tmp:
+        raiz = Path(tmp)
+        _repo_de_mentira(raiz)
+        (raiz / "pytest.ini").write_text(
+            "[pytest]\ntestpaths = tests\nnorecursedirs = trastero\n",
+            encoding="utf-8")
+        (raiz / "trastero").mkdir()
+        (raiz / "trastero" / "x.py").write_text(fuga, encoding="utf-8")
+        (raiz / "captura" / "y.py").write_text(fuga, encoding="utf-8")
+        culpables = _quienes_leen_la_lista_cruda(raiz)
+
+    assert "captura/y.py" in culpables, (
+        f"la guarda dejó de mirar código normal del repo: {culpables}")
+    assert "trastero/x.py" not in culpables, (
+        "la guarda entró en una carpeta que pytest.ini dice no recorrer: la "
+        f"lista de carpetas saltadas no sale de pytest.ini. Culpables: "
+        f"{culpables}")
+
+
+def test_las_carpetas_que_no_se_recorren_salen_de_pytest_ini():
+    """La TERCERA lista tecleada que tenía este archivo, ya derivada.
+
+    Decía `(".venv", "venv", "__pycache__")` a mano. Ahora sale de
+    `norecursedirs` de pytest.ini, o sea del mismo sitio del que lo saca
+    pytest: una carpeta de herramientas nueva se añade una vez y las dos cosas
+    se enteran.
+    """
+    fuera = _carpetas_que_no_son_del_repo(RAIZ)
+    assert ".venv" in fuera and "__pycache__" in fuera, (
+        f"norecursedirs de pytest.ini ya no cubre el venv ni los cachés: "
+        f"{sorted(fuera)}")
+    assert "captura" not in fuera and "cerebro" not in fuera, (
+        f"norecursedirs se comió una carpeta de código de Lucy: {sorted(fuera)}")
+
+
+def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
+    """El número, no el adjetivo.
+
+    `test_nadie_lee_la_lista_cruda` dice que no hay ninguno; esto dice sobre
+    CUÁNTOS archivos se midió, para que "cero falsos positivos" signifique algo
+    y para que se note si mañana la guarda deja de mirar medio repo.
+    """
+    fuera = _carpetas_que_no_son_del_repo(RAIZ)
+    exentos = _archivos_exentos(RAIZ)
+    mirados = [p for p in RAIZ.rglob("*.py")
+               if not any(x in fuera for x in p.relative_to(RAIZ).parts)
+               and p.resolve() not in exentos]
+    assert len(mirados) == 37, (
+        f"la guarda está mirando {len(mirados)} archivos .py y el 5-sep-2026 "
+        "eran 37. Si bajó, algo se está saltando de más y «cero falsos "
+        "positivos» dejó de significar lo que decía")
+    assert not _quienes_leen_la_lista_cruda(RAIZ), (
+        "hay falsos positivos sobre los archivos reales de hoy")
 
 
 def test_la_guarda_no_rojea_a_quien_usa_config_como_se_debe():
