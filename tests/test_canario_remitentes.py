@@ -408,6 +408,91 @@ def test_una_clase_inventada_revienta_en_vez_de_elegir_por_defecto():
     raise AssertionError("aceptó una clase que no existe")
 
 
+# ── Señal C: la base rechazó la fila ─────────────────────────────────────
+#
+# La más callada de las tres. El correo se entendió (no hay ErrorDeParseo, así
+# que la señal A no la ve) y el remitente enrutó (así que la B tampoco). Hasta
+# el 4-sep-2026 el rechazo subía crudo hasta el `except Exception` del bucle de
+# cerebro/interpretar.py: un `log.warning` en Railway y nada más, sin llegar
+# nunca a `guardar_estado_consumos` — o sea con el cursor de UID de ese buzón
+# sin avanzar, releyendo el mismo correo malo cada 15 minutos para siempre.
+
+BANRESERVAS = "notificaciones@banreservas.com"
+CONSUMO_BANRESERVAS = (
+    "Notificación de Consumo Su tarjeta VISA PLATINUM ••8110 presenta un "
+    "consumo. Monto: DOP 254.90 Estado: APROBADO Comercio: SM NACIONAL "
+    "MAXIMO GOM SANTO DOMINGODO Fecha de transacción: 17/04/2026 10:28 AM "
+    "Número de aprobación: 299209 Recibido por los valores indicados")
+
+
+def test_una_fila_rechazada_por_la_base_no_mata_la_pasada_y_avisa():
+    """Lo que cierra el agujero: el movimiento que no se puede guardar deja
+    rastro y avisa, en vez de desaparecer."""
+    reg = _montar([(1, _eml(BANRESERVAS, "Notificaciones Banreservas",
+                            CONSUMO_BANRESERVAS))])
+
+    async def _rechaza(mov, bandeja_id=None, categoria=None):
+        raise db.MovimientoRechazado(
+            "la base rechazó el movimiento de banreservas "
+            "(tipo=gasto, estado=reversada): CheckViolation: violates check "
+            'constraint "movimientos_estado_valido"')
+
+    db.guardar_movimiento = _rechaza
+
+    res = _correr(consumos.revisar())          # no revienta
+    assert res.enrutados.get(BANRESERVAS) == 1, res.enrutados
+    assert res.reventados.get(BANRESERVAS) is None, (
+        "no es un fallo de parseo: el correo se entendió entero")
+    assert res.rechazados.get(BANRESERVAS) == 1, res.rechazados
+    assert res.remitentes_rechazados() == [BANRESERVAS]
+    assert _correr(consumos.avisar_si_hay_bancos_mudos(res)) == 1
+    # avisos[0] es el CUERPO CRUDO del correo: se guarda antes de parsear
+    # (INVARIANTE 1), así que el dato no se pierde aunque la fila no entre. El
+    # aviso del canario es el último.
+    assert "VISA PLATINUM" in reg.avisos[0], (
+        "el crudo tiene que quedar guardado igual: es de donde se recupera")
+    assert BANRESERVAS in reg.avisos[-1], [a[:60] for a in reg.avisos]
+    assert "movimientos_estado_valido" in reg.avisos[-1], (
+        "el aviso tiene que llevar el error real, no una conjetura")
+
+
+def test_una_fila_rechazada_no_impide_que_avance_el_cursor():
+    """La pasada sigue: las demás filas entran y el cursor de UID se guarda. Un
+    correo malo no puede dejar la cuenta entera sin ingerir."""
+    _montar([(7, _eml(BANRESERVAS, "Notificaciones Banreservas",
+                      CONSUMO_BANRESERVAS))])
+    guardado = {}
+
+    async def _rechaza(mov, bandeja_id=None, categoria=None):
+        raise db.MovimientoRechazado("la base rechazó el movimiento")
+
+    async def _cursor(cuenta, uidv, uid, desde, reiniciar=False):
+        guardado[cuenta] = uid
+
+    db.guardar_movimiento = _rechaza
+    db.guardar_estado_consumos = _cursor
+    _correr(consumos.revisar())
+    assert guardado.get("tizianofv@gmail.com") == 7, guardado
+
+
+def test_un_fallo_de_conexion_no_se_disfraza_de_fila_mala():
+    """Lo contrario, y es lo que hace que el anterior valga. Si la base no
+    responde hay que PARAR sin guardar el cursor: darlo por bueno se saltaría
+    correos que nunca se guardaron."""
+    _montar([(1, _eml(BANRESERVAS, "Notificaciones Banreservas",
+                      CONSUMO_BANRESERVAS))])
+
+    async def _caida(mov, bandeja_id=None, categoria=None):
+        raise OSError("conexión caída")
+
+    db.guardar_movimiento = _caida
+    try:
+        _correr(consumos.revisar())
+    except OSError:
+        return
+    raise AssertionError("la ingesta se tragó un fallo de conexión")
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):

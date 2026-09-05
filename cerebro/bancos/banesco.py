@@ -37,6 +37,7 @@ from cerebro.bancos.contrato import (
     CorreoCrudo,
     ErrorDeParseo,
     Movimiento,
+    asentar_reverso,
     normalizar_estado,
     normalizar_fecha,
     normalizar_monto,
@@ -108,13 +109,19 @@ def parsear_consumo(correo: CorreoCrudo) -> list[Movimiento]:
         comercio = " ".join(m.group("comercio").split())
         if not comercio:
             raise ErrorDeParseo("consumo de Banesco sin comercio")
+        # "su estado es ___" es texto libre del banco, y `normalizar_estado()`
+        # devuelve `reversada` para anulada / devuelta / reversada. Ese valor NO
+        # lo acepta la base: hay que asentarlo antes. Hasta el 4-sep-2026 esto
+        # pasaba el estado derecho al Movimiento, y el primer consumo anulado de
+        # Banesco habría violado el CHECK de `movimientos_estado_valido`.
+        tipo, estado = asentar_reverso("gasto", normalizar_estado(m.group("estado")))
         return [Movimiento(
-            banco=BANCO, canal="tarjeta", tipo="gasto",
+            banco=BANCO, canal="tarjeta", tipo=tipo,
             fecha=normalizar_fecha(m.group("fecha")),
             monto=normalizar_monto(m.group("monto")),
             moneda=normalizar_moneda(m.group("moneda")),
             contraparte=comercio,
-            estado=normalizar_estado(m.group("estado")),
+            estado=estado,
             referencia=f"Banesco ••{m.group('tarjeta')} · {correo.cuenta}")]
 
     m = _DECLINADA.search(texto)

@@ -159,6 +159,12 @@ class Resumen:
                        la huella y coincidió con una que ya estaba.
       · `reventados` — de esos, cuántos levantaron ErrorDeParseo.
       · `sin_ruta`   — correos suyos que no calzaron con ningún parser.
+      · `rechazados` — movimientos que el parser SÍ produjo y la base no
+                       aceptó. Es distinto de `reventados`: acá el correo se
+                       entendió entero y lo que falla es el acople con el
+                       esquema. Ninguna suite hermética puede ver ese fallo —
+                       los dobles de conexión aceptan lo que sea—, así que si
+                       nadie lo cuenta acá, no lo cuenta nadie.
     """
     vistos: int = 0
     guardados_crudos: int = 0
@@ -169,6 +175,7 @@ class Resumen:
     producidos: dict = field(default_factory=dict)
     reventados: dict = field(default_factory=dict)
     sin_ruta: dict = field(default_factory=dict)
+    rechazados: dict = field(default_factory=dict)
 
     def remitentes_reventados(self) -> list[str]:
         """SEÑAL A: un parser calzó y no pudo leer el correo. Avisa SIEMPRE.
@@ -179,6 +186,17 @@ class Resumen:
         es un movimiento que no está en la base.
         """
         return sorted(r for r, n in self.reventados.items() if n > 0)
+
+    def remitentes_rechazados(self) -> list[str]:
+        """SEÑAL C: el parser leyó el correo y la BASE no aceptó la fila.
+
+        Avisa SIEMPRE, para cualquier remitente y sin importar cuántos otros
+        movimientos suyos entraron bien. Es la señal más callada de las tres:
+        el correo se entendió, el canario A no la ve (no hubo ErrorDeParseo) y
+        el B tampoco (el remitente enrutó), así que sin esto el movimiento
+        simplemente no está en la base y nada lo dice.
+        """
+        return sorted(r for r, n in self.rechazados.items() if n > 0)
 
     def remitentes_mudos(self) -> list[str]:
         """SEÑAL B: llegaron correos suyos y NINGUNO calzó con un parser.
@@ -457,10 +475,22 @@ async def revisar() -> Resumen:
                 # ingreso además sale mal: la contraparte de un ingreso es quien
                 # paga, no un comercio, así que la red casaría el nombre del
                 # banco o de una persona y lo llamaría gasto bancario.
-                guardado = await db.guardar_movimiento(
-                    mov, bandeja_id=bandeja_id,
-                    categoria=(cat.categoria_de(mov.contraparte)
-                               if mov.tipo == "gasto" else None))
+                try:
+                    guardado = await db.guardar_movimiento(
+                        mov, bandeja_id=bandeja_id,
+                        categoria=(cat.categoria_de(mov.contraparte)
+                                   if mov.tipo == "gasto" else None))
+                except db.MovimientoRechazado as e:
+                    # SOLO se atrapa "esta fila está mal". Un fallo de conexión
+                    # NO entra acá y sigue subiendo, que es lo correcto: si la
+                    # base no responde hay que parar sin guardar el cursor, o el
+                    # próximo `desde_uid` se saltaría correos que nunca se
+                    # guardaron. La distinción la hace db.guardar_movimiento().
+                    res.rechazados[rem] = res.rechazados.get(rem, 0) + 1
+                    res.fallos.append(Fallo(
+                        rem, f"{user}#{crudo.uid} [{crudo.asunto[:40]}]: {e}"))
+                    log.error("La base rechazó un movimiento de %s: %s", rem, e)
+                    continue
                 if guardado is None:
                     res.duplicados += 1
                 else:
@@ -502,7 +532,7 @@ _SIGUE_EN_GMAIL = ("Los correos siguen en Gmail, sin marcar y sin borrar.")
 async def avisar_si_hay_bancos_mudos(res: Resumen) -> int:
     """El canario. Deja un encargo por cada señal que se encendió.
 
-    Dos señales, y son distintas — por eso son dos avisos y no uno:
+    Tres señales, y son distintas — por eso son tres avisos y no uno:
 
       A · `reventados > 0` — un parser calzó con el correo y no pudo leerlo.
           Avisa SIEMPRE, para cualquier remitente. Antes esta señal estaba
@@ -512,6 +542,11 @@ async def avisar_si_hay_bancos_mudos(res: Resumen) -> int:
 
       B · `sin_ruta > 0` y `enrutados == 0` — llegaron correos suyos y ninguno
           calzó con un parser. Solo para remitentes `transaccional`.
+
+      C · `rechazados > 0` — el parser leyó el correo y la BASE no aceptó la
+          fila. Avisa SIEMPRE. Es la más callada de las tres: no hay
+          ErrorDeParseo y el remitente enrutó, así que ni A ni B la ven. Sin
+          este aviso el movimiento no está en la base y nada lo dice.
 
     Un aviso por remitente, por señal y por día. Devuelve cuántos avisos dejó.
 
@@ -574,6 +609,32 @@ async def avisar_si_hay_bancos_mudos(res: Resumen) -> int:
         _ultimo_aviso[(rem, "sin_ruta")] = hoy
         avisados += 1
         log.warning("Canario: %s mudo (%s correos, ninguno enrutado).", rem, n)
+
+    for rem in res.remitentes_rechazados():
+        if _ultimo_aviso.get((rem, "rechazado")) == hoy:
+            continue
+        n = res.rechazados.get(rem, 0)
+        error = res.error_de(rem)
+        await db.guardar_en_bandeja(
+            tipo_entrada="sistema",
+            contenido_raw=(
+                f"AVISO: {n} movimiento(s) de {rem} se leyeron bien y la base "
+                "NO los aceptó en esta revisión.\n\n"
+                + (f"El error fue: {error}\n\n" if error
+                   else "No tengo el texto del error de ESTE remitente; el "
+                        "detalle está en los logs.\n\n")
+                + "Decíselo a Tiziano en una línea, sin alarmar: esos "
+                "movimientos NO están en la base y no van a entrar solos — el "
+                "correo ya se dio por revisado, así que la próxima pasada no "
+                "vuelve a intentarlo. El cuerpo de esos correos sí quedó "
+                "guardado en la bandeja de Lucy —se guarda antes de parsear—, "
+                f"pero no sus adjuntos. {_SIGUE_EN_GMAIL}\n\n"
+                + _no_adivines("el parser leyó el correo y la base rechazó la "
+                               "fila")),
+            chat_id=config.CHAT_ID_DUENO, origen="banco")
+        _ultimo_aviso[(rem, "rechazado")] = hoy
+        avisados += 1
+        log.warning("Canario: la base rechazó %s movimiento(s) de %s.", n, rem)
 
     return avisados
 

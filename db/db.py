@@ -10,10 +10,40 @@ import hashlib
 import json
 from datetime import datetime
 
+import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from config import DATABASE_URL
+
+
+class MovimientoRechazado(Exception):
+    """La base rechazó ESTA fila. El problema es el dato, no la conexión.
+
+    Existe para poder distinguir dos cosas que hoy llegaban idénticas a quien
+    llama y que piden lo contrario:
+
+      · la base no responde  → hay que PARAR, no avanzar el cursor de la
+        ingesta y reintentar en la próxima pasada.
+      · esta fila está mal   → hay que SEGUIR con las demás, y dejar rastro de
+        la que no entró.
+
+    Sin la distinción, una fila mala mataba `revisar()` entera: se saltaba el
+    canario, no se guardaba el cursor de UID de ese buzón, y el único registro
+    era un `log.warning` en Railway. O sea que la ingesta de esa cuenta quedaba
+    atascada para siempre y en silencio.
+    """
+
+
+# Las excepciones de psycopg que significan "la fila está mal", no "la base se
+# cayó": violación de restricción (CHECK, NOT NULL, FK, UNIQUE) y dato fuera de
+# rango o de tipo. Se resuelven con getattr porque varias suites herméticas
+# stubean el módulo `psycopg` entero, y ahí estos nombres no existen; con la
+# tupla vacía el `except` no atrapa nada y el comportamiento es el de antes.
+_ERRORES_DE_FILA = tuple(
+    c for c in (getattr(psycopg, n, None)
+                for n in ("IntegrityError", "DataError"))
+    if isinstance(c, type) and issubclass(c, BaseException))
 
 # Pool de conexiones reutilizables. Se abre al arrancar el bot (ver main.py).
 pool = AsyncConnectionPool(DATABASE_URL, open=False)
@@ -725,20 +755,40 @@ async def guardar_movimiento(mov, bandeja_id: int | None = None,
     conversión, que es el único sitio donde este sistema podría perderlos.
     """
     async with pool.connection() as conn:
-        cur = await conn.execute(
-            """
-            INSERT INTO movimientos
-              (bandeja_id, tipo, fecha, monto, moneda, contraparte,
-               categoria, referencia, hash_contenido, banco, estado)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (hash_contenido) WHERE hash_contenido IS NOT NULL
-              DO NOTHING
-            RETURNING id
-            """,
-            (bandeja_id, mov.tipo, mov.fecha.date(), str(mov.monto), mov.moneda,
-             mov.contraparte, categoria, mov.referencia, mov.clave_dedupe(),
-             mov.banco, mov.estado),
-        )
+        try:
+            cur = await conn.execute(
+                """
+                INSERT INTO movimientos
+                  (bandeja_id, tipo, fecha, monto, moneda, contraparte,
+                   categoria, referencia, hash_contenido, banco, estado)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (hash_contenido) WHERE hash_contenido IS NOT NULL
+                  DO NOTHING
+                RETURNING id
+                """,
+                (bandeja_id, mov.tipo, mov.fecha.date(), str(mov.monto),
+                 mov.moneda, mov.contraparte, categoria, mov.referencia,
+                 mov.clave_dedupe(), mov.banco, mov.estado),
+            )
+        except _ERRORES_DE_FILA as e:
+            # UN MOVIMIENTO QUE NO SE PUEDE GUARDAR NO DESAPARECE EN SILENCIO.
+            #
+            # Antes esto subía crudo hasta el `except Exception` del bucle de
+            # cerebro/interpretar.py, que lo dejaba en un `log.warning` de
+            # Railway y nada más: sin aviso, sin bandeja, y sin llegar a
+            # `guardar_estado_consumos` — o sea con el cursor de UID de ese
+            # buzón sin avanzar, releyendo el mismo correo malo cada 15 minutos
+            # para siempre. La cuenta entera dejaba de ingerir y nadie se
+            # enteraba.
+            #
+            # El mensaje lleva banco/tipo/estado porque es lo que hace falta
+            # para saber QUÉ rechazó la base sin ir a buscar la fila (que no
+            # existe: no se insertó). No lleva monto ni contraparte: esto
+            # termina en un aviso que Lucy lee en voz alta.
+            raise MovimientoRechazado(
+                f"la base rechazó el movimiento de {mov.banco} "
+                f"(tipo={mov.tipo}, estado={mov.estado}): "
+                f"{type(e).__name__}: {e}") from e
         fila = await cur.fetchone()
         return fila[0] if fila else None
 

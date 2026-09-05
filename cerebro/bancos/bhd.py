@@ -28,6 +28,7 @@ from cerebro.bancos.contrato import (
     CorreoCrudo,
     ErrorDeParseo,
     Movimiento,
+    asentar_reverso,
     normalizar_estado,
     normalizar_fecha,
     normalizar_monto,
@@ -111,24 +112,15 @@ def parsear_consumo(correo: CorreoCrudo) -> list[Movimiento]:
 
         estado = normalizar_estado(estado_txt)
 
-        # UN REVERSO ES PLATA QUE VUELVE, no un gasto que se ignora.
+        # UN REVERSO ES PLATA QUE VUELVE. La regla entera —y el porqué— vive en
+        # `asentar_reverso()`, en el contrato, porque no es de BHD: es de los
+        # cinco bancos. Vivía suelta acá, y Banesco y Banreservas no la tenían.
         #
-        # BHD notifica el cargo original y el reverso en correos separados, así
-        # que el cargo YA entró como gasto aprobado. Si el reverso se guardara
-        # como gasto/reversada y los totales filtraran por 'aprobada', el cargo
-        # quedaría contado y la devolución no: el gasto sale inflado.
-        #
-        # Por eso el reverso se invierte —gasto pasa a ingreso— y queda
-        # 'aprobada', porque el reverso sí ocurrió. Los dos movimientos se
-        # netean solos sin tener que emparejarlos con el original, que es
-        # trabajo que BHD no nos da forma de hacer (no manda un id común).
-        #
-        # SUPUESTO A CONFIRMAR: que BHD siempre notificó antes el cargo que
-        # revierte. Si algún día llega un reverso de algo que nunca se notificó,
-        # esto crea un ingreso fantasma.
-        if estado == "reversada":
-            tipo = "ingreso" if tipo == "gasto" else "gasto"
-            estado = "aprobada"
+        # `estado_forzado` se anula porque una "Reserva de Fondos (Hold)"
+        # revertida ya no está pendiente de nada: se resolvió.
+        era_reverso = estado == "reversada"
+        tipo, estado = asentar_reverso(tipo, estado)
+        if era_reverso:
             estado_forzado = None
 
         if not comercio.strip():
