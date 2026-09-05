@@ -6,9 +6,12 @@ En Railway se cargan en la pestaña Variables; en local, desde un archivo .env.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
+log = logging.getLogger(__name__)
 
 # Zona horaria de Tiziano — República Dominicana, UTC-4, SIN horario de verano.
 # Toda interpretación de fechas ("mañana a las 10") se ancla acá.
@@ -74,6 +77,97 @@ CHAT_IDS_CASA = tuple(
 # Todos los que pueden entrar, con el dueño siempre dentro.
 CHAT_IDS_PERMITIDOS = (CHAT_ID_DUENO,) + tuple(
     c for c in CHAT_IDS_CASA if c != CHAT_ID_DUENO)
+
+
+# ── LA PUERTA ÚNICA DE LOS BUZONES ────────────────────────────────────────────
+#
+# `CORREO_CUENTAS` de arriba es la lista CRUDA, con las credenciales. Nadie la
+# lee directamente: se pide por `cuentas_de_correo(para=...)`, y ese `para` es
+# el punto donde se decide qué buzones existen para cada cosa.
+#
+# POR QUÉ ACÁ Y NO EN CADA CAMINO. Hasta el 5-sep-2026 cada función que tocaba
+# el correo iteraba `config.CORREO_CUENTAS` por su cuenta y se acordaba (o no)
+# de mirar `reporte_a`. `reporte_diario` se acordaba; `revisar_ahora`,
+# `buscar`, `leer` y `vigilar_911` no. O sea: el reporte automático respetaba
+# el campo y todo lo que Tiziano pedía a mano se lo saltaba, enseñándole el
+# correo de un buzón marcado con `reporte_a: 0` — justo la fuga que ese campo
+# existe para impedir.
+#
+# Filtrar la salida de esas cuatro no arregla el problema, lo posterga: el
+# quinto camino que alguien escriba mañana vuelve a olvidarse. Así que el
+# filtro no está en la salida de cada camino, sino en la ENTRADA de todos: para
+# tocar un buzón hace falta su usuario y su contraseña, y el único sitio del
+# que salen es esta función. Un camino nuevo no puede "olvidarse" de filtrar
+# porque no puede conseguir un buzón sin decir para qué lo quiere — y no hay
+# valor por defecto que lo decida por él.
+#
+# Lo guarda `tests/test_buzon_que_no_se_ve.py::test_nadie_lee_la_lista_cruda`,
+# que recorre los .py que hay EN DISCO (no una lista escrita a mano) y se pone
+# rojo si algún archivo vuelve a nombrar `config.CORREO_CUENTAS`.
+#
+# BARRER NO ES MOSTRAR, y ésa es toda la distinción:
+#
+#   · "barrer"  → TODOS los buzones. Abrir el IMAP, leer, sacar movimientos
+#     bancarios, marcar leído lo que ya se informó. Nada de esto le cuenta
+#     nada a nadie: es máquina hablando con máquina. El buzón de Rosi se
+#     sigue barriendo entero, igual que antes.
+#
+#   · "mostrar" → solo los que tienen a quién informar. Todo lo que termina
+#     en texto que Tiziano lee: el reporte de la mañana, "revisá el correo",
+#     una búsqueda, leer un correo suelto, una alerta 911.
+#
+# Es la línea entre "Lucy lee el correo de Rosi para sacar sus movimientos" y
+# "Lucy le cuenta a Tiziano lo que le escriben a Rosi". El sistema tiene que
+# poder hacer lo primero sin lo segundo.
+
+def destino_del_reporte(cuenta: dict) -> int:
+    """A qué chat va el reporte de ESTE buzón. 0 = a nadie.
+
+    Sin el campo `reporte_a`, va al dueño — que es como se comportaba antes y
+    por eso no rompe nada existente. Con él, el buzón se puede escanear para
+    bancos sin que su correspondencia aparezca en el briefing de otra persona.
+
+    `reporte_a: 0` (o false) = este buzón NO se le enseña a nadie.
+
+    Vive en config y no en `captura/correo.py` porque es política de
+    configuración —qué dice la variable de entorno sobre cada buzón— y porque
+    tiene que estar donde está la lista cruda: es lo que la convierte en las
+    dos vistas de abajo. `captura.correo.destino_del_reporte` sigue existiendo
+    como alias.
+    """
+    v = cuenta.get("reporte_a", cuenta.get("reporte", True))
+    if v is True:
+        return CHAT_ID_DUENO
+    if v is False or v == 0:
+        return 0
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        log.warning("reporte_a inválido en %s (%r): mando al dueño.",
+                    cuenta.get("user"), v)
+        return CHAT_ID_DUENO
+
+
+def cuentas_de_correo(para: str) -> list[dict]:
+    """Los buzones sobre los que se puede trabajar, según PARA QUÉ.
+
+    `para` es obligatorio y su vocabulario es CERRADO: un valor que no esté
+    acá revienta, no elige un valor por defecto. Es la regla del proyecto (los
+    vocabularios son cerrados) y acá además es la que sostiene todo: si
+    hubiera un valor por defecto, el camino nuevo que se olvide de pensar
+    heredaría "todos" y la fuga volvería sin que nadie la escribiera.
+
+        cuentas_de_correo("barrer")  → todos los buzones
+        cuentas_de_correo("mostrar") → solo los que tienen a quién informar
+    """
+    if para == "barrer":
+        return list(CORREO_CUENTAS)
+    if para == "mostrar":
+        return [c for c in CORREO_CUENTAS if destino_del_reporte(c)]
+    raise ValueError(
+        f"cuentas_de_correo(para={para!r}): los únicos valores son 'barrer' "
+        "(leer/procesar todos los buzones) y 'mostrar' (lo que va a ojos de "
+        "Tiziano). Elegí a conciencia: 'mostrar' respeta reporte_a, 'barrer' no.")
 
 
 # ── Tarifa doble de DeepSeek (regla de Tiziano, 1-ago-2026) ───────────────────

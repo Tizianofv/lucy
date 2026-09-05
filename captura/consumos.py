@@ -372,7 +372,12 @@ async def revisar() -> Resumen:
     """
     global _ultima_cosecha
     res = Resumen()
-    if not config.CORREO_CUENTAS:
+    # "barrer": TODOS los buzones, incluidos los que no se le enseñan a nadie.
+    # Es la mitad del asunto que no cambia — sacar los movimientos del buzón de
+    # Rosi no es contarle a Tiziano lo que le escriben (invariante 2 de arriba:
+    # esta ingesta no le cuenta nada a nadie).
+    cuentas = config.cuentas_de_correo("barrer")
+    if not cuentas:
         return res
 
     remitentes = list(bancos.remitentes_registrados())
@@ -390,7 +395,7 @@ async def revisar() -> Resumen:
         # correcciones. No inventamos.
         cat = Categorizador(claves=CLAVES)
 
-    for cuenta in config.CORREO_CUENTAS:
+    for cuenta in cuentas:
         user = cuenta.get("user", "?")
         estado = await db.leer_estado_consumos(user)
         desde_uid = estado["ultimo_uid"] if estado else 0
@@ -650,7 +655,8 @@ async def avisar_si_no_hay_latido() -> int:
 
     Un aviso por día. Devuelve 1 si avisó, 0 si no.
     """
-    if not config.CORREO_CUENTAS or not list(bancos.remitentes_registrados()):
+    if (not config.cuentas_de_correo("barrer")
+            or not list(bancos.remitentes_registrados())):
         return 0                      # nada que cosechar: no hay latido que pedir
     referencia = _ultima_cosecha or _arranque
     silencio = datetime.now() - referencia
