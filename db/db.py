@@ -86,8 +86,7 @@ def columnas_declaradas(ruta: str = RUTA_SCHEMA) -> dict[str, list[str]]:
     ahí antes de que alguien la baje a schema.sql. Así llegó
     `movimientos.hash_contenido`.
     """
-    def sin_comentarios(txt: str) -> str:
-        return "\n".join(l.split("--")[0] for l in txt.splitlines())
+    sin_comentarios = _sin_comentarios  # definido más abajo; se resuelve al llamar
 
     with open(ruta, encoding="utf-8") as f:
         crudo = f.read()
@@ -140,6 +139,161 @@ def columnas_declaradas(ruta: str = RUTA_SCHEMA) -> dict[str, list[str]]:
     return tablas
 
 
+def _sin_comentarios(txt: str) -> str:
+    return "\n".join(l.split("--")[0] for l in txt.splitlines())
+
+
+def _archivos_del_esquema(ruta: str, con_migraciones: bool = True) -> list[str]:
+    """db/schema.sql primero y las migraciones después, en orden de nombre.
+
+    El orden importa: una migración puede tirar una restricción y volver a
+    ponerla (lo hace 2026-08-31b con `movimientos_estado_valido`), y leerlas
+    desordenadas daría un objeto de menos o de más.
+    """
+    archivos = [ruta]
+    migraciones = os.path.join(os.path.dirname(ruta), "migrations")
+    if con_migraciones and os.path.isdir(migraciones):
+        archivos += [os.path.join(migraciones, n)
+                     for n in sorted(os.listdir(migraciones))
+                     if n.endswith(".sql")]
+    return archivos
+
+
+# Un solo barrido, en orden, sobre las cinco formas en que este repo nombra un
+# índice o una restricción. Van juntas en una alternación para que el orden de
+# aparición se conserve: si un DROP se leyera antes que su ADD, el objeto
+# quedaría fuera de la lista.
+_RE_OBJETOS = re.compile(
+    r"CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?"
+    r"(?:IF\s+NOT\s+EXISTS\s+)?(?P<idx>\w+)\s+ON\s+(?P<idx_tabla>\w+)"
+    r"|DROP\s+INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+EXISTS\s+)?(?P<drop_idx>\w+)"
+    r"|ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?P<add_tabla>\w+)\s+ADD\s+CONSTRAINT"
+    r"\s+(?P<add_con>\w+)"
+    r"|ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?P<drop_tabla>\w+)\s+DROP\s+CONSTRAINT"
+    r"\s+(?:IF\s+EXISTS\s+)?(?P<drop_con>\w+)",
+    re.I | re.S)
+
+_RE_TABLA = re.compile(
+    r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s*\((.*?)\n\);", re.S | re.I)
+
+
+def objetos_declarados(ruta: str = RUTA_SCHEMA,
+                       con_migraciones: bool = True) -> dict[str, dict[str, str]]:
+    """{'indices': {nombre: tabla}, 'restricciones': {nombre: tabla}}.
+
+    `con_migraciones=False` lee SOLO db/schema.sql. Es lo que hace falta para
+    preguntar si el archivo y las migraciones dicen lo mismo, que es la
+    pregunta del candado hermético (tests/test_esquema_reproduce_la_base.py).
+
+    La otra mitad de `columnas_declaradas()`. Aquella responde "¿qué columnas
+    tiene esta tabla?"; ésta responde "¿qué índices y qué restricciones CON
+    NOMBRE declara el repo?", que hasta el 5-sep-2026 no lo respondía nadie —
+    y por ahí se fueron las tres derivas que se midieron ese día:
+
+      · `idx_movimientos_hash` vivía solo en una migración. Sin él, el
+        `ON CONFLICT (hash_contenido)` de guardar_movimiento revienta y no
+        entra un solo movimiento bancario.
+      · `idx_movimientos_banco` e `idx_correo_reportado_fecha` estaban en la
+        base real y en ningún archivo.
+      · `cuentas_propias_patron_unico` estaba en la migración, pero el
+        `CREATE TABLE IF NOT EXISTS` de schema.sql corría antes y la saltaba.
+
+    SOLO los objetos con nombre propio. Las PRIMARY KEY y las FOREIGN KEY se
+    declaran sin nombre en este repo, y Postgres se los inventa: producción
+    llama `gastos_pkey` a la clave de `movimientos` porque la tabla se llamó
+    `gastos`, mientras una base nueva la llamaría `movimientos_pkey`. Comparar
+    eso mediría cómo bautiza Postgres, no qué esquema hay. La tabla y la
+    columna que sostienen esa PK sí se comparan, en tablas_que_faltan() y
+    columnas_que_faltan().
+    """
+    indices: dict[str, str] = {}
+    restricciones: dict[str, str] = {}
+    for archivo in _archivos_del_esquema(ruta, con_migraciones):
+        try:
+            with open(archivo, encoding="utf-8") as f:
+                txt = _sin_comentarios(f.read())
+        except OSError:
+            continue
+        # Las restricciones con nombre escritas DENTRO del CREATE TABLE.
+        for m in _RE_TABLA.finditer(txt):
+            tabla = m.group(1).lower()
+            for c in re.finditer(r"CONSTRAINT\s+(\w+)", m.group(2), re.I):
+                restricciones[c.group(1).lower()] = tabla
+        # Y todo lo que se declara fuera, en orden de aparición.
+        for m in _RE_OBJETOS.finditer(txt):
+            if m.group("idx"):
+                indices[m.group("idx").lower()] = m.group("idx_tabla").lower()
+            elif m.group("drop_idx"):
+                indices.pop(m.group("drop_idx").lower(), None)
+            elif m.group("add_con"):
+                restricciones[m.group("add_con").lower()] = \
+                    m.group("add_tabla").lower()
+            elif m.group("drop_con"):
+                restricciones.pop(m.group("drop_con").lower(), None)
+    return {"indices": indices, "restricciones": restricciones}
+
+
+# Los índices de la base real, dejando fuera los que Postgres crea SOLO para
+# sostener una restricción (PK, UNIQUE): ésos ya se comparan como restricción y
+# contarlos dos veces daría un descuadre inventado.
+_SQL_INDICES_REALES = """
+SELECT c.relname, i.relname
+  FROM pg_index x
+  JOIN pg_class c ON c.oid = x.indrelid
+  JOIN pg_class i ON i.oid = x.indexrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'public' AND c.relkind = 'r'
+   AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conindid = i.oid)
+"""
+
+# Solo UNIQUE ('u') y CHECK ('c'): son las que este repo escribe con nombre
+# propio. 'p' y 'f' van sin nombre (ver objetos_declarados), y 'n' —el NOT NULL
+# con nombre en el catálogo— solo existe desde Postgres 17, así que compararlo
+# mediría la versión del motor. El NOT NULL de verdad viaja en la columna.
+_SQL_RESTRICCIONES_REALES = """
+SELECT rel.relname, con.conname
+  FROM pg_constraint con
+  JOIN pg_class rel ON rel.oid = con.conrelid
+  JOIN pg_namespace n ON n.oid = rel.relnamespace
+ WHERE n.nspname = 'public' AND con.contype IN ('u', 'c')
+"""
+
+
+async def objetos_que_faltan() -> list[str]:
+    """Los índices y restricciones donde el repo y la base real no coinciden.
+
+    Mismo par de direcciones que columnas_que_faltan(), y duelen igual de
+    distinto:
+
+      · declarado y no en la base → la consulta que lo necesita revienta. Es
+        el caso de `idx_movimientos_hash`: sin él no entra un movimiento.
+      · en la base y no declarado → nadie sabe que existe, así que el día que
+        se levante la base de cero no está. Silencioso, y el peligroso.
+
+    Ningún test hermético puede ver esto: hay que preguntarle a la base.
+    """
+    declarados = objetos_declarados()
+    async with pool.connection() as conn:
+        cur = await conn.execute(_SQL_INDICES_REALES)
+        indices_reales = {i.lower(): t.lower() for t, i in await cur.fetchall()}
+        cur = await conn.execute(_SQL_RESTRICCIONES_REALES)
+        restr_reales = {c.lower(): t.lower() for t, c in await cur.fetchall()}
+
+    problemas: list[str] = []
+    for etiqueta, decl, reales in (
+            ("índice", declarados["indices"], indices_reales),
+            ("restricción", declarados["restricciones"], restr_reales)):
+        for nombre in sorted(set(decl) - set(reales)):
+            problemas.append(
+                f"{etiqueta} {decl[nombre]}.{nombre}: en db/schema.sql, no en "
+                "la base (lo que dependa de él revienta)")
+        for nombre in sorted(set(reales) - set(decl)):
+            problemas.append(
+                f"{etiqueta} {reales[nombre]}.{nombre}: en la base, no en "
+                "db/schema.sql (una base nueva no lo tendría)")
+    return sorted(problemas)
+
+
 async def columnas_que_faltan() -> list[str]:
     """Dónde NO coinciden db/schema.sql y las columnas de la base real.
 
@@ -183,6 +337,28 @@ async def columnas_que_faltan() -> list[str]:
     return sorted(problemas)
 
 
+def tablas_declaradas(ruta: str = RUTA_SCHEMA) -> set[str]:
+    """Los nombres de tabla que declara db/schema.sql. Vacío si no se puede leer.
+
+    Está separada de tablas_que_faltan() para poder probarla sin base: es puro
+    parseo de un archivo, y el parseo es donde se equivocó (ver abajo).
+    """
+    try:
+        with open(ruta, encoding="utf-8") as f:
+            # Sin quitar los comentarios primero, cualquier frase en prosa que
+            # diga "CREATE TABLE" inventa una tabla que falta. Pasó el
+            # 5-sep-2026: un comentario que explicaba por qué el CREATE TABLE
+            # de una migración se salta hizo que esto reportara una tabla
+            # llamada `se`. Una alarma que grita en falso es peor que ninguna:
+            # enseña a ignorarla. Los otros dos lectores de este archivo
+            # —columnas_declaradas() y backup._tablas_del_repo()— ya lo hacían.
+            return {t.lower() for t in re.findall(
+                r"CREATE TABLE (?:IF NOT EXISTS )?(\w+)",
+                _sin_comentarios(f.read()), re.I)}
+    except OSError:
+        return set()
+
+
 async def tablas_que_faltan() -> list[str]:
     """Las tablas que db/schema.sql declara y la base real NO tiene.
 
@@ -196,11 +372,8 @@ async def tablas_que_faltan() -> list[str]:
     que uno quiera. Solo se sabe preguntándole a la base de verdad, y el momento
     de preguntar es al arrancar, cuando el log todavía lo lee alguien.
     """
-    try:
-        with open(RUTA_SCHEMA, encoding="utf-8") as f:
-            declaradas = {t.lower() for t in re.findall(
-                r"CREATE TABLE (?:IF NOT EXISTS )?(\w+)", f.read(), re.I)}
-    except OSError:
+    declaradas = tablas_declaradas()
+    if not declaradas:
         return []
     async with pool.connection() as conn:
         cur = await conn.execute(

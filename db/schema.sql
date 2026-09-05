@@ -120,6 +120,14 @@ CREATE TABLE correo_reportado (
   -- (cuenta, uid) es la clave del ON CONFLICT de db.marcar_correo_reportado.
   PRIMARY KEY (cuenta, uid)
 );
+-- Existe en la base real y no estaba en ningún archivo del repo (medido el
+-- 5-sep-2026 contra producción). Nadie sabe quién lo creó, y hoy ninguna
+-- consulta del código filtra ni ordena por `reportado_en` — `grep -rn
+-- reportado_en --include=*.py` devuelve 0 líneas. Se declara igual, porque el
+-- trabajo de este archivo es describir la base que existe: un índice que está
+-- en producción y no acá vuelve a ser deriva invisible. Si algún día se decide
+-- que sobra, se borra en los dos sitios a la vez.
+CREATE INDEX idx_correo_reportado_fecha ON correo_reportado(reportado_en);
 
 -- ═══ Entidades (bandeja_id = trazabilidad, borrado_en = reversibilidad) ═══
 CREATE TABLE tareas (
@@ -237,6 +245,25 @@ CREATE TABLE movimientos (
 );
 CREATE INDEX idx_movimientos_fecha ON movimientos(fecha);
 
+-- El índice del que depende `ON CONFLICT (hash_contenido) WHERE hash_contenido
+-- IS NOT NULL` en db.guardar_movimiento. Vivió SOLO en la migración
+-- 2026-08-30_ingesta_bancaria.sql hasta el 5-sep-2026, así que una base creada
+-- con el `psql -f db/schema.sql` que manda el README no podía ingerir un solo
+-- correo: medido contra una base efímera de Postgres 16.2 armada solo con este
+-- archivo, ese INSERT devuelve
+--   InvalidColumnReference: there is no unique or exclusion constraint
+--   matching the ON CONFLICT specification
+-- Un ON CONFLICT sin su índice no es una optimización que falta: es la consulta
+-- que revienta.
+CREATE UNIQUE INDEX idx_movimientos_hash ON movimientos (hash_contenido)
+  WHERE hash_contenido IS NOT NULL;
+
+-- Existe en la base real desde antes que nadie lo anotara, y no estaba en
+-- ningún archivo del repo (medido el 5-sep-2026 contra producción). Sirve al
+-- filtro por banco de `movimientos_filtrados` — el que contesta "¿cuánto gasté
+-- en efectivo?", que es `banco = 'efectivo'`.
+CREATE INDEX idx_movimientos_banco ON movimientos(banco);
+
 -- Los lugares con nombre de su vida ("CDS", "el estudio", "casa"): son lo que
 -- convierte unas coordenadas en un dato con significado.
 CREATE TABLE lugares (
@@ -321,6 +348,13 @@ COMMENT ON COLUMN categorias_aprendidas.comercio IS
 -- Registro de cuentas propias de la casa. Estaba en la base real y no acá: es
 -- la tabla que separa un traspaso entre cuentas de un gasto de verdad, o sea
 -- la que evita volver a contar RD$657,400 al año que no se gastaron.
+-- El UNIQUE va acá y no solo en la migración: este archivo crea la tabla con
+-- IF NOT EXISTS, así que cuando después se corre
+-- 2026-08-30_ingesta_bancaria.sql —que sí lo trae— su CREATE TABLE se salta
+-- entero y la restricción no llega nunca. Medido el 5-sep-2026: una base
+-- armada con schema.sql + las siete migraciones en orden quedaba sin
+-- `cuentas_propias_patron_unico`, que producción sí tiene. Sin él, el mismo
+-- patrón entra dos veces y un traspaso se cuenta dos veces como propio.
 CREATE TABLE IF NOT EXISTS cuentas_propias (
   id         BIGSERIAL PRIMARY KEY,
   creado_en  TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -328,5 +362,6 @@ CREATE TABLE IF NOT EXISTS cuentas_propias (
   clase      TEXT NOT NULL,        -- 'nombre' | 'cuenta'
   banco      TEXT,
   notas      TEXT,
-  borrado_en TIMESTAMPTZ
+  borrado_en TIMESTAMPTZ,
+  CONSTRAINT cuentas_propias_patron_unico UNIQUE (patron)
 );

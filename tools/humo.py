@@ -96,7 +96,8 @@ async def main() -> int:
         # `tablas_que_faltan` hasta el 4-sep-2026: imprimía "✓ ... 2" y nadie
         # entendía que ese 2 eran dos tablas faltantes.
         for nombre, fn in (("tablas_que_faltan", db.tablas_que_faltan),
-                           ("columnas_que_faltan", db.columnas_que_faltan)):
+                           ("columnas_que_faltan", db.columnas_que_faltan),
+                           ("objetos_que_faltan", db.objetos_que_faltan)):
             try:
                 hallazgos = await fn()
             except Exception as e:
@@ -117,14 +118,19 @@ async def main() -> int:
         if rojas:
             print(f"\n  {len(rojas)} consulta(s) NO corren contra la base real.")
         if descuadres:
-            # Por qué esto frena un despliegue: el esquema que ve Lucy al
-            # escribir SQL se arma desde db/schema.sql. Si el archivo y la base
-            # no cuadran, hay columnas que Lucy no sabe que existen y por las
-            # que, por lo tanto, no filtra. No revienta: contesta otro número
-            # que el panel.
+            # Por qué esto frena un despliegue, en las dos formas que tiene de
+            # doler:
+            #  · COLUMNAS. El esquema que ve Lucy al escribir SQL se arma desde
+            #    db/schema.sql. Si el archivo y la base no cuadran, hay columnas
+            #    que Lucy no sabe que existen y por las que no filtra. No
+            #    revienta: contesta otro número que el panel.
+            #  · ÍNDICES y RESTRICCIONES. Lo que está en el archivo y no en la
+            #    base revienta la consulta que lo necesita (un ON CONFLICT sin
+            #    su índice no guarda nada); lo que está en la base y no en el
+            #    archivo desaparece el día que haya que levantarla de cero.
             print(f"\n  {len(descuadres)} descuadre(s) entre db/schema.sql y la "
-                  "base. Lucy y el panel pueden dar números distintos hasta "
-                  "que se arreglen.")
+                  "base. Mientras sigan, ni el número que contesta Lucy ni una "
+                  "base creada desde el repo son de fiar.")
         return 1
     print(f"\n  Las {len(pruebas)} corren contra la base real, y db/schema.sql "
           "cuadra con ella.")
