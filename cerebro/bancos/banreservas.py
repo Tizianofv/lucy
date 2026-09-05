@@ -26,6 +26,7 @@ from cerebro.bancos.contrato import (
     CorreoCrudo,
     ErrorDeParseo,
     Movimiento,
+    asentar_reverso,
     normalizar_estado,
     normalizar_fecha,
     normalizar_monto,
@@ -132,10 +133,16 @@ def parsear(correo: CorreoCrudo) -> list[Movimiento]:
         estado_txt = _campo(texto, "Estado")
         if not estado_txt:
             raise ErrorDeParseo("consumo de Banreservas sin estado")
+        # El campo "Estado:" lo escribe el banco, y `normalizar_estado()`
+        # devuelve `reversada` para anulada / devuelta / reversada. Ese valor NO
+        # lo acepta la base: hay que asentarlo antes. Hasta el 4-sep-2026 esto
+        # pasaba el estado derecho al Movimiento, y el primer consumo anulado de
+        # Banreservas habría violado el CHECK de `movimientos_estado_valido`.
+        tipo, estado = asentar_reverso("gasto", normalizar_estado(estado_txt))
         return [Movimiento(
-            banco=BANCO, canal="tarjeta", tipo="gasto", fecha=fecha,
+            banco=BANCO, canal="tarjeta", tipo=tipo, fecha=fecha,
             monto=monto, moneda=moneda, contraparte=comercio,
-            estado=normalizar_estado(estado_txt),
+            estado=estado,
             referencia=_referencia(texto, correo, fecha))]
 
     # ── Transferencia saliente, todavía sin liquidar ────────────────────

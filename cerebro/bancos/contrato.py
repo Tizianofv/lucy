@@ -50,7 +50,28 @@ TIPOS = ("gasto", "ingreso", "transferencia")
 # saber de dónde salió el dato y para depurar. Viaja en `referencia`.
 CANALES = ("tarjeta", "transferencia", "traspaso", "nomina", "servicio", "interes")
 
-ESTADOS = ("aprobada", "declinada", "reversada", "pendiente")
+# DOS listas y no una, porque son dos preguntas distintas:
+#
+#   ESTADOS_GUARDABLES — lo que la columna `movimientos.estado` acepta. Es la
+#       MISMA lista que la restricción `movimientos_estado_valido` (db/schema.sql
+#       y db/migrations/2026-08-31b_estado_desde_la_huella.sql). Que sean la
+#       misma no se deja a la buena memoria de nadie: lo comprueba
+#       tests/test_estado_guardable.py leyendo los dos SQL.
+#
+#   ESTADOS — lo que un banco puede DECIR, o sea lo que `normalizar_estado()`
+#       sabe devolver. Es un superconjunto: incluye `reversada`.
+#
+# `reversada` no es un estado del dinero, es una DIRECCIÓN: la plata volvió. El
+# banco notifica el cargo y su reverso en correos separados, así que el cargo ya
+# entró como gasto aprobado; el reverso se guarda invertido y aprobado, y los dos
+# se netean solos. Ver `asentar_reverso()`, que es donde deja de existir.
+#
+# Por eso `reversada` NO está en ESTADOS_GUARDABLES y `Movimiento` lo rechaza:
+# un parser que se olvide de resolverlo revienta con ErrorDeParseo —que la
+# ingesta ya cuenta y avisa— en vez de llegar a la base y violar el CHECK.
+ESTADOS_GUARDABLES = ("aprobada", "declinada", "pendiente")
+
+ESTADOS = ESTADOS_GUARDABLES + ("reversada",)
 
 # Cómo se comporta un remitente, para el canario de la ingesta. No describe al
 # parser: describe al BUZÓN del banco.
@@ -93,7 +114,7 @@ class Movimiento:
     monto: Decimal      # SIEMPRE positivo
     moneda: str         # DOP | USD
     contraparte: str    # el comercio si sale, quién pagó si entra
-    estado: str         # uno de ESTADOS
+    estado: str         # uno de ESTADOS_GUARDABLES — `reversada` NO llega acá
     referencia: str     # últimos dígitos, ref del banco, hora exacta
 
     def __post_init__(self) -> None:
@@ -104,8 +125,19 @@ class Movimiento:
             raise ErrorDeParseo(f"tipo '{self.tipo}' no está en {TIPOS}")
         if self.canal not in CANALES:
             raise ErrorDeParseo(f"canal '{self.canal}' no está en {CANALES}")
-        if self.estado not in ESTADOS:
-            raise ErrorDeParseo(f"estado '{self.estado}' no está en {ESTADOS}")
+        if self.estado not in ESTADOS_GUARDABLES:
+            # Se valida contra ESTADOS_GUARDABLES y NO contra ESTADOS a
+            # propósito: `reversada` es un estado que el banco dice, no uno que
+            # la base acepte. Hasta el 4-sep-2026 esto se validaba contra
+            # ESTADOS, así que un consumo anulado de Banesco o de Banreservas
+            # construía el Movimiento sin protestar y reventaba después, contra
+            # el CHECK de Postgres, en un sitio donde nadie lo estaba mirando.
+            # Ahora revienta acá, dentro del parser, que es donde la ingesta ya
+            # cuenta el fallo y el canario ya avisa.
+            raise ErrorDeParseo(
+                f"estado '{self.estado}' no está en {ESTADOS_GUARDABLES}. "
+                "Si el banco dijo 'reversada', resolvelo con asentar_reverso() "
+                "ANTES de construir el Movimiento — la base no lo acepta.")
         if not isinstance(self.monto, Decimal):
             raise ErrorDeParseo("monto tiene que ser Decimal, no float")
         if self.monto <= 0:
@@ -310,6 +342,44 @@ def normalizar_estado(texto: str) -> str:
     if t.startswith("pendien") or t.startswith("en proceso"):
         return "pendiente"
     raise ErrorDeParseo(f"estado desconocido: {texto!r}")
+
+
+def asentar_reverso(tipo: str, estado: str) -> tuple[str, str]:
+    """(tipo, estado) listos para guardar. Un reverso sale invertido y aprobado.
+
+    UN REVERSO ES PLATA QUE VUELVE, no un cargo que se ignora. El banco notifica
+    el cargo original y su reverso en correos separados, así que cuando llega el
+    reverso el cargo YA está en la base como gasto aprobado. Guardarlo como
+    gasto/reversada dejaría el cargo contado y la devolución no —los totales
+    filtran `estado <> 'declinada'`, y `reversada` no es `declinada`—, o sea el
+    gasto inflado. Invertir el tipo hace que los dos se neteen solos, sin tener
+    que emparejarlos con el original: ningún banco manda un id común.
+
+    Y queda `aprobada` porque el reverso SÍ ocurrió.
+
+    Esto vivía suelto dentro del parser de BHD (el único banco que lo hacía).
+    Banesco y Banreservas pasaban `normalizar_estado()` derecho al Movimiento, y
+    el día que cualquiera de los dos mandara un consumo anulado o devuelto, la
+    fila violaba el CHECK de la base y el movimiento no quedaba en ningún lado.
+    Medido el 4-sep-2026 contra producción: de los 178 correos de banco en
+    bandeja, los 3 con palabra de reverso eran de BHD y entraron bien; de
+    Banesco y Banreservas todavía no ha llegado ninguno.
+
+    Un traspaso revertido sigue siendo un traspaso: la plata volvió a moverse
+    entre cuentas propias, y ni entró ni salió del conjunto. Por eso
+    `transferencia` no se invierte. Hoy ese caso no es alcanzable desde BHD
+    —`_TIPOS_BHD` solo produce `gasto` e `ingreso`—, pero la regla vive acá y
+    la usan cinco bancos.
+
+    SUPUESTO A CONFIRMAR, heredado de BHD: que el banco siempre notificó antes
+    el cargo que revierte. Si llega el reverso de algo que nunca se notificó,
+    esto crea un ingreso fantasma.
+    """
+    if estado != "reversada":
+        return tipo, estado
+    if tipo == "transferencia":
+        return tipo, "aprobada"
+    return ("ingreso" if tipo == "gasto" else "gasto"), "aprobada"
 
 
 # ── El correo que recibe un parser ───────────────────────────────────────

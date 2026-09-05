@@ -219,7 +219,18 @@ CREATE TABLE movimientos (
   --
   -- Si alguna se duplicara, se ve: sale en "posibles duplicados" de /salud.
   -- Contar de más se nota; contar de menos, no.
+  --
+  -- La restricción va CON NOMBRE, y con el mismo que le puso la migración
+  -- 2026-08-31b (`movimientos_estado_valido`, comprobado contra producción el
+  -- 4-sep-2026). Sin nombre, Postgres la bautiza `movimientos_estado_check`, y
+  -- entonces una base armada desde este archivo y después migrada terminaba con
+  -- las DOS restricciones — la misma regla escrita dos veces con dos nombres.
+  --
+  -- Esta lista y `ESTADOS_GUARDABLES` de cerebro/bancos/contrato.py tienen que
+  -- decir lo mismo. No se deja a la memoria de nadie: lo comprueba
+  -- tests/test_estado_guardable.py leyendo este archivo y la migración.
   estado      TEXT NOT NULL DEFAULT 'aprobada'
+              CONSTRAINT movimientos_estado_valido
               CHECK (estado IN ('aprobada', 'declinada', 'pendiente')),
   banco       TEXT,                            -- BHD | Banreservas | ... | NULL a mano
   borrado_en  TIMESTAMPTZ
