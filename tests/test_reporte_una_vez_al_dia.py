@@ -172,7 +172,7 @@ def _servir(crudos):
     """Los correos llegan a UN solo buzón. El otro queda vacío a propósito: el
     candado viejo exigía una fila por cada cuenta configurada, y ese "cada" era
     la mitad del defecto."""
-    correo._sin_leer_sync = lambda cuenta, dias, limite: (
+    correo._sin_leer_sync = lambda cuenta, dias, **kw: (
         [dict(c, cuenta=cuenta["user"]) for c in crudos]
         if cuenta["user"] == BUZON_CON_CORREO else [])
 
@@ -271,7 +271,7 @@ def test_el_candado_se_consulta_antes_de_abrir_gmail():
     bandeja, _ = _montar(crudos=[_uno()])
     _correr(correo.reporte_diario())
     aperturas = []
-    correo._sin_leer_sync = lambda cuenta, dias, limite: (
+    correo._sin_leer_sync = lambda cuenta, dias, **kw: (
         aperturas.append(cuenta["user"]) or [])
     _correr(correo.reporte_diario())
     assert aperturas == [], f"abrió el buzón con el candado cerrado: {aperturas}"
@@ -304,7 +304,7 @@ def _montar_dos_destinos(hora=7, minuto=10, correo_de=None):
 
 
 def _servir_por_cuenta(mapa):
-    correo._sin_leer_sync = lambda cuenta, dias, limite: [
+    correo._sin_leer_sync = lambda cuenta, dias, **kw: [
         dict(c, cuenta=cuenta["user"]) for c in mapa.get(cuenta["user"], [])]
 
 
@@ -358,7 +358,7 @@ def test_el_destino_que_ya_reporto_no_vuelve_a_abrir_su_buzon():
     assert _correr(correo.reporte_diario()) == 1
     reloj.ahora = datetime(2026, 9, 2, 9, 0, tzinfo=TZ)
     aperturas = []
-    correo._sin_leer_sync = lambda cuenta, dias, limite: (
+    correo._sin_leer_sync = lambda cuenta, dias, **kw: (
         aperturas.append(cuenta["user"]) or [])
     _correr(correo.reporte_diario())
     assert aperturas == ["rosi@x.com"], (
@@ -374,7 +374,7 @@ def test_un_buzon_sin_destino_no_cuenta_como_destinatario():
                              {"user": "banco@x.com", "pass": "x", "reporte_a": 0}]
     assert _correr(correo.reporte_diario()) == 1
     aperturas = []
-    correo._sin_leer_sync = lambda cuenta, dias, limite: (
+    correo._sin_leer_sync = lambda cuenta, dias, **kw: (
         aperturas.append(cuenta["user"]) or [])
     assert _correr(correo.reporte_diario()) == 0
     assert aperturas == [], (

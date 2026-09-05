@@ -44,9 +44,74 @@ SERVIDOR = "imap.gmail.com"
 REPORTE_DESDE = 7   # 7 AM
 REPORTE_HASTA = 12  # mediodía
 
-# Tope de correos nuevos a mirar por cuenta y día. Un día normal trae pocos que
-# pasen el filtro barato; el tope es un cinturón contra una ráfaga rara.
-MAX_POR_DIA = 60
+# ACOTAR SIN DESCARTAR: EL CUPO LIMITA EL TRABAJO CARO, NO LA LISTA DE CORREOS.
+#
+# Hasta el 5-sep-2026 acá vivía `MAX_POR_DIA = 60`, puesto el 24-jul-2026
+# (commit 6395ec7, que subió el viejo `MAX_POR_VUELTA = 25`) con este motivo
+# escrito al lado: "el tope es un cinturón contra una ráfaga rara". Ese tope
+# hacía DOS cosas a la vez y solo una estaba mal:
+#
+#   · ACOTABA el trabajo de una vuelta. Eso hacía falta, y sigue haciendo falta.
+#   · DESCARTABA lo que no cabía. Eso estaba mal, y es lo que se fue.
+#
+# Se aplicaba en `_sin_leer_sync`, sobre la lista de UIDs recién buscada, y se
+# quedaba con los 60 MÁS NUEVOS:
+#
+#   1. Cortaba ANTES de descontar los que ya se habían informado, así que el
+#      presupuesto se gastaba en correos que después se tiraban igual.
+#   2. Lo que caía del corte no dejaba rastro: ni un log, ni un aviso. Un correo
+#      viejo sin leer podía salirse de la ventana de 7 días sin que a nadie le
+#      constara que existió.
+#
+# Y mordió de verdad: en la base de producción los encargos 171 y 172 (los dos
+# del 28-jul-2026) tienen 60 correos clavados cada uno para la misma cuenta —
+# medido el 5-sep-2026 con `SELECT bandeja_id, cuenta, count(*) FROM
+# correo_reportado GROUP BY 1,2`, que devuelve 2 grupos de exactamente 60 y
+# ninguno entre 31 y 59.
+#
+# El 5-sep-2026 se quitó entero, y quitarlo entero fue quitar de más: sin cupo,
+# un buzón con 2.000 sin leer en la ventana disparaba 2.000 descargas de cuerpo
+# y 2.000 llamadas a DeepSeek, secuenciales y sin límite de tiempo — medido con
+# un arnés de IMAP falso: N=2000 → 2000 cuerpos, 2000 llamadas, y un encargo de
+# 812.564 caracteres. Y como `reporte_diario()` se llama con `await` directo
+# desde `cerebro/interpretar.py::bucle`, mientras eso corre Lucy no vuelve a
+# mirar los mensajes de Tiziano.
+#
+# LA FORMA QUE QUEDÓ. El cupo de abajo NO decide qué correos entran al reporte:
+# entran TODOS, siempre. Decide en cuántos se gasta lo caro — una llamada a
+# DeepSeek y una descarga de cuerpo por correo. Lo que no entra en el cupo se
+# informa igual, agrupado por remitente y contado, diciendo con todas las
+# letras que Lucy no alcanzó a mirarlo con criterio. O sea: se pierde JUICIO
+# sobre esos correos, nunca el correo.
+#
+# Por qué no se aplazan a la vuelta siguiente, que era la otra forma: la ventana
+# son 7 días. Con 2.000 atrasados y 60 por mañana harían falta 34 días, así que
+# lo aplazado se caería igual de la ventana — el mismo descarte de antes, solo
+# que más lento y con un log. Informar de todo hoy borra ese caso en vez de
+# manejarlo: ningún correo queda esperando un turno que no va a llegar.
+#
+# El orden sí importa, y es el que el tope viejo tenía al revés: LO MÁS VIEJO
+# PRIMERO. Es lo que lleva más esperando y lo más cerca de caerse de la ventana,
+# así que es lo que se gana el cupo.
+#
+# 60 es el mismo número que había, a propósito: es el techo de gasto que este
+# reporte ya tenía y que nadie objetó. La diferencia es que antes esos 60 se
+# gastaban ANTES de descontar informados y bancos —o sea, en correos que se
+# tiraban igual— y ahora son 60 clasificaciones que sirven.
+MAX_CLASIFICA_POR_VUELTA = 60
+
+# El nivel de lo que entró al reporte sin pasar por el clasificador. No está en
+# `NIVELES` a propósito: `NIVELES` es el vocabulario con que se valida lo que
+# devuelve el modelo, y el modelo nunca puede devolver esto — lo pone Lucy
+# cuando se le acabó el cupo del día.
+SIN_CLASIFICAR = "sin_clasificar"
+
+# Los niveles que llevan extracto del cuerpo en el encargo. Vive acá arriba y en
+# un solo sitio porque decide DOS cosas que tienen que coincidir: qué correos se
+# muestran con extracto (`_linea`) y de cuáles se baja el cuerpo por IMAP
+# (`_pendientes_de`). Con dos listas escritas a mano, el día que alguien agregue
+# un nivel se baja un cuerpo que no se usa, o se muestra un extracto vacío.
+NIVELES_CON_EXTRACTO = ("911", "accion", "dudoso")
 
 # La primera frase del encargo que el reporte deja en la bandeja, y a la vez la
 # MARCA de "hoy ya salió": el candado de una vez al día busca ESTA constante en
@@ -169,13 +234,31 @@ CRITERIOS FINOS:
 
 
 def _texto(v: str | None) -> str:
-    """Cabecera MIME (=?utf-8?...) → texto legible."""
+    """Cabecera MIME (=?utf-8?...) → texto legible.
+
+    Un charset que Python no conoce NO puede tumbar esto. El caso que pasa de
+    verdad es `unknown-8bit`: es la etiqueta que le pone el propio `email`
+    cuando la cabecera trae bytes crudos de más de 7 bits sin declarar
+    codificación, y la manda cualquier remitente mal configurado — un asunto
+    con una tilde alcanza. Python no tiene ese códec, así que `p.decode(...)`
+    lanzaba `LookupError` desde dentro de `_sin_leer_sync`, y arriba
+    `reporte_diario` se lo comía con un `log.warning` y seguía con la cuenta
+    siguiente: UN asunto mal formado dejaba el buzón ENTERO fuera del reporte
+    del día y nadie se enteraba. Un carácter ilegible es mejor que un buzón
+    mudo.
+    """
     if not v:
         return ""
-    return "".join(
-        (p.decode(enc or "utf-8", "replace") if isinstance(p, bytes) else p)
-        for p, enc in decode_header(v)
-    )
+    partes = []
+    for p, enc in decode_header(v):
+        if not isinstance(p, bytes):
+            partes.append(p)
+            continue
+        try:
+            partes.append(p.decode(enc or "utf-8", "replace"))
+        except LookupError:
+            partes.append(p.decode("utf-8", "replace"))
+    return "".join(partes)
 
 
 def _es_ruido(msg) -> str | None:
@@ -220,14 +303,41 @@ def _snippet(msg, limite: int = 400) -> str:
     return " ".join(texto.split())[:limite]
 
 
-def _sin_leer_sync(cuenta: dict, dias: int, limite: int) -> list[dict]:
-    """SÍNCRONO (en un hilo). Los correos SIN LEER de los últimos `dias`.
+def _ficha(cuenta: dict, uid: bytes, crudo: bytes, con_cuerpo: bool) -> dict:
+    """El diccionario con el que trabaja el resto del módulo, desde el correo
+    crudo que devolvió IMAP."""
+    msg = email.message_from_bytes(crudo)
+    return {
+        "cuenta": cuenta["user"],
+        "uid": int(uid),
+        "from": _texto(msg.get("From")),
+        "subject": _texto(msg.get("Subject")),
+        "fecha": _texto(msg.get("Date")),
+        # Sin cuerpo no hay extracto. `_es_ruido` sí sale entero de las
+        # cabeceras, así que se calcula en los dos modos.
+        "snippet": _snippet(msg) if con_cuerpo else "",
+        "ruido_barato": _es_ruido(msg),  # se informa igual, pero baja solo
+    }
+
+
+def _sin_leer_sync(cuenta: dict, dias: int, *,
+                   con_cuerpo: bool = True) -> list[dict]:
+    """SÍNCRONO (en un hilo). TODOS los correos SIN LEER de los últimos `dias`.
 
     Este reemplaza al puntero como fuente del reporte, y es el arreglo de fondo
     del sistema: el puntero SE CONSUMÍA —cualquier revisión lo adelantaba— así
     que el reporte de la mañana podía encontrar cero y quedarse mudo mientras
     había correos pendientes de verdad. "Sin leer" no se consume solo, coincide
     con lo que Tiziano ve en su Gmail, y sobrevive a que Lucy esté caída.
+
+    TODOS quiere decir todos: acá no se descarta nada, y acá no vive ningún
+    tope. El cupo del reporte se aplica más arriba, sobre el trabajo caro y
+    después de descontar lo que ya se informó (ver `MAX_CLASIFICA_POR_VUELTA`).
+
+    `con_cuerpo=False` pide solo cabeceras. Sirve para decidir barato quién
+    merece que le bajemos el cuerpo entero — es lo que hace la vigilancia 911,
+    que corre cada pocos minutos las 24 horas y solo necesita remitente y
+    asunto para saber si mirar más.
     """
     M = imaplib.IMAP4_SSL(SERVIDOR, 993)
     try:
@@ -236,24 +346,44 @@ def _sin_leer_sync(cuenta: dict, dias: int, limite: int) -> list[dict]:
         desde = _fecha_imap(datetime.now(TZ) - timedelta(days=dias))
         typ, data = M.uid("search", None, "UNSEEN", "SINCE", desde)
         uids = data[0].split() if data and data[0] else []
-        # Los más nuevos primero: si hay que cortar por el tope, que se caiga
-        # lo viejo, no lo de hoy.
-        uids = uids[-limite:][::-1]
+        # Los más nuevos primero. Antes este orden decidía qué se salvaba del
+        # tope; ahora solo decide en qué orden se mira, porque no se cae nada.
+        uids = uids[::-1]
+        pieza = "(BODY.PEEK[])" if con_cuerpo else "(BODY.PEEK[HEADER])"
         salida = []
         for uid in uids:
-            d = M.uid("fetch", uid.decode(), "(BODY.PEEK[])")[1]
+            d = M.uid("fetch", uid.decode(), pieza)[1]
             if not d or not d[0]:
                 continue
-            msg = email.message_from_bytes(d[0][1])
-            salida.append({
-                "cuenta": cuenta["user"],
-                "uid": int(uid),
-                "from": _texto(msg.get("From")),
-                "subject": _texto(msg.get("Subject")),
-                "fecha": _texto(msg.get("Date")),
-                "snippet": _snippet(msg),
-                "ruido_barato": _es_ruido(msg),  # se informa igual, pero baja solo
-            })
+            salida.append(_ficha(cuenta, uid, d[0][1], con_cuerpo))
+        return salida
+    finally:
+        try:
+            M.logout()
+        except Exception:
+            pass
+
+
+def _traer_sync(cuenta: dict, uids: list[int]) -> list[dict]:
+    """SÍNCRONO (en un hilo). El cuerpo de UNOS uids concretos, y nada más.
+
+    Es la segunda mitad del par barato/caro: primero se mira con cabeceras
+    quién importa (`_sin_leer_sync(..., con_cuerpo=False)`) y después se baja
+    entero solo eso. Sin esto, la única forma de tener el extracto de un correo
+    era bajarlos todos.
+    """
+    if not uids:
+        return []
+    M = imaplib.IMAP4_SSL(SERVIDOR, 993)
+    try:
+        M.login(cuenta["user"], cuenta["pass"])
+        M.select("INBOX", readonly=True)
+        salida = []
+        for uid in uids:
+            d = M.uid("fetch", str(uid), "(BODY.PEEK[])")[1]
+            if not d or not d[0]:
+                continue
+            salida.append(_ficha(cuenta, str(uid).encode(), d[0][1], True))
         return salida
     finally:
         try:
@@ -571,9 +701,16 @@ async def _pendientes_de(cuenta: dict, reglas: str = "") -> list[dict]:
 
     No toca el puntero ni marca nada: solo mira. Lo que se informa y lo que se
     marca leído se decide después, cuando el reporte de verdad haya salido.
+
+    Barato primero, caro después, igual que `vigilar_911`: se traen SOLO las
+    cabeceras de todo lo sin leer, se descuenta lo que ya se informó y lo que
+    lee la ingesta bancaria, y recién entonces se gasta —clasificar con DeepSeek
+    y bajar el cuerpo— y solo hasta `MAX_CLASIFICA_POR_VUELTA`. Bajar el cuerpo
+    de todos, como se hacía hasta el 5-sep-2026, pagaba lo caro por correos que
+    dos líneas después se tiraban.
     """
     crudos = await asyncio.to_thread(
-        _sin_leer_sync, cuenta, VENTANA_DIAS, MAX_POR_DIA)
+        _sin_leer_sync, cuenta, VENTANA_DIAS, con_cuerpo=False)
     if not crudos:
         return []
 
@@ -611,18 +748,71 @@ async def _pendientes_de(cuenta: dict, reglas: str = "") -> list[dict]:
     if not nuevos:
         return []
 
+    # LO MÁS VIEJO PRIMERO. El uid de IMAP crece con la llegada al buzón, así
+    # que ordenar por uid es ordenar por antigüedad. Es lo que lleva más
+    # esperando y lo más cerca de caerse de la ventana de 7 días: si el cupo no
+    # alcanza para todos, que se lo lleve eso y no lo que llegó hace una hora.
+    nuevos.sort(key=lambda c: c["uid"])
+
+    # El filtro barato ya no descarta: solo ahorra una llamada a la IA en lo
+    # que es ruido evidente. El correo se informa igual, como mención — que
+    # es justo la regla que puso Tiziano: nada desaparece en silencio. Y como no
+    # gasta cupo, el cupo entero queda para lo que sí hay que juzgar.
     for c in nuevos:
-        # El filtro barato ya no descarta: solo ahorra una llamada a la IA en lo
-        # que es ruido evidente. El correo se informa igual, como mención — que
-        # es justo la regla que puso Tiziano: nada desaparece en silencio.
         if c.get("ruido_barato"):
             c["clasificacion"] = {
                 "ambito": "", "area": "publicidad_laboral", "nivel": "mencion",
                 "asunto_corto": c["subject"][:120],
                 "motivo": f"filtro: {c['ruido_barato']}",
             }
-        else:
-            c["clasificacion"] = await clasificar(c, reglas)
+
+    a_juzgar = [c for c in nuevos if "clasificacion" not in c]
+    con_cupo = a_juzgar[:MAX_CLASIFICA_POR_VUELTA]
+    sin_cupo = a_juzgar[MAX_CLASIFICA_POR_VUELTA:]
+
+    for c in con_cupo:
+        c["clasificacion"] = await clasificar(c, reglas)
+
+    # Los que no entraron en el cupo NO se caen: entran al reporte con lo que se
+    # sabe de ellos sin gastar nada —quién escribió y qué asunto puso—, y
+    # `_encargo` los cuenta y los nombra aparte, diciendo que Lucy no los miró
+    # con criterio. Nada desaparece en silencio; lo que se pierde es el juicio
+    # sobre ellos, no el correo.
+    for c in sin_cupo:
+        c["clasificacion"] = {
+            "ambito": "", "area": "", "nivel": SIN_CLASIFICAR,
+            "asunto_corto": c["subject"][:120],
+            "motivo": f"no alcancé a mirarlo hoy (cupo de {MAX_CLASIFICA_POR_VUELTA})",
+        }
+    if sin_cupo:
+        log.warning(
+            "Reporte de %s: %s correos entran SIN clasificar (cupo %s de %s por "
+            "juzgar). Se informan igual, agrupados.",
+            cuenta.get("user", "?"), len(sin_cupo), MAX_CLASIFICA_POR_VUELTA,
+            len(a_juzgar))
+
+    # El cuerpo, solo de los que de verdad lo muestran. Es el otro tramo caro:
+    # antes se bajaban los N cuerpos de la ventana entera, y el extracto solo lo
+    # usan los niveles de `NIVELES_CON_EXTRACTO`.
+    # `not c.get("snippet")` no es una guarda de más: es "no pidas lo que ya
+    # tenés". Sin ella, un camino que llegue acá con los cuerpos ya en la mano
+    # abre una segunda sesión IMAP para volver a bajar lo mismo.
+    caros = [c for c in con_cupo
+             if c["clasificacion"]["nivel"] in NIVELES_CON_EXTRACTO
+             and not c.get("snippet")]
+    if caros:
+        try:
+            cuerpos = await asyncio.to_thread(
+                _traer_sync, cuenta, [c["uid"] for c in caros])
+        except Exception:
+            # Un cuerpo que no se pudo bajar no cancela el correo: sale sin
+            # extracto, igual que en la vigilancia 911.
+            log.warning("No pude bajar los cuerpos en %s; el reporte sale sin "
+                        "extractos.", cuenta.get("user", "?"), exc_info=True)
+            cuerpos = []
+        extractos = {c["uid"]: c.get("snippet", "") for c in cuerpos}
+        for c in caros:
+            c["snippet"] = extractos.get(c["uid"], "")
     return nuevos
 
 
@@ -630,7 +820,7 @@ def _linea(c: dict) -> str:
     """Una línea de correo para el encargo, con lo justo según su nivel."""
     cl = c["clasificacion"]
     base = f"[{cl['nivel']}|{cl.get('area') or '?'}] De {c['from']} → {cl['asunto_corto']}"
-    if cl["nivel"] in ("911", "accion", "dudoso"):
+    if cl["nivel"] in NIVELES_CON_EXTRACTO:
         # Los que piden algo van con extracto: el agente necesita el contenido
         # para decir qué requiere y proponer la tarea.
         return f"{base}\n    (cuenta {c['cuenta']} · uid {c['uid']})\n    {c['snippet'][:280]}"
@@ -647,6 +837,25 @@ def _nombre(remitente: str) -> str:
     return r or "(sin remitente)"
 
 
+def _por_remitente(correos: list[dict], top: int = 25) -> str:
+    """'Pinterest (12), Amazon (3), Canva, y 40 remitentes más'.
+
+    Cómo se nombra en el encargo un montón de correos que no llevan detalle. El
+    número total sale del largo de la lista, no de un contador aparte: así no
+    puede decir 12 cuando hay 13.
+    """
+    cuenta_por: dict[str, int] = {}
+    for c in correos:
+        n = _nombre(c["from"])
+        cuenta_por[n] = cuenta_por.get(n, 0) + 1
+    ordenados = sorted(cuenta_por.items(), key=lambda x: -x[1])
+    listado = ", ".join(f"{n} ({k})" if k > 1 else n
+                        for n, k in ordenados[:top])
+    if len(ordenados) > top:
+        listado += f", y {len(ordenados) - top} remitentes más"
+    return listado
+
+
 def _encargo(pendientes: list[dict]) -> str:
     """El encargo que se le deja al agente para que redacte el reporte.
 
@@ -655,29 +864,35 @@ def _encargo(pendientes: list[dict]) -> str:
     política que Tiziano definió: qué nivel lleva cuánto detalle, y que nada
     —ni la publicidad— puede quedar sin mencionarse.
     """
-    orden = {"911": 0, "accion": 1, "dudoso": 2, "enterarte": 3, "mencion": 4}
+    orden = {"911": 0, "accion": 1, "dudoso": 2, "enterarte": 3, "mencion": 4,
+             SIN_CLASIFICAR: 5}
     pendientes = sorted(pendientes, key=lambda c: orden.get(
         c["clasificacion"]["nivel"], 9))
 
-    # Las menciones van AGRUPADAS por remitente y contadas. Cumplen la regla de
-    # Tiziano (aparecen, él se entera de que llegaron) sin convertir el reporte
-    # en un muro: en el ensayo eran 69 líneas de Pinterest, ofertas y newsletters.
-    detalle = [c for c in pendientes if c["clasificacion"]["nivel"] != "mencion"]
+    # Las menciones y los que no entraron en el cupo van AGRUPADOS por remitente
+    # y contados. Cumplen la regla de Tiziano (aparecen, él se entera de que
+    # llegaron) sin convertir el reporte en un muro: en el ensayo eran 69 líneas
+    # de Pinterest, ofertas y newsletters, y un día de atasco serían miles.
+    total = len(pendientes)
     menciones = [c for c in pendientes if c["clasificacion"]["nivel"] == "mencion"]
+    sin_juzgar = [c for c in pendientes
+                  if c["clasificacion"]["nivel"] == SIN_CLASIFICAR]
+    detalle = [c for c in pendientes
+               if c["clasificacion"]["nivel"] not in ("mencion", SIN_CLASIFICAR)]
     lineas = "\n".join(_linea(c) for c in detalle)
     if menciones:
-        cuenta_por: dict[str, int] = {}
-        for c in menciones:
-            n = _nombre(c["from"])
-            cuenta_por[n] = cuenta_por.get(n, 0) + 1
-        top = sorted(cuenta_por.items(), key=lambda x: -x[1])
-        listado = ", ".join(f"{n} ({k})" if k > 1 else n for n, k in top[:25])
-        if len(top) > 25:
-            listado += f", y {len(top) - 25} remitentes más"
         lineas += (f"\n\n[mencion] {len(menciones)} correos sin importancia, "
-                   f"de: {listado}")
+                   f"de: {_por_remitente(menciones)}")
+    if sin_juzgar:
+        # Esto es lo que evita que un día de atasco se convierta en un descarte
+        # callado: llegaron, se dicen, y se dice que no se miraron con criterio.
+        lineas += (
+            f"\n\n[{SIN_CLASIFICAR}] {len(sin_juzgar)} correos que NO alcancé a "
+            f"mirar hoy (el cupo del día es {MAX_CLASIFICA_POR_VUELTA} y hoy "
+            f"llegaron muchos más). No sé de qué van: solo sé que llegaron, y "
+            f"son de: {_por_remitente(sin_juzgar)}")
     return (
-        f"{MARCA_ENCARGO} Estos son los correos SIN LEER que "
+        f"{MARCA_ENCARGO} Estos son los {total} correos SIN LEER que "
         "todavía no le informaste a Tiziano, ya clasificados por vos misma "
         f"(nivel|área):\n\n{lineas}\n\n"
         "Armá UN mensaje, en este orden y con este detalle — es la política que "
@@ -689,7 +904,11 @@ def _encargo(pendientes: list[dict]) -> str:
         "· ENTERARTE: una o dos líneas cada uno, de qué va. Son cosas de su "
         "oficio (audio, plugins, técnica) o avisos de sus sistemas.\n"
         "· MENCION: SOLO los nombres de quién escribió, juntos en una línea, "
-        "sin tema y sin detalle. Ej: «De publicidad: Amazon, Canva, Fiverr».\n\n"
+        "sin tema y sin detalle. Ej: «De publicidad: Amazon, Canva, Fiverr».\n"
+        f"· {SIN_CLASIFICAR.upper()}: si hay, decíselo derecho y al final — "
+        "cuántos son y de quiénes. Que quede claro que llegaron y que NO los "
+        "leíste, para que él decida si quiere mirarlos. No inventes de qué van "
+        "ni les pongas un nivel: no lo sabés.\n\n"
         "REGLA QUE NO SE ROMPE: todo lo que llegó tiene que aparecer, aunque "
         "sea solo el nombre. Él fue explícito: aunque vos creas que no vale la "
         "pena, igual tiene que saber que llegó. No respondas ningún correo ni "
@@ -811,28 +1030,53 @@ async def vigilar_911(bot) -> int:
     en sí no gasta IA (mira remitente y asunto), y el encargo que sale cuando
     encuentra algo es una emergencia. Aplazar tres horas el aviso de que se
     cayó producción para ahorrar medio centavo es un mal negocio con nombre.
+
+    Mira TODO lo sin leer del último día, no una parte. Antes cortaba en los 30
+    más nuevos, y en el camino de las emergencias eso es lo peor que se puede
+    hacer: un día con 31 correos sin leer dejaba el "deploy failed" más viejo
+    fuera para siempre y sin una línea de log. Que ahora pueda mirarlos todos
+    sin volverse caro es por el par de abajo — cabeceras para decidir, cuerpo
+    solo para los que hay que contar. Como esto corre cada pocos minutos las 24
+    horas, es además MÁS barato que antes: lo normal es cero sospechosos y ni
+    un cuerpo bajado.
     """
     if not config.CORREO_CUENTAS:
         return 0
     avisados = 0
     for cuenta in config.CORREO_CUENTAS:
         try:
-            crudos = await asyncio.to_thread(
-                _sin_leer_sync, cuenta, 1, 30)  # solo el último día
+            cabeceras = await asyncio.to_thread(
+                _sin_leer_sync, cuenta, 1, con_cuerpo=False)  # solo el último día
         except Exception:
             log.warning("Vigilancia 911: no pude mirar %s.",
                         cuenta.get("user", "?"), exc_info=True)
             continue
 
-        sospechosos = [c for c in crudos if _huele_a_911(c)]
+        sospechosos = [c for c in cabeceras if _huele_a_911(c)]
         if not sospechosos:
             continue
         ya = await db.correos_ya_reportados(
             cuenta["user"], [c["uid"] for c in sospechosos])
-        for c in sospechosos:
-            if c["uid"] in ya:
-                continue
-            texto = (f"🚨 {c['from']}\n{c['subject']}\n\n{c['snippet'][:400]}")
+        nuevos = [c for c in sospechosos if c["uid"] not in ya]
+        if not nuevos:
+            continue
+        # Recién acá se baja el cuerpo, y solo de estos: el extracto es lo que
+        # deja que el aviso diga qué pasó y no solo que pasó algo.
+        try:
+            con_cuerpo = await asyncio.to_thread(
+                _traer_sync, cuenta, [c["uid"] for c in nuevos])
+        except Exception:
+            log.warning("Vigilancia 911: no pude bajar el cuerpo en %s; aviso "
+                        "con lo que tengo.", cuenta.get("user", "?"),
+                        exc_info=True)
+            con_cuerpo = []
+        # Un cuerpo que no se pudo bajar NO cancela el aviso: se avisa igual,
+        # sin extracto. Callar una alerta de infraestructura porque falló el
+        # segundo fetch sería cambiar un aviso incompleto por ninguno.
+        extractos = {c["uid"]: c.get("snippet", "") for c in con_cuerpo}
+        for c in nuevos:
+            snippet = extractos.get(c["uid"], "")
+            texto = (f"🚨 {c['from']}\n{c['subject']}\n\n{snippet[:400]}")
             bandeja_id = await db.guardar_en_bandeja(
                 tipo_entrada="sistema",
                 contenido_raw=(
@@ -953,25 +1197,52 @@ async def reporte_diario() -> int:
 
     # Un encargo POR DESTINO. Juntarlos mandaría el correo de una persona al
     # chat de otra, que es exactamente lo que este cambio existe para impedir.
-    bandeja_id = None
+    #
+    # Y cada correo se ata AL SUYO, dentro del mismo bucle que lo creó. Hasta el
+    # 5-sep-2026 esto se hacía en dos pasos: primero se creaban todos los
+    # encargos y se guardaba UN `bandeja_id` —el del dueño, o el primero que se
+    # hubiera creado—, y después se marcaban TODOS los correos con ese único id.
+    # O sea: una relación que es de varios se guardaba como si fuera de uno, y
+    # el desempate lo resolvía una regla ("prefiero el del dueño") en vez de un
+    # dato. Con dos destinos, los correos de uno quedaban colgando del encargo
+    # del otro.
+    #
+    # No es cosmético: `db.correos_por_marcar_leidos` y
+    # `db.olvidar_reportados_fallidos` deciden POR ESE id. Con el id cruzado,
+    # el encargo de una persona que sale bien marcaba como leídos —"ya te
+    # informé"— correos de otra persona cuyo reporte nunca llegó.
+    #
+    # Hoy en producción no hay ni una fila mal atada, porque hay un solo
+    # destino: las 994 filas de `correo_reportado` cuelgan de encargos al chat
+    # del dueño (medido el 5-sep-2026). El defecto estaba esperando al segundo
+    # `reporte_a`, que es justamente para lo que existe ese campo.
+    #
+    # Marcar dentro del bucle no adelanta nada respecto de "mandar primero,
+    # marcar después": lo que se marca es que el ENCARGO quedó escrito en la
+    # bandeja, y quien decide si de verdad llegó sigue siendo
+    # `confirmar_leidos`, que espera a que la bandeja diga 'procesado'.
+    encargos: dict[int, int] = {}      # destino → id del encargo que le tocó
     for destino, lista in por_destino.items():
         if not lista:
             continue
-        bid = await db.guardar_en_bandeja(
+        bandeja_id = await db.guardar_en_bandeja(
             tipo_entrada="sistema", contenido_raw=_encargo(lista),
             chat_id=destino, origen="correo")
-        if destino == config.CHAT_ID_DUENO or bandeja_id is None:
-            bandeja_id = bid
-    for c in pendientes:
-        cl = c["clasificacion"]
-        await db.marcar_correo_reportado(
-            c["cuenta"], c["uid"], nivel=cl["nivel"], ambito=cl.get("ambito", ""),
-            area=cl.get("area", ""), asunto=c["subject"], bandeja_id=bandeja_id)
+        encargos[destino] = bandeja_id
+        for c in lista:
+            cl = c["clasificacion"]
+            await db.marcar_correo_reportado(
+                c["cuenta"], c["uid"], nivel=cl["nivel"],
+                ambito=cl.get("ambito", ""), area=cl.get("area", ""),
+                asunto=c["subject"], bandeja_id=bandeja_id)
 
     niveles = {}
     for c in pendientes:
         n = c["clasificacion"]["nivel"]
         niveles[n] = niveles.get(n, 0) + 1
-    log.info("Reporte de correo: %s correos (%s) → encargo #%s.",
-             len(pendientes), niveles, bandeja_id)
+    # El log nombra TODOS los encargos, uno por destino. Con "→ encargo #N" en
+    # singular, un día con dos destinos dejaba la mitad sin rastro en el log.
+    log.info("Reporte de correo: %s correos (%s) → encargos %s.",
+             len(pendientes), niveles,
+             ", ".join(f"#{b} (chat {d})" for d, b in encargos.items()))
     return len(pendientes)

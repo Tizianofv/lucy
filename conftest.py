@@ -216,3 +216,54 @@ def _devolver_los_modulos_a_su_sitio():
         for clave, valor in original.items():
             if clave not in actual:
                 actual[clave] = valor
+
+
+# ── Ninguna prueba abre una conexión IMAP de verdad ──────────────────────
+#
+# La suite es hermética. Una prueba que se le escapa y abre `imaplib.IMAP4_SSL`
+# sale a `imap.gmail.com:993` desde la máquina de quien la corra: tarda, depende
+# de la red, y en un runner sin salida a internet se cuelga hasta el timeout.
+#
+# Pasó el 5-sep-2026 y es lo que hace falta entender para que esta guarda exista.
+# `captura/correo.py::_pendientes_de` pasó a bajar el cuerpo en un segundo paso
+# (`_traer_sync`). `tests/test_reporte_una_vez_al_dia.py` sustituye
+# `_sin_leer_sync` por un doble, pero `_traer_sync` no era suyo y quedó real: 18
+# conexiones a Gmail en esa sola suite, y la suite entera pasó de 0.64 s a
+# 10.35 s. Salió verde igual, porque el `try/except` que rodea la bajada de
+# cuerpos —que existe con razón: un fetch caído no puede callar el reporte— se
+# tragaba el error de red exactamente igual que se tragaría el de Gmail.
+#
+# Por eso esto NO revienta dentro de la llamada: cuenta los intentos y falla la
+# prueba AL TERMINAR. Un fallo que el código bajo prueba puede atrapar no es una
+# guarda; es una sugerencia.
+#
+# Y por eso vigila la FUNCIÓN, no una lista de archivos ni de nombres de prueba:
+# quien abra una conexión IMAP real cae acá, se llame como se llame y esté donde
+# esté. Las pruebas que se ponen su propio IMAP falso encima del módulo
+# (`correo.imaplib = ...`, `consumos.imaplib = ...`) no pasan por acá y no se
+# ven afectadas — que es justo la diferencia entre un doble y una conexión.
+
+import imaplib  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _sin_imap_de_verdad():
+    original = imaplib.IMAP4_SSL
+    intentos = []
+
+    def _bloqueado(*a, **k):
+        intentos.append(a)
+        raise OSError(
+            "conexión IMAP real bloqueada por conftest: la suite es hermética")
+
+    imaplib.IMAP4_SSL = _bloqueado
+    try:
+        yield
+    finally:
+        imaplib.IMAP4_SSL = original
+    if intentos:
+        destinos = ", ".join(sorted({":".join(map(str, a)) for a in intentos}))
+        raise AssertionError(
+            f"esta prueba intentó abrir {len(intentos)} conexión(es) IMAP de "
+            f"verdad ({destinos}). La suite no sale a internet: ponele un doble "
+            "al camino que quedó real.")
