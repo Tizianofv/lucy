@@ -102,8 +102,14 @@ CHAT_IDS_PERMITIDOS = (CHAT_ID_DUENO,) + tuple(
 # valor por defecto que lo decida por él.
 #
 # Lo guarda `tests/test_buzon_que_no_se_ve.py::test_nadie_lee_la_lista_cruda`,
-# que recorre los .py que hay EN DISCO (no una lista escrita a mano) y se pone
-# rojo si algún archivo vuelve a nombrar `config.CORREO_CUENTAS`.
+# que recorre los .py que hay EN DISCO (no una lista escrita a mano) y los lee
+# con `ast.parse`: compara nodos del árbol de sintaxis, nunca texto. Da igual
+# si el camino nuevo escribe `config.CORREO_CUENTAS`, la importa con alias, la
+# pide por `getattr` con el nombre partido en dos, por `vars(config)` o por
+# `importlib` — el único uso permitido del módulo es leerle un atributo suyo
+# que no sea esta lista, y todo lo demás cae del lado rojo por no poder
+# clasificarse. La lista de atributos permitidos sale de `vars(config)`, o sea
+# de lo que este archivo de verdad define, no de algo tecleado en la prueba.
 #
 # BARRER NO ES MOSTRAR, y ésa es toda la distinción:
 #

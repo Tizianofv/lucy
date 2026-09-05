@@ -20,9 +20,11 @@ POR QUÉ ESTAS PRUEBAS NO MIRAN CUATRO FILTROS. El arreglo no le puso un filtro
 a cada camino: les quitó a todos la capacidad de conseguir un buzón sin decir
 para qué lo quieren. `config.cuentas_de_correo(para=...)` es el único sitio del
 que sale un buzón con credenciales, y `test_nadie_lee_la_lista_cruda` —que
-recorre los .py que hay EN DISCO, no una lista escrita acá— se pone rojo si
-algún archivo vuelve a leer `config.CORREO_CUENTAS` por su cuenta. Un camino
-nuevo no puede olvidarse de filtrar: no puede conseguir el buzón.
+recorre los .py que hay EN DISCO, no una lista escrita acá, y los lee con
+`ast.parse` en vez de buscarles texto— se pone rojo si algún archivo puede
+alcanzar la lista cruda por su cuenta, lo escriba como lo escriba. Un camino
+nuevo no puede olvidarse de filtrar: no puede conseguir el buzón. El porqué de
+leer el árbol y no el texto está entero arriba de la guarda, más abajo.
 
 Y LA OTRA MITAD, que tiene que seguir igual: BARRER NO ES MOSTRAR. El buzón
 marcado se sigue leyendo entero para sacar sus movimientos bancarios. Si estas
@@ -32,6 +34,7 @@ Correr:  python3 tests/test_buzon_que_no_se_ve.py
 """
 from __future__ import annotations
 
+import ast
 import asyncio
 import os
 import sys
@@ -389,36 +392,368 @@ def test_para_es_obligatorio_y_su_vocabulario_es_cerrado():
             f"cuentas_de_correo({malo!r}) devolvió buzones en vez de reventar")
 
 
+# ── LA GUARDA: se lee el ÁRBOL DE SINTAXIS, nunca el texto ────────────────
+#
+# POR QUÉ NO SE BUSCA TEXTO. La primera versión de esta guarda recorría los .py
+# del disco —eso estaba bien— pero decidía con `"config.CORREO_CUENTAS" in ln`.
+# Medido el 5-sep-2026 con tres archivos nuevos que hacían LO MISMO
+# (`return [c for c in <la lista cruda>]`), en sintaxis normal de Python:
+#
+#     config.CORREO_CUENTAS                          →  1 failed   la agarra
+#     from config import CORREO_CUENTAS as CUENTAS   → 13 passed   se le escapa
+#     getattr(config, "CORREO_" + "CUENTAS")         → 13 passed   se le escapa
+#
+# Dos de cada tres. Y el arreglo NO puede ser añadirle esas dos formas al
+# patrón: mañana llega por `vars(config)`, por `config.__dict__`, por
+# `import config as cfg`, por `importlib`, o por un nombre que arma una
+# función. Una guarda que enumera formas de escribir algo siempre tiene una
+# forma más que no vio, y mientras tanto da tranquilidad falsa.
+#
+# DE DÓNDE SACA AHORA LO QUE COMPARA. De dos sitios, los dos reales:
+#
+#   1. `ast.parse` del archivo. El árbol ve igual `from config import
+#      CORREO_CUENTAS as CUENTAS` que `config.CORREO_CUENTAS`, porque el nombre
+#      está en el nodo y no en cómo se escribió. Los alias, los espacios, los
+#      paréntesis y los comentarios desaparecen antes de que se compare nada.
+#   2. `vars(config)`. Los atributos PERMITIDOS son los nombres públicos que el
+#      módulo config de verdad tiene hoy, menos el prohibido. Nadie los teclea
+#      acá: si config gana un nombre, entra solo; si pierde el prohibido, la
+#      guarda revienta en vez de quedarse verde vigilando un fantasma.
+#
+# Y EL CRITERIO ES «LO QUE NO SÉ CUENTA COMO ROJO», aplicado al trayecto
+# entero y no a un tramo. El módulo `config` solo se puede usar para UNA cosa:
+# leer uno de sus atributos permitidos, escrito como atributo. Cualquier otro
+# uso del objeto módulo —pasarlo, guardarlo, `getattr`-earlo, `vars`-earlo,
+# abrirle el `__dict__`— no se puede clasificar, y lo que no se puede
+# clasificar es rojo. Por eso una forma que nadie previó cae del lado rojo: no
+# hay que reconocerla, hay que fallar en reconocerla.
+
+_PROHIBIDO = "CORREO_CUENTAS"
+
+# Maquinaria que fabrica un objeto módulo en tiempo de ejecución. No es una
+# lista de trucos: es el juego completo de puertas que el lenguaje ofrece para
+# conseguir un módulo sin nombrarlo, y da igual qué string se les pase. El
+# código de Lucy no importa módulos a mano en ningún sitio (medido: cero usos
+# fuera de tests/ y conftest.py), así que exigirlo no cuesta nada y cierra el
+# hueco que el árbol de sintaxis solo no puede ver.
+_FABRICAS_DE_MODULOS = frozenset({
+    "importlib", "__import__", "eval", "exec", "globals", "locals"})
+
+
+def _atributos_que_config_ofrece() -> set[str]:
+    """Los nombres públicos que `config` DE VERDAD tiene, menos el prohibido."""
+    publicos = {n for n in vars(config) if not n.startswith("_")}
+    assert _PROHIBIDO in publicos, (
+        f"config ya no define {_PROHIBIDO}. Esta guarda quedaría vigilando un "
+        "nombre que no existe, o sea verde sin haber mirado nada: si la lista "
+        "cruda cambió de nombre, hay que cambiárselo también acá")
+    return publicos - {_PROHIBIDO}
+
+
+def _es_el_modulo_config(nodo, nombres_locales: set[str]) -> bool:
+    """¿Esta expresión ES el módulo config?
+
+    Dos formas, y las dos se ven en el árbol: un nombre que un `import` ató al
+    módulo (con alias o sin él), o el atributo `.config` de cualquier otra cosa
+    — que es como se llega a config a través de un módulo que ya lo importó.
+    """
+    if isinstance(nodo, ast.Name) and nodo.id in nombres_locales:
+        return True
+    return isinstance(nodo, ast.Attribute) and nodo.attr == "config"
+
+
+def _nombres_locales_del_modulo_config(arbol) -> set[str]:
+    """Con qué nombre conoce ESTE archivo al módulo config."""
+    nombres: set[str] = set()
+    for n in ast.walk(arbol):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                if a.name == "config" or a.name.startswith("config."):
+                    nombres.add(a.asname or a.name.split(".")[0])
+        elif isinstance(n, ast.ImportFrom):
+            for a in n.names:
+                if a.name == "config":
+                    nombres.add(a.asname or a.name)
+    return nombres
+
+
+def _infracciones(fuente, permitidos: set[str]) -> list[str]:
+    """Todo lo que en este archivo alcanza (o podría alcanzar) la lista cruda.
+
+    Devuelve motivos con número de línea. Lista vacía = el archivo no tiene por
+    dónde conseguir un buzón sin pasar por `cuentas_de_correo(para=...)`.
+    """
+    try:
+        arbol = ast.parse(fuente)
+    except SyntaxError as e:
+        return [f"línea {e.lineno}: no se pudo leer como Python ({e.msg}); "
+                "sin árbol no hay nada que clasificar, y sin clasificar es rojo"]
+
+    for padre in ast.walk(arbol):
+        for hijo in ast.iter_child_nodes(padre):
+            hijo._padre = padre                      # type: ignore[attr-defined]
+
+    locales = _nombres_locales_del_modulo_config(arbol)
+    malas: list[str] = []
+
+    for n in ast.walk(arbol):
+        # (a) El nombre prohibido escrito como atributo de lo que sea. Cubre
+        #     `config.X`, `cfg.X` y `otro_modulo.config.X` de una sola vez,
+        #     porque el árbol no distingue con qué alias se llegó.
+        if isinstance(n, ast.Attribute) and n.attr == _PROHIBIDO:
+            malas.append(f"línea {n.lineno}: lee el atributo .{_PROHIBIDO}")
+
+        # (b) El nombre prohibido traído por un import, de donde sea y con el
+        #     alias que sea — el alias vive en el nodo, no en el texto.
+        if isinstance(n, ast.ImportFrom):
+            for a in n.names:
+                if a.name == _PROHIBIDO:
+                    como = f" y lo llama {a.asname}" if a.asname else ""
+                    malas.append(
+                        f"línea {n.lineno}: importa {_PROHIBIDO} de "
+                        f"{n.module}{como}")
+                elif a.name == "*":
+                    malas.append(
+                        f"línea {n.lineno}: `from {n.module} import *` trae "
+                        "nombres que no puedo enumerar")
+
+        # (c) Maquinaria que fabrica módulos: no se puede saber qué consigue.
+        if isinstance(n, ast.Name) and n.id in _FABRICAS_DE_MODULOS:
+            malas.append(f"línea {n.lineno}: usa {n.id}, que puede devolver "
+                         "cualquier módulo y no se puede clasificar")
+        if isinstance(n, (ast.Import, ast.ImportFrom)):
+            raiz_mod = (n.module or "").split(".")[0] if isinstance(
+                n, ast.ImportFrom) else ""
+            modulos = [raiz_mod] if raiz_mod else [
+                a.name.split(".")[0] for a in n.names]
+            for m in modulos:
+                if m in _FABRICAS_DE_MODULOS:
+                    malas.append(f"línea {n.lineno}: importa {m}, que fabrica "
+                                 "objetos módulo que no se pueden clasificar")
+        if isinstance(n, ast.Attribute) and n.attr == "modules":
+            malas.append(f"línea {n.lineno}: toca la tabla de módulos; de ahí "
+                         "sale config sin nombrarlo")
+
+        # (d) El objeto módulo usado para CUALQUIER otra cosa que no sea leer
+        #     uno de sus atributos permitidos. Acá caen `getattr(config, ...)`,
+        #     `vars(config)`, `config.__dict__`, `otro = config` y todo lo que
+        #     todavía no se le ocurrió a nadie.
+        if _es_el_modulo_config(n, locales):
+            padre = getattr(n, "_padre", None)
+            bien = (isinstance(padre, ast.Attribute)
+                    and padre.value is n
+                    and padre.attr in permitidos)
+            if not bien:
+                como = (f".{padre.attr}" if isinstance(padre, ast.Attribute)
+                        else type(padre).__name__ if padre else "suelto")
+                malas.append(
+                    f"línea {n.lineno}: usa el módulo config de una forma que "
+                    f"no puedo clasificar ({como}); lo único permitido es "
+                    "leerle un atributo suyo que no sea la lista cruda")
+
+    return sorted(set(malas))
+
+
+def _quienes_leen_la_lista_cruda(raiz: Path) -> dict[str, list[str]]:
+    """Recorre los .py que hay EN DISCO bajo `raiz` y los clasifica.
+
+    Las exclusiones son por ROL, no por nombre:
+      · `config.py` es donde la lista se define y donde vive la puerta.
+      · `tests/` le escribe encima para montar buzones de mentira; es lo que
+        hace este mismo archivo unas funciones más arriba.
+      · `conftest.py` es andamio de pruebas del mismo rol que `tests/`: no
+        corre en producción y necesita `sys.modules` para aislar las pruebas
+        entre sí.
+    """
+    permitidos = _atributos_que_config_ofrece()
+    culpables: dict[str, list[str]] = {}
+    for py in sorted(raiz.rglob("*.py")):
+        rel = py.relative_to(raiz)
+        if rel.parts[0] == "tests" or rel.name in ("config.py", "conftest.py"):
+            continue
+        if any(p in (".venv", "venv", "__pycache__") for p in rel.parts):
+            continue
+        motivos = _infracciones(py.read_bytes(), permitidos)
+        if motivos:
+            culpables[str(rel)] = motivos
+    return culpables
+
+
 def test_nadie_lee_la_lista_cruda():
     """LA guarda del arreglo, y lo que hace que valga para el camino que
     todavía no existe.
 
     Recorre los .py que hay EN DISCO —no una lista de archivos escrita acá— y
-    exige que `config.CORREO_CUENTAS` no se nombre fuera de `config.py`. Un
+    exige que nadie fuera de `config.py` pueda alcanzar la lista cruda. Un
     archivo nuevo que se saltee la puerta pone esto rojo solo, sin que nadie se
-    acuerde de venir a añadirlo.
-
-    Las dos exclusiones son por ROL, no por nombre:
-      · `config.py` es donde la lista se define y donde vive la puerta.
-      · `tests/` le escribe encima para montar buzones de mentira; es lo que
-        hace este mismo archivo tres funciones más arriba.
+    acuerde de venir a añadirlo, y sin que importe cómo lo escriba.
     """
-    culpables: dict[str, list[int]] = {}
-    for py in sorted(RAIZ.rglob("*.py")):
-        rel = py.relative_to(RAIZ)
-        if rel.parts[0] == "tests" or rel.name == "config.py":
-            continue
-        if any(p in (".venv", "venv", "__pycache__") for p in rel.parts):
-            continue
-        lineas = [i for i, ln in enumerate(
-            py.read_text(encoding="utf-8", errors="replace").splitlines(), 1)
-            if "config.CORREO_CUENTAS" in ln]
-        if lineas:
-            culpables[str(rel)] = lineas
+    culpables = _quienes_leen_la_lista_cruda(RAIZ)
     assert not culpables, (
-        "estos archivos leen la lista cruda de buzones en vez de pedirla por "
-        f"config.cuentas_de_correo(para=...): {culpables}. Esa lista trae "
+        "estos archivos alcanzan la lista cruda de buzones en vez de pedirla "
+        f"por config.cuentas_de_correo(para=...): {culpables}. Esa lista trae "
         "TODOS los buzones, incluidos los que no se le enseñan a Tiziano")
+
+
+# Ocho caminos nuevos, todos haciendo LO MISMO: devolver la lista cruda. Los
+# tres primeros son los que la guarda vieja midió el 5-sep-2026 (uno rojo, dos
+# verdes). Los cinco de abajo son las formas siguientes, las que se le habrían
+# escapado a un parche que solo añadiera las dos primeras al patrón.
+_ESQUIVES = {
+    "el nombre escrito entero": """
+import config
+
+
+def cuentas():
+    return [c for c in config.CORREO_CUENTAS]
+""",
+    "importado con alias": """
+from config import CORREO_CUENTAS as CUENTAS
+
+
+def cuentas():
+    return [c for c in CUENTAS]
+""",
+    "el nombre partido en dos y pegado en getattr": """
+import config
+
+
+def cuentas():
+    return [c for c in getattr(config, "CORREO_" + "CUENTAS")]
+""",
+    "por vars() del módulo": """
+import config
+
+
+def cuentas():
+    return [c for c in vars(config)["CORREO_CUENTAS"]]
+""",
+    "por el __dict__ del módulo": """
+import config
+
+
+def cuentas():
+    return [c for c in config.__dict__["CORREO_CUENTAS"]]
+""",
+    "el módulo importado con otro nombre": """
+import config as cfg
+
+
+def cuentas():
+    return [c for c in cfg.CORREO_CUENTAS]
+""",
+    "el módulo traído por importlib": """
+import importlib
+
+
+def cuentas():
+    return [c for c in importlib.import_module("config").CORREO_CUENTAS]
+""",
+    "el nombre armado por una función": """
+import config
+
+
+def _nombre():
+    return "".join(["CORREO", "_", "CUENTAS"])
+
+
+def cuentas():
+    return [c for c in getattr(config, _nombre())]
+""",
+}
+
+# Y lo que TIENE que seguir en verde: los tres usos legítimos que hay hoy en el
+# repo, escritos igual que en `cerebro/`, `db/` y `captura/`.
+_LEGITIMOS = {
+    "import config y un atributo suyo": """
+import config
+
+
+def a_quien():
+    return config.CHAT_ID_DUENO
+""",
+    "from config import de nombres normales": """
+from config import TZ, OPENAI_API_KEY
+
+
+def zona():
+    return TZ, OPENAI_API_KEY
+""",
+    "la puerta, que es como se pide un buzón": """
+import config
+
+
+def cuentas():
+    return [c["user"] for c in config.cuentas_de_correo("mostrar")]
+""",
+}
+
+
+def test_la_guarda_muerde_los_ocho_caminos_a_la_lista_cruda():
+    """Las ocho formas de arriba tienen que poner la guarda ROJA.
+
+    Se corre el archivo de verdad —`_quienes_leen_la_lista_cruda`, el mismo que
+    usa la prueba de arriba— sobre una carpeta temporal FUERA del repositorio,
+    con un .py por forma. No se escribe nada dentro del repo.
+    """
+    import tempfile
+
+    permitidos = _atributos_que_config_ofrece()
+    escapados = [nombre for nombre, fuente in _ESQUIVES.items()
+                 if not _infracciones(fuente, permitidos)]
+    assert not escapados, (
+        f"estas formas de leer la lista cruda se le escapan a la guarda: "
+        f"{escapados}. Todas devuelven los buzones enteros, incluido el que "
+        "tiene reporte_a: 0")
+
+    # Y el recorrido del disco entero, no solo el clasificador: un archivo con
+    # cualquiera de las ocho formas, puesto en una carpeta como la del repo,
+    # tiene que aparecer en los culpables.
+    with tempfile.TemporaryDirectory() as tmp:
+        raiz = Path(tmp)
+        (raiz / "tests").mkdir()
+        for i, fuente in enumerate(_ESQUIVES.values()):
+            (raiz / f"camino_nuevo_{i}.py").write_text(fuente, encoding="utf-8")
+        culpables = _quienes_leen_la_lista_cruda(raiz)
+    assert len(culpables) == len(_ESQUIVES), (
+        f"el recorrido del disco solo señaló {sorted(culpables)} de "
+        f"{len(_ESQUIVES)} archivos culpables")
+
+
+def test_la_guarda_no_rojea_a_quien_usa_config_como_se_debe():
+    """Cero falsos positivos: la guarda no puede volverse un impuesto.
+
+    El repo entero ya se mide en `test_nadie_lee_la_lista_cruda` (hoy: 0
+    culpables sobre los .py que hay en disco). Acá van además los tres usos
+    legítimos escritos a la vista, para que un endurecimiento futuro que los
+    rompa se vea acá y no en un archivo cualquiera.
+    """
+    permitidos = _atributos_que_config_ofrece()
+    rojos = {n: _infracciones(f, permitidos)
+             for n, f in _LEGITIMOS.items() if _infracciones(f, permitidos)}
+    assert not rojos, f"la guarda rojeó usos legítimos de config: {rojos}"
+
+
+def test_la_guarda_se_cae_si_la_lista_cruda_cambia_de_nombre():
+    """Una guarda que vigila un nombre que ya no existe está verde sin mirar.
+
+    `_atributos_que_config_ofrece` deriva los atributos permitidos de
+    `vars(config)` y exige que el prohibido siga estando ahí. Si mañana alguien
+    renombra la lista, esto revienta en vez de dejar de vigilar en silencio.
+    """
+    guardado = config.CORREO_CUENTAS
+    try:
+        del config.CORREO_CUENTAS
+        reventado = False
+        try:
+            _atributos_que_config_ofrece()
+        except AssertionError:
+            reventado = True
+        assert reventado, (
+            "la guarda siguió tan tranquila con config sin CORREO_CUENTAS: "
+            "eso es estar verde sin haber mirado nada")
+    finally:
+        config.CORREO_CUENTAS = guardado
 
 
 def test_la_puerta_es_de_verdad_el_unico_sitio_donde_se_decide():
