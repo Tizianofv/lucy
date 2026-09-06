@@ -1840,8 +1840,120 @@ def _carpetas_que_no_son_del_repo(raiz: Path) -> set[str]:
     mañana aparece otra carpeta de herramientas, se añade en pytest.ini una vez
     y las dos cosas se enteran. Sin `pytest.ini` no se salta nada, que es el
     lado seguro: más archivos mirados, no menos.
+
+    OJO CON ESTA FUNCIÓN: mudar la lista a pytest.ini no la dejó de ser una
+    lista TECLEADA, solo la mudó de fichero — y el 6-sep-2026 falló como falla
+    cualquier lista tecleada. Decía `.venv` (con punto) y el árbol desde el que
+    se publica tiene una carpeta `venv` (sin punto). Por eso hoy esto NO es el
+    fondo del barrido, sino un cinturón: el fondo está en `_py_en_disco`, que
+    le pregunta a cada carpeta qué es en vez de mirarle el nombre.
     """
     return set(_pytest_ini(raiz, "norecursedirs"))
+
+
+def _es_entorno_virtual(carpeta: Path) -> bool:
+    """¿Esta carpeta es un entorno virtual? Se lo pregunta a la carpeta.
+
+    Un entorno virtual no es un NOMBRE: PEP 405 dice que es una carpeta con un
+    `pyvenv.cfg` dentro, y ése es el archivo que el propio Python busca para
+    saber que está corriendo dentro de uno. Así que `venv`, `.venv`, `env`,
+    `virtualenv` o `entorno` dan todos el mismo resultado y no hay ninguna
+    lista que mantener ni que se pueda quedar vieja.
+
+    POR QUÉ EXISTE, medido el 6-sep-2026: `norecursedirs` decía `.venv` y el
+    árbol desde el que se publica tiene una carpeta `venv`, así que la guarda
+    se metía dentro y parseaba los paquetes instalados. Reproducido sobre una
+    copia del árbol sacada con `git archive` y un venv poblado dentro (9664
+    .py bajo `venv/`, 66 fuera): UNA sola pasada de
+    `_quienes_leen_la_lista_cruda` tardó 175,13 s y contó 9701 archivos
+    vigilados en vez de 37. La suite entera llama a esto decenas de veces.
+
+    Y NO ES UNA INVENCIÓN DE ESTA GUARDA: es literalmente la comprobación que
+    hace el propio pytest para no coleccionar dentro de un entorno virtual
+    (`_pytest.main._in_venv`, leída del pytest 9.1.1 de este entorno el
+    6-sep-2026): `pyvenv.cfg`, más `conda-meta/history` para los entornos de
+    conda, que todavía no traen `pyvenv.cfg`. Se copian las DOS, porque copiar
+    media comprobación es cómo se hacen los agujeros.
+    """
+    try:
+        return ((carpeta / "pyvenv.cfg").is_file()
+                or (carpeta / "conda-meta" / "history").is_file())
+    except OSError:
+        return False
+
+
+# La firma que la Cache Directory Tagging Specification exige en la primera
+# línea de un `CACHEDIR.TAG`. Es una constante del estándar, no una elección de
+# este repo: por eso se compara el CONTENIDO y no el nombre del archivo.
+_FIRMA_DE_CACHE = b"Signature: 8a477f597d28d172789f06886806bc55"
+
+
+def _es_cache_de_herramienta(carpeta: Path) -> bool:
+    """¿Esta carpeta es el caché de una herramienta? También se lo pregunta.
+
+    Misma idea que `_es_entorno_virtual`, con el otro estándar que existe para
+    esto: una carpeta de caché se marca poniéndole dentro un `CACHEDIR.TAG`
+    que empieza por una firma fija. pytest lo escribe —comprobado en este repo
+    el 6-sep-2026 en `.pytest_cache/CACHEDIR.TAG`—. Si uv marca la suya no se
+    pudo comprobar desde acá: `.uv-cache` no existe en este árbol, así que de
+    ella no se afirma nada y la sigue tapando `norecursedirs`. El nombre de la
+    carpeta vuelve a dar igual.
+    """
+    tag = carpeta / "CACHEDIR.TAG"
+    try:
+        if not tag.is_file():
+            return False
+        with tag.open("rb") as f:
+            return f.read(len(_FIRMA_DE_CACHE)) == _FIRMA_DE_CACHE
+    except OSError:
+        return False
+
+
+def _py_en_disco(raiz: Path) -> list[Path]:
+    """Los `.py` que hay bajo `raiz`, sin entrar en lo que no es del repo.
+
+    EL FONDO DEL BARRIDO, dicho en una línea: se entra en toda carpeta menos
+    en las que cumplen uno de estos tres hechos.
+
+      · tiene dentro un `pyvenv.cfg`   → es un entorno virtual (PEP 405)
+      · tiene dentro un `CACHEDIR.TAG` → es un caché de herramienta (la spec)
+      · `norecursedirs` de pytest.ini la nombra → pytest tampoco entra ahí
+
+    Los dos primeros se le preguntan A LA CARPETA y por eso no se pueden
+    quedar viejos: cubren `venv`, `.venv`, `env` y cualquier nombre que alguien
+    invente mañana, sin que nadie teclee nada. El tercero es el que YA se quedó
+    viejo, y se queda solo como cinturón.
+
+    Se usa `os.walk` y no `rglob` por dos razones: poda la rama entera
+    (`subs[:] = ...`), o sea que ni siquiera se enumeran los miles de archivos
+    de un venv; y no sigue enlaces simbólicos a carpetas, que `rglob` sí
+    seguía. Hoy no cambia nada: los 66 .py que hay en disco son los 66 que git
+    tiene registrados, y no hay ningún enlace.
+
+    UNA DIFERENCIA DECLARADA con pytest, para que no sorprenda: pytest lee
+    `norecursedirs` como PATRONES (`fnmatch`) y acá se leen como NOMBRES
+    EXACTOS. Un `.*` o un `venv*` escritos ahí saltarían carpetas para pytest
+    y no para esta guarda. Se deja así a propósito —la lectura estricta mira
+    MÁS archivos, no menos, que es el lado seguro del error—, y se puede dejar
+    porque el fondo del barrido ya no depende de esa línea.
+
+    FRONTERA DECLARADA: una carpeta de código ajeno que no sea un venv, no
+    lleve `CACHEDIR.TAG` y no esté nombrada en `norecursedirs` SÍ se recorre.
+    El caso concreto que se conoce es `.uv-python` —los intérpretes que baja
+    uv—: hoy la tapa `norecursedirs`, y si alguien la saca de ahí el barrido
+    vuelve a crecer. Ni de `.uv-python` ni de `.uv-cache` se comprobó desde
+    acá si llevan `CACHEDIR.TAG`: ninguna de las dos existe en este árbol.
+    """
+    nombres_fuera = _carpetas_que_no_son_del_repo(raiz)
+    encontrados: list[Path] = []
+    for carpeta, subs, ficheros in os.walk(raiz):
+        aqui = Path(carpeta)
+        subs[:] = [d for d in subs
+                   if d not in nombres_fuera
+                   and not _es_entorno_virtual(aqui / d)
+                   and not _es_cache_de_herramienta(aqui / d)]
+        encontrados.extend(aqui / f for f in ficheros if f.endswith(".py"))
+    return sorted(encontrados)
 
 
 def _entradas_de_produccion(raiz: Path) -> list[Path]:
@@ -1957,9 +2069,14 @@ def _archivos_exentos(raiz: Path) -> set[Path]:
     # menos, que es el lado seguro del error.
     if not entradas:
         return exentos
-    candidatos: set[Path] = set()
-    for carpeta in _testpaths(raiz):
-        candidatos.update(p.resolve() for p in carpeta.rglob("*.py"))
+    # Los .py bajo `testpaths` salen del MISMO barrido podado que usa todo lo
+    # demás (`_py_en_disco`), no de un `rglob` aparte: si mañana alguien deja
+    # un entorno virtual dentro de `tests/`, dos barridos distintos darían dos
+    # conjuntos distintos y las cifras dejarían de hablar de lo mismo.
+    carpetas = _testpaths(raiz)
+    candidatos: set[Path] = {
+        p.resolve() for p in _py_en_disco(raiz)
+        if any(c == p or c in p.parents for c in carpetas)}
     if (raiz / "pytest.ini").is_file() and (raiz / "conftest.py").is_file():
         candidatos.add((raiz / "conftest.py").resolve())
     exentos |= {p for p in candidatos if p not in produccion}
@@ -1974,36 +2091,33 @@ def _archivos_vigilados(raiz: Path) -> list[Path]:
     filtro se separarían, y entonces «cero falsos positivos sobre 37 archivos»
     y «7 getattr sobre 37 archivos» dejarían de hablar del mismo 37.
     """
-    fuera = _carpetas_que_no_son_del_repo(raiz)
     exentos = _archivos_exentos(raiz)
-    return [p for p in raiz.rglob("*.py")
-            if not any(x in fuera for x in p.relative_to(raiz).parts)
-            and p.resolve() not in exentos]
+    return [p for p in _py_en_disco(raiz) if p.resolve() not in exentos]
 
 
 def _quienes_leen_la_lista_cruda(raiz: Path) -> dict[str, list[str]]:
     """Recorre los .py que hay EN DISCO bajo `raiz` y los clasifica.
 
-    Ningún archivo se nombra acá. Qué carpetas no se recorren sale de
-    `norecursedirs` de pytest.ini; quién queda exento, de `_archivos_exentos`,
-    que lo deriva de `config.__file__`, de `testpaths` y del cierre de imports
-    del `startCommand` de railway.json. Lo que no encaje en esos hechos se
-    queda DENTRO de la vigilancia, que es el lado seguro del error.
+    Ningún archivo se nombra acá. Hasta dónde llega el barrido lo decide
+    `_py_en_disco`, que le pregunta a cada carpeta si es un entorno virtual
+    (`pyvenv.cfg`, PEP 405) o un caché (`CACHEDIR.TAG`) en vez de mirarle el
+    nombre. Quién queda exento sale de `_archivos_exentos`, que lo deriva de
+    `config.__file__`, de `testpaths` y del cierre de imports del
+    `startCommand` de railway.json. Lo que no encaje en esos hechos se queda
+    DENTRO de la vigilancia, que es el lado seguro del error.
 
-    Medido el 6-sep-2026 sobre este repo: 66 archivos .py, 29 exentos
-    (config.py, el conftest de la rootdir y los 27 de `tests/`), 37 vigilados,
-    0 culpables. Las cuatro cifras las vuelve a medir al correr
-    `test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales`, para que
-    ninguna quede acá afirmada sin que nada la compruebe.
+    ACÁ NO VA NINGUNA CIFRA. La que había —«66 archivos .py, 29 exentos, 37
+    vigilados»— decía «medido sobre este repo» y era cierta en un árbol de
+    trabajo y falsa en el árbol desde el que se publica, donde hay un venv
+    dentro y son miles. Quien las mide, y contra el árbol en el que de verdad
+    esté corriendo, es
+    `test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales`.
     """
     permitidos = _atributos_que_config_ofrece()
     exentos = _archivos_exentos(raiz)
-    fuera = _carpetas_que_no_son_del_repo(raiz)
     culpables: dict[str, list[str]] = {}
-    for py in sorted(raiz.rglob("*.py")):
+    for py in _py_en_disco(raiz):
         rel = py.relative_to(raiz)
-        if any(p in fuera for p in rel.parts):
-            continue
         if py.resolve() in exentos:
             continue
         motivos = _infracciones(py.read_bytes(), permitidos)
@@ -2667,6 +2781,180 @@ def test_las_carpetas_que_no_se_recorren_salen_de_pytest_ini():
         f"norecursedirs se comió una carpeta de código de Lucy: {sorted(fuera)}")
 
 
+def _repo_con_carpeta_ajena(raiz: Path, nombre: str, marca: str,
+                            contenido: bytes, cuantos: int = 1) -> None:
+    """Un repo de mentira con una carpeta que trae `marca` dentro y `cuantos`
+    archivos que SÍ leen la lista cruda, para ver si el barrido entra o no."""
+    _repo_de_mentira(raiz)
+    ajena = raiz / nombre
+    ajena.mkdir()
+    if marca:
+        (ajena / marca).parent.mkdir(parents=True, exist_ok=True)
+        (ajena / marca).write_bytes(contenido)
+    for i in range(cuantos):
+        (ajena / f"paquete{i}.py").write_text(
+            _ESQUIVES["el nombre escrito entero"], encoding="utf-8")
+
+
+def test_el_barrido_no_entra_en_un_entorno_virtual_se_llame_como_se_llame():
+    """EL ARREGLO del 6-sep-2026, y la razón por la que no mira nombres.
+
+    `norecursedirs` decía `.venv` (con punto) y el árbol desde el que se
+    publica tiene una carpeta `venv` (sin punto). Una lista tecleada falló
+    exactamente como fallan las listas tecleadas, y nadie se enteró en todo el
+    día porque los árboles de trabajo no tienen esa carpeta.
+
+    Acá se prueban CUATRO nombres, y ninguno está en el `norecursedirs` del
+    repo de mentira (que dice `.venv __pycache__`): lo único que decide es si
+    la carpeta tiene un `pyvenv.cfg` dentro, que es lo que PEP 405 dice que es
+    un entorno virtual. El cuarto —`parece_venv`, sin `pyvenv.cfg`— comprueba
+    la otra mitad: que no se pierde vigilancia sobre una carpeta normal por
+    tener nombre sospechoso.
+    """
+    import tempfile
+
+    veredictos = {}
+    for nombre, marca in (("venv", "pyvenv.cfg"), ("env", "pyvenv.cfg"),
+                          ("entorno_raro", "pyvenv.cfg"),
+                          ("entorno_conda", "conda-meta/history"),
+                          ("parece_venv", "")):
+        with tempfile.TemporaryDirectory() as tmp:
+            raiz = Path(tmp)
+            _repo_con_carpeta_ajena(raiz, nombre, marca, b"home = /usr\n")
+            assert nombre not in _carpetas_que_no_son_del_repo(raiz), (
+                f"{nombre} está en norecursedirs; entonces esta prueba no "
+                "mide el pyvenv.cfg sino la lista tecleada")
+            veredictos[nombre] = f"{nombre}/paquete0.py" in \
+                _quienes_leen_la_lista_cruda(raiz)
+
+    assert veredictos == {"venv": False, "env": False, "entorno_raro": False,
+                          "entorno_conda": False, "parece_venv": True}, (
+        f"el barrido no está decidiendo por el pyvenv.cfg: {veredictos}. "
+        "Con pyvenv.cfg dentro la carpeta es un entorno virtual (PEP 405) y "
+        "no se recorre; sin él es código normal del repo y se mira")
+
+
+def test_un_venv_dentro_de_testpaths_tampoco_entra_por_la_puerta_de_atras():
+    """El mismo barrido para las dos mitades, no solo para la vigilada.
+
+    `_archivos_exentos` también recorre disco: junta los .py que hay bajo
+    `testpaths` para exentar el andamio de pruebas. Si ese recorrido fuera un
+    `rglob` aparte, un entorno virtual dejado dentro de `tests/` se colaría por
+    ahí —no como vigilado, sino como EXENTO— y las cifras de
+    `test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales`
+    empezarían a contar miles de archivos que nadie miró.
+
+    Es la Regla de los hermanos: el criterio bueno aplicado a un tramo y no al
+    de al lado. Acá se exige que los dos recorridos usen el mismo fondo.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        raiz = Path(tmp)
+        _repo_de_mentira(raiz)
+        sin_venv = len(_archivos_exentos(raiz))
+        (raiz / "tests" / "venv").mkdir()
+        (raiz / "tests" / "venv" / "pyvenv.cfg").write_text(
+            "home = /usr\n", encoding="utf-8")
+        (raiz / "tests" / "venv" / "paq.py").write_text(
+            _ESQUIVES["el nombre escrito entero"], encoding="utf-8")
+        con_venv = len(_archivos_exentos(raiz))
+        vigilados = [str(p.relative_to(raiz)) for p in _archivos_vigilados(raiz)]
+
+    assert con_venv == sin_venv, (
+        f"un venv dentro de tests/ metió {con_venv - sin_venv} archivos en la "
+        "lista de EXENTOS: el recorrido de la exención no usa el mismo fondo "
+        "que el de la vigilancia")
+    assert "tests/venv/paq.py" not in vigilados
+
+
+def test_el_barrido_no_entra_en_un_cache_marcado_con_cachedir_tag():
+    """La otra carpeta ajena que se reconoce sin nombrarla.
+
+    Un caché se marca con un `CACHEDIR.TAG` que empieza por una firma fija —la
+    Cache Directory Tagging Specification—, y pytest lo escribe: comprobado en
+    `.pytest_cache/CACHEDIR.TAG` de este repo el 6-sep-2026. Se comprueba que
+    decide la FIRMA y no el nombre del archivo: una carpeta con un
+    `CACHEDIR.TAG` que no lleva la firma se sigue mirando.
+    """
+    import tempfile
+
+    veredictos = {}
+    for nombre, contenido in (("un_cache", _FIRMA_DE_CACHE + b"\n"),
+                              ("cache_falso", b"esto no es la firma\n")):
+        with tempfile.TemporaryDirectory() as tmp:
+            raiz = Path(tmp)
+            _repo_con_carpeta_ajena(raiz, nombre, "CACHEDIR.TAG", contenido)
+            veredictos[nombre] = f"{nombre}/paquete0.py" in \
+                _quienes_leen_la_lista_cruda(raiz)
+
+    assert veredictos == {"un_cache": False, "cache_falso": True}, (
+        f"el barrido no está mirando la firma del CACHEDIR.TAG: {veredictos}")
+
+
+def test_el_fondo_del_barrido_no_depende_de_que_pytest_ini_este_bien():
+    """Que el arreglo NO se apoye en el fichero que se quedó viejo.
+
+    `norecursedirs` se queda como cinturón, no como fondo. Acá el repo de
+    mentira no tiene `norecursedirs` NINGUNO —o sea el peor caso: alguien
+    borra la línea, o la escribe mal como el 6-sep-2026— y aun así el barrido
+    se detiene en el entorno virtual, porque el hecho que lo detiene se lo
+    pregunta a la carpeta.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        raiz = Path(tmp)
+        _repo_con_carpeta_ajena(raiz, "venv", "pyvenv.cfg", b"home = /usr\n")
+        (raiz / "pytest.ini").write_text(
+            "[pytest]\ntestpaths = tests\n", encoding="utf-8")
+        assert _carpetas_que_no_son_del_repo(raiz) == set(), (
+            "esta prueba solo vale si no queda ninguna carpeta saltada por "
+            "nombre; si no, no mide el fondo sino el cinturón")
+        culpables = _quienes_leen_la_lista_cruda(raiz)
+
+    assert "venv/paquete0.py" not in culpables, (
+        f"sin norecursedirs el barrido se metió en el entorno virtual: "
+        f"{culpables}. El fondo del barrido está dependiendo de pytest.ini")
+    assert "captura/correo.py" not in culpables
+
+
+def test_un_venv_dentro_del_arbol_no_mete_ni_un_archivo_en_el_barrido():
+    """El número, no el adjetivo: con un venv dentro se miran los MISMOS
+    archivos que sin él, uno por uno y no solo la cuenta.
+
+    Medido el 6-sep-2026 sobre una copia del árbol sacada con `git archive`
+    con un venv poblado dentro (9665 .py bajo `venv/`, 66 fuera): antes, una
+    sola pasada de `_quienes_leen_la_lista_cruda` tardó 175,13 s y contó 9701
+    vigilados; después, 0,81 s y 37, y la suite entera pasó de no terminar a
+    6,43 s.
+
+    Lo que esta prueba NO mide: si la rama se poda (`os.walk` con
+    `subs[:] = ...`) o si se enumera y se descarta al final. Las dos dan la
+    misma lista; la diferencia son los 0,4 s de enumerar 9.6 mil archivos, no
+    los 175 s de parsearlos. Se poda porque sale gratis, no porque esto lo
+    exija.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        raiz = Path(tmp)
+        _repo_de_mentira(raiz)
+        sin_venv = [str(p.relative_to(raiz)) for p in _py_en_disco(raiz)]
+
+        venv = raiz / "venv"
+        (venv / "lib" / "site-packages" / "hondo").mkdir(parents=True)
+        (venv / "pyvenv.cfg").write_text("home = /usr\n", encoding="utf-8")
+        for i in range(300):
+            (venv / "lib" / "site-packages" / "hondo" / f"m{i}.py").write_text(
+                _ESQUIVES["el nombre escrito entero"], encoding="utf-8")
+        con_venv = [str(p.relative_to(raiz)) for p in _py_en_disco(raiz)]
+
+    assert con_venv == sin_venv, (
+        f"el venv metió {len(con_venv) - len(sin_venv)} archivos en el "
+        "barrido; la rama no se está podando")
+
+
 def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     """El número, no el adjetivo.
 
@@ -2679,9 +2967,7 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     assert not _quienes_leen_la_lista_cruda(RAIZ), (
         "hay falsos positivos sobre los archivos reales de hoy")
 
-    fuera = _carpetas_que_no_son_del_repo(RAIZ)
-    todos = [p for p in RAIZ.rglob("*.py")
-             if not any(x in fuera for x in p.relative_to(RAIZ).parts)]
+    todos = _py_en_disco(RAIZ)
     mirados = _archivos_vigilados(RAIZ)
     medido = {"en disco": len(todos), "exentos": len(todos) - len(mirados),
               "vigilados": len(mirados)}
