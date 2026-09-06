@@ -27,7 +27,21 @@ olvidarse de filtrar: no puede conseguir el buzón. El porqué de leer el árbol
 no el texto está entero arriba de la guarda, más abajo.
 
 Y HASTA DÓNDE LLEGA ESTA GUARDA, dicho para que nadie la lea de más. Vigila el
-camino que pasa por el módulo `config`. NO vigila el otro sitio del que hoy
+camino que pasa por el módulo `config`, y dentro de ese camino tiene dos
+fronteras declaradas y medidas, las dos escritas donde viven:
+
+  · Los siete objetos de `_PELIGROSOS` —`getattr` y familia, `eval`, `exec`,
+    `compile`, `__import__`— se reconocen POR IDENTIDAD DE OBJETO, así que
+    ningún alias los esconde; pero conseguir uno de ellos sin nombrarlo, por
+    ejemplo `builtins.__dict__["get" + "attr"]`, no se reconoce como tal. Ese
+    camino tampoco llega solo a la lista: hace falta además el módulo `config`.
+  · Un ayudante genérico `def leer(mod, nombre): return getattr(mod, nombre)`
+    sale rojo aunque nunca toque la lista prohibida. Es el precio de «lo que no
+    se puede clasificar es rojo», y hoy no lo paga nadie: cero sitios de Lucy lo
+    escriben. Lo cuenta `test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_
+    cuesta_hoy`, que se pone rojo el día que empiece a costar.
+
+Y NO vigila el otro sitio del que hoy
 salen buzones con credenciales: `tools/descubrir_bancos.py::_cuentas()` lee
 `os.environ["CORREO_CUENTAS"]` —y, si no está, el `.env` de la raíz— sin tocar
 config, y se queda con TODAS las cuentas, la marcada incluida. Está hecho a
@@ -442,6 +456,27 @@ def test_para_es_obligatorio_y_su_vocabulario_es_cerrado():
 # queda fuera de la vigilancia— seguían decidiéndose con una lista escrita a
 # mano. Blindar un tramo y dejar los demás da la sensación de haberlo resuelto.
 #
+# Y PASÓ UNA TERCERA VEZ, medido el 6-sep-2026, con la misma especie otra vez:
+# reconocer una cosa por el NOMBRE ESCRITO en vez de resolver qué es. Quedaban
+# dos sitios comparando el texto de un identificador contra `"getattr"` —el
+# motivo (c) y `es_espacio`—, así que UNA línea los apagaba los dos a la vez:
+#
+#     ga = getattr
+#     def cuentas():
+#         import sys
+#         return ga(ga(sys, "mod" + "ules")["config"], "CORREO_" + "CUENTAS")
+#
+# Puesto DENTRO de `captura/consumos.py` —un archivo que ya existía, para que el
+# rojo no pudiera venir de haber agregado uno— la suite daba 25 passed, y
+# ejecutado con un valor centinela la función devolvía la lista cruda entera,
+# con el buzón `reporte_a: 0` y sus credenciales. `from builtins import getattr
+# as ga` hacía lo mismo.
+#
+# Y con una segunda forma, de otra familia: `eval("config.CORREO_CUENTAS")`
+# dejaba la guarda en verde, igual que `exec`. Ésa no tiene arreglo por el lado
+# de mirar el texto —el código que va a correr no existe hasta que corre— y por
+# eso se le puso un fondo en vez de perseguirla. Ver `_PELIGROSOS`.
+#
 # DE DÓNDE SACA AHORA LO QUE COMPARA. De cuatro sitios, los cuatro reales, y
 # ninguno tecleado:
 #
@@ -463,6 +498,12 @@ def test_para_es_obligatorio_y_su_vocabulario_es_cerrado():
 #   4. `pytest.ini`, `railway.json` y `config.__file__`, para saber quién queda
 #      fuera de la vigilancia. Un archivo es andamio de pruebas por DÓNDE VIVE
 #      y por QUIÉN LO CARGA, nunca por cómo se llama.
+#   5. `builtins`, para saber a QUÉ FUNCIÓN llama una llamada. No se compara el
+#      texto del identificador: se resuelve el nombre al objeto que hay hoy en
+#      memoria y se pregunta si ES el objeto `getattr` —o `eval`, o `exec`—.
+#      `ga` resuelve al mismo objeto que `getattr`, así que da igual el nombre.
+#      Ver `llama_a`, y ver `_PELIGROSOS` para el fondo que cubre los alias que
+#      no se pueden seguir hasta su asignación.
 #
 # Y EL CRITERIO ES «LO QUE NO SÉ CUENTA COMO ROJO», aplicado al trayecto entero
 # y no a un tramo:
@@ -478,9 +519,14 @@ def test_para_es_obligatorio_y_su_vocabulario_es_cerrado():
 #     haya tenido que apuntar `sys` en ningún sitio.
 #   · Un `getattr` con un nombre de atributo que la guarda no puede enumerar es
 #     rojo sobre CUALQUIER cosa, sea o no un módulo: ahí no hay nada que
-#     clasificar.
+#     clasificar. Y CUÁL llamada es un `getattr` se decide resolviendo la
+#     función al objeto, no leyendo cómo se llama.
+#   · Convertir un texto en código —`eval`, `exec`, `compile`, `__import__`— es
+#     rojo por sí solo, sin mirar qué lleva el texto dentro. No es que la guarda
+#     no quiera mirar: es que ahí no hay nada que mirar hasta que corre.
 #   · Un archivo que no se pueda clasificar como andamio de pruebas queda
-#     DENTRO de la vigilancia, nunca fuera.
+#     DENTRO de la vigilancia, nunca fuera. Y si no se puede determinar con qué
+#     arranca producción, no se exenta a nadie.
 #
 # Por eso una forma que nadie previó cae del lado rojo: no hay que reconocerla,
 # hay que fallar en reconocerla.
@@ -706,6 +752,87 @@ def _nombre_llamado(nodo) -> str | None:
         isinstance(nodo.func, ast.Name) else None
 
 
+# ── Tramo 2-bis: a QUÉ FUNCIÓN se llama, resuelta al objeto ───────────────
+#
+# EL TERCER AGUJERO DE ESTE ARCHIVO, medido el 6-sep-2026, y de la misma
+# especie que los dos anteriores: reconocer una cosa por el NOMBRE ESCRITO en
+# vez de resolver qué es. `getattr` se reconocía comparando el texto del
+# identificador, en dos sitios a la vez, así que una sola línea lo apagaba
+# todo:
+#
+#     ga = getattr
+#     def _fuga():
+#         import sys
+#         modulo = ga(sys, "mod" + "ules")["config"]
+#         return ga(modulo, "CORREO_" + "CUENTAS")
+#
+# Puesto DENTRO de `captura/consumos.py` —un archivo que ya existía, para que
+# el rojo no pudiera venir del conteo de archivos— la suite daba 25 passed. El
+# mismo código con `getattr` escrito daba 2 failed. Ejecutado con un valor
+# centinela, la función devolvía la lista cruda entera, con el buzón
+# `reporte_a: 0` y sus credenciales dentro. `from builtins import getattr as
+# ga` hacía lo mismo, y `builtins.getattr(...)` también, porque un `func` que
+# es `ast.Attribute` no tiene "nombre suelto" que comparar.
+#
+# EL ARREGLO ES EL MISMO QUE YA SE HIZO CON `config`: no se pregunta cómo se
+# llama el identificador, se pregunta A QUÉ OBJETO RESUELVE HOY EN MEMORIA.
+# `ga` resuelve al mismo objeto que `getattr`, y por eso un alias que nadie
+# previó cae igual: no hay que reconocer el nombre, hay que resolver el objeto.
+
+_DESCONOCIDO = object()          # «no se pudo resolver», que no es «no es»
+
+# Las tres funciones que piden un atributo POR SU NOMBRE en tiempo de ejecución.
+# Son OBJETOS, no textos: da igual con qué identificador se llamen. Se pueden
+# usar, llamándolas, y entonces valen las reglas (c) y (f).
+_ATRIBUTO_POR_NOMBRE = (builtins.getattr, builtins.setattr, builtins.delattr)
+
+# Y las cuatro que convierten un TEXTO en código o en un módulo. Éstas no se
+# pueden usar de ninguna forma. Ver `_infracciones`, motivo (g).
+_TEXTO_A_CODIGO = (builtins.eval, builtins.exec, builtins.compile,
+                   builtins.__import__)
+
+# EL FONDO, dicho en una línea: en un archivo vigilado, estos siete objetos SOLO
+# pueden aparecer siendo llamados —y los de `_TEXTO_A_CODIGO` ni eso—. Nombrar
+# uno sin llamarlo es rojo, se le llame como se le llame.
+#
+# POR QUÉ HACE FALTA UN FONDO Y NO OTRA RONDA DE PARCHES. `ga = getattr` apagaba
+# las dos comprobaciones de `getattr` a la vez porque las dos comparaban el
+# TEXTO del identificador. Resolver el nombre al objeto (ver `llama_a`) arregla
+# los alias que se pueden seguir, pero el espacio de formas de ponerle otro
+# nombre a una función NO TIENE FONDO: una tupla, un diccionario, una clausura,
+# un `from builtins import getattr as ga`, el valor por defecto de un parámetro.
+# Perseguirlas una por una es la carrera que la sala ya perdió tres veces en
+# este mismo archivo. Así que la regla no persigue formas: dice DÓNDE puede
+# aparecer el objeto, y todo lo demás cae fuera por consecuencia.
+#
+# LA FRONTERA, medida el 6-sep-2026 sobre los 37 archivos vigilados de este
+# repo: 0 menciones fuera de una llamada, y 0 llamadas a `eval`, `exec`,
+# `compile` o `__import__`. O sea: el fondo cuesta CERO hoy.
+#
+# Y LO QUE QUEDA FUERA, dicho para que nadie lea esto de más: la lista es de
+# objetos concretos, así que un camino que consiga el objeto `getattr` sin
+# nombrarlo —`builtins.__dict__["get" + "attr"]`— no se reconoce como tal. Ese
+# camino no llega solo a la lista cruda: para sacarla hay que además conseguir
+# el módulo `config`, y eso cae por los motivos (d), (e) y (f).
+_PELIGROSOS = _ATRIBUTO_POR_NOMBRE + _TEXTO_A_CODIGO
+
+
+def _cual_peligroso(objetos) -> object | None:
+    """El objeto peligroso que hay en este conjunto, comparado por IDENTIDAD."""
+    for f in _PELIGROSOS:
+        if any(o is f for o in objetos):
+            return f
+    return None
+
+
+def _meter(conj: set, obj) -> None:
+    """Mete un objeto en el conjunto; si no se puede ni guardar, no lo sé."""
+    try:
+        conj.add(obj)
+    except TypeError:                        # inhashable → no se puede seguir
+        conj.add(_DESCONOCIDO)
+
+
 class _Contexto:
     """Lo que la guarda sabe de los nombres de UN archivo."""
 
@@ -716,8 +843,10 @@ class _Contexto:
         self.atados: set[str] = set()          # todo nombre que el archivo ata
         self.locales_config: set[str] = set()  # nombres que SON el módulo
         self.derivados: set[str] = set()       # nombres atados desde un espacio
+        self.objetos: dict[str, set] = {}      # nombre local → objetos de hoy
         self._leer_ataduras(arbol)
         self._propagar(arbol)
+        self._resolver_nombres(arbol)
 
     def _leer_ataduras(self, arbol) -> None:
         for n in ast.walk(arbol):
@@ -786,6 +915,88 @@ class _Contexto:
             if len(self.derivados) == antes:
                 return
 
+    # ── A qué objeto resuelve un nombre ──────────────────────────────────
+
+    def _resolver_nombres(self, arbol) -> None:
+        """Ata cada nombre a los objetos que puede valer HOY.
+
+        Solo asignaciones simples (`ga = getattr`, `f = ga`, `h = builtins.exec`)
+        y se repite hasta que deje de crecer, para que el orden de las líneas no
+        cambie el resultado. Se UNEN todas las asignaciones de un mismo nombre:
+        si alguna de ellas es `getattr`, el nombre cuenta como `getattr`. Eso es
+        el lado seguro — `ga = getattr` seguido de `ga = otra_cosa` sigue rojo.
+        """
+        for _ in range(4):
+            antes = {k: set(v) for k, v in self.objetos.items()}
+            for n in ast.walk(arbol):
+                if isinstance(n, ast.Assign) and len(n.targets) == 1 and \
+                        isinstance(n.targets[0], ast.Name):
+                    self.objetos.setdefault(n.targets[0].id, set()).update(
+                        self.resuelve(n.value))
+            if self.objetos == antes:
+                return
+
+    def resuelve(self, nodo) -> set:
+        """Los objetos a los que esta expresión puede resolver HOY en memoria.
+
+        Un `_DESCONOCIDO` dentro del conjunto significa que alguna rama no se
+        pudo resolver. Nunca importa nada nuevo: mira `sys.modules` (a través de
+        `_objeto_ya_cargado`) y `builtins`, y nada más.
+        """
+        if isinstance(nodo, ast.Name):
+            if nodo.id in self.objetos:
+                return set(self.objetos[nodo.id])
+            if nodo.id in self.importados:
+                hay, obj = _objeto_ya_cargado(self.importados[nodo.id])
+                salida: set = set()
+                _meter(salida, obj if hay else _DESCONOCIDO)
+                return salida
+            # Un nombre que este archivo no ata y que ES un builtin resuelve al
+            # builtin. Si el archivo lo ata (un `def getattr` propio, un
+            # parámetro), ya no se sabe qué es.
+            if nodo.id not in self.atados and hasattr(builtins, nodo.id):
+                salida = set()
+                _meter(salida, getattr(builtins, nodo.id))
+                return salida
+            return {_DESCONOCIDO}
+        if isinstance(nodo, ast.Attribute):
+            punteado = _punteado(nodo)
+            if punteado:
+                raiz = punteado.split(".")[0]
+                if raiz in self.importados:
+                    real = self.importados[raiz] + punteado[len(raiz):]
+                    hay, obj = _objeto_ya_cargado(real)
+                    if hay:
+                        salida = set()
+                        _meter(salida, obj)
+                        return salida
+            salida = set()
+            for base in self.resuelve(nodo.value):
+                if base is _DESCONOCIDO:
+                    salida.add(_DESCONOCIDO)
+                    continue
+                try:
+                    _meter(salida, getattr(base, nodo.attr))
+                except Exception:
+                    salida.add(_DESCONOCIDO)
+            return salida or {_DESCONOCIDO}
+        return {_DESCONOCIDO}
+
+    def llama_a(self, nodo, funciones: tuple):
+        """La función de `funciones` a la que llama este `ast.Call`, o None.
+
+        Compara por IDENTIDAD DE OBJETO, no por nombre: `getattr(...)`,
+        `ga(...)` con `ga = getattr`, `builtins.getattr(...)` y
+        `from builtins import getattr as ga` dan todos el mismo veredicto.
+        """
+        if not isinstance(nodo, ast.Call):
+            return None
+        posibles = self.resuelve(nodo.func)
+        for f in funciones:
+            if any(o is f for o in posibles):
+                return f
+        return None
+
     def es_espacio(self, nodo) -> bool:
         """¿De esta expresión puede salir un módulo si se le pide un nombre?"""
         if isinstance(nodo, ast.Name):
@@ -812,24 +1023,33 @@ class _Contexto:
         if isinstance(nodo, ast.Subscript):
             return self.es_espacio(nodo.value)
         if isinstance(nodo, ast.Call):
-            if _nombre_llamado(nodo) == "getattr" and nodo.args:
+            # Sacarle un atributo a un espacio devuelve lo que ese espacio
+            # tenga dentro, o sea otro espacio. Cuál es la función se decide
+            # RESOLVIÉNDOLA al objeto, nunca por su nombre: `ga(sys, "modules")`
+            # con `ga = getattr` es exactamente `getattr(sys, "modules")`.
+            if self.llama_a(nodo, _ATRIBUTO_POR_NOMBRE) is not None and \
+                    nodo.args:
                 return self.es_espacio(nodo.args[0])
             libre = _nombre_llamado(nodo)
-            if libre and libre not in self.atados:
-                # Llamar SIN argumentos a un nombre que este archivo no ata es
-                # la forma de pedir un espacio de nombres entero: `globals()`,
-                # `locals()`, `vars()`. De ahí sale cualquier cosa que el
-                # archivo tenga a mano, módulos incluidos.
-                if not nodo.args and not nodo.keywords:
-                    return True
-                # Y pasarle un espacio a una función suelta devuelve otra vista
-                # del mismo espacio: `vars(mod)`, `list(sys.modules.values())`.
-                return any(self.es_espacio(a) for a in nodo.args)
-            # El resultado de llamar a un método NO se hereda: `hmac.new(...)`
+            # Llamar SIN argumentos a un nombre que este archivo no ata es la
+            # forma de pedir un espacio de nombres entero: `globals()`,
+            # `locals()`, `vars()`. De ahí sale cualquier cosa que el archivo
+            # tenga a mano, módulos incluidos.
+            if libre and libre not in self.atados and not nodo.args \
+                    and not nodo.keywords:
+                return True
+            # Y pasarle un espacio a CUALQUIER llamada devuelve otra vista del
+            # mismo espacio: `vars(mod)`, `list(sys.modules.values())`,
+            # `ga(sys, "modules")`. Antes esto solo valía para las llamadas a un
+            # nombre suelto que el archivo no atara, así que bastaba con atar el
+            # nombre —`ga = getattr`— para que la rama no se ejecutara.
+            #
+            # Lo que NO se hereda es el resultado de una llamada cuyos
+            # argumentos no son espacios: `hmac.new(token, carga, sha256)`
             # devuelve un objeto HMAC, no el módulo `hmac`. Tratarlo como
             # espacio rojeaba `...hexdigest()[:32]` en web/auth.py sin que
             # hubiera por dónde llegar a un módulo.
-            return False
+            return any(self.es_espacio(a) for a in nodo.args)
         return False
 
 
@@ -888,21 +1108,92 @@ def _infracciones(fuente, permitidos: set[str]) -> list[str]:
                         f"línea {n.lineno}: `from {n.module} import *` trae "
                         "nombres que no puedo enumerar")
 
+        # (i) Un import que TRAE uno de los siete objetos peligrosos, del módulo
+        #     que sea y con el alias que sea. `from builtins import getattr as
+        #     ga` no nombra a `getattr` en ninguna expresión, así que el motivo
+        #     (h) no lo ve: el objeto entra por la puerta del import. Quién
+        #     entra se decide resolviendo el camino punteado AL OBJETO de hoy,
+        #     no leyendo el alias.
+        if isinstance(n, (ast.Import, ast.ImportFrom)):
+            for a in n.names:
+                if a.name == "*":
+                    continue
+                local = a.asname or a.name
+                if local not in ctx.importados:
+                    continue
+                hay, obj = _objeto_ya_cargado(ctx.importados[local])
+                # Una LISTA, no un conjunto: lo que devuelve un import puede
+                # ser inhashable y meterlo en un `set` reventaría la guarda.
+                cual = _cual_peligroso([obj]) if hay else None
+                if cual is not None:
+                    malas.append(
+                        f"línea {n.lineno}: importa {cual.__name__} y lo llama "
+                        f"{local!r}; ponerle otro nombre es justo lo que apaga "
+                        "las comprobaciones que lo reconocen")
+
         # (c) Un atributo pedido por su nombre en tiempo de ejecución. Si la
         #     guarda no puede enumerar qué nombres se piden no hay nada que
         #     clasificar, y eso vale sobre cualquier objeto, sea módulo o no.
-        if _nombre_llamado(n) in ("getattr", "setattr", "delattr") and \
-                len(n.args) >= 2 and _nombre_llamado(n) not in ctx.atados:
+        #
+        #     CUÁL es la función se decide resolviéndola AL OBJETO. Antes se
+        #     comparaba el texto del identificador contra
+        #     `("getattr", "setattr", "delattr")`, así que `ga = getattr` apagaba
+        #     esta comprobación entera con una línea.
+        pide = ctx.llama_a(n, _ATRIBUTO_POR_NOMBRE)
+        if pide is not None and len(n.args) >= 2:
+            comose = ast.unparse(n.func)
             quiere = pedidos(n.args[1])
             if quiere is None:
                 malas.append(
-                    f"línea {n.lineno}: {_nombre_llamado(n)} con un nombre de "
-                    "atributo que no puedo enumerar; sin saber qué pide no hay "
-                    "nada que clasificar")
+                    f"línea {n.lineno}: {comose} es {pide.__name__} y pide un "
+                    "nombre de atributo que no puedo enumerar; sin saber qué "
+                    "pide no hay nada que clasificar")
             elif _PROHIBIDO in quiere:
                 malas.append(
                     f"línea {n.lineno}: pide el atributo {_PROHIBIDO} por "
-                    f"{_nombre_llamado(n)}")
+                    f"{comose}, que es {pide.__name__}")
+
+        # (g) Convertir un TEXTO en código o en un módulo. Acá no se mira qué
+        #     lleva dentro el string a propósito: el código que va a correr no
+        #     existe hasta que corre, así que no hay NADA que analizar y
+        #     perseguirlo es una carrera sin fondo. Usarlas es rojo por sí solo.
+        #     Medido el 6-sep-2026: ningún archivo vigilado usa ninguna.
+        hace = ctx.llama_a(n, _TEXTO_A_CODIGO)
+        if hace is not None:
+            malas.append(
+                f"línea {n.lineno}: llama a {hace.__name__}, que convierte un "
+                "texto en código; lo que corra ahí no existe hasta que corre y "
+                "no hay forma de saber si alcanza la lista cruda")
+
+        # (h) EL FONDO: uno de los siete objetos peligrosos NOMBRADO sin
+        #     llamarlo. Ahí es donde se fabrica un alias —una tupla, un dict,
+        #     una clausura, el valor por defecto de un parámetro— y es la única
+        #     comprobación que no depende de poder seguir la asignación.
+        if isinstance(n, (ast.Name, ast.Attribute)) and \
+                isinstance(getattr(n, "ctx", None), ast.Load):
+            padre = getattr(n, "_padre", None)
+            if not (isinstance(padre, ast.Call) and padre.func is n):
+                cual = _cual_peligroso(ctx.resuelve(n))
+                if cual is not None:
+                    malas.append(
+                        f"línea {n.lineno}: nombra a {cual.__name__} sin "
+                        f"llamarlo ({ast.unparse(n)}); así se le pone otro "
+                        "nombre y las comprobaciones dejan de reconocerlo")
+
+        # (j) Abrirle a algo su espacio de nombres y pedirle una clave que no
+        #     puedo enumerar. Es la tercera forma de sacarle un atributo a un
+        #     módulo, después del punto y de `getattr`, y la única que se
+        #     escapaba de las dos: `vars(importlib.import_module(n))[k]`.
+        if isinstance(n, ast.Subscript):
+            base = n.value
+            abre = (ctx.llama_a(base, (builtins.vars,)) is not None
+                    or (isinstance(base, ast.Attribute)
+                        and base.attr == "__dict__"))
+            if abre and pedidos(n.slice) is None:
+                malas.append(
+                    f"línea {n.lineno}: le pide al espacio de nombres de algo "
+                    "una clave que no puedo enumerar; de ahí sale cualquier "
+                    "atributo de cualquier módulo, la lista cruda incluida")
 
         # (d) Pedir por su nombre el MÓDULO config: `sys.modules["config"]`,
         #     `importlib.import_module("config")`, `globals()["config"]`. El
@@ -948,7 +1239,7 @@ def _infracciones(fuente, permitidos: set[str]) -> list[str]:
             # exactamente igual de clasificable que escribirlo con un punto: se
             # sabe qué nombre se pide y se sabe que no es el prohibido.
             if not bien and isinstance(padre, ast.Call) and \
-                    _nombre_llamado(padre) == "getattr" and \
+                    ctx.llama_a(padre, (builtins.getattr,)) is not None and \
                     len(padre.args) >= 2 and padre.args[0] is n:
                 quiere = pedidos(padre.args[1])
                 bien = bool(quiere) and quiere is not None and \
@@ -1019,7 +1310,21 @@ def _carpetas_que_no_son_del_repo(raiz: Path) -> set[str]:
 
 
 def _entradas_de_produccion(raiz: Path) -> list[Path]:
-    """Con qué archivo arranca Lucy en Railway, leído de `railway.json`."""
+    """Con qué archivo arranca Lucy en Railway, leído de `railway.json`.
+
+    Se entienden las DOS formas normales de arrancar Python, porque el arreglo
+    de una no puede ser esperar que nadie escriba la otra:
+
+        "python main.py"    → el archivo, tal cual
+        "python -m main"    → el módulo, resuelto a `main.py` o `main/__init__.py`
+
+    Devolver la lista VACÍA significa «no pude determinar con qué arranca
+    producción», y quien lo llama tiene que tratarlo como tal — ver
+    `_archivos_exentos`. Antes esto se filtraba con `t.endswith(".py")` a secas:
+    un `startCommand` con `-m` daba una lista vacía EN SILENCIO, el cierre de
+    imports salía vacío, y con él todo lo que vive bajo `testpaths` quedaba
+    exento aunque producción lo cargara. Verificado ejecutando el 6-sep-2026.
+    """
     conf = raiz / "railway.json"
     if not conf.exists():
         return []
@@ -1027,9 +1332,19 @@ def _entradas_de_produccion(raiz: Path) -> list[Path]:
         datos = json.loads(conf.read_text(encoding="utf-8"))
     except ValueError:
         return []
-    orden = str(datos.get("deploy", {}).get("startCommand", ""))
-    return [raiz / t for t in orden.split()
-            if t.endswith(".py") and (raiz / t).is_file()]
+    trozos = str(datos.get("deploy", {}).get("startCommand", "")).split()
+    entradas: list[Path] = []
+    for i, t in enumerate(trozos):
+        if t.endswith(".py") and (raiz / t).is_file():
+            entradas.append(raiz / t)
+        elif t == "-m" and i + 1 < len(trozos):
+            partes = trozos[i + 1].split(".")
+            for cand in (raiz.joinpath(*partes).with_suffix(".py"),
+                         raiz.joinpath(*partes, "__init__.py")):
+                if cand.is_file():
+                    entradas.append(cand)
+                    break
+    return entradas
 
 
 def _cierre_de_imports(raiz: Path, entradas: list[Path]) -> set[Path]:
@@ -1085,7 +1400,8 @@ def _archivos_exentos(raiz: Path) -> set[Path]:
     Nada de esto es un nombre de archivo tecleado: sale de `config.__file__`,
     de `pytest.ini` y de `railway.json`. Y lo que no encaje se queda DENTRO.
     """
-    produccion = _cierre_de_imports(raiz, _entradas_de_produccion(raiz))
+    entradas = _entradas_de_produccion(raiz)
+    produccion = _cierre_de_imports(raiz, entradas)
     exentos: set[Path] = set()
 
     # El archivo que DEFINE la lista. Dónde vive lo dice el módulo de verdad,
@@ -1097,6 +1413,15 @@ def _archivos_exentos(raiz: Path) -> set[Path]:
 
     # Andamio de pruebas: pytest lo carga Y no corre en producción. Los dos
     # hechos a la vez; con uno solo no alcanza.
+    #
+    # Y SI NO SE SUPO CON QUÉ ARRANCA PRODUCCIÓN, no se exenta a nadie. El
+    # segundo hecho —«no corre en producción»— es el que separa un archivo de
+    # pruebas de uno que produccion carga, y sin las entradas ese hecho no se
+    # puede comprobar: darlo por cierto convertiría «no lo sé» en «no corre», o
+    # sea lo desconocido del lado verde. Cuesta más archivos mirados, nunca
+    # menos, que es el lado seguro del error.
+    if not entradas:
+        return exentos
     candidatos: set[Path] = set()
     for carpeta in _testpaths(raiz):
         candidatos.update(p.resolve() for p in carpeta.rglob("*.py"))
@@ -1104,6 +1429,21 @@ def _archivos_exentos(raiz: Path) -> set[Path]:
         candidatos.add((raiz / "conftest.py").resolve())
     exentos |= {p for p in candidatos if p not in produccion}
     return exentos
+
+
+def _archivos_vigilados(raiz: Path) -> list[Path]:
+    """Los .py que la guarda mira de verdad: ni saltados ni exentos.
+
+    Está acá, y no repetido dentro de cada prueba, porque varias necesitan
+    contar sobre EXACTAMENTE el mismo conjunto que se vigila. Dos copias de este
+    filtro se separarían, y entonces «cero falsos positivos sobre 37 archivos»
+    y «7 getattr sobre 37 archivos» dejarían de hablar del mismo 37.
+    """
+    fuera = _carpetas_que_no_son_del_repo(raiz)
+    exentos = _archivos_exentos(raiz)
+    return [p for p in raiz.rglob("*.py")
+            if not any(x in fuera for x in p.relative_to(raiz).parts)
+            and p.resolve() not in exentos]
 
 
 def _quienes_leen_la_lista_cruda(raiz: Path) -> dict[str, list[str]]:
@@ -1115,9 +1455,11 @@ def _quienes_leen_la_lista_cruda(raiz: Path) -> dict[str, list[str]]:
     del `startCommand` de railway.json. Lo que no encaje en esos hechos se
     queda DENTRO de la vigilancia, que es el lado seguro del error.
 
-    Medido el 5-sep-2026 sobre este repo: 66 archivos .py, 29 exentos
+    Medido el 6-sep-2026 sobre este repo: 66 archivos .py, 29 exentos
     (config.py, el conftest de la rootdir y los 27 de `tests/`), 37 vigilados,
-    0 culpables.
+    0 culpables. Las cuatro cifras las vuelve a medir al correr
+    `test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales`, para que
+    ninguna quede acá afirmada sin que nada la compruebe.
     """
     permitidos = _atributos_que_config_ofrece()
     exentos = _archivos_exentos(raiz)
@@ -1151,7 +1493,12 @@ def test_nadie_lee_la_lista_cruda():
         "TODOS los buzones, incluidos los que no se le enseñan a Tiziano")
 
 
-# Trece caminos nuevos, todos haciendo LO MISMO: devolver la lista cruda.
+# Caminos, todos haciendo LO MISMO: devolver la lista cruda. Cuántos son lo
+# dice `len(_ESQUIVES)` allí donde hace falta el número —
+# `test_la_guarda_muerde_todos_los_caminos_a_la_lista_cruda` lo cuenta al
+# correr—, y por eso acá no va ninguna cifra escrita: la que había decía
+# «Trece» con catorce entradas debajo, y una cifra tecleada que nadie vuelve a
+# medir se separa de la realidad exactamente igual que una lista tecleada.
 #
 #   · Los tres primeros son los que la guarda de TEXTO midió el 5-sep-2026
 #     (uno rojo, dos verdes).
@@ -1280,6 +1627,100 @@ import importlib
 def cuentas():
     mod = importlib.import_module("config")
     return [c for c in vars(mod)["CORREO_CUENTAS"]]
+""",
+    # ── Los seis siguientes son el TERCER agujero, medido el 6-sep-2026. Los
+    #    cinco primeros son la misma causa: `getattr` se reconocía comparando el
+    #    TEXTO del identificador, en dos sitios a la vez, así que ponerle otro
+    #    nombre apagaba las dos comprobaciones con una sola línea.
+    "getattr con otro nombre, atado en una asignación": """
+ga = getattr
+
+
+def cuentas():
+    import sys
+    modulo = ga(sys, "mod" + "ules")["config"]
+    return ga(modulo, "CORREO_" + "CUENTAS")
+""",
+    "getattr con otro nombre, traído por un import": """
+from builtins import getattr as ga
+
+
+def cuentas():
+    import sys
+    modulo = ga(sys, "mod" + "ules")["config"]
+    return ga(modulo, "CORREO_" + "CUENTAS")
+""",
+    # Éste es el residuo que ninguna resolución de asignaciones alcanza: el
+    # alias nace dentro de una tupla. Cae por el FONDO —nombrar a `getattr` sin
+    # llamarlo— y no por haber podido seguir la asignación.
+    "getattr con otro nombre, sacado de una tupla": """
+_HERRAMIENTAS = (getattr, len)
+
+
+def cuentas():
+    import sys
+    ga = _HERRAMIENTAS[0]
+    return ga(ga(sys, "modules")["config"], "CORREO_CUENTAS")
+""",
+    "getattr con otro nombre, devuelto por una función": """
+def _dame():
+    return getattr
+
+
+def cuentas():
+    import sys
+    ga = _dame()
+    return ga(ga(sys, "modules")["config"], "CORREO_CUENTAS")
+""",
+    "getattr escrito por su módulo": """
+import builtins
+import sys
+
+
+def cuentas():
+    modulo = builtins.getattr(sys, "modules")["config"]
+    return builtins.getattr(modulo, "CORREO_CUENTAS")
+""",
+    # Y la segunda forma, de la misma familia y con otra causa: el código que
+    # `eval` va a correr NO EXISTE hasta que corre, así que no hay nada que
+    # analizar. No se persigue lo que lleva dentro el texto; usarla es rojo.
+    "por eval, con el nombre dentro de un texto": """
+import config
+
+
+def cuentas():
+    return eval("config.CORREO_CUENTAS")
+""",
+    "por exec, con el nombre dentro de un texto": """
+import config
+
+
+def cuentas():
+    d = {}
+    exec("x = config.CORREO_CUENTAS", {"config": config}, d)
+    return d["x"]
+""",
+    # Y la fábrica de módulos con el nombre en una variable: ni el atributo se
+    # escribe, ni el nombre 'config' viaja como literal, así que los motivos (a)
+    # y (d) no lo ven. Cae por pedirle una clave no enumerable al espacio de
+    # nombres de algo.
+    "importlib con el nombre en una variable, abierto con vars()": """
+import importlib
+
+
+def cuentas(nombre, clave):
+    return vars(importlib.import_module(nombre))[clave]
+""",
+    # `vars(x)` y `x.__dict__` son la misma puerta escrita de dos formas, así
+    # que las dos tienen que estar cerradas. Ésta existe para que la mitad
+    # `__dict__` del motivo (j) no se pueda borrar sin que nada se ponga rojo:
+    # medido el 6-sep-2026, quitándola las 30 pruebas seguían en verde.
+    "importlib con el nombre en una variable, abierto por __dict__": """
+import importlib
+
+
+def cuentas(nombre, clave):
+    return importlib.import_module(nombre).__dict__[clave]
 """,
 }
 
@@ -1598,14 +2039,16 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     y para que se note si mañana la guarda deja de mirar medio repo.
     """
     fuera = _carpetas_que_no_son_del_repo(RAIZ)
-    exentos = _archivos_exentos(RAIZ)
-    mirados = [p for p in RAIZ.rglob("*.py")
-               if not any(x in fuera for x in p.relative_to(RAIZ).parts)
-               and p.resolve() not in exentos]
-    assert len(mirados) == 37, (
-        f"la guarda está mirando {len(mirados)} archivos .py y el 5-sep-2026 "
-        "eran 37. Si bajó, algo se está saltando de más y «cero falsos "
-        "positivos» dejó de significar lo que decía")
+    todos = [p for p in RAIZ.rglob("*.py")
+             if not any(x in fuera for x in p.relative_to(RAIZ).parts)]
+    mirados = _archivos_vigilados(RAIZ)
+    medido = {"en disco": len(todos), "exentos": len(todos) - len(mirados),
+              "vigilados": len(mirados)}
+    assert medido == {"en disco": 66, "exentos": 29, "vigilados": 37}, (
+        f"el reparto de archivos cambió: {medido}, y el 6-sep-2026 era "
+        "{'en disco': 66, 'exentos': 29, 'vigilados': 37}. Si los vigilados "
+        "bajaron, algo se está saltando de más y «cero falsos positivos» dejó "
+        "de significar lo que decía; si subieron, hay código nuevo que mirar")
     assert not _quienes_leen_la_lista_cruda(RAIZ), (
         "hay falsos positivos sobre los archivos reales de hoy")
 
@@ -1644,6 +2087,290 @@ def test_la_guarda_se_cae_si_la_lista_cruda_cambia_de_nombre():
             "eso es estar verde sin haber mirado nada")
     finally:
         config.CORREO_CUENTAS = guardado
+
+
+def test_getattr_se_reconoce_por_el_objeto_y_no_por_como_se_llame():
+    """EL TERCER AGUJERO de este archivo, medido el 6-sep-2026.
+
+    `getattr` se reconocía comparando el TEXTO del identificador, en dos sitios
+    a la vez —el motivo (c) y `es_espacio`—, así que ponerle otro nombre apagaba
+    las dos comprobaciones con UNA sola línea. Metido dentro de
+    `captura/consumos.py` —un archivo que YA EXISTÍA, para que el rojo no
+    pudiera venir de haber agregado un archivo— la suite daba 25 passed, y la
+    función devolvía la lista cruda entera con el buzón `reporte_a: 0` y sus
+    credenciales dentro.
+
+    Ahora la pregunta no es cómo se llama el identificador sino A QUÉ OBJETO
+    resuelve, que es lo mismo que ya se hacía con el módulo `config`. Por eso un
+    alias que nadie previó cae igual: no hay que reconocer el nombre nuevo, hay
+    que resolver el objeto, y `ga` resuelve al mismo objeto que `getattr`.
+    """
+    permitidos = _atributos_que_config_ofrece()
+    for nombre in ("getattr con otro nombre, atado en una asignación",
+                   "getattr con otro nombre, traído por un import",
+                   "getattr con otro nombre, sacado de una tupla",
+                   "getattr con otro nombre, devuelto por una función",
+                   "getattr escrito por su módulo"):
+        motivos = _infracciones(_ESQUIVES[nombre], permitidos)
+        assert motivos, (
+            f"«{nombre}» pasó limpio; es la lista cruda entera, con buzón "
+            "marcado y contraseñas, devuelta por un archivo de producción")
+
+    # Y el corazón del asunto: el MISMO código con `getattr` escrito y con
+    # `getattr` renombrado tiene que dar el mismo veredicto. Si un día vuelven a
+    # compararse textos, esto se pone rojo y aquéllas de arriba también.
+    literal = _infracciones("""
+import sys
+
+
+def cuentas():
+    modulo = getattr(sys, "mod" + "ules")["config"]
+    return getattr(modulo, "CORREO_" + "CUENTAS")
+""", permitidos)
+    alias = _infracciones(_ESQUIVES[
+        "getattr con otro nombre, atado en una asignación"], permitidos)
+    assert len(alias) >= len(literal), (
+        f"con `getattr` escrito caen {len(literal)} motivos y renombrándolo "
+        f"solo {len(alias)}: el nombre todavía cambia el veredicto.\n"
+        f"  literal: {literal}\n  alias:   {alias}")
+
+    # LOS TRES MOTIVOS, EXIGIDOS UNO POR UNO, y ésta es la parte que costó.
+    #
+    # El alias cae por tres caminos independientes, y al medirlo con mutaciones
+    # el 6-sep-2026 resultó que se tapaban entre sí: apagando CUALQUIERA de los
+    # tres, las 30 pruebas seguían en verde porque los otros dos sostenían el
+    # rojo. Una pieza que nadie puede demostrar que hace algo es una pieza que
+    # mañana se borra sin que se entere nadie — y entonces quedan dos, después
+    # una, y después ninguna. Así que se exigen los tres por separado.
+    def hay(trozo, motivos):
+        return any(trozo in m for m in motivos)
+
+    assert hay("pide el atributo CORREO_CUENTAS por", alias), (
+        f"nadie vio que `ga(modulo, ...)` estaba pidiendo {_PROHIBIDO}: la "
+        f"llamada dejó de resolverse al objeto `getattr`. Motivos: {alias}")
+    assert hay("sin llamarlo", alias), (
+        f"nadie vio que se estaba nombrando a getattr sin llamarlo. Ése es EL "
+        f"FONDO, y es lo único que agarra un alias fabricado de una forma que "
+        f"no se puede seguir —una tupla, una clausura—. Motivos: {alias}")
+    assert hay("de un espacio de nombres", alias), (
+        f"nadie vio que de `ga(sys, 'modules')` sale un espacio del que puede "
+        f"salir un módulo: `es_espacio` volvió a dar False para una llamada a "
+        f"un nombre que el archivo ata. Motivos: {alias}")
+
+    # Y el residuo, donde el FONDO es lo ÚNICO que queda: el alias nace dentro
+    # de una tupla, así que ninguna resolución de asignaciones lo alcanza y el
+    # motivo de arriba no puede dispararse.
+    tupla = _infracciones(
+        _ESQUIVES["getattr con otro nombre, sacado de una tupla"], permitidos)
+    assert hay("sin llamarlo", tupla), (
+        f"un alias fabricado dentro de una tupla se le escapó al fondo: "
+        f"{tupla}")
+    # Y acá `ga` no resuelve a nada —sale de un subíndice—, así que la única
+    # forma de ver que de `ga(sys, "modules")` sale un espacio es la regla
+    # general: de una llamada a la que se le pasa un espacio, sale un espacio.
+    # Antes esa regla solo valía si el nombre llamado NO estaba atado por el
+    # archivo, o sea que `ga = ...` la apagaba.
+    assert hay("de un espacio de nombres", tupla), (
+        f"de una llamada a la que se le pasa `sys` dejó de salir un espacio "
+        f"cuando el nombre llamado lo ata el propio archivo: {tupla}")
+
+
+def test_convertir_texto_en_codigo_es_rojo_sin_mirar_lo_que_lleva_dentro():
+    """La segunda mitad del agujero, y por qué acá no se analiza el string.
+
+    `eval("config.CORREO_CUENTAS")` dejaba `test_nadie_lee_la_lista_cruda` en
+    VERDE, igual que `exec`. Y no tiene arreglo por el lado de mirar el texto:
+    el código que va a correr NO EXISTE hasta que corre, así que
+    `eval("config." + parte_que_viene_de_la_base)` no se puede analizar ni en
+    principio. Perseguirlo es una carrera sin fondo.
+
+    El fondo es que usarlas sea rojo por sí solo, sin mirar qué llevan dentro.
+    Y hoy eso cuesta CERO: esta misma prueba cuenta los usos que hay en los
+    archivos vigilados en vez de afirmar el número.
+    """
+    permitidos = _atributos_que_config_ofrece()
+    for fuente in ('def f(t):\n    return eval(t)\n',
+                   'def f(t):\n    exec(t)\n',
+                   'def f(t):\n    return compile(t, "x", "eval")\n',
+                   'def f(n):\n    return __import__(n)\n'):
+        motivos = _infracciones(fuente, permitidos)
+        assert motivos, (
+            f"esto pasó limpio y no se puede clasificar ni en principio:\n"
+            f"{fuente}")
+
+    # El precio de la regla, contado y no afirmado.
+    usan = {}
+    for py in sorted(_archivos_vigilados(RAIZ)):
+        try:
+            arbol = ast.parse(py.read_bytes())
+        except SyntaxError:
+            continue
+        ctx = _Contexto(arbol)
+        cuales = sorted({f.__name__ for n in ast.walk(arbol)
+                         if (f := ctx.llama_a(n, _TEXTO_A_CODIGO)) is not None})
+        if cuales:
+            usan[str(py.relative_to(RAIZ))] = cuales
+    assert not usan, (
+        f"la regla dejó de costar cero: estos archivos de Lucy usan eval, "
+        f"exec, compile o __import__ y ahora salen rojos: {usan}. Antes de "
+        "aflojar la regla hay que mirar si ese uso es legítimo")
+
+
+def test_las_siete_formas_de_maquinaria_dinamica_una_por_una():
+    """El veredicto MEDIDO de cada una, y la frontera dicha donde está.
+
+    Un reporte anterior afirmó que las siete eran «rojas por sí solas». Medido
+    el 6-sep-2026 sobre la guarda de entonces, cuatro no lo eran: `importlib`,
+    `__import__`, `eval` y `exec` pasaban limpias. Esta prueba fija el veredicto
+    de hoy para que la próxima afirmación se pueda comprobar sin creerle a
+    nadie.
+
+    Y donde dice False, no dice «se puede sacar la lista»: dice que conseguir un
+    módulo NO es por sí solo la infracción. Sacarle la lista sí lo es, y eso lo
+    cubren los motivos (a), (c) y (j) — ver los esquives de `importlib`.
+    """
+    permitidos = _atributos_que_config_ofrece()
+    desnudas = {
+        "importlib.import_module": (
+            'import importlib\ndef f(n):\n    return importlib.import_module(n)\n',
+            False),
+        "__import__": ('def f(n):\n    return __import__(n)\n', True),
+        "eval": ('def f(t):\n    return eval(t)\n', True),
+        "exec": ('def f(t):\n    exec(t)\n', True),
+        "globals": ('def f(n):\n    return globals()[n]\n', True),
+        "locals": ('def f(n):\n    return locals()[n]\n', True),
+        "sys.modules": (
+            'import sys\ndef f(n):\n    return sys.modules[n]\n', True),
+    }
+    medido = {k: bool(_infracciones(src, permitidos))
+              for k, (src, _) in desnudas.items()}
+    esperado = {k: roja for k, (_, roja) in desnudas.items()}
+    assert medido == esperado, (
+        f"el veredicto de la maquinaria dinámica cambió.\n  medido:   {medido}"
+        f"\n  esperado: {esperado}")
+
+    # Y la mitad que de verdad importa: usada para LLEGAR a la lista cruda, la
+    # siete son rojas. `importlib` sale de la frontera en cuanto se le pide algo.
+    llegando = {
+        "importlib": 'import importlib\ndef f():\n    return importlib.import_module("config").CORREO_CUENTAS\n',
+        "importlib con nombre variable": 'import importlib\ndef f(n, k):\n    return vars(importlib.import_module(n))[k]\n',
+        "__import__": 'def f():\n    return __import__("config").CORREO_CUENTAS\n',
+        "eval": 'import config\ndef f():\n    return eval("config.CORREO_CUENTAS")\n',
+        "exec": 'import config\ndef f():\n    d = {}\n    exec("x = config.CORREO_CUENTAS", {"config": config}, d)\n    return d["x"]\n',
+        "globals": 'import config\ndef f():\n    return globals()["config"].CORREO_CUENTAS\n',
+        "locals": 'def f():\n    import config\n    return locals()["config"].CORREO_CUENTAS\n',
+        "sys.modules": 'import sys\ndef f():\n    return sys.modules["config"].CORREO_CUENTAS\n',
+    }
+    escapados = [k for k, src in llegando.items()
+                 if not _infracciones(src, permitidos)]
+    assert not escapados, (
+        f"estas formas alcanzan la lista cruda y pasaron limpias: {escapados}")
+
+
+def test_la_exencion_no_se_apaga_si_cambia_la_forma_de_arrancar():
+    """`"python -m main"` es una forma perfectamente normal de arrancar.
+
+    Con el filtro anterior —`t.endswith(".py")` sobre el `startCommand`— eso
+    daba una lista de entradas VACÍA en silencio, el cierre de imports salía
+    vacío, y con él todo lo que vive bajo `testpaths` quedaba exento aunque
+    producción lo cargara. Verificado ejecutando el 6-sep-2026; hoy el
+    startCommand dice `python main.py`, así que no se disparaba.
+
+    Ahora se entienden las dos formas, y lo que NO se pueda determinar cae del
+    lado rojo: sin entradas no se exenta a nadie.
+    """
+    import tempfile
+
+    fuga = _ESQUIVES["el nombre escrito entero"]
+
+    def montar(orden: str) -> tuple[list, dict]:
+        with tempfile.TemporaryDirectory() as tmp:
+            raiz = Path(tmp)
+            _repo_de_mentira(raiz)
+            (raiz / "railway.json").write_text(
+                json.dumps({"deploy": {"startCommand": orden}}),
+                encoding="utf-8")
+            # Un archivo bajo `testpaths` que producción SÍ carga. Es andamio
+            # por dónde vive y NO lo es por quién lo carga: el segundo hecho es
+            # el que decide, y sin saber con qué arranca no se puede comprobar.
+            (raiz / "main.py").write_text(
+                "import tests.compartido\n", encoding="utf-8")
+            (raiz / "tests" / "compartido.py").write_text(fuga,
+                                                          encoding="utf-8")
+            return (_entradas_de_produccion(raiz),
+                    _quienes_leen_la_lista_cruda(raiz))
+
+    entradas, culpables = montar("python main.py")
+    assert [p.name for p in entradas] == ["main.py"], (
+        f"no se entendió el arranque con el archivo suelto: {entradas}")
+    assert "tests/compartido.py" in culpables, (
+        f"un archivo bajo testpaths que producción importa quedó exento: "
+        f"{culpables}")
+
+    entradas, culpables = montar("python -m main")
+    assert [p.name for p in entradas] == ["main.py"], (
+        f"`python -m main` no se entendió como arranque: {entradas}. Ésa es "
+        "la forma que dejaba la lista de entradas vacía en silencio")
+    assert "tests/compartido.py" in culpables, (
+        f"con `-m` la exención volvió a tragarse un archivo de producción: "
+        f"{culpables}")
+
+    # Y lo que NO se puede determinar cae del lado rojo: sin entradas no se
+    # exenta a nadie, ni siquiera al andamio de pruebas de verdad.
+    entradas, culpables = montar("gunicorn web.app:app")
+    assert entradas == [], (
+        f"un arranque que no nombra ningún módulo de Lucy dio entradas: "
+        f"{entradas}")
+    assert "tests/compartido.py" in culpables, (
+        f"sin saber con qué arranca producción se siguió exentando: "
+        f"{culpables}. Lo que no se puede determinar va del lado rojo")
+
+
+def test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_cuesta_hoy():
+    """UN LÍMITE DECLARADO, con su número, en vez de una excepción silenciosa.
+
+    Un ayudante genérico `def leer(mod, nombre): return getattr(mod, nombre)`,
+    usado como `leer(config, "TZ")` —que nunca toca la lista prohibida— sale
+    ROJO. Es coherente con «lo que no se puede clasificar es rojo»: la guarda no
+    puede saber qué nombre le van a pasar, y por ese mismo agujero se saca
+    `CORREO_CUENTAS`. Pero una guarda que rojea a quien hace lo correcto se
+    apaga sola, así que el precio se cuenta en vez de suponerse.
+
+    LO MEDIDO, el 6-sep-2026: CERO sitios de Lucy escriben ese patrón. Los 7
+    `getattr` que hay en los 37 archivos vigilados piden todos un nombre que sí
+    se puede enumerar (4 en main.py, 2 en cerebro/interpretar.py, 1 en db/db.py
+    recorriendo una tupla de dos literales). O sea, el límite no le cuesta nada
+    a nadie hoy, y el día que le cueste será esta prueba la que lo diga.
+    """
+    permitidos = _atributos_que_config_ofrece()
+    assert _infracciones(
+        "def leer(mod, nombre):\n    return getattr(mod, nombre)\n",
+        permitidos), (
+        "el ayudante genérico pasó limpio; por ese mismo agujero se saca "
+        "CORREO_CUENTAS y la guarda no tiene cómo distinguirlo")
+
+    cuantos, opacos = 0, []
+    for py in sorted(_archivos_vigilados(RAIZ)):
+        try:
+            arbol = ast.parse(py.read_bytes())
+        except SyntaxError:
+            continue
+        ctx = _Contexto(arbol)
+        for n in ast.walk(arbol):
+            if ctx.llama_a(n, _ATRIBUTO_POR_NOMBRE) is None or len(n.args) < 2:
+                continue
+            cuantos += 1
+            if _cadenas(n.args[1], ctx.ambitos) is None:
+                opacos.append(f"{py.relative_to(RAIZ)}:{n.lineno}")
+    assert cuantos == 7, (
+        f"los archivos vigilados tienen {cuantos} llamadas a getattr y el "
+        "6-sep-2026 eran 7. Si el número se movió, hay que volver a mirar "
+        "cuánto cuesta este límite antes de darlo por gratis")
+    assert not opacos, (
+        f"el límite dejó de costar cero: {opacos} piden un nombre de atributo "
+        "que no se puede enumerar. Eso no es un falso positivo que ignorar — o "
+        "el sitio se reescribe con el nombre a la vista, o el límite se "
+        "renegocia con Tiziano, pero no se afloja la aserción")
 
 
 def test_la_puerta_es_de_verdad_el_unico_sitio_donde_se_decide():
