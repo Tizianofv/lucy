@@ -22,21 +22,56 @@ para qué lo quieren. `config.cuentas_de_correo(para=...)` es el único sitio de
 los que SALEN DEL MÓDULO CONFIG, y `test_nadie_lee_la_lista_cruda` —que recorre
 los .py que hay EN DISCO, no una lista escrita acá, y los lee con `ast.parse`
 en vez de buscarles texto— se pone rojo si algún archivo puede alcanzar la
-lista cruda por ahí, lo escriba como lo escriba. Un camino nuevo no puede
-olvidarse de filtrar: no puede conseguir el buzón. El porqué de leer el árbol y
-no el texto está entero arriba de la guarda, más abajo.
+lista cruda por ahí. Un camino nuevo escrito por DESCUIDO no puede olvidarse de
+filtrar: no puede conseguir el buzón. Hasta dónde llega eso —y hasta dónde no—
+está dicho entero en la frontera de aquí abajo, y el porqué de leer el árbol y
+no el texto está arriba de la guarda, más abajo.
 
-LA FRONTERA DE ESTA GUARDA, EN UNA LÍNEA, corregida el 6-sep-2026 porque la
-que había prometía de más:
+LA FRONTERA DE ESTA GUARDA, corregida DOS VECES el 6-sep-2026 porque las dos
+anteriores prometían de más:
 
-    La guarda ve lo que un archivo NOMBRA sobre algo que ella puede RESOLVER.
-    No ve lo que un archivo BUSCA mientras corre, ni lo que le pide a un objeto
-    que no pudo resolver.
+    La guarda ve lo que un archivo NOMBRA, sobre algo que ella puede RESOLVER,
+    y escrito EN LA MISMA OPERACIÓN con la que lo toca. UN SALTO, ni uno más.
 
-QUÉ TENÍA DE FALSO LA ANTERIOR, y por qué se escribe así el arreglo. Decía «la
-guarda ve lo que un archivo NOMBRA», a secas, con este criterio: tacha
-`CORREO_CUENTAS` del texto y, si el código deja de encontrar su objetivo, cae.
-La sala midió que no era cierto, con la diferencia más pequeña que hay:
+    No ve lo que un archivo BUSCA mientras corre; no ve lo que le pide a un
+    objeto que no pudo resolver; y no ve lo que nombra un salto más allá —sobre
+    lo que devolvió esa operación, o dentro de otra función.
+
+EL FONDO, QUE ES LA TERCERA CONDICIÓN Y LA QUE SE PUSO HOY. Abierto el espacio
+de nombres de algo —`vars(m)`, `globals()`, `locals()`, `m.__dict__`—, la guarda
+mira los nombres que viajan a la operación que TOCA ESE ESPACIO, y ni uno más
+allá. El motivo (j) explica el mecanismo; el fondo se fija corriendo, en las
+dos direcciones, en `test_el_fondo_del_espacio_abierto_es_un_salto`.
+
+Y ANTES DE PONERLE EL FONDO SE MIDIÓ QUE HACÍA FALTA. Seis formas, pasadas una
+por una por la guarda y ejecutadas después contra el `config` de verdad:
+
+    vars(mod)["CORREO_CUENTAS"]                        → rojo   un salto
+    dict(vars(mod))["CORREO_CUENTAS"]                  → VERDE  dos saltos
+    vars(mod).copy()["CORREO_CUENTAS"]                 → VERDE  dos saltos
+    mod.__dict__.copy().get("CORREO_CUENTAS")          → VERDE  dos saltos
+    d = {}; d.update(vars(mod)); d["CORREO_CUENTAS"]   → VERDE  dos saltos
+    operator.itemgetter("CORREO_CUENTAS")(vars(mod))   → VERDE  dos saltos
+    _leer(vars(mod))   # el nombre, en la otra función → VERDE  dos saltos
+
+Las seis verdes devuelven el objeto `config.CORREO_CUENTAS` en persona —la
+lista cruda, sin filtrar por `reporte_a`—, y sus gemelas de un salto menos
+también. Están escritas enteras en `_FUERA_DE_LA_FRONTERA`, y las ejecuta las
+doce, comparando por identidad y sin imprimir nada,
+`test_el_fondo_del_espacio_abierto_es_un_salto`.
+
+Las seis nombran `CORREO_CUENTAS` con todas sus letras sobre un módulo que la
+guarda SÍ resuelve, o sea que caían DENTRO de lo que la frontera anterior
+prometía. Perseguir el segundo salto obliga a perseguir el tercero —guardar el
+espacio en un atributo, pasarlo por dos funciones— y eso es análisis de flujo de
+datos, que no tiene fondo. Así que en vez de la séptima forma se le puso fondo
+al barrido y las seis se declararon, con su código exacto y con su gemela de un
+salto menos, en `_FUERA_DE_LA_FRONTERA`.
+
+QUÉ TENÍA DE FALSO LA PRIMERA FRONTERA, y por qué se escribe así el arreglo.
+Decía «la guarda ve lo que un archivo NOMBRA», a secas, con este criterio:
+tacha `CORREO_CUENTAS` del texto y, si el código deja de encontrar su objetivo,
+cae. La sala midió que no era cierto, con la diferencia más pequeña que hay:
 
     vars(m)["CORREO_CUENTAS"]      → 1 failed   la agarra
     vars(m).get("CORREO_CUENTAS")  → 1 passed   INVISIBLE
@@ -45,9 +80,25 @@ Corchetes o punto. El nombre estaba escrito entero en las dos, así que por el
 propio criterio las dos tenían que caer. La causa era que el motivo (j) miraba
 LA FORMA DE LA OPERACIÓN —solo `ast.Subscript`— en vez del espacio de nombres;
 está arreglado y medido, y el motivo (j) explica de dónde sale ahora la
-pregunta. Lo que quedó fuera y no se pudo cerrar es la segunda mitad de la
-línea de arriba, y está declarada con su código exacto en
+pregunta. Lo que quedó fuera y no se pudo cerrar son las otras dos mitades de
+la frontera de arriba —lo que se le pide a un objeto sin resolver, y lo que se
+nombra un salto más allá—, y está declarado con su código exacto en
 `_FUERA_DE_LA_FRONTERA`, entrada por entrada.
+
+Y UN DEFECTO DEL MISMO DÍA QUE SÍ SE ARREGLÓ, porque no era ofuscación sino un
+descuido corriente y tiraba hacia VERDE: un parámetro llamado `getattr` en
+cualquier función del archivo apagaba el motivo (c) para el archivo ENTERO
+—`_Contexto.atados` es plano y no tiene ámbitos—, así que `getattr(mod, n)`
+dejaba de verse. No se le dieron ámbitos a `atados`: se aplicó la doctrina de
+este archivo, «si el nombre está pisado no puedo resolverlo, y lo que no puedo
+clasificar es rojo». Es el motivo (k); vale para TODOS los nombres peligrosos
+—que salen de los objetos, no de una lista tecleada— y para las formas de pisar
+uno que `_Contexto.atados` recoge: un parámetro, un `def` propio, una
+asignación, un alias de import, el destino de un `for`. La que no recoge —el
+`case` de un `match`— sale roja igual, por el otro lado: no verla significa que
+la guarda sigue resolviendo el nombre al builtin, y entonces muerde el motivo
+(c). Todo eso, y lo que cuesta, se mide corriendo en
+`test_pisar_un_nombre_peligroso_es_rojo_y_cuanto_cuesta_hoy`.
 
 EL CRITERIO PARA SABER DE QUÉ LADO CAE ALGO NUEVO, sin tener que probarlo.
 Tacha del texto del archivo tres cosas: el nombre `config`, el nombre
@@ -58,8 +109,10 @@ seguir hasta un `import` o una asignación, porque la guarda los reconstruye.
   · Si tachando eso el código DEJA DE ENCONTRAR su objetivo, Y el objeto al que
     se lo pide llega por un camino que la guarda resuelve —un `import`, un
     espacio de nombres abierto con `vars`/`globals`/`locals`/`__dict__`, o una
-    función que ella resuelve al objeto— → la guarda lo atrapa. Da igual cómo
-    esté escrito: no hay que reconocer la forma, hay que fallar en reconocerla.
+    función que ella resuelve al objeto—, Y el nombre está escrito en LA MISMA
+    OPERACIÓN con la que se toca ese objeto o su espacio → la guarda lo atrapa.
+    Da igual cómo esté escrito: no hay que reconocer la forma, hay que fallar
+    en reconocerla.
   · Si lo SIGUE ENCONTRANDO —porque no dice qué quiere, sino que recorre una
     colección en tiempo de ejecución y elige comparando valores— → cae fuera, y
     la guarda no lo va a ver nunca. No hay parche que lo cambie: en el árbol de
@@ -69,23 +122,61 @@ seguir hasta un `import` o una asignación, porque la guarda los reconstruye.
     rama— → también cae fuera. Para tener ese `m` hay que haber conseguido el
     módulo por una puerta que ya está declarada fuera; en cuanto se consigue
     por una que la guarda ve, se pone rojo. Las dos direcciones están medidas.
+  · Y si lo NOMBRA sobre algo que la guarda sí resuelve, pero UN SALTO MÁS
+    ALLÁ —el nombre se le pide a lo que devolvió la operación anterior
+    (`dict(vars(m))[...]`, `vars(m).copy()[...]`, `m.__dict__.copy().get(...)`,
+    un `update` a otro diccionario), o está escrito dentro de otra función a la
+    que se le entregó el espacio— → también cae fuera. Para saber de qué lado
+    está algo no hace falta probarlo: mira si el nombre y el `vars`/`__dict__`
+    se tocan en la MISMA operación. Si sí, la guarda lo ve, sea cual sea el
+    método o la función; si entre los dos hay una operación más, no. Asignarle
+    el espacio a un nombre tal cual (`d = vars(m)`, `e = d`) NO es un salto: es
+    el mismo objeto, y la guarda lo sigue. Las seis formas están escritas
+    enteras en `_FUERA_DE_LA_FRONTERA`, cada una con su gemela de un salto
+    menos, que sale roja.
+  · Y UNA QUE NO DEPENDE DE TACHAR NADA: si el archivo le pone su propio
+    significado a uno de esos nombres —un parámetro, un `def`, una asignación,
+    un alias de import, el destino de un `for`— la guarda ya no puede resolver
+    ese nombre en NINGUNA parte del archivo, y todo el archivo sale rojo. Es el
+    motivo (k).
 
-POR QUÉ SE CORTÓ LA PERSECUCIÓN AHÍ, y no en la forma siguiente. El espacio de
-maneras de buscar un objeto en tiempo de ejecución no tiene fondo, y una guarda
-que enumera formas siempre tiene una más que no vio. Lo que esta guarda sí
-puede prometer es lo otro: que un camino nuevo escrito POR DESCUIDO —el que se
-olvida de pedir el buzón por la puerta— cae. Para eso funciona, y eso está
-medido forma por forma en `_ESQUIVES`. Nadie escribe por descuido un bucle
-sobre los módulos cargados comparando un nombre partido en dos.
+POR QUÉ SE CORTÓ LA PERSECUCIÓN AHÍ, y no en la forma siguiente. Son DOS los
+espacios sin fondo con los que se topa esta guarda, y los dos se cierran igual
+—poniéndoles un fondo dicho en una línea—, nunca enumerando formas:
+
+  · las maneras de BUSCAR un objeto en tiempo de ejecución sin nombrarlo. El
+    fondo es el criterio de arriba: si no escribe el nombre, no hay nada en el
+    árbol que mirar.
+  · las maneras de MOVER un valor de un sitio a otro antes de pedirle el
+    nombre —copiarlo, volcarlo en otro diccionario, pasarlo por un parámetro,
+    guardarlo en un atributo—. Ése es el fondo del salto, y seguirlo es
+    análisis de flujo de datos.
+
+Lo que esta guarda sí puede prometer es lo otro: que un camino nuevo escrito
+POR DESCUIDO —el que se olvida de pedir el buzón por la puerta— cae. Para eso
+funciona, y eso está medido forma por forma en `_ESQUIVES`. Nadie escribe por
+descuido un bucle sobre los módulos cargados comparando un nombre partido en
+dos, ni copia el espacio de nombres de un módulo antes de leerlo.
 
 Y LA DIFERENCIA ENTRE «UNA FORMA MÁS» Y «LA PROMESA SIN CUMPLIR», que es lo
-que decidió qué se arreglaba el 6-sep-2026 y qué no. `vars(m).get(...)` NO era
-otra forma de buscar en ejecución: nombraba la lista cruda con todas sus letras
-y caía dentro de lo que la guarda decía cubrir. Eso no se declara, se arregla.
-Una forma que NO nombra nada —recorrer los módulos cargados y elegir comparando
-un nombre partido— sí se declara, porque no hay nada en el árbol que mirar. La
-pregunta ante la siguiente, entonces, no es «¿es rebuscada?» sino «¿escribe el
-nombre?».
+que decidió qué se arreglaba el 6-sep-2026 y qué no. La pregunta ante la
+siguiente forma no es «¿es rebuscada?»: es si CAE DENTRO DE LO QUE LA FRONTERA
+PROMETE, y la frontera son las tres condiciones de arriba a la vez.
+
+  · `vars(m).get(...)` nombraba la lista cruda, sobre un objeto resoluble, en
+    la misma operación. Caía dentro de lo prometido. Eso no se declara, se
+    arregla — y se arregló.
+  · Un parámetro llamado `getattr` apagaba el motivo (c) del archivo entero.
+    Caía dentro de lo prometido, y además era un descuido corriente y tiraba
+    hacia verde. Se arregló: motivo (k).
+  · Recorrer los módulos cargados comparando un nombre partido NO nombra nada;
+    `m.__getattribute__(...)` sobre un `m` sin resolver no se puede resolver; y
+    `dict(vars(m))[...]` nombra pero un salto más allá. Las tres caen FUERA de
+    lo prometido, y por eso se declaran en vez de perseguirse.
+
+Una forma nueva se arregla si cumple las tres condiciones y aun así se escapa.
+Si falla alguna, se declara — y la declaración es la que hace que la frontera
+siga siendo cierta.
 
 LO QUE QUEDA FUERA, DECLARADO CON SU CÓDIGO EXACTO, para que nadie lo
 redescubra creyendo que es un agujero nuevo: `_FUERA_DE_LA_FRONTERA`, medido
@@ -94,11 +185,20 @@ Los números —cuántas formas atrapa y cuántas están declaradas fuera— los
 esa prueba al correr; acá no va ninguna cifra, que ya se separó de la realidad
 dos veces en este mismo archivo.
 
-Y UN PRECIO, que no es un agujero sino lo contrario: un ayudante genérico
-`def leer(mod, nombre): return getattr(mod, nombre)` sale ROJO aunque nunca
-toque la lista prohibida. Es lo que cuesta «lo que no se puede clasificar es
-rojo», y hoy no lo paga nadie: cero sitios de Lucy lo escriben. Lo cuenta
-`test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_cuesta_hoy`.
+Y DOS PRECIOS, que no son agujeros sino lo contrario. Los dos son lo que cuesta
+«lo que no se puede clasificar es rojo», y los dos se cuentan al correr en vez
+de afirmarse acá:
+
+  · un ayudante genérico `def leer(mod, nombre): return getattr(mod, nombre)`
+    sale ROJO aunque nunca toque la lista prohibida. Lo cuenta
+    `test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_cuesta_hoy`.
+  · un archivo que use uno de los nombres peligrosos para otra cosa —el caso
+    corriente es un parámetro llamado `vars` o `getattr`— sale ROJO entero, y
+    el arreglo es renombrar la variable. Lo cuenta
+    `test_pisar_un_nombre_peligroso_es_rojo_y_cuanto_cuesta_hoy`.
+
+Los dos exigen que su precio sea CERO sobre los archivos vigilados de hoy, y si
+deja de serlo se ponen rojos en vez de aflojarse.
 
 LA SALIDA DE VERDAD, QUE NO SE HIZO HOY Y HAY QUE DEJAR ESCRITA. Nada de esto
 haría falta si `config.CORREO_CUENTAS` no existiera como atributo alcanzable.
@@ -940,6 +1040,38 @@ _ABREN_UN_ESPACIO = (builtins.vars, builtins.globals, builtins.locals)
 # Esa segunda mitad también está medida allí, con las tres formas.
 _PELIGROSOS = _ATRIBUTO_POR_NOMBRE + _TEXTO_A_CODIGO
 
+# Y CÓMO SE LLAMAN HOY ESOS OBJETOS, sacado de los objetos y no tecleado. Hace
+# falta para el motivo (k): si un archivo ATA uno de estos nombres —un `def`, un
+# parámetro, una asignación, un import— entonces la guarda ya no puede resolver
+# ese nombre al builtin, y «no puedo resolver» es rojo.
+#
+# EL DEFECTO QUE LO MOTIVA, medido el 6-sep-2026 con tres casos:
+#
+#     def _otra(getattr):        # un parámetro llamado igual, en OTRA función
+#         return getattr
+#     def robar(mod, n):
+#         return getattr(mod, n)
+#
+#     sin nada que pise el nombre               → 1 failed   la agarra
+#     con un PARÁMETRO llamado getattr          → 1 passed   INVISIBLE
+#     con un parámetro de otro nombre (control) → 1 failed   la agarra
+#
+# `_Contexto.atados` es PLANO —no tiene ámbitos—, así que un parámetro llamado
+# `getattr` en cualquier función del archivo apaga `resuelve` para el archivo
+# ENTERO: el nombre deja de resolver al builtin, `llama_a` no reconoce nada y el
+# motivo (c) se va en silencio. No es ofuscación, es un descuido corriente —usar
+# el nombre de un builtin como parámetro se escribe sin pensar—, y tira hacia
+# VERDE, que es el lado que no avisa.
+#
+# NO SE ARREGLA DÁNDOLE ÁMBITOS A `atados`: eso es rehacer el Tramo 2 entero. Se
+# arregla con la doctrina del propio archivo: si el nombre está pisado, la
+# guarda no puede resolver con seguridad, y lo que no se puede clasificar es
+# rojo. Lo que cuesta —cuántos archivos vigilados atan hoy alguno de estos
+# nombres— no va escrito acá: lo cuenta y lo exige al correr
+# `test_pisar_un_nombre_peligroso_es_rojo_y_cuanto_cuesta_hoy`.
+_NOMBRES_PELIGROSOS = frozenset(
+    f.__name__ for f in _PELIGROSOS + _ABREN_UN_ESPACIO)
+
 
 def _cual_peligroso(objetos) -> object | None:
     """El objeto peligroso que hay en este conjunto, comparado por IDENTIDAD."""
@@ -1375,6 +1507,27 @@ def _infracciones(fuente, permitidos: set[str]) -> list[str]:
     ctx = _Contexto(arbol)
     malas: list[str] = []
 
+    # (k) UN NOMBRE PELIGROSO PISADO EN CUALQUIER PARTE DEL ARCHIVO. `atados`
+    #     es plano —no tiene ámbitos—, así que un `def _otra(getattr)` en una
+    #     función cualquiera hace que `resuelve` deje de resolver `getattr` al
+    #     builtin en TODO el archivo, y el motivo (c) se va en silencio. Medido
+    #     el 6-sep-2026: el mismo `getattr(mod, n)` daba rojo sin el parámetro y
+    #     VERDE con él.
+    #
+    #     No se arregla dándole ámbitos a `atados` —eso es rehacer el Tramo 2—
+    #     sino con la doctrina de este archivo: si el nombre está pisado, la
+    #     guarda no puede resolverlo con seguridad, y lo que no se puede
+    #     clasificar es rojo. Los nombres salen de los OBJETOS peligrosos, no
+    #     de una lista tecleada. Y va antes que todo lo demás porque, cuando
+    #     pasa, todo lo demás está decidido sobre nombres mal resueltos.
+    pisados = sorted(ctx.atados & _NOMBRES_PELIGROSOS)
+    if pisados:
+        malas.append(
+            f"línea 1: este archivo le pone su propio significado a {pisados}, "
+            "que son los nombres de los objetos peligrosos; con el nombre "
+            "pisado no puedo resolver a qué función se llama en ninguna parte "
+            "del archivo, y sin poder resolverlo no hay nada que clasificar")
+
     def pedidos(nodo):
         return _cadenas(nodo, ctx.ambitos)
 
@@ -1510,11 +1663,24 @@ def _infracciones(fuente, permitidos: set[str]) -> list[str]:
         #     método que nadie previó cae del lado correcto porque la guarda
         #     nunca le pregunta cómo se llama: le pregunta qué le entregan.
         #
+        #     Y SU FONDO, dicho en una línea porque el espacio de formas de
+        #     mover un valor tampoco tiene fondo: UN SALTO. Se miran los nombres
+        #     que viajan a la operación que toca EL ESPACIO —las tres ramas de
+        #     `viajan`, que son las tres formas que tiene Python de juntar un
+        #     objeto y una clave en una expresión—, y ni uno más allá. Lo que
+        #     esa operación DEVUELVE ya no es el espacio: `dict(vars(m))`,
+        #     `vars(m).copy()` y `d = {}; d.update(vars(m))` son diccionarios
+        #     nuevos, y un espacio entregado a otra función llega allí como un
+        #     parámetro, que es un nombre atado. El espacio sí se sigue de
+        #     nombre en nombre mientras se le asigne TAL CUAL —eso lo hace
+        #     `_propagar_espacios`— porque ahí sigue siendo el mismo objeto.
+        #
         #     Y lo que se queda fuera, a propósito y por lo mismo: una operación
         #     que NO LLEVA NINGÚN NOMBRE —`vars(m).values()`, `vars(m).items()`—
-        #     no nombra nada, así que no hay nada que clasificar. Es exactamente
-        #     la especie declarada en `_FUERA_DE_LA_FRONTERA`: buscar en
-        #     ejecución sin decir qué se busca.
+        #     no nombra nada, así que no hay nada que clasificar. Ésa y las seis
+        #     del salto están declaradas en `_FUERA_DE_LA_FRONTERA` con su
+        #     código exacto, y el fondo se fija corriendo, en las dos
+        #     direcciones, en `test_el_fondo_del_espacio_abierto_es_un_salto`.
         if ctx.abre_un_espacio(n):
             padre = getattr(n, "_padre", None)
             abuelo = getattr(padre, "_padre", None)
@@ -3476,8 +3642,12 @@ def test_cuanto_costaria_la_regla_a_secas_y_cuanto_cuesta_la_de_verdad():
 # ── LO QUE QUEDA FUERA DE LA FRONTERA, con su código exacto ───────────────
 #
 # Cada entrada es una forma que la guarda NO atrapa, escrita entera para que
-# nadie la redescubra creyendo que encontró un agujero nuevo. Todas caen del
-# mismo lado del criterio de la cabecera: NO NOMBRAN lo que quieren.
+# nadie la redescubra creyendo que encontró un agujero nuevo. Caen fuera por uno
+# de los TRES motivos que dice la cabecera, y cada entrada dice por cuál:
+#
+#   · no NOMBRAN lo que quieren (buscan en ejecución comparando valores);
+#   · lo nombran sobre un objeto que la guarda no puede RESOLVER;
+#   · o lo nombran A MÁS DE UN SALTO del sitio que la guarda mira.
 #
 # Los campos:
 #   · `fuente`      el código, tal cual. Tiene que salir VERDE.
@@ -3487,6 +3657,13 @@ def test_cuanto_costaria_la_regla_a_secas_y_cuanto_cuesta_la_de_verdad():
 #                   cada puerta distinta por la que se consiga `config`. Todas
 #                   tienen que salir ROJAS. Vacía cuando `llega_sola` es True:
 #                   ahí no hay nada que la atrape, y eso es lo que se declara.
+#   · `con_un_salto` OPCIONAL, y solo en las que caen fuera POR EL SALTO: la
+#                   misma forma con el salto de más quitado, que tiene que salir
+#                   ROJA. Es lo que fija el fondo en las dos direcciones: si el
+#                   barrido se ensancha, `fuente` deja de ser verde; si se
+#                   estrecha, ésta deja de ser roja. Lo mide
+#                   `test_el_fondo_del_espacio_abierto_es_un_salto`, que además
+#                   EJECUTA las dos y comprueba que las dos sacan la lista.
 #
 # Que estén acá NO afloja ninguna aserción: cada una está fijada por una prueba
 # que se pone roja si cambia de lado, en cualquiera de las dos direcciones.
@@ -3657,6 +3834,174 @@ _FUERA_DE_LA_FRONTERA = {
             "acá no va ninguna cifra tecleada—, o sea apagar la guarda por "
             "exceso de ruido. Se declara en vez de perseguirse",
     },
+
+    # ── LAS SEIS DEL SALTO, medidas por la sala el 6-sep-2026 y declaradas el
+    # mismo día. Las seis NOMBRAN `CORREO_CUENTAS` con todas sus letras y
+    # operan sobre un módulo que la guarda SÍ resuelve, así que no caen por
+    # ninguno de los dos motivos anteriores: caen por el TERCERO, el fondo del
+    # motivo (j). El nombre está escrito UN SALTO más allá del sitio que la
+    # guarda mira, y ahí ya no mira.
+    #
+    # POR QUÉ SE DECLARAN EN VEZ DE PERSEGUIRSE, que es la pregunta que decide
+    # de qué lado va cada hallazgo. Seguir el segundo salto es seguir el
+    # tercero: después de `.copy()` viene `d = {}; d.update(...)`, después
+    # guardarlo en un atributo de una clase, después pasarlo por dos funciones.
+    # Eso es análisis de flujo de datos, y el espacio NO TIENE FONDO — es
+    # exactamente el caso en que enumerar formas no termina nunca. Así que en
+    # vez de la séptima forma se le puso FONDO al barrido, dicho en una línea
+    # en la cabecera, y las seis se escriben acá con su código exacto.
+    #
+    # Las seis, EJECUTADAS con el `config` de verdad, devuelven el objeto
+    # `config.CORREO_CUENTAS` en persona —comparado por identidad, sin imprimir
+    # ninguna credencial— y lo mismo su versión de un salto. Eso lo comprueba
+    # `test_el_fondo_del_espacio_abierto_es_un_salto`, para que ni la forma
+    # declarada fuera ni la que la fija sean paja: las dos funcionan.
+    "el espacio copiado con dict() antes de pedirle el nombre": {
+        "fuente":
+            'def robar(mod):\n'
+            '    return dict(vars(mod))["CORREO_CUENTAS"]\n',
+        "con_un_salto":
+            'def robar(mod):\n'
+            '    return vars(mod)["CORREO_CUENTAS"]\n',
+        "llega_sola": False,
+        "y_llegando": [
+            'import config\n'
+            '\n'
+            '\n'
+            'def robar():\n'
+            '    return dict(vars(config))["CORREO_CUENTAS"]\n',
+        ],
+        "por_que":
+            "el espacio abierto es argumento de `dict(...)`, y a esa llamada "
+            "no viaja ningún nombre: el nombre se le pide a lo que `dict` "
+            "DEVOLVIÓ, que ya no es el espacio",
+    },
+    "el espacio copiado con .copy() antes de pedirle el nombre": {
+        "fuente":
+            'def robar(mod):\n'
+            '    return vars(mod).copy()["CORREO_CUENTAS"]\n',
+        "con_un_salto":
+            'def robar(mod):\n'
+            '    return vars(mod).get("CORREO_CUENTAS")\n',
+        "llega_sola": False,
+        "y_llegando": [
+            'import config\n'
+            '\n'
+            '\n'
+            'def robar():\n'
+            '    return vars(config).copy()["CORREO_CUENTAS"]\n',
+        ],
+        "por_que":
+            "el método llamado sobre el espacio SÍ se mira —y da igual cómo se "
+            "llame, por eso la versión de un salto usa `.get`—, pero a `.copy()` "
+            "no viaja ningún nombre y el subíndice cae sobre su resultado",
+    },
+    "el __dict__ copiado, y el nombre pedido a la copia": {
+        "fuente":
+            'def robar(mod):\n'
+            '    return mod.__dict__.copy().get("CORREO_CUENTAS")\n',
+        "con_un_salto":
+            'def robar(mod):\n'
+            '    return mod.__dict__.get("CORREO_CUENTAS")\n',
+        "llega_sola": False,
+        "y_llegando": [
+            'import config\n'
+            '\n'
+            '\n'
+            'def robar():\n'
+            '    return config.__dict__.copy().get("CORREO_CUENTAS")\n',
+        ],
+        "por_que":
+            "lo mismo que la anterior por la puerta del `__dict__`, que la "
+            "guarda sigue igual que a `vars`: el salto de más es el `.copy()`",
+    },
+    "el espacio volcado en otro diccionario con update()": {
+        "fuente":
+            'def robar(mod):\n'
+            '    d = {}\n'
+            '    d.update(vars(mod))\n'
+            '    return d["CORREO_CUENTAS"]\n',
+        "con_un_salto":
+            'def robar(mod):\n'
+            '    d = vars(mod)\n'
+            '    return d["CORREO_CUENTAS"]\n',
+        "llega_sola": False,
+        "y_llegando": [
+            'import config\n'
+            '\n'
+            '\n'
+            'def robar():\n'
+            '    d = {}\n'
+            '    d.update(vars(config))\n'
+            '    return d["CORREO_CUENTAS"]\n',
+        ],
+        "por_que":
+            "`_propagar_espacios` sigue el espacio mientras se le asigne TAL "
+            "CUAL a un nombre —por eso la versión de un salto, con `d = "
+            "vars(mod)`, sale roja—, pero `d = {}` seguido de un `update` deja "
+            "a `d` siendo otro diccionario, y a `update` no viaja ningún nombre",
+    },
+    "el nombre escrito en otra llamada, y el espacio entregado a lo que devolvió": {
+        "fuente":
+            'import operator\n'
+            '\n'
+            '\n'
+            'def robar(mod):\n'
+            '    return operator.itemgetter("CORREO_CUENTAS")(vars(mod))\n',
+        "con_un_salto":
+            'import operator\n'
+            '\n'
+            '\n'
+            'def robar(mod):\n'
+            '    return operator.getitem(vars(mod), "CORREO_CUENTAS")\n',
+        "llega_sola": False,
+        "y_llegando": [
+            'import operator\n'
+            'import config\n'
+            '\n'
+            '\n'
+            'def robar():\n'
+            '    return operator.itemgetter("CORREO_CUENTAS")(vars(config))\n',
+        ],
+        "por_que":
+            "cuando el espacio y el nombre están en la MISMA llamada la guarda "
+            "los ve, y da igual qué función sea —por eso `operator.getitem` "
+            "sale rojo—; acá el nombre está en la llamada de ARRIBA y al "
+            "espacio solo lo recibe lo que ésa devolvió",
+    },
+    "el espacio pasado a otra función, que es la que escribe el nombre": {
+        "fuente":
+            'def _leer(d):\n'
+            '    return d["CORREO_CUENTAS"]\n'
+            '\n'
+            '\n'
+            'def robar(mod):\n'
+            '    return _leer(vars(mod))\n',
+        "con_un_salto":
+            'def _leer(d, clave):\n'
+            '    return d[clave]\n'
+            '\n'
+            '\n'
+            'def robar(mod):\n'
+            '    return _leer(vars(mod), "CORREO_CUENTAS")\n',
+        "llega_sola": False,
+        "y_llegando": [
+            'import config\n'
+            '\n'
+            '\n'
+            'def _leer(d):\n'
+            '    return d["CORREO_CUENTAS"]\n'
+            '\n'
+            '\n'
+            'def robar():\n'
+            '    return _leer(vars(config))\n',
+        ],
+        "por_que":
+            "si el nombre viaja a la misma llamada que el espacio, la guarda "
+            "lo ve —por eso la versión de un salto sale roja—; escrito DENTRO "
+            "del otro lado de la llamada, el parámetro `d` es un nombre atado y "
+            "la guarda no lo trata como espacio",
+    },
 }
 
 
@@ -3758,6 +4103,91 @@ def test_la_frontera_declarada_esta_medida_forma_por_forma():
           f"{len(solas)} llega(n) a la lista cruda sin ayuda de nadie. De las "
           f"otras {len(_FUERA_DE_LA_FRONTERA) - len(solas)} se miden "
           f"{llegando} formas de llegar, y las {llegando} salen rojas.")
+
+
+def test_el_fondo_del_espacio_abierto_es_un_salto():
+    """EL FONDO DEL MOTIVO (j), fijado en las dos direcciones y ejecutado.
+
+    EL FONDO, EN UNA LÍNEA — la misma que está en la cabecera:
+
+        Abierto el espacio de nombres de algo, la guarda mira los nombres que
+        viajan a LA OPERACIÓN QUE TOCA EL ESPACIO, y ni uno más allá.
+
+    EL CRITERIO PARA PREDECIR SIN PROBAR: mira dónde está escrito el nombre y
+    dónde está el `vars(...)` / `globals()` / `locals()` / `.__dict__`. Si los
+    dos están en la MISMA operación —subíndice sobre el espacio, método llamado
+    sobre el espacio, o los dos como argumentos de una misma llamada— la guarda
+    lo ve, sea cual sea el método o la función. Si entre los dos hay una
+    operación más —una copia, un `dict(...)`, un `update`, el resultado de otra
+    llamada— o el nombre está escrito dentro de otra función, cae fuera. El
+    espacio sí se sigue de nombre en nombre mientras se le asigne TAL CUAL
+    (`d = vars(m)`, `e = d`): eso no es un salto, es el mismo objeto.
+
+    POR QUÉ EL FONDO ESTÁ AHÍ Y NO UN SALTO MÁS ALLÁ. Seguir el segundo salto
+    obliga a seguir el tercero, y el espacio de formas de mover un valor de un
+    sitio a otro no tiene fondo: es análisis de flujo de datos. Esta sala ya
+    perdió esa carrera tres veces en este archivo. Cuando el espacio no tiene
+    fondo, el arreglo no es tapar la forma nueva: es ponerle fondo al barrido y
+    decirlo en una línea que cualquiera pueda aplicar sin probar. Lo que queda
+    fuera se declara, con su código exacto, en `_FUERA_DE_LA_FRONTERA`.
+
+    LO QUE FIJA ESTA PRUEBA, y por eso se cae si alguien mueve el barrido sin
+    mover el fondo:
+
+      · cada forma declarada fuera POR EL SALTO tiene su gemela de un salto
+        menos, y ésa tiene que salir ROJA. Si el barrido se estrecha, se pone
+        verde y esto se cae.
+      · (la otra dirección —que la forma de dos saltos siga verde— la fija
+        `test_la_frontera_declarada_esta_medida_forma_por_forma`, que rojea si
+        el barrido se ensancha y la declaración se queda vieja.)
+      · y las DOS se ejecutan contra el `config` de verdad: las dos tienen que
+        devolver el objeto `config.CORREO_CUENTAS` en persona. Sin esto, la
+        declaración podría ser un susto de papel y la gemela un espantapájaros
+        que no saca nada. No se imprime ninguna credencial: se compara por
+        identidad.
+    """
+    permitidos = _atributos_que_config_ofrece()
+
+    delsalto = {k: d for k, d in _FUERA_DE_LA_FRONTERA.items()
+                if "con_un_salto" in d}
+    assert delsalto, (
+        "no queda ninguna forma declarada fuera POR EL SALTO. Si el motivo (j) "
+        "aprendió a seguir el segundo salto, es una gran noticia y hay que "
+        "reescribir el fondo de la cabecera; lo que no puede pasar es que esta "
+        "prueba se quede verde sin medir nada")
+
+    # ── Lo que importa: la gemela de un salto menos MUERDE.
+    blandas = [k for k, d in delsalto.items()
+               if not _infracciones(d["con_un_salto"], permitidos)]
+    assert not blandas, (
+        f"el barrido del motivo (j) se estrechó: {blandas} ya no se ven ni a "
+        "UN salto, que es justo el fondo que la cabecera promete. Eso no es "
+        "declarar una frontera, es haberla perdido")
+
+    # ── Y que ninguna de las dos sea paja: las dos sacan la lista cruda.
+    def _saca_la_lista(fuente: str):
+        espacio: dict = {}
+        exec(compile(fuente, "<forma del salto>", "exec"), espacio)
+        return espacio["robar"](config)
+
+    pajas = []
+    for k, d in delsalto.items():
+        for cual in ("fuente", "con_un_salto"):
+            try:
+                if _saca_la_lista(d[cual]) is not config.CORREO_CUENTAS:
+                    pajas.append(f"{k} [{cual}]")
+            except Exception as e:                       # noqa: BLE001
+                pajas.append(f"{k} [{cual}] reventó: {type(e).__name__}")
+    assert not pajas, (
+        f"estas formas no sacan la lista cruda al ejecutarlas: {pajas}. Una "
+        "forma declarada fuera que no funciona asusta sin motivo, y una gemela "
+        "que no funciona hace creer que el fondo está medido cuando lo que se "
+        "midió fue un espantapájaros")
+
+    print(f"\nFONDO DEL ESPACIO (medido al correr): {len(delsalto)} formas "
+          f"declaradas fuera por el salto; sus {len(delsalto)} gemelas de un "
+          f"salto menos salen rojas, y las {2 * len(delsalto)} sacan "
+          "`config.CORREO_CUENTAS` al ejecutarse.")
 
 
 def test_las_funciones_que_traen_modulos_no_dependen_de_quien_importo_que():
@@ -3945,6 +4375,142 @@ def test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_cuesta_hoy():
         "quedó verde, así que esto NO es una fuga: es el precio del límite, que "
         "se movió. Hay que volver a mirar cuánto cuesta antes de darlo por "
         "gratis, y actualizar el número")
+
+
+def test_pisar_un_nombre_peligroso_es_rojo_y_cuanto_cuesta_hoy():
+    """EL DEFECTO DE `atados`, arreglado el 6-sep-2026, medido corriendo.
+
+    LO QUE PASABA. `_Contexto.atados` es PLANO: junta en un solo conjunto todo
+    nombre que el archivo ate, venga de donde venga. Y `resuelve` lo usa para
+    decidir si un nombre suelto es el builtin: `if nodo.id not in self.atados
+    and hasattr(builtins, nodo.id)`. O sea que UN parámetro llamado `getattr`,
+    en cualquier función del archivo, apagaba el motivo (c) para el archivo
+    entero. Medido con estos tres casos:
+
+        sin nada que pise el nombre               → rojo   la agarra
+        con un PARÁMETRO llamado getattr          → VERDE  invisible
+        con un parámetro de otro nombre (control) → rojo   la agarra
+
+    POR QUÉ ESTO SE ARREGLA Y NO SE DECLARA, que es la pregunta que decide de
+    qué lado va cada hallazgo en este archivo. Dos motivos, y los dos importan:
+
+      · No es ofuscación, es un descuido corriente. Usar el nombre de un
+        builtin como parámetro se escribe sin pensar, y esta guarda existe
+        justamente para los descuidos.
+      · Tira hacia VERDE, que es el lado que no avisa. Todo lo demás que está
+        declarado en `_FUERA_DE_LA_FRONTERA` tira hacia rojo o exige mala fe.
+
+    LO QUE COMPRUEBA ESTA PRUEBA, y en este orden:
+
+      1. Los tres casos de arriba, tal cual, con el arreglo puesto.
+      2. Que valga para LOS DIEZ nombres peligrosos y no solo para `getattr`.
+         Los nombres salen de los objetos (`f.__name__`), no de una lista
+         tecleada, así que un objeto peligroso nuevo entra solo.
+      3. Que valga para las CINCO formas de pisar un nombre, no solo para un
+         parámetro: un `def` propio, una asignación, un alias de import y el
+         destino de un `for` atan igual que un parámetro.
+      4. Y lo que cuesta hoy, contado sobre los archivos de verdad.
+    """
+    permitidos = _atributos_que_config_ofrece()
+
+    # ── 1. Los tres casos de la sala, tal cual
+    llamada = 'def robar(mod, n):\n    return getattr(mod, n)\n'
+    tres = {
+        "sin nada que pise el nombre": llamada,
+        "con un PARÁMETRO llamado getattr":
+            'def _otra(getattr):\n    return getattr\n\n\n' + llamada,
+        "control: un parámetro de otro nombre":
+            'def _otra(gatito):\n    return gatito\n\n\n' + llamada,
+    }
+    verdes = [k for k, src in tres.items() if not _infracciones(src, permitidos)]
+    assert not verdes, (
+        f"estos casos salieron VERDES: {verdes}. El del medio es el defecto "
+        "que motivó el motivo (k): un parámetro llamado `getattr` en otra "
+        "función apaga la resolución del nombre en todo el archivo, y el "
+        "`getattr(mod, n)` de abajo deja de verse. El de arriba y el control "
+        "tienen que seguir rojos por el motivo (c), o esta prueba estaría "
+        "midiendo el vacío")
+
+    # ── 2. Los DIEZ nombres, uno por uno, aislados. Cada caso no hace más que
+    # pisar el nombre: sin el motivo (k) los diez son verdes, porque `resuelve`
+    # devuelve «no lo sé» y «no lo sé» no era ningún objeto peligroso.
+    sueltos = {n: f'def _otra({n}):\n    return {n}\n'
+               for n in sorted(_NOMBRES_PELIGROSOS)}
+    sin_morder = [n for n, src in sueltos.items()
+                  if not _infracciones(src, permitidos)]
+    assert not sin_morder, (
+        f"pisar estos nombres peligrosos salió verde: {sin_morder}. Con el "
+        "nombre pisado la guarda no puede resolver a qué función se llama en "
+        "ninguna parte del archivo, y eso es «no lo sé», que en esta guarda es "
+        "rojo")
+
+    # Y el control del control: la MISMA forma con un nombre que no es de
+    # nadie tiene que salir verde. Sin esto, la comprobación de arriba estaría
+    # igual de contenta con una guarda que rojea todo lo que se le ponga
+    # delante, que es la otra forma de no comprobar nada.
+    assert not _infracciones('def _otra(gatito):\n    return gatito\n',
+                             permitidos), (
+        "la misma forma con un nombre inocente también sale roja, así que lo "
+        "de arriba no está midiendo el nombre sino la forma: la guarda rojea "
+        "cualquier cosa y eso no es vigilar, es apagarse")
+
+    # ── 3. Las cinco formas de pisar un nombre. Un parámetro no es la única.
+    formas = {
+        "un parámetro": 'def _otra(getattr):\n    return getattr\n',
+        "una función propia": 'def getattr(o, n):\n    return None\n',
+        "una asignación": 'getattr = None\n',
+        "un alias de import": 'import os as vars\n',
+        "el destino de un for": 'for getattr in (1, 2):\n    pass\n',
+    }
+    escapadas = [k for k, src in formas.items()
+                 if not _infracciones(src, permitidos)]
+    assert not escapadas, (
+        f"estas formas de pisar un nombre peligroso no se ven: {escapadas}. "
+        "`_Contexto.atados` las recoge todas, así que si alguna sale verde es "
+        "que el motivo (k) dejó de mirar `atados`")
+
+    # ── 3-bis. Y LA QUE `atados` NO RECOGE, dicha acá para no prometer de más:
+    # el `case` de un `match` ata su nombre en tiempo de ejecución y
+    # `_leer_ataduras` no lo mira —`ast.MatchAs` guarda el nombre en un campo,
+    # no en un nodo `ast.Name`—. No es un agujero: NO verlo significa que la
+    # guarda sigue resolviendo el nombre al builtin, así que el `getattr(mod,
+    # n)` de abajo cae por el motivo (c) igual. La dirección del error es la
+    # segura, y se comprueba corriendo en vez de razonarse.
+    con_match = (
+        'def _otra(x):\n'
+        '    match x:\n'
+        '        case getattr:\n'
+        '            return getattr\n'
+        '\n'
+        '\n' + llamada)
+    assert _infracciones(con_match, permitidos), (
+        "un `case getattr:` dejó el archivo verde. `atados` no ve los nombres "
+        "que ata un `match`, y hasta hoy eso caía del lado seguro —el nombre "
+        "seguía resolviendo al builtin y el motivo (c) mordía—; si ya no "
+        "muerde, la forma pasó al lado que no avisa y hay que recogerla en "
+        "`_leer_ataduras`")
+
+    # ── 4. LO QUE CUESTA, contado sobre los archivos reales y no afirmado.
+    pisan: dict[str, list[str]] = {}
+    for py in sorted(_archivos_vigilados(RAIZ)):
+        try:
+            arbol = ast.parse(py.read_bytes())
+        except SyntaxError:
+            continue
+        choque = sorted(_Contexto(arbol).atados & _NOMBRES_PELIGROSOS)
+        if choque:
+            pisan[str(py.relative_to(RAIZ))] = choque
+
+    assert not pisan, (
+        f"el motivo (k) dejó de costar cero: {pisan} atan un nombre que es el "
+        "de un objeto peligroso. Eso NO es un falso positivo que ignorar: "
+        "mientras ese nombre esté pisado la guarda no puede resolver ninguna "
+        "llamada de ese archivo, así que el arreglo es renombrar la variable, "
+        "no aflojar la regla")
+
+    print(f"\nMOTIVO (k) (medido al correr): {len(_NOMBRES_PELIGROSOS)} nombres "
+          f"peligrosos, derivados de los objetos; {len(pisan)} de "
+          f"{len(_archivos_vigilados(RAIZ))} archivos vigilados atan alguno.")
 
 
 def test_los_contadores_no_pueden_tapar_el_rojo_que_importa():
