@@ -26,11 +26,28 @@ lista cruda por ahí, lo escriba como lo escriba. Un camino nuevo no puede
 olvidarse de filtrar: no puede conseguir el buzón. El porqué de leer el árbol y
 no el texto está entero arriba de la guarda, más abajo.
 
-LA FRONTERA DE ESTA GUARDA, EN UNA LÍNEA. Se cierra acá, el 6-sep-2026, tras
-seis vueltas en las que cada una tapó una forma y apareció otra:
+LA FRONTERA DE ESTA GUARDA, EN UNA LÍNEA, corregida el 6-sep-2026 porque la
+que había prometía de más:
 
-    La guarda ve lo que un archivo NOMBRA. No ve lo que un archivo BUSCA
-    mientras corre.
+    La guarda ve lo que un archivo NOMBRA sobre algo que ella puede RESOLVER.
+    No ve lo que un archivo BUSCA mientras corre, ni lo que le pide a un objeto
+    que no pudo resolver.
+
+QUÉ TENÍA DE FALSO LA ANTERIOR, y por qué se escribe así el arreglo. Decía «la
+guarda ve lo que un archivo NOMBRA», a secas, con este criterio: tacha
+`CORREO_CUENTAS` del texto y, si el código deja de encontrar su objetivo, cae.
+La sala midió que no era cierto, con la diferencia más pequeña que hay:
+
+    vars(m)["CORREO_CUENTAS"]      → 1 failed   la agarra
+    vars(m).get("CORREO_CUENTAS")  → 1 passed   INVISIBLE
+
+Corchetes o punto. El nombre estaba escrito entero en las dos, así que por el
+propio criterio las dos tenían que caer. La causa era que el motivo (j) miraba
+LA FORMA DE LA OPERACIÓN —solo `ast.Subscript`— en vez del espacio de nombres;
+está arreglado y medido, y el motivo (j) explica de dónde sale ahora la
+pregunta. Lo que quedó fuera y no se pudo cerrar es la segunda mitad de la
+línea de arriba, y está declarada con su código exacto en
+`_FUERA_DE_LA_FRONTERA`, entrada por entrada.
 
 EL CRITERIO PARA SABER DE QUÉ LADO CAE ALGO NUEVO, sin tener que probarlo.
 Tacha del texto del archivo tres cosas: el nombre `config`, el nombre
@@ -38,21 +55,37 @@ Tacha del texto del archivo tres cosas: el nombre `config`, el nombre
 también los que estén partidos en trozos de string y los alias que se puedan
 seguir hasta un `import` o una asignación, porque la guarda los reconstruye.
 
-  · Si tachando eso el código DEJA DE ENCONTRAR su objetivo → la guarda lo
-    atrapa. Da igual cómo esté escrito: no hay que reconocer la forma, hay que
-    fallar en reconocerla.
+  · Si tachando eso el código DEJA DE ENCONTRAR su objetivo, Y el objeto al que
+    se lo pide llega por un camino que la guarda resuelve —un `import`, un
+    espacio de nombres abierto con `vars`/`globals`/`locals`/`__dict__`, o una
+    función que ella resuelve al objeto— → la guarda lo atrapa. Da igual cómo
+    esté escrito: no hay que reconocer la forma, hay que fallar en reconocerla.
   · Si lo SIGUE ENCONTRANDO —porque no dice qué quiere, sino que recorre una
     colección en tiempo de ejecución y elige comparando valores— → cae fuera, y
     la guarda no lo va a ver nunca. No hay parche que lo cambie: en el árbol de
     sintaxis no hay nada que resolver.
+  · Y si lo NOMBRA pero se lo pide a un objeto que la guarda no puede resolver
+    —`m.__getattribute__("CORREO_CUENTAS")` sobre un `m` que vino de la primera
+    rama— → también cae fuera. Para tener ese `m` hay que haber conseguido el
+    módulo por una puerta que ya está declarada fuera; en cuanto se consigue
+    por una que la guarda ve, se pone rojo. Las dos direcciones están medidas.
 
-POR QUÉ SE CORTÓ LA PERSECUCIÓN AHÍ, y no en la séptima forma. El espacio de
+POR QUÉ SE CORTÓ LA PERSECUCIÓN AHÍ, y no en la forma siguiente. El espacio de
 maneras de buscar un objeto en tiempo de ejecución no tiene fondo, y una guarda
 que enumera formas siempre tiene una más que no vio. Lo que esta guarda sí
 puede prometer es lo otro: que un camino nuevo escrito POR DESCUIDO —el que se
 olvida de pedir el buzón por la puerta— cae. Para eso funciona, y eso está
 medido forma por forma en `_ESQUIVES`. Nadie escribe por descuido un bucle
 sobre los módulos cargados comparando un nombre partido en dos.
+
+Y LA DIFERENCIA ENTRE «UNA FORMA MÁS» Y «LA PROMESA SIN CUMPLIR», que es lo
+que decidió qué se arreglaba el 6-sep-2026 y qué no. `vars(m).get(...)` NO era
+otra forma de buscar en ejecución: nombraba la lista cruda con todas sus letras
+y caía dentro de lo que la guarda decía cubrir. Eso no se declara, se arregla.
+Una forma que NO nombra nada —recorrer los módulos cargados y elegir comparando
+un nombre partido— sí se declara, porque no hay nada en el árbol que mirar. La
+pregunta ante la siguiente, entonces, no es «¿es rebuscada?» sino «¿escribe el
+nombre?».
 
 LO QUE QUEDA FUERA, DECLARADO CON SU CÓDIGO EXACTO, para que nadie lo
 redescubra creyendo que es un agujero nuevo: `_FUERA_DE_LA_FRONTERA`, medido
@@ -859,6 +892,13 @@ _ATRIBUTO_POR_NOMBRE = (builtins.getattr, builtins.setattr, builtins.delattr)
 _TEXTO_A_CODIGO = (builtins.eval, builtins.exec, builtins.compile,
                    builtins.__import__)
 
+# Las tres funciones que DEVUELVEN EL ESPACIO DE NOMBRES de algo. También son
+# OBJETOS, así que `v = vars` no apaga nada. La cuarta forma de abrir un espacio
+# no es una función sino el atributo `__dict__`, que es el nombre que Python le
+# pone al espacio de nombres de un objeto y que no se puede cambiar por otro.
+# Ver `_Contexto.abre_un_espacio` y `_infracciones`, motivo (j).
+_ABREN_UN_ESPACIO = (builtins.vars, builtins.globals, builtins.locals)
+
 # EL FONDO, dicho en una línea: en un archivo vigilado, estos siete objetos SOLO
 # pueden aparecer siendo llamados —y los de `_TEXTO_A_CODIGO` ni eso—. Nombrar
 # uno sin llamarlo es rojo, se le llame como se le llame.
@@ -1051,9 +1091,11 @@ class _Contexto:
         self.locales_config: set[str] = set()  # nombres que SON el módulo
         self.derivados: set[str] = set()       # nombres atados desde un espacio
         self.objetos: dict[str, set] = {}      # nombre local → objetos de hoy
+        self.espacios: set[str] = set()        # nombres que SON un espacio ya abierto
         self._leer_ataduras(arbol)
         self._propagar(arbol)
         self._resolver_nombres(arbol)
+        self._propagar_espacios(arbol)
 
     def _leer_ataduras(self, arbol) -> None:
         for n in ast.walk(arbol):
@@ -1121,6 +1163,48 @@ class _Contexto:
                     self.derivados.add(destino.id)
             if len(self.derivados) == antes:
                 return
+
+    def _propagar_espacios(self, arbol) -> None:
+        """`d = vars(m)` deja a `d` SIENDO el espacio de nombres de algo.
+
+        Sin esto, guardar el espacio en una variable apaga el motivo (j) entero
+        con una línea, que es exactamente la especie de fuga que este archivo ya
+        cerró tres veces por el lado de `getattr`. Se repite hasta que deje de
+        crecer, para seguir `d = vars(m)`, `e = d`.
+        """
+        for _ in range(10):
+            antes = len(self.espacios)
+            for n in ast.walk(arbol):
+                destino = valor = None
+                if isinstance(n, ast.Assign) and len(n.targets) == 1:
+                    destino, valor = n.targets[0], n.value
+                elif isinstance(n, ast.AnnAssign) and n.value is not None:
+                    destino, valor = n.target, n.value
+                elif isinstance(n, (ast.For, ast.AsyncFor)):
+                    destino, valor = n.target, n.iter
+                if isinstance(destino, ast.Name) and valor is not None \
+                        and self.abre_un_espacio(valor):
+                    self.espacios.add(destino.id)
+            if len(self.espacios) == antes:
+                return
+
+    def abre_un_espacio(self, nodo) -> bool:
+        """¿Esta expresión ES el espacio de nombres de algo?
+
+        Tres formas, y ninguna se reconoce por el texto:
+
+          · una llamada que RESUELVE AL OBJETO `vars`, `globals` o `locals`
+            (`_ABREN_UN_ESPACIO`), igual que `llama_a` hace con `getattr`;
+          · el atributo `__dict__`, que es como Python llama al espacio de
+            nombres de un objeto y no admite otro nombre;
+          · un nombre al que se le asignó cualquiera de las dos, que es lo que
+            propaga `_propagar_espacios`.
+        """
+        if isinstance(nodo, ast.Name) and nodo.id in self.espacios:
+            return True
+        if isinstance(nodo, ast.Attribute) and nodo.attr == "__dict__":
+            return True
+        return self.llama_a(nodo, _ABREN_UN_ESPACIO) is not None
 
     # ── A qué objeto resuelve un nombre ──────────────────────────────────
 
@@ -1398,25 +1482,58 @@ def _infracciones(fuente, permitidos: set[str]) -> list[str]:
                         f"llamarlo ({ast.unparse(n)}); así se le pone otro "
                         "nombre y las comprobaciones dejan de reconocerlo")
 
-        # (j) Abrirle a algo su espacio de nombres y pedirle una clave que no
-        #     puedo enumerar. Es la tercera forma de sacarle un atributo a un
-        #     módulo, después del punto y de `getattr`, y la única que se
-        #     escapaba de las dos: `vars(importlib.import_module(n))[k]`.
+        # (j) EL ESPACIO DE NOMBRES DE ALGO, ABIERTO. `vars(x)`, `globals()`,
+        #     `locals()` y `x.__dict__` son la tercera forma de sacarle un
+        #     atributo a un módulo, después del punto y de `getattr`.
         #
-        #     Y la otra mitad, que faltaba: si la clave SÍ se puede enumerar y
-        #     es uno de los dos nombres prohibidos, también es rojo. (j) tenía
-        #     el defecto de (d) por el lado contrario —cubría lo indeterminable
-        #     y se le escapaba el literal—, así que `vars(mod)["CORREO_CUENTAS"]`
-        #     y `mod.__dict__["CORREO_CUENTAS"]` pasaban en verde. Es la misma
-        #     pareja de ramas que (e) ya tenía escrita.
-        if isinstance(n, ast.Subscript):
-            base = n.value
-            abre = (ctx.llama_a(base, (builtins.vars,)) is not None
-                    or (isinstance(base, ast.Attribute)
-                        and base.attr == "__dict__"))
-            if abre:
-                claves = pedidos(n.slice)
-                prohibidas = {_PROHIBIDO, _MODULO_CONFIG}
+        #     DE DÓNDE SALE «esto le está pidiendo una clave a un espacio de
+        #     nombres», que es la pregunta entera. Hasta el 6-sep-2026 la
+        #     respuesta era LA FORMA DE LA OPERACIÓN: solo se miraba un
+        #     `ast.Subscript`. Así que `vars(m)["CORREO_CUENTAS"]` salía rojo y
+        #     `vars(m).get("CORREO_CUENTAS")` salía VERDE devolviendo el objeto
+        #     `config.CORREO_CUENTAS` en persona, con la única diferencia de
+        #     cambiar corchetes por punto. Lo mismo `m.__dict__.get(...)` y
+        #     `dict.get(vars(m), ...)`.
+        #
+        #     Y la respuesta NO PUEDE SER EL NOMBRE DEL MÉTODO. Añadir `get` a
+        #     una lista deja fuera `pop`, `setdefault`, `__getitem__` llamado a
+        #     mano, `operator.getitem`, `dict.get` desatado y el que se invente
+        #     mañana: es la misma lista tecleada que este archivo ya quitó de
+        #     `getattr` y de las fábricas de módulos.
+        #
+        #     LA RESPUESTA, y el fondo: no se mira la operación, se mira EL
+        #     ESPACIO. `abre_un_espacio` resuelve `vars`/`globals`/`locals` AL
+        #     OBJETO —así `v = vars; v(m)` cuenta igual— y sigue `__dict__`, que
+        #     es el nombre que Python le da al espacio de nombres. Abierto el
+        #     espacio, TODO NOMBRE QUE VIAJE a la operación que se le hace tiene
+        #     que ser enumerable y no prohibido, sea cual sea esa operación. Un
+        #     método que nadie previó cae del lado correcto porque la guarda
+        #     nunca le pregunta cómo se llama: le pregunta qué le entregan.
+        #
+        #     Y lo que se queda fuera, a propósito y por lo mismo: una operación
+        #     que NO LLEVA NINGÚN NOMBRE —`vars(m).values()`, `vars(m).items()`—
+        #     no nombra nada, así que no hay nada que clasificar. Es exactamente
+        #     la especie declarada en `_FUERA_DE_LA_FRONTERA`: buscar en
+        #     ejecución sin decir qué se busca.
+        if ctx.abre_un_espacio(n):
+            padre = getattr(n, "_padre", None)
+            abuelo = getattr(padre, "_padre", None)
+            if isinstance(padre, ast.Subscript) and padre.value is n:
+                # `vars(m)[k]`
+                viajan = [padre.slice]
+            elif isinstance(padre, ast.Attribute) and padre.value is n and \
+                    isinstance(abuelo, ast.Call) and abuelo.func is padre:
+                # `vars(m).loquesea(k, ...)` — el método da igual
+                viajan = list(abuelo.args) + [k.value for k in abuelo.keywords]
+            elif isinstance(padre, ast.Call) and any(a is n for a in padre.args):
+                # `dict.get(vars(m), k)`, `operator.getitem(vars(m), k)`
+                viajan = [a for a in padre.args if a is not n] + \
+                    [k.value for k in padre.keywords]
+            else:
+                viajan = []
+            prohibidas = {_PROHIBIDO, _MODULO_CONFIG}
+            for viaja in viajan:
+                claves = pedidos(viaja)
                 if claves is None:
                     malas.append(
                         f"línea {n.lineno}: le pide al espacio de nombres de "
@@ -2009,6 +2126,53 @@ def cuentas(mod):
 def cuentas(mod):
     return mod.__dict__["CORREO_CUENTAS"]
 """,
+    # LAS MISMAS DOS DE ARRIBA CON UN PUNTO EN VEZ DE CORCHETES. Medido por la
+    # sala el 6-sep-2026 sobre la guarda anterior, metiendo las dos formas en un
+    # archivo que YA EXISTÍA: `vars(m)["CORREO_CUENTAS"]` daba 1 failed y
+    # `vars(m).get("CORREO_CUENTAS")` daba 1 passed devolviendo el objeto
+    # `config.CORREO_CUENTAS` en persona. El motivo (j) solo miraba
+    # `ast.Subscript`, y un `.get(...)` es un `ast.Call`.
+    #
+    # Las cinco están acá y no una sola a propósito: si la respuesta a esto
+    # hubiera sido añadir `get` a una lista de métodos, las otras cuatro
+    # seguirían verdes. Ahora ninguna de las cinco menciona el método en la
+    # guarda — cae el espacio de nombres, no la operación.
+    "la lista cruda pedida con .get al espacio de nombres de algo": """
+def cuentas(mod):
+    return vars(mod).get("CORREO_CUENTAS")
+""",
+    "la lista cruda pedida con .get al __dict__ de algo": """
+def cuentas(mod):
+    return mod.__dict__.get("CORREO_CUENTAS")
+""",
+    "la lista cruda pedida con dict.get desatado": """
+def cuentas(mod):
+    return dict.get(vars(mod), "CORREO_CUENTAS")
+""",
+    "la lista cruda sacada con un método que nadie previó": """
+def cuentas(mod):
+    return vars(mod).setdefault("CORREO_CUENTAS", [])
+""",
+    "el espacio de nombres guardado en una variable primero": """
+def cuentas(mod):
+    espacio = vars(mod)
+    return espacio.get("CORREO_CUENTAS")
+""",
+    # `globals()` y `locals()` son la misma puerta que `vars()`: los tres son
+    # objetos de builtins que devuelven un espacio de nombres. Con corchetes
+    # caen por el motivo (e), así que estas dos están escritas con `.get` —
+    # medido el 6-sep-2026: quitando `globals` y `locals` de `_ABREN_UN_ESPACIO`
+    # las 38 pruebas seguían en VERDE, o sea que esa mitad del arreglo no la
+    # comprobaba nadie.
+    "la lista cruda pedida con .get al espacio global": """
+def cuentas():
+    return globals().get("CORREO_CUENTAS")
+""",
+    "la lista cruda pedida con .get al espacio local": """
+def cuentas(CORREO_CUENTAS=None):
+    # se llama como `cuentas(**vars(config))`, desde otro archivo
+    return locals().get("CORREO_CUENTAS")
+""",
     # Y la tercera del mismo día: `getattr` con los argumentos desparramados.
     # El motivo (c) pedía `len(n.args) >= 2` para poder mirar el segundo, así
     # que una llamada sin segundo argumento POSICIONAL se iba en silencio — que
@@ -2599,7 +2763,18 @@ def _arbol_de_este_archivo():
     uno no se encuentran en los índices del otro. Eso ya rompió esta prueba una
     vez, y de la forma peligrosa: daba rojo cuando el código estaba bien.
     """
-    arbol = ast.parse(inspect.getsource(sys.modules[__name__]))
+    return _con_padres(inspect.getsource(sys.modules[__name__]))
+
+
+def _con_padres(fuente: str):
+    """Un árbol con cada nodo apuntando a su padre en `_p`.
+
+    Está aparte de `_arbol_de_este_archivo` para que las pruebas puedan medir
+    los cuidados sobre un texto INVENTADO. Sin eso, «este cuidado no se pasa con
+    un gesto» sería una afirmación de comentario: la única forma de comprobarla
+    es escribir el gesto y ver que sale rojo.
+    """
+    arbol = ast.parse(fuente)
     for padre in ast.walk(arbol):
         for hijo in ast.iter_child_nodes(padre):
             hijo._p = padre                          # type: ignore[attr-defined]
@@ -2704,51 +2879,88 @@ def _motivos_que_enumeran_nombres(arbol) -> dict[str, list[ast.Call]]:
     return salida
 
 
-def test_ningun_sitio_del_archivo_deja_pasar_lo_que_no_puede_enumerar():
-    """LA regla, exigida a TODO EL ARCHIVO y no leyéndolo uno a uno.
+# Lo que una rama tiene que CONTENER para que se acepte que hace algo. La lista
+# es sobre la gramática de sentencias de Python, que sí es finita y enumerable,
+# y va por el lado seguro: una clase de nodo que no esté acá NO cuenta como
+# consecuencia, así que una forma nueva de «hacer algo» se pone roja y se ve, en
+# vez de colarse en verde. Ver `_juez_de_cuidados`.
+_HACEN_ALGO = (ast.Return, ast.Raise, ast.Assert, ast.Break, ast.Continue,
+               ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Delete,
+               ast.Call, ast.Yield, ast.YieldFrom, ast.Await,
+               ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal)
 
-    EL AGUJERO DEL 6-sep-2026 no fue una clase nueva de fuga: fue la regla de
-    esta guarda sin aplicar a una rama. De los motivos que preguntan qué nombres
-    puede valer una expresión, todos menos uno trataban «no lo sé» como ROJO. El
-    motivo (d) preguntaba `if trae and _MODULO_CONFIG in trae`, así que un
-    `None` —que significa «no se puede enumerar»— hacía la condición False en
-    silencio. Por ahí salía la lista cruda entera.
 
-    Y EL AGUJERO DE ESTA PRUEBA, del mismo día: miraba solo
-    `inspect.getsource(_infracciones)`. Un testigo escribió un motivo con
-    exactamente ese defecto en una FUNCIÓN AUXILIAR de fuera, llamada desde el
-    bucle con una línea, y la suite dio 35 passed. La prueba prometía «el
-    séptimo motivo no puede nacer con este defecto» y solo miraba un trozo del
-    archivo.
+def _juez_de_cuidados(arbol):
+    """Devuelve `como_se_cuida(llamada) -> letra | None` sobre ESTE árbol.
 
-    SU ALCANCE, AHORA, dicho con precisión y sin prometer de más:
+    Está fuera de la prueba para que se pueda pasar un árbol INVENTADO y medir
+    cada cuidado con un caso escrito, en vez de afirmar en un comentario que no
+    se pasan con un gesto. Lo mide
+    `test_los_cuidados_no_se_pasan_con_un_gesto_que_no_hace_nada`.
 
-      · MIRA el archivo entero —`sys.modules[__name__]`, no una ruta escrita
-        acá— y dentro de él TODA llamada al enumerador `_cadenas`, se le llame
-        como se le llame: los alias se derivan del árbol (una función que no
-        hace más que devolver lo que él devuelve), no hay ninguno tecleado.
-      · EXIGE que el resultado de cada una haga una de estas cinco cosas, y
-        nada más: (A) compararse contra `None` ahí mismo; (B) asignarse a un
-        nombre que se compara contra `None` después y en el mismo bloque; (C)
-        devolverse tal cual, con lo que la obligación pasa a quien llame —y ese
-        sitio también está en esta lista—; (D) recogerse en una comprensión
-        cuyos elementos se comparan contra `None`; (E) pasarse como argumento a
-        una función de este archivo que compara ESE parámetro contra `None`.
-      · NO MIRA lo que la guarda hace con el resultado una vez comparado. Que
-        `claves is None` dispare el `malas.append` correcto lo mide
-        `test_lo_indeterminable_es_rojo_en_cada_motivo_por_separado`, motivo por
-        motivo y corriendo. Entre las dos no queda hueco: ésta ve la forma en
-        todo el archivo, la otra ve el veredicto en cada motivo.
+    LOS CINCO CUIDADOS: (A) el resultado se compara contra `None` ahí mismo;
+    (B) se asigna a un nombre que se compara contra `None` después y en el mismo
+    bloque; (C) se devuelve tal cual, con lo que la obligación pasa a quien
+    llame; (D) se recoge en una comprensión cuyos elementos se comparan contra
+    `None`; (E) se pasa como argumento a una función de este archivo que compara
+    ESE parámetro contra `None`.
 
-    No hay ninguna lista de motivos ni de sitios escrita acá.
+    Y LA CONDICIÓN QUE LES FALTABA A CUATRO DE LOS CINCO, del 6-sep-2026: que la
+    comparación TENGA CONSECUENCIA. Un testigo metió en una copia un motivo
+    defectuoso pasando el valor por este ayudante:
+
+        def _log_si_desconocido(nombre_atributo):
+            if nombre_atributo is None:
+                pass                  # un "diagnóstico" que no diagnostica nada
+            return nombre_atributo
+
+    y el cuidado (E) lo aceptó —36 passed— porque solo preguntaba si el
+    parámetro se comparaba contra `None` en alguna parte del cuerpo, sin mirar
+    si esa comparación hacía algo. Con esa copia, un `setattr` dinámico sobre
+    `config` quedaba verde y funcionaba. (A), (B) y (D) tenían el mismo defecto:
+    les bastaba que la comparación existiera. El único sano era (C), porque
+    devolver un valor no se puede fingir: el valor sale de verdad y la
+    obligación cae en quien llama, que también está en la lista.
+
+    QUÉ CUENTA COMO CONSECUENCIA, y por qué así. Se sube desde la comparación
+    hasta la SENTENCIA que la contiene:
+
+      · Si esa sentencia es una expresión suelta (`ast.Expr`), el valor de la
+        comparación se tira a la basura: no hay consecuencia. Es el único
+        enunciado de Python que evalúa algo y descarta el resultado, así que
+        esta rama no es una lista adivinada sino el complemento de un hecho.
+      · Si es un `if`/`while` cuyo test contiene la comparación, la consecuencia
+        vive en las ramas: alguna tiene que CONTENER algo de `_HACEN_ALGO`.
+      · Si es cualquier otra sentencia (`return`, una asignación, un `assert`,
+        un argumento de llamada, el iterable de un `for`), el valor SALE de
+        donde está y eso cuenta.
+
+    SU FONDO, dicho para que no prometa de más: comprueba que la rama NO ESTÉ
+    VACÍA, no que lo que hay dentro sea lo correcto. `if x is None: _ = 1` sigue
+    pasando, y eso está medido en la prueba de los gestos. Que el `is None`
+    dispare el `malas.append` que toca lo mide, corriendo y motivo por motivo,
+    `test_lo_indeterminable_es_rojo_en_cada_motivo_por_separado`.
     """
-    arbol = _arbol_de_este_archivo()
+    def rama_hace_algo(cuerpo) -> bool:
+        return any(isinstance(x, _HACEN_ALGO)
+                   for s in cuerpo for x in ast.walk(s))
+
+    def tiene_consecuencia(cmp) -> bool:
+        hijo, arriba = cmp, getattr(cmp, "_p", None)
+        while arriba is not None and not isinstance(arriba, ast.stmt):
+            hijo, arriba = arriba, getattr(arriba, "_p", None)
+        if arriba is None or isinstance(arriba, ast.Expr):
+            return False
+        if isinstance(arriba, (ast.If, ast.While)) and arriba.test is hijo:
+            return rama_hace_algo(arriba.body) or rama_hace_algo(arriba.orelse)
+        return True
 
     def compara_con_none(nodo) -> bool:
         return isinstance(nodo, ast.Compare) and \
             any(isinstance(o, (ast.Is, ast.IsNot)) for o in nodo.ops) and \
             any(isinstance(c, ast.Constant) and c.value is None
-                for c in nodo.comparators)
+                for c in nodo.comparators) and \
+            tiene_consecuencia(nodo)
 
     # DÓNDE vive cada sentencia: su bloque y su posición dentro de él. Hace
     # falta para no darse por satisfecho con que el nombre se compare «en
@@ -2835,6 +3047,60 @@ def test_ningun_sitio_del_archivo_deja_pasar_lo_que_no_puede_enumerar():
                     return "E"
         return None
 
+    return como_se_cuida
+
+
+def test_ningun_sitio_del_archivo_deja_pasar_lo_que_no_puede_enumerar():
+    """LA regla, exigida a TODO EL ARCHIVO y no leyéndolo uno a uno.
+
+    EL AGUJERO DEL 6-sep-2026 no fue una clase nueva de fuga: fue la regla de
+    esta guarda sin aplicar a una rama. De los motivos que preguntan qué nombres
+    puede valer una expresión, todos menos uno trataban «no lo sé» como ROJO. El
+    motivo (d) preguntaba `if trae and _MODULO_CONFIG in trae`, así que un
+    `None` —que significa «no se puede enumerar»— hacía la condición False en
+    silencio. Por ahí salía la lista cruda entera.
+
+    Y EL AGUJERO DE ESTA PRUEBA, del mismo día: miraba solo
+    `inspect.getsource(_infracciones)`. Un testigo escribió un motivo con
+    exactamente ese defecto en una FUNCIÓN AUXILIAR de fuera, llamada desde el
+    bucle con una línea, y la suite dio 35 passed. La prueba prometía «el
+    séptimo motivo no puede nacer con este defecto» y solo miraba un trozo del
+    archivo.
+
+    SU ALCANCE, AHORA, dicho con precisión y sin prometer de más:
+
+      · MIRA el archivo entero —`sys.modules[__name__]`, no una ruta escrita
+        acá— y dentro de él TODA llamada al enumerador `_cadenas`, se le llame
+        como se le llame: los alias se derivan del árbol (una función que no
+        hace más que devolver lo que él devuelve), no hay ninguno tecleado.
+      · EXIGE que el resultado de cada una haga una de estas cinco cosas, y
+        nada más: (A) compararse contra `None` ahí mismo; (B) asignarse a un
+        nombre que se compara contra `None` después y en el mismo bloque; (C)
+        devolverse tal cual, con lo que la obligación pasa a quien llame —y ese
+        sitio también está en esta lista—; (D) recogerse en una comprensión
+        cuyos elementos se comparan contra `None`; (E) pasarse como argumento a
+        una función de este archivo que compara ESE parámetro contra `None`.
+        Los cinco están en `_juez_de_cuidados`, con la condición que les faltaba
+        a cuatro: que la comparación TENGA CONSECUENCIA. Hasta el 6-sep-2026
+        bastaba con que estuviera escrita, y un `if x is None: pass` pasaba por
+        cuidado — medido, y ahora medido al revés en
+        `test_los_cuidados_no_se_pasan_con_un_gesto_que_no_hace_nada`.
+      · NO MIRA lo que la guarda hace con el resultado una vez comparado, ni si
+        lo que hay dentro de la rama sirve: solo que la rama no esté vacía. Que
+        `claves is None` dispare el `malas.append` correcto lo mide
+        `test_lo_indeterminable_es_rojo_en_cada_motivo_por_separado`, motivo por
+        motivo y corriendo. Entre las dos no queda hueco: ésta ve la forma en
+        todo el archivo, la otra ve el veredicto en cada motivo.
+      · Y UN HUECO QUE SÍ QUEDA, dicho para que no prometa de más: la otra mide
+        por LETRA de motivo, no por sitio. Dos llamadas bajo la misma letra, una
+        de ellas defectuosa, se cubren la una a la otra. Esta prueba lo tapa por
+        la forma —el sitio flojo sale igual— pero no por el veredicto.
+
+    No hay ninguna lista de motivos ni de sitios escrita acá.
+    """
+    arbol = _arbol_de_este_archivo()
+    como_se_cuida = _juez_de_cuidados(arbol)
+
     porletra = _motivos_que_enumeran_nombres(arbol)
     assert porletra, (
         "no se encontró ni un solo motivo de `_infracciones` que llame al "
@@ -2866,6 +3132,244 @@ def test_ningun_sitio_del_archivo_deja_pasar_lo_que_no_puede_enumerar():
         "6-sep-2026. Y si el sitio está FUERA de `_infracciones`, es además la "
         "forma exacta con la que un testigo burló esta prueba el mismo día: un "
         "motivo escrito en una función auxiliar")
+
+
+# Los cinco cuidados, cada uno escrito BIEN y escrito como GESTO. El gesto es
+# la misma forma con la comparación vaciada: existe, se lee igual, y no cambia
+# nada. Ninguna letra va tecleada en las claves de este diccionario — la letra
+# la dice el juez al correr, y por eso un cuidado que se renombre o desaparezca
+# se ve acá en vez de quedar en verde.
+_CUIDADOS_A_MEDIR = {
+    "(A) comparar el resultado ahí mismo": {
+        "bien": 'def motivo(n, amb):\n'
+                '    if _cadenas(n, amb) is None:\n'
+                '        malas.append("rojo")\n',
+        "gestos": [
+            # la comparación como sentencia suelta: su valor se tira
+            'def motivo(n, amb):\n'
+            '    _cadenas(n, amb) is None\n',
+            # y la comparación con una rama que no hace nada
+            'def motivo(n, amb):\n'
+            '    if _cadenas(n, amb) is None:\n'
+            '        pass\n',
+        ],
+    },
+    "(B) asignar y comparar después, en el mismo bloque": {
+        "bien": 'def motivo(n, amb):\n'
+                '    claves = _cadenas(n, amb)\n'
+                '    if claves is None:\n'
+                '        malas.append("rojo")\n',
+        "gestos": [
+            'def motivo(n, amb):\n'
+            '    claves = _cadenas(n, amb)\n'
+            '    if claves is None:\n'
+            '        pass\n',
+            'def motivo(n, amb):\n'
+            '    claves = _cadenas(n, amb)\n'
+            '    claves is None\n',
+        ],
+    },
+    "(C) devolverlo tal cual": {
+        "bien": 'def motivo(n, amb):\n'
+                '    if n is None:\n'
+                '        return None\n'
+                '    return _cadenas(n, amb)\n',
+        # (C) NO tiene gesto, y no es un descuido de esta lista: devolver un
+        # valor no se puede fingir. El `None` sale de verdad de la función y la
+        # obligación cae entera en quien llama, que también está en la lista de
+        # sitios. Los otros cuatro se cuidan CON UNA COMPARACIÓN, y una
+        # comparación sí se puede escribir sin que sirva para nada.
+        "gestos": [],
+    },
+    "(D) recogerlo en una comprensión y comparar los elementos": {
+        "bien": 'def motivo(elts, amb):\n'
+                '    partes = [_cadenas(e, amb) for e in elts]\n'
+                '    if any(p is None for p in partes):\n'
+                '        return None\n'
+                '    return partes\n',
+        "gestos": [
+            'def motivo(elts, amb):\n'
+            '    partes = [_cadenas(e, amb) for e in elts]\n'
+            '    any(p is None for p in partes)\n'
+            '    return partes\n',
+            'def motivo(elts, amb):\n'
+            '    partes = [_cadenas(e, amb) for e in elts]\n'
+            '    if any(p is None for p in partes):\n'
+            '        pass\n'
+            '    return partes\n',
+        ],
+    },
+    "(E) pasarlo a una función que compara ESE parámetro": {
+        "bien": 'def _cuidar(valor):\n'
+                '    if valor is None:\n'
+                '        raise AssertionError("rojo")\n'
+                '    return valor\n'
+                '\n'
+                'def motivo(n, amb):\n'
+                '    return _cuidar(_cadenas(n, amb))\n',
+        "gestos": [
+            # EL GESTO QUE ENCONTRÓ UN TESTIGO EL 6-sep-2026, textual: un
+            # "diagnóstico" que no diagnostica nada. Con esto en una copia, un
+            # `setattr` dinámico sobre `config` quedaba verde y funcionaba.
+            'def _log_si_desconocido(nombre_atributo):\n'
+            '    if nombre_atributo is None:\n'
+            '        pass\n'
+            '    return nombre_atributo\n'
+            '\n'
+            'def motivo(n, amb):\n'
+            '    return _log_si_desconocido(_cadenas(n, amb))\n',
+        ],
+    },
+}
+
+
+def test_los_cuidados_no_se_pasan_con_un_gesto_que_no_hace_nada():
+    """Los cinco cuidados, medidos con un caso bueno y uno vaciado por dentro.
+
+    POR QUÉ EXISTE. Hasta el 6-sep-2026 los cuidados (A), (B), (D) y (E) solo
+    preguntaban si la comparación contra `None` ESTABA ESCRITA. Un testigo
+    escribió el ayudante de `(E) gestos[0]` —`if x is None: pass`, con el
+    comentario «un diagnóstico»— y `test_ningun_sitio_del_archivo_deja_pasar_lo
+    _que_no_puede_enumerar` dio 36 passed sobre una copia en la que un `setattr`
+    dinámico sobre `config` salía verde y devolvía la lista cruda.
+
+    Y por qué se mide en vez de afirmarse: la promesa «este cuidado no se pasa
+    con un gesto» solo se puede comprobar escribiendo el gesto. Un comentario
+    que lo diga es exactamente la clase de cifra tecleada que este archivo ya
+    tuvo que quitar dos veces.
+
+    EL FONDO DE LA COMPROBACIÓN, dicho acá para que no prometa de más: el juez
+    exige que la rama NO ESTÉ VACÍA, no que lo que hay dentro sirva. Eso se mide
+    abajo con su caso: `if x is None: _ = 1` sigue pasando. Lo que cierra ese
+    resto es la otra prueba, la que corre cada motivo y mira el veredicto.
+    """
+    for nombre, caso in _CUIDADOS_A_MEDIR.items():
+        arbol = _con_padres(caso["bien"])
+        sitios = _sitios_que_enumeran_nombres(arbol)
+        assert len(sitios) == 1, (
+            f"{nombre}: el caso bueno tiene {len(sitios)} llamadas al "
+            "enumerador y tiene que tener exactamente una; si tiene cero, este "
+            "caso está midiendo el vacío y pasa sin comprobar nada")
+        letra = _juez_de_cuidados(arbol)(sitios[0])
+        assert letra == nombre[1], (
+            f"{nombre}: el caso escrito BIEN ya no se acepta con su cuidado — "
+            f"el juez dice {letra!r}. O el cuidado desapareció, o el caso dejó "
+            "de ser un ejemplo suyo; en cualquiera de los dos casos lo que este "
+            "diccionario dice medir no es lo que mide")
+
+    colados = []
+    for nombre, caso in _CUIDADOS_A_MEDIR.items():
+        for i, fuente in enumerate(caso["gestos"]):
+            arbol = _con_padres(fuente)
+            sitios = _sitios_que_enumeran_nombres(arbol)
+            assert len(sitios) == 1, (
+                f"{nombre} gesto {i}: {len(sitios)} llamadas al enumerador en "
+                "vez de una; un gesto que no se ve no mide nada")
+            letra = _juez_de_cuidados(arbol)(sitios[0])
+            if letra is not None:
+                colados.append(f"{nombre} gesto {i} → aceptado como {letra!r}")
+
+    assert not colados, (
+        f"estos gestos pasan por cuidado sin cuidar nada: {colados}. Una "
+        "comparación contra `None` que no cambia nada es un trámite, y el "
+        "cuidado que la acepta convierte esta guarda entera en un trámite: fue "
+        "así como un motivo defectuoso salió 36 passed el 6-sep-2026")
+
+    # ── EL FONDO, medido y no prometido: hasta dónde llega esto y hasta dónde
+    # no. Se comprueba que la rama HACE ALGO, no que lo que hace sirva. Este
+    # caso pasa a propósito, y está escrito para que nadie lea la prueba de
+    # arriba como si cerrara más de lo que cierra.
+    con_fondo = ('def _cuidar(valor):\n'
+                 '    if valor is None:\n'
+                 '        _ = 1\n'
+                 '    return valor\n'
+                 '\n'
+                 'def motivo(n, amb):\n'
+                 '    return _cuidar(_cadenas(n, amb))\n')
+    arbol = _con_padres(con_fondo)
+    fondo = _juez_de_cuidados(arbol)(_sitios_que_enumeran_nombres(arbol)[0])
+    assert fondo == "E", (
+        "el fondo declarado se movió: una rama que asigna algo inútil ya no "
+        "pasa. Es mejor de lo declarado, y hay que reescribir la declaración — "
+        "una frontera que promete de menos hace que nadie vuelva a mirar")
+
+
+def test_cuanto_cuesta_mirar_el_espacio_de_nombres_y_no_el_metodo():
+    """El precio del motivo (j), contado sobre los archivos reales.
+
+    LA TENTACIÓN que había que medir antes de escribir nada: `.get("algo")` es
+    de lo más común que hay en Python. Si la respuesta a
+    `vars(m).get("CORREO_CUENTAS")` hubiera sido «un `.get` con un argumento que
+    no puedo enumerar es rojo», la guarda habría empezado a rojear código que no
+    tiene nada que ver con buzones; una guarda que estorba se termina apagando,
+    y entonces no vigila nada.
+
+    LAS DOS CIFRAS, contadas acá y no escritas en ningún comentario:
+
+      · lo que costaría la regla a secas — llamadas a un método `get` con algún
+        argumento que la guarda no puede enumerar;
+      · lo que cuesta la que se quedó — sitios donde un archivo ABRE el espacio
+        de nombres de algo (`vars`, `globals`, `locals`, `__dict__`), que es lo
+        único que el motivo (j) mira.
+
+    La segunda es la que decide, y es la que tiene aserción: mientras sea cero,
+    la regla no le cuesta nada a nadie. La primera va detrás y marcada como
+    contador, para que su movimiento no aborte nunca lo que importa.
+    """
+    llamadas = get_opacos = aperturas = sin_resolver = 0
+    rojos: dict[str, list[str]] = {}
+    permitidos = _atributos_que_config_ofrece()
+    for py in _archivos_vigilados(RAIZ):
+        try:
+            arbol = ast.parse(py.read_bytes())
+        except SyntaxError:
+            continue
+        for padre in ast.walk(arbol):
+            for hijo in ast.iter_child_nodes(padre):
+                hijo._padre = padre              # type: ignore[attr-defined]
+        ctx = _Contexto(arbol)
+        for n in ast.walk(arbol):
+            if isinstance(n, ast.Call):
+                llamadas += 1
+                if all(o is _DESCONOCIDO for o in ctx.resuelve(n.func)):
+                    sin_resolver += 1
+                if isinstance(n.func, ast.Attribute) and n.func.attr == "get" \
+                        and any(_cadenas(a, ctx.ambitos) is None
+                                for a in list(n.args)
+                                + [k.value for k in n.keywords]):
+                    get_opacos += 1
+            if not ctx.abre_un_espacio(n):
+                continue
+            aperturas += 1
+            motivos = [m for m in _infracciones(py.read_bytes(), permitidos)
+                       if m.startswith(f"línea {n.lineno}:")
+                       and "espacio de nombres" in m]
+            if motivos:
+                rojos.setdefault(str(py.relative_to(RAIZ)), []).extend(motivos)
+
+    # PRIMERO lo que importa: la regla que se quedó no rojea a nadie.
+    assert not rojos, (
+        f"el motivo (j) empezó a costar: {rojos}. Un archivo real abre el "
+        "espacio de nombres de algo y le pide un nombre que la guarda no puede "
+        "clasificar. Eso no es un falso positivo que ignorar — o el sitio se "
+        "reescribe pidiendo el buzón por config.cuentas_de_correo(para=...), o "
+        "la frontera se renegocia con Tiziano, pero no se afloja la regla")
+
+    print(f"\nCOSTO DEL MOTIVO (j), medido al correr sobre "
+          f"{len(_archivos_vigilados(RAIZ))} archivos vigilados y "
+          f"{llamadas} llamadas: la regla que se quedó mira {aperturas} "
+          f"sitios (los que abren un espacio de nombres) y rojea {len(rojos)}. "
+          f"La regla a secas —«un `.get` con un argumento que no puedo "
+          f"enumerar es rojo»— habría rojeado {get_opacos}. Y la que cerraría "
+          f"la entrada `__getattribute__` de `_FUERA_DE_LA_FRONTERA` —«toda "
+          f"llamada cuyo callee no se resuelve es roja»— tocaría "
+          f"{sin_resolver}.")
+
+    assert get_opacos > aperturas, (
+        _MARCA_CONTADOR + f"la regla a secas costaría {get_opacos} y la que se "
+        f"quedó mira {aperturas} sitios. Si la primera ya no es mayor, el "
+        "motivo por el que se eligió mirar el espacio y no el método dejó de "
+        "ser cierto y hay que volver a mirarlo")
 
 
 def test_lo_indeterminable_es_rojo_en_cada_motivo_por_separado():
@@ -3107,6 +3611,51 @@ _FUERA_DE_LA_FRONTERA = {
             "«lo resolví MAL ⇒ verde». Arreglarlo pide darle ámbitos a "
             "`importados`, o sea rehacer el Tramo 2 entero: es otra vuelta, y "
             "por eso hoy se declara en vez de perseguirse",
+    },
+    # LA CUARTA, encontrada el 6-sep-2026 al cerrar el motivo (j) y declarada
+    # el mismo día porque es la MITAD QUE FALTABA DE LA FRONTERA. El criterio
+    # de la cabecera decía «tacha `CORREO_CUENTAS`; si el código deja de
+    # encontrar su objetivo, la guarda lo atrapa», y acá el nombre está escrito
+    # entero y aun así no cae: `__getattribute__` es el `getattr` que vive
+    # DENTRO del objeto, y el motivo (c) reconoce a `getattr` resolviéndolo al
+    # objeto — sobre un `m` que la guarda no sabe qué es no hay nada que
+    # resolver. Ejecutada devuelve `config.CORREO_CUENTAS` en persona
+    # (`resultado is config.CORREO_CUENTAS` → True, medido).
+    #
+    # Por eso la frontera de la cabecera dice ahora «lo que un archivo nombra
+    # SOBRE UN OBJETO QUE LA GUARDA PUEDE RESOLVER»: para tener ese `m` hay que
+    # haber conseguido el módulo por una puerta que ya está fuera de la
+    # frontera, y en cuanto se consigue por una que la guarda ve, cae — es
+    # justo lo que miden las dos formas de `y_llegando`.
+    "el getattr que vive dentro del objeto, sobre un módulo sin resolver": {
+        "fuente":
+            'def robar(m):\n'
+            '    return m.__getattribute__("CORREO_CUENTAS")\n',
+        "llega_sola": False,
+        "y_llegando": [
+            # el mismo `__getattribute__` sobre el config que se ve: cae por (f)
+            'import config\n'
+            '\n'
+            '\n'
+            'def robar():\n'
+            '    return config.__getattribute__("CORREO_CUENTAS")\n',
+            # y consiguiéndolo por la tabla de módulos: cae por (e)
+            'import sys\n'
+            '\n'
+            '\n'
+            'def robar():\n'
+            '    return sys.modules["config"].__getattribute__(\n'
+            '        "CORREO_CUENTAS")\n',
+        ],
+        "por_que":
+            "el motivo (c) decide qué es `getattr` RESOLVIÉNDOLO al objeto, y "
+            "un método buscado sobre un valor que la guarda no puede resolver "
+            "no resuelve a nada. Cerrarlo pediría rojear toda llamada cuyo "
+            "callee no se resuelve, y eso es la mayoría de las llamadas de los "
+            "archivos vigilados —lo cuenta al correr "
+            "`test_cuanto_cuesta_mirar_el_espacio_de_nombres_y_no_el_metodo`, "
+            "acá no va ninguna cifra tecleada—, o sea apagar la guarda por "
+            "exceso de ruido. Se declara en vez de perseguirse",
     },
 }
 
