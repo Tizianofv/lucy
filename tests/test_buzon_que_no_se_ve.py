@@ -32,9 +32,12 @@ fronteras declaradas y medidas, las dos escritas donde viven:
 
   · Los siete objetos de `_PELIGROSOS` —`getattr` y familia, `eval`, `exec`,
     `compile`, `__import__`— se reconocen POR IDENTIDAD DE OBJETO, así que
-    ningún alias los esconde; pero conseguir uno de ellos sin nombrarlo, por
-    ejemplo `builtins.__dict__["get" + "attr"]`, no se reconoce como tal. Ese
-    camino tampoco llega solo a la lista: hace falta además el módulo `config`.
+    ningún alias los esconde; pero conseguir uno de ellos sin nombrarlo no se
+    reconoce como tal. Son DOS formas, no una, y las dos están medidas en
+    `test_conseguir_getattr_sin_nombrarlo_no_llega_solo_a_la_lista`:
+    `builtins.__dict__["get" + "attr"]`, y `sys.modules["builtins"].__dict__
+    ["get" + "attr"]`, que además no necesita `import builtins`. Ese camino
+    tampoco llega solo a la lista: hace falta además el módulo `config`.
   · Un ayudante genérico `def leer(mod, nombre): return getattr(mod, nombre)`
     sale rojo aunque nunca toque la lista prohibida. Es el precio de «lo que no
     se puede clasificar es rojo», y hoy no lo paga nadie: cero sitios de Lucy lo
@@ -63,6 +66,10 @@ import ast
 import asyncio
 import builtins
 import configparser
+import importlib
+import importlib.machinery
+import importlib.util
+import inspect
 import json
 import os
 import sys
@@ -811,9 +818,17 @@ _TEXTO_A_CODIGO = (builtins.eval, builtins.exec, builtins.compile,
 #
 # Y LO QUE QUEDA FUERA, dicho para que nadie lea esto de más: la lista es de
 # objetos concretos, así que un camino que consiga el objeto `getattr` sin
-# nombrarlo —`builtins.__dict__["get" + "attr"]`— no se reconoce como tal. Ese
-# camino no llega solo a la lista cruda: para sacarla hay que además conseguir
-# el módulo `config`, y eso cae por los motivos (d), (e) y (f).
+# nombrarlo no se reconoce como tal. Son DOS formas y hasta el 6-sep-2026 acá
+# solo estaba escrita una:
+#
+#     builtins.__dict__["get" + "attr"]                  # pide `import builtins`
+#     sys.modules["builtins"].__dict__["get" + "attr"]   # no pide nada
+#
+# Las dos, sueltas, salen VERDES — medido, no supuesto, en
+# `test_conseguir_getattr_sin_nombrarlo_no_llega_solo_a_la_lista`. Y las dos
+# dejan de importar en cuanto se usan para algo: para sacar la lista cruda hace
+# falta además el módulo `config`, y conseguirlo cae por los motivos (d), (e) y
+# (f). Esa segunda mitad también está medida allí, con las dos formas.
 _PELIGROSOS = _ATRIBUTO_POR_NOMBRE + _TEXTO_A_CODIGO
 
 
@@ -823,6 +838,129 @@ def _cual_peligroso(objetos) -> object | None:
         if any(o is f for o in objetos):
             return f
     return None
+
+
+# ── Tramo 2-ter: qué llamadas pueden DEVOLVER un módulo ───────────────────
+#
+# EL CUARTO AGUJERO DE ESTE ARCHIVO, medido el 6-sep-2026, y de la misma
+# especie que los tres anteriores — con una vuelta de tuerca: acá la regla
+# buena YA ESTABA ESCRITA, aplicada por cinco motivos, y a uno se le olvidó.
+#
+# De los seis motivos que buscan `config`, cinco tratan «no puedo enumerarlo»
+# como ROJO y lo dicen: «si es None: rojo». El motivo (d) preguntaba
+# `if trae and _MODULO_CONFIG in trae`, o sea que un nombre que no se podía
+# resolver daba `None`, la condición salía False en silencio, y no pasaba nada:
+#
+#     import importlib as _il
+#     def _cual():
+#         import os
+#         return os.environ["MODULO_OBJETIVO_SALA"]
+#     def _fuga_importlib():
+#         mod = _il.import_module(_cual())
+#         return vars(mod)["CORREO_CUENTAS"]
+#
+# Puesto DENTRO de `captura/consumos.py` —un archivo que ya existía, para que
+# el rojo no pudiera venir del conteo de archivos— la guarda daba 30 passed. El
+# MISMO código con `import_module("config")` daba 2 failed. Ejecutado con
+# credenciales centinela, la función devolvía la lista cruda entera, con el
+# buzón `reporte_a: 0` dentro. Lo único que cambiaba era si el nombre del
+# módulo era un literal o se armaba al vuelo.
+#
+# POR QUÉ EL ARREGLO NO ES «ARGUMENTO NO ENUMERABLE ⇒ ROJO» A SECAS. La mayoría
+# de las llamadas de cualquier archivo reciben algo que no es un string
+# literal, así que la regla a secas rojea a casi todo el repo. Una guarda que
+# rojea a quien hace lo correcto se apaga sola: ese no es el arreglo, es el
+# mismo defecto por el otro lado. Acá NO va la cifra —se separaría de la
+# realidad como cualquier número tecleado—: la mide al correr
+# `test_cuanto_costaria_la_regla_a_secas_y_cuanto_cuesta_la_de_verdad`.
+#
+# LA PUERTA ESTÁ EN EL CALLEE, NO EN EL ARGUMENTO. `f(x)` con `x` desconocido
+# no dice nada; `import_module(x)` con `x` desconocido devuelve CUALQUIER
+# módulo. Así que la pregunta es a qué objeto resuelve la función llamada, que
+# es exactamente lo que este archivo ya hace con `getattr` y su familia.
+#
+# LA LISTA SE SACA DEL SISTEMA DE IMPORTS, Y CON FONDO. Un
+# `_TEXTO_A_MODULO = (importlib.import_module,)` escrito a mano es la especie de
+# lista que ya falló tres veces acá: le faltó `sys`, le faltó `getattr` por
+# alias, le faltó `conftest.py`. Así que se barre `importlib`.
+#
+# PERO UN BARRIDO SIN FONDO ES LA MISMA LISTA QUE SE SEPARA DE LA REALIDAD, solo
+# que automática, y este archivo se lo comió en el primer intento. Barrer «todo
+# submódulo de `importlib` que esté en `sys.modules`» daba 28 objetos corriendo
+# el archivo suelto y 120 corriendo bajo pytest, que carga `importlib.metadata`
+# y `importlib.resources`. Entre esos 120 entraban `str`, `Mapping`,
+# `suppress`, `cast` y `filterfalse`: RE-EXPORTS de módulos que no tienen nada
+# que ver, colados por ser atributos públicos. Con `str` adentro el motivo (d)
+# rojeaba decenas de llamadas legítimas en un tercio de los archivos vigilados
+# —la cifra exacta cambiaba de corrida a corrida, que es justo el problema—, o
+# sea que el veredicto de la guarda pasaba a depender de qué había importado
+# quien la corriera.
+#
+# EL FONDO, en una línea: se barren los módulos del sistema de imports que ESTE
+# archivo importa arriba —ni uno más, así que no depende de quién cargó qué— y
+# de ellos se guarda solo lo que el sistema de imports DEFINE, no lo que
+# re-exporta. «Definir» se decide con `__module__`, y las raíces se leen de
+# objetos reales (`ModuleSpec.__module__` es `_frozen_importlib`), no tecleadas.
+
+_MODULOS_DEL_SISTEMA_DE_IMPORTS = (importlib, importlib.util,
+                                   importlib.machinery)
+
+# De dónde sale «lo que el sistema de imports define». Las dos raíces de
+# implementación se leen de objetos suyos, no se escriben a mano.
+_RAICES_DE_IMPORTS = (
+    importlib.__name__,                                   # "importlib"
+    importlib.machinery.ModuleSpec.__module__,            # "_frozen_importlib"
+    importlib.machinery.SourceFileLoader.__module__,      # "..._external"
+)
+
+
+def _funciones_que_traen_modulos(modulos=_MODULOS_DEL_SISTEMA_DE_IMPORTS
+                                 ) -> tuple:
+    """Los callables que el sistema de imports DEFINE, sacados de él.
+
+    Son OBJETOS, no textos: da igual con qué identificador se llamen, igual que
+    con `getattr`. `builtins.__import__` se suma aparte porque es la puerta de
+    abajo de todas ellas y vive en `builtins`, no en `importlib`.
+
+    `modulos` se puede pasar para poder MEDIR el filtro con un módulo de
+    mentira, en vez de tener que creerse que filtra.
+    """
+    salida: list = []
+
+    def meter(obj) -> None:
+        if not any(obj is x for x in salida):
+            salida.append(obj)
+
+    for mod in modulos:
+        for atrib in dir(mod):
+            if atrib.startswith("_"):
+                continue
+            try:
+                obj = getattr(mod, atrib)
+            except Exception:
+                continue
+            if not callable(obj) or isinstance(obj, types.ModuleType):
+                continue
+            duena = getattr(obj, "__module__", None)
+            if not isinstance(duena, str):
+                continue
+            if any(duena == r or duena.startswith(r + ".")
+                   for r in _RAICES_DE_IMPORTS):
+                meter(obj)
+    meter(builtins.__import__)
+    return tuple(salida)
+
+
+_TRAEN_MODULOS = _funciones_que_traen_modulos()
+
+# El barrido tiene que haber encontrado la función que motivó todo esto. Si
+# `importlib` cambia de forma y el barrido se queda vacío, esto se pone rojo en
+# vez de dejar el motivo (d) mirando una tupla sin nada dentro — que sería
+# verde sin haber comprobado nada.
+assert any(o is importlib.import_module for o in _TRAEN_MODULOS), (
+    "el barrido de `importlib` no encontró `import_module`; el motivo (d) "
+    "quedaría sin puerta y la fuga que lo motivó volvería a ser invisible")
+assert any(o is builtins.__import__ for o in _TRAEN_MODULOS)
 
 
 def _meter(conj: set, obj) -> None:
@@ -1140,6 +1278,17 @@ def _infracciones(fuente, permitidos: set[str]) -> list[str]:
         #     `("getattr", "setattr", "delattr")`, así que `ga = getattr` apagaba
         #     esta comprobación entera con una línea.
         pide = ctx.llama_a(n, _ATRIBUTO_POR_NOMBRE)
+        if pide is not None and len(n.args) < 2:
+            # `getattr(*par)` y `getattr(mod, **kw)` no tienen un segundo
+            # argumento que mirar: el nombre pedido está dentro de algo que se
+            # desparrama al llamar. No poder ni localizarlo es un caso más de
+            # «no lo sé», y valía verde porque este `if` pedía `>= 2` y se iba
+            # en silencio.
+            malas.append(
+                f"línea {n.lineno}: {ast.unparse(n.func)} es {pide.__name__} y "
+                "se le pasan los argumentos desparramados; no puedo ni "
+                "localizar qué nombre de atributo pide, así que no hay nada "
+                "que clasificar")
         if pide is not None and len(n.args) >= 2:
             comose = ast.unparse(n.func)
             quiere = pedidos(n.args[1])
@@ -1184,24 +1333,58 @@ def _infracciones(fuente, permitidos: set[str]) -> list[str]:
         #     puedo enumerar. Es la tercera forma de sacarle un atributo a un
         #     módulo, después del punto y de `getattr`, y la única que se
         #     escapaba de las dos: `vars(importlib.import_module(n))[k]`.
+        #
+        #     Y la otra mitad, que faltaba: si la clave SÍ se puede enumerar y
+        #     es uno de los dos nombres prohibidos, también es rojo. (j) tenía
+        #     el defecto de (d) por el lado contrario —cubría lo indeterminable
+        #     y se le escapaba el literal—, así que `vars(mod)["CORREO_CUENTAS"]`
+        #     y `mod.__dict__["CORREO_CUENTAS"]` pasaban en verde. Es la misma
+        #     pareja de ramas que (e) ya tenía escrita.
         if isinstance(n, ast.Subscript):
             base = n.value
             abre = (ctx.llama_a(base, (builtins.vars,)) is not None
                     or (isinstance(base, ast.Attribute)
                         and base.attr == "__dict__"))
-            if abre and pedidos(n.slice) is None:
-                malas.append(
-                    f"línea {n.lineno}: le pide al espacio de nombres de algo "
-                    "una clave que no puedo enumerar; de ahí sale cualquier "
-                    "atributo de cualquier módulo, la lista cruda incluida")
+            if abre:
+                claves = pedidos(n.slice)
+                prohibidas = {_PROHIBIDO, _MODULO_CONFIG}
+                if claves is None:
+                    malas.append(
+                        f"línea {n.lineno}: le pide al espacio de nombres de "
+                        "algo una clave que no puedo enumerar; de ahí sale "
+                        "cualquier atributo de cualquier módulo, la lista "
+                        "cruda incluida")
+                elif claves & prohibidas:
+                    cual = sorted(claves & prohibidas)
+                    malas.append(
+                        f"línea {n.lineno}: le pide {cual} al espacio de "
+                        "nombres de algo, que es exactamente la lista cruda o "
+                        "el módulo que la tiene")
 
         # (d) Pedir por su nombre el MÓDULO config: `sys.modules["config"]`,
         #     `importlib.import_module("config")`, `globals()["config"]`. El
         #     nombre sale de `config.__name__`, no de acá.
+        #
+        #     Y si la llamada es a una función que TRAE MÓDULOS POR SU NOMBRE,
+        #     un argumento que no se puede enumerar es rojo, igual que en (c),
+        #     (e), (f) y (j): sin saber qué nombre se pide, no se sabe si el
+        #     módulo que sale es `config`. La puerta está en el callee y no en
+        #     el argumento porque «argumento no enumerable ⇒ rojo» a secas
+        #     rojea 1.828 de las 3.198 llamadas de los archivos vigilados; ver
+        #     `_funciones_que_traen_modulos`, donde está la medida entera.
         if isinstance(n, ast.Call):
+            trae_modulos = ctx.llama_a(n, _TRAEN_MODULOS)
             for arg in list(n.args) + [k.value for k in n.keywords]:
                 trae = pedidos(arg)
-                if trae and _MODULO_CONFIG in trae:
+                if trae is None:
+                    if trae_modulos is not None:
+                        malas.append(
+                            f"línea {n.lineno}: le pasa a "
+                            f"{trae_modulos.__name__}, que trae módulos por su "
+                            "nombre, un nombre que no puedo enumerar; de ahí "
+                            f"puede salir cualquier módulo, {_MODULO_CONFIG!r} "
+                            "incluido")
+                elif _MODULO_CONFIG in trae:
                     malas.append(
                         f"línea {n.lineno}: le pasa el nombre "
                         f"{_MODULO_CONFIG!r} a una llamada; así se consigue el "
@@ -1722,6 +1905,55 @@ import importlib
 def cuentas(nombre, clave):
     return importlib.import_module(nombre).__dict__[clave]
 """,
+    # EL AGUJERO DEL 6-sep-2026, y por qué las dos de arriba no lo tapaban: las
+    # dos piden una CLAVE no enumerable, y el motivo (j) cubría eso. Ésta pide
+    # la clave con un literal —`"CORREO_CUENTAS"` escrito entero— y arma el
+    # NOMBRE DEL MÓDULO al vuelo. Así quedaba fuera de las dos ramas a la vez:
+    # (j) veía una clave enumerable y se callaba, y (d) veía un nombre de módulo
+    # no enumerable y también se callaba. Metida en `captura/consumos.py` —un
+    # archivo que ya existía, para que el rojo no pudiera venir del conteo—:
+    # 30 passed. La misma con `import_module("config")`: 2 failed. Ejecutada con
+    # credenciales centinela devolvía la lista cruda entera, buzón
+    # `reporte_a: 0` incluido.
+    "importlib con el nombre al vuelo y la clave escrita entera": """
+import importlib as _il
+
+
+def _cual():
+    import os
+    return os.environ["MODULO_OBJETIVO"]
+
+
+def cuentas():
+    mod = _il.import_module(_cual())
+    return vars(mod)["CORREO_CUENTAS"]
+""",
+    # Y la mitad de arriba por separado, para que ninguna de las dos ramas
+    # nuevas se pueda borrar sin que algo se ponga rojo. Ésta no importa nada:
+    # le pide la lista cruda por su nombre al espacio de nombres de lo que le
+    # pasen. Medido el 6-sep-2026 sobre la guarda de antes: VERDE.
+    "la lista cruda pedida por su nombre al espacio de nombres de algo": """
+def cuentas(mod):
+    return vars(mod)["CORREO_CUENTAS"]
+""",
+    "la lista cruda pedida por su nombre al __dict__ de algo": """
+def cuentas(mod):
+    return mod.__dict__["CORREO_CUENTAS"]
+""",
+    # Y la tercera del mismo día: `getattr` con los argumentos desparramados.
+    # El motivo (c) pedía `len(n.args) >= 2` para poder mirar el segundo, así
+    # que una llamada sin segundo argumento POSICIONAL se iba en silencio — que
+    # es justo el caso en el que menos se sabe qué se está pidiendo. Medido
+    # sobre la guarda de antes: VERDE las dos.
+    "getattr con los argumentos desparramados": """
+def cuentas(mod, nombre):
+    par = (mod, nombre)
+    return getattr(*par)
+""",
+    "getattr con el nombre metido en kwargs": """
+def cuentas(mod, nombre):
+    return getattr(mod, **{"name": nombre})
+""",
 }
 
 # Y lo que TIENE que seguir en verde: los usos legítimos que hay hoy en el
@@ -2225,6 +2457,11 @@ def test_las_siete_formas_de_maquinaria_dinamica_una_por_una():
     de hoy para que la próxima afirmación se pueda comprobar sin creerle a
     nadie.
 
+    Y CAMBIÓ UNA, el 6-sep-2026, y a más rojo: `importlib.import_module(n)` con
+    `n` sin enumerar era False y ahora es True. Era el agujero — el motivo (d)
+    trataba «no puedo enumerar el nombre» como verde, y por ahí salía la lista
+    cruda entera sin que nada se pusiera rojo. Ver `_funciones_que_traen_modulos`.
+
     Y donde dice False, no dice «se puede sacar la lista»: dice que conseguir un
     módulo NO es por sí solo la infracción. Sacarle la lista sí lo es, y eso lo
     cubren los motivos (a), (c) y (j) — ver los esquives de `importlib`.
@@ -2233,7 +2470,7 @@ def test_las_siete_formas_de_maquinaria_dinamica_una_por_una():
     desnudas = {
         "importlib.import_module": (
             'import importlib\ndef f(n):\n    return importlib.import_module(n)\n',
-            False),
+            True),
         "__import__": ('def f(n):\n    return __import__(n)\n', True),
         "eval": ('def f(t):\n    return eval(t)\n', True),
         "exec": ('def f(t):\n    exec(t)\n', True),
@@ -2265,6 +2502,367 @@ def test_las_siete_formas_de_maquinaria_dinamica_una_por_una():
                  if not _infracciones(src, permitidos)]
     assert not escapados, (
         f"estas formas alcanzan la lista cruda y pasaron limpias: {escapados}")
+
+
+def _arbol_de_infracciones():
+    """El árbol de `_infracciones`, con cada nodo apuntando a su padre.
+
+    UN solo árbol por llamada, y quien lo use tiene que usar SIEMPRE el mismo:
+    parsear dos veces da dos juegos de nodos distintos, y entonces los padres de
+    uno no se encuentran en los índices del otro. Eso ya rompió esta prueba una
+    vez, y de la forma peligrosa: daba rojo cuando el código estaba bien.
+    """
+    arbol = ast.parse(inspect.getsource(_infracciones))
+    for padre in ast.walk(arbol):
+        for hijo in ast.iter_child_nodes(padre):
+            hijo._p = padre                          # type: ignore[attr-defined]
+    return arbol
+
+
+def _motivos_que_enumeran_nombres(arbol) -> dict[str, list[ast.Call]]:
+    """Qué motivo de `_infracciones` llama a `pedidos`, leído de su propio código.
+
+    Los motivos se marcan con un comentario `# (x)` en el cuerpo de la función.
+    Ni las letras ni los números de línea se escriben acá: se sacan del archivo
+    con `inspect.getsource`, así que un motivo nuevo aparece solo.
+    """
+    marcas: list[tuple[int, str]] = []
+    for i, linea in enumerate(inspect.getsource(_infracciones).splitlines(), 1):
+        limpia = linea.strip()
+        if limpia.startswith("# (") and ")" in limpia:
+            letra = limpia[3:limpia.index(")")]
+            if len(letra) == 1 and letra.isalpha():
+                marcas.append((i, letra))
+
+    salida: dict[str, list[ast.Call]] = {}
+    for n in ast.walk(arbol):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) \
+                and n.func.id == "pedidos":
+            cuales = [m for m in marcas if m[0] <= n.lineno]
+            letra = cuales[-1][1] if cuales else "?"
+            salida.setdefault(letra, []).append(n)
+    return salida
+
+
+def test_ningun_motivo_deja_pasar_lo_que_no_puede_enumerar():
+    """LA regla, exigida a TODOS los motivos a la vez y no leyéndolos uno a uno.
+
+    EL AGUJERO DEL 6-sep-2026 no fue una clase nueva de fuga: fue la regla de
+    esta guarda sin aplicar a una rama. De los motivos que preguntan qué nombres
+    puede valer una expresión, todos menos uno trataban «no lo sé» como ROJO. El
+    motivo (d) preguntaba `if trae and _MODULO_CONFIG in trae`, así que un
+    `None` —que significa «no se puede enumerar»— hacía la condición False en
+    silencio. Por ahí salía la lista cruda entera.
+
+    Que eso estuviera bien o mal se sabía LEYENDO los seis. Esta prueba lo hace
+    saber CORRIENDO: recorre el código de `_infracciones`, busca cada sitio que
+    llama a `pedidos` —o sea cada sitio que enumera nombres— y exige que el
+    resultado se compare contra `None` en alguna parte. Un `if trae and ...`
+    vuelve a poner esto rojo, y el séptimo motivo que alguien escriba mañana no
+    puede nacer con este defecto sin que la suite se entere.
+
+    No hay ninguna lista de motivos escrita acá: las letras salen de los
+    comentarios del propio `_infracciones`.
+    """
+    arbol = _arbol_de_infracciones()
+
+    def compara_con_none(nodo) -> bool:
+        return isinstance(nodo, ast.Compare) and \
+            any(isinstance(o, (ast.Is, ast.IsNot)) for o in nodo.ops) and \
+            any(isinstance(c, ast.Constant) and c.value is None
+                for c in nodo.comparators)
+
+    # DÓNDE vive cada sentencia: su bloque y su posición dentro de él. Hace
+    # falta para no darse por satisfecho con que el nombre se compare «en
+    # alguna parte de la función»: `claves` lo usan (e) y (j), y `quiere` (c) y
+    # (f), así que un motivo nuevo que reutilizara el nombre y NO lo comparara
+    # pasaría gratis colgado de la comprobación del vecino. La comparación
+    # tiene que estar DESPUÉS de la asignación y en su mismo bloque.
+    sitio: dict[int, tuple[list, int]] = {}
+    for n in ast.walk(arbol):
+        for campo in ("body", "orelse", "finalbody"):
+            bloque = getattr(n, campo, None)
+            if isinstance(bloque, list):
+                for i, s in enumerate(bloque):
+                    if isinstance(s, ast.stmt):
+                        sitio[id(s)] = (bloque, i)
+
+    def se_compara_despues(asignacion, nombre: str) -> bool:
+        donde = sitio.get(id(asignacion))
+        if donde is None:
+            return False
+        bloque, i = donde
+        for posterior in bloque[i + 1:]:
+            for n in ast.walk(posterior):
+                if compara_con_none(n) and isinstance(n.left, ast.Name) \
+                        and n.left.id == nombre:
+                    return True
+        return False
+
+    porletra = _motivos_que_enumeran_nombres(arbol)
+    assert porletra, (
+        "no se encontró ni un solo sitio que llame a `pedidos` dentro de "
+        "`_infracciones`. O se renombró el ayudante y esta prueba quedó "
+        "mirando al vacío —o sea verde sin comprobar nada—, o los motivos "
+        "dejaron de enumerar nombres")
+
+    flojos: dict[str, list[int]] = {}
+    for letra, llamadas in sorted(porletra.items()):
+        for c in llamadas:
+            padre = getattr(c, "_p", None)
+            bien = compara_con_none(padre)
+            if not bien and isinstance(padre, ast.Assign) and \
+                    len(padre.targets) == 1 and \
+                    isinstance(padre.targets[0], ast.Name):
+                bien = se_compara_despues(padre, padre.targets[0].id)
+            if not bien:
+                flojos.setdefault(letra, []).append(c.lineno)
+
+    assert not flojos, (
+        f"estos motivos enumeran nombres y NO tratan «no lo sé» como rojo: "
+        f"{flojos} (líneas relativas al principio de `_infracciones`). Un "
+        "`pedidos(...)` cuyo resultado no se compara contra None deja pasar en "
+        "silencio justo el caso en el que menos se sabe qué se está pidiendo, "
+        "que es como se escapó la fuga del 6-sep-2026")
+
+
+def test_lo_indeterminable_es_rojo_en_cada_motivo_por_separado():
+    """La otra mitad: no que esté escrito, sino que MUERDA — motivo por motivo.
+
+    La prueba de arriba mira la forma del código; ésta mira el veredicto. Cada
+    caso es la misma idea escrita para un motivo distinto: pedir algo con un
+    nombre que la guarda no puede enumerar. Los seis tienen que salir rojos.
+
+    El motivo (a) no aparece porque no enumera nada: el nombre de un atributo
+    escrito con un punto es siempre un literal en el árbol, así que no tiene
+    versión indeterminable — cuando el nombre se arma al vuelo, eso YA es (c).
+    """
+    permitidos = _atributos_que_config_ofrece()
+    casos = {
+        "(c) getattr con un nombre que no se puede enumerar":
+            'def f(mod, n):\n    return getattr(mod, n)\n',
+        "(d) un módulo traído por un nombre que no se puede enumerar":
+            'import importlib\ndef f(n):\n    return importlib.import_module(n)\n',
+        "(e) un nombre sacado de un espacio de módulos, sin enumerar":
+            'import sys\ndef f(n):\n    return sys.modules[n]\n',
+        "(f) el módulo config usado de una forma que no se puede clasificar":
+            'import config\ndef f(n):\n    return getattr(config, n)\n',
+        "(j) una clave pedida al espacio de nombres de algo, sin enumerar":
+            'def f(mod, k):\n    return vars(mod)[k]\n',
+    }
+    verdes = [k for k, src in casos.items()
+              if not _infracciones(src, permitidos)]
+    assert not verdes, (
+        f"estos motivos dejaron pasar un nombre que no se puede enumerar: "
+        f"{verdes}")
+
+    # Y que la prueba de arriba no se quede corta: cada motivo que enumera
+    # nombres tiene que tener acá un caso suyo. Las letras salen del código de
+    # `_infracciones`, no de una lista escrita a mano, así que un motivo nuevo
+    # que enumere nombres y no traiga su caso pone esto rojo.
+    letras = set(_motivos_que_enumeran_nombres(
+        _arbol_de_infracciones()))
+    cubiertas = {k[1] for k in casos}
+    assert letras <= cubiertas, (
+        f"estos motivos enumeran nombres y no tienen un caso medido acá: "
+        f"{sorted(letras - cubiertas)}. Sin caso, nadie comprueba corriendo "
+        "que traten «no lo sé» como rojo")
+
+
+def test_cuanto_costaria_la_regla_a_secas_y_cuanto_cuesta_la_de_verdad():
+    """El precio del motivo (d), contado sobre los archivos reales.
+
+    «Argumento no enumerable ⇒ rojo» aplicado a TODA llamada es la lectura
+    literal de la regla, y es inviable: cuenta acá cuántas llamadas legítimas de
+    los archivos vigilados caerían. La versión que se quedó pone la puerta en el
+    CALLEE —solo las llamadas a algo que trae módulos por su nombre— y tiene que
+    costar CERO.
+
+    Las dos cifras se miden al correr y no se afirman en ningún comentario: una
+    cifra que nadie puede reproducir es peor que ninguna, porque el que la lee
+    la da por buena.
+    """
+    vigilados = _archivos_vigilados(RAIZ)
+    llamadas = a_secas = con_puerta = 0
+    archivos_a_secas: set[str] = set()
+    archivos_con_puerta: dict[str, list[int]] = {}
+
+    for py in vigilados:
+        try:
+            arbol = ast.parse(py.read_bytes())
+        except SyntaxError:
+            continue
+        ctx = _Contexto(arbol)
+        rel = str(py.relative_to(RAIZ))
+        for n in ast.walk(arbol):
+            if not isinstance(n, ast.Call):
+                continue
+            llamadas += 1
+            args = list(n.args) + [k.value for k in n.keywords]
+            sin_enumerar = [a for a in args
+                            if _cadenas(a, ctx.ambitos) is None]
+            if sin_enumerar:
+                a_secas += 1
+                archivos_a_secas.add(rel)
+                if ctx.llama_a(n, _TRAEN_MODULOS) is not None:
+                    con_puerta += 1
+                    archivos_con_puerta.setdefault(rel, []).append(n.lineno)
+
+    # Lo que de verdad se exige: la regla que se quedó no rojea a nadie.
+    assert con_puerta == 0, (
+        f"el motivo (d) empezó a costar: {con_puerta} llamadas legítimas en "
+        f"{archivos_con_puerta} le pasan un nombre no enumerable a algo que "
+        "trae módulos. Antes de aflojar la regla hay que mirar si ese uso es "
+        "legítimo — y si lo es, la frontera se declara acá con su medida")
+
+    # Y la constancia de por qué la puerta está en el callee y no en el
+    # argumento. Si esto dejara de ser cierto, la regla a secas sería viable y
+    # habría que preferirla, porque no depende de reconocer ninguna función.
+    assert a_secas > llamadas // 4, (
+        f"la regla «argumento no enumerable ⇒ rojo» a secas ya solo costaría "
+        f"{a_secas} de {llamadas} llamadas en {len(archivos_a_secas)} de "
+        f"{len(vigilados)} archivos. Si de verdad bajó tanto, conviene "
+        "revisarla: sería un fondo mejor que la puerta en el callee")
+
+
+def test_conseguir_getattr_sin_nombrarlo_no_llega_solo_a_la_lista():
+    """La frontera de `_PELIGROSOS`, con SUS DOS formas y las dos medidas.
+
+    El archivo declaraba una sola —`builtins.__dict__["get" + "attr"]`— y hay
+    otra que no necesita ni `import builtins`:
+    `sys.modules["builtins"].__dict__["get" + "attr"]`. Una frontera que nombra
+    una de las dos formas de cruzarla promete más de lo que cubre.
+
+    Lo que la frontera dice es dos cosas, y acá se comprueban por separado:
+
+      1. Sueltas, las dos son VERDES. Conseguir el objeto `getattr` sin
+         nombrarlo no se reconoce como tal — es el precio de comparar por
+         identidad de objeto. Medido el 6-sep-2026.
+      2. Usadas para llegar a la lista cruda, las dos son ROJAS, porque hace
+         falta además el módulo `config` y eso lo cubren (d) y (e).
+
+    Si algún día (1) cambia a rojo, mejor: hay que venir y reescribir esto. Lo
+    que no puede pasar sin que nadie se entere es que (2) cambie a verde.
+    """
+    permitidos = _atributos_que_config_ofrece()
+
+    sueltas = {
+        "por builtins importado":
+            'import builtins\n'
+            'def f(mod, n):\n'
+            '    ga = builtins.__dict__["get" + "attr"]\n'
+            '    return ga\n',
+        "por la tabla de módulos, sin importar builtins":
+            'import sys\n'
+            'def f(mod, n):\n'
+            '    ga = sys.modules["builtins"].__dict__["get" + "attr"]\n'
+            '    return ga\n',
+    }
+    rojas = {k: _infracciones(src, permitidos)
+             for k, src in sueltas.items() if _infracciones(src, permitidos)}
+    assert not rojas, (
+        f"la frontera se movió: conseguir `getattr` sin nombrarlo ahora es "
+        f"rojo por sí solo ({rojas}). Es una buena noticia, pero el texto de "
+        "`_PELIGROSOS` y el de la cabecera dicen lo contrario y hay que "
+        "corregirlos")
+
+    llegando = {
+        "por builtins importado, y config por la tabla de módulos":
+            'import builtins\n'
+            'import sys\n'
+            'def f():\n'
+            '    ga = builtins.__dict__["get" + "attr"]\n'
+            '    return ga(ga(sys, "modules")["config"], "CORREO_CUENTAS")\n',
+        "sin importar builtins, y config por la tabla de módulos":
+            'import sys\n'
+            'def f():\n'
+            '    ga = sys.modules["builtins"].__dict__["get" + "attr"]\n'
+            '    return ga(ga(sys, "modules")["config"], "CORREO_CUENTAS")\n',
+        "sin importar builtins, y config por import_module con nombre al vuelo":
+            'import sys\n'
+            'import importlib\n'
+            'def f(n):\n'
+            '    ga = sys.modules["builtins"].__dict__["get" + "attr"]\n'
+            '    return ga(importlib.import_module(n), "CORREO_CUENTAS")\n',
+    }
+    escapados = [k for k, src in llegando.items()
+                 if not _infracciones(src, permitidos)]
+    assert not escapados, (
+        f"estas formas consiguen `getattr` sin nombrarlo Y llegan a la lista "
+        f"cruda, y pasaron limpias: {escapados}. La frontera declarada dice "
+        "que esto no puede pasar")
+
+
+def test_las_funciones_que_traen_modulos_no_dependen_de_quien_importo_que():
+    """El fondo del barrido de `importlib`, y por qué hizo falta ponérselo.
+
+    El primer intento de este arreglo barría «todo submódulo de `importlib` que
+    esté en `sys.modules`». Medido el 6-sep-2026: 28 objetos corriendo el
+    archivo suelto y 120 corriendo bajo pytest, que carga `importlib.metadata` y
+    `importlib.resources`. Entre esos 120 entraban `str`, `Mapping`, `suppress`,
+    `cast` y `filterfalse` —re-exports de módulos que no tienen nada que ver— y
+    con `str` adentro el motivo (d) rojeaba 80 llamadas legítimas en 13 de los
+    37 archivos vigilados.
+
+    O sea: una lista DERIVADA sin fondo se separa de la realidad igual que una
+    tecleada, solo que sin que nadie la haya escrito. El fondo es que se barren
+    los módulos que este archivo importa —ni uno más— y que solo se guarda lo
+    que el sistema de imports DEFINE, no lo que re-exporta.
+    """
+    coladas = [o for o in _TRAEN_MODULOS
+               if getattr(o, "__module__", None) == builtins.__name__
+               and o is not builtins.__import__]
+    assert not coladas, (
+        f"el barrido se coló objetos de `builtins` que no son `__import__`: "
+        f"{[getattr(o, '__name__', o) for o in coladas]}. Con `str` ahí "
+        "adentro el motivo (d) rojea a medio repo y la guarda se apaga sola")
+
+    # Y que siga trayendo lo que tiene que traer.
+    assert any(o is importlib.import_module for o in _TRAEN_MODULOS)
+    assert any(o is importlib.reload for o in _TRAEN_MODULOS)
+    assert any(o is builtins.__import__ for o in _TRAEN_MODULOS)
+
+    # EL FILTRO, medido y no supuesto. Un módulo de mentira con tres atributos
+    # públicos: uno que el sistema de imports define y dos re-exportados de
+    # otro sitio. Solo el primero puede entrar. Sin esta medida, quitarle el
+    # filtro al barrido no ponía nada rojo.
+    import contextlib
+
+    falso = types.ModuleType("importlib.de_mentira")
+    falso.import_module = importlib.import_module      # sí: lo define importlib
+    falso.str = str                                    # no: re-export de builtins
+    falso.suppress = contextlib.suppress               # no: re-export de contextlib
+    salida = _funciones_que_traen_modulos((falso,))
+    assert any(o is importlib.import_module for o in salida)
+    colados = [getattr(o, "__name__", o) for o in salida
+               if o is str or o is contextlib.suppress]
+    assert not colados, (
+        f"el filtro por `__module__` dejó pasar re-exports: {colados}. Es "
+        "exactamente lo que metió `str` en la lista y rojeó 80 llamadas "
+        "legítimas de 13 archivos vigilados")
+
+    # Y EL ALCANCE, también medido. El barrido mira los módulos que este
+    # archivo importa, no `sys.modules`: si mirara `sys.modules`, un submódulo
+    # de `importlib` cargado por cualquier otro cambiaría el veredicto de la
+    # guarda. Se comprueba metiendo uno y viendo que no cambia nada.
+    intruso = types.ModuleType("importlib.intruso_de_prueba")
+
+    def traeria_modulos(nombre):                      # __module__ = este test
+        raise AssertionError("no se debe llamar")
+
+    traeria_modulos.__module__ = "importlib.intruso_de_prueba"
+    intruso.traeria_modulos = traeria_modulos
+    sys.modules["importlib.intruso_de_prueba"] = intruso
+    try:
+        despues = _funciones_que_traen_modulos()
+        colado = [o for o in despues if o is traeria_modulos]
+        assert not colado, (
+            "el barrido volvió a mirar `sys.modules`: un submódulo de "
+            "`importlib` cargado por otro se le coló. Así es como pasó de 28 "
+            "objetos a 120 según quién hubiera importado qué")
+        assert len(despues) == len(_TRAEN_MODULOS)
+    finally:
+        del sys.modules["importlib.intruso_de_prueba"]
 
 
 def test_la_exencion_no_se_apaga_si_cambia_la_forma_de_arrancar():
