@@ -1894,8 +1894,10 @@ def _es_cache_de_herramienta(carpeta: Path) -> bool:
     Misma idea que `_es_entorno_virtual`, con el otro estándar que existe para
     esto: una carpeta de caché se marca poniéndole dentro un `CACHEDIR.TAG`
     que empieza por una firma fija. pytest lo escribe —comprobado en este repo
-    el 6-sep-2026 en `.pytest_cache/CACHEDIR.TAG`— y uv lo escribe en su caché.
-    El nombre de la carpeta vuelve a dar igual.
+    el 6-sep-2026 en `.pytest_cache/CACHEDIR.TAG`—. Si uv marca la suya no se
+    pudo comprobar desde acá: `.uv-cache` no existe en este árbol, así que de
+    ella no se afirma nada y la sigue tapando `norecursedirs`. El nombre de la
+    carpeta vuelve a dar igual.
     """
     tag = carpeta / "CACHEDIR.TAG"
     try:
@@ -1939,8 +1941,8 @@ def _py_en_disco(raiz: Path) -> list[Path]:
     lleve `CACHEDIR.TAG` y no esté nombrada en `norecursedirs` SÍ se recorre.
     El caso concreto que se conoce es `.uv-python` —los intérpretes que baja
     uv—: hoy la tapa `norecursedirs`, y si alguien la saca de ahí el barrido
-    vuelve a crecer. No está comprobado desde acá si uv le pone `CACHEDIR.TAG`
-    a esa carpeta; la del caché sí lo lleva según su documentación.
+    vuelve a crecer. Ni de `.uv-python` ni de `.uv-cache` se comprobó desde
+    acá si llevan `CACHEDIR.TAG`: ninguna de las dos existe en este árbol.
     """
     nombres_fuera = _carpetas_que_no_son_del_repo(raiz)
     encontrados: list[Path] = []
@@ -2870,9 +2872,10 @@ def test_el_barrido_no_entra_en_un_cache_marcado_con_cachedir_tag():
     """La otra carpeta ajena que se reconoce sin nombrarla.
 
     Un caché se marca con un `CACHEDIR.TAG` que empieza por una firma fija —la
-    Cache Directory Tagging Specification—, y pytest y uv lo escriben. Se
-    comprueba que decide la FIRMA y no el nombre del archivo: una carpeta con
-    un `CACHEDIR.TAG` que no lleva la firma se sigue mirando.
+    Cache Directory Tagging Specification—, y pytest lo escribe: comprobado en
+    `.pytest_cache/CACHEDIR.TAG` de este repo el 6-sep-2026. Se comprueba que
+    decide la FIRMA y no el nombre del archivo: una carpeta con un
+    `CACHEDIR.TAG` que no lleva la firma se sigue mirando.
     """
     import tempfile
 
