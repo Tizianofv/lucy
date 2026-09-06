@@ -26,26 +26,65 @@ lista cruda por ahí, lo escriba como lo escriba. Un camino nuevo no puede
 olvidarse de filtrar: no puede conseguir el buzón. El porqué de leer el árbol y
 no el texto está entero arriba de la guarda, más abajo.
 
-Y HASTA DÓNDE LLEGA ESTA GUARDA, dicho para que nadie la lea de más. Vigila el
-camino que pasa por el módulo `config`, y dentro de ese camino tiene dos
-fronteras declaradas y medidas, las dos escritas donde viven:
+LA FRONTERA DE ESTA GUARDA, EN UNA LÍNEA. Se cierra acá, el 6-sep-2026, tras
+seis vueltas en las que cada una tapó una forma y apareció otra:
 
-  · Los siete objetos de `_PELIGROSOS` —`getattr` y familia, `eval`, `exec`,
-    `compile`, `__import__`— se reconocen POR IDENTIDAD DE OBJETO, así que
-    ningún alias los esconde; pero conseguir uno de ellos sin nombrarlo no se
-    reconoce como tal. Son DOS formas, no una, y las dos están medidas en
-    `test_conseguir_getattr_sin_nombrarlo_no_llega_solo_a_la_lista`:
-    `builtins.__dict__["get" + "attr"]`, y `sys.modules["builtins"].__dict__
-    ["get" + "attr"]`, que además no necesita `import builtins`. Ese camino
-    tampoco llega solo a la lista: hace falta además el módulo `config`.
-  · Un ayudante genérico `def leer(mod, nombre): return getattr(mod, nombre)`
-    sale rojo aunque nunca toque la lista prohibida. Es el precio de «lo que no
-    se puede clasificar es rojo», y hoy no lo paga nadie: cero sitios de Lucy lo
-    escriben. Lo cuenta `test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_
-    cuesta_hoy`, que se pone rojo el día que empiece a costar.
+    La guarda ve lo que un archivo NOMBRA. No ve lo que un archivo BUSCA
+    mientras corre.
 
-Y NO vigila el otro sitio del que hoy
-salen buzones con credenciales: `tools/descubrir_bancos.py::_cuentas()` lee
+EL CRITERIO PARA SABER DE QUÉ LADO CAE ALGO NUEVO, sin tener que probarlo.
+Tacha del texto del archivo tres cosas: el nombre `config`, el nombre
+`CORREO_CUENTAS`, y los nombres de los siete objetos de `_PELIGROSOS`. Tacha
+también los que estén partidos en trozos de string y los alias que se puedan
+seguir hasta un `import` o una asignación, porque la guarda los reconstruye.
+
+  · Si tachando eso el código DEJA DE ENCONTRAR su objetivo → la guarda lo
+    atrapa. Da igual cómo esté escrito: no hay que reconocer la forma, hay que
+    fallar en reconocerla.
+  · Si lo SIGUE ENCONTRANDO —porque no dice qué quiere, sino que recorre una
+    colección en tiempo de ejecución y elige comparando valores— → cae fuera, y
+    la guarda no lo va a ver nunca. No hay parche que lo cambie: en el árbol de
+    sintaxis no hay nada que resolver.
+
+POR QUÉ SE CORTÓ LA PERSECUCIÓN AHÍ, y no en la séptima forma. El espacio de
+maneras de buscar un objeto en tiempo de ejecución no tiene fondo, y una guarda
+que enumera formas siempre tiene una más que no vio. Lo que esta guarda sí
+puede prometer es lo otro: que un camino nuevo escrito POR DESCUIDO —el que se
+olvida de pedir el buzón por la puerta— cae. Para eso funciona, y eso está
+medido forma por forma en `_ESQUIVES`. Nadie escribe por descuido un bucle
+sobre los módulos cargados comparando un nombre partido en dos.
+
+LO QUE QUEDA FUERA, DECLARADO CON SU CÓDIGO EXACTO, para que nadie lo
+redescubra creyendo que es un agujero nuevo: `_FUERA_DE_LA_FRONTERA`, medido
+entrada por entrada en `test_la_frontera_declarada_esta_medida_forma_por_forma`.
+Los números —cuántas formas atrapa y cuántas están declaradas fuera— los cuenta
+esa prueba al correr; acá no va ninguna cifra, que ya se separó de la realidad
+dos veces en este mismo archivo.
+
+Y UN PRECIO, que no es un agujero sino lo contrario: un ayudante genérico
+`def leer(mod, nombre): return getattr(mod, nombre)` sale ROJO aunque nunca
+toque la lista prohibida. Es lo que cuesta «lo que no se puede clasificar es
+rojo», y hoy no lo paga nadie: cero sitios de Lucy lo escriben. Lo cuenta
+`test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_cuesta_hoy`.
+
+LA SALIDA DE VERDAD, QUE NO SE HIZO HOY Y HAY QUE DEJAR ESCRITA. Nada de esto
+haría falta si `config.CORREO_CUENTAS` no existiera como atributo alcanzable.
+Si las credenciales se leyeran DENTRO de `cuentas_de_correo(para=...)` y no
+quedaran guardadas en ningún atributo del módulo, no habría nada que encontrar
+por mucho que se recorran los módulos cargados: la fuga de
+`_FUERA_DE_LA_FRONTERA` volvería con las manos vacías. Es la Regla 11 —borrar el
+caso en vez de manejarlo— y es el arreglo definitivo.
+
+Una vuelta anterior lo midió y lo descartó por un motivo real, y sigue en pie:
+`config.CORREO_CUENTAS = ...` se asigna 15 veces en 5 archivos de prueba
+(medido el 6-sep-2026 con `grep -rn "config\\.CORREO_CUENTAS *=" tests/`), y esos
+5 archivos colectan 100 pruebas (`pytest --collect-only`). Ésa es hoy la única
+forma que tiene la suite de instalar buzones falsos, y con la lista metida en un
+cierre el `conftest` no la restaura. O sea: el día que alguien rehaga el
+aislamiento de la suite, ahí está el arreglo que borra este archivo entero.
+
+Y NO VIGILA el otro sitio del que hoy salen buzones con credenciales, que no es
+un agujero sino una decisión: `tools/descubrir_bancos.py::_cuentas()` lee
 `os.environ["CORREO_CUENTAS"]` —y, si no está, el `.env` de la raíz— sin tocar
 config, y se queda con TODAS las cuentas, la marcada incluida. Está hecho a
 propósito («Igual que config.py, pero sin importarlo: este script tiene que
@@ -538,6 +577,28 @@ def test_para_es_obligatorio_y_su_vocabulario_es_cerrado():
 # Por eso una forma que nadie previó cae del lado rojo: no hay que reconocerla,
 # hay que fallar en reconocerla.
 
+# LOS CONTADORES, y por qué llevan una marca. Varias pruebas de acá cuentan lo
+# que un límite CUESTA hoy —cuántos getattr hay, cuántos archivos se vigilan—
+# para que «no cuesta nada» sea un número y no un adjetivo. Está bien que
+# existan; lo que no puede pasar es que su rojo se confunda con el rojo que
+# importa.
+#
+# PASÓ TRES VECES EL 6-sep-2026, y la última fue la peor: la sala metió en el
+# repo una fuga que devolvía las credenciales del buzón marcado, y el ÚNICO
+# rojo de la suite fue «tienen 8 llamadas a getattr y el 6-sep eran 7». Un
+# contador que salta primero hace creer que la guarda vio algo cuando no vio
+# nada, y de paso esconde que la prueba de fondo está en verde.
+#
+# Dos reglas, y las dos se comprueban corriendo en
+# `test_los_contadores_no_pueden_tapar_el_rojo_que_importa`:
+#
+#   1. El mensaje de un contador EMPIEZA con esta marca, así que su rojo dice
+#      de sí mismo que es un contador.
+#   2. Un contador nunca es la PRIMERA aserción de su prueba. La aserción de
+#      fondo va antes, siempre, para que el contador no pueda abortar la prueba
+#      antes de que lo que importa se haya comprobado.
+_MARCA_CONTADOR = "CONTADOR (no es una fuga): "
+
 _PROHIBIDO = "CORREO_CUENTAS"
 
 # El nombre con el que config vive en la tabla de módulos, sacado del módulo y
@@ -818,17 +879,25 @@ _TEXTO_A_CODIGO = (builtins.eval, builtins.exec, builtins.compile,
 #
 # Y LO QUE QUEDA FUERA, dicho para que nadie lea esto de más: la lista es de
 # objetos concretos, así que un camino que consiga el objeto `getattr` sin
-# nombrarlo no se reconoce como tal. Son DOS formas y hasta el 6-sep-2026 acá
-# solo estaba escrita una:
+# nombrarlo no se reconoce como tal. Son AL MENOS TRES formas; el 6-sep-2026
+# había escrita una, después dos, y un testigo encontró la tercera:
 #
 #     builtins.__dict__["get" + "attr"]                  # pide `import builtins`
 #     sys.modules["builtins"].__dict__["get" + "attr"]   # no pide nada
+#     vars(builtins)["get" + "attr"]                     # pide `import builtins`
 #
-# Las dos, sueltas, salen VERDES — medido, no supuesto, en
-# `test_conseguir_getattr_sin_nombrarlo_no_llega_solo_a_la_lista`. Y las dos
-# dejan de importar en cuanto se usan para algo: para sacar la lista cruda hace
-# falta además el módulo `config`, y conseguirlo cae por los motivos (d), (e) y
-# (f). Esa segunda mitad también está medida allí, con las dos formas.
+# La tercera se le escapa por el mismo sitio que las otras dos: el motivo (h)
+# mira nodos `ast.Name` y `ast.Attribute`, y el resultado de un `Subscript` no
+# es ninguno de los dos. Y se dice «AL MENOS TRES» a propósito: éste es el
+# espacio sin fondo del que habla la cabecera, así que la cuenta no se cierra —
+# lo que se cierra es el criterio con el que se decide de qué lado cae una
+# cuarta, y ése está arriba, en una línea.
+#
+# Las tres, sueltas, salen VERDES — medido, no supuesto, en
+# `test_la_frontera_declarada_esta_medida_forma_por_forma`. Y las tres dejan de
+# importar en cuanto se usan para algo: para sacar la lista cruda hace falta
+# además el módulo `config`, y conseguirlo cae por los motivos (d), (e) y (f).
+# Esa segunda mitad también está medida allí, con las tres formas.
 _PELIGROSOS = _ATRIBUTO_POR_NOMBRE + _TEXTO_A_CODIGO
 
 
@@ -2054,14 +2123,19 @@ def test_la_guarda_muerde_el_camino_por_la_tabla_de_modulos():
     """
     fuente = _ESQUIVES["por la tabla de módulos, pedida con getattr"]
     motivos = _infracciones(fuente, _atributos_que_config_ofrece())
-    assert len(motivos) >= 2, (
-        f"el camino por la tabla de módulos solo cayó por {motivos}; se espera "
-        "que caiga por el nombre del módulo y por el atributo pedido")
+    # Los dos motivos concretos PRIMERO: son lo que se exige. El conteo va
+    # después, para que no aborte la prueba antes de decir CUÁL de los dos
+    # falta, que es el dato con el que se arregla.
     assert any(_MODULO_CONFIG in m for m in motivos), (
         f"nadie vio que se estaba sacando el módulo {_MODULO_CONFIG!r} de un "
         f"espacio de nombres: {motivos}")
     assert any(_PROHIBIDO in m for m in motivos), (
         f"nadie vio que se estaba pidiendo {_PROHIBIDO}: {motivos}")
+    assert len(motivos) >= 2, (
+        f"{_MARCA_CONTADOR}el camino por la tabla de módulos solo cayó por "
+        f"{motivos}. Los dos motivos que se exigen YA CORRIERON arriba y "
+        "quedaron verdes, así que esto NO es una fuga: es que los dos se "
+        "fundieron en un solo mensaje")
 
 
 # ── Que un archivo esté exento NO puede depender de cómo se llame ─────────
@@ -2270,6 +2344,11 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     CUÁNTOS archivos se midió, para que "cero falsos positivos" signifique algo
     y para que se note si mañana la guarda deja de mirar medio repo.
     """
+    # PRIMERO lo que importa. Antes el contador de abajo iba delante, así que
+    # añadir un archivo al repo abortaba la prueba y esto no llegaba a correr.
+    assert not _quienes_leen_la_lista_cruda(RAIZ), (
+        "hay falsos positivos sobre los archivos reales de hoy")
+
     fuera = _carpetas_que_no_son_del_repo(RAIZ)
     todos = [p for p in RAIZ.rglob("*.py")
              if not any(x in fuera for x in p.relative_to(RAIZ).parts)]
@@ -2277,12 +2356,12 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     medido = {"en disco": len(todos), "exentos": len(todos) - len(mirados),
               "vigilados": len(mirados)}
     assert medido == {"en disco": 66, "exentos": 29, "vigilados": 37}, (
-        f"el reparto de archivos cambió: {medido}, y el 6-sep-2026 era "
-        "{'en disco': 66, 'exentos': 29, 'vigilados': 37}. Si los vigilados "
+        f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
+        "6-sep-2026 era {'en disco': 66, 'exentos': 29, 'vigilados': 37}. La "
+        "aserción de fondo —cero archivos alcanzan la lista cruda— YA CORRIÓ "
+        "arriba y quedó verde, así que esto NO es una fuga. Si los vigilados "
         "bajaron, algo se está saltando de más y «cero falsos positivos» dejó "
         "de significar lo que decía; si subieron, hay código nuevo que mirar")
-    assert not _quienes_leen_la_lista_cruda(RAIZ), (
-        "hay falsos positivos sobre los archivos reales de hoy")
 
 
 def test_la_guarda_no_rojea_a_quien_usa_config_como_se_debe():
@@ -2504,30 +2583,111 @@ def test_las_siete_formas_de_maquinaria_dinamica_una_por_una():
         f"estas formas alcanzan la lista cruda y pasaron limpias: {escapados}")
 
 
-def _arbol_de_infracciones():
-    """El árbol de `_infracciones`, con cada nodo apuntando a su padre.
+def _arbol_de_este_archivo():
+    """El árbol del ARCHIVO ENTERO, con cada nodo apuntando a su padre.
+
+    Antes esto parseaba solo `inspect.getsource(_infracciones)`, y ahí estaba el
+    agujero: un motivo escrito en una FUNCIÓN AUXILIAR de fuera, llamada desde
+    el bucle de `_infracciones` con una línea, quedaba fuera del texto mirado y
+    la prueba de la serie seguía verde. Medido el 6-sep-2026: un motivo con el
+    mismo defecto de las seis vueltas, puesto en un ayudante, daba 35 passed.
+
+    El archivo se lee de `sys.modules[__name__]`, no de una ruta escrita acá.
 
     UN solo árbol por llamada, y quien lo use tiene que usar SIEMPRE el mismo:
     parsear dos veces da dos juegos de nodos distintos, y entonces los padres de
     uno no se encuentran en los índices del otro. Eso ya rompió esta prueba una
     vez, y de la forma peligrosa: daba rojo cuando el código estaba bien.
     """
-    arbol = ast.parse(inspect.getsource(_infracciones))
+    arbol = ast.parse(inspect.getsource(sys.modules[__name__]))
     for padre in ast.walk(arbol):
         for hijo in ast.iter_child_nodes(padre):
             hijo._p = padre                          # type: ignore[attr-defined]
     return arbol
 
 
+def _alias_del_enumerador(arbol) -> set[str]:
+    """Con qué nombres se llama al enumerador en este archivo.
+
+    El enumerador es `_cadenas` —su nombre sale del objeto, no está tecleado— y
+    un alias es una función que no hace más que devolver lo que él devuelve
+    (`def pedidos(nodo): return _cadenas(nodo, ctx.ambitos)`) o un nombre atado
+    directamente a él. Se repite hasta que deje de crecer, para que un alias de
+    un alias también entre.
+    """
+    nombres = {_cadenas.__name__}
+    for _ in range(4):
+        antes = set(nombres)
+        for n in ast.walk(arbol):
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
+                    len(n.body) == 1 and isinstance(n.body[0], ast.Return) and \
+                    isinstance(n.body[0].value, ast.Call) and \
+                    isinstance(n.body[0].value.func, ast.Name) and \
+                    n.body[0].value.func.id in nombres:
+                nombres.add(n.name)
+            if isinstance(n, ast.Assign) and len(n.targets) == 1 and \
+                    isinstance(n.targets[0], ast.Name) and \
+                    isinstance(n.value, ast.Name) and n.value.id in nombres:
+                nombres.add(n.targets[0].id)
+        if nombres == antes:
+            break
+    return nombres
+
+
+def _sitios_que_enumeran_nombres(arbol) -> list[ast.Call]:
+    """TODA llamada al enumerador que hay en el archivo, esté donde esté.
+
+    Menos una: la línea que DEFINE un alias (`def pedidos(nodo): return
+    _cadenas(...)`). Ahí no hay nada que comprobar —el alias devuelve tal cual
+    lo que le den, incluido el `None`— y la obligación pasa a quien lo llame,
+    que es justo lo que esta lista recoge.
+    """
+    alias = _alias_del_enumerador(arbol)
+    definiciones = set()
+    for n in ast.walk(arbol):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and \
+                n.name in alias and len(n.body) == 1 and \
+                isinstance(n.body[0], ast.Return) and \
+                isinstance(n.body[0].value, ast.Call):
+            definiciones.add(id(n.body[0].value))
+    def se_llama(f) -> bool:
+        # Un nombre suelto (`pedidos(x)`) o punteado (`T._cadenas(x)`). Lo
+        # segundo no lo escribe nadie hoy; se mira igual porque no cuesta, y
+        # porque «no lo miro» es como se escapó la fuga de las seis vueltas.
+        return (isinstance(f, ast.Name) and f.id in alias) or \
+            (isinstance(f, ast.Attribute) and f.attr in alias)
+
+    return [n for n in ast.walk(arbol)
+            if isinstance(n, ast.Call) and se_llama(n.func)
+            and id(n) not in definiciones]
+
+
+def _cuerpo_de_infracciones(arbol):
+    """El nodo `FunctionDef` de `_infracciones` dentro del árbol del archivo."""
+    for n in ast.walk(arbol):
+        if isinstance(n, ast.FunctionDef) and n.name == _infracciones.__name__:
+            return n
+    raise AssertionError(
+        f"no se encontró `{_infracciones.__name__}` en el árbol del archivo; "
+        "sin él estas pruebas estarían verdes sin mirar nada")
+
+
 def _motivos_que_enumeran_nombres(arbol) -> dict[str, list[ast.Call]]:
-    """Qué motivo de `_infracciones` llama a `pedidos`, leído de su propio código.
+    """Qué motivo de `_infracciones` llama al enumerador, leído de su código.
 
     Los motivos se marcan con un comentario `# (x)` en el cuerpo de la función.
-    Ni las letras ni los números de línea se escriben acá: se sacan del archivo
-    con `inspect.getsource`, así que un motivo nuevo aparece solo.
+    Ni las letras ni los números de línea se escriben acá: se sacan del archivo,
+    así que un motivo nuevo aparece solo. Solo cuentan las marcas que caen
+    DENTRO de `_infracciones`, y ese rango sale del propio nodo.
     """
+    cuerpo = _cuerpo_de_infracciones(arbol)
+    desde, hasta = cuerpo.lineno, cuerpo.end_lineno or cuerpo.lineno
+
     marcas: list[tuple[int, str]] = []
-    for i, linea in enumerate(inspect.getsource(_infracciones).splitlines(), 1):
+    for i, linea in enumerate(
+            inspect.getsource(sys.modules[__name__]).splitlines(), 1):
+        if not desde <= i <= hasta:
+            continue
         limpia = linea.strip()
         if limpia.startswith("# (") and ")" in limpia:
             letra = limpia[3:limpia.index(")")]
@@ -2535,17 +2695,17 @@ def _motivos_que_enumeran_nombres(arbol) -> dict[str, list[ast.Call]]:
                 marcas.append((i, letra))
 
     salida: dict[str, list[ast.Call]] = {}
-    for n in ast.walk(arbol):
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) \
-                and n.func.id == "pedidos":
-            cuales = [m for m in marcas if m[0] <= n.lineno]
-            letra = cuales[-1][1] if cuales else "?"
-            salida.setdefault(letra, []).append(n)
+    for n in _sitios_que_enumeran_nombres(arbol):
+        if not desde <= n.lineno <= hasta:
+            continue
+        cuales = [m for m in marcas if m[0] <= n.lineno]
+        letra = cuales[-1][1] if cuales else "?"
+        salida.setdefault(letra, []).append(n)
     return salida
 
 
-def test_ningun_motivo_deja_pasar_lo_que_no_puede_enumerar():
-    """LA regla, exigida a TODOS los motivos a la vez y no leyéndolos uno a uno.
+def test_ningun_sitio_del_archivo_deja_pasar_lo_que_no_puede_enumerar():
+    """LA regla, exigida a TODO EL ARCHIVO y no leyéndolo uno a uno.
 
     EL AGUJERO DEL 6-sep-2026 no fue una clase nueva de fuga: fue la regla de
     esta guarda sin aplicar a una rama. De los motivos que preguntan qué nombres
@@ -2554,17 +2714,35 @@ def test_ningun_motivo_deja_pasar_lo_que_no_puede_enumerar():
     `None` —que significa «no se puede enumerar»— hacía la condición False en
     silencio. Por ahí salía la lista cruda entera.
 
-    Que eso estuviera bien o mal se sabía LEYENDO los seis. Esta prueba lo hace
-    saber CORRIENDO: recorre el código de `_infracciones`, busca cada sitio que
-    llama a `pedidos` —o sea cada sitio que enumera nombres— y exige que el
-    resultado se compare contra `None` en alguna parte. Un `if trae and ...`
-    vuelve a poner esto rojo, y el séptimo motivo que alguien escriba mañana no
-    puede nacer con este defecto sin que la suite se entere.
+    Y EL AGUJERO DE ESTA PRUEBA, del mismo día: miraba solo
+    `inspect.getsource(_infracciones)`. Un testigo escribió un motivo con
+    exactamente ese defecto en una FUNCIÓN AUXILIAR de fuera, llamada desde el
+    bucle con una línea, y la suite dio 35 passed. La prueba prometía «el
+    séptimo motivo no puede nacer con este defecto» y solo miraba un trozo del
+    archivo.
 
-    No hay ninguna lista de motivos escrita acá: las letras salen de los
-    comentarios del propio `_infracciones`.
+    SU ALCANCE, AHORA, dicho con precisión y sin prometer de más:
+
+      · MIRA el archivo entero —`sys.modules[__name__]`, no una ruta escrita
+        acá— y dentro de él TODA llamada al enumerador `_cadenas`, se le llame
+        como se le llame: los alias se derivan del árbol (una función que no
+        hace más que devolver lo que él devuelve), no hay ninguno tecleado.
+      · EXIGE que el resultado de cada una haga una de estas cinco cosas, y
+        nada más: (A) compararse contra `None` ahí mismo; (B) asignarse a un
+        nombre que se compara contra `None` después y en el mismo bloque; (C)
+        devolverse tal cual, con lo que la obligación pasa a quien llame —y ese
+        sitio también está en esta lista—; (D) recogerse en una comprensión
+        cuyos elementos se comparan contra `None`; (E) pasarse como argumento a
+        una función de este archivo que compara ESE parámetro contra `None`.
+      · NO MIRA lo que la guarda hace con el resultado una vez comparado. Que
+        `claves is None` dispare el `malas.append` correcto lo mide
+        `test_lo_indeterminable_es_rojo_en_cada_motivo_por_separado`, motivo por
+        motivo y corriendo. Entre las dos no queda hueco: ésta ve la forma en
+        todo el archivo, la otra ve el veredicto en cada motivo.
+
+    No hay ninguna lista de motivos ni de sitios escrita acá.
     """
-    arbol = _arbol_de_infracciones()
+    arbol = _arbol_de_este_archivo()
 
     def compara_con_none(nodo) -> bool:
         return isinstance(nodo, ast.Compare) and \
@@ -2587,43 +2765,107 @@ def test_ningun_motivo_deja_pasar_lo_que_no_puede_enumerar():
                     if isinstance(s, ast.stmt):
                         sitio[id(s)] = (bloque, i)
 
-    def se_compara_despues(asignacion, nombre: str) -> bool:
+    def se_compara_despues(asignacion, nombre: str) -> str | None:
+        """(B) o (D): el nombre asignado se compara contra None más adelante."""
         donde = sitio.get(id(asignacion))
         if donde is None:
-            return False
+            return None
         bloque, i = donde
         for posterior in bloque[i + 1:]:
             for n in ast.walk(posterior):
-                if compara_con_none(n) and isinstance(n.left, ast.Name) \
-                        and n.left.id == nombre:
+                if not compara_con_none(n) or not isinstance(n.left, ast.Name):
+                    continue
+                if n.left.id == nombre:
+                    return "B"
+                # (D) `partes = [pedidos(e) for e in ...]` seguido de
+                # `any(p is None for p in partes)`: lo comparado es el elemento
+                # y no la lista, y hay que atarlo a ESA lista para que la
+                # comprobación no valga colgada de la de otra variable.
+                for c in ast.walk(posterior):
+                    if isinstance(c, ast.comprehension) and \
+                            isinstance(c.target, ast.Name) and \
+                            c.target.id == n.left.id and \
+                            isinstance(c.iter, ast.Name) and \
+                            c.iter.id == nombre:
+                        return "D"
+        return None
+
+    def sentencia_de(nodo):
+        while nodo is not None and not isinstance(nodo, ast.stmt):
+            nodo = getattr(nodo, "_p", None)
+        return nodo
+
+    # (E) Qué funciones de este archivo comparan contra None el parámetro que
+    # está en una posición dada. Se saca del árbol, no se teclea.
+    def parametro_comparado(nombre_fn: str, pos: int) -> bool:
+        for n in ast.walk(arbol):
+            if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) or \
+                    n.name != nombre_fn:
+                continue
+            args = n.args.posonlyargs + n.args.args
+            if pos >= len(args):
+                continue
+            param = args[pos].arg
+            for d in ast.walk(n):
+                if compara_con_none(d) and isinstance(d.left, ast.Name) and \
+                        d.left.id == param:
                     return True
         return False
 
+    def como_se_cuida(c: ast.Call) -> str | None:
+        padre = getattr(c, "_p", None)
+        if compara_con_none(padre):
+            return "A"
+        if isinstance(padre, ast.Return):
+            return "C"                       # la obligación pasa a quien llame
+        if isinstance(padre, ast.Assign) and len(padre.targets) == 1 and \
+                isinstance(padre.targets[0], ast.Name):
+            visto = se_compara_despues(padre, padre.targets[0].id)
+            if visto:
+                return visto
+        st = sentencia_de(c)                 # (D): dentro de una comprensión
+        if isinstance(st, ast.Assign) and len(st.targets) == 1 and \
+                isinstance(st.targets[0], ast.Name):
+            visto = se_compara_despues(st, st.targets[0].id)
+            if visto:
+                return visto
+        if isinstance(padre, ast.Call) and isinstance(padre.func, ast.Name):
+            for i, a in enumerate(padre.args):
+                if a is c and parametro_comparado(padre.func.id, i):
+                    return "E"
+        return None
+
     porletra = _motivos_que_enumeran_nombres(arbol)
     assert porletra, (
-        "no se encontró ni un solo sitio que llame a `pedidos` dentro de "
-        "`_infracciones`. O se renombró el ayudante y esta prueba quedó "
-        "mirando al vacío —o sea verde sin comprobar nada—, o los motivos "
-        "dejaron de enumerar nombres")
+        "no se encontró ni un solo motivo de `_infracciones` que llame al "
+        "enumerador. O se renombró y esta prueba quedó mirando al vacío —o sea "
+        "verde sin comprobar nada—, o los motivos dejaron de enumerar nombres")
+
+    sitios = _sitios_que_enumeran_nombres(arbol)
+    assert len(sitios) >= sum(len(v) for v in porletra.values()), (
+        "el barrido del archivo entero encontró MENOS sitios que el de "
+        "`_infracciones` solo. Eso es imposible salvo que el barrido esté roto, "
+        "y un barrido roto es verde sin haber mirado")
+
+    cuerpo = _cuerpo_de_infracciones(arbol)
+    dentro = range(cuerpo.lineno, (cuerpo.end_lineno or cuerpo.lineno) + 1)
 
     flojos: dict[str, list[int]] = {}
-    for letra, llamadas in sorted(porletra.items()):
-        for c in llamadas:
-            padre = getattr(c, "_p", None)
-            bien = compara_con_none(padre)
-            if not bien and isinstance(padre, ast.Assign) and \
-                    len(padre.targets) == 1 and \
-                    isinstance(padre.targets[0], ast.Name):
-                bien = se_compara_despues(padre, padre.targets[0].id)
-            if not bien:
-                flojos.setdefault(letra, []).append(c.lineno)
+    for c in sitios:
+        if como_se_cuida(c) is not None:
+            continue
+        donde = "en un motivo de _infracciones" if c.lineno in dentro \
+            else "FUERA de _infracciones"
+        flojos.setdefault(donde, []).append(c.lineno)
 
     assert not flojos, (
-        f"estos motivos enumeran nombres y NO tratan «no lo sé» como rojo: "
-        f"{flojos} (líneas relativas al principio de `_infracciones`). Un "
-        "`pedidos(...)` cuyo resultado no se compara contra None deja pasar en "
-        "silencio justo el caso en el que menos se sabe qué se está pidiendo, "
-        "que es como se escapó la fuga del 6-sep-2026")
+        f"estos sitios enumeran nombres y NO tratan «no lo sé» como rojo: "
+        f"{flojos} (líneas del archivo). Un `pedidos(...)` cuyo resultado no se "
+        "compara contra None deja pasar en silencio justo el caso en el que "
+        "menos se sabe qué se está pidiendo, que es como se escapó la fuga del "
+        "6-sep-2026. Y si el sitio está FUERA de `_infracciones`, es además la "
+        "forma exacta con la que un testigo burló esta prueba el mismo día: un "
+        "motivo escrito en una función auxiliar")
 
 
 def test_lo_indeterminable_es_rojo_en_cada_motivo_por_separado():
@@ -2661,7 +2903,7 @@ def test_lo_indeterminable_es_rojo_en_cada_motivo_por_separado():
     # `_infracciones`, no de una lista escrita a mano, así que un motivo nuevo
     # que enumere nombres y no traiga su caso pone esto rojo.
     letras = set(_motivos_que_enumeran_nombres(
-        _arbol_de_infracciones()))
+        _arbol_de_este_archivo()))
     cubiertas = {k[1] for k in casos}
     assert letras <= cubiertas, (
         f"estos motivos enumeran nombres y no tienen un caso medido acá: "
@@ -2719,78 +2961,254 @@ def test_cuanto_costaria_la_regla_a_secas_y_cuanto_cuesta_la_de_verdad():
     # argumento. Si esto dejara de ser cierto, la regla a secas sería viable y
     # habría que preferirla, porque no depende de reconocer ninguna función.
     assert a_secas > llamadas // 4, (
-        f"la regla «argumento no enumerable ⇒ rojo» a secas ya solo costaría "
-        f"{a_secas} de {llamadas} llamadas en {len(archivos_a_secas)} de "
-        f"{len(vigilados)} archivos. Si de verdad bajó tanto, conviene "
-        "revisarla: sería un fondo mejor que la puerta en el callee")
+        f"{_MARCA_CONTADOR}la regla «argumento no enumerable ⇒ rojo» a secas ya "
+        f"solo costaría {a_secas} de {llamadas} llamadas en "
+        f"{len(archivos_a_secas)} de {len(vigilados)} archivos. La aserción de "
+        "fondo —la regla que se quedó no rojea a nadie— YA CORRIÓ arriba y "
+        "quedó verde, así que esto NO es una fuga. Si de verdad bajó tanto, "
+        "conviene revisarla: sería un fondo mejor que la puerta en el callee")
 
 
-def test_conseguir_getattr_sin_nombrarlo_no_llega_solo_a_la_lista():
-    """La frontera de `_PELIGROSOS`, con SUS DOS formas y las dos medidas.
-
-    El archivo declaraba una sola —`builtins.__dict__["get" + "attr"]`— y hay
-    otra que no necesita ni `import builtins`:
-    `sys.modules["builtins"].__dict__["get" + "attr"]`. Una frontera que nombra
-    una de las dos formas de cruzarla promete más de lo que cubre.
-
-    Lo que la frontera dice es dos cosas, y acá se comprueban por separado:
-
-      1. Sueltas, las dos son VERDES. Conseguir el objeto `getattr` sin
-         nombrarlo no se reconoce como tal — es el precio de comparar por
-         identidad de objeto. Medido el 6-sep-2026.
-      2. Usadas para llegar a la lista cruda, las dos son ROJAS, porque hace
-         falta además el módulo `config` y eso lo cubren (d) y (e).
-
-    Si algún día (1) cambia a rojo, mejor: hay que venir y reescribir esto. Lo
-    que no puede pasar sin que nadie se entere es que (2) cambie a verde.
-    """
-    permitidos = _atributos_que_config_ofrece()
-
-    sueltas = {
-        "por builtins importado":
+# ── LO QUE QUEDA FUERA DE LA FRONTERA, con su código exacto ───────────────
+#
+# Cada entrada es una forma que la guarda NO atrapa, escrita entera para que
+# nadie la redescubra creyendo que encontró un agujero nuevo. Todas caen del
+# mismo lado del criterio de la cabecera: NO NOMBRAN lo que quieren.
+#
+# Los campos:
+#   · `fuente`      el código, tal cual. Tiene que salir VERDE.
+#   · `llega_sola`  ¿consigue ella sola la lista cruda? Si es False, hace falta
+#                   además el módulo `config`, y conseguirlo cae por (d)/(e)/(f).
+#   · `y_llegando`  la misma forma usada para alcanzar la lista, una entrada por
+#                   cada puerta distinta por la que se consiga `config`. Todas
+#                   tienen que salir ROJAS. Vacía cuando `llega_sola` es True:
+#                   ahí no hay nada que la atrape, y eso es lo que se declara.
+#
+# Que estén acá NO afloja ninguna aserción: cada una está fijada por una prueba
+# que se pone roja si cambia de lado, en cualquiera de las dos direcciones.
+_FUERA_DE_LA_FRONTERA = {
+    # LA fuga que cerró la persecución, medida por la sala el 6-sep-2026. No
+    # nombra `config` ni `CORREO_CUENTAS` en ninguna parte: recorre los módulos
+    # ya cargados y le pregunta a cada uno cómo se llama. El único rojo que
+    # produjo fue un CONTADOR de costo, y por eso se arreglaron los contadores.
+    "el bucle sobre los módulos cargados, eligiendo por el nombre partido": {
+        "fuente":
+            'def _es_el_que_busco(m):\n'
+            '    return getattr(m, "__name__", "") == "con" + "fig"\n'
+            '\n'
+            'def _robar():\n'
+            '    import sys\n'
+            '    salida = []\n'
+            '    for m in sys.modules.values():\n'
+            '        if _es_el_que_busco(m):\n'
+            '            salida.extend(vars(m).values())\n'
+            '    return salida\n',
+        "llega_sola": True,
+        "y_llegando": [],
+        "por_que":
+            "el nombre del módulo se compara en tiempo de ejecución contra un "
+            "string armado al vuelo, y los valores salen por `.values()`, que "
+            "no es un `Subscript`: no hay un solo nodo del árbol donde "
+            "aparezca qué se quiere",
+    },
+    # Las tres formas de conseguir el objeto `getattr` sin nombrarlo. El motivo
+    # (h) mira nodos `ast.Name` y `ast.Attribute`; el resultado de un
+    # `Subscript` no es ninguno de los dos.
+    "getattr sacado del __dict__ de builtins importado": {
+        "fuente":
             'import builtins\n'
             'def f(mod, n):\n'
             '    ga = builtins.__dict__["get" + "attr"]\n'
             '    return ga\n',
-        "por la tabla de módulos, sin importar builtins":
-            'import sys\n'
-            'def f(mod, n):\n'
-            '    ga = sys.modules["builtins"].__dict__["get" + "attr"]\n'
-            '    return ga\n',
-    }
-    rojas = {k: _infracciones(src, permitidos)
-             for k, src in sueltas.items() if _infracciones(src, permitidos)}
-    assert not rojas, (
-        f"la frontera se movió: conseguir `getattr` sin nombrarlo ahora es "
-        f"rojo por sí solo ({rojas}). Es una buena noticia, pero el texto de "
-        "`_PELIGROSOS` y el de la cabecera dicen lo contrario y hay que "
-        "corregirlos")
-
-    llegando = {
-        "por builtins importado, y config por la tabla de módulos":
+        "llega_sola": False,
+        "y_llegando": [
             'import builtins\n'
             'import sys\n'
             'def f():\n'
             '    ga = builtins.__dict__["get" + "attr"]\n'
             '    return ga(ga(sys, "modules")["config"], "CORREO_CUENTAS")\n',
-        "sin importar builtins, y config por la tabla de módulos":
+        ],
+        "por_que": "`_PELIGROSOS` compara por identidad de objeto, y acá el "
+                   "objeto se consigue sin que su nombre esté en el árbol",
+    },
+    "getattr sacado de la tabla de módulos, sin importar builtins": {
+        "fuente":
+            'import sys\n'
+            'def f(mod, n):\n'
+            '    ga = sys.modules["builtins"].__dict__["get" + "attr"]\n'
+            '    return ga\n',
+        "llega_sola": False,
+        "y_llegando": [
             'import sys\n'
             'def f():\n'
             '    ga = sys.modules["builtins"].__dict__["get" + "attr"]\n'
             '    return ga(ga(sys, "modules")["config"], "CORREO_CUENTAS")\n',
-        "sin importar builtins, y config por import_module con nombre al vuelo":
+            # Y la misma forma consiguiendo `config` por otra puerta: el nombre
+            # del módulo armado al vuelo y pasado a `import_module`. Cae por
+            # (d), no por (e), así que mide otra cosa.
             'import sys\n'
             'import importlib\n'
             'def f(n):\n'
             '    ga = sys.modules["builtins"].__dict__["get" + "attr"]\n'
             '    return ga(importlib.import_module(n), "CORREO_CUENTAS")\n',
-    }
-    escapados = [k for k, src in llegando.items()
+        ],
+        "por_que": "igual que la anterior, y además sin necesitar `import "
+                   "builtins`",
+    },
+    # LA TERCERA, que el archivo no declaraba: encontrada el 6-sep-2026.
+    # Ejecutada, `vars(builtins)["get" + "attr"] is builtins.getattr` da True.
+    "getattr sacado de vars(builtins)": {
+        "fuente":
+            'import builtins\n'
+            'def f(mod, n):\n'
+            '    ga = vars(builtins)["get" + "attr"]\n'
+            '    return ga\n',
+        "llega_sola": False,
+        "y_llegando": [
+            'import builtins\n'
+            'import sys\n'
+            'def f():\n'
+            '    ga = vars(builtins)["get" + "attr"]\n'
+            '    return ga(ga(sys, "modules")["config"], "CORREO_CUENTAS")\n',
+        ],
+        "por_que": "el archivo declaraba DOS formas de conseguir `getattr` sin "
+                   "nombrarlo y hay al menos tres; el motivo (j) rojea la "
+                   "clave indeterminable, pero acá la clave SÍ se enumera y no "
+                   "es ninguno de los dos nombres prohibidos",
+    },
+    # EL MOTIVO (i) Y EL (c), APAGADOS POR UN NOMBRE LOCAL. Comprobado con un
+    # caso ejecutable el 6-sep-2026, y es peor de lo que se creía: `ga` no
+    # queda «sin resolver», queda resuelto AL OBJETO EQUIVOCADO, así que ni
+    # siquiera el nombre de atributo escrito entero lo salva.
+    "un import local que le roba el nombre a un alias peligroso": {
+        "fuente":
+            'from builtins import getattr as ga\n'
+            'def _prepara():\n'
+            '    import os as ga\n'
+            '    return ga.getcwd()\n'
+            'def robar(mod):\n'
+            '    return ga(mod, "CORREO_" + "CUENTAS")\n',
+        "llega_sola": False,
+        "y_llegando": [
+            'from builtins import getattr as ga\n'
+            'import sys\n'
+            'def _prepara():\n'
+            '    import os as ga\n'
+            '    return ga.getcwd()\n'
+            'def robar():\n'
+            '    return ga(sys.modules["config"], "CORREO_" + "CUENTAS")\n',
+        ],
+        "por_que":
+            "`_Contexto.importados` es PLANO: no tiene ámbitos. El `import os "
+            "as ga` de dentro de una función pisa el `ga` de todo el archivo, "
+            "así que (i) y (c) resuelven `ga` al módulo `os` cuando en tiempo "
+            "de ejecución es `builtins.getattr`. Es la especie de «no lo sé ⇒ "
+            "verde» que ya se arregló en (c), (d) y (j), pero por el lado de "
+            "«lo resolví MAL ⇒ verde». Arreglarlo pide darle ámbitos a "
+            "`importados`, o sea rehacer el Tramo 2 entero: es otra vuelta, y "
+            "por eso hoy se declara en vez de perseguirse",
+    },
+}
+
+
+def test_la_frontera_declarada_esta_medida_forma_por_forma():
+    """LA FRONTERA, medida por sus dos mitades — no afirmada en un comentario.
+
+    Mitad A: las formas de DESCUIDO caen todas. Son `_ESQUIVES`, y lo mide
+    `test_la_guarda_muerde_todos_los_caminos_a_la_lista_cruda`; acá se cuenta
+    cuántas son, para que el número de la cabecera no sea una cifra tecleada.
+
+    Mitad B: las formas DELIBERADAS de `_FUERA_DE_LA_FRONTERA` no caen, y están
+    escritas con su código exacto. Cada una se comprueba en las dos
+    direcciones:
+
+      · suelta → VERDE. Si un día sale roja, mejor: hay que venir y reescribir
+        la declaración. Lo que no puede pasar es que la declaración diga una
+        cosa y la guarda haga otra.
+      · usada para llegar a la lista cruda → ROJA, y una vez por cada puerta
+        distinta por la que se consiga `config`, no una sola. La excepción es
+        la declarada `llega_sola`: ésa no la atrapa nadie, y por eso su lista
+        de formas de llegar está vacía.
+
+    Declarar una forma fuera NO es quitar la prueba que la cubría: es
+    escribirla donde se vea y fijarla con una aserción que se pone roja si se
+    mueve, en cualquiera de las dos direcciones.
+    """
+    permitidos = _atributos_que_config_ofrece()
+
+    # ── Mitad B, primero lo que importa: cada forma declarada está donde dice
+    rojas = {k: _infracciones(d["fuente"], permitidos)
+             for k, d in _FUERA_DE_LA_FRONTERA.items()
+             if _infracciones(d["fuente"], permitidos)}
+    assert not rojas, (
+        f"la frontera se movió y ahora la guarda SÍ atrapa esto: {rojas}. Es "
+        "una buena noticia, pero la cabecera y `_FUERA_DE_LA_FRONTERA` dicen "
+        "lo contrario y hay que corregirlos: una frontera que promete de menos "
+        "hace que nadie vuelva a mirar")
+
+    escapados = [f"{k} [{i}]" for k, d in _FUERA_DE_LA_FRONTERA.items()
+                 for i, src in enumerate(d["y_llegando"])
                  if not _infracciones(src, permitidos)]
     assert not escapados, (
-        f"estas formas consiguen `getattr` sin nombrarlo Y llegan a la lista "
-        f"cruda, y pasaron limpias: {escapados}. La frontera declarada dice "
-        "que esto no puede pasar")
+        f"estas formas están declaradas como «no llegan solas» y sin embargo "
+        f"llegaron a la lista cruda sin que nadie las viera: {escapados}. O se "
+        "arregla la guarda, o la entrada pasa a `llega_sola: True` y eso es un "
+        "agujero nuevo que hay que contarle a Tiziano")
+
+    # Y la coherencia de la declaración: `llega_sola` y `y_llegando` son las
+    # dos caras de lo mismo, y una entrada que diga las dos cosas a la vez
+    # dejaría sin medir justo lo que declara.
+    incoherentes = [k for k, d in _FUERA_DE_LA_FRONTERA.items()
+                    if bool(d["llega_sola"]) == bool(d["y_llegando"])]
+    assert not incoherentes, (
+        f"estas entradas se declaran a sí mismas de dos formas a la vez: "
+        f"{incoherentes}. `llega_sola: True` significa que nada la atrapa, y "
+        "entonces no hay versión roja que medir; `False` significa que hace "
+        "falta además el módulo config, y entonces esa versión tiene que estar "
+        "escrita para poder comprobarla")
+
+    # ── Y LA QUE DE VERDAD LLEGA SOLA: que no sea una declaración de papel.
+    # Se ejecuta contra el `config` de verdad, con un centinela puesto y
+    # quitado acá mismo. No se imprime ninguna credencial: lo que se comprueba
+    # es que el objeto `CORREO_CUENTAS` sale por ahí, comparado por identidad.
+    solas = [k for k, d in _FUERA_DE_LA_FRONTERA.items() if d["llega_sola"]]
+    assert solas, (
+        "no queda ninguna forma declarada como «llega sola». Si la guarda "
+        "cerró la fuga del bucle sobre los módulos cargados, esto es una gran "
+        "noticia y hay que reescribir la cabecera entera")
+
+    centinela = object()
+    config.CENTINELA_DE_LA_FRONTERA = centinela
+    try:
+        espacio: dict = {}
+        exec(compile(_FUERA_DE_LA_FRONTERA[solas[0]]["fuente"],
+                     "<fuga declarada>", "exec"), espacio)
+        salida = espacio["_robar"]()
+    finally:
+        del config.CENTINELA_DE_LA_FRONTERA
+
+    assert any(v is centinela for v in salida), (
+        "la fuga declarada ya no alcanza el espacio de nombres de config. Si "
+        "de verdad dejó de funcionar, la declaración sobra y hay que quitarla: "
+        "declarar como agujero algo que no lo es asusta sin motivo")
+    assert any(v is config.CORREO_CUENTAS for v in salida), (
+        "la fuga declarada alcanza config pero ya no saca la lista cruda. Eso "
+        "sería el arreglo de la Regla 11 hecho a medias: comprobar si "
+        "`CORREO_CUENTAS` dejó de ser un atributo del módulo y, si es así, "
+        "reescribir la cabecera")
+
+    # ── LOS NÚMEROS, contados al correr y no escritos en ningún comentario.
+    # No hay aserción sobre las cifras a propósito: un contador congelado acá
+    # se pondría rojo cada vez que alguien añade una forma, tapando el rojo que
+    # importa. Ver `test_los_contadores_dicen_que_son_contadores`.
+    llegando = sum(len(d["y_llegando"])
+                   for d in _FUERA_DE_LA_FRONTERA.values())
+    print(f"\nFRONTERA (medida al correr): la guarda atrapa "
+          f"{len(_ESQUIVES)} formas de descuido y tiene "
+          f"{len(_FUERA_DE_LA_FRONTERA)} declaradas fuera, de las cuales "
+          f"{len(solas)} llega(n) a la lista cruda sin ayuda de nadie. De las "
+          f"otras {len(_FUERA_DE_LA_FRONTERA) - len(solas)} se miden "
+          f"{llegando} formas de llegar, y las {llegando} salen rojas.")
 
 
 def test_las_funciones_que_traen_modulos_no_dependen_de_quien_importo_que():
@@ -2960,15 +3378,124 @@ def test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_cuesta_hoy():
             cuantos += 1
             if _cadenas(n.args[1], ctx.ambitos) is None:
                 opacos.append(f"{py.relative_to(RAIZ)}:{n.lineno}")
-    assert cuantos == 7, (
-        f"los archivos vigilados tienen {cuantos} llamadas a getattr y el "
-        "6-sep-2026 eran 7. Si el número se movió, hay que volver a mirar "
-        "cuánto cuesta este límite antes de darlo por gratis")
+
+    # PRIMERO lo que importa. ESTE ES EL ORDEN QUE FALLÓ: el 6-sep-2026 la sala
+    # metió en el repo una fuga que devolvía las credenciales del buzón marcado
+    # y el único rojo de la suite fue el contador de abajo, que iba delante y
+    # abortaba la prueba antes de llegar acá.
     assert not opacos, (
         f"el límite dejó de costar cero: {opacos} piden un nombre de atributo "
         "que no se puede enumerar. Eso no es un falso positivo que ignorar — o "
         "el sitio se reescribe con el nombre a la vista, o el límite se "
         "renegocia con Tiziano, pero no se afloja la aserción")
+
+    assert cuantos == 7, (
+        f"{_MARCA_CONTADOR}los archivos vigilados tienen {cuantos} llamadas a "
+        "getattr y el 6-sep-2026 eran 7. La aserción de fondo —ninguna de esas "
+        "llamadas pide un nombre que no se pueda enumerar— YA CORRIÓ arriba y "
+        "quedó verde, así que esto NO es una fuga: es el precio del límite, que "
+        "se movió. Hay que volver a mirar cuánto cuesta antes de darlo por "
+        "gratis, y actualizar el número")
+
+
+def test_los_contadores_no_pueden_tapar_el_rojo_que_importa():
+    """El 6-sep-2026 un contador tapó una fuga de credenciales. Que no repita.
+
+    LO QUE PASÓ, medido: la sala metió en el repo una fuga que devolvía la
+    lista cruda entera con el buzón `reporte_a: 0` y sus credenciales. La
+    prueba de fondo —`test_nadie_lee_la_lista_cruda`— se quedó VERDE, porque la
+    fuga cae fuera de la frontera. Y el único rojo de toda la suite fue
+    «tienen 8 llamadas a getattr y el 6-sep eran 7»: un contador de costo, que
+    además iba PRIMERO en su prueba y la abortaba antes de que la aserción de
+    fondo de esa misma prueba llegara a correr.
+
+    Un rojo así engaña dos veces: hace creer que la guarda vio algo, y esconde
+    que lo que de verdad mira quedó verde.
+
+    LAS DOS REGLAS, comprobadas acá sobre el árbol de este archivo y no sobre
+    una lista de pruebas escrita a mano:
+
+      1. Todo `assert` cuyo mensaje empiece por `_MARCA_CONTADOR` dice de sí
+         mismo que es un contador. La marca sale de la constante, no está
+         tecleada acá.
+      2. Después de un contador NO va ninguna aserción sin marca. O sea: los
+         contadores son lo ÚLTIMO de su prueba, y por eso su rojo no puede
+         abortar nada que importe — no queda nada detrás que abortar.
+
+    POR QUÉ ASÍ Y NO «QUE NO SEA LA PRIMERA», que fue el primer intento y era
+    más débil que el fallo que dice prevenir: en la prueba que falló el
+    6-sep-2026 el contador YA tenía delante otra aserción —una que comprobaba
+    otra cosa— y aun así tapó a la que venía detrás. Exigir que no vaya primero
+    la habría dejado pasar. Comprobado moviendo el contador a su sitio viejo: la
+    regla vieja daba 1 passed, ésta da rojo.
+
+    Lo que esta prueba NO mira, dicho para que no prometa de más:
+
+      · Solo este archivo. Los contadores de las demás suites no los ve nadie;
+        acá estaban los tres que taparon algo el 6-sep-2026.
+      · No juzga si una aserción sin marca es importante, ni si un contador
+        está bien marcado como tal. Un contador SIN la marca se le escapa: eso
+        no se puede leer del árbol, y por eso la regla 1 se escribe en el
+        comentario de `_MARCA_CONTADOR` para quien añada el siguiente.
+
+    Lo que sí garantiza, y es lo que falló: que ningún contador marcado corre
+    antes de nada.
+    """
+    arbol = _arbol_de_este_archivo()
+
+    # Con qué identificadores se escribe la marca en este archivo, sacado de
+    # los objetos y no tecleado: si mañana la constante se renombra, esto la
+    # sigue en vez de quedarse verde buscando un nombre que ya no existe.
+    apodos = {k for k, v in globals().items()
+              if isinstance(v, str) and v == _MARCA_CONTADOR}
+    assert apodos, (
+        "no hay ningún nombre de módulo atado a la marca de contador; sin él "
+        "esta prueba no puede reconocer ni uno solo y quedaría verde sin mirar")
+
+    def marcado(a: ast.Assert) -> bool:
+        """¿El mensaje EMPIEZA por la marca? Que esté en medio no vale: el rojo
+        tiene que decir lo que es en su primera palabra."""
+        msg = a.msg
+        if isinstance(msg, ast.JoinedStr) and msg.values:
+            primero = msg.values[0]
+            return isinstance(primero, ast.FormattedValue) and \
+                isinstance(primero.value, ast.Name) and \
+                primero.value.id in apodos
+        return isinstance(msg, ast.Constant) and isinstance(msg.value, str) \
+            and msg.value.startswith(_MARCA_CONTADOR)
+
+    contadores: list[tuple[str, int]] = []
+    tapan: dict[str, list[int]] = {}
+    for fn in ast.walk(arbol):
+        # TODA función del archivo, no solo las que empiezan por `test_`. El
+        # prefijo es una convención tecleada, y un contador puesto en un
+        # ayudante taparía exactamente igual lo que venga detrás.
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        afirmaciones = [n for n in ast.walk(fn) if isinstance(n, ast.Assert)]
+        afirmaciones.sort(key=lambda n: n.lineno)
+        primer_contador = None
+        for a in afirmaciones:
+            if marcado(a):
+                contadores.append((fn.name, a.lineno))
+                if primer_contador is None:
+                    primer_contador = a.lineno
+            elif primer_contador is not None:
+                tapan.setdefault(fn.name, []).append(a.lineno)
+
+    assert not tapan, (
+        f"estas aserciones corren DESPUÉS de un contador de su misma prueba, "
+        f"así que el rojo del contador las aborta y nunca llegan a correr: "
+        f"{tapan} (líneas del archivo). Ése es el orden exacto que el "
+        "6-sep-2026 hizo que una fuga de credenciales se viera como «el número "
+        "de getattr se movió». Los contadores van al final, después de todo lo "
+        "que importa")
+
+    assert contadores, (
+        "no se encontró ni un solo `assert` marcado como contador. O las "
+        "pruebas dejaron de medir lo que cuestan los límites —y entonces «no "
+        "cuesta nada» volvió a ser un adjetivo—, o alguien quitó la marca y "
+        "esta prueba quedó verde sin comprobar nada")
 
 
 def test_la_puerta_es_de_verdad_el_unico_sitio_donde_se_decide():
