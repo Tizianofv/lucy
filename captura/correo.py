@@ -568,7 +568,9 @@ async def buscar(de: str = "", asunto: str = "", texto: str = "",
 
     resultados: list[dict] = []
     fallos: list[str] = []
-    for cuenta in config.CORREO_CUENTAS:
+    # "mostrar": esto va derecho a los ojos de Tiziano. Un buzón con
+    # `reporte_a: 0` no aparece acá ni aunque el remitente buscado le escriba.
+    for cuenta in config.cuentas_de_correo("mostrar"):
         try:
             resultados += await asyncio.to_thread(
                 _buscar_sync, cuenta, criterios, limite)
@@ -657,7 +659,11 @@ async def leer(cuenta: str, uid: str) -> dict | None:
     como leído en Gmail (la sesión IMAP es de solo lectura): si él quiere, lo
     abre él mismo.
     """
-    cta = next((c for c in config.CORREO_CUENTAS if c["user"] == cuenta), None)
+    # "mostrar", y por nombre: si le pasan el usuario de un buzón que no se
+    # enseña, no está en esta lista y el correo no se abre. Da igual de dónde
+    # sacó el nombre quien llamó.
+    cta = next((c for c in config.cuentas_de_correo("mostrar")
+                if c["user"] == cuenta), None)
     if cta is None:
         return None
     try:
@@ -668,31 +674,13 @@ async def leer(cuenta: str, uid: str) -> dict | None:
         return None
 
 
-def destino_del_reporte(cuenta: dict) -> int:
-    """A qué chat va el reporte de ESTE buzón.
-
-    Sin el campo `reporte_a`, va al dueño — que es como se comportaba antes y
-    por eso no rompe nada existente. Con él, el buzón se puede escanear para
-    bancos sin que su correspondencia aparezca en el briefing de otra persona.
-
-    Es la línea que separa "Lucy lee el correo de Rosi para sacar sus
-    movimientos" de "Lucy le cuenta a Tiziano lo que le escriben a Rosi". Son
-    cosas distintas y el sistema tiene que poder hacer la primera sin la
-    segunda.
-
-    `reporte_a: 0` (o false) = este buzón NO genera reporte para nadie.
-    """
-    v = cuenta.get("reporte_a", cuenta.get("reporte", True))
-    if v is True:
-        return config.CHAT_ID_DUENO
-    if v is False or v == 0:
-        return 0
-    try:
-        return int(v)
-    except (TypeError, ValueError):
-        log.warning("reporte_a inválido en %s (%r): mando al dueño.",
-                    cuenta.get("user"), v)
-        return config.CHAT_ID_DUENO
+# A qué chat va el reporte de cada buzón, y qué buzones existen para cada cosa.
+# Las dos viven en `config` —junto a la lista cruda que leen— y acá quedan como
+# alias para no romper a quien ya las llamaba por este nombre. La explicación
+# larga de por qué la puerta es única está en `config.py`, en el bloque
+# "LA PUERTA ÚNICA DE LOS BUZONES".
+destino_del_reporte = config.destino_del_reporte
+cuentas = config.cuentas_de_correo
 
 
 async def _pendientes_de(cuenta: dict, reglas: str = "") -> list[dict]:
@@ -919,11 +907,19 @@ def _encargo(pendientes: list[dict]) -> str:
 async def revisar_ahora() -> list[dict]:
     """Revisión on-demand ("revisá el correo"): mira lo mismo que el reporte
     pero sin informar formalmente — no marca reportado ni leído, así lo que él
-    espía a media tarde igual le llega ordenado en el reporte de la mañana."""
+    espía a media tarde igual le llega ordenado en el reporte de la mañana.
+
+    "Lo mismo que el reporte" incluye A QUIÉN se le puede enseñar. Hasta el
+    5-sep-2026 esto recorría TODOS los buzones sin mirar `reporte_a`: el
+    reporte de la mañana respetaba el campo y el pedido a mano se lo saltaba,
+    así que pedir "revisá el correo" le enseñaba a Tiziano los correos de un
+    buzón marcado con `reporte_a: 0` (34 sin leer en la ventana, medidos ese
+    día). Un mismo buzón no puede ser privado a las 7:00 y público a las 15:00.
+    """
     reglas = await _reglas()
     salida: list[dict] = []
     fallos: list[str] = []
-    for cuenta in config.CORREO_CUENTAS:
+    for cuenta in config.cuentas_de_correo("mostrar"):
         try:
             salida += await _pendientes_de(cuenta, reglas)
         except Exception as e:
@@ -977,7 +973,14 @@ async def confirmar_leidos() -> int:
 
     total = 0
     for user, uids in por_cuenta.items():
-        cta = next((c for c in config.CORREO_CUENTAS if c["user"] == user), None)
+        # "barrer" a propósito, y es el único sitio donde la diferencia importa
+        # al revés: esto no enseña nada, escribe \Seen sobre correos que YA se
+        # informaron. Las filas solo existen para buzones que eran visibles
+        # cuando salió su reporte; si alguien le pone `reporte_a: 0` a uno
+        # después, con "mostrar" esas filas se quedarían pendientes para
+        # siempre y el correo nunca se marcaría leído.
+        cta = next((c for c in config.cuentas_de_correo("barrer")
+                    if c["user"] == user), None)
         if cta is None:
             continue
         try:
@@ -1040,10 +1043,15 @@ async def vigilar_911(bot) -> int:
     horas, es además MÁS barato que antes: lo normal es cero sospechosos y ni
     un cuerpo bajado.
     """
-    if not config.CORREO_CUENTAS:
+    # "mostrar": el aviso lleva remitente, asunto y 400 caracteres del cuerpo
+    # al chat del dueño, así que es enseñar correo como cualquier otro camino.
+    # Un buzón con `reporte_a: 0` no se vigila: no se le puede contar a Tiziano
+    # lo que ahí llegue, ni siquiera si viene de Railway.
+    cuentas_visibles = config.cuentas_de_correo("mostrar")
+    if not cuentas_visibles:
         return 0
     avisados = 0
-    for cuenta in config.CORREO_CUENTAS:
+    for cuenta in cuentas_visibles:
         try:
             cabeceras = await asyncio.to_thread(
                 _sin_leer_sync, cuenta, 1, con_cuerpo=False)  # solo el último día
@@ -1127,7 +1135,12 @@ async def reporte_diario() -> int:
     verdad (ver confirmar_leidos). Leído significa "ya te informé", así que
     marcarlo antes de que él lo lea sería una mentira escrita en su buzón.
     """
-    if not config.CORREO_CUENTAS:
+    # "mostrar": este reporte es exactamente lo que va a ojos de alguien. Antes
+    # el filtro se hacía acá abajo, a mano, con un `if not destino: continue`
+    # que este camino se acordaba de escribir y los otros cuatro no. Ahora la
+    # lista ya viene filtrada de la puerta, igual que para todos.
+    cuentas_visibles = config.cuentas_de_correo("mostrar")
+    if not cuentas_visibles:
         return 0
     ahora = datetime.now(TZ)
     if not (REPORTE_DESDE <= ahora.hour < REPORTE_HASTA):
@@ -1160,7 +1173,7 @@ async def reporte_diario() -> int:
     hoy_arranca = ahora.replace(hour=0, minute=0, second=0, microsecond=0)
     ya_reportados = await db.destinos_con_encargo_hoy(
         "correo", MARCA_ENCARGO, hoy_arranca)
-    destinos = {d for d in map(destino_del_reporte, config.CORREO_CUENTAS) if d}
+    destinos = {d for d in map(destino_del_reporte, cuentas_visibles) if d}
     if not destinos - ya_reportados:
         # Todos los que informan a alguien ya informaron. Se sale ANTES de
         # abrir IMAP: son ~100 vueltas por mañana.
@@ -1171,10 +1184,8 @@ async def reporte_diario() -> int:
     # informa a quien le corresponde. Hoy todos van al dueño porque ninguna
     # cuenta declara `reporte_a`, pero la estructura ya no lo obliga.
     por_destino: dict[int, list[dict]] = {}
-    for cuenta in config.CORREO_CUENTAS:
+    for cuenta in cuentas_visibles:
         destino = destino_del_reporte(cuenta)
-        if not destino:
-            continue          # buzón que se lee para bancos y nada más
         if destino in ya_reportados:
             continue          # ese chat ya tuvo su reporte hoy
         try:

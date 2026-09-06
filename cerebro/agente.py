@@ -591,7 +591,11 @@ async def _ejecutar_herramienta(
             )
 
         if nombre == "correo":
-            if not config.CORREO_CUENTAS:
+            # "mostrar": esta herramienta entera existe para ponerle correo
+            # delante a Tiziano. Si no hay ni un buzón que se le pueda enseñar,
+            # la respuesta correcta es que no hay correo que mirar — no la
+            # lista cruda, que puede tener buzones que se barren y no se ven.
+            if not config.cuentas_de_correo("mostrar"):
                 return "ERROR: no hay cuentas de correo configuradas."
             accion = str(args.get("accion") or "revisar").strip().lower()
             if accion == "buscar":
