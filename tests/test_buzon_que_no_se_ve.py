@@ -783,6 +783,43 @@ class _Ambito(dict):
         return defecto
 
 
+# LA LISTA TECLEADA QUE QUEDA EN ESTE ARCHIVO, declarada con su frontera en vez
+# de escondida. Las otras se derivaron —los objetos peligrosos salen de un
+# barrido, las ataduras salen del compilador—; ésta no se puede derivar por el
+# mismo camino, y el motivo es concreto: `_cadenas` necesita saber A QUÉ ÁMBITO
+# PERTENECE CADA NODO del árbol, y `symtable` contesta la otra pregunta —qué
+# nombres quedan atados en cada bloque— sin decir a qué nodo del `ast`
+# corresponde cada bloque. No hay puente entre las dos.
+#
+# Así que se declara, como `_TEXTO_A_CODIGO`, con su frontera MEDIDA. Lo que
+# sigue no se razona acá: se comprueba corriendo, en
+# `test_los_ambitos_del_tramo_1_declaran_su_frontera`.
+#
+# LO QUE ESTA LISTA NO ABRE. El compilador de CPython sabe abrir siete clases de
+# bloque (`_symtable.TYPE_*`). Esta lista cubre tres —módulo, función y clase— y
+# NO cubre las cuatro de PEP 695, que entraron en 3.12 y no existían cuando esto
+# se escribió: `type alias`, `type parameter`, `TypeVar bound` y `annotation`.
+# O sea que dentro de un `type A = ...` los nombres se miran con el ámbito de
+# afuera y no con uno propio.
+#
+# LO QUE ESO CUESTA, medido el 8-sep-2026 de dos maneras y no razonado:
+#
+#   · POR ESTRUCTURA. Los nodos donde `_atar_cadenas` ata un nombre salen de su
+#     propio código, no de una lista: son once. Nueve de ellos son SENTENCIAS y
+#     lo que llevan dentro esos bloques es una EXPRESIÓN, así que no caben ahí
+#     —lo dice el parser, con SyntaxError—. Los dos que sí caben, `Lambda` y
+#     `comprehension`, abren ámbito propio en esta misma lista. Conclusión
+#     medida: un bloque de PEP 695 no puede meterle al ámbito de afuera ni una
+#     atadura, que es la única manera de que un «no lo sé» se vuelva un «sé qué
+#     nombre pide» y un rojo se vuelva verde.
+#   · POR DIFERENCIA. Metiéndole `ast.TypeAlias` a esta lista y volviendo a
+#     clasificar el corpus entero —los archivos vigilados, `_ESQUIVES`,
+#     `_LEGITIMOS`, `_FUERA_DE_LA_FRONTERA` y las fuentes de PEP 695 de la
+#     declaración— no cambia ni un veredicto, ni un motivo.
+#
+# Y HACIA EL OTRO LADO SOBRA, que es el lado seguro. Desde PEP 709 (3.12) las
+# comprensiones no abren bloque en CPython y esta lista sí les abre ámbito: el
+# Tramo 1 es más estricto que el compilador ahí, no más flojo.
 _ABREN_AMBITO = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
                  ast.ClassDef, ast.ListComp, ast.SetComp, ast.DictComp,
                  ast.GeneratorExp)
@@ -5005,6 +5042,333 @@ def test_los_objetos_peligrosos_salen_de_un_barrido_o_estan_declarados():
     print(f"\nOBJETOS PELIGROSOS (medido al correr): "
           f"{len(derivados)} salen de un barrido, "
           f"{len(declarados_a_mano)} están declarados a mano con su motivo.")
+
+
+# EL REPARTO DE LAS CLASES DE ÁMBITO, enumerado entero por los dos lados. Las
+# siete clases de bloque que el compilador de CPython sabe abrir se reparten
+# acá, y NINGUNA cae en «lo que sobra»: una clase que aparezca en una versión
+# futura de Python y no esté en ninguna de las dos tablas sale ROJA, no exenta.
+#
+# La fuente de cada entrada es lo que hace que esto se mida en vez de creerse:
+# el test la compila y compara cuántos bloques abre el compilador con cuántos
+# ámbitos abre el Tramo 1.
+_AMBITOS_QUE_EL_TRAMO_1_ABRE = {
+    "module": "x = 1\n",
+    "function": "def f():\n    x = 1\n",
+    "class": "class C:\n    x = 1\n",
+}
+
+# Y las que NO abre, cada una con el código que la produce, un ataque que
+# intenta usarla para llegar a la lista cruda, y el motivo. El ataque se CORRE:
+# si alguna de estas cuatro dejara de salir roja, esto deja de ser una frontera
+# declarada y pasa a ser un agujero.
+_AMBITOS_QUE_EL_TRAMO_1_NO_ABRE = {
+    "type alias": {
+        "fuente": "type A = int\n",
+        # El valor de un alias no se evalúa hasta que alguien lo pide, así que
+        # es el sitio natural para esconder una lectura.
+        "ataque":
+            'import config\n'
+            'type A = [getattr(config, n) for n in ("CORREO_" + "CUENTAS",)]\n',
+        "molde": "type A = {}",
+        "por_que":
+            "el valor de un `type` es una EXPRESIÓN: de los once nodos donde "
+            "`_atar_cadenas` ata un nombre, los nueve que son sentencias no "
+            "caben ahí, y los dos que caben —`Lambda` y `comprehension`— ya "
+            "abren ámbito propio. Nada puede atarse en este bloque y salirse",
+    },
+    "type parameter": {
+        "fuente": "def f[T](x):\n    return x\n",
+        "ataque":
+            'import config\n'
+            'def f[n](x):\n'
+            '    return getattr(config, n)\n',
+        "molde": "def f[T: {}](x): pass",
+        "por_que":
+            "dentro de la cabecera de PEP 695 el único sitio donde cabe una "
+            "expresión del usuario es el límite de un parámetro, y eso es el "
+            "molde. Los parámetros en sí son nombres, no expresiones: "
+            "`_atar_cadenas` no los ata, y el compilador tampoco los mete en "
+            "`atados`, así que un `def f[getattr]` deja `getattr` resolviendo "
+            "al builtin y muerde por el motivo (c)",
+    },
+    "TypeVar bound": {
+        "fuente": "def f[T: int](x):\n    return x\n",
+        "ataque":
+            'import config\n'
+            'def f[T: getattr(config, "CORREO_" + "CUENTAS")](x):\n'
+            '    return x\n',
+        "molde": "def f[T: {}](x): pass",
+        "por_que": "mismo molde y mismo motivo que `type parameter`: un límite "
+                   "es una expresión, y ahí no cabe ninguna sentencia que ate",
+    },
+    "annotation": {
+        # CPython 3.12 tiene la constante pero no abre el bloque en ninguna
+        # forma que se pudo escribir el 8-sep-2026. No se declara exenta por
+        # eso: el test comprueba CORRIENDO que el corpus no lo produce, y el
+        # día que una versión de Python empiece a abrirlo, se pone rojo.
+        "fuente": None,
+        "ataque": None,
+        "molde": None,
+        "por_que":
+            "`_symtable.TYPE_ANNOTATION` existe pero ninguna fuente del corpus "
+            "lo produce en 3.12. Queda declarado FUERA —no cubierto— porque no "
+            "se pudo medir, que en esta guarda es el lado estricto",
+    },
+}
+
+
+def _nodos_donde_se_ata_un_nombre() -> frozenset[str]:
+    """Los nodos donde `_atar_cadenas` ata un nombre, sacados de SU código.
+
+    No es una lista tecleada: se lee el `isinstance(n, ...)` de su bucle sobre
+    `ast.walk`. Si mañana alguien le añade un nodo, entra solo acá.
+    """
+    arbol = ast.parse(inspect.getsource(_atar_cadenas).lstrip())
+    salida: set[str] = set()
+    for n in ast.walk(arbol):
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == "isinstance"
+                and isinstance(n.args[0], ast.Name) and n.args[0].id == "n"):
+            for t in ast.walk(n.args[1]):
+                if isinstance(t, ast.Attribute) and \
+                        isinstance(t.value, ast.Name) and t.value.id == "ast":
+                    salida.add(t.attr)
+    return frozenset(salida)
+
+
+# Una fuente mínima por cada nodo que ata, para probar si CABE dentro de un
+# bloque de PEP 695. Va con `{}` porque el molde lo pone cada clase de ámbito.
+# Un nodo que ate y no tenga fragmento acá NO se da por seguro: sale rojo.
+_FRAGMENTO_QUE_ATA = {
+    "Assign": "(x = 1)",
+    "AnnAssign": "(x: int = 1)",
+    "AugAssign": "(x += 1)",
+    "For": "(for i in (): pass)",
+    "AsyncFor": "(async for i in (): pass)",
+    "withitem": '(with open("x") as fh: pass)',
+    "ExceptHandler": "(try: pass\nexcept E as e: pass)",
+    "FunctionDef": "(def f(): pass)",
+    "AsyncFunctionDef": "(async def f(): pass)",
+    "Lambda": "(lambda z: z)",
+    "comprehension": "[i for i in ()]",
+}
+
+
+def _clases_de_bloque_de_cpython() -> frozenset[str]:
+    """Las clases de bloque que el compilador sabe abrir, según CPython.
+
+    Salen de los `return "..."` de `symtable.SymbolTable.get_type`, y se
+    cruzan contra el número de constantes `TYPE_*` de `_symtable` para que una
+    clase que la lectura no vea ponga esto rojo en vez de desaparecer.
+    """
+    import _symtable
+
+    arbol = ast.parse(inspect.getsource(symtable.SymbolTable.get_type).lstrip())
+    nombres = {n.value.value for n in ast.walk(arbol)
+               if isinstance(n, ast.Return) and isinstance(n.value, ast.Constant)
+               and isinstance(n.value.value, str)}
+    constantes = [n for n in dir(_symtable) if n.startswith("TYPE_")]
+    assert len(nombres) == len(constantes), (
+        f"leyendo `symtable.SymbolTable.get_type` salieron {len(nombres)} "
+        f"clases de bloque {sorted(nombres)} y `_symtable` declara "
+        f"{len(constantes)} constantes {sorted(constantes)}. No cuadran, así "
+        "que la lista de clases no se puede dar por completa")
+    return frozenset(nombres)
+
+
+def _bloques_de(fuente: str) -> list[str]:
+    """Las clases de bloque que el compilador abre para esta fuente."""
+    salida: list[str] = []
+
+    def recorrer(b) -> None:
+        salida.append(b.get_type())
+        for h in b.get_children():
+            recorrer(h)
+
+    recorrer(symtable.symtable(fuente, "<frontera>", "exec"))
+    return salida
+
+
+def _ambitos_de(fuente: str) -> int:
+    """Cuántos ámbitos distintos abre el Tramo 1 para esta fuente."""
+    return len({id(a) for a in _repartir_ambitos(ast.parse(fuente)).values()})
+
+
+def test_los_ambitos_del_tramo_1_declaran_su_frontera():
+    """`_ABREN_AMBITO` es la lista tecleada que queda, y acá se mide su límite.
+
+    La Regla 18 de esta sala dice que una lista escrita a mano y la realidad se
+    separan desde el día que se escribe. Las otras cuatro de este archivo se
+    derivaron. Ésta no se puede: `_cadenas` pregunta A QUÉ ÁMBITO PERTENECE UN
+    NODO y `symtable` contesta QUÉ NOMBRES ATA UN BLOQUE, sin decir a qué nodo
+    del árbol corresponde el bloque.
+
+    Entonces se hace lo que se hizo con `_TEXTO_A_CODIGO`: se declara, y la
+    declaración se comprueba corriendo. Cuatro cosas:
+
+      1. EL REPARTO ESTÁ ENTERO. Las clases de bloque salen de CPython, no de
+         acá, y cada una está en una de las dos tablas. Una clase nueva —la que
+         traiga Python 3.14— no cae en el grupo indulgente por olvido: cae roja.
+      2. EL REPARTO ES CIERTO. Para cada clase se compila su fuente y se
+         comparan bloques contra ámbitos. Las declaradas dentro tienen que dar
+         igual; las declaradas fuera, más bloques que ámbitos. Una tabla que se
+         equivoque de lado sale roja.
+      3. LA FRONTERA NO GOTEA, y esto es lo que de verdad importa. Un ámbito
+         que el Tramo 1 no abre solo hace daño si le mete una atadura al ámbito
+         de afuera: ahí un nombre que era «no lo sé» —rojo— pasa a ser «sé qué
+         pide» —posible verde—. Se mide preguntándole al parser si los nodos
+         que atan caben dentro de esos bloques. Los que quepan tienen que abrir
+         ámbito propio en `_ABREN_AMBITO`.
+      4. Y EL ATAQUE DE CADA UNA SALE ROJO, que es la comprobación de
+         comportamiento. Sola no bastaría —el punto 3 es el que ve la
+         divergencia—, pero sin ella el punto 3 sería un argumento.
+    """
+    # 1. El reparto entero, contra la lista de CPython.
+    de_cpython = _clases_de_bloque_de_cpython()
+    dentro = set(_AMBITOS_QUE_EL_TRAMO_1_ABRE)
+    fuera = set(_AMBITOS_QUE_EL_TRAMO_1_NO_ABRE)
+    assert not (dentro & fuera), (
+        f"estas clases de ámbito están declaradas dentro Y fuera: "
+        f"{sorted(dentro & fuera)}")
+    sin_clasificar = de_cpython - dentro - fuera
+    assert not sin_clasificar, (
+        f"el compilador de CPython sabe abrir estas clases de bloque y este "
+        f"archivo no dice de qué lado están: {sorted(sin_clasificar)}. Una "
+        "clase de ámbito nueva no se exenta por olvido: o `_ABREN_AMBITO` le "
+        "abre ámbito y se declara dentro, o se declara fuera con su ataque "
+        "medido")
+    inventadas = (dentro | fuera) - de_cpython
+    assert not inventadas, (
+        f"estas clases de ámbito están declaradas acá y el compilador no las "
+        f"conoce: {sorted(inventadas)}. La lista de clases la manda CPython")
+
+    # 2. Que cada una esté del lado que dice, medido compilando su fuente.
+    for clase, fuente in sorted(_AMBITOS_QUE_EL_TRAMO_1_ABRE.items()):
+        bloques, ambitos = len(_bloques_de(fuente)), _ambitos_de(fuente)
+        assert bloques == ambitos, (
+            f"«{clase}» está declarada como cubierta por `_ABREN_AMBITO`, "
+            f"pero sobre su fuente el compilador abre {bloques} bloques y el "
+            f"Tramo 1 abre {ambitos} ámbitos. Si el compilador abre más, hay "
+            "un ámbito que el Tramo 1 se está comiendo y la tabla miente")
+
+    for clase, d in sorted(_AMBITOS_QUE_EL_TRAMO_1_NO_ABRE.items()):
+        if d["fuente"] is None:
+            continue
+        abiertos = _bloques_de(d["fuente"])
+        bloques, ambitos = len(abiertos), _ambitos_de(d["fuente"])
+        assert clase in abiertos, (
+            f"la fuente declarada para «{clase}» no abre un bloque de esa "
+            f"clase: abre {abiertos}. Sin eso no se está midiendo lo que se "
+            "dice medir")
+        assert bloques > ambitos, (
+            f"«{clase}» está declarada como NO cubierta y sobre su fuente el "
+            f"compilador abre {bloques} bloques y el Tramo 1 abre {ambitos} "
+            "ámbitos. Si ya la cubre, esta declaración sobra y hay que moverla "
+            "a la otra tabla")
+
+    # 3. La frontera: nada de lo que ata cabe dentro de esos bloques sin pasar
+    #    por un ámbito que `_ABREN_AMBITO` sí abre.
+    atadores = _nodos_donde_se_ata_un_nombre()
+    sin_fragmento = atadores - set(_FRAGMENTO_QUE_ATA)
+    assert not sin_fragmento, (
+        f"`_atar_cadenas` ata nombres en {sorted(sin_fragmento)} y no hay "
+        "fragmento para probar si eso cabe dentro de un bloque de PEP 695. Un "
+        "nodo que ata sin medir no se da por seguro: hay que escribirle su "
+        "fragmento acá")
+    # Y la otra dirección, que es la que impide que esto pase EN VACÍO: si la
+    # lectura de `_atar_cadenas` dejara de encontrar nodos, los bucles de abajo
+    # no recorrerían nada y la prueba saldría verde sin haber medido. Los
+    # fragmentos sobrantes lo delatan.
+    sobrantes = set(_FRAGMENTO_QUE_ATA) - atadores
+    assert not sobrantes, (
+        f"hay fragmentos para {sorted(sobrantes)} y `_atar_cadenas` no ata "
+        "nombres ahí. O la lectura de su código dejó de ver algo —y entonces "
+        "todo lo de abajo se mide sobre menos nodos de los que hay— o el nodo "
+        "se quitó y el fragmento sobra")
+
+    caben: set[str] = set()          # nodos que sí caben en algún molde
+    tapados: set[str] = set()        # …y que van tapados por un ámbito propio
+    for clase, d in sorted(_AMBITOS_QUE_EL_TRAMO_1_NO_ABRE.items()):
+        if d["molde"] is None:
+            continue
+        for nodo in sorted(atadores):
+            fuente = d["molde"].format(_FRAGMENTO_QUE_ATA[nodo])
+            try:
+                arbol = ast.parse(fuente)
+            except SyntaxError:
+                continue               # el parser dice que ahí no cabe
+            caben.add(nodo)
+            padres: dict[int, object] = {}
+            for p in ast.walk(arbol):
+                for h in ast.iter_child_nodes(p):
+                    padres[id(h)] = p
+            for n in ast.walk(arbol):
+                if type(n).__name__ != nodo:
+                    continue
+                # El propio nodo cuenta: un `Lambda` ata sus parámetros DENTRO
+                # de su ámbito, que esta lista sí abre.
+                tapado, sube = False, n
+                while sube is not None:
+                    if isinstance(sube, _ABREN_AMBITO):
+                        tapado = True
+                        break
+                    sube = padres.get(id(sube))
+                assert tapado, (
+                    f"dentro de un bloque «{clase}» cabe un `{nodo}` que ata "
+                    f"un nombre y NINGÚN nodo de `_ABREN_AMBITO` lo tapa. Esa "
+                    "atadura se le mete al ámbito de afuera, y ahí un nombre "
+                    "que era «no lo sé» pasa a ser conocido: un rojo se puede "
+                    f"volver verde. Fuente: {fuente!r}")
+                tapados.add(nodo)
+
+    # 4. Y el ataque de cada una, corrido.
+    permitidos = _atributos_que_config_ofrece()
+    verdes = [clase for clase, d in _AMBITOS_QUE_EL_TRAMO_1_NO_ABRE.items()
+              if d["ataque"] is not None
+              and not _infracciones(d["ataque"], permitidos)]
+    assert not verdes, (
+        f"el ataque declarado para estas clases de ámbito sale VERDE: "
+        f"{verdes}. Eso ya no es una frontera declarada, es un agujero")
+
+    # Y la clase que no se pudo producir: se comprueba que de verdad no salga
+    # en ninguna fuente del corpus, en vez de creerlo.
+    corpus = ([f for f in _AMBITOS_QUE_EL_TRAMO_1_ABRE.values()]
+              + [d[k] for d in _AMBITOS_QUE_EL_TRAMO_1_NO_ABRE.values()
+                 for k in ("fuente", "ataque") if d[k] is not None]
+              + list(_ESQUIVES.values()) + list(_LEGITIMOS.values())
+              + [d["fuente"] for d in _FUERA_DE_LA_FRONTERA.values()])
+    vistas: set[str] = set()
+    for fuente in corpus:
+        with contextlib.suppress(SyntaxError, ValueError):
+            vistas.update(_bloques_de(fuente))
+    nunca_vistas = {c for c, d in _AMBITOS_QUE_EL_TRAMO_1_NO_ABRE.items()
+                    if d["fuente"] is None}
+    aparecidas = nunca_vistas & vistas
+    assert not aparecidas, (
+        f"{sorted(aparecidas)} se declaró como «CPython no abre este bloque en "
+        "ninguna forma que se pudo escribir» y el corpus lo abre. La "
+        "declaración caducó: hay que darle fuente y ataque, o cubrirlo en "
+        "`_ABREN_AMBITO`")
+
+    # Y la otra dirección, que es el lado seguro: donde el Tramo 1 abre ámbitos
+    # que el compilador ya no abre. Desde PEP 709 las comprensiones se meten en
+    # el ámbito de afuera y aquí siguen teniendo el suyo.
+    sobra = _ambitos_de("y = [i for i in ()]\n") - len(_bloques_de("y = [i for i in ()]\n"))
+
+    assert caben == tapados, (
+        f"estos nodos caben dentro de un bloque de PEP 695 y no se comprobó "
+        f"que vayan tapados: {sorted(caben - tapados)}")
+
+    print(f"\nFRONTERA DEL TRAMO 1 (medida al correr): CPython sabe abrir "
+          f"{len(de_cpython)} clases de ámbito; `_ABREN_AMBITO` cubre "
+          f"{len(dentro)} y deja {len(fuera)} declaradas fuera con su ataque "
+          f"rojo. De los {len(atadores)} nodos donde `_atar_cadenas` ata un "
+          f"nombre, {len(atadores) - len(caben)} no caben dentro de esos "
+          f"bloques —lo dice el parser— y los {len(caben)} que caben "
+          f"({sorted(caben)}) abren ámbito propio, así que ninguna atadura se "
+          f"escapa al ámbito de afuera. Sobre una comprensión el Tramo 1 abre "
+          f"{sobra} ámbito más que el compilador, que es el lado estricto.")
 
 
 def test_las_ataduras_salen_del_compilador_y_no_de_una_lista_de_nodos():
