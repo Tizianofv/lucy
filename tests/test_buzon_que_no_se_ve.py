@@ -92,17 +92,16 @@ cualquier función del archivo apagaba el motivo (c) para el archivo ENTERO
 dejaba de verse. No se le dieron ámbitos a `atados`: se aplicó la doctrina de
 este archivo, «si el nombre está pisado no puedo resolverlo, y lo que no puedo
 clasificar es rojo». Es el motivo (k); vale para TODOS los nombres peligrosos
-—que salen de los objetos, no de una lista tecleada— y para las formas de pisar
-uno que `_Contexto.atados` recoge: un parámetro, un `def` propio, una
-asignación, un alias de import, el destino de un `for`. La que no recoge —el
-`case` de un `match`— sale roja igual, por el otro lado: no verla significa que
-la guarda sigue resolviendo el nombre al builtin, y entonces muerde el motivo
-(c). Todo eso, y lo que cuesta, se mide corriendo en
+—que salen de los objetos, no de una lista tecleada— y para TODA forma de pisar
+uno, sin inventario, porque quién ata qué se lo pregunta al compilador de
+Python y no a un recorrido por tipo de nodo. Ver `_nombres_que_python_ata`, que
+cuenta además qué tenía de falso el inventario que había acá hasta el
+7-sep-2026. Todo eso, y lo que cuesta, se mide corriendo en
 `test_pisar_un_nombre_peligroso_es_rojo_y_cuanto_cuesta_hoy`.
 
 EL CRITERIO PARA SABER DE QUÉ LADO CAE ALGO NUEVO, sin tener que probarlo.
 Tacha del texto del archivo tres cosas: el nombre `config`, el nombre
-`CORREO_CUENTAS`, y los nombres de los siete objetos de `_PELIGROSOS`. Tacha
+`CORREO_CUENTAS`, y los nombres de los objetos de `_PELIGROSOS`. Tacha
 también los que estén partidos en trozos de string y los alias que se puedan
 seguir hasta un `import` o una asignación, porque la guarda los reconstruye.
 
@@ -135,10 +134,12 @@ seguir hasta un `import` o una asignación, porque la guarda los reconstruye.
     enteras en `_FUERA_DE_LA_FRONTERA`, cada una con su gemela de un salto
     menos, que sale roja.
   · Y UNA QUE NO DEPENDE DE TACHAR NADA: si el archivo le pone su propio
-    significado a uno de esos nombres —un parámetro, un `def`, una asignación,
-    un alias de import, el destino de un `for`— la guarda ya no puede resolver
-    ese nombre en NINGUNA parte del archivo, y todo el archivo sale rojo. Es el
-    motivo (k).
+    significado a uno de esos nombres, la guarda ya no puede resolver ese
+    nombre en NINGUNA parte del archivo, y todo el archivo sale rojo. Es el
+    motivo (k). Acá NO va la lista de formas de ponerle a un nombre otro
+    significado, y no por resumir: la respuesta la da `symtable`, o sea el
+    compilador de CPython, así que la lista no existe ni hace falta. Una
+    sintaxis que Python estrene mañana entra sola.
 
 POR QUÉ SE CORTÓ LA PERSECUCIÓN AHÍ, y no en la forma siguiente. Son DOS los
 espacios sin fondo con los que se topa esta guarda, y los dos se cierran igual
@@ -238,12 +239,15 @@ import ast
 import asyncio
 import builtins
 import configparser
+import contextlib
 import importlib
 import importlib.machinery
 import importlib.util
 import inspect
+import io
 import json
 import os
+import symtable
 import sys
 import types
 from collections.abc import Mapping
@@ -779,6 +783,43 @@ class _Ambito(dict):
         return defecto
 
 
+# LA LISTA TECLEADA QUE QUEDA EN ESTE ARCHIVO, declarada con su frontera en vez
+# de escondida. Las otras se derivaron —los objetos peligrosos salen de un
+# barrido, las ataduras salen del compilador—; ésta no se puede derivar por el
+# mismo camino, y el motivo es concreto: `_cadenas` necesita saber A QUÉ ÁMBITO
+# PERTENECE CADA NODO del árbol, y `symtable` contesta la otra pregunta —qué
+# nombres quedan atados en cada bloque— sin decir a qué nodo del `ast`
+# corresponde cada bloque. No hay puente entre las dos.
+#
+# Así que se declara, como `_TEXTO_A_CODIGO`, con su frontera MEDIDA. Lo que
+# sigue no se razona acá: se comprueba corriendo, en
+# `test_los_ambitos_del_tramo_1_declaran_su_frontera`.
+#
+# LO QUE ESTA LISTA NO ABRE. El compilador de CPython sabe abrir siete clases de
+# bloque (`_symtable.TYPE_*`). Esta lista cubre tres —módulo, función y clase— y
+# NO cubre las cuatro de PEP 695, que entraron en 3.12 y no existían cuando esto
+# se escribió: `type alias`, `type parameter`, `TypeVar bound` y `annotation`.
+# O sea que dentro de un `type A = ...` los nombres se miran con el ámbito de
+# afuera y no con uno propio.
+#
+# LO QUE ESO CUESTA, medido el 8-sep-2026 de dos maneras y no razonado:
+#
+#   · POR ESTRUCTURA. Los nodos donde `_atar_cadenas` ata un nombre salen de su
+#     propio código, no de una lista: son once. Nueve de ellos son SENTENCIAS y
+#     lo que llevan dentro esos bloques es una EXPRESIÓN, así que no caben ahí
+#     —lo dice el parser, con SyntaxError—. Los dos que sí caben, `Lambda` y
+#     `comprehension`, abren ámbito propio en esta misma lista. Conclusión
+#     medida: un bloque de PEP 695 no puede meterle al ámbito de afuera ni una
+#     atadura, que es la única manera de que un «no lo sé» se vuelva un «sé qué
+#     nombre pide» y un rojo se vuelva verde.
+#   · POR DIFERENCIA. Metiéndole `ast.TypeAlias` a esta lista y volviendo a
+#     clasificar el corpus entero —los archivos vigilados, `_ESQUIVES`,
+#     `_LEGITIMOS`, `_FUERA_DE_LA_FRONTERA` y las fuentes de PEP 695 de la
+#     declaración— no cambia ni un veredicto, ni un motivo.
+#
+# Y HACIA EL OTRO LADO SOBRA, que es el lado seguro. Desde PEP 709 (3.12) las
+# comprensiones no abren bloque en CPython y esta lista sí les abre ámbito: el
+# Tramo 1 es más estricto que el compilador ahí, no más flojo.
 _ABREN_AMBITO = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
                  ast.ClassDef, ast.ListComp, ast.SetComp, ast.DictComp,
                  ast.GeneratorExp)
@@ -982,24 +1023,184 @@ def _nombre_llamado(nodo) -> str | None:
 
 _DESCONOCIDO = object()          # «no se pudo resolver», que no es «no es»
 
-# Las tres funciones que piden un atributo POR SU NOMBRE en tiempo de ejecución.
+# Las funciones que piden un atributo POR SU NOMBRE en tiempo de ejecución.
 # Son OBJETOS, no textos: da igual con qué identificador se llamen. Se pueden
 # usar, llamándolas, y entonces valen las reglas (c) y (f).
-_ATRIBUTO_POR_NOMBRE = (builtins.getattr, builtins.setattr, builtins.delattr)
+#
+# NO ESTÁN TECLEADAS: SE LES PREGUNTA. Hasta el 7-sep-2026 acá había escrita a
+# mano la tupla `(getattr, setattr, delattr)`, dentro del archivo que existe
+# para no depender de listas escritas a mano. Una cuarta forma de pedir un
+# atributo por su nombre no la habría visto esa línea.
+#
+# CÓMO SE PREGUNTA. A cada callable de `builtins` se le pasa una SONDA —un
+# objeto que anota si alguien le pide el atributo centinela— y se le pide que
+# haga lo suyo con el nombre del centinela. Los que de verdad van a buscar ese
+# atributo se delatan solos; los que no, no. No se mira el nombre del builtin,
+# ni su firma, ni su docstring: se mira lo que HACE.
+#
+# LO QUE SALIÓ, medido el 7-sep-2026 sobre este Python: cuatro, no tres.
+# `hasattr` hacía exactamente lo mismo que las otras y no estaba en la lista.
+# Lo que cuesta añadirla se cuenta corriendo, no acá.
+def _funciones_que_piden_un_atributo_por_nombre(espacio=None) -> tuple:
+    """Los callables de `builtins` que van a buscar un atributo por su nombre.
+
+    `espacio` se puede pasar para poder MEDIR el barrido con un módulo de
+    mentira, en vez de tener que creerse que barre.
+    """
+    centinela = "_CENTINELA_DEL_BARRIDO_"
+    pedido: list[str] = []
+
+    class _Sonda:
+        def __getattribute__(self, n):
+            if n == centinela:
+                pedido.append(n)
+                raise AttributeError(n)
+            return object.__getattribute__(self, n)
+
+        def __setattr__(self, n, v):
+            if n == centinela:
+                pedido.append(n)
+                return
+            object.__setattr__(self, n, v)
+
+        def __delattr__(self, n):
+            if n == centinela:
+                pedido.append(n)
+                return
+            object.__delattr__(self, n)
+
+    salida: list = []
+    # Barrer significa LLAMAR a todo lo que hay en `builtins`, así que se le
+    # tapan al barrido las dos salidas que tiene un builtin para hacerse notar:
+    # lo que imprime y el depurador. Se devuelven a su sitio en el `finally`.
+    gancho = sys.breakpointhook
+    sys.breakpointhook = lambda *a, **k: None
+    try:
+        for _, obj in sorted(vars(espacio or builtins).items()):
+            if not callable(obj):
+                continue
+            # Dos aridades porque `setattr` necesita un valor que poner. No es
+            # una lista de funciones: es «pruébalo con y sin valor».
+            for args in ((_Sonda(), centinela), (_Sonda(), centinela, 1)):
+                pedido.clear()
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()), \
+                            contextlib.redirect_stderr(io.StringIO()):
+                        obj(*args)
+                except BaseException:
+                    pass
+                if pedido:
+                    if not any(obj is x for x in salida):
+                        salida.append(obj)
+                    break
+    finally:
+        sys.breakpointhook = gancho
+    return tuple(salida)
+
+
+_ATRIBUTO_POR_NOMBRE = _funciones_que_piden_un_atributo_por_nombre()
+
+# El barrido tiene que haber encontrado las tres que motivaron todo esto. Si un
+# día deja de encontrarlas —porque el barrido se rompió, no porque `getattr`
+# dejara de existir— esto se pone rojo en vez de dejar los motivos (c) y (f)
+# mirando una tupla corta, que sería verde sin haber comprobado nada. Es el
+# mismo candado que lleva `_TRAEN_MODULOS`.
+for _anclaje in (builtins.getattr, builtins.setattr, builtins.delattr):
+    assert any(o is _anclaje for o in _ATRIBUTO_POR_NOMBRE), (
+        f"el barrido de builtins no encontró {_anclaje.__name__}; los motivos "
+        "(c) y (f) quedarían sin puerta y la fuga que los motivó volvería a "
+        "ser invisible")
+del _anclaje
 
 # Y las cuatro que convierten un TEXTO en código o en un módulo. Éstas no se
 # pueden usar de ninguna forma. Ver `_infracciones`, motivo (g).
 _TEXTO_A_CODIGO = (builtins.eval, builtins.exec, builtins.compile,
                    builtins.__import__)
 
-# Las tres funciones que DEVUELVEN EL ESPACIO DE NOMBRES de algo. También son
-# OBJETOS, así que `v = vars` no apaga nada. La cuarta forma de abrir un espacio
+# Y las funciones que DEVUELVEN EL ESPACIO DE NOMBRES de algo. También son
+# OBJETOS, así que `v = vars` no apaga nada. La otra forma de abrir un espacio
 # no es una función sino el atributo `__dict__`, que es el nombre que Python le
 # pone al espacio de nombres de un objeto y que no se puede cambiar por otro.
 # Ver `_Contexto.abre_un_espacio` y `_infracciones`, motivo (j).
-_ABREN_UN_ESPACIO = (builtins.vars, builtins.globals, builtins.locals)
+#
+# ÉSTA ES LA HERMANA DE `_ATRIBUTO_POR_NOMBRE`, y por eso se deriva igual. El
+# 7-sep-2026 la sala mandó a quitar dos listas tecleadas de este archivo y ésta
+# era la tercera, tres líneas más abajo de una de ellas, con exactamente el
+# mismo defecto. Arreglar una hermana y dejar la otra es la forma en que este
+# archivo ya falló cinco veces: el criterio bueno aplicado a un solo tramo.
+#
+# CÓMO SE PREGUNTA: se le planta un centinela en los tres sitios donde vive un
+# espacio de nombres —el `__dict__` de una sonda, los globales del módulo y los
+# locales del propio barrido— y se le pide a cada callable de `builtins` que
+# haga lo suyo. El que devuelva un diccionario con el centinela dentro es que
+# abrió uno de esos espacios. No se mira su nombre: se mira lo que devuelve.
+#
+# LO QUE SALIÓ, medido el 7-sep-2026 sobre este Python: los mismos tres que
+# estaban tecleados, comparados por identidad de objeto. O sea que acá el
+# cambio no mueve ni un veredicto — y ésa es justamente la razón de hacerlo
+# ahora y no el día que sí lo mueva.
+_CENTINELA_ESPACIO_NOMBRE = "_CENTINELA_ESPACIO"
+_CENTINELA_ESPACIO = True                    # → para que globals() lo lleve
 
-# EL FONDO, dicho en una línea: en un archivo vigilado, estos siete objetos SOLO
+
+def _funciones_que_abren_un_espacio(espacio=None) -> tuple:
+    """Los callables de `builtins` que devuelven el espacio de nombres de algo.
+
+    `espacio` se puede pasar para poder MEDIR el barrido con un módulo de
+    mentira, en vez de tener que creerse que barre.
+    """
+    _CENTINELA_ESPACIO = True                # → para que locals() lo lleve
+    assert _CENTINELA_ESPACIO
+
+    class _Sonda:
+        pass
+
+    sonda = _Sonda()
+    setattr(sonda, _CENTINELA_ESPACIO_NOMBRE, True)  # → para vars(sonda)
+
+    salida: list = []
+    gancho = sys.breakpointhook
+    sys.breakpointhook = lambda *a, **k: None
+    try:
+        for _, obj in sorted(vars(espacio or builtins).items()):
+            if not callable(obj):
+                continue
+            # Con la sonda y sin nada: `vars(x)` pide un objeto, `globals()` y
+            # `locals()` no admiten ninguno.
+            for args in ((sonda,), ()):
+                try:
+                    with contextlib.redirect_stdout(io.StringIO()), \
+                            contextlib.redirect_stderr(io.StringIO()):
+                        devuelto = obj(*args)
+                except BaseException:
+                    continue
+                try:
+                    abrio = isinstance(devuelto, dict) and \
+                        _CENTINELA_ESPACIO_NOMBRE in devuelto
+                except BaseException:
+                    abrio = False
+                if abrio:
+                    if not any(obj is x for x in salida):
+                        salida.append(obj)
+                    break
+    finally:
+        sys.breakpointhook = gancho
+    return tuple(salida)
+
+
+_ABREN_UN_ESPACIO = _funciones_que_abren_un_espacio()
+
+# El mismo candado que llevan `_TRAEN_MODULOS` y `_ATRIBUTO_POR_NOMBRE`: si el
+# barrido se rompe y devuelve de menos, el motivo (j) se queda sin puerta y eso
+# sería verde sin haber comprobado nada.
+for _anclaje in (builtins.vars, builtins.globals, builtins.locals):
+    assert any(o is _anclaje for o in _ABREN_UN_ESPACIO), (
+        f"el barrido de builtins no encontró {_anclaje.__name__}; el motivo "
+        "(j) quedaría sin puerta y la fuga que lo motivó volvería a ser "
+        "invisible")
+del _anclaje
+
+# EL FONDO, dicho en una línea: en un archivo vigilado, estos objetos SOLO
 # pueden aparecer siendo llamados —y los de `_TEXTO_A_CODIGO` ni eso—. Nombrar
 # uno sin llamarlo es rojo, se le llame como se le llame.
 #
@@ -1041,9 +1242,10 @@ _ABREN_UN_ESPACIO = (builtins.vars, builtins.globals, builtins.locals)
 _PELIGROSOS = _ATRIBUTO_POR_NOMBRE + _TEXTO_A_CODIGO
 
 # Y CÓMO SE LLAMAN HOY ESOS OBJETOS, sacado de los objetos y no tecleado. Hace
-# falta para el motivo (k): si un archivo ATA uno de estos nombres —un `def`, un
-# parámetro, una asignación, un import— entonces la guarda ya no puede resolver
-# ese nombre al builtin, y «no puedo resolver» es rojo.
+# falta para el motivo (k): si un archivo ATA uno de estos nombres —de cualquier
+# forma; quién ata qué lo dice el compilador, ver `_nombres_que_python_ata`—
+# entonces la guarda ya no puede resolver ese nombre al builtin, y «no puedo
+# resolver» es rojo.
 #
 # EL DEFECTO QUE LO MOTIVA, medido el 6-sep-2026 con tres casos:
 #
@@ -1212,6 +1414,86 @@ def _meter(conj: set, obj) -> None:
         conj.add(_DESCONOCIDO)
 
 
+# ── De dónde sale «este archivo ata este nombre» ──────────────────────────
+#
+# EL SEXTO AGUJERO DE ESTE ARCHIVO, medido el 7-sep-2026, y de la misma especie
+# que los cinco anteriores — con la vuelta de tuerca de que estaba DENTRO del
+# archivo que existe para no depender de listas escritas a mano.
+#
+# `_leer_ataduras` decide qué nombres ata un archivo recorriendo el árbol y
+# preguntando por TIPO DE NODO: `ast.Import`, `ast.FunctionDef`, `ast.Lambda`,
+# `ast.ClassDef`, `ast.Name` en Store/Del, `ast.ExceptHandler`, `ast.Global`.
+# Eso es una lista tecleada de FORMAS DE SINTAXIS, y la sintaxis de Python crece
+# cada versión. Medido, con el mismo `getattr(mod, n)` debajo en todos:
+#
+#     def _otra(getattr): ...            → `getattr` en atados     (la ve)
+#     case getattr:                      → NO queda en atados
+#     case [*getattr]:                   → NO queda en atados
+#     case {**getattr}:                  → NO queda en atados
+#     case 1 as getattr:                 → NO queda en atados
+#     def _otra[getattr](x): ...         → NO queda en atados      (PEP 695)
+#     def _otra[**getattr](x): ...       → NO queda en atados
+#     def _otra[*getattr](x): ...        → NO queda en atados
+#     class C[getattr]: ...              → NO queda en atados
+#     type A[getattr] = int              → NO queda en atados
+#
+# O sea NUEVE formas que la lista no recogía, no una. La cabecera declaraba UNA
+# —el `case` de un `match`— y se presentaba como completa. Ésa era la mentira:
+# no el agujero, que no lo hay (las nueve salen rojas igual, porque no verlas
+# significa que la guarda sigue resolviendo el nombre al builtin y muerde el
+# motivo (c)), sino el INVENTARIO, que prometía saber lo que no sabía.
+#
+# Y NO SE ARREGLA AÑADIÉNDOLE `ast.MatchAs` Y `ast.TypeVar` A LA LISTA. Ésa
+# sería la tercera vuelta de la misma lista, y la señal de esta sala dice que
+# ahí el enfoque está mal: la lista y la sintaxis de Python vuelven a separarse
+# en la versión siguiente, y nadie se entera hasta que revienta.
+#
+# SE ARREGLA PREGUNTÁNDOLE A PYTHON. `symtable` es la fase del compilador de
+# CPython que decide qué nombres quedan atados en cada ámbito; es la MISMA que
+# usa el intérprete para compilar el archivo. No es un modelo de las formas de
+# atar un nombre: es la cosa que las define. Una sintaxis nueva entra sola,
+# porque entra en el compilador antes de que exista.
+#
+# Y LA PREGUNTA SE REDUJO A UNA, no a una lista de predicados. Medido sobre las
+# doce formas de arriba más el control: `is_local()` es cierto en todas menos en
+# `global getattr`, que no ata pero declara que va a escribir el nombre —y que
+# la lista vieja también recogía—; y en el control, un archivo que solo USA
+# `getattr`, los dos son falsos. Ésa es la línea entera del criterio.
+#
+# LO QUE CUESTA, medido el 7-sep-2026 sobre los 37 archivos vigilados: symtable
+# es un SUPERCONJUNTO estricto de lo que veía la lista —no le falta ni un nombre
+# en ninguno de los 37— y lo único que añade es `.0`, el nombre interno que
+# CPython le pone al iterador de una comprensión, que no es un identificador
+# que nadie pueda escribir. Cero culpables antes, cero después. Se comprueba
+# corriendo, en las dos direcciones, en
+# `test_las_ataduras_salen_del_compilador_y_no_de_una_lista_de_nodos`.
+def _nombres_que_python_ata(arbol) -> tuple[frozenset[str], bool]:
+    """Los nombres que este archivo ata, según el compilador de CPython.
+
+    Devuelve `(nombres, seguro)`. `seguro` en False significa que no se pudo
+    averiguar, que en esta guarda es rojo y no un encogimiento de hombros.
+    """
+    try:
+        tabla = symtable.symtable(ast.unparse(arbol), "<vigilado>", "exec")
+    except Exception:
+        return frozenset(), False
+
+    nombres: set[str] = set()
+
+    def recorrer(ambito) -> None:
+        for simbolo in ambito.get_symbols():
+            # Atado acá, o declarado para escribirlo. Un nombre que el archivo
+            # solo USA no es ninguna de las dos, y por eso el control sale
+            # limpio en vez de rojear todos los archivos.
+            if simbolo.is_local() or simbolo.is_declared_global():
+                nombres.add(simbolo.get_name())
+        for hijo in ambito.get_children():
+            recorrer(hijo)
+
+    recorrer(tabla)
+    return frozenset(nombres), True
+
+
 class _Contexto:
     """Lo que la guarda sabe de los nombres de UN archivo."""
 
@@ -1219,7 +1501,12 @@ class _Contexto:
         self.ambitos = _repartir_ambitos(arbol)
         _atar_cadenas(arbol, self.ambitos)
         self.importados: dict[str, str] = {}   # nombre local → camino punteado
-        self.atados: set[str] = set()          # todo nombre que el archivo ata
+        # Todo nombre que el archivo ata, sacado del compilador. `_leer_ataduras`
+        # le suma abajo lo que ve el árbol —que hoy es un subconjunto medido, y
+        # se queda porque de paso construye `importados` y `locales_config`, que
+        # symtable no sabe: él dice QUÉ nombres se atan, no A QUÉ.
+        _atadas, self.ataduras_seguras = _nombres_que_python_ata(arbol)
+        self.atados: set[str] = set(_atadas)
         self.locales_config: set[str] = set()  # nombres que SON el módulo
         self.derivados: set[str] = set()       # nombres atados desde un espacio
         self.objetos: dict[str, set] = {}      # nombre local → objetos de hoy
@@ -1520,6 +1807,13 @@ def _infracciones(fuente, permitidos: set[str]) -> list[str]:
     #     clasificar es rojo. Los nombres salen de los OBJETOS peligrosos, no
     #     de una lista tecleada. Y va antes que todo lo demás porque, cuando
     #     pasa, todo lo demás está decidido sobre nombres mal resueltos.
+    #     Y si el compilador no pudo decir qué nombres ata este archivo, no hay
+    #     con qué contestar la pregunta: eso es «no lo sé», que acá es rojo.
+    if not ctx.ataduras_seguras:
+        malas.append(
+            "línea 1: no pude sacar del compilador qué nombres ata este "
+            "archivo, así que no sé cuáles de los nombres peligrosos están "
+            "pisados; sin eso no puedo resolver ninguna llamada suya")
     pisados = sorted(ctx.atados & _NOMBRES_PELIGROSOS)
     if pisados:
         malas.append(
@@ -1552,7 +1846,7 @@ def _infracciones(fuente, permitidos: set[str]) -> list[str]:
                         f"línea {n.lineno}: `from {n.module} import *` trae "
                         "nombres que no puedo enumerar")
 
-        # (i) Un import que TRAE uno de los siete objetos peligrosos, del módulo
+        # (i) Un import que TRAE uno de los objetos peligrosos, del módulo
         #     que sea y con el alias que sea. `from builtins import getattr as
         #     ga` no nombra a `getattr` en ninguna expresión, así que el motivo
         #     (h) no lo ve: el objeto entra por la puerta del import. Quién
@@ -1620,7 +1914,7 @@ def _infracciones(fuente, permitidos: set[str]) -> list[str]:
                 "texto en código; lo que corra ahí no existe hasta que corre y "
                 "no hay forma de saber si alcanza la lista cruda")
 
-        # (h) EL FONDO: uno de los siete objetos peligrosos NOMBRADO sin
+        # (h) EL FONDO: uno de los objetos peligrosos NOMBRADO sin
         #     llamarlo. Ahí es donde se fabrica un alias —una tupla, un dict,
         #     una clausura, el valor por defecto de un parámetro— y es la única
         #     comprobación que no depende de poder seguir la asignación.
@@ -4617,11 +4911,25 @@ def test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_cuesta_hoy():
     `CORREO_CUENTAS`. Pero una guarda que rojea a quien hace lo correcto se
     apaga sola, así que el precio se cuenta en vez de suponerse.
 
-    LO MEDIDO, el 6-sep-2026: CERO sitios de Lucy escriben ese patrón. Los 7
-    `getattr` que hay en los 37 archivos vigilados piden todos un nombre que sí
-    se puede enumerar (4 en main.py, 2 en cerebro/interpretar.py, 1 en db/db.py
-    recorriendo una tupla de dos literales). O sea, el límite no le cuesta nada
-    a nadie hoy, y el día que le cueste será esta prueba la que lo diga.
+    LO MEDIDO, el 7-sep-2026: CERO sitios de Lucy escriben ese patrón. Las 8
+    llamadas que hay en los 37 archivos vigilados piden todas un nombre que sí
+    se puede enumerar:
+
+        main.py:185,223,224,225          getattr   4
+        cerebro/interpretar.py:58,60     getattr   2
+        db/db.py:46                      getattr   1
+        tools/humo.py:87                 hasattr   1
+
+    O sea, el límite no le cuesta nada a nadie hoy, y el día que le cueste será
+    esta prueba la que lo diga.
+
+    POR QUÉ EL NÚMERO PASÓ DE 7 A 8, y no es que alguien escribiera una llamada
+    nueva. El 6-sep-2026 `_ATRIBUTO_POR_NOMBRE` era una tupla TECLEADA con tres
+    funciones; el 7-sep-2026 se derivó preguntándole a `builtins` cuáles van de
+    verdad a buscar un atributo por su nombre, y salieron CUATRO. La que faltaba
+    es `hasattr`, y la octava llamada —`tools/humo.py:87`— llevaba ahí todo el
+    tiempo sin que nadie la contara. No es una regresión: es el precio de dejar
+    de teclear la lista, y se paga entero acá.
     """
     permitidos = _atributos_que_config_ofrece()
     assert _infracciones(
@@ -4654,13 +4962,508 @@ def test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_cuesta_hoy():
         "el sitio se reescribe con el nombre a la vista, o el límite se "
         "renegocia con Tiziano, pero no se afloja la aserción")
 
-    assert cuantos == 7, (
+    assert cuantos == 8, (
         f"{_MARCA_CONTADOR}los archivos vigilados tienen {cuantos} llamadas a "
-        "getattr y el 6-sep-2026 eran 7. La aserción de fondo —ninguna de esas "
+        "getattr y el 7-sep-2026 eran 8. La aserción de fondo —ninguna de esas "
         "llamadas pide un nombre que no se pueda enumerar— YA CORRIÓ arriba y "
         "quedó verde, así que esto NO es una fuga: es el precio del límite, que "
         "se movió. Hay que volver a mirar cuánto cuesta antes de darlo por "
         "gratis, y actualizar el número")
+
+
+def test_los_objetos_peligrosos_salen_de_un_barrido_o_estan_declarados():
+    """La pregunta de la Regla 18: «¿quiénes son sus hermanos, y lo cumplen
+    todos?» — contestada corriendo, no leyendo el archivo.
+
+    El 7-sep-2026 se derivaron dos listas que estaban tecleadas. Tenían una
+    tercera hermana tres líneas más abajo (`_ABREN_UN_ESPACIO`) con el mismo
+    defecto, y una cuarta (`_TEXTO_A_CODIGO`) que NO se puede derivar por el
+    mismo camino. Arreglar unas y dejar otras es exactamente cómo este archivo
+    ya falló cinco veces, así que la respuesta tiene que quedar corriendo:
+
+      1. Todo objeto peligroso sale de un barrido, o está en el ÚNICO grupo
+         declarado a mano — y ese grupo se enumera, no se deduce. Un objeto
+         peligroso nuevo que nazca tecleado no cae en el grupo indulgente por
+         olvido: cae rojo.
+      2. Los barridos LEEN lo que se les da, o sea que no son una constante
+         disfrazada de función. Se les pasa un espacio de mentira y tienen que
+         contestar sobre él.
+
+    POR QUÉ `_TEXTO_A_CODIGO` SE DECLARA EN VEZ DE DERIVARSE, medido el
+    7-sep-2026 y no supuesto. El barrido conductual que encuentra a las otras
+    —darle algo a cada builtin y mirar qué hace— encuentra `eval`, `exec` y
+    `compile`, y NO encuentra `__import__`: las tres primeras se delatan porque
+    ejecutan o compilan el texto que se les pasa, y `__import__` no hace ni una
+    cosa ni la otra —convierte un texto en un MÓDULO—, así que para verlo el
+    barrido tendría que importar de verdad. Tres de cuatro no es derivar: es
+    perder `__import__`, que es la puerta más ancha de las cuatro. Y hacer que
+    el barrido ejecute texto para reconocer a los que ejecutan texto es pedirle
+    a esta guarda que haga lo único que prohíbe sin excepción (motivo (g)). Eso
+    ya no es una pregunta técnica; si tiene que cambiar, lo decide Tiziano.
+    """
+    # 1. El reparto: derivado, o declarado. Nada cae en «lo que sobra».
+    derivados = _ATRIBUTO_POR_NOMBRE + _ABREN_UN_ESPACIO
+    declarados_a_mano = _TEXTO_A_CODIGO
+    sin_clasificar = [
+        f for f in _PELIGROSOS + _ABREN_UN_ESPACIO
+        if not any(f is d for d in derivados)
+        and not any(f is d for d in declarados_a_mano)]
+    assert not sin_clasificar, (
+        f"estos objetos peligrosos no salen de ningún barrido y tampoco están "
+        f"en el grupo declarado a mano: {[getattr(f, '__name__', f) for f in sin_clasificar]}. "
+        "Un objeto peligroso nuevo no puede entrar tecleado y en silencio: o "
+        "sale de un barrido, o se declara acá con el motivo medido de por qué "
+        "no se puede barrer")
+
+    # 2. Que los barridos lean su entrada. Un barrido que devuelve siempre lo
+    #    mismo pasaría el punto 1 sin haber barrido nada.
+    vacio = types.SimpleNamespace()
+    assert _funciones_que_piden_un_atributo_por_nombre(vacio) == (), (
+        "el barrido de `getattr` devolvió algo sobre un espacio VACÍO, así que "
+        "no está mirando lo que se le da: es una lista tecleada con forma de "
+        "función")
+    assert _funciones_que_abren_un_espacio(vacio) == (), (
+        "el barrido de `vars` devolvió algo sobre un espacio VACÍO, así que no "
+        "está mirando lo que se le da")
+
+    solo_una = types.SimpleNamespace(comoquiera=builtins.getattr)
+    salio = _funciones_que_piden_un_atributo_por_nombre(solo_una)
+    assert len(salio) == 1 and salio[0] is builtins.getattr, (
+        f"el barrido de `getattr` sobre un espacio con UN solo objeto devolvió "
+        f"{salio}. Tiene que contestar sobre el espacio que se le pasa, y "
+        "reconocerlo por lo que HACE aunque se llame `comoquiera`")
+
+    otra = types.SimpleNamespace(comoquiera=builtins.vars)
+    salio = _funciones_que_abren_un_espacio(otra)
+    assert len(salio) == 1 and salio[0] is builtins.vars, (
+        f"el barrido de `vars` sobre un espacio con UN solo objeto devolvió "
+        f"{salio}")
+
+    print(f"\nOBJETOS PELIGROSOS (medido al correr): "
+          f"{len(derivados)} salen de un barrido, "
+          f"{len(declarados_a_mano)} están declarados a mano con su motivo.")
+
+
+# EL REPARTO DE LAS CLASES DE ÁMBITO, enumerado entero por los dos lados. Las
+# siete clases de bloque que el compilador de CPython sabe abrir se reparten
+# acá, y NINGUNA cae en «lo que sobra»: una clase que aparezca en una versión
+# futura de Python y no esté en ninguna de las dos tablas sale ROJA, no exenta.
+#
+# La fuente de cada entrada es lo que hace que esto se mida en vez de creerse:
+# el test la compila y compara cuántos bloques abre el compilador con cuántos
+# ámbitos abre el Tramo 1.
+_AMBITOS_QUE_EL_TRAMO_1_ABRE = {
+    "module": "x = 1\n",
+    "function": "def f():\n    x = 1\n",
+    "class": "class C:\n    x = 1\n",
+}
+
+# Y las que NO abre, cada una con el código que la produce, un ataque que
+# intenta usarla para llegar a la lista cruda, y el motivo. El ataque se CORRE:
+# si alguna de estas cuatro dejara de salir roja, esto deja de ser una frontera
+# declarada y pasa a ser un agujero.
+_AMBITOS_QUE_EL_TRAMO_1_NO_ABRE = {
+    "type alias": {
+        "fuente": "type A = int\n",
+        # El valor de un alias no se evalúa hasta que alguien lo pide, así que
+        # es el sitio natural para esconder una lectura.
+        "ataque":
+            'import config\n'
+            'type A = [getattr(config, n) for n in ("CORREO_" + "CUENTAS",)]\n',
+        "molde": "type A = {}",
+        "por_que":
+            "el valor de un `type` es una EXPRESIÓN: de los once nodos donde "
+            "`_atar_cadenas` ata un nombre, los nueve que son sentencias no "
+            "caben ahí, y los dos que caben —`Lambda` y `comprehension`— ya "
+            "abren ámbito propio. Nada puede atarse en este bloque y salirse",
+    },
+    "type parameter": {
+        "fuente": "def f[T](x):\n    return x\n",
+        "ataque":
+            'import config\n'
+            'def f[n](x):\n'
+            '    return getattr(config, n)\n',
+        "molde": "def f[T: {}](x): pass",
+        "por_que":
+            "dentro de la cabecera de PEP 695 el único sitio donde cabe una "
+            "expresión del usuario es el límite de un parámetro, y eso es el "
+            "molde. Los parámetros en sí son nombres, no expresiones: "
+            "`_atar_cadenas` no los ata, y el compilador tampoco los mete en "
+            "`atados`, así que un `def f[getattr]` deja `getattr` resolviendo "
+            "al builtin y muerde por el motivo (c)",
+    },
+    "TypeVar bound": {
+        "fuente": "def f[T: int](x):\n    return x\n",
+        "ataque":
+            'import config\n'
+            'def f[T: getattr(config, "CORREO_" + "CUENTAS")](x):\n'
+            '    return x\n',
+        "molde": "def f[T: {}](x): pass",
+        "por_que": "mismo molde y mismo motivo que `type parameter`: un límite "
+                   "es una expresión, y ahí no cabe ninguna sentencia que ate",
+    },
+    "annotation": {
+        # CPython 3.12 tiene la constante pero no abre el bloque en ninguna
+        # forma que se pudo escribir el 8-sep-2026. No se declara exenta por
+        # eso: el test comprueba CORRIENDO que el corpus no lo produce, y el
+        # día que una versión de Python empiece a abrirlo, se pone rojo.
+        "fuente": None,
+        "ataque": None,
+        "molde": None,
+        "por_que":
+            "`_symtable.TYPE_ANNOTATION` existe pero ninguna fuente del corpus "
+            "lo produce en 3.12. Queda declarado FUERA —no cubierto— porque no "
+            "se pudo medir, que en esta guarda es el lado estricto",
+    },
+}
+
+
+def _nodos_donde_se_ata_un_nombre() -> frozenset[str]:
+    """Los nodos donde `_atar_cadenas` ata un nombre, sacados de SU código.
+
+    No es una lista tecleada: se lee el `isinstance(n, ...)` de su bucle sobre
+    `ast.walk`. Si mañana alguien le añade un nodo, entra solo acá.
+    """
+    arbol = ast.parse(inspect.getsource(_atar_cadenas).lstrip())
+    salida: set[str] = set()
+    for n in ast.walk(arbol):
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == "isinstance"
+                and isinstance(n.args[0], ast.Name) and n.args[0].id == "n"):
+            for t in ast.walk(n.args[1]):
+                if isinstance(t, ast.Attribute) and \
+                        isinstance(t.value, ast.Name) and t.value.id == "ast":
+                    salida.add(t.attr)
+    return frozenset(salida)
+
+
+# Una fuente mínima por cada nodo que ata, para probar si CABE dentro de un
+# bloque de PEP 695. Va con `{}` porque el molde lo pone cada clase de ámbito.
+# Un nodo que ate y no tenga fragmento acá NO se da por seguro: sale rojo.
+_FRAGMENTO_QUE_ATA = {
+    "Assign": "(x = 1)",
+    "AnnAssign": "(x: int = 1)",
+    "AugAssign": "(x += 1)",
+    "For": "(for i in (): pass)",
+    "AsyncFor": "(async for i in (): pass)",
+    "withitem": '(with open("x") as fh: pass)',
+    "ExceptHandler": "(try: pass\nexcept E as e: pass)",
+    "FunctionDef": "(def f(): pass)",
+    "AsyncFunctionDef": "(async def f(): pass)",
+    "Lambda": "(lambda z: z)",
+    "comprehension": "[i for i in ()]",
+}
+
+
+def _clases_de_bloque_de_cpython() -> frozenset[str]:
+    """Las clases de bloque que el compilador sabe abrir, según CPython.
+
+    Salen de los `return "..."` de `symtable.SymbolTable.get_type`, y se
+    cruzan contra el número de constantes `TYPE_*` de `_symtable` para que una
+    clase que la lectura no vea ponga esto rojo en vez de desaparecer.
+    """
+    import _symtable
+
+    arbol = ast.parse(inspect.getsource(symtable.SymbolTable.get_type).lstrip())
+    nombres = {n.value.value for n in ast.walk(arbol)
+               if isinstance(n, ast.Return) and isinstance(n.value, ast.Constant)
+               and isinstance(n.value.value, str)}
+    constantes = [n for n in dir(_symtable) if n.startswith("TYPE_")]
+    assert len(nombres) == len(constantes), (
+        f"leyendo `symtable.SymbolTable.get_type` salieron {len(nombres)} "
+        f"clases de bloque {sorted(nombres)} y `_symtable` declara "
+        f"{len(constantes)} constantes {sorted(constantes)}. No cuadran, así "
+        "que la lista de clases no se puede dar por completa")
+    return frozenset(nombres)
+
+
+def _bloques_de(fuente: str) -> list[str]:
+    """Las clases de bloque que el compilador abre para esta fuente."""
+    salida: list[str] = []
+
+    def recorrer(b) -> None:
+        salida.append(b.get_type())
+        for h in b.get_children():
+            recorrer(h)
+
+    recorrer(symtable.symtable(fuente, "<frontera>", "exec"))
+    return salida
+
+
+def _ambitos_de(fuente: str) -> int:
+    """Cuántos ámbitos distintos abre el Tramo 1 para esta fuente."""
+    return len({id(a) for a in _repartir_ambitos(ast.parse(fuente)).values()})
+
+
+def test_los_ambitos_del_tramo_1_declaran_su_frontera():
+    """`_ABREN_AMBITO` es la lista tecleada que queda, y acá se mide su límite.
+
+    La Regla 18 de esta sala dice que una lista escrita a mano y la realidad se
+    separan desde el día que se escribe. Las otras cuatro de este archivo se
+    derivaron. Ésta no se puede: `_cadenas` pregunta A QUÉ ÁMBITO PERTENECE UN
+    NODO y `symtable` contesta QUÉ NOMBRES ATA UN BLOQUE, sin decir a qué nodo
+    del árbol corresponde el bloque.
+
+    Entonces se hace lo que se hizo con `_TEXTO_A_CODIGO`: se declara, y la
+    declaración se comprueba corriendo. Cuatro cosas:
+
+      1. EL REPARTO ESTÁ ENTERO. Las clases de bloque salen de CPython, no de
+         acá, y cada una está en una de las dos tablas. Una clase nueva —la que
+         traiga Python 3.14— no cae en el grupo indulgente por olvido: cae roja.
+      2. EL REPARTO ES CIERTO. Para cada clase se compila su fuente y se
+         comparan bloques contra ámbitos. Las declaradas dentro tienen que dar
+         igual; las declaradas fuera, más bloques que ámbitos. Una tabla que se
+         equivoque de lado sale roja.
+      3. LA FRONTERA NO GOTEA, y esto es lo que de verdad importa. Un ámbito
+         que el Tramo 1 no abre solo hace daño si le mete una atadura al ámbito
+         de afuera: ahí un nombre que era «no lo sé» —rojo— pasa a ser «sé qué
+         pide» —posible verde—. Se mide preguntándole al parser si los nodos
+         que atan caben dentro de esos bloques. Los que quepan tienen que abrir
+         ámbito propio en `_ABREN_AMBITO`.
+      4. Y EL ATAQUE DE CADA UNA SALE ROJO, que es la comprobación de
+         comportamiento. Sola no bastaría —el punto 3 es el que ve la
+         divergencia—, pero sin ella el punto 3 sería un argumento.
+    """
+    # 1. El reparto entero, contra la lista de CPython.
+    de_cpython = _clases_de_bloque_de_cpython()
+    dentro = set(_AMBITOS_QUE_EL_TRAMO_1_ABRE)
+    fuera = set(_AMBITOS_QUE_EL_TRAMO_1_NO_ABRE)
+    assert not (dentro & fuera), (
+        f"estas clases de ámbito están declaradas dentro Y fuera: "
+        f"{sorted(dentro & fuera)}")
+    sin_clasificar = de_cpython - dentro - fuera
+    assert not sin_clasificar, (
+        f"el compilador de CPython sabe abrir estas clases de bloque y este "
+        f"archivo no dice de qué lado están: {sorted(sin_clasificar)}. Una "
+        "clase de ámbito nueva no se exenta por olvido: o `_ABREN_AMBITO` le "
+        "abre ámbito y se declara dentro, o se declara fuera con su ataque "
+        "medido")
+    inventadas = (dentro | fuera) - de_cpython
+    assert not inventadas, (
+        f"estas clases de ámbito están declaradas acá y el compilador no las "
+        f"conoce: {sorted(inventadas)}. La lista de clases la manda CPython")
+
+    # 2. Que cada una esté del lado que dice, medido compilando su fuente.
+    for clase, fuente in sorted(_AMBITOS_QUE_EL_TRAMO_1_ABRE.items()):
+        bloques, ambitos = len(_bloques_de(fuente)), _ambitos_de(fuente)
+        assert bloques == ambitos, (
+            f"«{clase}» está declarada como cubierta por `_ABREN_AMBITO`, "
+            f"pero sobre su fuente el compilador abre {bloques} bloques y el "
+            f"Tramo 1 abre {ambitos} ámbitos. Si el compilador abre más, hay "
+            "un ámbito que el Tramo 1 se está comiendo y la tabla miente")
+
+    for clase, d in sorted(_AMBITOS_QUE_EL_TRAMO_1_NO_ABRE.items()):
+        if d["fuente"] is None:
+            continue
+        abiertos = _bloques_de(d["fuente"])
+        bloques, ambitos = len(abiertos), _ambitos_de(d["fuente"])
+        assert clase in abiertos, (
+            f"la fuente declarada para «{clase}» no abre un bloque de esa "
+            f"clase: abre {abiertos}. Sin eso no se está midiendo lo que se "
+            "dice medir")
+        assert bloques > ambitos, (
+            f"«{clase}» está declarada como NO cubierta y sobre su fuente el "
+            f"compilador abre {bloques} bloques y el Tramo 1 abre {ambitos} "
+            "ámbitos. Si ya la cubre, esta declaración sobra y hay que moverla "
+            "a la otra tabla")
+
+    # 3. La frontera: nada de lo que ata cabe dentro de esos bloques sin pasar
+    #    por un ámbito que `_ABREN_AMBITO` sí abre.
+    atadores = _nodos_donde_se_ata_un_nombre()
+    sin_fragmento = atadores - set(_FRAGMENTO_QUE_ATA)
+    assert not sin_fragmento, (
+        f"`_atar_cadenas` ata nombres en {sorted(sin_fragmento)} y no hay "
+        "fragmento para probar si eso cabe dentro de un bloque de PEP 695. Un "
+        "nodo que ata sin medir no se da por seguro: hay que escribirle su "
+        "fragmento acá")
+    # Y la otra dirección, que es la que impide que esto pase EN VACÍO: si la
+    # lectura de `_atar_cadenas` dejara de encontrar nodos, los bucles de abajo
+    # no recorrerían nada y la prueba saldría verde sin haber medido. Los
+    # fragmentos sobrantes lo delatan.
+    sobrantes = set(_FRAGMENTO_QUE_ATA) - atadores
+    assert not sobrantes, (
+        f"hay fragmentos para {sorted(sobrantes)} y `_atar_cadenas` no ata "
+        "nombres ahí. O la lectura de su código dejó de ver algo —y entonces "
+        "todo lo de abajo se mide sobre menos nodos de los que hay— o el nodo "
+        "se quitó y el fragmento sobra")
+
+    caben: set[str] = set()          # nodos que sí caben en algún molde
+    tapados: set[str] = set()        # …y que van tapados por un ámbito propio
+    for clase, d in sorted(_AMBITOS_QUE_EL_TRAMO_1_NO_ABRE.items()):
+        if d["molde"] is None:
+            continue
+        for nodo in sorted(atadores):
+            fuente = d["molde"].format(_FRAGMENTO_QUE_ATA[nodo])
+            try:
+                arbol = ast.parse(fuente)
+            except SyntaxError:
+                continue               # el parser dice que ahí no cabe
+            caben.add(nodo)
+            padres: dict[int, object] = {}
+            for p in ast.walk(arbol):
+                for h in ast.iter_child_nodes(p):
+                    padres[id(h)] = p
+            for n in ast.walk(arbol):
+                if type(n).__name__ != nodo:
+                    continue
+                # El propio nodo cuenta: un `Lambda` ata sus parámetros DENTRO
+                # de su ámbito, que esta lista sí abre.
+                tapado, sube = False, n
+                while sube is not None:
+                    if isinstance(sube, _ABREN_AMBITO):
+                        tapado = True
+                        break
+                    sube = padres.get(id(sube))
+                assert tapado, (
+                    f"dentro de un bloque «{clase}» cabe un `{nodo}` que ata "
+                    f"un nombre y NINGÚN nodo de `_ABREN_AMBITO` lo tapa. Esa "
+                    "atadura se le mete al ámbito de afuera, y ahí un nombre "
+                    "que era «no lo sé» pasa a ser conocido: un rojo se puede "
+                    f"volver verde. Fuente: {fuente!r}")
+                tapados.add(nodo)
+
+    # 4. Y el ataque de cada una, corrido.
+    permitidos = _atributos_que_config_ofrece()
+    verdes = [clase for clase, d in _AMBITOS_QUE_EL_TRAMO_1_NO_ABRE.items()
+              if d["ataque"] is not None
+              and not _infracciones(d["ataque"], permitidos)]
+    assert not verdes, (
+        f"el ataque declarado para estas clases de ámbito sale VERDE: "
+        f"{verdes}. Eso ya no es una frontera declarada, es un agujero")
+
+    # Y la clase que no se pudo producir: se comprueba que de verdad no salga
+    # en ninguna fuente del corpus, en vez de creerlo.
+    corpus = ([f for f in _AMBITOS_QUE_EL_TRAMO_1_ABRE.values()]
+              + [d[k] for d in _AMBITOS_QUE_EL_TRAMO_1_NO_ABRE.values()
+                 for k in ("fuente", "ataque") if d[k] is not None]
+              + list(_ESQUIVES.values()) + list(_LEGITIMOS.values())
+              + [d["fuente"] for d in _FUERA_DE_LA_FRONTERA.values()])
+    vistas: set[str] = set()
+    for fuente in corpus:
+        with contextlib.suppress(SyntaxError, ValueError):
+            vistas.update(_bloques_de(fuente))
+    nunca_vistas = {c for c, d in _AMBITOS_QUE_EL_TRAMO_1_NO_ABRE.items()
+                    if d["fuente"] is None}
+    aparecidas = nunca_vistas & vistas
+    assert not aparecidas, (
+        f"{sorted(aparecidas)} se declaró como «CPython no abre este bloque en "
+        "ninguna forma que se pudo escribir» y el corpus lo abre. La "
+        "declaración caducó: hay que darle fuente y ataque, o cubrirlo en "
+        "`_ABREN_AMBITO`")
+
+    # Y la otra dirección, que es el lado seguro: donde el Tramo 1 abre ámbitos
+    # que el compilador ya no abre. Desde PEP 709 las comprensiones se meten en
+    # el ámbito de afuera y aquí siguen teniendo el suyo.
+    sobra = _ambitos_de("y = [i for i in ()]\n") - len(_bloques_de("y = [i for i in ()]\n"))
+
+    assert caben == tapados, (
+        f"estos nodos caben dentro de un bloque de PEP 695 y no se comprobó "
+        f"que vayan tapados: {sorted(caben - tapados)}")
+
+    print(f"\nFRONTERA DEL TRAMO 1 (medida al correr): CPython sabe abrir "
+          f"{len(de_cpython)} clases de ámbito; `_ABREN_AMBITO` cubre "
+          f"{len(dentro)} y deja {len(fuera)} declaradas fuera con su ataque "
+          f"rojo. De los {len(atadores)} nodos donde `_atar_cadenas` ata un "
+          f"nombre, {len(atadores) - len(caben)} no caben dentro de esos "
+          f"bloques —lo dice el parser— y los {len(caben)} que caben "
+          f"({sorted(caben)}) abren ámbito propio, así que ninguna atadura se "
+          f"escapa al ámbito de afuera. Sobre una comprensión el Tramo 1 abre "
+          f"{sobra} ámbito más que el compilador, que es el lado estricto.")
+
+
+def test_las_ataduras_salen_del_compilador_y_no_de_una_lista_de_nodos():
+    """Que `atados` siga saliendo de `symtable`, medido en las DOS direcciones.
+
+    La prueba de al lado comprueba que catorce formas de pisar un nombre salgan
+    rojas. Eso se puede conseguir con una lista de tipos de nodo bien larga, y
+    entonces la forma quince —la que traiga Python 3.15— vuelve a escaparse.
+    Ésta comprueba la otra cosa, que es la que impide que la serie siga:
+
+      1. Que el recorrido por tipo de nodo (`_leer_ataduras`) NO le añada a
+         `atados` ni un nombre que el compilador no tenga. Si un día se lo
+         añade, es que alguien volvió a decidir por tipo de nodo y hay que
+         mirar por qué.
+      2. Que sobre los archivos vigidos DE VERDAD el compilador no se quede
+         corto respecto del recorrido, o sea que `atados` no perdió nada al
+         cambiar de fuente.
+      3. Y que el criterio del compilador siga siendo el que se midió: un
+         archivo que solo USA un nombre no lo ata. Sin esto, `atados` podría
+         volverse «todos los nombres» y todo lo de arriba pasaría igual.
+    """
+    solo_del_arbol: dict[str, list[str]] = {}
+    solo_del_compilador: dict[str, list[str]] = {}
+
+    for py in sorted(_archivos_vigilados(RAIZ)):
+        try:
+            arbol = ast.parse(py.read_bytes())
+        except SyntaxError:
+            continue
+        del_compilador, seguro = _nombres_que_python_ata(arbol)
+        assert seguro, (
+            f"{py.relative_to(RAIZ)}: el compilador no pudo decir qué nombres "
+            "ata. Eso hoy sale rojo por el motivo (k), que es lo correcto, "
+            "pero sobre un archivo de Lucy significa que algo se rompió")
+        del_arbol = set()
+        _Contexto.__dict__["_leer_ataduras"](
+            types.SimpleNamespace(importados={}, atados=del_arbol,
+                                  locales_config=set()), arbol)
+        nombre = str(py.relative_to(RAIZ))
+        if del_arbol - del_compilador:
+            solo_del_arbol[nombre] = sorted(del_arbol - del_compilador)
+        if del_compilador - del_arbol:
+            solo_del_compilador[nombre] = sorted(del_compilador - del_arbol)
+
+    assert not solo_del_arbol, (
+        f"el recorrido por tipo de nodo ve ataduras que el compilador no: "
+        f"{solo_del_arbol}. O el criterio `is_local() or is_declared_global()` "
+        "se quedó corto, o alguien volvió a meter una lista de nodos que "
+        "decide por su cuenta; en los dos casos hay que mirarlo, porque la "
+        "gracia de preguntarle al compilador es que él sea el que manda")
+
+    # La otra dirección no es una aserción sino el número que dice cuánto añade
+    # preguntarle al compilador. Hoy es `.0`, el iterador de una comprensión.
+    print(f"\nATADURAS (medido al correr): el compilador añade "
+          f"{sum(len(v) for v in solo_del_compilador.values())} nombres que el "
+          f"recorrido por tipo de nodo no veía, en "
+          f"{len(solo_del_compilador)} de {len(_archivos_vigilados(RAIZ))} "
+          "archivos vigilados.")
+
+    # 3. El criterio no se volvió «todo el mundo está atado».
+    usa, _ = _nombres_que_python_ata(
+        ast.parse("def robar(mod, n):\n    return getattr(mod, n)\n"))
+    assert "getattr" not in usa and {"robar", "mod", "n"} <= usa, (
+        f"el criterio de `_nombres_que_python_ata` dejó de distinguir usar de "
+        f"atar: sacó {sorted(usa)} de un archivo que solo LLAMA a `getattr`. "
+        "Con ese criterio el motivo (k) rojea todos los archivos vigilados y "
+        "la guarda se apaga sola")
+
+    # 4. Y LAS DOS MITADES DEL CRITERIO, pinchadas DIRECTAMENTE sobre
+    #    `_nombres_que_python_ata` y no a través de `atados`.
+    #
+    #    POR QUÉ HACE FALTA ESTO APARTE, medido el 7-sep-2026 mutando: quitarle
+    #    `is_declared_global()` al criterio no ponía roja NINGUNA prueba de la
+    #    suite. La razón es que `atados` es la UNIÓN del compilador con el
+    #    recorrido por tipo de nodo, y `ast.Global` entra por el recorrido: la
+    #    unión tapaba que la mitad del compilador se había apagado. Hoy el
+    #    recorrido es un subconjunto medido y no molesta, pero el día que se
+    #    quite —que es adónde va esto— la mitad apagada quedaría sola y muda.
+    #    Una mutación que sale verde es un agujero en quien mide, no un éxito.
+    mitades = {
+        "un parámetro (is_local)":
+            ('def _o(getattr):\n    return getattr\n', "getattr"),
+        "un `global` (is_declared_global)":
+            ('def _o():\n    global getattr\n', "getattr"),
+        "un `case` de match (is_local)":
+            ('def _o(x):\n    match x:\n        case vars:\n'
+             '            return vars\n', "vars"),
+    }
+    ciegos = [k for k, (src, quien) in mitades.items()
+              if quien not in _nombres_que_python_ata(ast.parse(src))[0]]
+    assert not ciegos, (
+        f"el criterio de `_nombres_que_python_ata` no ve estas ataduras: "
+        f"{ciegos}. Son las dos mitades de `is_local() or "
+        "is_declared_global()`; si una se apaga, `atados` lo tapa mientras "
+        "`_leer_ataduras` siga puesto y nadie se entera")
 
 
 def test_pisar_un_nombre_peligroso_es_rojo_y_cuanto_cuesta_hoy():
@@ -4689,12 +5492,13 @@ def test_pisar_un_nombre_peligroso_es_rojo_y_cuanto_cuesta_hoy():
     LO QUE COMPRUEBA ESTA PRUEBA, y en este orden:
 
       1. Los tres casos de arriba, tal cual, con el arreglo puesto.
-      2. Que valga para LOS DIEZ nombres peligrosos y no solo para `getattr`.
+      2. Que valga para TODOS los nombres peligrosos y no solo para `getattr`.
          Los nombres salen de los objetos (`f.__name__`), no de una lista
          tecleada, así que un objeto peligroso nuevo entra solo.
-      3. Que valga para las CINCO formas de pisar un nombre, no solo para un
-         parámetro: un `def` propio, una asignación, un alias de import y el
-         destino de un `for` atan igual que un parámetro.
+      3. Que valga para CATORCE formas de pisar un nombre, no solo para un
+         parámetro — y esas catorce son un banco de ejemplos con el que se
+         MIDE, no la lista con la que la guarda DECIDE: eso se lo pregunta al
+         compilador. Con su control, que es un archivo que solo usa el nombre.
       4. Y lo que cuesta hoy, contado sobre los archivos de verdad.
     """
     permitidos = _atributos_que_config_ofrece()
@@ -4717,8 +5521,10 @@ def test_pisar_un_nombre_peligroso_es_rojo_y_cuanto_cuesta_hoy():
         "tienen que seguir rojos por el motivo (c), o esta prueba estaría "
         "midiendo el vacío")
 
-    # ── 2. Los DIEZ nombres, uno por uno, aislados. Cada caso no hace más que
-    # pisar el nombre: sin el motivo (k) los diez son verdes, porque `resuelve`
+    # ── 2. TODOS los nombres, uno por uno, aislados. Cuántos son lo cuenta el
+    # `print` del final, que es el único sitio donde esa cifra puede estar al
+    # día. Cada caso no hace más que pisar el nombre: sin el motivo (k) todos
+    # son verdes, porque `resuelve`
     # devuelve «no lo sé» y «no lo sé» no era ningún objeto peligroso.
     sueltos = {n: f'def _otra({n}):\n    return {n}\n'
                for n in sorted(_NOMBRES_PELIGROSOS)}
@@ -4740,41 +5546,70 @@ def test_pisar_un_nombre_peligroso_es_rojo_y_cuanto_cuesta_hoy():
         "de arriba no está midiendo el nombre sino la forma: la guarda rojea "
         "cualquier cosa y eso no es vigilar, es apagarse")
 
-    # ── 3. Las cinco formas de pisar un nombre. Un parámetro no es la única.
+    # ── 3. LAS FORMAS DE PISAR UN NOMBRE, Y DE DÓNDE SALE ESTA LISTA.
+    #
+    # ESTA LISTA NO DECIDE NADA. Es un banco de ejemplos, o sea PRUEBA de que
+    # la guarda muerde; no es de donde la guarda saca su respuesta. La guarda
+    # se la pide a `symtable`, que es la fase del compilador de CPython que ata
+    # los nombres (ver `_nombres_que_python_ata`). Ésa es la diferencia que
+    # importa: una lista con la que se DECIDE se separa de la realidad; una
+    # lista con la que se MIDE solo se queda corta, y quedarse corta no deja
+    # pasar nada.
+    #
+    # Hasta el 7-sep-2026 acá había cinco formas y se decía «`atados` las
+    # recoge todas». Eran las cinco que sabía recoger el recorrido por tipo de
+    # nodo. Estas catorce son las cinco de entonces más las NUEVE que aquel
+    # recorrido no veía —las cuatro del `match` y las cinco de PEP 695—, y hoy
+    # las catorce salen rojas POR EL MOTIVO (k), no de rebote.
     formas = {
         "un parámetro": 'def _otra(getattr):\n    return getattr\n',
         "una función propia": 'def getattr(o, n):\n    return None\n',
         "una asignación": 'getattr = None\n',
         "un alias de import": 'import os as vars\n',
         "el destino de un for": 'for getattr in (1, 2):\n    pass\n',
+        "un `with ... as`":
+            'import io\nwith io.StringIO() as getattr:\n    pass\n',
+        "un `except ... as`":
+            'try:\n    pass\nexcept Exception as getattr:\n    pass\n',
+        "una morsa": 'if (getattr := 1):\n    pass\n',
+        "un `case` de match":
+            'def _o(x):\n    match x:\n        case getattr:\n'
+            '            return getattr\n',
+        "un `case [*resto]`":
+            'def _o(x):\n    match x:\n        case [*getattr]:\n'
+            '            return getattr\n',
+        "un `case {**resto}`":
+            'def _o(x):\n    match x:\n        case {**getattr}:\n'
+            '            return getattr\n',
+        "un `case ... as`":
+            'def _o(x):\n    match x:\n        case 1 as getattr:\n'
+            '            return getattr\n',
+        "un parámetro de tipo PEP 695 en un def":
+            'def _otra[getattr](x):\n    return x\n',
+        "un parámetro de tipo PEP 695 en una clase":
+            'class C[getattr]:\n    pass\n',
+        "un parámetro de tipo PEP 695 en un alias":
+            'type A[getattr] = int\n',
     }
+    marca_k = "le pone su propio significado a"
     escapadas = [k for k, src in formas.items()
-                 if not _infracciones(src, permitidos)]
+                 if marca_k not in " ".join(_infracciones(src, permitidos))]
     assert not escapadas, (
-        f"estas formas de pisar un nombre peligroso no se ven: {escapadas}. "
-        "`_Contexto.atados` las recoge todas, así que si alguna sale verde es "
-        "que el motivo (k) dejó de mirar `atados`")
+        f"estas formas de pisar un nombre peligroso no las ve el motivo (k): "
+        f"{escapadas}. La respuesta sale de `symtable`, no de una lista de "
+        "tipos de nodo, así que una forma que se escape significa que "
+        "`_nombres_que_python_ata` dejó de preguntarle al compilador — o que "
+        "el criterio `is_local() or is_declared_global()` se quedó corto")
 
-    # ── 3-bis. Y LA QUE `atados` NO RECOGE, dicha acá para no prometer de más:
-    # el `case` de un `match` ata su nombre en tiempo de ejecución y
-    # `_leer_ataduras` no lo mira —`ast.MatchAs` guarda el nombre en un campo,
-    # no en un nodo `ast.Name`—. No es un agujero: NO verlo significa que la
-    # guarda sigue resolviendo el nombre al builtin, así que el `getattr(mod,
-    # n)` de abajo cae por el motivo (c) igual. La dirección del error es la
-    # segura, y se comprueba corriendo en vez de razonarse.
-    con_match = (
-        'def _otra(x):\n'
-        '    match x:\n'
-        '        case getattr:\n'
-        '            return getattr\n'
-        '\n'
-        '\n' + llamada)
-    assert _infracciones(con_match, permitidos), (
-        "un `case getattr:` dejó el archivo verde. `atados` no ve los nombres "
-        "que ata un `match`, y hasta hoy eso caía del lado seguro —el nombre "
-        "seguía resolviendo al builtin y el motivo (c) mordía—; si ya no "
-        "muerde, la forma pasó al lado que no avisa y hay que recogerla en "
-        "`_leer_ataduras`")
+    # ── 3-bis. Y EL CONTROL DE LA MEDIDA, que es lo que impide que lo de arriba
+    # esté contento con una guarda que rojea todo. Un archivo que solo USA
+    # `getattr` no lo ata, y el compilador lo dice: ninguna de las catorce
+    # formas de arriba puede estar midiendo «aparece la palabra getattr».
+    assert marca_k not in " ".join(_infracciones(llamada, permitidos)), (
+        "el motivo (k) se disparó sobre un archivo que solo LLAMA a `getattr` "
+        "sin atarlo. Entonces las catorce formas de arriba no están midiendo "
+        "que el nombre esté pisado, sino que la palabra aparezca, y el motivo "
+        "(k) estaría rojeando el repo entero")
 
     # ── 4. LO QUE CUESTA, contado sobre los archivos reales y no afirmado.
     pisan: dict[str, list[str]] = {}
