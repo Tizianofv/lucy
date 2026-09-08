@@ -44,9 +44,11 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import importlib
 import inspect
 import json
 import os
+import pathlib
 import re
 import socket
 import sys
@@ -605,11 +607,29 @@ def test_el_parte_nunca_esconde_menos_de_lo_que_un_turno_puede_escribir():
 #   · para que un mensaje salga del proceso hay que hacer E/S. Da igual cómo se
 #     llame quien la haga: pasa por el objeto `bot` del turno, por un cliente de
 #     `telegram` propio, por `httpx`, o por un socket. Los cuatro llevan doble.
-#   · para que una escritura llegue a Postgres hay que pedirle una conexión al
-#     pool. `db.pool` es el único de este proceso — 57 usos en `db/db.py`, 10 en
-#     `acciones/crud.py`, y todo `cerebro/*` va por él. Con un doble ahí se ve
-#     CADA sentencia que se ejecuta, con su texto ya armado, se llame como se
-#     llame quien la mandó.
+#   · para que una escritura llegue a Postgres hay que pasarla por un CURSOR de
+#     psycopg. Da igual de dónde salga la conexión: `db.pool`, un pool armado a
+#     mano, un `psycopg.connect()` suelto. Con un doble en el cursor se ve CADA
+#     sentencia con su texto ya armado, se llame como se llame quien la mandó.
+#
+# CORRECCIÓN DEL 8-sep-2026 — lo que este bloque decía antes era FALSO y sostuvo
+# dos vueltas de trabajo. Decía: «para que una escritura llegue a Postgres hay
+# que pedirle una conexión al pool; `db.pool` es el único de este proceso».
+# No es cierto, y se midió preguntándole al paquete instalado (recorriendo
+# `dir(psycopg)` y `dir(psycopg_pool)`, no una lista escrita acá): hay OCHO
+# formas de conseguir una conexión y la guarda de entonces veía DOS.
+#
+#     psycopg.connect                      NO la veía
+#     psycopg.Connection                   NO
+#     psycopg.BaseConnection               NO
+#     psycopg.AsyncConnection              sí
+#     psycopg_pool.ConnectionPool          NO
+#     psycopg_pool.NullConnectionPool      NO
+#     psycopg_pool.AsyncNullConnectionPool NO
+#     psycopg_pool.AsyncConnectionPool     sí
+#
+# Y se reprodujo: una herramienta que escribía por `psycopg.connect(...)`
+# síncrono corrió nueve veces y la suite entera dio 452 passed.
 #
 # Y las ramas que se recorren no salen de una lista escrita acá: salen del árbol
 # de sintaxis de `_ejecutar_herramienta`. Una herramienta nueva entra sola en el
@@ -868,6 +888,29 @@ class _ConexionEspia:
     async def rollback(self):
         return None
 
+    async def close(self):
+        return None
+
+    # Una conexión suelta se usa de las cuatro maneras, y las cuatro tienen que
+    # caer en el mismo sitio: `await ...connect()`, `with ...connect() as c`
+    # (así lo hace `db/backup.py:380`), `async with`, y a pelo.
+    def __await__(self):
+        async def _yo():
+            return self
+        return _yo().__await__()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
 
 class _Bloque:
     """`pool.connection()` sirve para `async with` Y para `with`.
@@ -916,6 +959,181 @@ class _PoolEspia:
         return None
 
 
+# ═════════════════════════════════════════════════════════════════════════
+# LA PUERTA DEL CURSOR: una sola, y tiene que PROBAR que está puesta
+# ═════════════════════════════════════════════════════════════════════════
+#
+# LA REGLA, EN UNA LÍNEA: todo lo que este proceso le manda a Postgres por
+# psycopg pasa por un cursor, y el doble está en el cursor.
+#
+# POR QUÉ EL CURSOR ES UN FONDO Y NO OTRA LISTA (medido el 8-sep-2026):
+#
+#   · los 10 cursores que expone psycopg derivan TODOS de
+#     `psycopg.cursor.BaseCursor` — comprobado recorriendo los módulos del
+#     paquete y preguntando por el atributo `execute`, no por un prefijo de
+#     nombre;
+#   · `Connection.execute` y `AsyncConnection.execute` NO hablan con la base:
+#     leído en su fuente, construyen un cursor y llaman a su `execute`;
+#   · y debajo del cursor ya no hay Python: `psycopg.pq.__impl__` es `binary` y
+#     `psycopg_binary.pq.PGconn` es un tipo inmutable —
+#     `TypeError: cannot set 'exec_' attribute of immutable type`.
+#
+# Así, las tres formas que antes salían verdes salen rojas SIN NOMBRARLAS: no se
+# las persigue, se mira por dónde salen.
+#
+# ⬛ Y LA PUERTA TIENE QUE PROBAR QUE ESTÁ PUESTA, O PONERSE ROJA.
+#
+# Éste es el punto por el que esta serie llevaba vueltas fallando, y no es un
+# adorno. Medido dentro de la suite ENTERA:
+#
+#     sys.modules["psycopg"] = <module 'psycopg' from
+#                               <test_reporte_una_vez_al_dia._Cualquiera ...>>
+#
+# Otros DIEZ archivos de `tests/` plantan un `psycopg` de mentira al importarse
+# y no lo devuelven nunca; el `conftest` solo restaura módulos de Lucy. La cifra
+# se reproduce así, y por eso se escribe —una cifra que nadie puede repetir es
+# peor que ninguna, porque el que la lee la da por buena:
+#
+#     grep -lE 'sys\.modules\[[^]]*\] *=' tests/*.py | xargs grep -l '"psycopg"'
+#
+# Da 11 archivos, y uno de los once es éste. Se cuenta con UN comando y no con
+# dos: la primera versión de esta cifra usaba dos greps por separado, uno por
+# cada forma de plantar el muñeco, y se le escaparon dos archivos porque un par
+# de ellos escribe `sys.modules[n]` sin guion bajo. Es la misma trampa que
+# persigue este archivo —una lista escrita a mano— metida en el comentario que
+# la denuncia.
+#
+# El peor de los diez es un
+# atrapa-todo que responde a CUALQUIER atributo: `hasattr(psycopg.cursor,
+# "BaseCursor")` devuelve True siendo falso. O sea que una puerta que se
+# conforme con que el nombre exista se pone a sí misma sobre un muñeco y mide
+# CERO en verde, sin distinguir «vi todo y no había nada» de «nadie me enseñó
+# nada».
+#
+# Por eso: el módulo real se busca por `isinstance(__file__, str)` —los dos
+# tipos de mentira fallan ahí, el atrapa-todo y el `types.ModuleType` pelado— y
+# la clase se exige con `isinstance(..., type)`, nunca con `hasattr`. Si no se
+# puede DEMOSTRAR, esto sale sin veredicto y en ROJO.
+
+
+_REALES: dict = {}
+
+
+def _modulo_de_verdad(nombre: str):
+    """`_buscar_modulo_de_verdad` con memoria: el real es siempre el mismo objeto.
+
+    La memoria está porque el rastreo recorre `sys.modules` entero y los
+    atributos de cada módulo, y eso corre en cada tendido de red. NO se afirma
+    acá cuánto ahorra: se midió la suite entera con y sin ella y la diferencia
+    quedó por debajo del ruido de la máquina (tres corridas de cada una, 9.4–12.0 s
+    contra 9.7–11.3 s, rangos solapados). Una cifra que no se sostiene es peor
+    que ninguna, así que no se pone.
+    """
+    hallado = _buscar_modulo_de_verdad(nombre)
+    if hallado is not None:
+        _REALES[nombre] = hallado
+    return hallado
+
+
+def _buscar_modulo_de_verdad(nombre: str):
+    """El módulo `nombre` de verdad, o None si en este proceso solo hay muñecos.
+
+    No se pregunta por `sys.modules[nombre]` y ya: durante la suite completa esa
+    entrada es un doble. Se busca por una marca que ningún doble de este repo
+    tiene —un `__file__` que sea de verdad un `str`— primero en `sys.modules` y
+    después entre las referencias que el código de Lucy ya tiene agarradas, que
+    es donde sobrevive el real cuando alguien pisa la entrada global.
+    """
+    def _sirve(m):
+        return (isinstance(m, types.ModuleType)
+                and getattr(m, "__name__", None) == nombre
+                and isinstance(getattr(m, "__file__", None), str))
+
+    if _sirve(_REALES.get(nombre)):
+        return _REALES[nombre]
+
+    directo = sys.modules.get(nombre)
+    if _sirve(directo):
+        return directo
+    for mod in list(sys.modules.values()):
+        if not isinstance(mod, types.ModuleType):
+            continue
+        for attr in list(vars(mod).values()) if hasattr(mod, "__dict__") else []:
+            if _sirve(attr):
+                return attr
+    # Ni en `sys.modules` ni agarrado por nadie: en este proceso el real nunca
+    # llegó a importarse porque un muñeco ocupaba su sitio desde el principio.
+    # Se trae del disco apartando los muñecos, y se los devuelve a su sitio en
+    # el acto: quien decide qué queda en `sys.modules` es `poner_la_puerta`,
+    # que sabe restaurarlo, y no esta función.
+    #
+    # Se aparta la FAMILIA entera y no solo el módulo pedido, porque no son
+    # independientes: medido, importar el `psycopg_pool` real con un muñeco en
+    # `psycopg` da `ImportError: cannot import name 'errors' from 'psycopg'`.
+    familia = nombre.split("_")[0]
+    apartados = {n: m for n, m in sys.modules.items()
+                 if n == familia or n.startswith(familia)}
+    for n in apartados:
+        del sys.modules[n]
+    try:
+        real = importlib.import_module(nombre)
+        return real if _sirve(real) else None
+    except Exception:                                  # noqa: BLE001
+        return None
+    finally:
+        for n, m in apartados.items():
+            sys.modules[n] = m
+
+
+def _vias_de_conexion(*modulos) -> dict:
+    """Toda forma de CONSEGUIR una conexión, derivada del paquete instalado.
+
+    DE DÓNDE SALE LA LISTA, porque importa: de `dir()` de cada módulo y de
+    `issubclass` contra `psycopg.BaseConnection` y `psycopg.cursor.BaseCursor`.
+    NO de nombres ni de prefijos. Si mañana psycopg publica una clase de
+    conexión o un pool más, entra sola en la puerta y nadie tiene que acordarse.
+
+    Tres formas, y las tres derivadas:
+      · una clase de conexión (subclase de `BaseConnection`) → se dobla `connect`
+      · un pool (clase con `.connection` que no es cursor ni conexión) → `connection`
+      · un atajo de módulo que es un método YA VINCULADO a una clase de conexión
+        → se dobla en el módulo. `psycopg.connect` es exactamente esto: medido,
+        `psycopg.connect == psycopg.Connection.connect`, un classmethod vinculado.
+        Por eso doblar la clase no alcanza y hay que pisar también el atajo.
+
+    Medido el 8-sep-2026: devuelve las OCHO del levantamiento y ninguna de más.
+    """
+    real = _modulo_de_verdad("psycopg")
+    if real is None:
+        return {}
+    base_con = real.BaseConnection
+    base_cur = real.cursor.BaseCursor
+    fuera: dict[str, tuple] = {}
+    for mod in modulos:
+        if mod is None:
+            continue
+        for nom in dir(mod):
+            if nom.startswith("__"):
+                continue
+            try:
+                obj = getattr(mod, nom)
+            except Exception:                          # noqa: BLE001
+                continue
+            etiqueta = f"{mod.__name__}.{nom}"
+            if inspect.isclass(obj):
+                if issubclass(obj, base_cur):          # un cursor no da conexiones
+                    continue
+                if issubclass(obj, base_con):
+                    fuera[etiqueta] = ("clase-de-conexion", mod, nom, obj)
+                elif callable(getattr(obj, "connection", None)):
+                    fuera[etiqueta] = ("pool", mod, nom, obj)
+            elif (inspect.ismethod(obj)
+                  and inspect.isclass(getattr(obj, "__self__", None))
+                  and issubclass(obj.__self__, base_con)):
+                fuera[etiqueta] = ("atajo-de-modulo", mod, nom, obj)
+    return fuera
+
+
 # ── La red de los mensajes: los cuatro sitios por donde se puede salir ────
 
 class _Salida(dict):
@@ -943,6 +1161,10 @@ class _RedDeMensajes:
     def __init__(self):
         self.salidas: list[_Salida] = []
         self._guardado: list[tuple] = []
+        self._guardado_modulos: list[tuple] = []
+        self.vias_dobladas: dict[str, str] = {}
+        self.motivo_sin_puerta: str | None = "la red todavía no se tendió"
+        self.base_cursor = None
 
     def apuntar(self, via, detalle):
         # `_pila_corta` y no `inspect.stack()`: éste último va al disco a buscar
@@ -1002,25 +1224,92 @@ class _RedDeMensajes:
         self._reemplazar(socket.socket, "connect", _conectar)
         self._reemplazar(socket.socket, "connect_ex", _conectar)
 
-        # Y un pool hecho a mano tampoco se escapa: la fábrica devuelve un
-        # espía atado al libro que esté midiendo. Sin esto, una herramienta que
-        # se armara su propio `AsyncConnectionPool(DATABASE_URL)` escribiría en
-        # producción sin pasar por `db.pool` y ninguna medición la vería.
-        self._reemplazar(sys.modules["psycopg_pool"], "AsyncConnectionPool",
-                         lambda *a, **k: _PoolEspia(_LIBRO_ACTIVO or _Libro()))
+        # Y la puerta del cursor, que es la que cubre las OCHO formas de
+        # conseguir una conexión sin nombrar ninguna.
+        self.poner_la_puerta()
 
-        # Ni una conexión suelta, sin pool de por medio.
-        class _ConexionSuelta:
-            @classmethod
-            async def connect(cls, *a, **k):
-                libro = _LIBRO_ACTIVO or _Libro()
-                return _ConexionEspia(libro, 9000 + len(libro.sentencias))
+    # -- la puerta del cursor ---------------------------------------------
+    def poner_la_puerta(self) -> None:
+        """Dobla el cursor y TODAS las vías de conseguir una conexión.
 
-        self._reemplazar(sys.modules["psycopg"], "AsyncConnection",
-                         _ConexionSuelta)
+        Deja constancia de si pudo o no en `self.motivo_sin_puerta`: quien mida
+        algo con la puerta caída tiene que poder ponerse rojo en vez de dar un
+        verde que no significa nada.
+        """
+        self.vias_dobladas: dict[str, str] = {}
+        self.motivo_sin_puerta: str | None = None
+
+        real = _modulo_de_verdad("psycopg")
+        real_pool = _modulo_de_verdad("psycopg_pool")
+        if real is None or real_pool is None:
+            falta = "psycopg" if real is None else "psycopg_pool"
+            self.motivo_sin_puerta = (
+                f"en este proceso no hay un `{falta}` de verdad: "
+                f"sys.modules[{falta!r}] = {sys.modules.get(falta)!r}")
+            return
+
+        base_cur = getattr(real.cursor, "BaseCursor", None)
+        if not isinstance(base_cur, type):
+            self.motivo_sin_puerta = (
+                f"`psycopg.cursor.BaseCursor` no es una clase sino "
+                f"{base_cur!r}: el módulo responde al nombre pero es un muñeco")
+            return
+
+        # Los reales vuelven a `sys.modules` MIENTRAS se mide, para que un
+        # `import psycopg` dentro de una herramienta obtenga el que está
+        # doblado y no el muñeco que dejó otro archivo de pruebas.
+        for nombre, mod in (("psycopg", real), ("psycopg_pool", real_pool)):
+            self._guardado_modulos.append((nombre, sys.modules.get(nombre),
+                                           nombre in sys.modules))
+            sys.modules[nombre] = mod
+
+        # ── EL FONDO: el doble va en el cursor ──
+        # Si alguna vía se escapara de la lista de abajo y consiguiera un objeto
+        # REAL de psycopg, su ejecución cae igual acá. Debajo de esto ya no hay
+        # Python al que bajarse.
+        def _execute(cur, sql, args=None, *a, **k):
+            libro = _LIBRO_ACTIVO or _Libro()
+            libro.apuntar(getattr(cur, "_bloque_espia", 8000), str(sql), args)
+            return cur
+
+        def _executemany(cur, sql, seq=(), *a, **k):
+            for args in list(seq) or [None]:
+                _execute(cur, sql, args)
+            return cur
+
+        self._reemplazar(base_cur, "execute", _execute)
+        self._reemplazar(base_cur, "executemany", _executemany)
+        self.base_cursor = base_cur
+
+        # ── Las vías de conseguir una conexión, DERIVADAS del paquete ──
+        def _conexion_suelta(*a, **k):
+            libro = _LIBRO_ACTIVO or _Libro()
+            return _ConexionEspia(libro, 9000 + len(libro.sentencias))
+
+        for etiqueta, (clase, mod, nom, obj) in _vias_de_conexion(
+                real, real_pool).items():
+            if clase == "clase-de-conexion":
+                self._reemplazar(obj, "connect", classmethod(
+                    lambda cls, *a, **k: _conexion_suelta()))
+            elif clase == "pool":
+                self._reemplazar(mod, nom,
+                                 lambda *a, **k: _PoolEspia(_LIBRO_ACTIVO
+                                                            or _Libro()))
+            else:                                   # atajo-de-modulo
+                self._reemplazar(mod, nom, _conexion_suelta)
+            self.vias_dobladas[etiqueta] = clase
 
     def _reemplazar(self, obj, nombre, nuevo):
-        self._guardado.append((obj, nombre, getattr(obj, nombre, _NO_ESTABA)))
+        # En una CLASE se guarda lo que hay en su `__dict__`, no lo que devuelve
+        # `getattr`: para un `classmethod`, `getattr` ya devuelve el método
+        # VINCULADO, y restaurar eso dejaría a las subclases heredando un
+        # `connect` atado a la clase madre. `vars()` devuelve el descriptor tal
+        # cual, que es lo único que restaura sin cambiar la semántica.
+        if inspect.isclass(obj):
+            viejo = vars(obj).get(nombre, _NO_ESTABA)
+        else:
+            viejo = getattr(obj, nombre, _NO_ESTABA)
+        self._guardado.append((obj, nombre, viejo))
         setattr(obj, nombre, nuevo)
 
     def levantar(self):
@@ -1030,6 +1319,12 @@ class _RedDeMensajes:
             else:
                 setattr(obj, nombre, viejo)
         self._guardado.clear()
+        for nombre, viejo, estaba in reversed(self._guardado_modulos):
+            if estaba:
+                sys.modules[nombre] = viejo
+            else:
+                sys.modules.pop(nombre, None)
+        self._guardado_modulos.clear()
 
 
 def _montar_sobre_la_base(libro: _Libro):
@@ -1111,6 +1406,108 @@ def test_un_turno_manda_un_solo_mensaje_y_sale_por_la_puerta():
         f"el mensaje salió sin pasar por la puerta; pila: {unica['pila'][:8]}")
 
 
+def _resolver(x):
+    """El valor, esperándolo si hace falta. Sirve para las vías sync y async."""
+    if inspect.isawaitable(x):
+        return asyncio.get_event_loop_policy().new_event_loop(
+            ).run_until_complete(_esperar(x))
+    return x
+
+
+async def _esperar(x):
+    return await x
+
+
+def test_la_puerta_del_cursor_esta_puesta_y_se_demuestra_mandandole_una_sentencia():
+    """⬛ LA PUERTA PRUEBA QUE ESTÁ PUESTA, O ESTO SE PONE ROJO.
+
+    Es la mitad que hace válido el diseño, y la que faltaba en las vueltas
+    anteriores. Una guarda que se instala sobre un muñeco mide CERO y lo informa
+    como verde: no distingue «vi todo y no había nada» de «nadie me enseñó
+    nada». Acá eso no se puede: si la puerta no se puede DEMOSTRAR, sale roja.
+
+    Y no se demuestra leyendo el archivo ni preguntando si un nombre existe
+    —medido: dentro de la suite completa `hasattr(psycopg.cursor, "BaseCursor")`
+    devuelve True siendo un atrapa-todo—. Se demuestra CORRIENDO: por cada vía
+    de conseguir una conexión se manda una sentencia centinela y se exige verla
+    aparecer en el libro. La vía que no la enseñe se nombra y pone esto rojo.
+
+    DE DÓNDE SALE LA LISTA DE VÍAS: de `dir()` de `psycopg` y `psycopg_pool` y
+    de `issubclass` contra `BaseConnection` / `BaseCursor` — no de nombres ni de
+    prefijos. Una clase de conexión o un pool nuevos entran solos.
+    """
+    global _LIBRO_ACTIVO
+    red = _RedDeMensajes()
+    libro = _Libro()
+    _LIBRO_ACTIVO = libro
+    red.tender()
+    try:
+        assert red.motivo_sin_puerta is None, (
+            "la puerta del cursor NO se pudo poner, así que cualquier medición "
+            f"de escrituras de este archivo vale cero: {red.motivo_sin_puerta}")
+
+        # 1. El doble está en el cursor, y `BaseCursor` es una CLASE de verdad.
+        #    `isinstance(..., type)` y no `hasattr`: un atrapa-todo pasa hasattr.
+        assert isinstance(red.base_cursor, type), (
+            f"`BaseCursor` no es una clase sino {red.base_cursor!r}")
+        assert "_execute" in getattr(
+            vars(red.base_cursor).get("execute"), "__name__", ""), (
+            "`BaseCursor.execute` no quedó doblado: lo que hay es "
+            f"{vars(red.base_cursor).get('execute')!r}")
+
+        # 2. Están las OCHO vías, y ninguna se quedó fuera.
+        assert len(red.vias_dobladas) >= 8, (
+            f"solo se doblaron {sorted(red.vias_dobladas)}. Si psycopg dejó de "
+            f"exponer sus conexiones así, esta prueba dejó de ver las vías y "
+            f"hay que rehacerla, no bajar el número")
+
+        # 3. LA DEMOSTRACIÓN: una sentencia por vía, y hay que verla.
+        ciegas, ejercitadas = [], []
+        for etiqueta, clase in sorted(red.vias_dobladas.items()):
+            mod_nom, _, attr = etiqueta.partition(".")
+            obj = getattr(sys.modules[mod_nom], attr)
+            centinela = f"UPDATE tareas SET centinela = '{etiqueta}'"
+            antes = len(libro.sentencias)
+            try:
+                if clase == "pool":
+                    with obj("postgresql://centinela").connection() as con:
+                        con.execute(centinela)
+                elif clase == "clase-de-conexion":
+                    _resolver(obj.connect("postgresql://centinela")
+                              ).execute(centinela)
+                else:                                    # atajo-de-modulo
+                    _resolver(obj("postgresql://centinela")).execute(centinela)
+            except Exception as e:                       # noqa: BLE001
+                ciegas.append(f"{etiqueta} ({clase}): reventó al usarla — "
+                              f"{type(e).__name__}: {e}")
+                continue
+            visto = [s for s in libro.sentencias[antes:]
+                     if etiqueta in str(s["sql"])]
+            if not visto:
+                ciegas.append(f"{etiqueta} ({clase}): la sentencia salió y el "
+                              f"libro no la vio — por ahí se escribe a ciegas")
+            else:
+                ejercitadas.append(etiqueta)
+
+        assert not ciegas, (
+            "hay vías de llegar a Postgres que la puerta NO ve. Todo lo que "
+            "este archivo mida sobre escrituras es un verde sin valor mientras "
+            "esto siga así:\n  " + "\n  ".join(ciegas))
+
+        assert len(ejercitadas) == len(red.vias_dobladas), (
+            f"se doblaron {len(red.vias_dobladas)} vías y solo se demostraron "
+            f"{len(ejercitadas)}: {sorted(ejercitadas)}")
+    finally:
+        red.levantar()
+        _LIBRO_ACTIVO = None
+
+    # 4. Y al levantar la red, psycopg queda como estaba. Una puerta que se deja
+    #    puesta le cambia el mundo a las 452 pruebas que vienen detrás.
+    assert "_execute" not in getattr(
+        vars(red.base_cursor).get("execute"), "__name__", ""), (
+        "la puerta se quedó puesta después de levantar la red")
+
+
 def test_ninguna_escritura_llega_a_la_base_sin_su_huella():
     """LA GUARDA DE VERDAD SOBRE LAS ESCRITURAS: un doble en el pool, y a correr.
 
@@ -1144,13 +1541,33 @@ def test_ninguna_escritura_llega_a_la_base_sin_su_huella():
         ninguna tabla de dominio, así que la cobertura sobre las que escriben
         era completa. El piso de abajo existe para que eso no se degrade en
         silencio.
-      · La red cubre `db.pool`, un `AsyncConnectionPool` hecho a mano y un
-        `psycopg.AsyncConnection.connect` suelto — probadas las tres. Lo que
-        queda fuera es escribir sin usar Python (un `psql` por subproceso, por
-        ejemplo).
+      · La red cubre las OCHO formas de conseguir una conexión, derivadas del
+        paquete instalado y no de una lista escrita acá, y que la puerta esté
+        de verdad puesta lo demuestra corriendo
+        `test_la_puerta_del_cursor_esta_puesta_...`, mandando una sentencia
+        centinela por cada una.
       · El «mismo bloque de conexión» es la unidad. Una escritura y su huella
         repartidas en dos bloques distintos saldrían rojas aunque el efecto
         final fuera correcto; hoy `crud` no lo hace nunca.
+
+    LA FRONTERA, corregida el 8-sep-2026. Lo que este bloque decía antes era
+    falso: «lo que queda fuera es escribir sin usar Python». Medido, TRES formas
+    en Python puro salían verdes —`psycopg.connect` síncrono, el pool síncrono y
+    `psycopg.Connection.connect`— y una la usa el propio repo en
+    `db/backup.py:380`. Lo que de verdad queda fuera son cuatro cosas, y las dos
+    primeras NO se confían: tienen prueba propia que las pone rojas solas.
+
+      1. UN SUBPROCESO. Hoy hay exactamente uno que habla con Postgres,
+         `db/backup.py` (`pg_dump --schema-only`), y solo lee.
+         → lo vigila `test_ningun_subproceso_nuevo_le_habla_a_postgres`.
+      2. OTRO DRIVER. Hoy no hay ninguno además de psycopg.
+         → lo vigila `test_no_entro_otro_driver_de_postgres_por_la_puerta_de_atras`.
+      3. LAS TABLAS QUE NO SE VIGILAN. `db/schema.sql` declara 16 tablas y
+         `crud.TABLAS` tiene 8: una escritura a las otras 9 se VE pero no se
+         juzga. Queda declarado en
+         `test_la_frontera_de_las_tablas_vigiladas_esta_declarada`.
+      4. `Copy.write` / `write_row`, que manda datos después de un `COPY` que el
+         cursor sí vio. Hoy el repo no usa `copy` fuera de `tests/`.
     """
     fn = _nodo("_ejecutar_herramienta")
 
@@ -1335,6 +1752,170 @@ def test_lo_que_dice_el_parte_es_exactamente_lo_que_llego_a_la_base():
     assert _botones_de(mensaje) == ["undt:77"]
     for s in escrituras:
         assert s["tabla"] == "tareas", s
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# LA FRONTERA DE LA PUERTA: lo que queda fuera, declarado y con guardia
+# ═════════════════════════════════════════════════════════════════════════
+#
+# Una guarda que dice honestamente hasta dónde llega vale más que una que
+# promete todo y tiene un agujero que nadie ha buscado todavía. Estas tres
+# prueban las salidas 1, 2 y 3 de la frontera; la 4 (`Copy.write`) se declara
+# en el docstring de arriba y hoy no tiene uso en el repo fuera de `tests/`.
+
+_RAIZ_REPO = pathlib.Path(__file__).resolve().parent.parent
+
+# LISTA TECLEADA, y se dice: son los ejecutables de PostgreSQL que sirven para
+# escribir en la base sin pasar por psycopg. No hay forma de derivarla del
+# sistema —depende de qué haya instalado en la máquina, no del repo—, así que
+# vale lo que valga la lista. Lo que SÍ es derivado es dónde se busca: todos los
+# `.py` que hay en el disco, no un puñado de archivos nombrados a mano.
+_HERRAMIENTAS_DE_POSTGRES = ("psql", "pg_dump", "pg_dumpall", "pg_restore",
+                             "pgbench", "createdb", "dropdb", "vacuumdb",
+                             "reindexdb", "clusterdb", "pg_isready")
+
+# El único subproceso que hoy habla con Postgres, y solo LEE. Enumerado a
+# propósito: al cubo indulgente no se puede llegar por olvido.
+_SUBPROCESOS_PERMITIDOS = {("db/backup.py", "pg_dump")}
+
+
+def _py_del_repo() -> list[pathlib.Path]:
+    """Todos los `.py` que hay en el disco bajo el repo. Derivado, no tecleado.
+
+    Sin esto la vigilancia sería una lista de archivos escrita a mano, que es
+    exactamente el defecto que este archivo existe para quitar: un archivo nuevo
+    entraría sin que nadie lo mirara.
+    """
+    return [p for p in _RAIZ_REPO.rglob("*.py")
+            if not any(parte in (".venv", "venv", "site-packages", ".git",
+                                 "node_modules", "__pycache__")
+                       for parte in p.parts)]
+
+
+def test_ningun_subproceso_nuevo_le_habla_a_postgres():
+    """FRONTERA 1: un subproceso no pasa por el cursor, así que se vigila aparte.
+
+    La puerta del cursor ve todo lo que sale por psycopg. Un `subprocess` que
+    llame a `psql` no pasa por ahí y escribiría sin que nadie lo viera. Hoy hay
+    exactamente uno y solo lee; si aparece otro, esto se pone rojo y alguien
+    tiene que decidir, en vez de enterarse después.
+    """
+    hallados = set()
+    for archivo in _py_del_repo():
+        try:
+            arbol = ast.parse(archivo.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError):
+            continue
+        for n in ast.walk(arbol):
+            if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                    and isinstance(n.func.value, ast.Name)
+                    and n.func.value.id == "subprocess"):
+                continue
+            for dentro in ast.walk(n):
+                if not (isinstance(dentro, ast.Constant)
+                        and isinstance(dentro.value, str)):
+                    continue
+                # El nombre del ejecutable, no una frase que lo mencione: se
+                # mira el primer trozo del literal, que es como se pasa en una
+                # lista de argumentos.
+                if dentro.value.split("/")[-1] in _HERRAMIENTAS_DE_POSTGRES:
+                    rel = archivo.relative_to(_RAIZ_REPO).as_posix()
+                    hallados.add((rel, dentro.value.split("/")[-1]))
+
+    nuevos = hallados - _SUBPROCESOS_PERMITIDOS
+    assert not nuevos, (
+        "hay subprocesos que le hablan a Postgres y NO están declarados. Un "
+        "subproceso no pasa por el cursor, así que lo que escriba no lo ve "
+        "ninguna guarda de este archivo:\n  "
+        + "\n  ".join(f"{a}: {h}" for a, h in sorted(nuevos))
+        + "\n  Si es legítimo y solo lee, va a _SUBPROCESOS_PERMITIDOS con su "
+          "motivo. Si escribe, hay que decidir qué se hace, no aflojar esto.")
+
+    muertos = _SUBPROCESOS_PERMITIDOS - hallados
+    assert not muertos, (
+        f"declarados permitidos pero ya no existen: {sorted(muertos)}. Un "
+        f"perdón muerto es cómo se cuela el siguiente: se BORRA la línea.")
+
+
+def test_no_entro_otro_driver_de_postgres_por_la_puerta_de_atras():
+    """FRONTERA 2: la puerta es de psycopg. Otro driver no pasaría por ella.
+
+    Se lee de `requirements.txt`, no de la memoria de nadie. Hoy el archivo
+    declara `psycopg[binary]` y `psycopg-pool` y ningún otro driver; el día que
+    entre uno, esto se pone rojo — porque la puerta del cursor no lo vería y
+    todo lo que este archivo mide dejaría de valer sin avisar.
+    """
+    # LISTA TECLEADA, y se dice: son los otros drivers de Postgres para Python
+    # que se usan hoy. No se puede derivar del repo, porque justamente lo que se
+    # busca es algo que todavía no está. Vale lo que valga la lista.
+    OTROS_DRIVERS = ("asyncpg", "sqlalchemy", "pg8000", "aiopg", "psycopg2",
+                     "psycopg2-binary", "pygresql", "py-postgresql", "pgdb",
+                     "postgres", "databases", "peewee", "tortoise-orm")
+
+    req = (_RAIZ_REPO / "requirements.txt").read_text(encoding="utf-8")
+    declarados = set()
+    for linea in req.splitlines():
+        linea = linea.strip()
+        if not linea or linea.startswith("#"):
+            continue
+        # El nombre del paquete, sin extras ni versión.
+        nombre = re.split(r"[\[<>=!;\s]", linea, 1)[0].strip().lower()
+        if nombre:
+            declarados.add(nombre)
+
+    intrusos = declarados & set(OTROS_DRIVERS)
+    assert not intrusos, (
+        f"`requirements.txt` declara {sorted(intrusos)}, que habla con Postgres "
+        f"sin pasar por psycopg. La puerta del cursor NO lo ve, así que todo lo "
+        f"que este archivo mide sobre escrituras dejó de valer: hay que "
+        f"extender la puerta o declarar la frontera de nuevo.")
+
+    assert any(d.startswith("psycopg") for d in declarados), (
+        f"`requirements.txt` ya no declara psycopg ({sorted(declarados)}): si "
+        f"el driver cambió, esta puerta entera está midiendo otra cosa")
+
+
+def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
+    """FRONTERA 3: la puerta VE todas las tablas; la guarda solo JUZGA ocho.
+
+    Medido el 8-sep-2026: una herramienta que hace `UPDATE categorias_aprendidas`
+    o `DELETE FROM cuentas_propias` sale VERDE. El espía ve la sentencia y la
+    prueba no la juzga, porque `_Libro.escrituras_de_dominio` filtra por
+    `crud.TABLAS`. Puede estar bien —esas tablas no son acciones que Tiziano
+    deshaga con un botón— pero hasta hoy no estaba dicho en ninguna parte, y una
+    frontera callada es la que mañana alguien cruza creyendo que estaba cubierta.
+
+    Los dos números salen de lo real: del esquema en disco y de `crud.TABLAS`.
+    Si el reparto se mueve, esto se pone rojo para que alguien lo mire.
+    """
+    declaradas = set(db.columnas_declaradas())
+    vigiladas = set(crud.TABLAS)
+
+    assert vigiladas <= declaradas, (
+        f"`crud.TABLAS` nombra tablas que el esquema no declara: "
+        f"{sorted(vigiladas - declaradas)}")
+
+    # 16 y no 17: `grep -c "CREATE TABLE" db/schema.sql` da 17 porque una de las
+    # apariciones está DENTRO de un comentario (línea 353). El número sale de
+    # `columnas_declaradas()`, que parsea, no de contar líneas que casan.
+    sin_juzgar = declaradas - vigiladas
+    assert len(declaradas) == 16 and len(vigiladas) == 8, (
+        f"el reparto de tablas cambió: el esquema declara {len(declaradas)} y "
+        f"`crud.TABLAS` vigila {len(vigiladas)} (el 8-sep-2026 eran 16 y 8). "
+        f"Las que quedan sin juzgar serían {sorted(sin_juzgar)}. No se afloja "
+        f"este número: se decide si las nuevas entran en la vigilancia y se "
+        f"actualiza la frontera.")
+
+    # Las ocho que la puerta VE y la guarda NO JUZGA, enumeradas. `log_acciones`
+    # está acá porque no es una tabla de dominio: es donde viven las huellas, y
+    # se la mira aparte (`_Libro.huellas`). `backups` es donde escribe
+    # `db/backup.py:360`, que es legítimo y por eso sigue verde.
+    assert sin_juzgar == {
+        "backups", "bandeja", "categorias_aprendidas", "consumos_estado",
+        "correo_estado", "correo_reportado", "cuentas_propias", "log_acciones",
+    }, (f"cambió qué tablas quedan fuera del juicio de esta guarda: "
+        f"{sorted(sin_juzgar)}. Una escritura a cualquiera de ellas se VE pero "
+        f"no se exige que deje huella ni que salga en el parte.")
 
 
 # ── Las dos mitades estáticas que el runtime no puede cubrir ─────────────
