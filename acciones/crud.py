@@ -827,3 +827,30 @@ async def deshacer(log_id: int) -> str:
             motivo=f"Tiziano deshizo la acción #{log_id} ({huella['accion']})",
         )
     return que
+
+
+async def deshacer_varias(log_ids) -> tuple[int, list[str]]:
+    """Revierte VARIAS acciones de un mismo mensaje. Devuelve (cuántas, fallos).
+
+    Existe porque un mensaje puede escribir muchas cosas —"ya hice todo" cierra
+    once tareas— y hasta hoy el botón de vuelta apuntaba solo a la última: el
+    `antes` de las otras diez seguía en `log_acciones` y no había por dónde
+    pedirlo.
+
+    DE ATRÁS PARA ADELANTE, y eso no es un detalle de estilo. Dos ediciones
+    sobre la misma fila guardan `antes` encadenados: la primera guarda A (y deja
+    B), la segunda guarda B (y deja C). Deshaciendo en orden queda B; deshaciendo
+    al revés queda A, que es el estado del que salimos.
+
+    No se corta en el primer fallo: si una huella ya no se puede revertir, las
+    demás sí, y quedarse a medias en silencio sería lo peor de las dos cosas. Lo
+    que no se pudo se devuelve como texto para que quien llame lo cuente.
+    """
+    revertidas, fallos = 0, []
+    for log_id in sorted({int(i) for i in log_ids}, reverse=True):
+        try:
+            await deshacer(log_id)
+            revertidas += 1
+        except Exception as e:  # noqa: BLE001 — el motivo se le cuenta a Tiziano
+            fallos.append(f"#{log_id}: {e}")
+    return revertidas, fallos

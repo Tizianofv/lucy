@@ -461,8 +461,102 @@ CANALES_DE_TIZIANO = ("texto", "audio", "foto")
 SOLO_A_MANO = ("archivar", "preferencia")
 
 
+# ── El parte de lo escrito ───────────────────────────────────────────────
+#
+# EL DEFECTO QUE ESTO ARREGLA (medido el 8-sep-2026 contra fa0ca9f):
+#
+#   1 consultar + 10 editar -> cerradas 10 | 1 botón de deshacer  | "Listo."
+#   1 consultar + 11 editar -> cerradas 11 | 0 botones            | "Me enredé
+#                              tratando de resolver esto y prefiero no adivinar."
+#
+# Las dos líneas son la MISMA falla con dos caras: el turno terminaba contando
+# lo que quiso hacer en vez de lo que ya había escrito. Con 10 ofrecía volver
+# atrás UNA de diez; con 11 decía que no había podido, con las once escrituras
+# hechas.
+#
+# Subir MAX_PASOS no lo arregla: mueve la pared. Lo que no puede pasar es que al
+# chocar con ella se tire el parte de un trabajo ya hecho — el mismo argumento
+# que dejó escrito MAX_REUBICADAS en `despertador.py` ("eso mueve el precipicio,
+# no lo quita").
+#
+# Así que la regla es una sola y no tiene excepciones:
+#
+#   ⬛ TODO lo que se ESCRIBIÓ sale nombrado en el mensaje que sale, y el botón
+#      de vuelta cubre TODO lo escrito. Salga el turno por donde salga.
+#
+# Se sostiene con dos piezas y ninguna es una lista escrita a mano:
+#   · `_anotar` es el ÚNICO sitio donde se apunta una escritura, y exige la
+#     frase en el mismo momento en que se hace (después habría que volver a la
+#     base — justo cuando el turno se cortó y no hay pasos).
+#   · `_fin_del_turno` es la ÚNICA salida de `atender`. Una salida nueva que se
+#     olvide del parte no puede existir sin saltarse la puerta, y hay una prueba
+#     que recorre el árbol de sintaxis y se pone roja si alguien lo hace.
+
+# Cuántas líneas del parte entran en el mensaje. Sale de MAX_PASOS y no de un
+# número tecleado: un turno no puede escribir más veces que pasos tiene, así que
+# atado ahí el parte NUNCA esconde nada — y si mañana alguien mueve el techo, se
+# mueve solo. El recorte de abajo sigue en pie por si alguna vez una sola
+# herramienta escribe varias filas: ahí se dice cuántas faltan, que es
+# información y no deuda. Es un mensaje de Telegram, no un correo.
+MAX_EN_EL_PARTE = MAX_PASOS
+
+
+def _anotar(acciones: list[dict], log_id, que: str) -> None:
+    """Apunta UNA escritura: su asa para deshacer y qué fue, en palabras.
+
+    Es el único camino por el que algo entra en el parte. La frase se arma acá,
+    con lo que la herramienta tiene delante en ese instante, y no después: el
+    caso en que el parte hace falta de verdad es justo aquel en el que el turno
+    se quedó sin pasos y ya no puede volver a mirar la base.
+    """
+    if log_id:
+        acciones.append({"log_id": int(log_id), "que": que})
+
+
+def _como_se_llama(fila: dict | None) -> str:
+    """El nombre humano de una fila, mire la tabla que mire.
+
+    Se prueban las columnas por orden en vez de por tabla: `editar` es genérico
+    para ocho tablas y una tabla nueva no tendría por qué venir a tocar esto.
+    """
+    for columna in ("titulo", "nombre", "contraparte", "texto"):
+        valor = (fila or {}).get(columna)
+        if valor:
+            return str(valor)[:40]
+    return ""
+
+
+def _resumen_cambios(cambios: dict) -> str:
+    """Los cambios de una edición, cortos, para que quepan en una línea."""
+    partes = [f"{k}={str(v)[:30]}" for k, v in cambios.items()]
+    resumen = ", ".join(partes)
+    return resumen[:80] + ("…" if len(resumen) > 80 else "")
+
+
+def _parte_de_lo_hecho(acciones: list[dict]) -> str:
+    """Lo YA escrito, en palabras, para pegarlo al pie del mensaje.
+
+    Va SIEMPRE que haya algo escrito — no solo cuando el turno se rompió. Que
+    el modelo lo cuente en su respuesta no cuenta como parte: el modelo es
+    justo la pieza que puede equivocarse contando, y este renglón lo escribe
+    la casa con lo que de verdad pasó por la base.
+
+    Con UNA escritura es un renglón; con varias, una lista. Es un mensaje de
+    Telegram: la diferencia entre confirmar y sepultar son tres líneas.
+    """
+    if not acciones:
+        return ""
+    if len(acciones) == 1:
+        return f"<i>Ya está hecho: {acciones[0]['que']}</i>"
+    lineas = [f"· {a['que']}" for a in acciones[:MAX_EN_EL_PARTE]]
+    de_mas = len(acciones) - MAX_EN_EL_PARTE
+    if de_mas > 0:
+        lineas.append(f"· …y {de_mas} más")
+    return (f"<b>Ya quedó hecho ({len(acciones)}):</b>\n" + "\n".join(lineas))
+
+
 async def _ejecutar_herramienta(
-    nombre: str, args: dict, bandeja_id: int, acciones: list[int],
+    nombre: str, args: dict, bandeja_id: int, acciones: list[dict],
     tipo_entrada: str = "texto",
 ) -> str:
     """Corre una herramienta y devuelve el resultado COMO TEXTO para el modelo.
@@ -495,7 +589,10 @@ async def _ejecutar_herramienta(
             tabla, rid, log_id = await crud.crear_desde_interpretacion(
                 bandeja_id, dict(args),
                 motivo=f"Creado por Lucy desde la bandeja #{bandeja_id}")
-            acciones.append(log_id)
+            titulo = str(args.get("titulo") or "")[:40]
+            _anotar(acciones, log_id,
+                    (f"anoté «{titulo}» ({tabla} #{rid})" if titulo
+                     else f"anoté {tabla} #{rid}"))
             resultado = f"OK: {tabla}#{rid} creado (acción #{log_id}, reversible)."
             if tabla == "eventos":
                 resultado += await _avisar_choques(rid)
@@ -509,7 +606,11 @@ async def _ejecutar_herramienta(
                 motivo=f"Orden de Tiziano (bandeja #{bandeja_id})")
             if despues is None:
                 return "ERROR: ese registro no existe o está archivado."
-            acciones.append(log_id)
+            nombre_fila = _como_se_llama(despues)
+            quien = (f"«{nombre_fila}»" if nombre_fila
+                     else f"{tabla} #{int(args.get('id') or 0)}")
+            _anotar(acciones, log_id,
+                    f"{quien} → {_resumen_cambios(cambios)}")
             resultado = f"OK: editado (acción #{log_id}, reversible)."
             # Mover una cita puede crear un choque que antes no existía: la
             # casa le acerca el dato acá, en el momento en que aparece.
@@ -526,7 +627,9 @@ async def _ejecutar_herramienta(
                 motivo=f"Orden de Tiziano (bandeja #{bandeja_id})")
             if log_id is None:
                 return "ERROR: ese registro no existe o ya estaba archivado."
-            acciones.append(log_id)
+            _anotar(acciones, log_id,
+                    f"archivé {str(args.get('tabla') or '')} "
+                    f"#{int(args.get('id') or 0)}")
             return f"OK: archivado (acción #{log_id}, reversible)."
 
         if nombre == "deshacer":
@@ -540,8 +643,8 @@ async def _ejecutar_herramienta(
                 lon=args.get("lon") or None,
                 radio_m=args.get("radio_m") or None,
             )
-            if log_id:
-                acciones.append(log_id)
+            _anotar(acciones, log_id,
+                    f"guardé el lugar «{str(args.get('nombre') or '')[:40]}»")
             return resultado
 
         if nombre == "perfil":
@@ -554,8 +657,9 @@ async def _ejecutar_herramienta(
                 descripcion=str(args.get("descripcion") or "") or None,
                 bandeja_id=bandeja_id,
             )
-            if log_id:
-                acciones.append(log_id)
+            _anotar(acciones, log_id,
+                    f"anoté en el perfil de "
+                    f"«{str(args.get('nombre') or '')[:40]}»")
             return resultado
 
         if nombre == "preferencia":
@@ -565,14 +669,15 @@ async def _ejecutar_herramienta(
                     bandeja_id, int(args.get("id") or 0))
                 if log_id is None:
                     return "ERROR: no encuentro esa preferencia (¿ya la olvidaste?)."
-                acciones.append(log_id)
+                _anotar(acciones, log_id,
+                        f"olvidé la preferencia #{int(args.get('id') or 0)}")
                 return f"OK: preferencia olvidada (acción #{log_id}, reversible)."
             texto = str(args.get("texto") or "").strip()
             if not texto:
                 return "ERROR: 'texto' vacío; una preferencia tiene que decir la regla."
             _pid, log_id = await crud.guardar_preferencia(
                 bandeja_id, texto, str(args.get("contexto") or "") or None)
-            acciones.append(log_id)
+            _anotar(acciones, log_id, f"guardé la preferencia «{texto[:40]}»")
             return f"OK: preferencia guardada (acción #{log_id}, reversible)."
 
         if nombre == "buscar_lugar":
@@ -742,7 +847,9 @@ async def atender(fila: dict, texto: str, bot) -> None:
     # El diálogo que se guardará si esta conversación queda esperando una
     # respuesta: arrastra lo previo para que la ventana no pierda memoria.
     dialogo = dialogo_previo + [actual]
-    acciones: list[int] = []  # log_ids de lo hecho en este mensaje
+    # Lo ESCRITO en este mensaje: {"log_id": n, "que": "en palabras"}. Entra
+    # solo por `_anotar`, y sale sí o sí por `_fin_del_turno`.
+    acciones: list[dict] = []
 
     responder_kw = dict(chat_id=chat_id,
                         reply_to_message_id=fila.get("telegram_msg_id"))
@@ -754,22 +861,47 @@ async def atender(fila: dict, texto: str, bot) -> None:
 
     pasos = 0       # herramientas ejecutadas de verdad
     tropiezos = 0   # turnos vacíos o mal formados: no cuentan como paso
-    async def _fin_del_turno(salida: str) -> None:
-        """Manda el texto y cierra la fila, igual que `responder`.
+    async def _fin_del_turno(
+        salida: str,
+        clasificacion: str | None = "orden",
+        estado: str = "procesado",
+        motivo: str = "panel",
+    ) -> None:
+        """LA ÚNICA SALIDA DEL TURNO. Manda, reporta lo escrito y cierra la fila.
 
         Existe porque el bloque del panel hacía `return texto` desde dentro
         de atender() —creyendo que devolvía el resultado de una
         herramienta— y eso dejaba la fila en 'procesando' sin enviar nada.
         Cerrar un turno son cuatro pasos, y hacerlos a mano en cada rama es
         cómo se olvida uno.
+
+        Y desde el 8-sep-2026 cierra el otro agujero de la misma familia: cada
+        rama decidía por su cuenta qué contar de lo ya escrito, y dos de ellas
+        —quedarse sin pasos, y abrir la ventana con `preguntar`— no contaban
+        nada. Once tareas cerradas salían con un "me enredé" y sin botón.
+        Acá el parte y el botón se ponen SIEMPRE, sin preguntar por qué se
+        acabó el turno: si se escribió, se dice.
+
+        El botón se apoya en la lista que se guarda dos líneas más abajo. La
+        ventana entre el envío y ese guardado es de milisegundos y no se cierra
+        a propósito: mandar ANTES de marcar es lo que hace que un envío fallido
+        devuelva la fila a la cola en vez de dejarla esperando una respuesta a
+        una pregunta que nunca salió.
         """
-        await _enviar(bot, salida, **responder_kw)
-        await db.guardar_respuesta(bandeja_id, salida)
+        parte = _parte_de_lo_hecho(acciones)
+        texto_final = f"{salida}\n\n{parte}".strip() if parte else salida
+        markup = (botones.teclado_deshacer_todo(bandeja_id, len(acciones))
+                  if acciones else None)
+        await _enviar(bot, texto_final, reply_markup=markup, **responder_kw)
+        await db.guardar_respuesta(bandeja_id, texto_final)
         await db.guardar_interpretacion(
-            bandeja_id, "orden", {"dialogo": dialogo[-30:]},
-            estado="procesado")
+            bandeja_id, clasificacion,
+            {"dialogo": dialogo[-30:],
+             "hecho": [a["log_id"] for a in acciones]},
+            estado=estado)
         await _cerrar_pendiente()
-        log.info("#%s resuelto en %s paso(s) (panel)", bandeja_id, pasos)
+        log.info("#%s resuelto en %s paso(s), %s acción(es) (%s)",
+                 bandeja_id, pasos, len(acciones), motivo)
 
     log.info("#%s atender: contexto listo, arranco los pasos", bandeja_id)
     while pasos < MAX_PASOS and tropiezos < MAX_TROPIEZOS:
@@ -858,32 +990,26 @@ async def atender(fila: dict, texto: str, bot) -> None:
             return
 
         if nombre == "responder":
-            salida = str(args.get("texto") or "")
-            markup = botones.teclado_deshacer(acciones[-1]) if acciones else None
-            await _enviar(bot, salida, reply_markup=markup, **responder_kw)
-            await db.guardar_respuesta(bandeja_id, salida)
-            await db.guardar_interpretacion(
-                bandeja_id, str(args.get("clasificacion") or "") or None,
-                {"dialogo": dialogo[-30:]}, estado="procesado")
-            await _cerrar_pendiente()
-            log.info("#%s resuelto en %s paso(s), %s acción(es)",
-                     bandeja_id, pasos, len(acciones))
+            await _fin_del_turno(
+                str(args.get("texto") or ""),
+                clasificacion=str(args.get("clasificacion") or "") or None,
+                motivo="responder")
             return
 
         # ── preguntar: la ventana se abre y el turno termina ─────────────
         if nombre == "preguntar":
-            salida = str(args.get("texto") or "")
-            await _enviar(bot, salida, **responder_kw)
-            await db.guardar_respuesta(bandeja_id, salida)
             # Mandar primero, marcar después: si el envío falla, la fila
             # vuelve a la cola en vez de quedarse esperando una respuesta a
-            # una pregunta que nunca salió.
-            await db.guardar_interpretacion(
-                bandeja_id, None, {"dialogo": dialogo[-30:]},
-                estado="esperando_respuesta")
-            await _cerrar_pendiente()  # la ventana vieja la reemplaza esta
-            log.info("#%s preguntó y espera respuesta (paso %s)",
-                     bandeja_id, pasos)
+            # una pregunta que nunca salió. Ese orden vive en `_fin_del_turno`.
+            #
+            # Y la pregunta va CON el parte de lo ya escrito: antes salía
+            # pelada, así que lo que Lucy hubiera escrito antes de dudar se
+            # quedaba sin contar y sin botón hasta el final de la conversación
+            # —o para siempre, si no había final.
+            await _fin_del_turno(
+                str(args.get("texto") or ""), clasificacion=None,
+                estado="esperando_respuesta", motivo="preguntó y espera")
+            # (la ventana vieja la cierra `_fin_del_turno`: esta la reemplaza)
             return
 
         # ── cualquier otra herramienta: ejecutar y seguir ────────────────
@@ -897,11 +1023,16 @@ async def atender(fila: dict, texto: str, bot) -> None:
         dialogo.append(aviso)
 
     # ── Se quedó sin pasos: eso también es "no sé" — y no sabe = pregunta ─
-    salida = ("Me enredé tratando de resolver esto y prefiero no adivinar. "
-              "¿Me lo decís de otra forma, o en partes?")
-    await _enviar(bot, salida, **responder_kw)
-    await db.guardar_respuesta(bandeja_id, salida)
-    await db.guardar_interpretacion(
-        bandeja_id, None, {"dialogo": dialogo[-30:]}, estado="procesado")
-    await _cerrar_pendiente()
-    log.warning("#%s agotó los %s pasos sin terminar", bandeja_id, MAX_PASOS)
+    #
+    # Pero "no sé cómo seguir" NO es "no hice nada". Si ya escribió, decir que
+    # se enredó es mentir en la dirección cómoda: las escrituras quedan y él
+    # cree que no pasó nada. Con 11 tareas cerradas eso salía tal cual.
+    if acciones:
+        salida = ("Me quedé sin pasos antes de poder contártelo bien, pero "
+                  "esto ya está escrito. Si no era eso, tocá el botón.")
+    else:
+        salida = ("Me enredé tratando de resolver esto y prefiero no adivinar. "
+                  "¿Me lo decís de otra forma, o en partes?")
+    log.warning("#%s agotó los %s pasos sin terminar (%s acción(es) escritas)",
+                bandeja_id, MAX_PASOS, len(acciones))
+    await _fin_del_turno(salida, clasificacion=None, motivo="sin pasos")
