@@ -69,6 +69,26 @@ no en su hermano— y las dos veces el arreglo fue el mismo: que lo que no se
 sabe clasificar caiga del lado seguro SOLO, sin que nadie lo agregue a una
 lista.
 
+Y LA TERCERA VEZ, LA NOCHE DEL 9-sep-2026, LOS DOS TRAMOS ERAN LAS DOS RAMAS
+DE `pantallas()`: la costura que existe para poder probar, y el camino real.
+
+`pantallas(fuente)` acepta el HTML ya leído para probar con un menú fabricado.
+Está bien que exista. Lo que estaba mal es que las pruebas de las garantías de
+arriba entraban TODAS por ahí, y producción entra siempre por la otra rama
+—`cerebro/agente.py` llama `bloque_para_el_prompt()` sin argumento—. Medido
+sobre `2d29bab`, rompiendo cada garantía SOLO en la rama que lee el archivo:
+
+    · el parseo del <nav> metido dentro del `try`   → 503 passed, todo verde
+    · un atributo saltándose la puerta `_leer`      → 503 passed, todo verde
+    · los <a> sin data-tambien borrados en silencio → 503 passed, todo verde
+
+Ninguna era un defecto vivo; las tres eran un cambio futuro razonable a un paso
+de serlo. El arreglo no es duplicar pruebas —una por rama— sino que la costura
+deje de ser una forma de medir: `tests/test_panel_descrito.py` corre todo menú
+fabricado por LAS DOS ramas (`_por_los_dos_caminos`) y se pone rojo si alguien
+vuelve a llamar a `pantallas(html)` por fuera. Si se toca este archivo, la
+garantía que se agregue se prueba por ahí, no llamando con `fuente`.
+
 Lo que NO se hace acá: adivinar. Un fallback silencioso devolvería una lista
 vacía, el prompt quedaría sin pantallas y todo seguiría en verde —que es justo
 la forma de fallar que este archivo viene a cerrar—. Quién se banca el

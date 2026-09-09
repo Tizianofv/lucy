@@ -66,6 +66,37 @@ tramo y no a su hermano— y las dos veces el arreglo fue quitarle la lista: la
 lectura del archivo se blinda por el ALCANCE del `try` y no por los tipos, y el
 `except` se reconoce por la CLASE y no por su nombre escrito.
 
+Y EL QUINTO, EL MISMO DIAGNÓSTICO CON LOS DOS TRAMOS DENTRO DE UNA FUNCIÓN:
+LAS PRUEBAS MEDÍAN LA COSTURA Y DABAN POR CUBIERTO EL CAMINO REAL.
+
+`pantallas(fuente=None)` tiene dos ramas: con `fuente` usa el HTML que le pasan
+—la costura que existe para poder probar sin tocar el disco— y sin `fuente` lee
+`web/plantillas/base.html`. **Producción entra SIEMPRE por la segunda**
+(`cerebro/agente.py` llama `bloque_para_el_prompt()` sin argumento), y casi
+todas las pruebas de acá entraban por la primera. Medido el 9-sep-2026 sobre
+`2d29bab`, mutando el código real y corriendo la suite entera:
+
+    · el parseo del `<nav>` metido dentro del `try` SOLO en la rama que lee
+      el archivo                                    → 503 passed / 18 passed
+    · `data-nota` leído con `_atributo` en vez de por la puerta `_leer`
+                                                    → 503 passed / 18 passed
+    · la rama que lee el archivo borrando en silencio los `<a>` sin
+      `data-tambien`                                → 503 passed / 18 passed
+
+Las tres son la garantía que este archivo se atribuye, rota en el único camino
+que corre en producción, y las tres pasaban en verde. La primera es literal el
+defecto que motivó el cuarto fallo, entrando por la rama que nadie probaba.
+
+EL ARREGLO NO ES DUPLICAR CADA PRUEBA —una por rama—, porque mañana la cuarta
+se escribe por un solo lado. Es que **la costura deje de ser una forma de medir
+y pase a ser una sola puerta**: `_por_los_dos_caminos()` corre el menú fabricado
+por las DOS ramas y exige que den lo mismo, y `test_ninguna_prueba_mide_el_menu
+_solo_por_la_costura` —que saca su lista del AST de los archivos de prueba que
+hay en disco, no de un inventario— se pone roja si alguien vuelve a llamar a
+`pantallas(html)` por fuera. Una prueba escrita por la costura ya no puede dar
+por cubierto el camino real, y la que se escriba mañana lo cubre sin que nadie
+se acuerde.
+
 Herméticos: se stubea psycopg antes de importar, igual que en
 test_esquema_del_modelo.py. No tocan ninguna base y no llaman a ningún modelo.
 
@@ -74,10 +105,14 @@ Correr:  python3 -m pytest tests/test_panel_descrito.py -q
 from __future__ import annotations
 
 import ast
+import inspect
 import os
 import re
+import shutil
 import sys
+import tempfile
 import types
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -130,6 +165,85 @@ def _bloque_del_panel(texto: str) -> str:
 def _entrecomillado(texto: str) -> set[str]:
     """Todo lo que va entre comillas dobles en un texto."""
     return set(re.findall(r'"([^"]*)"', texto))
+
+
+# ── LA PUERTA ÚNICA para medir un menú fabricado ─────────────────────────
+
+def _por_los_dos_caminos(html: str, funcion=None):
+    """El menú fabricado, por la costura Y por el camino que corre en producción.
+
+    POR QUÉ EXISTE, medido el 9-sep-2026 sobre `2d29bab`:
+
+    `pantallas(fuente)` tiene dos ramas —el HTML que le pasan, o el archivo que
+    lee— y PRODUCCIÓN ENTRA SIEMPRE POR LA SEGUNDA: `cerebro/agente.py` llama
+    `bloque_para_el_prompt()` sin argumento. Las pruebas de menús fabricados
+    entraban por la primera, así que las garantías más caras de `web/menu.py`
+    estaban protegidas en la rama que nadie ejecuta. Tres mutaciones del código
+    real —el parseo dentro del `try` solo en la rama que lee el archivo, un
+    atributo saltándose la puerta `_leer`, y esa misma rama borrando en silencio
+    los enlaces sin `data-tambien`— daban las tres 503 passed / 18 passed.
+
+    Acá el mismo HTML se corre por las dos ramas y se exige que den EXACTAMENTE
+    lo mismo: el mismo valor, o el mismo tipo de excepción con el mismo mensaje.
+    No hay que escribir la prueba dos veces, y una rama que se desvíe sale roja
+    aunque la prueba se haya escrito pensando solo en la otra.
+
+    La ruta del menú se normaliza antes de comparar los mensajes —la costura
+    nombra `web/plantillas/base.html` y el camino real nombra el archivo
+    temporal— porque lo que se compara es el comportamiento, no dónde vivía el
+    archivo.
+
+    Devuelve lo que devolvieron, y si reventaron re-lanza la excepción, así que
+    se usa igual que la función de siempre, con `pytest.raises` incluido.
+
+    LO QUE QUEDA FUERA, dicho para que nadie lo dé por cubierto: el camino real
+    se corre contra un archivo temporal, no contra `web/plantillas/base.html`.
+    Es el mismo código —leer del disco y parsear— y por eso vale; lo que NO
+    prueba es el contenido del menú de verdad, y de eso hablan las pruebas que
+    llaman sin fabricar nada (`test_el_prompt_nombra_todas_las_pantallas_del
+    _menu` y sus hermanas). Y si las dos ramas se rompen IGUAL, acá coinciden y
+    esto se calla: lo que atrapa esa mitad es la propia prueba que llama.
+    """
+    funcion = menu.pantallas if funcion is None else funcion
+
+    def _correr(llamar):
+        try:
+            return ("devolvió", llamar())
+        except Exception as e:      # se compara y se re-lanza más abajo
+            return ("reventó", e)
+
+    por_la_costura = _correr(lambda: funcion(html))
+
+    carpeta = tempfile.mkdtemp(prefix="menu-camino-real-")
+    falso = Path(carpeta) / "base.html"
+    falso.write_text(html, encoding="utf-8")
+    original = menu.BASE
+    menu.BASE = falso
+    try:
+        por_el_camino_real = _correr(lambda: funcion())
+    finally:
+        menu.BASE = original
+        shutil.rmtree(carpeta, ignore_errors=True)
+
+    def _comparable(salida, base):
+        que, valor = salida
+        texto = (repr(valor) if que == "devolvió"
+                 else f"{type(valor).__name__}: {valor}")
+        return que, texto.replace(str(base), "<el archivo del menú>")
+
+    costura = _comparable(por_la_costura, original)
+    real = _comparable(por_el_camino_real, falso)
+    assert costura == real, (
+        "el mismo menú da cosas distintas según por dónde entre, y producción "
+        f"entra SIEMPRE por el camino real:\n"
+        f"  por la costura   ({funcion.__name__}(html)) → {costura}\n"
+        f"  camino real      ({funcion.__name__}())     → {real}\n"
+        "Una garantía que solo vale en la rama de las pruebas no protege nada.")
+
+    que, valor = por_la_costura
+    if que == "reventó":
+        raise valor
+    return valor
 
 
 # ── La lista sale del menú, no de la memoria de nadie ────────────────────
@@ -276,7 +390,7 @@ def test_una_pantalla_nueva_en_el_menu_llega_sola_al_prompt():
         '<a href="/presupuesto" data-tambien="cómo voy con el presupuesto,'
         ' cuánto me queda" data-nota="es del mes en curso">Presupuesto</a>'
         '</nav>')
-    bloque = menu.bloque_para_el_prompt(fabricado)
+    bloque = _por_los_dos_caminos(fabricado, menu.bloque_para_el_prompt)
     assert "Presupuesto" in bloque and "/presupuesto" in bloque, bloque
     assert '"cuánto me queda"' in bloque, (
         f"la frase nueva no llegó al prompt: {bloque}")
@@ -320,17 +434,17 @@ def test_un_menu_ilegible_revienta_en_vez_de_quedarse_callado():
     """
     sana = '<a href="/" data-tambien="el arranque">Portada</a>'
     with pytest.raises(menu.MenuIlegible):
-        menu.pantallas("<html><body>ni un nav</body></html>")
+        _por_los_dos_caminos("<html><body>ni un nav</body></html>")
     with pytest.raises(menu.MenuIlegible):
-        menu.pantallas("<nav><span>texto suelto</span></nav>")
+        _por_los_dos_caminos("<nav><span>texto suelto</span></nav>")
     with pytest.raises(menu.MenuIlegible):
-        menu.pantallas(f'<nav>{sana}<a href="/x" data-tambien="lo de x">'
-                       '</a></nav>')
+        _por_los_dos_caminos(f'<nav>{sana}<a href="/x" data-tambien="lo de x">'
+                             '</a></nav>')
     with pytest.raises(menu.MenuIlegible):
-        menu.pantallas(f'<nav>{sana}<a href="/x">Equis</a></nav>')
+        _por_los_dos_caminos(f'<nav>{sana}<a href="/x">Equis</a></nav>')
     with pytest.raises(menu.MenuIlegible):
-        menu.pantallas(f'<nav>{sana}<a href="/x" data-tambien="lo de x"'
-                       ' data-nota="dice &quot;hola&quot;">Equis</a></nav>')
+        _por_los_dos_caminos(f'<nav>{sana}<a href="/x" data-tambien="lo de x"'
+                             ' data-nota="dice &quot;hola&quot;">Equis</a></nav>')
 
 
 def test_no_poder_leer_el_archivo_es_menu_ilegible_se_llame_como_se_llame():
@@ -383,6 +497,16 @@ def test_un_fallo_del_parseo_no_se_disfraza_de_menu_ilegible():
     se entere.
 
     Se rompe algo que corre DESPUÉS de la lectura y se exige que salga entero.
+
+    Y SE EXIGE EN LAS DOS RAMAS, que es lo que faltaba. Esto llamaba
+    `menu.pantallas("<nav></nav>")` —con `fuente`—, o sea que corría por la rama
+    de la costura y NUNCA por la que lee el archivo, que es la única que usa
+    `cerebro/agente.py`. Medido el 9-sep-2026 sobre `2d29bab`: metiendo el
+    parseo del `<nav>` dentro del `try` SOLO en la rama que lee el archivo, la
+    suite entera daba 503 passed y este archivo 18 passed, con el agujero vivo
+    en producción — un fallo de programación disfrazado de «no pude leer el
+    menú», tragado por `agente.py`, y Lucy contestando con un prompt al que le
+    falta el panel sin que nadie se entere.
     """
     class _NavRoto:
         def findall(self, *a, **k):
@@ -392,7 +516,7 @@ def test_un_fallo_del_parseo_no_se_disfraza_de_menu_ilegible():
     menu._NAV = _NavRoto()
     try:
         with pytest.raises(ValueError):
-            menu.pantallas("<nav></nav>")
+            _por_los_dos_caminos("<nav></nav>")
     finally:
         menu._NAV = original
 
@@ -419,7 +543,7 @@ def test_una_pantalla_no_se_evapora_por_como_estan_escritas_las_comillas():
         "<a href=/tareas data-tambien='los pendientes'>Tareas</a>",
     ]
     for forma in formas:
-        pantallas = menu.pantallas(f"<nav>{sana}{forma}</nav>")
+        pantallas = _por_los_dos_caminos(f"<nav>{sana}{forma}</nav>")
         assert [p.ruta for p in pantallas] == ["/", "/tareas"], (
             f"la pantalla cambió según cómo se escribió el atributo: {forma} "
             f"→ {[p.ruta for p in pantallas]}")
@@ -427,9 +551,13 @@ def test_una_pantalla_no_se_evapora_por_como_estan_escritas_las_comillas():
             f"las frases cambiaron según las comillas: {forma} → {pantallas}")
 
     # Y el atributo que está pero no se puede leer no se salta en silencio.
+    # Acá va solo el `href`, que es el que se evaporaba; los TRES atributos —y
+    # los que haya mañana— los recorre
+    # test_un_atributo_que_esta_y_no_se_deja_leer_revienta_sea_cual_sea, que
+    # saca la lista del AST de `web/menu.py` en vez de teclearla.
     with pytest.raises(menu.MenuIlegible):
-        menu.pantallas(f'<nav>{sana}<a href data-tambien="lo de x">Equis</a>'
-                       '</nav>')
+        _por_los_dos_caminos(f'<nav>{sana}<a href data-tambien="lo de x">Equis'
+                             '</a></nav>')
 
 
 def test_un_enlace_de_fuera_del_panel_no_es_una_pantalla():
@@ -446,9 +574,150 @@ def test_un_enlace_de_fuera_del_panel_no_es_una_pantalla():
         '<a href="https://railway.app">Railway</a>'
         '<a href="mailto:tiziano@example.com">Escribir</a>'
         '</nav>')
-    pantallas = menu.pantallas(con_externo)
+    pantallas = _por_los_dos_caminos(con_externo)
     assert [p.ruta for p in pantallas] == ["/"], (
         f"la frontera no es la que dice el archivo: {pantallas}")
+
+
+# ── Los atributos del enlace, y que TODOS pasen por la misma puerta ──────
+
+def _atributos_del_enlace():
+    """Qué atributos lee `web/menu.py` del `<a>`, y por qué puerta. Del AST.
+
+    DE DÓNDE SALE LA LISTA, porque una comprobación vale lo que valga su lista:
+    de los literales que el propio código le pasa a `_leer` y a `_atributo`,
+    leídos del árbol de `web/menu.py`. Acá no hay ningún nombre de atributo
+    tecleado, así que un cuarto atributo que alguien agregue mañana entra solo.
+
+    Los nombres de las dos funciones tampoco se teclean: salen de los objetos
+    reales (`menu._leer.__name__`), así que un renombre no abre el agujero.
+
+    Devuelve tres cosas, y la tercera es la que le pone fondo:
+      · los que pasan por la puerta (`_leer`)
+      · los que van directo al crudo (`_atributo`) — tienen que ser cero
+      · las llamadas que NO se pueden resolver leyendo. Lo que no se sabe
+        cuenta como rojo; la única que se descuenta es la que `_leer` le hace
+        a `_atributo`, que es la puerta llamando a lo que envuelve, y se
+        reconoce por estar DENTRO de su definición, no por su nombre.
+    """
+    with open(os.path.join(RAIZ, "web", "menu.py"), encoding="utf-8") as f:
+        arbol = ast.parse(f.read(), "web/menu.py")
+
+    puerta, crudo = menu._leer.__name__, menu._atributo.__name__
+    dentro_de_la_puerta = {
+        id(x)
+        for n in ast.walk(arbol)
+        if isinstance(n, ast.FunctionDef) and n.name == puerta
+        for x in ast.walk(n)}
+
+    por_la_puerta, sin_puerta, sin_resolver = set(), set(), []
+    for n in ast.walk(arbol):
+        if not (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id in (puerta, crudo)):
+            continue
+        if id(n) in dentro_de_la_puerta and n.func.id == crudo:
+            continue
+        arg = n.args[1] if len(n.args) > 1 else None
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            (por_la_puerta if n.func.id == puerta else sin_puerta).add(arg.value)
+        else:
+            sin_resolver.append(f"{n.func.id}(…) en la línea {n.lineno}")
+    return por_la_puerta, sin_puerta, sin_resolver
+
+
+# Un valor válido por atributo, para poder fabricar el enlace de la prueba de
+# abajo. NO es la lista de atributos —ésa sale del AST—: es material de prueba,
+# y la prueba exige que cubra exactamente lo que el AST encontró. Al lado
+# indulgente no se llega por olvido: un atributo nuevo sin valor acá sale rojo
+# pidiendo el valor, no se salta en silencio.
+_VALOR_SANO = {
+    "href": "/x",
+    "data-tambien": "lo de x",
+    "data-nota": "una nota",
+}
+
+
+def test_los_atributos_del_enlace_pasan_todos_por_la_misma_puerta():
+    """¿Quiénes son sus hermanos, y lo cumplen todos? Leído, no recordado.
+
+    `_leer` existe para que ningún atributo tenga su propio criterio con un
+    valor que no se entiende. Que hoy los tres pasen por ahí se sabe leyendo el
+    archivo; esta prueba lo sabe CORRIENDO, así que el cuarto atributo no puede
+    nacer con el defecto.
+
+    Y hacen falta las dos mitades: ésta mira la fuente compartida, y
+    test_un_atributo_que_esta_y_no_se_deja_leer_revienta_sea_cual_sea mira el
+    comportamiento. Una prueba de comportamiento sola no ve que dos hermanos
+    usen criterios distintos que hoy dan el mismo resultado.
+
+    Medido el 9-sep-2026 sobre `2d29bab`: con `data-nota` leído por `_atributo`
+    en vez de por `_leer`, la suite entera daba 503 passed y este archivo
+    18 passed. El `ILEGIBLE` crudo llegaba a `.strip()` y salía un
+    `AttributeError` que `cerebro/agente.py` no atrapa —solo atrapa
+    `MenuIlegible`—, o sea `_sistema()` tumbado en CADA mensaje.
+    """
+    por_la_puerta, sin_puerta, sin_resolver = _atributos_del_enlace()
+
+    assert por_la_puerta, (
+        "no encontré ni un atributo leído por la puerta en web/menu.py: o el "
+        "archivo cambió de forma o esta prueba dejó de ver lo que mira, y una "
+        "prueba que no ve nada pasa siempre")
+    assert not sin_puerta, (
+        f"atributos que se saltan la puerta {menu._leer.__name__} y leen el "
+        f"crudo directo: {sorted(sin_puerta)}. Ése es el criterio propio que "
+        f"{menu._leer.__name__} vino a quitar: el valor ILEGIBLE sale sin "
+        "envolver, no es MenuIlegible, y cerebro/agente.py no lo atrapa.")
+    assert not sin_resolver, (
+        f"no puedo resolver leyendo estas lecturas de atributo: {sin_resolver}. "
+        "Lo que no se sabe cuenta como rojo: si el nombre del atributo se arma "
+        "al vuelo, esta prueba ya no puede afirmar que todos pasan por la "
+        "puerta, y un PASA ahí sería inventado.")
+
+
+def test_un_atributo_que_esta_y_no_se_deja_leer_revienta_sea_cual_sea():
+    """La otra mitad: el comportamiento, atributo por atributo y en las DOS ramas.
+
+    «El atributo está y no se pudo leer» es distinto de «no está»: lo primero es
+    MenuIlegible, lo segundo puede ser la exención declarada. Sin esto, un
+    atributo escrito sin valor se salta en silencio y la pantalla desaparece del
+    prompt sin un rojo en ninguna parte.
+
+    Se recorren TODOS los atributos que el AST encontró —no una lista de acá— y
+    cada uno se mide por la costura y por el camino real a la vez.
+
+    Y SE EXIGE QUE HAYA REVENTADO EN LA PUERTA, no solo que haya reventado.
+    Con `data-tambien` escrito sin valor, una versión que se lo saltara en
+    silencio saldría igual de MenuIlegible —por el «no declara data-tambien» de
+    más abajo—, o sea VERDE por el motivo equivocado. El sitio del que salió se
+    le pregunta al rastro de la excepción, no al texto del mensaje: un cambio de
+    redacción no puede aflojar esto.
+    """
+    por_la_puerta, _, _ = _atributos_del_enlace()
+    assert set(_VALOR_SANO) == por_la_puerta, (
+        f"web/menu.py lee {sorted(por_la_puerta)} y acá hay valores de prueba "
+        f"para {sorted(_VALOR_SANO)}. No se puede fabricar el enlace sin un "
+        "valor válido para cada uno: agrégalo, o esta prueba estaría dando por "
+        "cubierto un atributo que nunca ejercita.")
+
+    sana = '<a href="/" data-tambien="el arranque">Portada</a>'
+    for roto in sorted(por_la_puerta):
+        atributos = " ".join(
+            n if n == roto else f'{n}="{_VALOR_SANO[n]}"'
+            for n in sorted(por_la_puerta))
+        html = f'<nav>{sana}<a {atributos}>Equis</a></nav>'
+        with pytest.raises(menu.MenuIlegible) as e:
+            _por_los_dos_caminos(html)
+
+        rastro = e.value.__traceback__
+        marcos = set()
+        while rastro is not None:
+            marcos.add(rastro.tb_frame.f_code.co_name)
+            rastro = rastro.tb_next
+        assert menu._leer.__name__ in marcos, (
+            f"{roto} escrito sin valor sí revienta, pero no en "
+            f"{menu._leer.__name__}: salió de {sorted(marcos)}. O sea que ese "
+            "atributo no pasa por la puerta y hoy está verde de casualidad, "
+            f"por otra comprobación. Mensaje: {e.value}")
 
 
 @pytest.mark.parametrize("romper, motivo", [
@@ -726,6 +995,130 @@ def test_un_solo_sitio_se_traga_el_menu_ilegible():
         f"el que se traga un menú ilegible tiene que ser uno solo y ser el "
         f"armado del prompt; hoy son {sorted(culpables)}. Dos sitios que se lo "
         "traguen eligen por su cuenta qué decirle al modelo cuando no hay menú.")
+
+
+# ── Y que nadie vuelva a medir el menú solo por la costura ───────────────
+
+# Las funciones del menú que aceptan un HTML inyectado, o sea las que tienen
+# costura. La lista sale de la FIRMA de cada una, no de un inventario acá: una
+# función nueva con `fuente` queda vigilada sin que nadie la agregue.
+_CON_COSTURA = {
+    nombre
+    for nombre, objeto in vars(menu).items()
+    if inspect.isfunction(objeto) and objeto.__module__ == menu.__name__
+    and "fuente" in inspect.signature(objeto).parameters}
+
+
+def _archivos_de_prueba():
+    """Los archivos de prueba que hay EN DISCO, no un inventario tecleado.
+
+    LA FRONTERA, en una línea para poder predecirla sin correr nada: es un
+    archivo de prueba todo `.py` bajo `tests/`, todo `conftest.py` esté donde
+    esté, y todo `.py` cuyo nombre empiece por `test_`.
+
+    `conftest.py` va nombrado A PROPÓSITO: no empieza por `test_` y en pytest es
+    justo el sitio donde uno pone lo compartido, o sea el primero donde alguien
+    escribiría una medición del menú. Un barrido de `test_*.py` lo dejaría
+    afuera, que es el agujero que apareció el 5-sep-2026 en dos proyectos.
+
+    El fondo del barrido —no meterse en entornos virtuales ni en cachés— se lo
+    pide a `test_buzon_que_no_se_ve._py_en_disco`, que le pregunta a cada
+    carpeta qué es (`pyvenv.cfg`, `CACHEDIR.TAG`) en vez de mirarle el nombre.
+    Se reusa esa y no se copia el criterio: dos copias de un criterio se
+    separan, que es la regla entera de este archivo.
+    """
+    import test_buzon_que_no_se_ve as barrido
+
+    for ruta in barrido._py_en_disco(Path(RAIZ)):
+        rel = ruta.relative_to(RAIZ)
+        if (rel.parts[0] == "tests" or ruta.name == "conftest.py"
+                or ruta.name.startswith("test_")):
+            yield ruta
+
+
+def _nombres_con_costura_en(arbol) -> set[str]:
+    """Con qué nombres puede llamarse en ESTE archivo a una función con costura.
+
+    Se sobre-aproxima a propósito: `menu.pantallas(...)`, `m.pantallas(...)` y
+    `pantallas(...)` traído con `from web.menu import pantallas` cuentan todos.
+    De más es el lado seguro; de menos es el agujero.
+    """
+    locales = set(_CON_COSTURA)
+    for n in ast.walk(arbol):
+        if isinstance(n, ast.ImportFrom) and (n.module or "") == menu.__name__:
+            for a in n.names:
+                if a.name in _CON_COSTURA:
+                    locales.add(a.asname or a.name)
+    return locales
+
+
+def test_ninguna_prueba_mide_el_menu_solo_por_la_costura():
+    """LO QUE CIERRA LA SERIE: la costura deja de ser una forma de medir.
+
+    `pantallas(fuente)` acepta un HTML inyectado para poder probar sin tocar el
+    disco. Está bien que exista. Lo que no está bien es que una prueba escrita
+    por ahí DÉ POR CUBIERTO el camino real, que es el único que corre en
+    producción (`cerebro/agente.py` llama sin argumento).
+
+    Medido el 9-sep-2026 sobre `2d29bab`, mutando el código real: tres garantías
+    de `web/menu.py` rotas SOLO en la rama que lee el archivo daban las tres
+    503 passed / 18 passed. Arreglarlo duplicando cada prueba —una por rama— deja
+    plantado el caso de mañana, porque la cuarta prueba se escribe por un lado
+    solo. Así que hay UNA puerta, `_por_los_dos_caminos`, que corre las dos
+    ramas, y acá se exige que sea la única.
+
+    DE DÓNDE SALEN LAS DOS LISTAS: los archivos son los de prueba que hay en
+    disco (ver `_archivos_de_prueba`), y las funciones vigiladas salen de la
+    FIRMA de las de `web/menu.py` que aceptan `fuente`, no de nombres tecleados.
+
+    LO QUE QUEDA FUERA, dicho para que nadie lo dé por cubierto: quien consiga
+    la función por un nombre armado al vuelo —`getattr(menu, "pant" + "allas")`—
+    se escapa; eso ya no se puede leer. Es la misma frontera declarada de
+    test_un_solo_sitio_se_traga_el_menu_ilegible.
+    """
+    assert _CON_COSTURA, (
+        "no encontré ninguna función del menú con `fuente`: o la costura "
+        "desapareció o esta prueba dejó de verla, y entonces pasa siempre")
+
+    puerta = _por_los_dos_caminos.__name__
+    por_fuera = []
+    mirados = list(_archivos_de_prueba())
+
+    # Una guarda que no mira nada pasa siempre. Que este mismo archivo —el que
+    # tiene TODAS las llamadas al menú— esté en la lista es la comprobación más
+    # barata de que el barrido llegó a algún lado.
+    assert Path(os.path.abspath(__file__)) in mirados, (
+        f"el barrido no llegó ni a este archivo: {len(mirados)} mirados. "
+        "Una comprobación sobre una lista vacía está verde por no mirar.")
+
+    for ruta in mirados:
+        with open(ruta, encoding="utf-8") as f:
+            arbol = ast.parse(f.read(), str(ruta))
+        nombres = _nombres_con_costura_en(arbol)
+
+        dentro_de_la_puerta = {
+            id(x)
+            for n in ast.walk(arbol)
+            if isinstance(n, ast.FunctionDef) and n.name == puerta
+            for x in ast.walk(n)}
+
+        for n in ast.walk(arbol):
+            if not isinstance(n, ast.Call) or id(n) in dentro_de_la_puerta:
+                continue
+            llamada = (n.func.attr if isinstance(n.func, ast.Attribute)
+                       else n.func.id if isinstance(n.func, ast.Name) else None)
+            if llamada not in nombres:
+                continue
+            if n.args or any(k.arg == "fuente" for k in n.keywords):
+                rel = os.path.relpath(ruta, RAIZ)
+                por_fuera.append(f"{rel}:{n.lineno} → {llamada}(…)")
+
+    assert not por_fuera, (
+        f"{len(por_fuera)} mediciones del menú por la costura sin pasar por "
+        f"{puerta}(): {por_fuera}. Esa rama NO es la que corre en producción: "
+        "una garantía probada solo ahí puede estar rota en el camino real y "
+        f"toda la suite en verde. Cambia la llamada por {puerta}(html) y la "
+        "misma prueba cubre las dos ramas.")
 
 
 if __name__ == "__main__":
