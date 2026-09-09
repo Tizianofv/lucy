@@ -10,13 +10,16 @@ import hashlib
 import json
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime, timezone
 
 import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from config import DATABASE_URL
+# TZ es la zona de Santo Domingo, y viene de config para que haya UNA sola en
+# todo Lucy: la usa el panel de tareas para decidir a qué DÍA pertenece un
+# `vence_en`, que es un instante y no una fecha (ver `dia_rd`).
+from config import DATABASE_URL, TZ
 
 
 class MovimientoRechazado(Exception):
@@ -1672,3 +1675,231 @@ async def poner_categoria(movimiento_id: int, categoria: str) -> None:
     if antes and antes.get("contraparte") and se_aprende(categoria):
         await aprender_categoria(normalizar_comercio(antes["contraparte"]),
                                  categoria)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# EL PANEL DE TAREAS
+#
+# "Atrasada" NO EXISTÍA en el sistema hasta acá. No había función, ni columna,
+# ni consulta guardada: vivía dentro de dos textos de prompt, y el modelo
+# reescribía el SQL cada vez. Medido el 8-sep-2026 contra producción, las dos
+# redacciones daban NÚMEROS DISTINTOS —9 por instante y 8 por día— y ninguna de
+# las dos veía las 4 tareas pendientes SIN FECHA, que llevaban meses invisibles.
+#
+# Por eso lo que sigue se dice UNA vez y en UN sitio. Quien necesite
+# "atrasadas" llama a `grupo_de_tarea`; no vuelve a escribir el criterio.
+# ═══════════════════════════════════════════════════════════════════════════
+
+# El ÚNICO estado que este módulo nombra para decidir un grupo, y el único que
+# se escribe. NO hay una lista de estados válidos acá a propósito.
+#
+# `tareas.estado` no tiene restricción CHECK y ya se separó de lo que declara
+# su propio comentario en db/schema.sql (`pendiente | hecha | pospuesta`):
+# contra producción, el 8-sep-2026, había 46 pendiente, 44 hecha, 1 descartado
+# y CERO pospuesta. O sea que existe un estado que nadie declaró y uno
+# declarado que nadie usó nunca.
+#
+# Una lista escrita a mano acá habría hecho desaparecer la fila en 'descartado'
+# del panel sin que nadie se entere. Así que se nombra lo que se necesita
+# nombrar y TODO LO DEMÁS cae en un grupo VISIBLE (ver `grupo_de_tarea`).
+ESTADO_PENDIENTE = "pendiente"
+ESTADO_HECHA = "hecha"
+
+# El orden en que se pintan los grupos, y su título. Es una decisión de
+# presentación y vive acá, pegada al criterio que produce las claves, para que
+# no se puedan separar.
+#
+# NO es la lista de la que salen los grupos: los grupos salen de lo que
+# devuelve la consulta. Una clave que no esté acá se pinta igual, al final, con
+# su clave cruda por título — ver `tareas_por_grupo`. Que un grupo pueda
+# aparecer sin permiso es deliberado: lo contrario es cómo se pierde una fila.
+GRUPOS_DE_TAREAS = (
+    ("atrasadas", "Atrasadas"),
+    ("hoy", "Hoy"),
+    ("sin_fecha", "Sin fecha"),
+    ("proximas", "Próximas"),
+    ("otros", "Otros estados"),
+)
+
+# Techo de la consulta. Hoy la tabla tiene 91 filas vivas, así que no muerde;
+# existe para que el día que muerda se NOTE. Se piden `limite + 1` filas y, si
+# vuelve una de más, `tareas_por_grupo` lo dice con `hay_mas`. Un LIMIT que
+# recorta callado es la forma más barata de perder una tarea.
+TOPE_TAREAS = 500
+
+
+def dia_rd(cuando) -> date | None:
+    """El día calendario de un instante, EN SANTO DOMINGO.
+
+    `tareas.vence_en` es TIMESTAMPTZ, o sea que llega como instante. Un
+    instante no tiene día hasta que se le elige una zona: las 8 de la noche del
+    lunes en Santo Domingo son las 0:00 del MARTES en UTC. Comparar en UTC hace
+    que las tareas de la noche cambien de día, y entonces el panel dice
+    "atrasada" sobre algo que vence hoy.
+
+    La zona sale de `config.TZ`, que es la misma que usa el resto de Lucy. No
+    se escribe 'America/Santo_Domingo' acá: dos copias de una zona horaria se
+    desincronizan igual que dos copias de cualquier otra cosa.
+
+    Un instante SIN zona se lee como UTC y no como la hora de la máquina que
+    corra esto: adivinar la zona del servidor haría que el mismo dato diera
+    días distintos en Railway y en una laptop.
+    """
+    if cuando is None:
+        return None
+    if isinstance(cuando, datetime):
+        if cuando.tzinfo is None:
+            cuando = cuando.replace(tzinfo=timezone.utc)
+        return cuando.astimezone(TZ).date()
+    if isinstance(cuando, date):
+        return cuando
+    return None
+
+
+def hoy_rd() -> date:
+    """Hoy en Santo Domingo. Se pasa como argumento a `grupo_de_tarea` para
+    poder probar los bordes sin depender del reloj de quien corra las pruebas."""
+    return datetime.now(TZ).date()
+
+
+def grupo_de_tarea(estado, vence_en, hoy: date) -> str:
+    """A qué grupo del panel pertenece una tarea. LA definición de "atrasada".
+
+    ATRASADA ES POR DÍA, NO POR INSTANTE, y esa es la decisión central. Una
+    tarea que vence hoy a las 9 de la mañana NO está atrasada a las 10: lo
+    estará mañana. En el ritmo de un estudio de grabación nadie trabaja al
+    minuto, y las dos personas que miran este panel piensan en días. Medido
+    contra producción el 8-sep-2026, las dos definiciones que andaban sueltas
+    en los prompts daban 9 (por instante) y 8 (por día).
+
+    LO QUE NO SE PUEDE CONFIRMAR QUE ES 'pendiente' CAE EN 'otros', que es un
+    grupo VISIBLE. Se usa `!=` contra el único estado nombrado y no una lista
+    de estados conocidos: así, el estado que alguien invente mañana —o el que
+    ya existe y nadie declaró, 'descartado'— aparece en el panel en vez de
+    desaparecer de él. Al grupo indulgente no se llega por olvido; acá el
+    olvido lleva al grupo que SE VE.
+    """
+    if estado != ESTADO_PENDIENTE:
+        return "otros"
+    dia = dia_rd(vence_en)
+    if dia is None:
+        # SIN FECHA VA VISIBLE Y CON SU PROPIO TÍTULO. Las 4 que hay en
+        # producción no las ve ninguna definición de "atrasada" —ni la de
+        # instante ni la de día—, y por eso llevaban meses perdidas. Meterlas
+        # dentro de otro grupo, u ocultarlas, es exactamente cómo se perdieron.
+        return "sin_fecha"
+    if dia < hoy:
+        return "atrasadas"
+    if dia == hoy:
+        return "hoy"
+    return "proximas"
+
+
+async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -> dict:
+    """Las tareas vivas, repartidas en los grupos del panel.
+
+    El SQL solo TRAE filas; el criterio lo pone `grupo_de_tarea`. Es a
+    propósito: un criterio escrito en SQL solo se puede comprobar con una base
+    delante, y esta suite es hermética por diseño. Acá el reparto es código
+    Python que se prueba con un `hoy` fijo, y la consulta queda tan tonta que
+    no tiene dónde esconder una regla.
+
+    `quien` sale de tareas.bandeja_id → bandeja.chat_id, con LEFT JOIN: la
+    tarea que no tenga bandeja tiene que salir igual con un guion. Contra
+    producción el 8-sep-2026 eso se sabía en 90 de las 91 filas, y la que falta
+    NO se esconde — una tarea que no aparece porque le falta un dato accesorio
+    es la misma familia de fallo que las 4 sin fecha.
+
+    Devuelve {"grupos": [{clave, titulo, filas}], "hay_mas": bool}. Los grupos
+    vacíos no se pintan, y ninguno se pierde: ver el bucle del final.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT t.id, t.titulo, t.estado, t.vence_en, t.creado_en,
+                   t.bandeja_id, b.chat_id AS quien
+              FROM tareas t
+              LEFT JOIN bandeja b ON b.id = t.bandeja_id
+             WHERE t.borrado_en IS NULL
+             ORDER BY t.vence_en ASC NULLS LAST, t.creado_en ASC, t.id ASC
+             LIMIT %s
+            """, (limite + 1,))
+        filas = list(await cur.fetchall())
+
+    hay_mas = len(filas) > limite
+    if hay_mas:
+        filas = filas[:limite]
+
+    hoy = hoy or hoy_rd()
+    por_clave: dict = {}
+    for f in filas:
+        f["vence_dia"] = dia_rd(f.get("vence_en"))
+        clave = grupo_de_tarea(f.get("estado"), f.get("vence_en"), hoy)
+        por_clave.setdefault(clave, []).append(f)
+
+    # Primero los grupos declarados, en su orden. Después, CUALQUIER clave que
+    # haya salido y que nadie previó: se pinta al final con su clave cruda en
+    # vez de desaparecer. Hoy `grupo_de_tarea` no puede devolver otra cosa —
+    # pero "hoy no puede" es exactamente lo que se creía de la lista de estados
+    # de db/schema.sql antes de que apareciera 'descartado' en producción.
+    grupos = [{"clave": c, "titulo": t, "filas": por_clave.pop(c)}
+              for c, t in GRUPOS_DE_TAREAS if por_clave.get(c)]
+    grupos += [{"clave": c, "titulo": c, "filas": fs}
+               for c, fs in por_clave.items()]
+    return {"grupos": grupos, "hay_mas": hay_mas}
+
+
+async def marcar_tarea_hecha(tarea_id: int) -> bool:
+    """Marca UNA tarea como hecha. Devuelve si de verdad cambió algo.
+
+    Deja su huella en log_acciones como toda escritura del panel, con
+    actor='panel': una tarea cerrada desde la web tiene que ser tan auditable y
+    tan reversible como una cerrada por Telegram. El actor no es 'lucy' porque
+    no fue Lucy — `acciones.crud._registrar` firma 'lucy' y por eso no se
+    reutiliza acá, igual que no lo reutilizan `poner_categoria` ni
+    `a_la_papelera`.
+
+    `completado_en` se llena en el mismo UPDATE. La otra puerta —el modelo por
+    Telegram— manda `{"estado": "hecha", "completado_en": "<ahora>"}` junto
+    (`cerebro/agente.py:117`), así que las dos puertas dejan la fila igual. Dos
+    caminos que dan resultados distintos para la misma acción es cómo se pierde
+    la confianza en los dos.
+
+    LO QUE YA ESTABA HECHO NO SE VUELVE A ESCRIBIR: devuelve False sin tocar
+    nada. Eso cubre la carrera real —Rosi la marca, la pantalla de Tiziano
+    lleva diez minutos abierta y la marca otra vez— sin duplicar la huella ni
+    mover `completado_en` a la hora equivocada.
+
+    LAS RECURRENTES NO NECESITAN NADA ESPECIAL ACÁ, y conviene saber por qué
+    antes de "arreglarlo": `cerebro/despertador.py:519` barre las filas con
+    recurrencia y estado 'hecha' y las reprograma solas. Barre por ESTADO, no
+    por quién lo escribió, así que una tarea recurrente cerrada desde el panel
+    se reprograma igual que una cerrada por Telegram.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, titulo, estado, vence_en, completado_en, bandeja_id "
+            "FROM tareas WHERE id = %s AND borrado_en IS NULL", (tarea_id,))
+        antes = await cur.fetchone()
+        if antes is None or antes.get("estado") == ESTADO_HECHA:
+            # No existe, está en la papelera, o ya estaba hecha. En los tres
+            # casos no se escribe: una huella de una edición que no pasó es
+            # basura permanente en la tabla que ES el deshacer.
+            return False
+        await conn.execute(
+            "UPDATE tareas SET estado = %s, completado_en = now() WHERE id = %s",
+            (ESTADO_HECHA, tarea_id))
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo,
+               bandeja_id)
+            VALUES ('panel', 'editar', 'tareas', %s, %s, %s,
+                    'marcada hecha desde el panel de tareas', %s)
+            """,
+            (tarea_id, json.dumps(antes, default=str, ensure_ascii=False),
+             json.dumps({"estado": ESTADO_HECHA}, ensure_ascii=False),
+             antes.get("bandeja_id")))
+        return True

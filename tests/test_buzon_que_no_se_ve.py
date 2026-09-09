@@ -3268,9 +3268,17 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 8-sep-2026: 66 → 67 en disco y 29 → 30 exentos por
     # `tests/test_cerrar_varias.py`. Los VIGILADOS no se movieron (37): una
     # prueba nueva es exenta por rol, que es justo lo que tenía que pasar.
-    assert medido == {"en disco": 67, "exentos": 30, "vigilados": 37}, (
+    #
+    # 8-sep-2026, más tarde: 67 → 68 en disco y 30 → 31 exentos por
+    # `tests/test_panel_tareas.py`, del panel de tareas. Los VIGILADOS siguen
+    # en 37 por lo mismo, y conviene decir por qué eso es la respuesta correcta
+    # y no una casualidad: la exención sale de `testpaths` de pytest.ini, o sea
+    # del ROL del archivo, no de que se llame `test_*`. El mismo trabajo tocó
+    # `db/db.py`, `web/app.py` y `tools/humo.py` —los tres YA vigilados— y la
+    # aserción de fondo de arriba siguió verde sobre ellos.
+    assert medido == {"en disco": 68, "exentos": 31, "vigilados": 37}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "8-sep-2026 era {'en disco': 67, 'exentos': 30, 'vigilados': 37}. La "
+        "8-sep-2026 era {'en disco': 68, 'exentos': 31, 'vigilados': 37}. La "
         "aserción de fondo —cero archivos alcanzan la lista cruda— YA CORRIÓ "
         "arriba y quedó verde, así que esto NO es una fuga. Si los vigilados "
         "bajaron, algo se está saltando de más y «cero falsos positivos» dejó "
