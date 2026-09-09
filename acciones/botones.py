@@ -70,6 +70,27 @@ def teclado_deshacer(log_id: int) -> InlineKeyboardMarkup:
     ]])
 
 
+def teclado_deshacer_todo(bandeja_id: int, cuantas: int) -> InlineKeyboardMarkup:
+    """UN botón que devuelve TODO lo que ese mensaje escribió.
+
+    Por qué uno y no uno por cosa: la queja que originó esto es literalmente
+    "hay que ir uno por uno". Once botones para deshacer once cierres es el
+    mismo trabajo manual con otra ropa.
+
+    Por qué viaja el `bandeja_id` y no la lista de huellas: `callback_data` de
+    Telegram tiene un tope duro de 64 bytes, y once ids no entran. Un RANGO
+    («de la huella 40 a la 51») sí entraría, pero mentiría el día que otro
+    proceso escriba una huella en el medio — se llevaría por delante algo que
+    ese mensaje no hizo. El `bandeja_id` es la única asa que identifica AL
+    MENSAJE: la lista exacta la escribió el turno en su propia fila, y de ahí
+    se lee. Es la misma asa que ya usan `ok:`, `no:` y `acc:`.
+    """
+    etiqueta = "↩️ Deshacer" if cuantas <= 1 else f"↩️ Deshacer las {cuantas}"
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(etiqueta, callback_data=f"undt:{bandeja_id}")
+    ]])
+
+
 def teclado_orden(
     bandeja_id: int, candidatos: list[tuple[int, str]]
 ) -> InlineKeyboardMarkup:
@@ -144,6 +165,36 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
         await _cerrar_tarjeta(q, f"↩️ <b>Deshecho</b> · revertí {que}")
         log.info("Deshecha la accion #%s", bandeja_id)
+        return
+
+    # ── Deshacer TODO lo que escribió un mensaje ────────────────────────
+    # Acá bandeja_id sí es el id de la bandeja. La lista de huellas no viaja en
+    # el botón (no cabe) ni se adivina por rango (se llevaría huellas ajenas):
+    # se lee de la fila del mensaje, donde el turno la dejó escrita.
+    if accion == "undt":
+        fila = await db.obtener(bandeja_id)
+        huellas = ((fila or {}).get("interpretacion") or {}).get("hecho") or []
+        if not huellas:
+            await q.answer(
+                "No encuentro qué deshacer de ese mensaje.", show_alert=True)
+            return
+        try:
+            revertidas, fallos = await crud.deshacer_varias(huellas)
+        except Exception as e:
+            log.exception("No pude deshacer lo del mensaje #%s", bandeja_id)
+            await q.answer(f"No pude deshacerlo: {e}"[:190], show_alert=True)
+            return
+        if fallos:
+            # Se dice lo que NO se pudo. Un "deshecho" a secas sobre un
+            # deshacer a medias deja a Tiziano creyendo algo falso.
+            await _cerrar_tarjeta(
+                q, f"↩️ <b>Deshice {revertidas} de {len(huellas)}</b> · "
+                   f"{len(fallos)} no pude: {'; '.join(fallos)[:300]}")
+        else:
+            await _cerrar_tarjeta(
+                q, f"↩️ <b>Deshecho</b> · {revertidas} cambio(s)")
+        log.info("Deshechos %s de %s cambios del mensaje #%s",
+                 revertidas, len(huellas), bandeja_id)
         return
 
     if accion == "no":

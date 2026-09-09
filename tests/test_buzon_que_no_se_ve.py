@@ -3265,9 +3265,12 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     mirados = _archivos_vigilados(RAIZ)
     medido = {"en disco": len(todos), "exentos": len(todos) - len(mirados),
               "vigilados": len(mirados)}
-    assert medido == {"en disco": 66, "exentos": 29, "vigilados": 37}, (
+    # 8-sep-2026: 66 → 67 en disco y 29 → 30 exentos por
+    # `tests/test_cerrar_varias.py`. Los VIGILADOS no se movieron (37): una
+    # prueba nueva es exenta por rol, que es justo lo que tenía que pasar.
+    assert medido == {"en disco": 67, "exentos": 30, "vigilados": 37}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "6-sep-2026 era {'en disco': 66, 'exentos': 29, 'vigilados': 37}. La "
+        "8-sep-2026 era {'en disco': 67, 'exentos': 30, 'vigilados': 37}. La "
         "aserción de fondo —cero archivos alcanzan la lista cruda— YA CORRIÓ "
         "arriba y quedó verde, así que esto NO es una fuga. Si los vigilados "
         "bajaron, algo se está saltando de más y «cero falsos positivos» dejó "
