@@ -1152,15 +1152,23 @@ def _escapan_si_se_capturan() -> set[tuple[str, str]]:
 
     DERIVADO, no tecleado: son exactamente las vías que `_vias_de_conexion`
     clasifica como `pool` o `atajo-de-modulo`, o sea las que se doblan pisando un
-    atributo DEL MÓDULO. Un `from psycopg_pool import ConnectionPool` se queda con
-    el objeto de verdad y ya no vuelve a mirar el módulo nunca más.
+    atributo DEL MÓDULO. Quien se quede con el objeto antes tiene el de verdad y
+    ya no vuelve a mirar el módulo nunca más.
 
     Las `clase-de-conexion` NO entran: ésas se doblan dentro de la clase, así que
     capturar la clase con `from psycopg import Connection` es inofensivo — el
     `.connect` se resuelve al llamarlo y ahí ya está el doble.
 
-    Si psycopg publica mañana otro pool o otro atajo de módulo, entra solo acá y
-    la FRONTERA 4 empieza a vigilarlo sin que nadie se acuerde.
+    Esto responde QUÉ símbolos escapan, y esa mitad sí es derivada: si psycopg
+    publica mañana otro pool o otro atajo de módulo, entra solo acá. La otra
+    mitad —CÓMO se busca a quién los capturó— no lo es: el barrido de
+    `test_la_captura_por_from_import_esta_declarada` solo lee `from … import …`.
+    Un `x = psycopg.connect` captura EL MISMO objeto. Medido el 8-sep-2026:
+    con `from psycopg import connect as a` y `b = psycopg.connect`, `a is b` →
+    **True**; y tras `tender()`, `psycopg.connect is a` → False y
+    `psycopg.connect is b` → False, o sea que la puerta no le llega a ninguno de
+    los dos. La diferencia entre las dos formas es de escritura, no de efecto —
+    y el barrido solo ve la escritura.
     """
     real = _modulo_de_verdad("psycopg")
     real_pool = _modulo_de_verdad("psycopg_pool")
@@ -1270,10 +1278,12 @@ class _RedDeMensajes:
 
         NO dice «todas», y la palabra importa: la puerta se instala CAMBIANDO UN
         ATRIBUTO con el programa ya corriendo, así que solo alcanza a quien
-        resuelva ese atributo después. Un `from psycopg import connect` hecho
-        antes se quedó con la función de verdad y escribe sin que el libro se
-        entere. Eso es el techo del método, está declarado como FRONTERA 4 y lo
-        vigila `test_la_frontera_de_los_simbolos_capturados_esta_declarada`.
+        resuelva ese atributo después. Quien se quedara antes con la función de
+        verdad —`from psycopg import connect`, o `x = psycopg.connect`, que
+        capturan el mismo objeto— escribe sin que el libro se entere. Eso es el
+        techo del método y está declarado como FRONTERA 4. De las dos formas,
+        `test_la_captura_por_from_import_esta_declarada` avisa de UNA: la del
+        `from … import …`. La otra no la ve nadie y está dicho allá.
 
         Deja constancia de si pudo o no en `self.motivo_sin_puerta`: quien mida
         algo con la puerta caída tiene que poder ponerse rojo en vez de dar un
@@ -1306,10 +1316,30 @@ class _RedDeMensajes:
                                            nombre in sys.modules))
             sys.modules[nombre] = mod
 
-        # ── EL FONDO: el doble va en el cursor ──
-        # Si alguna vía se escapara de la lista de abajo y consiguiera un objeto
-        # REAL de psycopg, su ejecución cae igual acá. Debajo de esto ya no hay
-        # Python al que bajarse.
+        # ── EL DOBLE EN `BaseCursor`, Y HASTA DÓNDE LLEGA DE VERDAD ──
+        # Acá decía «EL FONDO: si alguna vía se escapara y consiguiera un objeto
+        # REAL de psycopg, su ejecución cae igual acá; debajo de esto ya no hay
+        # Python al que bajarse». Eso era falso y se corrige con la medición.
+        #
+        # Medido el 8-sep-2026 sobre el psycopg instalado:
+        #     'execute' in vars(psycopg.cursor.BaseCursor) ...... False
+        #     'execute' in vars(psycopg.Cursor) ................. True
+        #     'execute' in vars(psycopg.AsyncCursor) ............ True
+        # y tras poner el doble en `BaseCursor`:
+        #     psycopg.Cursor.execute.__qualname__ ....... 'Cursor.execute'
+        #     psycopg.AsyncCursor.execute.__qualname__ .. 'AsyncCursor.execute'
+        #     psycopg.ServerCursor.execute.__qualname__ . 'ServerCursor.execute'
+        #     psycopg.cursor.BaseCursor.execute ......... el doble
+        #
+        # O sea que `execute` NO está definido en `BaseCursor`: ponerlo acá crea
+        # un atributo que las clases concretas TAPAN en el MRO. Un cursor REAL de
+        # psycopg no pasa por este doble, así que no hay fondo debajo de las ocho
+        # vías: lo que las cubre son los espías que ellas devuelven, y nada más.
+        #
+        # Lo que este doble sí hace: apuntar lo que le llegue por `BaseCursor` y
+        # dejar constancia, en la prueba de la puerta, de que se pudo instalar.
+        # Medido quitándolo y corriendo la suite entera: 1 rojo, y es el assert
+        # que comprueba que está puesto. Ninguna prueba de comportamiento cambia.
         def _execute(cur, sql, args=None, *a, **k):
             libro = _LIBRO_ACTIVO or _Libro()
             libro.apuntar(getattr(cur, "_bloque_espia", 8000), str(sql), args)
@@ -1634,7 +1664,19 @@ def test_ninguna_escritura_llega_a_la_base_sin_su_huella():
          pisa EN EL MÓDULO (`pool` y `atajo-de-modulo`, cinco hoy); capturar una
          clase de conexión es inofensivo porque el doble va dentro de la clase.
          Y no es rebuscado: el propio repo importa así en `db/db.py:17`.
-         → lo vigila `test_la_frontera_de_los_simbolos_capturados_esta_declarada`.
+         → De esto AVISA UNA FORMA Y NO TODAS, y ésa es la diferencia con las
+           tres de arriba. `test_la_captura_por_from_import_esta_declarada` lee
+           el árbol de sintaxis buscando `from psycopg import …` /
+           `from psycopg_pool import …`, y nada más. Una captura por asignación
+           de atributo —`x = psycopg.connect`, `self._c = psycopg.connect`,
+           `getattr(psycopg, "connect")`— no la ve, y captura EL MISMO objeto:
+           medido, `from psycopg import connect as a` y `b = psycopg.connect`
+           dan `a is b` → True. Se dejó así a propósito en la séptima vuelta:
+           ampliar el barrido a las asignaciones traería la octava forma
+           (`getattr`, un diccionario, un `functools.partial`, un decorador),
+           porque el barrido mira CÓMO ESTÁ ESCRITO el código y no lo que hace.
+           Lo que queda cubierto es una forma real y frecuente; lo que queda
+           fuera está escrito acá para que nadie lo descubra otra vez.
       5. `Copy.write` / `write_row`, que manda datos después de un `COPY` que el
          cursor sí vio. Hoy el repo no usa `copy` fuera de `tests/`.
     """
@@ -1832,11 +1874,24 @@ def test_lo_que_dice_el_parte_es_exactamente_lo_que_llego_a_la_base():
 # prueban las salidas 1, 2, 3 y 4 de la frontera; la 5 (`Copy.write`) se declara
 # en el docstring de arriba y hoy no tiene uso en el repo fuera de `tests/`.
 #
-# La 4 es distinta de las otras tres y conviene decirlo: las tres primeras
-# vigilan algo que HOY NO PASA y que sería un error si pasara. La 4 vigila algo
-# que YA PASA una vez, a propósito y sin arreglo previsto, porque es el techo del
-# método. Lo que la prueba impide no es que exista: es que aparezca la SEGUNDA
-# sin que nadie se entere.
+# La 4 es distinta de las otras tres y conviene decirlo dos veces, porque acá
+# estuvo escrito de más:
+#
+#   · Las tres primeras vigilan algo que HOY NO PASA y que sería un error si
+#     pasara. La 4 vigila algo que YA PASA una vez, a propósito y sin arreglo
+#     previsto, porque es el techo del método.
+#   · Y decía «lo que la prueba impide es que aparezca la SEGUNDA sin que nadie
+#     se entere». Eso prometía de más. La prueba de la 4 avisa de la SEGUNDA
+#     ESCRITA CON `from … import …`, que es la única forma que su barrido lee.
+#     Una segunda escrita `x = psycopg.connect` aparece sin que nadie se entere:
+#     medido el 8-sep-2026 sobre una copia, archivo nuevo con esa forma →
+#     `tests/test_cerrar_varias.py` da 24 passed, 0 rojos. Sobre la suite entera
+#     da 1 rojo, y NO cuenta como detección: es el censo de archivos de
+#     `tests/test_buzon_que_no_se_ve.py`, que se pone rojo por CUALQUIER `.py`
+#     nuevo — comprobado con un archivo trivial sin psycopg, mismo rojo. Cuenta
+#     que el archivo existe, no lo que hace.
+#     La forma cubierta es real y frecuente; la que falta está declarada, no
+#     tapada.
 
 _RAIZ_REPO = pathlib.Path(__file__).resolve().parent.parent
 
@@ -1994,11 +2049,24 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
 
 
 # Los sitios del repo que se quedan con un símbolo de psycopg ANTES de que la
-# puerta se instale, y que por eso escriben sin que el libro los vea. DECLARADOS
-# UNO POR UNO: al cubo indulgente no se llega por olvido, y un sitio que no esté
-# acá pone la prueba de abajo roja aunque sea inofensivo.
+# puerta se instale, ESCRITO `from psycopg… import …`, y que por eso escriben sin
+# que el libro los vea. DECLARADOS UNO POR UNO: al cubo indulgente no se llega
+# por olvido, y un sitio que no esté acá pone la prueba de abajo roja aunque sea
+# inofensivo.
 #
-# Reproducir esta lista, sin correr la suite y sin creerle a nadie:
+# ⚠️ EL TRINQUETE, dicho donde está la lista porque es donde se usa. Agregar un
+# sitio a esta lista es MÁS BARATO que arreglarlo: son UNA línea contra reescribir
+# el módulo para que llame por el atributo. Medido el 8-sep-2026 sobre una copia:
+# un archivo nuevo con `from psycopg import connect` da 1 rojo; agregándolo acá y
+# sin tocar una coma de ese archivo, 24 passed. La escritura a ciegas sigue viva.
+# Así que: **quien agregue un sitio a esta lista está decidiendo que ese sitio
+# escribe a ciegas** — sin marca en el parte y sin poder deshacerse con el botón.
+# No es un trámite para poner verde la suite; es esa decisión, y se hereda a quien
+# venga detrás. La forma de NO tomarla es dejar el módulo de por medio: `import
+# psycopg` y llamar `psycopg.connect(...)`.
+#
+# Reproducir esta lista, sin correr la suite y sin creerle a nadie. Fíjate en el
+# `isinstance(n, ast.ImportFrom)`: eso, y no otra cosa, es todo lo que se busca.
 #
 #   "../pruebas-confiables/.venv/bin/python3" -c "$(cat <<'PY'
 #   import ast, pathlib
@@ -2025,27 +2093,54 @@ _CAPTURAS_DECLARADAS = {
 }
 
 
-def test_la_frontera_de_los_simbolos_capturados_esta_declarada():
-    """FRONTERA 4: la puerta se instala corriendo, y quien llegó antes le gana.
+def test_la_captura_por_from_import_esta_declarada():
+    """UNA FORMA CONCRETA AVISA: `from psycopg… import …` antes de la puerta.
 
-    Ésta es la sexta vuelta sobre la misma guarda, y las cinco anteriores se
-    cerraron pensando «faltó cubrir un caso». No era eso: la puerta se pone
-    cambiando un atributo con el programa ya arrancado, así que **cualquier
-    importación anterior le gana por llegar primero**. Eso no es un caso que
-    falte, es el techo del método — por ahí siempre va a haber una décima forma.
-    Así que en vez de perseguirla, se declara y se le pone guardia.
+    El nombre dice lo que hace, y antes decía de más. Se llamaba
+    `test_la_frontera_de_los_simbolos_capturados_esta_declarada` y se leía como
+    si la FRONTERA 4 entera estuviera vigilada. No lo está: lo que esta prueba
+    lee es UNA forma de escribir la captura.
 
-    QUÉ SE VIGILA, y las dos mitades son derivadas:
-      · CUÁLES símbolos escapan → `_escapan_si_se_capturan()`, sacado de
+    POR QUÉ EXISTE. La puerta se pone cambiando un atributo con el programa ya
+    arrancado, así que cualquiera que se quedara antes con el símbolo le gana por
+    llegar primero. Eso no es un caso que falte cubrir: es el techo del método.
+
+    QUÉ VE Y QUÉ NO, medido el 8-sep-2026 sobre una copia fuera del repo:
+
+      · VE `from psycopg import connect` en un archivo nuevo → 1 rojo, con el
+        archivo y la línea en el mensaje.
+      · NO VE `x = psycopg.connect` en un archivo nuevo → 24 passed, 0 rojos en
+        este archivo. (Sobre la suite entera sale 1 rojo, pero es el censo de
+        archivos de `tests/test_buzon_que_no_se_ve.py`, que salta por cualquier
+        `.py` nuevo: comprobado con un archivo trivial sin psycopg, mismo rojo.
+        No es una detección de la captura.)
+        Y no es un caso distinto: `from psycopg import connect as a` y
+        `b = psycopg.connect` capturan EL MISMO objeto (`a is b` → True), así que
+        lo que escriba por ahí es igual de invisible para el libro. Tampoco ve
+        `getattr(psycopg, "connect")`, `self._c = psycopg.connect`, ni nada que no
+        sea un `ast.ImportFrom`.
+
+    POR QUÉ NO SE PERSIGUE LA FORMA QUE FALTA. Ésta es la séptima vuelta sobre la
+    misma guarda y cada una encontró una forma nueva. Todas comparten defecto:
+    miran CÓMO ESTÁ ESCRITO el código en vez de lo que hace. Ampliar el barrido a
+    las asignaciones traería la octava (`getattr`, un diccionario, un
+    `functools.partial`, un decorador) y eso no termina. Se decidió dejar de
+    prometer en vez de perseguir: la forma cubierta es real y frecuente —el propio
+    repo importa así en `db/db.py:17`—, y la que falta queda escrita acá.
+
+    QUÉ SE DERIVA Y QUÉ SE TECLEA, sin adornos:
+      · CUÁLES símbolos escapan → DERIVADO. `_escapan_si_se_capturan()`, de
         `dir()` + `issubclass` sobre el paquete instalado. Un pool nuevo de
         psycopg entra solo.
-      · DÓNDE se buscan → todos los `.py` que hay en el disco bajo el repo
-        (`_py_del_repo`), no un puñado de archivos nombrados a mano.
-
-    Lo único tecleado es `_CAPTURAS_DECLARADAS`, que son los sitios PERDONADOS, y
-    se dice: vale lo que valga la lista. Está escrita en el sentido estricto —lo
-    no declarado se pone rojo—, que es el único reparto al que no se llega por
-    olvido.
+      · EN QUÉ ARCHIVOS se busca → DERIVADO. Todos los `.py` que hay en el disco
+        bajo el repo (`_py_del_repo`), no un puñado nombrados a mano.
+      · CÓMO se busca → **TECLEADO**, y es lo que limita todo lo demás: un solo
+        `isinstance(n, ast.ImportFrom)`. Un símbolo nuevo entra solo en la lista
+        de arriba, pero solo se lo encuentra si alguien lo escribió con esa forma.
+      · QUÉ SE PERDONA → TECLEADO. `_CAPTURAS_DECLARADAS`, en el sentido estricto
+        —lo no declarado se pone rojo—, que es el único reparto al que no se llega
+        por olvido. Y agregar un sitio ahí es más barato que arreglarlo: el
+        trinquete está declarado arriba, junto a la lista.
 
     ¿Y EL TECHO ES DE VERDAD UN TECHO? Medido el 8-sep-2026, y la respuesta es
     que NO del todo — pero la salida no es gratis y por eso no se tomó acá:
@@ -2093,6 +2188,13 @@ def test_la_frontera_de_los_simbolos_capturados_esta_declarada():
         except (OSError, SyntaxError):
             continue
         for n in ast.walk(arbol):
+            # ⚠️ ACÁ ESTÁ EL TECHO DE ESTA PRUEBA, Y ES ESTA LÍNEA. Solo
+            # `ast.ImportFrom`. Una captura por asignación —`x = psycopg.connect`,
+            # `self._c = psycopg.connect`, `getattr(psycopg, "connect")`— se lleva
+            # EL MISMO objeto y pasa por acá sin que nadie la vea. No es un
+            # descuido: ampliar esto a las asignaciones abre la forma siguiente
+            # (un diccionario, un `partial`, un decorador), porque lo que se mira
+            # es cómo está escrito el código y no lo que hace. Ver el docstring.
             if not isinstance(n, ast.ImportFrom):
                 continue
             for alias in n.names:
@@ -2108,9 +2210,13 @@ def test_la_frontera_de_los_simbolos_capturados_esta_declarada():
         + "\n  ".join(f"{a}: from {m} import {n}" for a, m, n in sorted(nuevas))
         + "\n  La forma que SÍ ve la puerta es dejar el módulo de por medio: "
           "`import psycopg` y llamar `psycopg.connect(...)`, o `import "
-          "psycopg_pool` y `psycopg_pool.AsyncConnectionPool(...)`. Si de verdad "
-          "hace falta capturarlo, va a _CAPTURAS_DECLARADAS con su motivo — pero "
-          "entonces ese sitio escribe a ciegas y hay que decidirlo, no heredarlo.")
+          "psycopg_pool` y `psycopg_pool.AsyncConnectionPool(...)`.\n"
+          "  Y lo otro que se puede hacer, dicho para que se elija a sabiendas y "
+          "no por salir del paso: meter el sitio en `_CAPTURAS_DECLARADAS` pone "
+          "esto verde en UNA línea, sin tocar el módulo y con la escritura a "
+          "ciegas viva. Eso es más barato que arreglarlo, y por eso hace falta "
+          "decirlo: quien lo haga está DECIDIENDO que ese sitio escribe a ciegas, "
+          "y esa decisión se hereda. No se hereda por descuido.")
 
     muertas = _CAPTURAS_DECLARADAS - hallados
     assert not muertas, (
