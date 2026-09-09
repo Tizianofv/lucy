@@ -42,6 +42,30 @@ definitivo» con una repregunta genérica. Un typo en el menú del panel dejaba 
 Lucy sin contestar nada. Eso se fija abajo en las dos direcciones: que siga
 contestando, y que el aviso salga igual de fuerte.
 
+Y EL CUARTO, EL DE LA NOCHE DEL 9-sep-2026: EL MISMO, POR OTRA PUERTA.
+
+El arreglo del radio de daño blindó el HTML mal formado y dejó afuera el
+archivo ilegible, que llega por la misma llamada. `pantallas()` atrapaba
+`OSError` y `UnicodeDecodeError` NO es un `OSError` —es `ValueError`—, así que
+un `base.html` con la codificación cambiada (un pegado desde Windows-1252, un
+merge mal resuelto) se escapaba de las dos redes y volvía a dejar a Lucy sin
+contestar nada. Medido antes del arreglo, llamando al código real:
+
+    · base.html con un byte 0xff  → UnicodeDecodeError SIN ATRAPAR
+    · el archivo no está          → aviso y Lucy sigue contestando
+    · una carpeta en su lugar     → aviso y Lucy sigue contestando
+
+Y la prueba de «un solo sitio» tenía la misma especie de defecto un centímetro
+más abajo: buscaba el TEXTO «MenuIlegible» en el `ast.dump` del `except`, así
+que un segundo sitio que la importara con alias se le escapaba. Medido: con la
+prueba vieja, `from web.menu import MenuIlegible as ME … except ME:` daba
+1 passed. Ahora se resuelve el símbolo contra los imports del archivo.
+
+Las dos veces el diagnóstico fue el mismo —el criterio bueno aplicado a un
+tramo y no a su hermano— y las dos veces el arreglo fue quitarle la lista: la
+lectura del archivo se blinda por el ALCANCE del `try` y no por los tipos, y el
+`except` se reconoce por la CLASE y no por su nombre escrito.
+
 Herméticos: se stubea psycopg antes de importar, igual que en
 test_esquema_del_modelo.py. No tocan ninguna base y no llaman a ningún modelo.
 
@@ -309,6 +333,105 @@ def test_un_menu_ilegible_revienta_en_vez_de_quedarse_callado():
                        ' data-nota="dice &quot;hola&quot;">Equis</a></nav>')
 
 
+def test_no_poder_leer_el_archivo_es_menu_ilegible_se_llame_como_se_llame():
+    """EL FONDO: acá no puede haber una lista de tipos de fallo.
+
+    El `except` de la lectura decía `OSError`, y `UnicodeDecodeError` NO es un
+    OSError. Un `base.html` con la codificación cambiada se escapaba de
+    `pantallas()`, se escapaba del `except MenuIlegible` de `cerebro/agente.py`
+    y terminaba en «Fallo definitivo»: Lucy sin contestar nada.
+
+    Lo que se prueba acá NO es que atrape `UnicodeDecodeError` —eso sería la
+    lista de mañana, con un elemento más—. El tipo del fallo LO INVENTA ESTA
+    PRUEBA EN EL MOMENTO, así que ninguna lista escrita en ninguna parte puede
+    contenerlo: si alguien vuelve a enumerar tipos, esto se pone rojo sin que
+    nadie tenga que acordarse de agregar el caso nuevo.
+    """
+    class _FalloQueNadiePuedeTenerEnUnaLista(Exception):
+        pass
+
+    class _RutaQueNoSeDejaLeer:
+        def read_text(self, *a, **k):
+            raise _FalloQueNadiePuedeTenerEnUnaLista("ni OSError ni Unicode")
+
+        def __str__(self):
+            return "<una ruta de prueba>"
+
+    original = menu.BASE
+    menu.BASE = _RutaQueNoSeDejaLeer()
+    try:
+        with pytest.raises(menu.MenuIlegible) as e:
+            menu.pantallas()
+    finally:
+        menu.BASE = original
+
+    assert "_FalloQueNadiePuedeTenerEnUnaLista" in str(e.value), (
+        f"el motivo real no llega al mensaje: {e.value}. Sin el tipo adentro, "
+        "el que lea el log no sabe qué le pasó al menú.")
+    assert isinstance(e.value.__cause__, _FalloQueNadiePuedeTenerEnUnaLista), (
+        "se perdió la excepción original: sin `from e` el rastro no lleva al "
+        "fallo de verdad")
+
+
+def test_un_fallo_del_parseo_no_se_disfraza_de_menu_ilegible():
+    """EL OTRO EXTREMO, y lo fija el ALCANCE, no una lista.
+
+    Tragarse cualquier cosa tampoco sirve: si el `try` de la lectura creciera
+    hasta cubrir el parseo, un error de programación de ahí abajo saldría
+    disfrazado de «no pude leer el menú», `cerebro/agente.py` se lo tragaría y
+    Lucy seguiría contestando con un prompt al que le falta algo, sin que nadie
+    se entere.
+
+    Se rompe algo que corre DESPUÉS de la lectura y se exige que salga entero.
+    """
+    class _NavRoto:
+        def findall(self, *a, **k):
+            raise ValueError("esto no es un fallo de lectura")
+
+    original = menu._NAV
+    menu._NAV = _NavRoto()
+    try:
+        with pytest.raises(ValueError):
+            menu.pantallas("<nav></nav>")
+    finally:
+        menu._NAV = original
+
+
+def test_una_pantalla_no_se_evapora_por_como_estan_escritas_las_comillas():
+    """El mismo defecto, un centímetro más abajo: el atributo por su forma.
+
+    `_atributo` leía solo `nombre="valor"`. Con `href='/tareas'` —HTML
+    perfectamente válido— el href salía None, la ruta salía "", no empezaba por
+    "/" y LA PANTALLA SE SALTABA EN SILENCIO. Su hermano `data-tambien`, con las
+    mismas comillas simples, sí caía del lado seguro. Medido el 9-sep-2026 sobre
+    el mismo menú, cambiando solo las comillas:
+
+        href="/tareas"   → ['/', '/tareas']
+        href='/tareas'   → ['/']            ← la pantalla se evaporó
+
+    Acá se exige que las tres formas válidas de HTML den la MISMA pantalla, y
+    que un atributo que está y no se puede leer reviente en vez de saltarse.
+    """
+    sana = '<a href="/" data-tambien="el arranque">Portada</a>'
+    formas = [
+        '<a href="/tareas" data-tambien="los pendientes">Tareas</a>',
+        "<a href='/tareas' data-tambien='los pendientes'>Tareas</a>",
+        "<a href=/tareas data-tambien='los pendientes'>Tareas</a>",
+    ]
+    for forma in formas:
+        pantallas = menu.pantallas(f"<nav>{sana}{forma}</nav>")
+        assert [p.ruta for p in pantallas] == ["/", "/tareas"], (
+            f"la pantalla cambió según cómo se escribió el atributo: {forma} "
+            f"→ {[p.ruta for p in pantallas]}")
+        assert pantallas[1].frases == ("los pendientes",), (
+            f"las frases cambiaron según las comillas: {forma} → {pantallas}")
+
+    # Y el atributo que está pero no se puede leer no se salta en silencio.
+    with pytest.raises(menu.MenuIlegible):
+        menu.pantallas(f'<nav>{sana}<a href data-tambien="lo de x">Equis</a>'
+                       '</nav>')
+
+
 def test_un_enlace_de_fuera_del_panel_no_es_una_pantalla():
     """La única exención, y se puede predecir sin correr nada.
 
@@ -328,9 +451,27 @@ def test_un_enlace_de_fuera_del_panel_no_es_una_pantalla():
         f"la frontera no es la que dice el archivo: {pantallas}")
 
 
+@pytest.mark.parametrize("romper, motivo", [
+    (lambda p: p.write_text("<header><nav><a href='/'>Resumen</a></header>",
+                            encoding="utf-8"),
+     "un </nav> sin cerrar"),
+    (lambda p: p.write_bytes(b'<nav><a href="/" data-tambien="algo">'
+                             b"Resumen \xff</a></nav>"),
+     "un byte que no es UTF-8 valido"),
+    (lambda p: None, "el archivo del menu no esta"),
+    (lambda p: p.mkdir(), "donde iba el menu hay una carpeta"),
+])
 def test_un_menu_roto_no_deja_a_lucy_sin_contestar(monkeypatch, tmp_path,
-                                                   caplog):
+                                                   caplog, romper, motivo):
     """EL RADIO DE DAÑO, medido en las dos direcciones.
+
+    LAS CUATRO FORMAS DE ROMPERLO ENTRAN POR CAMINOS DISTINTOS a propósito: el
+    `</nav>` sin cerrar revienta en el parseo, el byte que no es UTF-8 revienta
+    en la decodificación (`UnicodeDecodeError`, que NO es un `OSError`) y los
+    otros dos en el sistema de archivos. El del byte es el que se escapaba: el
+    9-sep-2026 salía de `pantallas()` sin atrapar, se escapaba del
+    `except MenuIlegible` de `cerebro/agente.py` y terminaba en «Fallo
+    definitivo».
 
     `_sistema()` se arma en CADA mensaje. Antes de este arreglo un `</nav>` mal
     cerrado lo hacía lanzar, y `cerebro/interpretar.py::_procesar` mandaba la
@@ -353,8 +494,7 @@ def test_un_menu_roto_no_deja_a_lucy_sin_contestar(monkeypatch, tmp_path,
     assert len(herramientas) > 5, f"no reconocí las herramientas: {herramientas}"
 
     roto = tmp_path / "base.html"
-    roto.write_text("<header><nav><a href='/'>Resumen</a></header>",
-                    encoding="utf-8")
+    romper(roto)
     monkeypatch.setattr(menu, "BASE", roto)
 
     with caplog.at_level("ERROR"):
@@ -400,6 +540,137 @@ def test_un_fallo_que_no_es_del_menu_no_se_traga(monkeypatch):
         agente.herramientas_del_prompt()
 
 
+# ── Quién puede atrapar la excepción del menú, resuelto por IDENTIDAD ────
+#
+# POR QUÉ NO ALCANZA CON BUSCARLE EL NOMBRE, medido el 9-sep-2026:
+#
+# Esto miraba si el texto "MenuIlegible" aparecía en el `ast.dump` del tipo del
+# `except`. Un segundo sitio que la importara con alias —`from web.menu import
+# MenuIlegible as ME` … `except ME:`— se lo saltaba entero: el defecto era
+# exactamente el que persigue el resto de este archivo, comprobar por el nombre
+# escrito en vez de por lo que la cosa ES.
+#
+# Acá el módulo y el nombre de la clase se le preguntan al objeto real, y los
+# `except` se resuelven contra los imports de cada archivo. Da igual el alias,
+# da igual si mañana la clase se llama distinto.
+_MOD_OBJETIVO = menu.MenuIlegible.__module__      # derivado, no tecleado
+_NOM_OBJETIVO = menu.MenuIlegible.__name__        # derivado, no tecleado
+
+
+def _archivos_del_repo():
+    """Los `.py` que hay en disco. Uno nuevo con el defecto se pone rojo solo."""
+    for carpeta, _, archivos in os.walk(RAIZ):
+        if ".git" in carpeta.split(os.sep):
+            continue
+        for archivo in sorted(archivos):
+            if archivo.endswith(".py"):
+                yield os.path.join(carpeta, archivo)
+
+
+def _nombres_de_modulo(ruta: str) -> set[str]:
+    """Con qué nombres se puede importar este archivo.
+
+    Son dos porque el repo se importa de dos maneras: `cerebro.agente` desde la
+    raíz y `test_x` a secas —pytest mete `tests/` en el path—. Con uno solo, un
+    re-export entre archivos de pruebas quedaría invisible.
+    """
+    rel = os.path.relpath(ruta, RAIZ)[: -len(".py")]
+    partes = [p for p in rel.split(os.sep) if p != "__init__"]
+    return {".".join(partes), partes[-1]} if partes else set()
+
+
+def _punteado(nodo) -> str | None:
+    """`a.b.c` como texto, o None si la expresión no es un nombre punteado.
+
+    None es «no lo sé», y más abajo eso cuenta como rojo. Un `except` cuyo tipo
+    sale de una llamada o de un subíndice no se puede resolver leyendo, así que
+    no se da por bueno.
+    """
+    partes = []
+    while isinstance(nodo, ast.Attribute):
+        partes.append(nodo.attr)
+        nodo = nodo.value
+    if not isinstance(nodo, ast.Name):
+        return None
+    partes.append(nodo.id)
+    return ".".join(reversed(partes))
+
+
+def _es_la_clase(nodo, clases: set[str], modulos: dict[str, str],
+                 expone: dict[str, set[str]]) -> bool:
+    """¿Esta expresión nombra la clase del menú, con el alias que sea?"""
+    if isinstance(nodo, ast.Name):
+        return nodo.id in clases
+    punteado = _punteado(nodo)
+    if punteado is None or "." not in punteado:
+        return False
+    prefijo, _, atributo = punteado.rpartition(".")
+    return atributo in expone.get(modulos.get(prefijo, prefijo), set())
+
+
+def _como_la_llama(arbol, paquete: str, expone: dict[str, set[str]]):
+    """(nombres de la clase, alias de módulos) según los imports de ESE archivo.
+
+    Se sobre-aproxima a propósito: se miran también los imports que están dentro
+    de una función —`cerebro/agente.py` importa `web.menu` ahí adentro— y eso
+    puede exponer de más. De más es el lado seguro; de menos es el agujero.
+    """
+    clases: set[str] = set()
+    modulos: dict[str, str] = {}
+    for _ in range(4):          # un alias del alias necesita otra vuelta
+        antes = (len(clases), len(modulos))
+        for n in ast.walk(arbol):
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    modulos[a.asname or a.name] = a.name
+                    if a.asname is None:
+                        modulos[a.name] = a.name   # `import web.menu` → web.menu.X
+            elif isinstance(n, ast.ImportFrom):
+                origen = n.module or ""
+                if n.level:                        # import relativo
+                    base = paquete.split(".") if paquete else []
+                    base = base[: len(base) - (n.level - 1)]
+                    origen = ".".join([p for p in base if p] +
+                                      ([origen] if origen else []))
+                for a in n.names:
+                    local = a.asname or a.name
+                    if a.name in expone.get(origen, set()):
+                        clases.add(local)
+                    modulos[local] = f"{origen}.{a.name}" if origen else a.name
+            elif (isinstance(n, ast.Assign) and len(n.targets) == 1
+                    and isinstance(n.targets[0], ast.Name)
+                    and _es_la_clase(n.value, clases, modulos, expone)):
+                clases.add(n.targets[0].id)        # `OTRA = ME`
+        if (len(clases), len(modulos)) == antes:
+            break
+    return clases, modulos
+
+
+def _mapa_del_repo():
+    """Cada archivo con su árbol, y qué módulo expone la clase, a punto fijo.
+
+    El punto fijo es lo que le pone FONDO: si `a.py` la re-exporta y `b.py` la
+    trae de `a`, `b` queda igual de vigilado que si la importara del original.
+    """
+    arboles = {}
+    for ruta in _archivos_del_repo():
+        with open(ruta, encoding="utf-8") as f:
+            arboles[ruta] = (ast.parse(f.read(), ruta), _nombres_de_modulo(ruta))
+
+    expone: dict[str, set[str]] = {_MOD_OBJETIVO: {_NOM_OBJETIVO}}
+    while True:
+        crecio = False
+        for ruta, (arbol, nombres) in arboles.items():
+            paquete = sorted(nombres, key=len)[-1].rpartition(".")[0]
+            clases, _ = _como_la_llama(arbol, paquete, expone)
+            for m in nombres:
+                if not clases <= expone.get(m, set()):
+                    expone.setdefault(m, set()).update(clases)
+                    crecio = True
+        if not crecio:
+            return arboles, expone
+
+
 def test_un_solo_sitio_se_traga_el_menu_ilegible():
     """¿Quiénes son sus hermanos, y lo cumplen todos?
 
@@ -408,29 +679,53 @@ def test_un_solo_sitio_se_traga_el_menu_ilegible():
     va a elegir su propio criterio de qué decirle al modelo, y los dos van a
     separarse. Así que se cuentan, y son uno.
 
-    Los archivos se sacan del disco, no de una lista escrita acá: uno nuevo con
-    el defecto se pone rojo solo. Y se leen con `ast`, no buscándoles texto: un
-    `except` no se reconoce por cómo está escrito.
-    """
-    culpables = []
-    for carpeta, _, archivos in os.walk(RAIZ):
-        if ".git" in carpeta.split(os.sep):
-            continue
-        for archivo in archivos:
-            if not archivo.endswith(".py"):
-                continue
-            ruta = os.path.join(carpeta, archivo)
-            arbol = ast.parse(open(ruta, encoding="utf-8").read(), ruta)
-            for nodo in ast.walk(arbol):
-                if not isinstance(nodo, ast.ExceptHandler) or nodo.type is None:
-                    continue
-                if "MenuIlegible" in ast.dump(nodo.type):
-                    culpables.append(os.path.relpath(ruta, RAIZ))
+    LA FRONTERA DE ESTA PRUEBA, en una línea para que se pueda predecir sin
+    correrla: es culpable todo `except` cuyo tipo RESUELVE a la clase real del
+    menú siguiendo los imports del archivo —con el alias que sea, y aunque la
+    clase se llame distinto mañana—, y lo que no se pueda resolver, en un
+    archivo que la tenga a mano, también.
 
-    assert culpables == ["cerebro/agente.py"], (
+    Y lo que queda FUERA, dicho para que nadie lo dé por cubierto: quien la
+    atrape por herencia (`except Exception`, `except RuntimeError`) no se cuenta
+    acá; de eso habla `test_un_fallo_que_no_es_del_menu_no_se_traga`. Y quien se
+    la consiga por un import armado al vuelo tampoco: eso ya no se puede leer.
+
+    DE DÓNDE SALEN LAS DOS LISTAS, porque una comprobación vale lo que valga su
+    lista: los archivos son los `.py` que hay en disco, no un inventario escrito
+    acá; y los nombres de la clase salen del objeto real y de los imports de
+    cada archivo, no de un prefijo ni de un texto.
+    """
+    arboles, expone = _mapa_del_repo()
+    culpables, dudosos = set(), []
+
+    for ruta, (arbol, nombres) in arboles.items():
+        paquete = sorted(nombres, key=len)[-1].rpartition(".")[0]
+        clases, modulos = _como_la_llama(arbol, paquete, expone)
+        # ¿Este archivo tiene la clase al alcance de la mano? Si no la tiene, no
+        # puede nombrarla, y un `except` raro suyo no habla del menú.
+        alcanza = bool(clases) or any(m in expone for m in modulos.values())
+        rel = os.path.relpath(ruta, RAIZ)
+
+        for nodo in ast.walk(arbol):
+            if not isinstance(nodo, ast.ExceptHandler) or nodo.type is None:
+                continue
+            partes = (nodo.type.elts if isinstance(nodo.type, ast.Tuple)
+                      else [nodo.type])
+            for parte in partes:
+                if _es_la_clase(parte, clases, modulos, expone):
+                    culpables.add(rel)
+                elif _punteado(parte) is None and alcanza:
+                    dudosos.append(f"{rel}:{parte.lineno}")
+
+    assert not dudosos, (
+        f"hay {len(dudosos)} `except` que no puedo resolver en archivos que "
+        f"tienen la excepción del menú a mano: {dudosos}. Lo que no sé leer "
+        "cuenta como rojo: escribí el tipo con su nombre y esto se apaga.")
+
+    assert sorted(culpables) == ["cerebro/agente.py"], (
         f"el que se traga un menú ilegible tiene que ser uno solo y ser el "
-        f"armado del prompt; hoy son {culpables}. Dos sitios que se lo traguen "
-        "eligen por su cuenta qué decirle al modelo cuando no hay menú.")
+        f"armado del prompt; hoy son {sorted(culpables)}. Dos sitios que se lo "
+        "traguen eligen por su cuenta qué decirle al modelo cuando no hay menú.")
 
 
 if __name__ == "__main__":

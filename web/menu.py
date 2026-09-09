@@ -52,6 +52,23 @@ pantalla y no se mira. Todo lo demás que esté dentro de esa frontera y no se
 pueda leer entero —sin nombre visible, sin `data-tambien`, con una nota que
 lleve comillas— es MenuIlegible, no un caso que se salta.
 
+Y LA REGLA DE LA QUE SALE ESA FRONTERA, agregada el 9-sep-2026 después de que
+el mismo defecto apareciera dos veces más: LO QUE NO SE PUEDE LEER ES
+MenuIlegible, NO UNA LISTA DE MOTIVOS.
+
+    · leyendo el ARCHIVO: no hay lista de excepciones. La frontera es el
+      alcance del `try`, y adentro está solo la lectura, así que cualquier
+      fallo de ahí —`OSError`, `UnicodeDecodeError`, o el que inventen
+      mañana— es «no pude leer el menú» por construcción.
+    · leyendo un ATRIBUTO: no hay lista de formas de escribirlo. Se leen las
+      tres válidas de HTML, y un atributo que está y no se entiende revienta
+      en vez de saltarse — los tres atributos por la misma puerta (`_leer`).
+
+Las dos veces el defecto tuvo la misma forma —el criterio bueno en un tramo y
+no en su hermano— y las dos veces el arreglo fue el mismo: que lo que no se
+sabe clasificar caiga del lado seguro SOLO, sin que nadie lo agregue a una
+lista.
+
 Lo que NO se hace acá: adivinar. Un fallback silencioso devolvería una lista
 vacía, el prompt quedaría sin pantallas y todo seguiría en verde —que es justo
 la forma de fallar que este archivo viene a cerrar—. Quién se banca el
@@ -77,15 +94,50 @@ _ENLACE = re.compile(r"<a\b([^>]*)>(.*?)</a>", re.S | re.I)
 _MARCAS = re.compile(r"<[^>]+>")
 
 
-def _atributo(atributos: str, nombre: str) -> str | None:
-    """El valor de un atributo del `<a>`, o None si no está.
+# Los tres modos válidos de escribir un valor en HTML: entre comillas dobles,
+# entre simples, y suelto hasta el primer espacio. Se reconocen los tres porque
+# un atributo es lo que es —no cómo lo escribió quien editó la plantilla—, y
+# porque el editor de cualquiera puede cambiar unas por otras sin avisar.
+_VALOR = r'"([^"]*)"|\'([^\']*)\'|([^\s>]+)'
+
+# «El atributo está y no se pudo leer» es distinto de «no está»: lo primero es
+# MenuIlegible, lo segundo puede ser la exención declarada. Sin un valor propio
+# para el primer caso, los dos se confunden en None y el ilegible se salta en
+# silencio, que es justo la forma de fallar que este archivo cierra.
+ILEGIBLE = object()
+
+
+def _atributo(atributos: str, nombre: str) -> str | None | object:
+    """El valor de un atributo del `<a>`: None si no está, ILEGIBLE si no se lee.
 
     Se busca por nombre y no por posición: el orden de los atributos en el HTML
     no es asunto de nadie, y una guarda que dependa de él se rompe el día que
     alguien reordene la línea.
+
+    POR QUÉ MIRA LAS TRES FORMAS DE ESCRIBIR UN VALOR, medido el 9-sep-2026:
+
+    Acá decía `nombre="([^"]*)"` —solo comillas dobles—. Con `href='/tareas'`,
+    que es HTML perfectamente válido, `href` salía None, la ruta salía "", no
+    empezaba por "/" y la pantalla SE SALTABA EN SILENCIO: desaparecía del
+    prompt sin un rojo en ninguna parte. Medido sobre el mismo menú, cambiando
+    solo las comillas del href:
+
+        href="/tareas"   → ['/', '/tareas']
+        href='/tareas'   → ['/']          ← la pantalla se evaporó
+        data-tambien='…' → MenuIlegible   ← el hermano sí caía del lado seguro
+
+    O sea: el mismo criterio aplicado a un atributo y no a su hermano, y el que
+    se lo saltaba era justo el que decide si algo es una pantalla. Reconocer un
+    atributo por CÓMO ESTÁ ESCRITO es la misma especie de defecto que este
+    archivo persigue en el prompt.
     """
-    m = re.search(rf'\b{re.escape(nombre)}="([^"]*)"', atributos, re.I)
-    return None if m is None else m.group(1)
+    limite = rf'(?<![-\w]){re.escape(nombre)}(?![-\w])'
+    m = re.search(rf"{limite}\s*=\s*(?:{_VALOR})", atributos, re.I)
+    if m is not None:
+        return next(g for g in m.groups() if g is not None)
+    # Está escrito pero sin un valor que se pueda leer. No se adivina y no se
+    # salta: quien llama decide, y hoy eso es MenuIlegible.
+    return ILEGIBLE if re.search(limite, atributos, re.I) else None
 
 
 class MenuIlegible(RuntimeError):
@@ -96,6 +148,24 @@ class MenuIlegible(RuntimeError):
     esto y nada más. Un `except Exception` alrededor del armado del prompt se
     tragaría también los errores de verdad y los dejaría en silencio.
     """
+
+
+def _leer(atributos: str, nombre: str) -> str | None:
+    """UNA sola puerta para los tres atributos del enlace.
+
+    Los tres —`href`, `data-tambien`, `data-nota`— pasan por acá, así que
+    ninguno puede tener su propio criterio para un atributo escrito de una
+    forma que no se entiende. Ése fue el defecto del 9-sep-2026: `data-tambien`
+    ilegible reventaba y `href` ilegible se saltaba en silencio.
+    """
+    valor = _atributo(atributos, nombre)
+    if valor is ILEGIBLE:
+        raise MenuIlegible(
+            f"{BASE}: el enlace <a {' '.join(atributos.split())}> declara "
+            f"{nombre} y no le puedo leer el valor. Un atributo que está y no "
+            "se entiende no se adivina ni se salta: saltarlo en silencio es "
+            "exactamente cómo desaparece una pantalla sin que nadie se entere.")
+    return valor
 
 
 class Pantalla(NamedTuple):
@@ -125,9 +195,32 @@ def pantallas(fuente: str | None = None) -> list[Pantalla]:
     tocar la plantilla real. Sin argumento lee `web/plantillas/base.html`.
     """
     if fuente is None:
+        # POR QUÉ ESTE `except` NO ES UNA LISTA DE TIPOS, medido el 9-sep-2026:
+        #
+        # Acá decía `except OSError`, y `UnicodeDecodeError` NO es un OSError
+        # (es ValueError). O sea que un `base.html` guardado en otra
+        # codificación —un pegado desde Windows-1252, un merge mal resuelto—
+        # se escapaba de acá, se escapaba del `except MenuIlegible` de
+        # `cerebro/agente.py`, y terminaba en «Fallo definitivo»: Lucy sin
+        # contestar NADA, ni la hora. Exactamente el fallo que este archivo
+        # existe para cerrar, entrando por otra puerta.
+        #
+        # Agregarle `UnicodeDecodeError` a la lista tapa el de hoy y deja
+        # plantado el de mañana, que es la misma forma de fallar que persigue
+        # todo lo demás de este archivo. Así que la frontera NO es el tipo:
+        # es el ALCANCE del `try`, y adentro hay UNA sola operación —leer el
+        # archivo del menú—. Todo lo que salga de ahí es, por construcción, «no
+        # pude leer el menú», se llame como se llame y lo invente quien lo
+        # invente. Un tipo nuevo cae del lado seguro sin que nadie lo agregue a
+        # ninguna parte.
+        #
+        # Y el otro extremo queda cerrado por el mismo alcance: el parseo de
+        # abajo está FUERA del `try`, así que un error de verdad ahí sigue
+        # saliendo entero. `BaseException` también queda afuera a propósito —un
+        # Ctrl-C no es un menú ilegible—.
         try:
             html = BASE.read_text(encoding="utf-8")
-        except OSError as e:
+        except Exception as e:
             raise MenuIlegible(
                 f"{BASE}: no pude leer el archivo del menú "
                 f"({type(e).__name__}: {e}). Sin él no sé qué pantallas tiene "
@@ -145,7 +238,7 @@ def pantallas(fuente: str | None = None) -> list[Pantalla]:
     salida: list[Pantalla] = []
     for bloque in bloques:
         for atributos, texto in _ENLACE.findall(bloque):
-            ruta = _atributo(atributos, "href") or ""
+            ruta = _leer(atributos, "href") or ""
             # La frontera, y es la única exención que hay: un enlace del menú
             # que no apunta a una ruta del propio panel no es una pantalla del
             # panel. Se puede decir en una línea y se puede predecir sin correr
@@ -161,7 +254,7 @@ def pantallas(fuente: str | None = None) -> list[Pantalla]:
                     "silencio es justo cómo desaparece una pantalla sin que "
                     "nadie se entere.")
 
-            crudo = _atributo(atributos, "data-tambien")
+            crudo = _leer(atributos, "data-tambien")
             frases = tuple(f for f in (t.strip() for t in (crudo or "").split(","))
                            if f)
             if not frases:
@@ -173,7 +266,7 @@ def pantallas(fuente: str | None = None) -> list[Pantalla]:
                     "pide por su nombre de todos los días. Es obligatorio: una "
                     "pantalla nueva no puede nacer muda.")
 
-            nota = (_atributo(atributos, "data-nota") or "").strip()
+            nota = (_leer(atributos, "data-nota") or "").strip()
             if '"' in nota or "&quot;" in nota:
                 raise MenuIlegible(
                     f"{BASE}: la data-nota de {ruta} lleva comillas. Las "
