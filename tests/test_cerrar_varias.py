@@ -1086,22 +1086,35 @@ def _buscar_modulo_de_verdad(nombre: str):
 
 
 def _vias_de_conexion(*modulos) -> dict:
-    """Toda forma de CONSEGUIR una conexión, derivada del paquete instalado.
+    """Los SITIOS donde se instala la puerta, derivados del paquete instalado.
+
+    Ojo con el nombre: esto NO es «toda forma de conseguir una conexión», que es
+    lo que decía antes y era falso. Son los sitios donde la puerta se pone. Y la
+    puerta se pone CAMBIANDO UN ATRIBUTO mientras el programa corre, así que solo
+    la ve quien resuelva ese atributo DESPUÉS. Ver `_ESCAPAN_SI_SE_CAPTURAN` y la
+    FRONTERA 4, que es el techo del método y no un caso que falte cubrir.
 
     DE DÓNDE SALE LA LISTA, porque importa: de `dir()` de cada módulo y de
     `issubclass` contra `psycopg.BaseConnection` y `psycopg.cursor.BaseCursor`.
     NO de nombres ni de prefijos. Si mañana psycopg publica una clase de
     conexión o un pool más, entra sola en la puerta y nadie tiene que acordarse.
 
-    Tres formas, y las tres derivadas:
-      · una clase de conexión (subclase de `BaseConnection`) → se dobla `connect`
-      · un pool (clase con `.connection` que no es cursor ni conexión) → `connection`
-      · un atajo de módulo que es un método YA VINCULADO a una clase de conexión
-        → se dobla en el módulo. `psycopg.connect` es exactamente esto: medido,
+    Tres formas, y las tres derivadas. Lo que las separa de verdad es DÓNDE se
+    pisa el atributo, porque de eso depende a quién le gana la puerta:
+
+      · `clase-de-conexion` (subclase de `BaseConnection`) → se dobla `connect`
+        DENTRO DE LA CLASE. Quien tenga la clase agarrada de antes sigue viendo
+        el doble, porque el atributo se resuelve en el momento de llamarlo.
+      · `pool` (clase con `.connection` que no es cursor ni conexión) → se dobla
+        EN EL MÓDULO. Quien tenga la clase agarrada de antes NO ve el doble.
+      · `atajo-de-modulo`: un método YA VINCULADO a una clase de conexión → se
+        dobla EN EL MÓDULO, y tampoco lo ve quien lo capturó antes.
+        `psycopg.connect` es exactamente esto: medido,
         `psycopg.connect == psycopg.Connection.connect`, un classmethod vinculado.
         Por eso doblar la clase no alcanza y hay que pisar también el atajo.
 
-    Medido el 8-sep-2026: devuelve las OCHO del levantamiento y ninguna de más.
+    Medido el 8-sep-2026: devuelve las OCHO del levantamiento y ninguna de más
+    — tres en la clase y cinco en el módulo.
     """
     real = _modulo_de_verdad("psycopg")
     if real is None:
@@ -1132,6 +1145,29 @@ def _vias_de_conexion(*modulos) -> dict:
                   and issubclass(obj.__self__, base_con)):
                 fuera[etiqueta] = ("atajo-de-modulo", mod, nom, obj)
     return fuera
+
+
+def _escapan_si_se_capturan() -> set[tuple[str, str]]:
+    """Los `(módulo, nombre)` a los que la puerta NO le gana si se capturan antes.
+
+    DERIVADO, no tecleado: son exactamente las vías que `_vias_de_conexion`
+    clasifica como `pool` o `atajo-de-modulo`, o sea las que se doblan pisando un
+    atributo DEL MÓDULO. Un `from psycopg_pool import ConnectionPool` se queda con
+    el objeto de verdad y ya no vuelve a mirar el módulo nunca más.
+
+    Las `clase-de-conexion` NO entran: ésas se doblan dentro de la clase, así que
+    capturar la clase con `from psycopg import Connection` es inofensivo — el
+    `.connect` se resuelve al llamarlo y ahí ya está el doble.
+
+    Si psycopg publica mañana otro pool o otro atajo de módulo, entra solo acá y
+    la FRONTERA 4 empieza a vigilarlo sin que nadie se acuerde.
+    """
+    real = _modulo_de_verdad("psycopg")
+    real_pool = _modulo_de_verdad("psycopg_pool")
+    return {(mod.__name__, nom)
+            for (clase, mod, nom, _obj) in _vias_de_conexion(
+                real, real_pool).values()
+            if clase in ("pool", "atajo-de-modulo")}
 
 
 # ── La red de los mensajes: los cuatro sitios por donde se puede salir ────
@@ -1230,7 +1266,14 @@ class _RedDeMensajes:
 
     # -- la puerta del cursor ---------------------------------------------
     def poner_la_puerta(self) -> None:
-        """Dobla el cursor y TODAS las vías de conseguir una conexión.
+        """Dobla el cursor y las ocho vías de conseguir una conexión.
+
+        NO dice «todas», y la palabra importa: la puerta se instala CAMBIANDO UN
+        ATRIBUTO con el programa ya corriendo, así que solo alcanza a quien
+        resuelva ese atributo después. Un `from psycopg import connect` hecho
+        antes se quedó con la función de verdad y escribe sin que el libro se
+        entere. Eso es el techo del método, está declarado como FRONTERA 4 y lo
+        vigila `test_la_frontera_de_los_simbolos_capturados_esta_declarada`.
 
         Deja constancia de si pudo o no en `self.motivo_sin_puerta`: quien mida
         algo con la puerta caída tiene que poder ponerse rojo en vez de dar un
@@ -1541,21 +1584,35 @@ def test_ninguna_escritura_llega_a_la_base_sin_su_huella():
         ninguna tabla de dominio, así que la cobertura sobre las que escriben
         era completa. El piso de abajo existe para que eso no se degrade en
         silencio.
-      · La red cubre las OCHO formas de conseguir una conexión, derivadas del
-        paquete instalado y no de una lista escrita acá, y que la puerta esté
+      · La red se instala en las OCHO formas de conseguir una conexión, derivadas
+        del paquete instalado y no de una lista escrita acá, y que la puerta esté
         de verdad puesta lo demuestra corriendo
         `test_la_puerta_del_cursor_esta_puesta_...`, mandando una sentencia
-        centinela por cada una.
+        centinela por cada una. **Cubre las ocho para quien las llame por el
+        atributo** —`psycopg.connect(...)`, `psycopg_pool.ConnectionPool(...)`—,
+        que es como se escribe. NO cubre a quien se haya quedado con el símbolo
+        de antes; eso es la FRONTERA 4 de abajo.
       · El «mismo bloque de conexión» es la unidad. Una escritura y su huella
         repartidas en dos bloques distintos saldrían rojas aunque el efecto
         final fuera correcto; hoy `crud` no lo hace nunca.
 
-    LA FRONTERA, corregida el 8-sep-2026. Lo que este bloque decía antes era
-    falso: «lo que queda fuera es escribir sin usar Python». Medido, TRES formas
-    en Python puro salían verdes —`psycopg.connect` síncrono, el pool síncrono y
-    `psycopg.Connection.connect`— y una la usa el propio repo en
-    `db/backup.py:380`. Lo que de verdad queda fuera son cuatro cosas, y las dos
-    primeras NO se confían: tienen prueba propia que las pone rojas solas.
+    LA FRONTERA, corregida dos veces el 8-sep-2026.
+
+    La PRIMERA corrección quitó un «lo que queda fuera es escribir sin usar
+    Python» que era falso: medido, TRES formas en Python puro salían verdes
+    —`psycopg.connect` síncrono, el pool síncrono y `psycopg.Connection.connect`—
+    y una la usa el propio repo en `db/backup.py:380`. Esas tres ya están
+    cubiertas: `guarda vieja → 0 de 3 atrapadas; guarda nueva → 3 de 3`.
+
+    La SEGUNDA corrección es ésta, y no es un caso que faltara: es EL TECHO DEL
+    MÉTODO, y por eso se declara en vez de perseguirse. La puerta se instala
+    cambiando un atributo con el programa ya corriendo. Cualquiera que haya hecho
+    `from psycopg import connect` ANTES se quedó con la función de verdad y le
+    gana por llegar primero. Perseguir eso caso por caso no termina nunca; lo
+    honesto es decir hasta dónde llega la puerta y poner guardia en la frontera.
+
+    Así que lo que queda fuera son CINCO cosas, y las cuatro primeras NO se
+    confían: tienen prueba propia que las pone rojas solas.
 
       1. UN SUBPROCESO. Hoy hay exactamente uno que habla con Postgres,
          `db/backup.py` (`pg_dump --schema-only`), y solo lee.
@@ -1566,7 +1623,19 @@ def test_ninguna_escritura_llega_a_la_base_sin_su_huella():
          `crud.TABLAS` tiene 8: una escritura a las otras 9 se VE pero no se
          juzga. Queda declarado en
          `test_la_frontera_de_las_tablas_vigiladas_esta_declarada`.
-      4. `Copy.write` / `write_row`, que manda datos después de un `COPY` que el
+      4. UN SÍMBOLO CAPTURADO ANTES DE QUE LA PUERTA SE INSTALE. Medido el
+         8-sep-2026 por identidad de objetos: tras `tender()`,
+         `psycopg.connect is capturado_antes` → **False**, y
+         `capturado_antes.__module__` sigue siendo `psycopg.connection`. Se
+         escribió por ahí y el libro anotó **0 sentencias**; la capa de socket de
+         `_RedDeMensajes` tampoco lo vio (**0 apuntes**), porque psycopg abre el
+         zócalo en C y no pasa por `socket.socket.connect`. O sea que por esa vía
+         se escribe a ciegas del todo. Solo escapan los símbolos que la puerta
+         pisa EN EL MÓDULO (`pool` y `atajo-de-modulo`, cinco hoy); capturar una
+         clase de conexión es inofensivo porque el doble va dentro de la clase.
+         Y no es rebuscado: el propio repo importa así en `db/db.py:17`.
+         → lo vigila `test_la_frontera_de_los_simbolos_capturados_esta_declarada`.
+      5. `Copy.write` / `write_row`, que manda datos después de un `COPY` que el
          cursor sí vio. Hoy el repo no usa `copy` fuera de `tests/`.
     """
     fn = _nodo("_ejecutar_herramienta")
@@ -1759,9 +1828,15 @@ def test_lo_que_dice_el_parte_es_exactamente_lo_que_llego_a_la_base():
 # ═════════════════════════════════════════════════════════════════════════
 #
 # Una guarda que dice honestamente hasta dónde llega vale más que una que
-# promete todo y tiene un agujero que nadie ha buscado todavía. Estas tres
-# prueban las salidas 1, 2 y 3 de la frontera; la 4 (`Copy.write`) se declara
+# promete todo y tiene un agujero que nadie ha buscado todavía. Estas cuatro
+# prueban las salidas 1, 2, 3 y 4 de la frontera; la 5 (`Copy.write`) se declara
 # en el docstring de arriba y hoy no tiene uso en el repo fuera de `tests/`.
+#
+# La 4 es distinta de las otras tres y conviene decirlo: las tres primeras
+# vigilan algo que HOY NO PASA y que sería un error si pasara. La 4 vigila algo
+# que YA PASA una vez, a propósito y sin arreglo previsto, porque es el techo del
+# método. Lo que la prueba impide no es que exista: es que aparezca la SEGUNDA
+# sin que nadie se entere.
 
 _RAIZ_REPO = pathlib.Path(__file__).resolve().parent.parent
 
@@ -1916,6 +1991,174 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
     }, (f"cambió qué tablas quedan fuera del juicio de esta guarda: "
         f"{sorted(sin_juzgar)}. Una escritura a cualquiera de ellas se VE pero "
         f"no se exige que deje huella ni que salga en el parte.")
+
+
+# Los sitios del repo que se quedan con un símbolo de psycopg ANTES de que la
+# puerta se instale, y que por eso escriben sin que el libro los vea. DECLARADOS
+# UNO POR UNO: al cubo indulgente no se llega por olvido, y un sitio que no esté
+# acá pone la prueba de abajo roja aunque sea inofensivo.
+#
+# Reproducir esta lista, sin correr la suite y sin creerle a nadie:
+#
+#   "../pruebas-confiables/.venv/bin/python3" -c "$(cat <<'PY'
+#   import ast, pathlib
+#   for p in sorted(pathlib.Path('.').rglob('*.py')):
+#       if {'.venv','venv','site-packages','.git','node_modules','__pycache__'} & set(p.parts):
+#           continue
+#       for n in ast.walk(ast.parse(p.read_text(encoding='utf-8'))):
+#           if isinstance(n, ast.ImportFrom) and (n.module or '').split('.')[0] in ('psycopg','psycopg_pool'):
+#               for a in n.names:
+#                   print(f'{p}:{n.lineno}: from {n.module} import {a.name}')
+#   PY
+#   )"
+#
+# El 8-sep-2026 ese comando da OCHO líneas: siete son `from psycopg.rows import
+# dict_row`, que no es una vía de conexión y no escapa de nada, y la octava es la
+# única declarada acá.
+_CAPTURAS_DECLARADAS = {
+    # `db/db.py:17`. Se queda con la clase del pool y con ella construye `db.pool`
+    # en la línea 51, a la hora de importar el módulo. En la suite esto no hace
+    # daño porque `_montar_sobre_la_base` pisa `db.pool` entero con `_PoolEspia`,
+    # que es un nivel más abajo que la puerta; pero el símbolo está capturado y
+    # la puerta no le llega. Se declara para que se vea, no porque esté bien.
+    ("db/db.py", "psycopg_pool", "AsyncConnectionPool"),
+}
+
+
+def test_la_frontera_de_los_simbolos_capturados_esta_declarada():
+    """FRONTERA 4: la puerta se instala corriendo, y quien llegó antes le gana.
+
+    Ésta es la sexta vuelta sobre la misma guarda, y las cinco anteriores se
+    cerraron pensando «faltó cubrir un caso». No era eso: la puerta se pone
+    cambiando un atributo con el programa ya arrancado, así que **cualquier
+    importación anterior le gana por llegar primero**. Eso no es un caso que
+    falte, es el techo del método — por ahí siempre va a haber una décima forma.
+    Así que en vez de perseguirla, se declara y se le pone guardia.
+
+    QUÉ SE VIGILA, y las dos mitades son derivadas:
+      · CUÁLES símbolos escapan → `_escapan_si_se_capturan()`, sacado de
+        `dir()` + `issubclass` sobre el paquete instalado. Un pool nuevo de
+        psycopg entra solo.
+      · DÓNDE se buscan → todos los `.py` que hay en el disco bajo el repo
+        (`_py_del_repo`), no un puñado de archivos nombrados a mano.
+
+    Lo único tecleado es `_CAPTURAS_DECLARADAS`, que son los sitios PERDONADOS, y
+    se dice: vale lo que valga la lista. Está escrita en el sentido estricto —lo
+    no declarado se pone rojo—, que es el único reparto al que no se llega por
+    olvido.
+
+    ¿Y EL TECHO ES DE VERDAD UN TECHO? Medido el 8-sep-2026, y la respuesta es
+    que NO del todo — pero la salida no es gratis y por eso no se tomó acá:
+
+      · `conftest.py` SÍ corre antes de que los módulos de prueba importen
+        `db/db.py`. Comprobado poniendo un centinela en `psycopg_pool` desde
+        `conftest.py`: `db/db.py` lo capturó (`db.AsyncConnectionPool` era el
+        centinela, y la línea 51 reventó al instanciarlo). O sea que una puerta
+        instalada ahí SÍ le ganaría a la captura de `db/db.py:17`.
+      · PERO cuesta. Instalar cualquier cosa con forma de psycopg en
+        `conftest.py` obliga a tener el psycopg REAL en `sys.modules` para las
+        488 que recoge `pytest --collect-only`, y varias suites son herméticas a
+        propósito y montan muñecos
+        con `sys.modules.setdefault` (este archivo, líneas 68-76). Medido sobre
+        una copia: la suite pasó de `456 passed` a `5 failed, 451 passed` — las
+        cuatro de `tests/test_buzon_que_no_se_ve.py` más
+        `test_la_puerta_del_cursor_esta_puesta_...`, que es la prueba de la
+        propia puerta.
+      · Y `sitecustomize` correría todavía antes, pero es un archivo que cambia
+        el arranque del intérprete para TODO lo que se ejecute en esa máquina,
+        no solo para la suite. No se probó.
+
+    Así que hay salida, no es barata, y cuál se toma no es una decisión técnica
+    con una respuesta correcta: es de Tiziano. Mientras no la tome, esto se queda
+    declarado y con guardia, que es lo honesto.
+    """
+    escapan = _escapan_si_se_capturan()
+
+    # Lo que no sé cuenta como rojo: si la derivación se quedó vacía o perdió la
+    # vía más obvia, esta prueba estaría verde sin haber mirado nada.
+    assert ("psycopg", "connect") in escapan, (
+        f"la derivación de símbolos que escapan salió sin `psycopg.connect`, que "
+        f"es el caso de manual: {sorted(escapan)}. O psycopg cambió de forma o "
+        f"`_modulo_de_verdad` devolvió un muñeco — en cualquiera de los dos casos "
+        f"esta guarda quedó decorativa y hay que rehacerla, no aflojarla.")
+    assert len(escapan) >= 5, (
+        f"solo se derivaron {sorted(escapan)} (el 8-sep-2026 eran cinco: "
+        f"`psycopg.connect` y los cuatro pools de `psycopg_pool`). Si el número "
+        f"baja, el barrido dejó de ver vías y hay que mirarlo.")
+
+    hallados = set()
+    for archivo in _py_del_repo():
+        try:
+            arbol = ast.parse(archivo.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError):
+            continue
+        for n in ast.walk(arbol):
+            if not isinstance(n, ast.ImportFrom):
+                continue
+            for alias in n.names:
+                if (n.module, alias.name) in escapan:
+                    rel = archivo.relative_to(_RAIZ_REPO).as_posix()
+                    hallados.add((rel, n.module, alias.name))
+
+    nuevas = hallados - _CAPTURAS_DECLARADAS
+    assert not nuevas, (
+        "hay sitios que se quedan con un símbolo de psycopg ANTES de que la "
+        "puerta se instale. Lo que escriban por ahí NO lo ve el libro, así que "
+        "no se cuenta en el parte ni se puede deshacer con el botón:\n  "
+        + "\n  ".join(f"{a}: from {m} import {n}" for a, m, n in sorted(nuevas))
+        + "\n  La forma que SÍ ve la puerta es dejar el módulo de por medio: "
+          "`import psycopg` y llamar `psycopg.connect(...)`, o `import "
+          "psycopg_pool` y `psycopg_pool.AsyncConnectionPool(...)`. Si de verdad "
+          "hace falta capturarlo, va a _CAPTURAS_DECLARADAS con su motivo — pero "
+          "entonces ese sitio escribe a ciegas y hay que decidirlo, no heredarlo.")
+
+    muertas = _CAPTURAS_DECLARADAS - hallados
+    assert not muertas, (
+        f"declaradas como capturas que escapan pero ya no existen: "
+        f"{sorted(muertas)}. Un perdón muerto es cómo se cuela el siguiente: se "
+        f"BORRA la línea, no se deja «por si acaso».")
+
+
+def test_el_simbolo_capturado_antes_de_la_puerta_de_verdad_se_escapa():
+    """FRONTERA 4, la mitad medida: la de arriba declara, ésta lo DEMUESTRA.
+
+    Una frontera declarada y no comprobada es una frase. Acá se captura
+    `psycopg.connect` antes de tender la red, se tiende, y se exige que la puerta
+    NO le haya llegado. Medido el 8-sep-2026: `real.connect is capturado` → False,
+    y `capturado.__module__` sigue siendo `psycopg.connection`.
+
+    ⚠️ Esta prueba está escrita AL REVÉS que las demás del archivo: exige que el
+    agujero SIGA ABIERTO. Si se pone roja no es que algo se rompió — es que
+    alguien consiguió que la puerta llegue antes que la captura. Entonces la
+    FRONTERA 4 dejó de existir y lo que hay que hacer es BORRARLA de la lista de
+    arriba y borrar esta prueba, no aflojar el assert.
+
+    No se llega a conectar con nada: solo se comparan identidades de objetos.
+    """
+    real_antes = _modulo_de_verdad("psycopg")
+    assert real_antes is not None, (
+        "no hay un `psycopg` de verdad en este proceso: esta medición no vale")
+    capturado = real_antes.connect          # el `from psycopg import connect`
+
+    red = _RedDeMensajes()
+    red.tender()
+    try:
+        assert red.motivo_sin_puerta is None, (
+            f"la puerta no se pudo poner, así que esto no mide nada: "
+            f"{red.motivo_sin_puerta}")
+        real = _modulo_de_verdad("psycopg")
+        assert real.connect is not capturado, (
+            "la puerta SÍ le llegó al símbolo capturado antes de instalarla. "
+            "Eso es una buena noticia y significa que la FRONTERA 4 ya no "
+            "existe: hay que BORRARLA del docstring de "
+            "`test_ninguna_escritura_llega_a_la_base_sin_su_huella`, borrar "
+            "`_CAPTURAS_DECLARADAS` y borrar esta prueba. No aflojar esto.")
+        assert capturado.__module__ == "psycopg.connection", (
+            f"el símbolo capturado ya no es la función real de psycopg sino "
+            f"{capturado!r} (módulo {capturado.__module__}): la medición dejó "
+            f"de comparar lo que dice comparar")
+    finally:
+        red.levantar()
 
 
 # ── Las dos mitades estáticas que el runtime no puede cubrir ─────────────
