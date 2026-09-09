@@ -19,9 +19,20 @@ QUÉ SE PRUEBA CON MÁS SAÑA, y por qué son ésas y no otras:
     mañana del MARTES en UTC: comparado en UTC, el panel diría que una tarea de
     esta noche es de mañana.
 
-LO QUE ESTOS TESTS NO PUEDEN VER: `psycopg` está reemplazado por un módulo
-falso, así que nada de acá habla con Postgres. Que las columnas existan de
-verdad en la base y que el LEFT JOIN corra lo cubre `tools/humo.py`, que
+LO QUE ESTOS TESTS NO PUEDEN VER, medido y no supuesto: `psycopg` está
+reemplazado por un módulo falso, así que nada de acá habla con Postgres y LA
+CONEXIÓN DEVUELVE LAS FILAS QUE SE LE PREPARAN. O sea que ninguna prueba de
+comportamiento de este archivo puede ver lo que el SQL hace con las filas antes
+de devolverlas.
+
+Eso no es teoría: cambiando `LEFT JOIN` por `JOIN` en una copia, las 484
+pruebas siguieron VERDES —y `tools/humo.py` también habría salido verde, porque
+un INNER JOIN corre perfecto y solo devuelve 90 filas en vez de 91—. Por eso
+`test_ningun_join_de_esta_consulta_puede_descartar_una_tarea` mira el TEXTO del
+SQL, que es lo que el resto de este archivo evita: ahí es lo único que hay, y
+está dicho con su límite al lado.
+
+Que las columnas existan de verdad en la base lo cubre `tools/humo.py`, que
 necesita DATABASE_URL. El test de columnas de abajo compara contra
 db/schema.sql, que describe la base pero no ES la base.
 
@@ -289,14 +300,53 @@ def test_una_clave_de_grupo_que_nadie_previo_se_pinta_igual():
     assert sum(len(g["filas"]) for g in datos["grupos"]) == 2
 
 
-def test_la_tarea_sin_bandeja_no_se_esconde():
+def test_la_tarea_sin_bandeja_no_se_esconde_al_repartirla():
     """En producción se sabe quién anotó 90 de las 91. La que falta sale igual,
     con un guion: una fila que se esconde porque le falta un dato accesorio es
-    la misma familia de fallo que las 4 sin fecha."""
+    la misma familia de fallo que las 4 sin fecha.
+
+    ESTA MITAD ES DE COMPORTAMIENTO, y solo cubre el reparto en Python: una
+    fila con `quien` en None llega entera hasta su grupo. La otra mitad —que el
+    SQL no la descarte antes de llegar acá— NO se puede ver desde una suite
+    hermética, y va en la prueba de abajo con su límite dicho.
+    """
     filas = [_fila(1, quien=None), _fila(2)]
     grupos = _grupos(filas, date(2026, 9, 8))
     ids = {f["id"] for fs in grupos.values() for f in fs}
     assert ids == {1, 2}, "se perdió la tarea sin bandeja"
+
+
+def test_ningun_join_de_esta_consulta_puede_descartar_una_tarea():
+    """Todo JOIN de esta consulta tiene que ser LEFT JOIN. La regla, en una
+    línea: `tareas` manda, y ninguna tabla accesoria puede quitar una fila.
+
+    POR QUÉ ESTO MIRA EL TEXTO DEL SQL, que es lo que el resto de esta suite
+    evita a propósito. Lo descubrí mutando: cambié `LEFT JOIN` por `JOIN` en la
+    copia y las 484 pruebas siguieron VERDES, incluida la de arriba, que
+    parecía cubrirlo. No es culpa de esa prueba: la conexión de estas suites es
+    de mentira y devuelve las filas que se le preparan, así que el tipo de JOIN
+    NO ES OBSERVABLE desde acá. Ninguna cantidad de pruebas de comportamiento
+    en esta suite puede verlo.
+
+    Y `tools/humo.py` TAMPOCO lo vería: con la base real, un INNER JOIN corre
+    perfecto y solo devuelve 90 filas en vez de 91. Corre en verde y miente.
+
+    Así que esto es lo más fuerte que se puede hacer sin una base delante, y se
+    dice como lo que es. Lo que lo salva de ser una lista tecleada es que la
+    lista sale del SQL —se cuentan los JOIN que HAY, no los que me acuerdo—:
+    el tercer JOIN que alguien escriba mañana tiene que cumplirlo igual, o esto
+    se pone rojo solo.
+    """
+    import inspect
+    import re
+    sql = inspect.getsource(db.tareas_por_grupo)
+    joins = re.findall(r"(\w+)\s+JOIN\s+(\w+)", sql)
+    assert joins, "no se encontró ningún JOIN: ¿cambió la consulta?"
+    malos = [f"{previo} JOIN {tabla}" for previo, tabla in joins
+             if previo.upper() != "LEFT"]
+    assert not malos, (
+        f"estos JOIN pueden descartar tareas enteras: {malos}. Una tarea sin "
+        "bandeja desaparecería del panel y nadie se enteraría")
 
 
 def test_el_tope_no_recorta_callado():
