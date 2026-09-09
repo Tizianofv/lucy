@@ -2,6 +2,22 @@
 {% block titulo %}Tareas{% endblock %}
 {% block cuerpo %}
 <h1>Tareas</h1>
+
+{# Un ENLACE y no un formulario, y no es un detalle de estilo: esta pantalla
+   tiene un solo formulario a propósito —cerrar varias de una vez con un
+   botón— y un segundo al lado rompería eso. El de escribir una tarea vive en
+   /tareas/nueva; el porqué entero está en `web/app.py::tarea_nueva`.
+
+   Y va ACÁ ARRIBA, fuera del `{% if not grupos %}` de abajo: cuando no hay
+   ninguna tarea es justo cuando hace falta escribir la primera. Un botón de
+   «agregar» que desaparece con la lista vacía deja la pantalla sin salida. #}
+<div class="barra"><a href="/tareas/nueva">+ Agregar tarea</a></div>
+
+{% if creada %}
+{# Se nombra el id de lo que se creó, no un «listo». La tarea está pintada más
+   abajo, en su grupo: el aviso dice que pasó y la lista lo demuestra. #}
+<p class="aviso ok">Tarea creada (#{{ creada }}). Está en su grupo, más abajo.</p>
+{% endif %}
 {% if guardadas %}
 {# El aviso existe por lo mismo que en /sin-clasificar: sin él, el éxito y el
    "no cambió nada" devuelven el MISMO redirect y no hay forma de distinguirlos. #}

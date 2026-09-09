@@ -3276,9 +3276,18 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # del ROL del archivo, no de que se llame `test_*`. El mismo trabajo tocó
     # `db/db.py`, `web/app.py` y `tools/humo.py` —los tres YA vigilados— y la
     # aserción de fondo de arriba siguió verde sobre ellos.
-    assert medido == {"en disco": 68, "exentos": 31, "vigilados": 37}, (
+    #
+    # 9-sep-2026: 68 → 69 en disco y 31 → 32 exentos por
+    # `tests/test_tarea_a_mano.py`, del alta de tareas a mano en el panel. Los
+    # VIGILADOS siguen en 37, y por el mismo motivo que la vez anterior: la
+    # exención sale del ROL —`testpaths` de pytest.ini—, no del nombre. Ese
+    # mismo trabajo tocó `db/db.py` y `web/app.py`, los dos YA vigilados, y la
+    # aserción de fondo de arriba siguió verde sobre ellos. Lo demás que agregó
+    # —`web/plantillas/tarea_nueva.html`— no es un `.py` y no entra en este
+    # reparto.
+    assert medido == {"en disco": 69, "exentos": 32, "vigilados": 37}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "8-sep-2026 era {'en disco': 68, 'exentos': 31, 'vigilados': 37}. La "
+        "9-sep-2026 era {'en disco': 69, 'exentos': 32, 'vigilados': 37}. La "
         "aserción de fondo —cero archivos alcanzan la lista cruda— YA CORRIÓ "
         "arriba y quedó verde, así que esto NO es una fuga. Si los vigilados "
         "bajaron, algo se está saltando de más y «cero falsos positivos» dejó "

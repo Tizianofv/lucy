@@ -1,0 +1,46 @@
+{% extends "base.html" %}{% set activo='tareas' %}
+{% block titulo %}Nueva tarea{% endblock %}
+{% block cuerpo %}
+<h1>Nueva tarea</h1>
+
+{# El motivo del rechazo se dice con palabras, no con un código. El servidor
+   manda una clave por la URL —`?error=titulo`— y acá se traduce: quien la lee
+   está mirando el celular, no el log. Una clave que no se traduce es un error
+   que no se entiende, y un error que no se entiende se repite. #}
+{% if error == 'titulo' %}
+<p class="aviso">Falta el título, o es más largo de {{ largo_titulo }}
+caracteres. Sin título no hay tarea: es lo único que dice qué hay que hacer.</p>
+{% elif error == 'fecha' %}
+<p class="aviso">Esa fecha no se puede guardar. Déjala vacía si la tarea no
+tiene día, o escribe una desde el {{ piso_fecha }} en adelante.</p>
+{% endif %}
+
+{# UN SOLO formulario, igual que en el resto del panel. Sin JavaScript: si el
+   navegador no corre nada, esto sigue guardando. #}
+<form method="post" action="/tareas/nueva">
+  <p>
+    <label for="titulo">Qué hay que hacer</label><br>
+    <input id="titulo" name="titulo" type="text" required
+           maxlength="{{ largo_titulo }}" autofocus
+           style="width:100%;max-width:34rem"
+           placeholder="Llamar al contador">
+  </p>
+  <p>
+    <label for="vence">Cuándo vence</label><br>
+    <input id="vence" name="vence" type="date" min="{{ piso_fecha }}">
+    {# `min` sale del MISMO valor que valida el servidor: una pantalla que
+       ofrece lo que la ruta rechaza es una trampa. No hay `max`: una tarea que
+       vence el mes que viene es el caso normal de una tarea, al revés que un
+       gasto en efectivo, que es plata que ya salió. #}
+    <br><span class="suave">Opcional. Vacío = «Sin fecha», que en esta pantalla
+    tiene su propio grupo y se ve igual.</span>
+  </p>
+  <div class="barra">
+    <button>Guardar la tarea</button>
+    <a href="/tareas" class="suave">Volver a la lista</a>
+  </div>
+</form>
+
+<p class="suave">Queda anotada a tu nombre —la lista dice quién anotó cada
+cosa— y no manda ningún aviso por Telegram: aquí se elige un día, no una hora.</p>
+{% endblock %}
