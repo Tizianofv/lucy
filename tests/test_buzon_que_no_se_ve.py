@@ -3276,9 +3276,17 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # del ROL del archivo, no de que se llame `test_*`. El mismo trabajo tocó
     # `db/db.py`, `web/app.py` y `tools/humo.py` —los tres YA vigilados— y la
     # aserción de fondo de arriba siguió verde sobre ellos.
-    assert medido == {"en disco": 68, "exentos": 31, "vigilados": 37}, (
+    #
+    # 9-sep-2026: 68 → 70 en disco. Uno es `tests/test_panel_descrito.py`, que
+    # cae en exentos (31 → 32) por el mismo motivo de siempre: rol de prueba.
+    # El otro es `web/menu.py` —la lista de pantallas del panel, leída del menú
+    # real para que la descripción que lee Lucy no se separe de lo que el panel
+    # tiene—, y ése SÍ sube los vigilados (37 → 38), que es lo que tenía que
+    # pasar con código nuevo fuera de `testpaths`. La aserción de fondo de
+    # arriba siguió verde sobre él.
+    assert medido == {"en disco": 70, "exentos": 32, "vigilados": 38}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "8-sep-2026 era {'en disco': 68, 'exentos': 31, 'vigilados': 37}. La "
+        "9-sep-2026 era {'en disco': 70, 'exentos': 32, 'vigilados': 38}. La "
         "aserción de fondo —cero archivos alcanzan la lista cruda— YA CORRIÓ "
         "arriba y quedó verde, así que esto NO es una fuga. Si los vigilados "
         "bajaron, algo se está saltando de más y «cero falsos positivos» dejó "

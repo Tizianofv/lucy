@@ -222,11 +222,20 @@ HERRAMIENTAS DISPONIBLES:
      que no esté en el cuerpo. Leerlo NO lo marca como leído en Gmail.
 
 · panel  {}
-  El enlace al panel de finanzas: gastos por mes, lo que falta clasificar y el
-  detalle. Dáselo cuando pida "el panel", "ver mis gastos", "el resumen del mes"
-  o cualquier cosa que se conteste mejor con una tabla que con una frase. El
-  enlace vence en 10 minutos y solo sirve para él: no lo reenvíes a nadie ni lo
-  repitas en la conversación más de lo necesario.
+  El enlace al panel. NO es solo de plata. Las pantallas que tiene HOY, con su
+  ruta — esta lista sale del menú de verdad, así que es la que hay:
+{PANTALLAS_DEL_PANEL}
+  Es UN solo enlace para todas: se entra una vez y se cambia de pantalla con el
+  menú de arriba. No hay un enlace por pantalla ni hace falta elegir cuál.
+  Dáselo cuando pida "el panel" — y también cuando pida algo que viva en alguna
+  de esas pantallas y se conteste mejor con una tabla que con una frase: "ver
+  mis gastos", "el resumen del mes", "lo que falta clasificar", "los
+  pendientes", "las tareas", "qué hay que hacer", "la lista". Antes de decir que
+  algo no está en el panel, mirá la lista de arriba.
+  Ojo con los pendientes: la pantalla de tareas es de las DOS personas de la
+  casa, así que sirve igual para ver los propios y para ver cómo va todo.
+  El enlace vence en 10 minutos y se emite a nombre de quien lo pide: no lo
+  reenvíes a nadie ni lo repitas en la conversación más de lo necesario.
 
 · recordar  {"texto": "lo que acordamos del depósito", "n": 5}
   Busca por SIGNIFICADO en todo lo que se han dicho (tus respuestas
@@ -407,9 +416,28 @@ def _sistema(preferencias: list[dict] | None = None) -> str:
         # texto: una lista duplicada se desincroniza el día que se agregue una,
         # y el agente le ofrecería a Tiziano categorías que ya no existen.
         f"{consultar.ESQUEMA}\n\n"
-        + HERRAMIENTAS.replace(
-            "{CATEGORIAS}", ", ".join(f'"{c}"' for c in CATEGORIAS))
+        + herramientas_del_prompt()
     )
+
+
+def herramientas_del_prompt() -> str:
+    """`HERRAMIENTAS` con las dos listas inyectadas desde su fuente real.
+
+    Ninguna de las dos se teclea en el texto: una lista duplicada se
+    desincroniza el día que se le agrega algo y nadie se entera.
+      · Las categorías salen de `CATEGORIAS`.
+      · Las pantallas salen del `<nav>` de `web/plantillas/base.html`, que es
+        el menú que ve quien abre el panel. El 9-sep-2026 se publicó `/tareas`
+        y la descripción se quedó hablando solo de plata, en verde.
+
+    `web.menu` se importa acá adentro, como `web.auth` más abajo: `cerebro` no
+    depende de `web` al arrancar, solo cuando arma el prompt.
+    """
+    import web.menu as _menu
+    return HERRAMIENTAS.replace(
+        "{CATEGORIAS}", ", ".join(f'"{c}"' for c in CATEGORIAS)
+    ).replace(
+        "{PANTALLAS_DEL_PANEL}", _menu.bloque_para_el_prompt())
 
 
 async def _avisar_choques(evento_id: int) -> str:
