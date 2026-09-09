@@ -2081,11 +2081,23 @@ def _py_del_repo() -> list[pathlib.Path]:
     Sin esto la vigilancia sería una lista de archivos escrita a mano, que es
     exactamente el defecto que este archivo existe para quitar: un archivo nuevo
     entraría sin que nadie lo mirara.
+
+    Y HASTA DÓNDE LLEGA EL BARRIDO tampoco se teclea acá, desde el 9-sep-2026.
+    Antes saltaba carpetas por NOMBRE —`.venv`, `venv`, `site-packages`,
+    `node_modules`, `__pycache__`, `.git`—, que es una lista tecleada con la
+    forma de siempre: un `env/`, un `entorno/` o un entorno de conda no llevan
+    ninguno de esos nombres y sí llevan `pyvenv.cfg`, así que pasaban de largo.
+    Se lo pide a `test_buzon_que_no_se_ve._py_en_disco`, la única puerta del
+    repositorio, que le pregunta a cada carpeta QUÉ ES —`pyvenv.cfg` de PEP
+    405, `CACHEDIR.TAG` de la spec de cachés— en vez de mirarle el nombre.
+
+    Lo que la puerta cubre por otro camino: `site-packages` solo existe dentro
+    de un entorno virtual, y `.git`, `__pycache__` y `node_modules` están en
+    `norecursedirs` de pytest.ini, que la puerta lee como cinturón.
     """
-    return [p for p in _RAIZ_REPO.rglob("*.py")
-            if not any(parte in (".venv", "venv", "site-packages", ".git",
-                                 "node_modules", "__pycache__")
-                       for parte in p.parts)]
+    import test_buzon_que_no_se_ve as barrido
+
+    return barrido._py_en_disco(_RAIZ_REPO)
 
 
 def test_ningun_subproceso_nuevo_le_habla_a_postgres():

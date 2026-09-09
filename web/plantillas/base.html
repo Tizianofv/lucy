@@ -45,13 +45,35 @@
   /* La tabla ancha se desplaza sola en el móvil en vez de romper la página. */
   .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 </style></head><body>
+<!-- Este menú es la lista de pantallas del panel, y es la ÚNICA. De acá la lee
+     `web/menu.py` y la inyecta en el prompt de Lucy, así que una pantalla que
+     se agregue o se quite acá llega sola al prompt.
+
+     `data-tambien` es OBLIGATORIO y son las palabras con las que una persona
+     pide esta pantalla — no el nombre del menú: nadie dice "Tareas", dicen
+     "los pendientes". Van acá, pegadas a la pantalla, y no en el prompt: si la
+     pantalla se va, sus frases se van con ella y Lucy deja de invitar a pedir
+     algo que ya no existe. Sin `data-tambien` el arranque del prompt revienta
+     con el motivo, a propósito: una pantalla nueva no puede nacer muda.
+
+     `data-nota` es opcional y es lo que hay que saber de esa pantalla. Es el
+     único opcional, y se puede: una nota que falta no hace que el panel
+     prometa nada falso. Sin comillas — se comparan una a una contra las frases.
+-->
 <header><nav>
-  <a href="/" class="{{ 'on' if activo=='resumen' }}">Resumen</a>
-  <a href="/tareas" class="{{ 'on' if activo=='tareas' }}">Tareas</a>
-  <a href="/sin-clasificar" class="{{ 'on' if activo=='cola' }}">Sin clasificar</a>
-  <a href="/movimientos" class="{{ 'on' if activo=='movs' }}">Movimientos</a>
-  <a href="/papelera" class="{{ 'on' if activo=='papelera' }}">Papelera</a>
-  <a href="/salud" class="{{ 'on' if activo=='salud' }}">Salud</a>
+  <a href="/" class="{{ 'on' if activo=='resumen' }}"
+     data-tambien="ver mis gastos, el resumen del mes">Resumen</a>
+  <a href="/tareas" class="{{ 'on' if activo=='tareas' }}"
+     data-tambien="los pendientes, las tareas, qué hay que hacer, la lista"
+     data-nota="es de las DOS personas de la casa, así que sirve igual para ver los propios y para ver cómo va todo">Tareas</a>
+  <a href="/sin-clasificar" class="{{ 'on' if activo=='cola' }}"
+     data-tambien="lo que falta clasificar, lo que quedó sin categoría">Sin clasificar</a>
+  <a href="/movimientos" class="{{ 'on' if activo=='movs' }}"
+     data-tambien="el detalle, los movimientos, gasto por gasto">Movimientos</a>
+  <a href="/papelera" class="{{ 'on' if activo=='papelera' }}"
+     data-tambien="la papelera, lo que borré">Papelera</a>
+  <a href="/salud" class="{{ 'on' if activo=='salud' }}"
+     data-tambien="la salud del sistema, si todo está andando bien">Salud</a>
 </nav></header>
 <main>{% block cuerpo %}{% endblock %}</main>
 </body></html>
