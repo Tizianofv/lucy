@@ -827,13 +827,31 @@ _NOM_OBJETIVO = menu.MenuIlegible.__name__        # derivado, no tecleado
 
 
 def _archivos_del_repo():
-    """Los `.py` que hay en disco. Uno nuevo con el defecto se pone rojo solo."""
-    for carpeta, _, archivos in os.walk(RAIZ):
-        if ".git" in carpeta.split(os.sep):
-            continue
-        for archivo in sorted(archivos):
-            if archivo.endswith(".py"):
-                yield os.path.join(carpeta, archivo)
+    """Los `.py` que hay en disco. Uno nuevo con el defecto se pone rojo solo.
+
+    HASTA DÓNDE LLEGA EL BARRIDO no se decide acá: se lo pide a
+    `test_buzon_que_no_se_ve._py_en_disco`, la única puerta del repositorio
+    para recorrerlo entero. Es la misma que ya usa `_archivos_de_prueba()` más
+    abajo, y se reusa en vez de copiar el criterio: dos copias de un criterio
+    se separan, que es la regla entera de este archivo.
+
+    POR QUÉ, medido el 9-sep-2026 sobre 5ed50c6: esto excluía `.git` y NADA
+    MÁS. En el árbol de trabajo no hay entorno virtual y no se notaba; en el
+    árbol DESDE EL QUE SE PUBLICA hay una carpeta `venv`, y ahí este barrido se
+    metía dentro y parseaba los paquetes instalados. Contado el mismo día, el
+    mismo commit, los dos árboles:
+
+        .py bajo el árbol de trabajo ......    70
+        .py bajo el árbol principal ....... 9.724      ← factor 139
+
+    Es el caso exacto que el 6-sep-2026 dejó la suite parada 58 minutos en el
+    árbol principal, después de que dos testigos la dieran por buena en uno de
+    trabajo — el único sitio donde ese defecto no se puede ver.
+    """
+    import test_buzon_que_no_se_ve as barrido
+
+    for ruta in barrido._py_en_disco(Path(RAIZ)):
+        yield str(ruta)
 
 
 def _nombres_de_modulo(ruta: str) -> set[str]:

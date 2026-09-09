@@ -2250,6 +2250,330 @@ def _py_en_disco(raiz: Path) -> list[Path]:
     return sorted(encontrados)
 
 
+# ── UNA SOLA PUERTA PARA RECORRER EL REPOSITORIO ──────────────────────────
+#
+# POR QUÉ EXISTE, medido el 9-sep-2026 sobre 5ed50c6: `_py_en_disco` NO era el
+# único sitio que recorría el repositorio entero. Había otros tres, cada uno
+# con su propio criterio de hasta dónde llegar:
+#
+#   tests/test_panel_descrito.py::_archivos_del_repo   saltaba `.git`, y nada más
+#   tests/test_cerrar_varias.py::_py_del_repo          nombres tecleados
+#   tests/test_esquema_reproduce_la_base.py::_fuentes  nombres tecleados
+#
+# El primero se metía DENTRO del entorno virtual del árbol desde el que se
+# publica. Contado el mismo día, el mismo commit, los dos árboles:
+#
+#     .py bajo el árbol de trabajo ......    70
+#     .py bajo el árbol principal ....... 9.724      ← factor 139
+#
+# Los otros dos no se metían HOY, y por el motivo equivocado: porque alguien
+# tecleó `venv` y `.venv`. Un `env/`, un `entorno/` o un entorno de conda —que
+# no llevan ese nombre y sí llevan `pyvenv.cfg`— pasaban de largo en los dos.
+#
+# Arreglar los tres uno por uno deja el cuarto para mañana. Lo que corta la
+# serie no es que los de hoy estén bien: es que NO SE PUEDA ESCRIBIR UN CUARTO.
+# Por eso lo de abajo no comprueba criterios, cuenta puertas, y son una.
+
+# La puerta, sacada del OBJETO y no tecleada: si mañana se renombra o se muda
+# de archivo, la exención se va con ella en vez de quedarse acá exentando un
+# nombre que ya no existe — que es cómo se abre un agujero sin tocarlo.
+_ARCHIVO_DE_LA_PUERTA = Path(_py_en_disco.__code__.co_filename).resolve()
+_NOMBRE_DE_LA_PUERTA = _py_en_disco.__name__
+
+# Las formas de la biblioteca estándar que BAJAN por el árbol. Están tecleadas
+# y se dice: son la API de `os` y de `pathlib`, no un inventario de este repo.
+# Bajar es lo único que puede meterse dentro de un entorno virtual — `listdir`,
+# `scandir`, `iterdir` y `glob` listan UNA carpeta y se quedan ahí.
+_BAJAN_DESDE_OS = frozenset({"os.walk", "os.fwalk", "walk", "fwalk"})
+_BAJA_DESDE_PATH = "rglob"
+
+# Que una llamada no sea un recorrido de archivos no es lo mismo que no saber
+# desde dónde recorre: lo primero se ignora, lo segundo cuenta ROJO. Sin dos
+# valores distintos las dos cosas se confunden, y «no lo sé» acabaría del lado
+# verde, que es exactamente el error que persigue todo este archivo.
+_NO_ES_UN_RECORRIDO = object()
+
+
+def _punteado_de(nodo) -> str | None:
+    """`a.b.c` como texto, o None si la expresión no es un nombre punteado."""
+    partes = []
+    while isinstance(nodo, ast.Attribute):
+        partes.append(nodo.attr)
+        nodo = nodo.value
+    if not isinstance(nodo, ast.Name):
+        return None
+    partes.append(nodo.id)
+    return ".".join(reversed(partes))
+
+
+def _carpeta_que_nombra(nodo, ambito: dict, archivo: Path):
+    """Qué carpeta nombra esta expresión, o None si no se puede saber.
+
+    GRAMÁTICA CERRADA a propósito, y ésta es la lista entera: `__file__`, un
+    literal de texto, un nombre que ya esté en `ambito`, `Path(...)`,
+    `.parent`, `.parents[n]`, `.resolve()`, `.absolute()`, el operador `/`, y
+    `os.path.dirname` / `abspath` / `realpath` / `join`. Todo lo demás devuelve
+    None — y None NO significa «está bien»: más abajo cuenta rojo. Lo que no se
+    puede demostrar por debajo de la raíz no se da por bueno.
+    """
+    if isinstance(nodo, ast.Name):
+        return archivo if nodo.id == "__file__" else ambito.get(nodo.id)
+    if isinstance(nodo, ast.Constant) and isinstance(nodo.value, str):
+        return Path(nodo.value)
+    if isinstance(nodo, ast.Attribute) and nodo.attr == "parent":
+        base = _carpeta_que_nombra(nodo.value, ambito, archivo)
+        return None if base is None else base.parent
+    if (isinstance(nodo, ast.Subscript)
+            and isinstance(nodo.value, ast.Attribute)
+            and nodo.value.attr == "parents"
+            and isinstance(nodo.slice, ast.Constant)
+            and isinstance(nodo.slice.value, int)):
+        base = _carpeta_que_nombra(nodo.value.value, ambito, archivo)
+        if base is None or nodo.slice.value >= len(base.parents):
+            return None
+        return base.parents[nodo.slice.value]
+    if isinstance(nodo, ast.BinOp) and isinstance(nodo.op, ast.Div):
+        izq = _carpeta_que_nombra(nodo.left, ambito, archivo)
+        der = _carpeta_que_nombra(nodo.right, ambito, archivo)
+        return None if izq is None or der is None else izq / der
+    if isinstance(nodo, ast.Call):
+        return _carpeta_que_devuelve(nodo, ambito, archivo)
+    return None
+
+
+def _carpeta_que_devuelve(llamada, ambito: dict, archivo: Path):
+    """La mitad de la gramática que son llamadas. Misma regla: lo que no está
+    escrito acá devuelve None, y None cuenta rojo."""
+    nombre = _punteado_de(llamada.func)
+    if nombre is None:
+        return None
+    corto = nombre.rsplit(".", 1)[-1]
+    args = llamada.args
+    receptor = (llamada.func.value if isinstance(llamada.func, ast.Attribute)
+                else None)
+
+    if corto in ("Path", "PurePath", "PosixPath"):
+        return _carpeta_que_nombra(args[0], ambito, archivo) if args else None
+    if nombre == "os.path.dirname":
+        base = _carpeta_que_nombra(args[0], ambito, archivo) if args else None
+        return None if base is None else base.parent
+    if nombre in ("os.path.abspath", "os.path.realpath", "os.fspath"):
+        return _carpeta_que_nombra(args[0], ambito, archivo) if args else None
+    if nombre == "os.path.join":
+        trozos = [_carpeta_que_nombra(a, ambito, archivo) for a in args]
+        if not trozos or any(t is None for t in trozos):
+            return None
+        salida = trozos[0]
+        for t in trozos[1:]:
+            salida = salida / t
+        return salida
+    if corto in ("resolve", "absolute") and receptor is not None:
+        base = _carpeta_que_nombra(receptor, ambito, archivo)
+        return None if base is None else base.resolve()
+    if corto == "joinpath" and receptor is not None:
+        base = _carpeta_que_nombra(receptor, ambito, archivo)
+        trozos = [_carpeta_que_nombra(a, ambito, archivo) for a in args]
+        if base is None or any(t is None for t in trozos):
+            return None
+        for t in trozos:
+            base = base / t
+        return base
+    return None
+
+
+def _atar_nombres(cuerpo, ambito: dict, archivo: Path) -> None:
+    """`NOMBRE = <expresión de ruta>` de ESTE bloque y de sus `if`/`for`/`try`,
+    sin entrar en las funciones de adentro: cada función se ata la suya."""
+    for n in cuerpo:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        if (isinstance(n, ast.Assign) and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Name)):
+            valor = _carpeta_que_nombra(n.value, ambito, archivo)
+            if valor is not None:
+                ambito[n.targets[0].id] = valor
+        for campo in ("body", "orelse", "finalbody"):
+            _atar_nombres(getattr(n, campo, []) or [], ambito, archivo)
+        for manejador in getattr(n, "handlers", []):
+            _atar_nombres(manejador.body, ambito, archivo)
+
+
+def _llamadas_con_su_ambito(arbol, archivo: Path):
+    """Cada llamada del archivo, con los nombres de carpeta que tiene a mano y
+    con la función que la contiene (None si está en el cuerpo del módulo)."""
+    del_modulo: dict = {}
+    _atar_nombres(arbol.body, del_modulo, archivo)
+    salida = []
+
+    def bajar(nodo, ambito, funcion):
+        if isinstance(nodo, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            ambito = dict(ambito)
+            _atar_nombres(nodo.body, ambito, archivo)
+            funcion = nodo
+        if isinstance(nodo, ast.Call):
+            salida.append((nodo, ambito, funcion))
+        for hijo in ast.iter_child_nodes(nodo):
+            bajar(hijo, ambito, funcion)
+
+    bajar(arbol, del_modulo, None)
+    return salida
+
+
+def _raiz_del_recorrido(llamada, ambito: dict, archivo: Path):
+    """Desde qué carpeta baja esta llamada; None si baja desde algo que no se
+    pudo resolver; `_NO_ES_UN_RECORRIDO` si no baja por el árbol."""
+    nombre = _punteado_de(llamada.func)
+    if nombre in _BAJAN_DESDE_OS:
+        return (_carpeta_que_nombra(llamada.args[0], ambito, archivo)
+                if llamada.args else None)
+    if not isinstance(llamada.func, ast.Attribute):
+        return _NO_ES_UN_RECORRIDO
+    if llamada.func.attr == _BAJA_DESDE_PATH:
+        return _carpeta_que_nombra(llamada.func.value, ambito, archivo)
+    if llamada.func.attr == "walk":
+        # FRONTERA DECLARADA: `walk` también es `ast.walk` y el `walk()` de un
+        # correo, que no tocan el disco. Se juzga solo cuando el receptor SE
+        # PUEDE resolver a una carpeta; si no se puede, acá no es un recorrido
+        # de archivos. Es el único sitio de esta prueba donde «no lo sé» cae
+        # del lado verde, y es porque el nombre no es de `pathlib`.
+        sobre = _carpeta_que_nombra(llamada.func.value, ambito, archivo)
+        return _NO_ES_UN_RECORRIDO if sobre is None else sobre
+    return _NO_ES_UN_RECORRIDO
+
+
+def _recorridos_fuera_de_la_puerta(raiz: Path) -> dict:
+    """Los sitios que bajan por el árbol sin poder demostrar dónde paran.
+
+    LA FRONTERA, en una línea para poder predecirla sin correr nada: es
+    culpable todo `os.walk`, `os.fwalk`, `.rglob(...)` y `.walk(...)` sobre una
+    ruta, cuya RAÍZ no se pueda demostrar estrictamente por debajo de la raíz
+    del repositorio — y el único cuerpo exento es el de la puerta.
+
+    Los tres cubos, enumerados para que al indulgente no se pueda llegar por
+    olvido: (1) el cuerpo de la puerta; (2) una raíz que la gramática cerrada
+    de `_carpeta_que_nombra` evalúa a una carpeta POR DEBAJO de la raíz —una
+    carpeta de datos, `tests/fixtures`—; (3) todo lo demás, rojo. Una raíz que
+    no se pueda evaluar cae en el (3), no en el (2).
+
+    Lo que esta prueba NO ve, dicho para que nadie lo dé por cubierto: una
+    recursión escrita a mano con `listdir`/`scandir` sobre cada subcarpeta, y
+    un `.walk()` sobre un receptor que no se puede resolver. Lo primero no usa
+    ninguna de las formas de arriba; lo segundo está dicho en
+    `_raiz_del_recorrido`.
+    """
+    raiz = raiz.resolve()
+    culpables: dict = {}
+    for py in _py_en_disco(raiz):
+        rel = str(py.relative_to(raiz))
+        try:
+            fuente = py.read_text(encoding="utf-8")
+            arbol = ast.parse(fuente, str(py))
+        except (OSError, ValueError, SyntaxError) as e:
+            # No poder leerlo no lo absuelve: se dice y cuenta rojo.
+            culpables[rel] = f"no se pudo leer ni parsear: {type(e).__name__}"
+            continue
+        real = py.resolve()
+        for llamada, ambito, funcion in _llamadas_con_su_ambito(arbol, real):
+            donde = _raiz_del_recorrido(llamada, ambito, real)
+            if donde is _NO_ES_UN_RECORRIDO:
+                continue
+            if (real == _ARCHIVO_DE_LA_PUERTA and funcion is not None
+                    and funcion.name == _NOMBRE_DE_LA_PUERTA):
+                continue
+            if donde is not None:
+                abajo = donde.resolve()
+                if abajo != raiz and raiz in abajo.parents:
+                    continue
+            culpables[f"{rel}:{llamada.lineno}"] = (
+                f"{ast.unparse(llamada.func)}(...) sobre "
+                + (f"«{ast.unparse(_expresion_de_raiz(llamada))}» = {donde}"
+                   if donde is not None else
+                   f"«{ast.unparse(_expresion_de_raiz(llamada))}», que no se "
+                   "puede demostrar por debajo de la raíz"))
+    return culpables
+
+
+def _expresion_de_raiz(llamada):
+    """Desde dónde dice el código que baja, para poder pegarlo en el rojo."""
+    if _punteado_de(llamada.func) in _BAJAN_DESDE_OS and llamada.args:
+        return llamada.args[0]
+    return llamada.func.value
+
+
+def test_el_repositorio_se_recorre_por_una_sola_puerta():
+    """¿Quiénes son los hermanos de `_py_en_disco`, y lo cumplen todos?
+
+    Ésta es la pregunta que corta la serie, y la respuesta tiene que estar en
+    una prueba y no en la memoria de quien lo arregló. El 9-sep-2026 los
+    hermanos eran tres y ninguno cumplía: uno se metía en el entorno virtual
+    del árbol desde el que se publica, y los otros dos se salvaban solo porque
+    alguien había tecleado `venv` y `.venv` en una lista.
+
+    Arreglar los tres no impide que nazca un cuarto. Esto sí: el barrido que
+    alguien escriba mañana empezando por la raíz del repositorio nace rojo, y
+    la única forma de ponerlo verde es pasar por la puerta.
+
+    Y por qué no alcanza con una prueba de comportamiento —plantar un venv y
+    contar archivos—: eso solo ve el RESULTADO, y tres criterios distintos
+    pueden dar el mismo resultado hoy y separarse mañana. Que la puerta muerde
+    de verdad lo mide
+    `test_un_venv_dentro_del_arbol_no_mete_ni_un_archivo_en_el_barrido`; que
+    sea la única, esto.
+    """
+    culpables = _recorridos_fuera_de_la_puerta(RAIZ)
+    assert culpables == {}, (
+        "hay barridos del repositorio fuera de la única puerta "
+        f"(`{_NOMBRE_DE_LA_PUERTA}`): {culpables}. Un barrido que empieza en "
+        "la raíz se mete dentro del entorno virtual del árbol desde el que se "
+        "publica —9.724 .py contra 70— y deja la suite parada. Se arregla "
+        "pidiéndole los archivos a la puerta, no agregándole una carpeta más "
+        "a una lista")
+
+
+def test_un_recorrido_nuevo_del_repo_nace_rojo():
+    """Que la prueba de arriba MUERDA, sobre un repo de mentira y no leyendo.
+
+    Cuatro archivos y los cuatro casos que importan: el que baja desde una
+    carpeta de datos por debajo de la raíz —verde, porque un arreglo que
+    esconde archivos de verdad no es un arreglo—, los dos que bajan desde la
+    raíz con las dos formas que existen, y el que baja desde algo que no se
+    puede resolver. Los tres últimos, rojos.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        raiz = Path(tmp).resolve()
+        (raiz / "datos").mkdir()
+        (raiz / "abajo.py").write_text(
+            "import pathlib\n"
+            "FIX = pathlib.Path(__file__).parent / 'datos'\n"
+            "def f():\n"
+            "    return sorted(FIX.rglob('*.eml'))\n", encoding="utf-8")
+        (raiz / "raiz_con_walk.py").write_text(
+            "import os\n"
+            "R = os.path.dirname(os.path.abspath(__file__))\n"
+            "def f():\n"
+            "    return [c for c, _, _ in os.walk(R) if '.git' not in c]\n",
+            encoding="utf-8")
+        (raiz / "raiz_con_rglob.py").write_text(
+            "import pathlib\n"
+            "R = pathlib.Path(__file__).resolve().parent\n"
+            "def f():\n"
+            "    return [p for p in R.rglob('*.py') if '.git' not in p.parts]\n",
+            encoding="utf-8")
+        (raiz / "opaco.py").write_text(
+            "def f(d):\n"
+            "    return sorted(d.rglob('*.py'))\n", encoding="utf-8")
+        culpables = _recorridos_fuera_de_la_puerta(raiz)
+
+    assert sorted({k.split(":")[0] for k in culpables}) == [
+        "opaco.py", "raiz_con_rglob.py", "raiz_con_walk.py"], (
+        f"la guarda no mordió lo que tenía que morder: {culpables}")
+    assert not any(k.startswith("abajo.py") for k in culpables), (
+        "un barrido sobre una carpeta de datos POR DEBAJO de la raíz no puede "
+        f"salir rojo; si sale, la guarda esconde archivos de verdad: {culpables}")
+
+
 def _entradas_de_produccion(raiz: Path) -> list[Path]:
     """Con qué archivo arranca Lucy en Railway, leído de `railway.json`.
 

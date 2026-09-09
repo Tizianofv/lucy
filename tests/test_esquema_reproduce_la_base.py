@@ -89,17 +89,31 @@ def _fuentes() -> list[tuple[str, str]]:
     nuevo en un módulo que hoy no existe tiene que quedar cubierto igual. La
     lista escrita a mano es justo la que se queda atrás — pasó con la de
     tests/test_backup_alerta.py, que enumera tres nombres.
+
+    Y HASTA DÓNDE LLEGA EL BARRIDO tampoco se teclea acá, desde el 9-sep-2026.
+    Antes saltaba carpetas por NOMBRE —`.venv`, `venv`, `.uv-cache`, …—, y una
+    lista de nombres se queda vieja igual que la de archivos: un `env/`, un
+    `entorno/` o un entorno de conda no llevan ninguno de esos nombres y sí
+    llevan `pyvenv.cfg`. Se lo pide a `test_buzon_que_no_se_ve._py_en_disco`,
+    la única puerta del repositorio para recorrerlo entero, que le pregunta a
+    cada carpeta QUÉ ES (`pyvenv.cfg`, `CACHEDIR.TAG`) en vez de mirarle el
+    nombre.
+
+    `tests/` se sigue saltando ACÁ y no en la puerta a propósito: eso no es «no
+    es del repositorio», es «no es código de producción», y ésa es una pregunta
+    de este archivo y de nadie más.
     """
+    import pathlib
+
+    import test_buzon_que_no_se_ve as barrido
+
     salida = []
-    for carpeta, subs, archivos in os.walk(_ROOT):
-        subs[:] = [s for s in subs if s not in
-                   {".venv", ".git", "tests", "__pycache__", ".uv-cache",
-                    ".uv-python", ".pytest_cache", "venv"}]
-        for a in archivos:
-            if a.endswith(".py"):
-                ruta = os.path.join(carpeta, a)
-                with open(ruta, encoding="utf-8") as f:
-                    salida.append((os.path.relpath(ruta, _ROOT), f.read()))
+    for ruta in barrido._py_en_disco(pathlib.Path(_ROOT)):
+        rel = os.path.relpath(ruta, _ROOT)
+        if rel.split(os.sep)[0] == "tests":
+            continue
+        with open(ruta, encoding="utf-8") as f:
+            salida.append((rel, f.read()))
     return salida
 
 
