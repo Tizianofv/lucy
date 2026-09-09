@@ -76,6 +76,13 @@ async def main() -> int:
         # LECTURA — humo.py no escribe nada, y menos en producción.
         ("movimientos_filtrados (banco=efectivo)",
          lambda: db.movimientos_filtrados(None, None, None, None, "efectivo")),
+        # La consulta del panel de tareas. Es un LEFT JOIN de tareas contra
+        # bandeja, y toca seis columnas de una tabla que hasta hoy NINGUNA
+        # función de db/db.py consultaba: o sea que es exactamente la familia de
+        # error de acople que este archivo existe para agarrar. Es una LECTURA;
+        # la escritura (marcar_tarea_hecha) no se prueba acá, porque humo.py no
+        # escribe en producción.
+        ("tareas_por_grupo", lambda: db.tareas_por_grupo()),
     ]
 
     rojas = []

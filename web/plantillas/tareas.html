@@ -1,0 +1,99 @@
+{% extends "base.html" %}{% set activo='tareas' %}
+{% block titulo %}Tareas{% endblock %}
+{% block cuerpo %}
+<h1>Tareas</h1>
+{% if guardadas %}
+{# El aviso existe por lo mismo que en /sin-clasificar: sin él, el éxito y el
+   "no cambió nada" devuelven el MISMO redirect y no hay forma de distinguirlos. #}
+<p class="vacio">Cerrada{{ 's' if guardadas > 1 }} {{ guardadas }}.</p>
+{% endif %}
+{% if hay_mas %}
+<p class="aviso">Hay más de {{ tope }} tareas y esta pantalla muestra las
+primeras. Nada se perdió, pero no está todo a la vista.</p>
+{% endif %}
+
+{% if not grupos %}
+<p class="vacio">No hay ninguna tarea. 👌</p>
+{% else %}
+<p class="suave">Una sola lista para los dos. «Atrasada» es por DÍA, no por
+hora: lo que vence hoy más temprano todavía es de hoy.</p>
+
+{# UN SOLO formulario para toda la pantalla, como en /sin-clasificar. Con un
+   formulario por fila, cerrar una recargaba la página y se llevaba puesto todo
+   lo demás que estuviera marcado sin enviar. Marcar diez y guardar una vez es
+   la diferencia entre un panel que se usa y uno que no. #}
+<form method="post" action="/tareas">
+  <div class="barra">
+    <button>Guardar lo marcado</button>
+    <span class="suave" id="cuenta"></span>
+  </div>
+
+  {% for g in grupos %}
+  <h2>{{ g.titulo }} · {{ g.filas|length }}</h2>
+  <div class="scroll"><table>
+  <tr><th style="width:2.5rem"></th><th>Tarea</th><th>Vence</th>
+      <th>Quién la anotó</th><th>Estado</th></tr>
+  {% for t in g.filas %}
+  <tr>
+    <td>
+      {# `prev_` va en TODAS las filas, hecha o no: es lo que dice qué filas
+         estaban en la pantalla cuando se pintó. Un checkbox sin marcar no
+         viaja en el formulario, así que sin esto no se distingue "no la toqué"
+         de "la desmarqué" — el mismo motivo por el que lo tiene /categorias. #}
+      <input type="hidden" name="prev_{{ t.id }}" value="{{ t.estado }}">
+      {# Las ya hechas salen marcadas y DESHABILITADAS. Un navegador no envía
+         un campo deshabilitado, así que no hay forma de que un envío las
+         vuelva a escribir. Y no se ofrece desmarcar porque desmarcar no
+         deshace: qué debería pasar al deshacer un "hecha" no está decidido, y
+         una casilla que parece hacer algo y no lo hace miente. #}
+      <input type="checkbox" name="hecha_{{ t.id }}" value="1"
+             {% if t.estado == hecha %}checked disabled
+             title="ya está hecha"{% endif %}>
+    </td>
+    <td>{{ t.titulo }}</td>
+    <td class="suave">
+      {%- if t.vence_dia -%}
+        {{ t.vence_dia.strftime('%d/%m/%Y') }}
+      {%- else -%}
+        sin fecha
+      {%- endif -%}
+    </td>
+    {# El chat de quien la anotó. "yo" cuando es el de quien está mirando; el
+       número cuando es del otro, porque en este sistema no hay ningún sitio del
+       que sacar su nombre y escribirlo acá a mano sería inventarlo. Y "—"
+       cuando no se sabe: esa tarea SALE IGUAL. Una fila que se esconde porque
+       le falta un dato accesorio es cómo se pierden las cosas. #}
+    <td class="suave">
+      {%- if t.quien is none -%}—
+      {%- elif t.quien == yo -%}yo
+      {%- else -%}{{ t.quien }}
+      {%- endif -%}
+    </td>
+    <td class="suave">{{ t.estado }}</td>
+  </tr>
+  {% endfor %}
+  </table></div>
+  {% endfor %}
+
+  <div class="barra"><button>Guardar lo marcado</button></div>
+</form>
+
+{# El contador es una comodidad, no un requisito: si el JS no corre, el
+   formulario funciona igual. Quien decide qué se guarda es el servidor. #}
+<script>
+(function () {
+  var f = document.querySelector('form[action="/tareas"]');
+  var c = document.getElementById('cuenta');
+  if (!f || !c) return;
+  function contar() {
+    var n = 0;
+    f.querySelectorAll('input[type=checkbox]:not([disabled])').forEach(
+      function (b) { if (b.checked) n++; });
+    c.textContent = n ? n + ' para cerrar' : '';
+  }
+  f.addEventListener('change', contar);
+  contar();
+})();
+</script>
+{% endif %}
+{% endblock %}

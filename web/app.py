@@ -26,6 +26,13 @@ CUATRO PANTALLAS, y el orden no es casual:
                     cuándo miró por última vez miente por omisión: un cero puede
                     ser "no gastaste" o "dejé de mirar", y son cosas opuestas.
 
+  /tareas           Lo que hay que hacer, para las DOS personas de la casa en
+                    una sola lista. Es la primera pantalla que no habla de
+                    plata: entró porque Rosi necesitaba ver y cerrar sus
+                    pendientes sin pedírselo a Lucy por Telegram. Lo que la hace
+                    distinta de una lista cualquiera está en db.grupo_de_tarea —
+                    "atrasada" se dice ahí una sola vez, y es por DÍA.
+
 SIN BUILD DE JAVASCRIPT. HTML renderizado en el servidor y CSS a mano. Meter un
 toolchain de Node en un repo Python que despliega en Railway sería un segundo
 proyecto de mantenimiento, y el tiempo es justo lo que este proyecto no tiene.
@@ -518,6 +525,101 @@ async def papelera(request: Request, restaurado: int = 0):
         request, "papelera.html",
         {"movs": await db.papelera(), "dias": db.DIAS_EN_PAPELERA,
          "restaurado": restaurado})
+
+
+@app.get("/tareas", response_class=HTMLResponse)
+async def tareas(request: Request, guardadas: int = 0):
+    """El panel de tareas: lo que hay que hacer, para las dos personas.
+
+    UNA SOLA LISTA PARA LOS DOS, por decisión de Tiziano —"está bien que Rosi
+    vea todo"—. La columna de quién la anotó alcanza para saber de quién es
+    cada cosa; partir la lista en dos por persona sería inventarle al panel una
+    frontera que el trabajo de esta casa no tiene.
+
+    ESTA RUTA NO SABE QUÉ ES "ATRASADA". El criterio vive entero en
+    `db.grupo_de_tarea` y esta función solo pinta lo que aquella devuelve. Es
+    el defecto que este panel vino a arreglar: hasta hoy "atrasada" se
+    reescribía en cada consulta y daba números distintos según quién la
+    escribiera.
+
+    `yo` es el chat de quien está mirando. Sirve para que la columna "Quién"
+    diga "yo" en vez de un número de Telegram, y sale de la sesión —o sea del
+    dato que ya se comprobó para dejar entrar— y no de una lista de nombres
+    escrita a mano en ninguna parte.
+    """
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    datos = await db.tareas_por_grupo()
+    return plantillas.TemplateResponse(
+        request, "tareas.html",
+        {"grupos": datos["grupos"], "hay_mas": datos["hay_mas"],
+         "yo": chat, "guardadas": guardadas, "tope": db.TOPE_TAREAS,
+         "hecha": db.ESTADO_HECHA})
+
+
+@app.post("/tareas")
+async def guardar_tareas(request: Request):
+    """Cerrar VARIAS tareas de una vez. La tercera escritura del panel.
+
+    UN SOLO BOTÓN PARA TODA LA TABLA, igual que /categorias y por el mismo
+    motivo, que ahí está escrito con la cicatriz puesta: cuando cada fila se
+    guardaba sola, el recargue se llevaba puesto lo que ya estaba marcado en
+    las demás. Con cuarenta filas eso no lo hace nadie, y un panel que no se
+    usa no le sirve a Rosi mañana.
+
+    LAS FILAS QUE NADIE TOCÓ NO SE PISAN, y hay dos frenos para eso porque son
+    dos preguntas distintas:
+
+      · `prev_<id>` es lo que la fila tenía CUANDO SE PINTÓ. Un checkbox sin
+        marcar no viaja en el formulario, así que la casilla sola no distingue
+        "no la toqué" de "la desmarqué"; `prev_` es lo que hace la diferencia
+        visible, igual que en POST /categorias.
+      · y `db.marcar_tarea_hecha` vuelve a mirar la fila EN LA BASE antes de
+        escribir. Eso cubre la pantalla vieja: si Rosi la cerró hace diez
+        minutos, el envío de Tiziano no la vuelve a escribir ni duplica su
+        huella en log_acciones.
+
+    DESMARCAR NO DESHACE, y la pantalla lo dice: las que ya están hechas salen
+    con la casilla marcada y DESHABILITADA. Qué tiene que pasar cuando alguien
+    deshace un "hecha" —¿vuelve a pendiente?, ¿con qué fecha?— es una decisión
+    de Tiziano que este encargo no tomó, y una casilla que parece deshacer y no
+    deshace miente. Antes que manejar el caso, se borra.
+
+    NO HAY REDIRECT A UN DESTINO ELEGIBLE. De acá se vuelve siempre a /tareas,
+    así que no existe el parámetro `volver` que /categorias y /efectivo tienen
+    que defender contra "//evil.com". El agujero que no existe no se tapa.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+
+    formulario = await request.form()
+    hechas, ignoradas = 0, 0
+    for campo in formulario:
+        if not campo.startswith("hecha_"):
+            continue
+        try:
+            tid = int(campo[len("hecha_"):])
+        except ValueError:
+            ignoradas += 1
+            continue
+        previa = str(formulario.get(f"prev_{tid}", "")).strip()
+        if previa == db.ESTADO_HECHA:
+            # Ya estaba hecha cuando se pintó: no hay nada que cambiar.
+            continue
+        if await db.marcar_tarea_hecha(tid):
+            hechas += 1
+        else:
+            ignoradas += 1
+
+    if ignoradas:
+        # Un rechazo que no deja rastro en ningún lado es un fallo silencioso,
+        # y este panel paga por que todo sea auditable. Va acá y no en db.db
+        # porque el logger de este módulo existe y el de aquél no (ver el
+        # hallazgo sobre db/db.py:1648).
+        log.warning("Panel de tareas: %s marca(s) sin efecto —la tarea no "
+                    "existe, está en la papelera o ya estaba hecha", ignoradas)
+    return RedirectResponse(f"/tareas?guardadas={hechas}", status_code=303)
 
 
 @app.get("/salud", response_class=HTMLResponse)
