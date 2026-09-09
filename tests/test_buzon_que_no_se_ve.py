@@ -2343,14 +2343,37 @@ def _carpeta_que_nombra(nodo, ambito: dict, archivo: Path):
 
 def _carpeta_que_devuelve(llamada, ambito: dict, archivo: Path):
     """La mitad de la gramática que son llamadas. Misma regla: lo que no está
-    escrito acá devuelve None, y None cuenta rojo."""
+    escrito acá devuelve None, y None cuenta rojo.
+
+    LOS MÉTODOS SE MIRAN ANTES QUE EL NOMBRE PUNTEADO, y eso NO es un detalle
+    de estilo: `Path(__file__).resolve()` tiene una LLAMADA de receptor, así
+    que no es un nombre punteado y `_punteado_de` devuelve None. Escrito al
+    revés, `pathlib.Path(__file__).resolve().parents[1]` —que es como este
+    repositorio escribe la raíz en tres archivos— no se podía evaluar, y una
+    carpeta de datos por debajo de la raíz salía ROJA. Medido el 9-sep-2026
+    plantando `DATOS = pathlib.Path(__file__).resolve().parents[1] / 'docs'`
+    con un `DATOS.rglob('*.md')`: rojo, y tenía que ser verde. Una guarda que
+    estorba se termina desactivando entera, que es peor que no tenerla.
+    """
+    args = llamada.args
+    if isinstance(llamada.func, ast.Attribute):
+        receptor = llamada.func.value
+        if llamada.func.attr in ("resolve", "absolute"):
+            base = _carpeta_que_nombra(receptor, ambito, archivo)
+            return None if base is None else base.resolve()
+        if llamada.func.attr == "joinpath":
+            base = _carpeta_que_nombra(receptor, ambito, archivo)
+            trozos = [_carpeta_que_nombra(a, ambito, archivo) for a in args]
+            if base is None or any(t is None for t in trozos):
+                return None
+            for t in trozos:
+                base = base / t
+            return base
+
     nombre = _punteado_de(llamada.func)
     if nombre is None:
         return None
     corto = nombre.rsplit(".", 1)[-1]
-    args = llamada.args
-    receptor = (llamada.func.value if isinstance(llamada.func, ast.Attribute)
-                else None)
 
     if corto in ("Path", "PurePath", "PosixPath"):
         return _carpeta_que_nombra(args[0], ambito, archivo) if args else None
@@ -2367,17 +2390,6 @@ def _carpeta_que_devuelve(llamada, ambito: dict, archivo: Path):
         for t in trozos[1:]:
             salida = salida / t
         return salida
-    if corto in ("resolve", "absolute") and receptor is not None:
-        base = _carpeta_que_nombra(receptor, ambito, archivo)
-        return None if base is None else base.resolve()
-    if corto == "joinpath" and receptor is not None:
-        base = _carpeta_que_nombra(receptor, ambito, archivo)
-        trozos = [_carpeta_que_nombra(a, ambito, archivo) for a in args]
-        if base is None or any(t is None for t in trozos):
-            return None
-        for t in trozos:
-            base = base / t
-        return base
     return None
 
 
@@ -2533,11 +2545,16 @@ def test_el_repositorio_se_recorre_por_una_sola_puerta():
 def test_un_recorrido_nuevo_del_repo_nace_rojo():
     """Que la prueba de arriba MUERDA, sobre un repo de mentira y no leyendo.
 
-    Cuatro archivos y los cuatro casos que importan: el que baja desde una
-    carpeta de datos por debajo de la raíz —verde, porque un arreglo que
-    esconde archivos de verdad no es un arreglo—, los dos que bajan desde la
-    raíz con las dos formas que existen, y el que baja desde algo que no se
-    puede resolver. Los tres últimos, rojos.
+    Seis archivos y los casos que importan: los dos que bajan desde una
+    carpeta de datos por debajo de la raíz —verdes, porque un arreglo que
+    esconde archivos de verdad no es un arreglo—, los tres que bajan desde la
+    raíz con las formas que este repositorio usa de verdad, y el que baja desde
+    algo que no se puede resolver. Los cuatro últimos, rojos.
+
+    `abajo_con_resolve.py` está acá por lo que costó el 9-sep-2026: el
+    evaluador no veía a través de `Path(__file__).resolve()`, así que esa
+    carpeta de datos salía roja. Sin este caso la guarda habría entrado
+    estorbando, y una guarda que estorba se termina desactivando entera.
     """
     import tempfile
 
@@ -2549,6 +2566,17 @@ def test_un_recorrido_nuevo_del_repo_nace_rojo():
             "FIX = pathlib.Path(__file__).parent / 'datos'\n"
             "def f():\n"
             "    return sorted(FIX.rglob('*.eml'))\n", encoding="utf-8")
+        (raiz / "abajo_con_resolve.py").write_text(
+            "import pathlib\n"
+            "D = pathlib.Path(__file__).resolve().parents[0] / 'datos'\n"
+            "def f():\n"
+            "    return sorted(D.rglob('*.eml'))\n", encoding="utf-8")
+        (raiz / "raiz_con_parents.py").write_text(
+            "import pathlib\n"
+            "R = pathlib.Path(__file__).resolve().parents[0]\n"
+            "def f():\n"
+            "    return [p for p in R.rglob('*.py') if '.venv' not in p.parts]\n",
+            encoding="utf-8")
         (raiz / "raiz_con_walk.py").write_text(
             "import os\n"
             "R = os.path.dirname(os.path.abspath(__file__))\n"
@@ -2567,9 +2595,10 @@ def test_un_recorrido_nuevo_del_repo_nace_rojo():
         culpables = _recorridos_fuera_de_la_puerta(raiz)
 
     assert sorted({k.split(":")[0] for k in culpables}) == [
-        "opaco.py", "raiz_con_rglob.py", "raiz_con_walk.py"], (
+        "opaco.py", "raiz_con_parents.py", "raiz_con_rglob.py",
+        "raiz_con_walk.py"], (
         f"la guarda no mordió lo que tenía que morder: {culpables}")
-    assert not any(k.startswith("abajo.py") for k in culpables), (
+    assert not any(k.startswith("abajo") for k in culpables), (
         "un barrido sobre una carpeta de datos POR DEBAJO de la raíz no puede "
         f"salir rojo; si sale, la guarda esconde archivos de verdad: {culpables}")
 
