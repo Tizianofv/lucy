@@ -223,17 +223,15 @@ HERRAMIENTAS DISPONIBLES:
 
 · panel  {}
   El enlace al panel. NO es solo de plata. Las pantallas que tiene HOY, con su
-  ruta — esta lista sale del menú de verdad, así que es la que hay:
+  ruta, con las palabras con las que se las suele pedir y con lo que haya que
+  saber de cada una — esta lista sale del menú de verdad, así que es la que hay:
 {PANTALLAS_DEL_PANEL}
   Es UN solo enlace para todas: se entra una vez y se cambia de pantalla con el
   menú de arriba. No hay un enlace por pantalla ni hace falta elegir cuál.
-  Dáselo cuando pida "el panel" — y también cuando pida algo que viva en alguna
-  de esas pantallas y se conteste mejor con una tabla que con una frase: "ver
-  mis gastos", "el resumen del mes", "lo que falta clasificar", "los
-  pendientes", "las tareas", "qué hay que hacer", "la lista". Antes de decir que
-  algo no está en el panel, mirá la lista de arriba.
-  Ojo con los pendientes: la pantalla de tareas es de las DOS personas de la
-  casa, así que sirve igual para ver los propios y para ver cómo va todo.
+  Dáselo cuando te pidan el panel por su nombre — y también cuando pidan algo
+  que viva en alguna de esas pantallas y se conteste mejor con una tabla que con
+  una frase. Antes de decir que algo no está en el panel, mirá el listado de
+  arriba: ahí está todo lo que tiene, y nada de lo que no tiene.
   El enlace vence en 10 minutos y se emite a nombre de quien lo pide: no lo
   reenvíes a nadie ni lo repitas en la conversación más de lo necesario.
 
@@ -426,18 +424,48 @@ def herramientas_del_prompt() -> str:
     Ninguna de las dos se teclea en el texto: una lista duplicada se
     desincroniza el día que se le agrega algo y nadie se entera.
       · Las categorías salen de `CATEGORIAS`.
-      · Las pantallas salen del `<nav>` de `web/plantillas/base.html`, que es
-        el menú que ve quien abre el panel. El 9-sep-2026 se publicó `/tareas`
-        y la descripción se quedó hablando solo de plata, en verde.
+      · Las pantallas —su nombre, su ruta, cómo se las pide una persona y la
+        nota de cada una— salen del `<nav>` de `web/plantillas/base.html`, que
+        es el menú que ve quien abre el panel. El 9-sep-2026 se publicó
+        `/tareas` y la descripción se quedó hablando solo de plata, en verde.
+
+    ESTE ES EL ÚNICO SITIO QUE SE BANCA UN MENÚ ILEGIBLE, y el motivo se midió
+    el 9-sep-2026 sobre `ca2c421`: `_sistema()` se arma en CADA mensaje, no solo
+    cuando piden el panel, así que un `</nav>` mal cerrado hacía que
+    `_sistema()` lanzara y `cerebro/interpretar.py::_procesar` lo mandara a
+    `_fallo` → «Fallo definitivo» → repregunta genérica. O sea: un typo en el
+    menú del panel dejaba a Lucy sin contestar NADA, ni la hora.
+
+    Lo que se hace en su lugar es lo mismo que ya hace `main.py` con una tabla
+    que falta: se avisa fuerte y se sigue. Y lo que se le dice al modelo es la
+    verdad —que hoy no sabemos qué pantallas hay—, no una lista inventada ni una
+    lista vacía disfrazada de lista.
+
+    Ruidoso sigue siendo, y en los dos sitios donde se ve:
+      · en la suite, porque `tests/test_panel_descrito.py` lee el menú de verdad
+        y se pone rojo; `.github/workflows/pruebas.yml` la corre en cada push,
+        así que un menú roto no llega a producción por el camino normal;
+      · en el log, con un `log.error` en el primer mensaje que entre.
+
+    El `except` es de `MenuIlegible` y de nada más: un `except Exception` acá se
+    tragaría los errores de verdad del armado del prompt y los dejaría en
+    silencio, que es justo lo contrario de lo que este arreglo quiere.
 
     `web.menu` se importa acá adentro, como `web.auth` más abajo: `cerebro` no
     depende de `web` al arrancar, solo cuando arma el prompt.
     """
     import web.menu as _menu
+    try:
+        pantallas = _menu.bloque_para_el_prompt()
+    except _menu.MenuIlegible as e:
+        log.error(
+            "NO PUDE LEER EL MENÚ DEL PANEL: %s — Lucy sigue contestando todo "
+            "lo demás, pero hasta que esto se arregle no sabe qué pantallas "
+            "tiene el panel y no va a afirmar que algo está ahí.", e)
+        pantallas = _menu.SIN_MENU
     return HERRAMIENTAS.replace(
         "{CATEGORIAS}", ", ".join(f'"{c}"' for c in CATEGORIAS)
-    ).replace(
-        "{PANTALLAS_DEL_PANEL}", _menu.bloque_para_el_prompt())
+    ).replace("{PANTALLAS_DEL_PANEL}", pantallas)
 
 
 async def _avisar_choques(evento_id: int) -> str:
