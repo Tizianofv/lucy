@@ -34,9 +34,11 @@ alcanzaba. Las tres guardas de árbol de sintaxis perseguían nombres (`_enviar`
 un cliente de `telegram` armado a mano, y un `db.pool.connection()` con SQL
 crudo. La segunda se saltaba las dos guardas de escritura a la vez y es la forma
 más directa que existe. Lo que las cierra ahora es un doble en los sitios por
-donde de verdad se sale del proceso —el pool de Postgres y los cuatro caminos de
-un mensaje—, más el barrido de todas las herramientas sacadas del propio árbol
-de `_ejecutar_herramienta`. El detalle, en el bloque «LA PUERTA DE VERDAD».
+donde de verdad se sale del proceso —las OCHO formas de conseguir una conexión a
+Postgres, derivadas del paquete instalado y no sólo `db.pool`, y los cuatro
+caminos de un mensaje—, más el barrido de todas las herramientas sacadas del
+propio árbol de `_ejecutar_herramienta`. El detalle, en el bloque «LA PUERTA DE
+VERDAD».
 
 Correr:  python3 -m pytest tests/test_cerrar_varias.py
 """
@@ -607,10 +609,21 @@ def test_el_parte_nunca_esconde_menos_de_lo_que_un_turno_puede_escribir():
 #   · para que un mensaje salga del proceso hay que hacer E/S. Da igual cómo se
 #     llame quien la haga: pasa por el objeto `bot` del turno, por un cliente de
 #     `telegram` propio, por `httpx`, o por un socket. Los cuatro llevan doble.
-#   · para que una escritura llegue a Postgres hay que pasarla por un CURSOR de
-#     psycopg. Da igual de dónde salga la conexión: `db.pool`, un pool armado a
-#     mano, un `psycopg.connect()` suelto. Con un doble en el cursor se ve CADA
-#     sentencia con su texto ya armado, se llame como se llame quien la mandó.
+#   · para que una escritura llegue a Postgres hay que conseguir antes una
+#     CONEXIÓN, y las formas de conseguirla en este proceso son enumerables: se
+#     derivan de `dir(psycopg)` y `dir(psycopg_pool)`, y hoy son OCHO. Doblando
+#     esas ocho, lo que devuelven es un espía que apunta CADA sentencia con su
+#     texto ya armado, se llame como se llame quien la mandó — `db.pool`, un
+#     pool armado a mano, o un `psycopg.connect()` suelto.
+#
+#     OJO, Y ESTO ES EL TECHO: acá decía «hay que pasarla por un CURSOR de
+#     psycopg… con un doble en el cursor se ve CADA sentencia». Eso era FALSO.
+#     Medido el 8-sep-2026: de los 10 cursores que expone psycopg, los 10 tapan
+#     en el MRO el doble que se le pone a `BaseCursor` y CERO pasan por él. Lo
+#     que cubre son los ocho puntos de entrada, no un fondo debajo — ver el
+#     bloque «LA PUERTA: dónde está de verdad» y `poner_la_puerta()`. Quien se
+#     quede con uno de esos ocho símbolos ANTES de que la puerta se instale
+#     escribe a ciegas: es la FRONTERA 4, declarada y no tapada.
 #
 # CORRECCIÓN DEL 8-sep-2026 — lo que este bloque decía antes era FALSO y sostuvo
 # dos vueltas de trabajo. Decía: «para que una escritura llegue a Postgres hay
@@ -960,26 +973,88 @@ class _PoolEspia:
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# LA PUERTA DEL CURSOR: una sola, y tiene que PROBAR que está puesta
+# LA PUERTA: dónde está de verdad, y tiene que PROBAR que está puesta
 # ═════════════════════════════════════════════════════════════════════════
 #
-# LA REGLA, EN UNA LÍNEA: todo lo que este proceso le manda a Postgres por
-# psycopg pasa por un cursor, y el doble está en el cursor.
+# Se la llama «la puerta del cursor» en todo el archivo y en el nombre de
+# `test_la_puerta_del_cursor_esta_puesta_...`. El nombre se queda porque es como
+# se la conoce; lo que este bloque decía de ella, no.
 #
-# POR QUÉ EL CURSOR ES UN FONDO Y NO OTRA LISTA (medido el 8-sep-2026):
+# LA REGLA, EN UNA LÍNEA, AHORA QUE ES CIERTA: lo que esta guarda cubre son los
+# OCHO PUNTOS DE ENTRADA que dobla —derivados de `dir(psycopg)` y de
+# `dir(psycopg_pool)` con `issubclass`, no de una lista escrita acá—, y lo que
+# ve las sentencias son los ESPÍAS que esos ocho devuelven. Debajo no hay
+# ningún fondo, y por eso la cobertura tiene FRONTERA (la 4, más abajo).
 #
-#   · los 10 cursores que expone psycopg derivan TODOS de
-#     `psycopg.cursor.BaseCursor` — comprobado recorriendo los módulos del
-#     paquete y preguntando por el atributo `execute`, no por un prefijo de
-#     nombre;
-#   · `Connection.execute` y `AsyncConnection.execute` NO hablan con la base:
-#     leído en su fuente, construyen un cursor y llaman a su `execute`;
-#   · y debajo del cursor ya no hay Python: `psycopg.pq.__impl__` es `binary` y
-#     `psycopg_binary.pq.PGconn` es un tipo inmutable —
-#     `TypeError: cannot set 'exec_' attribute of immutable type`.
+# LO QUE ESTE BLOQUE DECÍA ANTES Y ERA FALSO. Decía: «todo lo que este proceso
+# le manda a Postgres por psycopg pasa por un cursor, y el doble está en el
+# cursor», bajo el título «POR QUÉ EL CURSOR ES UN FONDO Y NO OTRA LISTA». No es
+# cierto. La medición que lo tumba ya estaba escrita en `poner_la_puerta()`, a
+# unas 350 líneas de acá, y esta segunda copia sobrevivió a esa corrección: la
+# misma afirmación estaba en dos sitios, se arregló uno y siguió viva en el
+# otro. Por eso esto se REESCRIBE y no se le pone una nota debajo.
 #
-# Así, las tres formas que antes salían verdes salen rojas SIN NOMBRARLAS: no se
-# las persigue, se mira por dónde salen.
+# LA MEDICIÓN QUE LO TUMBA (rehecha el 8-sep-2026, psycopg 3.2.3, pq `binary`):
+#
+#     'execute' in vars(psycopg.cursor.BaseCursor) ...... False
+#     'execute' in vars(psycopg.Cursor) ................. True
+#
+# `execute` NO está definido en `BaseCursor`: ponerlo ahí crea un atributo que
+# las clases concretas TAPAN en el MRO. Medido con la puerta REAL puesta
+# —`red.tender()` y después comparando por identidad contra el doble—:
+#
+#     cursores que expone psycopg .......... 10
+#       lo VEN (pasan por el doble) ........  0
+#       lo TAPAN en el MRO ................. 10
+#
+# O sea que un cursor REAL de psycopg no pasa por el doble nunca, ni uno.
+#
+# PARA QUÉ SIRVE ENTONCES EL DOBLE EN `BaseCursor`, QUE SIGUE PUESTO:
+#   · para apuntar lo que le llegue por `BaseCursor` — hoy, nada real;
+#   · y para DEMOSTRAR que la puerta se pudo instalar, que es lo que comprueba
+#     el assert de `test_la_puerta_del_cursor_esta_puesta_...`. Medido
+#     quitándolo y corriendo la suite entera: 1 rojo, y es ese assert. Ninguna
+#     prueba de comportamiento cambia.
+#
+# LO QUE SÍ SOSTIENE LA COBERTURA son los ocho puntos de entrada. Medido
+# corriendo, con la puerta puesta, mandando una sentencia por cada uno de los
+# tres caminos síncronos en Python puro que antes salían verdes:
+#
+#     psycopg.connect (síncrono) .............. ATRAPADA
+#     psycopg_pool.ConnectionPool (síncrono) .. ATRAPADA
+#     psycopg.Connection.connect .............. ATRAPADA
+#
+# Caen sin que nadie las nombre —no se las persigue, se dobla por dónde salen—,
+# y caen porque lo que devuelven es un espía, no porque haya nada debajo de
+# ellas. Quien se quede con uno de esos símbolos ANTES escribe a ciegas: eso es
+# la FRONTERA 4 y está declarada, no tapada.
+#
+# LAS TRES AFIRMACIONES VECINAS, COMPROBADAS UNA POR UNA EL 8-sep-2026:
+#
+#   · «los 10 cursores que expone psycopg derivan TODOS de
+#     `psycopg.cursor.BaseCursor`» — CIERTO, y se reproduce con esto:
+#         [n for n in dir(psycopg) if inspect.isclass(getattr(psycopg, n))
+#          and issubclass(getattr(psycopg, n), psycopg.cursor.BaseCursor)]
+#     da 10, y los 10 tienen `execute`. Pero sólo CUATRO lo definen —`Cursor`,
+#     `AsyncCursor`, `ServerCursor`, `AsyncServerCursor`— y los otros seis lo
+#     heredan de ésos: por eso los diez tapan el doble. El «10» es del nivel de
+#     arriba y se dice de dónde sale; recorriendo además los submódulos del
+#     paquete aparecen 4 clases más —el propio `BaseCursor` y los mixins
+#     `ClientCursorMixin`, `RawCursorMixin`, `ServerCursorMixin`—, y ninguna de
+#     esas cuatro tiene `execute`. Derivar TODOS de `BaseCursor` no los hace
+#     pasar por él: es exactamente lo que la medición de arriba desmiente.
+#   · «`Connection.execute` y `AsyncConnection.execute` NO hablan con la base»
+#     — CIERTO, leído en su fuente con `inspect.getsource`: los dos hacen
+#     `cur = self.cursor()` y devuelven `cur.execute(...)`. Y por eso mismo
+#     tampoco pasan por el doble: `self.cursor()` devuelve un cursor concreto.
+#   · «debajo del cursor ya no hay Python» — CIERTO: `psycopg.pq.__impl__` es
+#     `binary`, `psycopg.pq.PGconn is psycopg_binary.pq.PGconn`, y asignarle un
+#     atributo da, literal:
+#         TypeError: cannot set 'exec_' attribute of immutable type
+#                    'psycopg_binary.pq.PGconn'
+#     Lo que este hecho prueba NO es que el cursor sea un fondo: prueba que no
+#     hay dónde poner uno. Es la razón de que la cobertura tenga que vivir en
+#     los puntos de entrada y de que su techo se declare en vez de perseguirse.
 #
 # ⬛ Y LA PUERTA TIENE QUE PROBAR QUE ESTÁ PUESTA, O PONERSE ROJA.
 #
@@ -990,9 +1065,11 @@ class _PoolEspia:
 #                               <test_reporte_una_vez_al_dia._Cualquiera ...>>
 #
 # Otros DIEZ archivos de `tests/` plantan un `psycopg` de mentira al importarse
-# y no lo devuelven nunca; el `conftest` solo restaura módulos de Lucy. La cifra
-# se reproduce así, y por eso se escribe —una cifra que nadie puede repetir es
-# peor que ninguna, porque el que la lee la da por buena:
+# y no lo devuelven nunca; el `conftest` solo restaura módulos de Lucy —los que
+# viven dentro del repo y no son pruebas, ver `_modulos_del_proyecto`—, así que
+# `psycopg` no lo toca. La cifra se reproduce así, y por eso se escribe —una
+# cifra que nadie puede repetir es peor que ninguna, porque el que la lee la da
+# por buena:
 #
 #     grep -lE 'sys\.modules\[[^]]*\] *=' tests/*.py | xargs grep -l '"psycopg"'
 #
@@ -1005,10 +1082,12 @@ class _PoolEspia:
 #
 # El peor de los diez es un
 # atrapa-todo que responde a CUALQUIER atributo: `hasattr(psycopg.cursor,
-# "BaseCursor")` devuelve True siendo falso. O sea que una puerta que se
-# conforme con que el nombre exista se pone a sí misma sobre un muñeco y mide
-# CERO en verde, sin distinguir «vi todo y no había nada» de «nadie me enseñó
-# nada».
+# "BaseCursor")` devuelve True siendo falso. Medido reproduciendo el muñeco de
+# `test_reporte_una_vez_al_dia`: `hasattr(...)` → True, e
+# `isinstance(psycopg.cursor.BaseCursor, type)` → False. O sea que una puerta
+# que se conforme con que el nombre exista se pone a sí misma sobre un muñeco y
+# mide CERO en verde, sin distinguir «vi todo y no había nada» de «nadie me
+# enseñó nada».
 #
 # Por eso: el módulo real se busca por `isinstance(__file__, str)` —los dos
 # tipos de mentira fallan ahí, el atrapa-todo y el `types.ModuleType` pelado— y
@@ -1582,13 +1661,16 @@ def test_la_puerta_del_cursor_esta_puesta_y_se_demuestra_mandandole_una_sentenci
 
 
 def test_ninguna_escritura_llega_a_la_base_sin_su_huella():
-    """LA GUARDA DE VERDAD SOBRE LAS ESCRITURAS: un doble en el pool, y a correr.
+    """LA GUARDA DE VERDAD SOBRE LAS ESCRITURAS: espías en las ocho, y a correr.
 
-    `db.pool` es el único camino a Postgres que hay en este proceso. Con un
-    espía ahí se ve CADA sentencia con su texto ya armado — se llame como se
-    llame quien la mandó, la haya escrito con `crud.`, con `db.`, con un alias,
-    o con `db.pool.connection()` a pelo, que es la forma que se saltaba las dos
-    guardas de arriba a la vez.
+    Acá decía «`db.pool` es el único camino a Postgres que hay en este proceso».
+    Eso era FALSO y es la misma frase que la cabecera de esta sección declara
+    falsa: medido el 8-sep-2026 hay OCHO formas de conseguir una conexión y la
+    guarda de entonces veía DOS. Lo que hay hoy es un espía en cada una de las
+    ocho, derivadas del paquete instalado. Con eso se ve CADA sentencia con su
+    texto ya armado — se llame como se llame quien la mandó, la haya escrito con
+    `crud.`, con `db.`, con un alias, o con `db.pool.connection()` a pelo, que es
+    la forma que se saltaba las dos guardas de arriba a la vez.
 
     Y las herramientas que se recorren NO están escritas acá: salen del árbol de
     sintaxis de `_ejecutar_herramienta` (`if nombre == "..."`), y los argumentos
@@ -1925,8 +2007,10 @@ def _py_del_repo() -> list[pathlib.Path]:
 def test_ningun_subproceso_nuevo_le_habla_a_postgres():
     """FRONTERA 1: un subproceso no pasa por el cursor, así que se vigila aparte.
 
-    La puerta del cursor ve todo lo que sale por psycopg. Un `subprocess` que
-    llame a `psql` no pasa por ahí y escribiría sin que nadie lo viera. Hoy hay
+    La puerta ve lo que sale por las ocho vías de psycopg que dobla — no «todo
+    lo que sale por psycopg», que es lo que decía acá: quien capture un símbolo
+    antes tampoco pasa por ella (FRONTERA 4). Un `subprocess` que llame a `psql`
+    no pasa por ahí y escribiría sin que nadie lo viera. Hoy hay
     exactamente uno y solo lee; si aparece otro, esto se pone rojo y alguien
     tiene que decidir, en vez de enterarse después.
     """
