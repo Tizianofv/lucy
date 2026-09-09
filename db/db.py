@@ -1903,3 +1903,122 @@ async def marcar_tarea_hecha(tarea_id: int) -> bool:
              json.dumps({"estado": ESTADO_HECHA}, ensure_ascii=False),
              antes.get("bandeja_id")))
         return True
+
+
+# Los minutos-antes de una tarea escrita desde el panel: NINGUNO.
+#
+# El formulario pide un DÍA, no una hora. `anticipos_min` con su default de la
+# tabla ('{0}') haría que `cerebro/despertador.py:242` mandara un Telegram al
+# instante que guardemos en `vence_en` — un instante que nadie eligió, porque
+# la persona escribió una fecha y no una hora. Avisar a una hora inventada es
+# inventarle a Tiziano una decisión que no tomó.
+#
+# No es un caso nuevo: las citas que entran de Google Calendar ya entran mudas
+# por el mismo mecanismo (`cerebro/despertador.py`, cabecera), y la consulta que
+# reparte campanadas exige `cardinality(anticipos_min) > 0`, así que una lista
+# vacía no avisa nunca. La tarea SÍ aparece en el panel, en su grupo, que es
+# donde se la fue a buscar.
+#
+# Poner una hora de aviso es una decisión de Tiziano y este código no la toma.
+SIN_ANTICIPOS: list[int] = []
+
+
+async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
+                                     vence_en: datetime | None) -> int:
+    """Una tarea escrita a mano en el panel. La cuarta escritura del panel.
+
+    QUIÉN LA ANOTÓ NO SE PUEDE MENTIR, y por eso esta función escribe DOS filas
+    y no una. La columna "Quién la anotó" del panel no es un campo de `tareas`:
+    sale de `tareas.bandeja_id → bandeja.chat_id` (ver `tareas_por_grupo`). O
+    sea que una tarea con `bandeja_id` NULO se pinta con un guion — medido:
+    `tareas_por_grupo` la reparte igual y la plantilla imprime «—» porque
+    `quien` viene None. No miente, pero tampoco registra a nadie, y el encargo
+    pide las dos cosas.
+
+    Así que la fila de `bandeja` se crea de verdad, con el chat de la SESIÓN —el
+    mismo dato que ya se comprobó para dejar entrar, no un nombre escrito a
+    mano en ninguna parte— y la tarea cuelga de ella. Entonces la columna dice
+    lo que pasó: esa persona la anotó.
+
+    NO ES UNA COLUMNA NUEVA NI UNA MIGRACIÓN. `bandeja` es la columna vertebral
+    del proyecto y ya recibe filas que no son mensajes de Telegram:
+    `registrar_aviso` mete las del despertador con `origen='despertador'`. Ésta
+    es la misma idea con `origen='panel'`. Cero DDL, cero cambio en la consulta
+    del panel, cero cambio en la plantilla.
+
+    LA FILA DE BANDEJA VA MUDA, y eso es deliberado. `contenido_raw`,
+    `transcripcion` y `respuesta_lucy` quedan NULOS, así que las dos consultas
+    que arman la memoria del agente —`ultimos_intercambios` acá y
+    `cerebro/memoria.py:78`— la descartan por su propio filtro
+    (`coalesce(transcripcion, contenido_raw) IS NOT NULL OR respuesta_lucy IS
+    NOT NULL`). Guardar el título como si Tiziano lo hubiera dicho por Telegram
+    metería en la conversación una frase que nadie dijo: el sistema recordaría
+    una voz que no existió. La fila dice lo único que de verdad pasó —de dónde
+    vino y de quién— y nada más.
+
+    Y va con `estado='procesado'` para que `tomar_pendientes` no la levante:
+    no hay nada que interpretar, la tarea ya está creada.
+
+    SIN GUARDA DE DUPLICADOS, al revés que el alta por Telegram
+    (`acciones/crud.py:_duplicado_pendiente`). Los motivos, por orden de peso:
+
+      · Aquella guarda existe porque EL AGENTE re-crea lo que acaba de crear
+        —lo dice su propio docstring—. Una persona escribiendo en un formulario
+        sabe lo que está escribiendo; no es el mismo problema.
+      · Su coincidencia es `titulo = %s AND vence_en IS NOT DISTINCT FROM %s`, y
+        acá la fecha es OPCIONAL: dos tareas sin fecha con el mismo título
+        chocarían SIEMPRE. «Llamar al banco» de la semana pasada se comería a
+        «Llamar al banco» de hoy.
+      · Y peor que no crearla: aquella función devuelve el id de la vieja, así
+        que el panel diría «creada» sobre algo que no creó. Un mensaje de éxito
+        que no corresponde a una escritura es la familia de fallo callado que
+        este panel existe para combatir.
+      · Es la misma decisión, con la misma forma, que ya tomó
+        `crear_gasto_en_efectivo`: sin guarda, porque el 303 del endpoint ya
+        tapa el duplicado por refrescar.
+
+    La fila y su huella en log_acciones se escriben en el MISMO bloque de
+    conexión, o sea en la misma transacción, igual que `crear_gasto_en_efectivo`
+    y `a_la_papelera`: o entran las tres o no entra ninguna. Una tarea sin su
+    línea de log es una tarea que no se puede deshacer, y el deshacer de este
+    proyecto ES log_acciones.
+
+    La acción se registra como 'crear' porque es lo que `deshacer()` sabe
+    revertir: su rama de 'crear' hace `SET borrado_en = now()`.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            INSERT INTO bandeja
+              (origen, tipo_entrada, chat_id, estado, procesado_en)
+            VALUES ('panel', 'panel', %s, 'procesado', now())
+            RETURNING id
+            """,
+            (chat_id,))
+        bandeja_id = (await cur.fetchone())["id"]
+
+        await cur.execute(
+            """
+            INSERT INTO tareas
+              (bandeja_id, titulo, vence_en, anticipos_min)
+            VALUES (%s, %s, %s, %s)
+            RETURNING *
+            """,
+            (bandeja_id, titulo, vence_en, SIN_ANTICIPOS))
+        # RETURNING * y no una fila reconstruida a mano: `despues` tiene que ser
+        # lo que de verdad quedó guardado —con el id, el creado_en y los
+        # defaults que puso Postgres—, no lo que creíamos estar mandando.
+        fila = await cur.fetchone()
+
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo,
+               bandeja_id)
+            VALUES ('panel', 'crear', 'tareas', %s, NULL, %s,
+                    'tarea escrita a mano desde el panel de tareas', %s)
+            """,
+            (fila["id"],
+             json.dumps(fila, default=str, ensure_ascii=False), bandeja_id))
+        return fila["id"]

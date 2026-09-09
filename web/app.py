@@ -217,6 +217,59 @@ def _hoy() -> date:
     return datetime.now(config.TZ).date()
 
 
+# El largo máximo del título de una tarea escrita a mano. Es la misma vara que
+# `concepto` en POST /efectivo, y por el mismo motivo: el campo de la base es
+# TEXT —no tiene tope— así que sin esto un POST a mano puede guardar un título
+# de megabytes que después hay que pintar en una tabla.
+LARGO_TITULO = 200
+
+
+def _vence_valido(texto: str, piso: date = PISO_FECHA):
+    """El campo «vence» del formulario → (aceptado, instante).
+
+    Devuelve `(True, None)` cuando viene VACÍO: la fecha es opcional y la tarea
+    nace sin fecha, que en este panel no es un hueco sino un grupo con nombre
+    propio —«Sin fecha»—. Ese grupo existe porque las 4 tareas sin `vence_en`
+    de producción llevaban meses invisibles; mandarlas a hoy por defecto sería
+    volver a inventarles una fecha que nadie eligió.
+
+    Devuelve `(False, None)` si el texto no es una fecha, o si cae por debajo
+    de PISO_FECHA. El piso es el mismo que usa /efectivo y por el mismo motivo:
+    no es una regla de negocio, es la malla contra un dígito del año que se
+    resbaló.
+
+    EL FUTURO SE ACEPTA, al revés que en /efectivo. Un gasto en efectivo es
+    plata que ya salió; una tarea que vence el mes que viene es el caso normal
+    de una tarea. Son la misma forma de campo y preguntas opuestas.
+
+    LA HORA ES 23:59 EN SANTO DOMINGO, y las dos mitades de esa frase importan:
+
+      · «23:59» porque el formulario pide un DÍA. «Vence el jueves» quiere decir
+        que el jueves entero todavía sirve, así que el instante que representa
+        ese día es su final y no su comienzo.
+      · «en Santo Domingo» porque `tareas.vence_en` es TIMESTAMPTZ, o sea un
+        instante, y el panel decide el grupo con `db.dia_rd`, que lo lee EN
+        SANTO DOMINGO. Armado en UTC, el 23:59 del jueves se guardaría como un
+        instante que en Santo Domingo todavía es del jueves a las 19:59 — pero
+        el 00:00 de cualquier día armado en UTC cae en el día ANTERIOR en
+        Santo Domingo. Una tarea escrita de noche nacería en el día equivocado.
+
+    La zona sale de `config.TZ`, la misma que usa `db.dia_rd`: dos copias de una
+    zona horaria se desincronizan igual que dos copias de cualquier otra cosa.
+    """
+    limpio = (texto or "").strip()
+    if not limpio:
+        return True, None
+    try:
+        dia = date.fromisoformat(limpio)
+    except ValueError:
+        return False, None
+    if dia < piso:
+        return False, None
+    return True, datetime(dia.year, dia.month, dia.day, 23, 59,
+                          tzinfo=config.TZ)
+
+
 def _sesion(request: Request) -> int | None:
     return auth.validar(request.cookies.get(COOKIE))
 
@@ -528,7 +581,7 @@ async def papelera(request: Request, restaurado: int = 0):
 
 
 @app.get("/tareas", response_class=HTMLResponse)
-async def tareas(request: Request, guardadas: int = 0):
+async def tareas(request: Request, guardadas: int = 0, creada: int = 0):
     """El panel de tareas: lo que hay que hacer, para las dos personas.
 
     UNA SOLA LISTA PARA LOS DOS, por decisión de Tiziano —"está bien que Rosi
@@ -555,7 +608,7 @@ async def tareas(request: Request, guardadas: int = 0):
         request, "tareas.html",
         {"grupos": datos["grupos"], "hay_mas": datos["hay_mas"],
          "yo": chat, "guardadas": guardadas, "tope": db.TOPE_TAREAS,
-         "hecha": db.ESTADO_HECHA})
+         "hecha": db.ESTADO_HECHA, "creada": creada})
 
 
 @app.post("/tareas")
@@ -620,6 +673,86 @@ async def guardar_tareas(request: Request):
         log.warning("Panel de tareas: %s marca(s) sin efecto —la tarea no "
                     "existe, está en la papelera o ya estaba hecha", ignoradas)
     return RedirectResponse(f"/tareas?guardadas={hechas}", status_code=303)
+
+
+@app.get("/tareas/nueva", response_class=HTMLResponse)
+async def tarea_nueva(request: Request, error: str = ""):
+    """El formulario para escribir una tarea a mano.
+
+    POR QUÉ ES UNA PANTALLA APARTE Y NO UN SEGUNDO FORMULARIO EN /tareas, que
+    es lo primero que uno intentaría: `/tareas` tiene un test que exige UN SOLO
+    <form> en su plantilla
+    (`tests/test_panel_tareas.py::test_un_solo_formulario_para_toda_la_pantalla`),
+    y ese test no es un capricho — la pantalla cierra VARIAS tareas con un solo
+    botón justamente porque un formulario por fila recargaba la página y se
+    llevaba puesto todo lo demás marcado sin enviar. Meterle un segundo <form>
+    al lado rompe la razón por la que ese test existe, y además un <form>
+    dentro de otro es HTML inválido: el navegador descarta el de adentro y el
+    botón deja de hacer nada, EN SILENCIO.
+
+    Es la misma decisión que ya tomó POST /efectivo, que por eso vive en
+    /movimientos y no en /sin-clasificar. Acá el equivalente es una pantalla
+    propia, y en /tareas queda un ENLACE —no un formulario— que se ve también
+    cuando la lista está vacía, que es justo cuando hace falta escribir la
+    primera.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    return plantillas.TemplateResponse(
+        request, "tarea_nueva.html",
+        {"error": error, "piso_fecha": PISO_FECHA.isoformat(),
+         "largo_titulo": LARGO_TITULO})
+
+
+@app.post("/tareas/nueva")
+async def crear_tarea(request: Request):
+    """Escribir una tarea a mano. La cuarta escritura del panel.
+
+    SOLO DOS CAMPOS: título y cuándo vence. La tabla tiene prioridad,
+    recurrencia, proyecto, persona y anticipos, y ninguno entra acá — no se
+    pidieron, y `prioridad` está vacía en las 91 filas de producción. Un campo
+    que nadie llenó es una decisión inventada esperando a que alguien la crea.
+
+    QUIÉN LA ANOTÓ SALE DE LA SESIÓN, no de un campo del formulario. Es el
+    mismo chat que ya se comprobó para dejar entrar: un formulario que
+    preguntara quién sos aceptaría la respuesta que le den.
+
+    Nada de lo que se rechaza devuelve un 500: todo sale por un 303 de vuelta
+    al formulario, con `?error=` para que se vea qué pasó, igual que
+    /efectivo. Y cada rechazo deja una línea en el log del servidor: un rechazo
+    sin rastro es un fallo silencioso.
+
+    LO QUE SE ESCRIBIÓ NO VUELVE EN LA URL. Son dos campos y volver a
+    escribirlos cuesta poco; meter el título de una tarea en una query string
+    lo deja en el historial del navegador y en el log de cualquier proxy, que
+    es un precio bastante más alto.
+    """
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+
+    formulario = await request.form()
+
+    def _vuelta(clave: str):
+        log.warning("Panel de tareas: tarea a mano rechazada por %s", clave)
+        return RedirectResponse(f"/tareas/nueva?error={clave}", status_code=303)
+
+    titulo = str(formulario.get("titulo", "")).strip()
+    if not titulo or len(titulo) > LARGO_TITULO:
+        # Sin título no hay tarea: `tareas.titulo` es NOT NULL a propósito, y
+        # una tarea que no dice qué hay que hacer no es una tarea. Se rechaza
+        # y se dice; no se inventa un título por defecto.
+        return _vuelta("titulo")
+
+    ok, vence_en = _vence_valido(str(formulario.get("vence", "")))
+    if not ok:
+        return _vuelta("fecha")
+
+    tid = await db.crear_tarea_desde_el_panel(chat, titulo, vence_en)
+    # Se vuelve A LA LISTA y no al formulario: la tarea recién escrita tiene
+    # que VERSE en su grupo. Un "guardado" que no muestra lo guardado obliga a
+    # confiar, y este panel existe para no tener que confiar.
+    return RedirectResponse(f"/tareas?creada={tid}", status_code=303)
 
 
 @app.get("/salud", response_class=HTMLResponse)
