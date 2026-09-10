@@ -429,12 +429,56 @@ def test_toda_escritura_de_la_columna_pasa_por_la_misma_puerta():
 
 def test_la_ruta_tambien_pregunta_por_la_puerta():
     """La validación del formulario y la de la escritura son la MISMA función,
-    no dos criterios que hoy dicen lo mismo. La ruta la nombra; si dejara de
-    hacerlo, el rechazo dependería solo de la capa de abajo y el panel diría
-    «guardado» sobre algo que no guardó."""
-    fuente = inspect.getsource(panel)
-    assert config.puede_ser_responsable.__name__ in fuente, (
-        "la ruta del panel ya no le pregunta a la puerta de config")
+    no dos criterios que hoy dicen lo mismo. Si la ruta dejara de preguntarle a
+    la puerta, el rechazo dependería solo de la capa de abajo.
+
+    LO QUE ESTA PRUEBA MIRABA ANTES, Y POR QUÉ NO SERVÍA, medido el 10-sep-2026
+    en memoria: buscaba el nombre `puede_ser_responsable` en el TEXTO de
+    web/app.py. Quitándole a la ruta la llamada, el nombre seguía ahí —en el
+    docstring de `_responsable_pedido`, que lo menciona al explicarse— y la
+    prueba seguía verde con CERO referencias de código a la puerta. Medía la
+    prosa, que es exactamente el defecto que este trabajo le quitó a las
+    guardas de `tests/test_panel_tareas.py`.
+
+    Ahora se mira el árbol de sintaxis. Las funciones que se revisan NO están
+    tecleadas: son las de web/app.py que llaman a `asignar_responsable`. Cada
+    una tiene que llegar a la puerta, ella misma o a través de una función del
+    mismo módulo a la que llame — un nivel, que es la forma que tiene hoy
+    (`guardar_tareas` → `_responsable_pedido` → la puerta). La que alguien
+    escriba mañana entra sola en el recorrido.
+    """
+    puerta = config.puede_ser_responsable.__name__
+    escritura = db.asignar_responsable.__name__
+    arbol = ast.parse(open(os.path.join(RAIZ, "web", "app.py"),
+                           encoding="utf-8").read())
+
+    funciones = {n.name: n for n in arbol.body
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+
+    def _nombres(nodo):
+        # Solo CÓDIGO: nombres y atributos. Un docstring es un ast.Constant y
+        # no entra, así que la prosa no puede hacer pasar esta prueba.
+        return ({n.id for n in ast.walk(nodo) if isinstance(n, ast.Name)}
+                | {n.attr for n in ast.walk(nodo)
+                   if isinstance(n, ast.Attribute)})
+
+    escriben = [f for f in funciones.values() if escritura in _nombres(f)]
+    assert escriben, (
+        f"ninguna función de web/app.py llama a {escritura}: esta guarda "
+        "estaría verde sin haber mirado nada")
+
+    sin_puerta = []
+    for f in escriben:
+        propios = _nombres(f)
+        alcanza = puerta in propios or any(
+            puerta in _nombres(funciones[otro])
+            for otro in propios if otro in funciones and otro != f.name)
+        if not alcanza:
+            sin_puerta.append(f.name)
+    assert not sin_puerta, (
+        f"estas rutas escriben el responsable sin preguntarle a {puerta}: "
+        f"{sin_puerta}. El formulario aceptaría a cualquiera y solo la capa de "
+        "abajo lo pararía")
 
 
 # ── La escritura: lo que deja escrito ────────────────────────────────────
