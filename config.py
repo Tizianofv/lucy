@@ -164,9 +164,13 @@ def personas_del_panel() -> tuple[tuple[int, str], ...]:
 def puede_ser_responsable(chat_id) -> bool:
     """LA PUERTA ÚNICA de quién puede quedar como responsable de una tarea.
 
-    Todo el que escriba `tareas.responsable_chat_id` pasa por acá — la ruta del
-    panel y `db.asignar_responsable`, y hay una prueba que recorre `db/db.py`
-    buscando quién más escribe esa columna y exige que también la nombre.
+    La llaman directo la ruta del panel y `db.asignar_responsable`. Los dos
+    escritores GENÉRICOS —`acciones.crud.editar` y `acciones.crud.deshacer`,
+    que no nombran la columna porque la sacan de los datos— llegan acá por
+    `crud._por_las_puertas`. Quién escribe la columna no se da por sabido: lo
+    cuenta `tests/test_responsable.py` recorriendo cada `execute` del
+    repositorio, y hasta dónde llega ese recorrido está dicho ahí, en LA
+    FRONTERA, y en ningún otro sitio.
 
     Que la respuesta se derive de `personas_del_panel()` y no de una lista
     propia es lo que impide que las dos se separen: si mañana alguien deja de

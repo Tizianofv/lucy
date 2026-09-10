@@ -14,12 +14,15 @@ QUÉ SE PRUEBA CON MÁS SAÑA, y por qué son ésas:
     la variable dejaría de servir para lo único que existe. Hay una prueba que
     mete una tercera persona y exige que aparezca sola.
 
-  · QUE NO SE PUEDA ASIGNAR A CUALQUIERA. Una tarea que queda con alguien que
-    no puede abrir el panel es un pendiente que esa persona no va a ver nunca.
-    La puerta es `config.puede_ser_responsable`, y hay una prueba que recorre
-    `db/db.py` buscando QUIÉN MÁS escribe esa columna y exige que también la
-    nombre — para que el segundo camino que alguien escriba mañana no pueda
-    nacer sin puerta.
+  · QUE NO SE PUEDA ASIGNAR A CUALQUIERA, POR NINGÚN CAMINO. Una tarea que
+    queda con alguien que no puede abrir el panel es un pendiente que esa
+    persona no va a ver nunca. La puerta es `config.puede_ser_responsable`.
+    Quién escribe la columna sale de un censo de cada `execute` del
+    repositorio, no de buscar el nombre de la columna en el texto: `editar` y
+    `deshacer` la escriben sin nombrarla nunca. A los que la nombran se les
+    exige la puerta; a los que arman la columna al vuelo, una sonda que CORRE y
+    demuestra que un chat que no vale no se escribe. Hasta dónde llega: LA
+    FRONTERA, más abajo, y sólo ahí.
 
   · QUE SIN RESPONSABLE SEA NORMAL Y NO UN ERROR. Las 57 tareas vivas de
     producción nacieron sin responsable; tratarlo como un caso a manejar habría
@@ -49,12 +52,14 @@ from __future__ import annotations
 import asyncio
 import ast
 import inspect
+import json
 import os
 import re
 import sys
 import textwrap
 import types
 from datetime import datetime, timezone
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -74,6 +79,7 @@ sys.modules.setdefault("psycopg_pool", _pool)
 
 import config  # noqa: E402
 import db.db as db  # noqa: E402
+import acciones.crud as crud  # noqa: E402
 import web.app as panel  # noqa: E402
 import web.auth as auth  # noqa: E402
 
@@ -384,45 +390,35 @@ def test_no_se_le_puede_asignar_a_quien_no_entra_al_panel():
 
 
 def test_toda_escritura_de_la_columna_pasa_por_la_misma_puerta():
-    """LA PRUEBA QUE IMPIDE QUE NAZCA UN SEGUNDO CAMINO SIN PUERTA.
+    """LOS QUE NOMBRAN LA COLUMNA EN SU SQL tienen que nombrar la puerta.
 
-    Hoy `db.asignar_responsable` es la única función que escribe
-    `responsable_chat_id`, y valida con `config.puede_ser_responsable`. Eso se
-    sabe leyendo el archivo; el problema es que mañana alguien escriba otra que
-    también la toque y se olvide de la puerta — y leer el archivo es justo lo
-    que nadie va a volver a hacer.
+    Es el cubo 1 del censo (ver LA FRONTERA). Los que la escriben sin nombrarla
+    —el cubo 3— los juzga `test_todo_escritor_generico_tiene_sonda_y_la_sonda_
+    corre`, corriendo.
 
-    LA LISTA DE FUNCIONES NO ESTÁ TECLEADA ACÁ: sale de recorrer `db/db.py` con
-    el árbol de sintaxis y quedarse con las que escriben esa columna. La que
-    alguien agregue mañana entra sola en el recorrido, y si no nombra la puerta
-    esto se pone rojo sin que nadie venga a añadirla a ninguna parte.
+    LO QUE ESTA PRUEBA MIRABA ANTES, Y POR QUÉ NO SERVÍA, medido el 10-sep-2026
+    sobre 9a12b0f: recorría SOLO `db/db.py` y buscaba el nombre de la columna en
+    todos los textos de cada función, docstring incluido. `crud.editar` le
+    escribía la columna a un chat que la puerta rechazaba y esto seguía verde:
+    estaba en otro archivo, y el nombre de la columna no aparece en ningún
+    texto de ese archivo. Ahora los archivos salen del disco y lo que se lee es
+    el SQL de cada `execute`, no la prosa.
     """
+    censo = _censo()
     columna = _columna_del_codigo()
-    puerta = config.puede_ser_responsable.__name__
-
-    arbol = ast.parse(open(os.path.join(RAIZ, "db", "db.py"),
-                           encoding="utf-8").read())
-    escriben, con_puerta = [], []
-    for nodo in ast.walk(arbol):
-        if not isinstance(nodo, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        textos = " ".join(
-            n.value for n in ast.walk(nodo)
-            if isinstance(n, ast.Constant) and isinstance(n.value, str))
-        if not re.search(rf"(?:UPDATE|INSERT).*{columna}", textos, re.S | re.I):
-            continue
-        escriben.append(nodo.name)
-        nombres = {n.id for n in ast.walk(nodo) if isinstance(n, ast.Name)}
-        nombres |= {n.attr for n in ast.walk(nodo) if isinstance(n, ast.Attribute)}
-        if puerta in nombres:
-            con_puerta.append(nodo.name)
-
+    assert censo["sitios"], (
+        "el censo no encontró ni un `execute` en el repositorio: esta guarda "
+        "estaría verde sin haber mirado nada")
+    escriben = censo["legibles_que_escriben"]
     assert escriben, (
-        f"no se encontró ninguna función que escriba {columna} en db/db.py: "
-        "esta guarda estaría verde sin haber mirado nada")
-    sin_puerta = sorted(set(escriben) - set(con_puerta))
+        f"no se encontró ninguna función que escriba {columna} con un SQL que "
+        "la nombre: esta guarda estaría verde sin haber mirado nada")
+    puertas = {_PUERTA, _PUERTA_DE_CRUD}
+    sin_puerta = sorted(
+        quien for quien, funcion in escriben.items()
+        if funcion is None or not (puertas & _nombres_de_codigo(funcion)))
     assert not sin_puerta, (
-        f"estas funciones escriben {columna} sin pasar por {puerta}: "
+        f"estas funciones escriben {columna} sin pasar por la puerta: "
         f"{sin_puerta}. Cualquiera de ellas puede dejarle una tarea a alguien "
         "que no puede abrir el panel para verla")
 
@@ -441,40 +437,53 @@ def test_la_ruta_tambien_pregunta_por_la_puerta():
     guardas de `tests/test_panel_tareas.py`.
 
     Ahora se mira el árbol de sintaxis. Las funciones que se revisan NO están
-    tecleadas: son las de web/app.py que llaman a `asignar_responsable`. Cada
-    una tiene que llegar a la puerta, ella misma o a través de una función del
-    mismo módulo a la que llame — un nivel, que es la forma que tiene hoy
-    (`guardar_tareas` → `_responsable_pedido` → la puerta). La que alguien
-    escriba mañana entra sola en el recorrido.
+    tecleadas: son las que llaman a `asignar_responsable`. Cada una tiene que
+    llegar a la puerta, ella misma o a través de una función del mismo módulo a
+    la que llame — un nivel, que es la forma que tiene hoy (`guardar_tareas` →
+    `_responsable_pedido` → la puerta). La que alguien escriba mañana entra
+    sola en el recorrido.
+
+    Y LOS ARCHIVOS TAMPOCO ESTÁN TECLEADOS, desde el 10-sep-2026. Hasta ese día
+    esto leía sólo `web/app.py`: una pantalla nueva en otro archivo que llamara
+    a la escritura sin preguntarle a la puerta entraba sin que nadie la mirara.
+    Ahora son todos los .py que hay en disco fuera de `testpaths`, por la misma
+    puerta de recorrido que usa el censo.
     """
+    import test_buzon_que_no_se_ve as barrido
+
     puerta = config.puede_ser_responsable.__name__
     escritura = db.asignar_responsable.__name__
-    arbol = ast.parse(open(os.path.join(RAIZ, "web", "app.py"),
-                           encoding="utf-8").read())
+    raiz = Path(RAIZ)
+    pruebas = barrido._testpaths(raiz)
 
-    funciones = {n.name: n for n in arbol.body
-                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    escriben, sin_puerta = [], []
+    for py in barrido._py_en_disco(raiz):
+        if any(c == py or c in py.parents for c in pruebas):
+            continue
+        arbol = ast.parse(py.read_text(encoding="utf-8"), str(py))
+        todas = [n for n in ast.walk(arbol)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+        # Por nombre, pero sin perder a ninguna: dos funciones que se llamen
+        # igual (dos métodos, una anidada) se miran las dos.
+        por_nombre: dict = {}
+        for f in todas:
+            por_nombre.setdefault(f.name, []).append(f)
+        for f in todas:
+            propios = _nombres_de_codigo(f)
+            if escritura not in propios:
+                continue
+            donde = f"{py.relative_to(raiz).as_posix()}::{f.name}"
+            escriben.append(donde)
+            alcanza = puerta in propios or any(
+                puerta in _nombres_de_codigo(otra)
+                for nombre in propios if nombre != f.name
+                for otra in por_nombre.get(nombre, ()))
+            if not alcanza:
+                sin_puerta.append(donde)
 
-    def _nombres(nodo):
-        # Solo CÓDIGO: nombres y atributos. Un docstring es un ast.Constant y
-        # no entra, así que la prosa no puede hacer pasar esta prueba.
-        return ({n.id for n in ast.walk(nodo) if isinstance(n, ast.Name)}
-                | {n.attr for n in ast.walk(nodo)
-                   if isinstance(n, ast.Attribute)})
-
-    escriben = [f for f in funciones.values() if escritura in _nombres(f)]
     assert escriben, (
-        f"ninguna función de web/app.py llama a {escritura}: esta guarda "
+        f"ninguna función del repositorio llama a {escritura}: esta guarda "
         "estaría verde sin haber mirado nada")
-
-    sin_puerta = []
-    for f in escriben:
-        propios = _nombres(f)
-        alcanza = puerta in propios or any(
-            puerta in _nombres(funciones[otro])
-            for otro in propios if otro in funciones and otro != f.name)
-        if not alcanza:
-            sin_puerta.append(f.name)
     assert not sin_puerta, (
         f"estas rutas escriben el responsable sin preguntarle a {puerta}: "
         f"{sin_puerta}. El formulario aceptaría a cualquiera y solo la capa de "
@@ -650,6 +659,528 @@ def test_la_columna_nueva_no_es_persona_id():
         "tarea en 30 de las 57 filas vivas")
     assert "persona_id" in declaradas, "persona_id desapareció del esquema"
     assert columna in declaradas
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# QUIÉN ESCRIBE LA COLUMNA: el censo, y las sondas que CORREN
+# ═════════════════════════════════════════════════════════════════════════
+#
+# POR QUÉ EXISTE, medido el 10-sep-2026 sobre 9a12b0f: la guarda de antes
+# buscaba el nombre de la columna en los textos de `db/db.py`, y `crud.editar`
+# —el que usan el agente de Telegram y los botones— escribía la columna con un
+# chat que la puerta rechazaba:
+#
+#     crud.editar("tareas", 1, {"responsable_chat_id": <un chat que no vale>})
+#     -> UPDATE tareas SET responsable_chat_id = %s WHERE id = %s
+#
+# El nombre de la columna no está en ningún texto de `acciones/crud.py`: sale
+# de los datos y se arma al vuelo. Buscarlo en el texto del repositorio entero
+# tampoco lo habría encontrado. Lo mismo `crud.deshacer`, con el `antes` de una
+# huella.
+#
+# ── LA FRONTERA: lo que ve ───────────────────────────────────────────────
+#
+#   Toda llamada `<algo>.execute(...)` o `<algo>.executemany(...)` escrita en
+#   un .py del repositorio fuera de `testpaths` —los archivos los da
+#   `test_buzon_que_no_se_ve._py_en_disco`, la única puerta para recorrer el
+#   repositorio—, repartida por su SQL en tres cubos:
+#
+#     1. SQL LEGIBLE. Un literal, o armado al vuelo SOLO en el nombre de la
+#        tabla: el hueco va justo detrás de UPDATE, INTO, FROM, JOIN o `null::`.
+#        Sus columnas se leen, y si escribe la columna la función tiene que
+#        nombrar la puerta.
+#     2. SOLO LECTURA. La misma función ejecuta el literal
+#        `SET TRANSACTION READ ONLY`, y el candado lo pone Postgres.
+#     3. ESCRITOR GENÉRICO: todo lo demás. Un hueco en cualquier otro sitio, o un
+#        SQL que no se puede reconstruir desde el código. Tiene que tener sonda
+#        en `SONDAS`, y la sonda corre.
+#
+#   Lo que no se sabe clasificar cae en el 3, que es el estricto. Al 1 y al 2
+#   no se llega por olvido: hay que cumplir su regla.
+#
+#   Cómo se reconstruye el SQL: un hueco que sólo puede valer textos escritos en
+#   el código (`{"a" if x else "b"}`) cuenta como esos textos; una variable
+#   cuenta como lo que se le asigna en la misma función —o en el módulo, si en
+#   la función no se le asigna nada— siempre que todo eso sea texto. Un
+#   parámetro no se puede reconstruir.
+#
+# ── LA FRONTERA: lo que NO ve ────────────────────────────────────────────
+#
+#   1. SQL que llega a Postgres sin una llamada escrita `.execute` o
+#      `.executemany`: `getattr(con, "execute")`, `copy`, un subproceso con
+#      `psql`, los `.sql` de `db/migrations`, la consola de Railway.
+#   2. Un hueco detrás de UPDATE, INTO, FROM, JOIN o `null::` se toma por un
+#      nombre de tabla. Si alguien mete ahí «tareas SET responsable_chat_id»,
+#      pasa.
+#   3. Una sonda ve el SQL que saldría hacia la base con una conexión de
+#      mentira. No ve lo que Postgres hace con él.
+#   4. En el cubo 1 basta con que la función NOMBRE la puerta. Que respete la
+#      respuesta sólo lo prueban, corriendo, las pruebas de
+#      `db.asignar_responsable` de este archivo.
+#   5. Del cubo 2 se ve que la línea está, no que Postgres la cumpla.
+#   6. El código bajo `testpaths`.
+
+_PUERTA = config.puede_ser_responsable.__name__
+_PUERTA_DE_CRUD = crud._por_las_puertas.__name__
+# Se compara contra el texto de antes del hueco YA SIN ESPACIOS AL FINAL, así
+# que detrás de la palabra no se exige ninguno: sólo, si acaso, una comilla.
+_HUECO_DE_TABLA = re.compile(r'(?:\b(?:UPDATE|INTO|FROM|JOIN)\s*"?|null::)$',
+                             re.I)
+_SOLO_LECTURA = "SET TRANSACTION READ ONLY"
+_EJECUTAN = ("execute", "executemany")
+
+
+def _nombres_de_codigo(nodo) -> set:
+    """Los nombres y atributos que un nodo USA. Sólo código: un docstring es un
+    ast.Constant y no entra, así que la prosa no puede hacer pasar nada."""
+    return ({n.id for n in ast.walk(nodo) if isinstance(n, ast.Name)}
+            | {n.attr for n in ast.walk(nodo) if isinstance(n, ast.Attribute)})
+
+
+def _textos_posibles(nodo):
+    """Los textos que puede valer una expresión, si SÓLO puede valer textos
+    escritos en el código. None si puede valer otra cosa."""
+    if isinstance(nodo, ast.Constant) and isinstance(nodo.value, str):
+        return [nodo.value]
+    if isinstance(nodo, ast.IfExp):
+        a, b = _textos_posibles(nodo.body), _textos_posibles(nodo.orelse)
+        return None if a is None or b is None else a + b
+    return None
+
+
+def _asignaciones(ambito) -> dict:
+    """Lo que se le asigna a cada nombre dentro de un ámbito."""
+    nodos = ambito.body if isinstance(ambito, ast.Module) else ast.walk(ambito)
+    salida: dict = {}
+    for n in nodos:
+        if isinstance(n, ast.Assign):
+            for t in n.targets:
+                if isinstance(t, ast.Name):
+                    salida.setdefault(t.id, []).append(n.value)
+        elif (isinstance(n, (ast.AugAssign, ast.AnnAssign))
+              and isinstance(n.target, ast.Name) and n.value is not None):
+            salida.setdefault(n.target.id, []).append(n.value)
+    return salida
+
+
+def _parametros(funcion) -> set:
+    if funcion is None:
+        return set()
+    a = funcion.args
+    todos = [*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg]
+    return {p.arg for p in todos if p is not None}
+
+
+def _piezas(expr, locales, globales, parametros):
+    """El SQL como [(es_texto, texto)], o None si no se puede reconstruir."""
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+        return [(True, expr.value)]
+    if isinstance(expr, ast.JoinedStr):
+        piezas = []
+        for v in expr.values:
+            if isinstance(v, ast.Constant):
+                piezas.append((True, v.value))
+                continue
+            textos = _textos_posibles(v.value)
+            piezas.append((True, " ".join(textos)) if textos is not None
+                          else (False, ""))
+        return piezas
+    if isinstance(expr, ast.Name) and expr.id not in parametros:
+        valores = locales.get(expr.id) or globales.get(expr.id)
+        if not valores:
+            return None
+        piezas = []
+        for v in valores:
+            parte = _piezas(v, {}, {}, set())
+            if parte is None:
+                return None
+            piezas += parte + [(True, " ")]
+        return piezas
+    return None
+
+
+def _legible(piezas):
+    """(True, texto) si todo hueco es un nombre de tabla; (False, None) si no."""
+    if piezas is None:
+        return False, None
+    texto = ""
+    for es_texto, trozo in piezas:
+        if not es_texto:
+            if not _HUECO_DE_TABLA.search(texto.rstrip()):
+                return False, None
+            trozo = " <tabla> "
+        texto += trozo
+    return True, texto
+
+
+def _llamadas_a_execute(nodo, funcion=None):
+    """(función que la contiene o None, llamada) por cada `.execute(...)`."""
+    for hijo in ast.iter_child_nodes(nodo):
+        dentro = (hijo if isinstance(hijo, (ast.FunctionDef,
+                                            ast.AsyncFunctionDef))
+                  else funcion)
+        if (isinstance(hijo, ast.Call) and isinstance(hijo.func, ast.Attribute)
+                and hijo.func.attr in _EJECUTAN):
+            yield funcion, hijo
+        yield from _llamadas_a_execute(hijo, dentro)
+
+
+def _sql_de(llamada):
+    if llamada.args:
+        return llamada.args[0]
+    return next((k.value for k in llamada.keywords if k.arg == "query"), None)
+
+
+def _ejecuta_solo_lectura(funcion) -> bool:
+    return any(
+        isinstance(_sql_de(llamada), ast.Constant)
+        and isinstance(_sql_de(llamada).value, str)
+        and " ".join(_sql_de(llamada).value.split()).upper() == _SOLO_LECTURA
+        for _, llamada in _llamadas_a_execute(funcion, funcion))
+
+
+def _censo() -> dict:
+    """Cada `execute` del repositorio, en su cubo. Ver LA FRONTERA."""
+    import test_buzon_que_no_se_ve as barrido
+
+    raiz = Path(RAIZ).resolve()
+    pruebas = [p.resolve() for p in barrido._testpaths(raiz)]
+    columna = _columna_del_codigo()
+    escribe = re.compile(r"\b(?:UPDATE|INSERT|COPY)\b", re.I)
+    nombra = re.compile(rf"\b{re.escape(columna)}\b")
+
+    censo = {"sitios": 0, "legibles_que_escriben": {}, "genericos": {},
+             "solo_lectura": {}}
+    for py in barrido._py_en_disco(raiz):
+        real = py.resolve()
+        if any(c == real or c in real.parents for c in pruebas):
+            continue
+        rel = real.relative_to(raiz).as_posix()
+        modulo = ast.parse(real.read_text(encoding="utf-8"), str(real))
+        globales = _asignaciones(modulo)
+        for funcion, llamada in _llamadas_a_execute(modulo):
+            censo["sitios"] += 1
+            quien = f"{rel}::{funcion.name if funcion else '<módulo>'}"
+            sql = _sql_de(llamada)
+            piezas = (None if sql is None else _piezas(
+                sql, _asignaciones(funcion) if funcion else {}, globales,
+                _parametros(funcion)))
+            legible, texto = _legible(piezas)
+            if not legible:
+                cubo = ("solo_lectura" if funcion is not None
+                        and _ejecuta_solo_lectura(funcion) else "genericos")
+                censo[cubo].setdefault(quien, []).append(llamada.lineno)
+            elif escribe.search(texto) and nombra.search(texto):
+                censo["legibles_que_escriben"].setdefault(quien, funcion)
+    return censo
+
+
+def _id_de(fn) -> str:
+    """El mismo `archivo::función` que usa el censo, sacado del objeto."""
+    raiz = Path(RAIZ).resolve()
+    archivo = Path(inspect.getsourcefile(fn)).resolve()
+    return f"{archivo.relative_to(raiz).as_posix()}::{fn.__name__}"
+
+
+# ── Una base de mentira para `acciones.crud` ─────────────────────────────
+#
+# Anota todo el SQL y sirve lo justo: la fila de la tarea para `editar` y la
+# huella para `deshacer`. Mismo límite dicho arriba: ve el SQL que saldría, no
+# lo que Postgres haría con él.
+
+class _CursorDeCrud:
+    def __init__(self, base):
+        self._base = base
+        self._fila = None
+
+    async def execute(self, sql, params=None):
+        s = " ".join(sql.split())
+        self._base.sql.append((s, params))
+        if s.startswith("SELECT") and "FROM log_acciones" in s:
+            self._fila = self._base.huella
+        elif s.startswith("SELECT"):
+            self._fila = dict(self._base.fila) if self._base.fila else None
+        elif "RETURNING" in s:
+            self._fila = (5000,)
+        else:
+            self._fila = None
+        return self
+
+    async def fetchone(self):
+        return self._fila
+
+    async def fetchall(self):
+        return [self._fila] if self._fila else []
+
+
+class _BaseDeCrud:
+    def __init__(self, fila=None, huella=None):
+        self.fila = fila
+        self.huella = huella
+        self.sql: list = []
+
+    def cursor(self, row_factory=None):
+        return _CursorDeCrud(self)
+
+    async def execute(self, sql, params=None):
+        return await _CursorDeCrud(self).execute(sql, params)
+
+
+def _correr(base, fn):
+    """Corre `fn` contra `base`. Devuelve el ValueError si lo hubo, o None.
+
+    Sólo se atrapa ValueError, que es como `crud` dice «no»: cualquier otra
+    excepción revienta la prueba con su traza, en vez de contar como rechazo.
+    """
+    guardado = db.pool
+    db.pool = _Pool(base)
+    bucle = asyncio.new_event_loop()
+    try:
+        bucle.run_until_complete(fn())
+        return None
+    except ValueError as e:
+        return e
+    finally:
+        bucle.close()
+        db.pool = guardado
+
+
+def _escrituras(base) -> list:
+    """Las escrituras a la tabla de la entidad, sin la huella del log."""
+    return [(s, p) for s, p in base.sql
+            if re.match(r"(?:UPDATE|INSERT|DELETE)\b", s)
+            and "log_acciones" not in s]
+
+
+def _escribio(base, columna) -> bool:
+    return any(re.search(rf"\b{re.escape(columna)}\b", s)
+               for s, _ in _escrituras(base))
+
+
+def _escribio_algo(base) -> bool:
+    return any(re.match(r"(?:UPDATE|INSERT|DELETE)\b", s) for s, _ in base.sql)
+
+
+def _sonda_editar(fn, chat):
+    """Pide escribir `chat` como responsable por el camino de Telegram."""
+    base = _BaseDeCrud(fila=_fila(1))
+    return base, _correr(base, lambda: fn(
+        "tareas", 1, {_columna_del_codigo(): chat}, motivo="sonda"))
+
+
+def _sonda_deshacer(fn, chat):
+    """Deshace una edición que CAMBIÓ el responsable y lo tenía en `chat`."""
+    columna = _columna_del_codigo()
+    otro = DUENO if chat != DUENO else OTRA
+    base = _BaseDeCrud(huella={
+        "accion": "editar", "tabla": "tareas", "registro_id": 1,
+        "antes": {**_fila(1), columna: chat},
+        "despues": {**_fila(1), columna: otro}})
+    return base, _correr(base, lambda: fn(77))
+
+
+# Una sonda por escritor genérico del censo. Las claves son los OBJETOS, no
+# nombres: si mañana uno se renombra o se muda, deja de coincidir con el censo
+# y se pone rojo, en vez de quedarse acá probando algo que ya no existe.
+SONDAS = {crud.editar: _sonda_editar, crud.deshacer: _sonda_deshacer}
+
+
+def test_todo_escritor_generico_tiene_sonda_y_la_sonda_corre():
+    """LOS HERMANOS, Y QUE LO CUMPLAN TODOS.
+
+    Los escritores genéricos salen del censo (cubo 3 de LA FRONTERA), no de una
+    lista. Se exige que el conjunto sea EXACTAMENTE el de `SONDAS`: uno nuevo
+    sin sonda se pone rojo, y una sonda de uno que ya no está, también.
+
+    Y cada sonda corre dos veces. Con un chat que no entra al panel: tiene que
+    decir que no y no escribir la columna. Con uno que sí: tiene que escribirla,
+    porque una sonda que nunca llega a escribir no está midiendo nada.
+    """
+    _con_gente(LA_CASA)
+    censo = _censo()
+    columna = _columna_del_codigo()
+    hallados = set(censo["genericos"])
+    assert hallados, (
+        "el censo no encontró ningún escritor genérico, y `crud.editar` lo es: "
+        "el censo dejó de ver, no se arregló el problema")
+    con_sonda = {_id_de(fn) for fn in SONDAS}
+    assert hallados == con_sonda, (
+        f"escritores genéricos SIN sonda: {sorted(hallados - con_sonda)}; "
+        f"sondas de escritores que el censo ya no ve: "
+        f"{sorted(con_sonda - hallados)}. Uno que arma el SQL al vuelo puede "
+        f"escribir {columna} sin nombrarla, y leer su texto no lo va a ver")
+
+    for fn, sonda in SONDAS.items():
+        base, error = sonda(fn, AJENO)
+        assert isinstance(error, ValueError), (
+            f"{fn.__name__} aceptó un responsable que no entra al panel")
+        assert not _escribio(base, columna), (
+            f"{fn.__name__} escribió {columna} con un chat que no vale: "
+            f"{_escrituras(base)}")
+
+        base, error = sonda(fn, OTRA)
+        assert error is None, f"{fn.__name__} rechazó a quien sí puede: {error}"
+        assert _escribio(base, columna), (
+            f"la sonda de {fn.__name__} no llegó a escribir {columna} ni con un "
+            "chat que vale: no está midiendo nada")
+
+
+def test_la_puerta_de_crud_es_la_columna_que_escribe_el_panel():
+    """`crud` le pone la puerta a la columna por nombre, y ese nombre tiene que
+    ser el que escribe `db.asignar_responsable` y declara la migración. Un typo
+    en `crud.PUERTAS` dejaría a `editar` escribiendo la columna de verdad sin
+    ninguna puerta."""
+    assert _columna_del_codigo() in crud.PUERTAS.get("tareas", {}), (
+        f"crud no le pone puerta a tareas.{_columna_del_codigo()}: "
+        f"{crud.PUERTAS}")
+
+
+# ── Por Telegram: `crud.editar` ──────────────────────────────────────────
+
+def test_editar_no_escribe_un_responsable_que_no_vale_y_dice_por_que():
+    """Decisión de Tiziano (10-sep-2026): por Telegram se puede asignar, pero
+    sólo a quien entra al panel, y un chat que no vale se RECHAZA.
+
+    Rechazar quiere decir las dos cosas: no se escribe nada, y quien lo pidió
+    se entera de por qué. El motivo nombra a quién SÍ se le puede dejar —por
+    nombre, sacado de la misma casa que usa la puerta— y nunca el número.
+    """
+    _con_gente(LA_CASA)
+    for valor in (AJENO, str(AJENO), "cualquier cosa", True, 1.5, -1, 0):
+        base, error = _sonda_editar(crud.editar, valor)
+        assert isinstance(error, ValueError), f"editar aceptó {valor!r}"
+        assert not _escribio_algo(base), (
+            f"editar escribió algo con {valor!r}: {base.sql}")
+        texto = str(error)
+        assert str(AJENO) not in texto, "el rechazo enseña un número de chat"
+        for _, nombre in config.personas_del_panel():
+            assert nombre in texto, (
+                f"el rechazo no dice a quién sí se le puede dejar: {texto!r}")
+
+    # Tiene nombre y perdió el acceso al panel: tampoco.
+    _con_gente({DUENO: "Zutana", OTRA: "Mengano"}, permitidos=(DUENO,))
+    base, error = _sonda_editar(crud.editar, OTRA)
+    assert isinstance(error, ValueError)
+    assert not _escribio_algo(base)
+
+
+def test_editar_asigna_a_quien_si_puede_y_deja_sin_responsable():
+    """Los controles: lo que vale se escribe. Y «sin responsable» es de primera
+    clase, venga como null o como texto vacío."""
+    _con_gente(LA_CASA)
+    columna = _columna_del_codigo()
+    for valor, queda in ((OTRA, OTRA), (str(OTRA), OTRA),
+                         (None, None), ("", None)):
+        base, error = _sonda_editar(crud.editar, valor)
+        assert error is None, f"editar rechazó {valor!r}: {error}"
+        escrito = _escrituras(base)
+        assert len(escrito) == 1 and columna in escrito[0][0], escrito
+        assert escrito[0][1][0] == queda, (
+            f"con {valor!r} guardó {escrito[0][1][0]!r} y tenía que quedar "
+            f"{queda!r}")
+
+
+def test_editar_otras_columnas_sigue_igual():
+    """La puerta no le cambia nada a quien no la toca: el mismo UPDATE, con los
+    mismos valores, que emitía `editar` antes de que existiera. Y una tabla sin
+    puerta no pasa por ninguna aunque le manden una columna con ese nombre."""
+    _con_gente(LA_CASA)
+    base = _BaseDeCrud(fila=_fila(1))
+    error = _correr(base, lambda: crud.editar(
+        "tareas", 1, {"titulo": "otro", "estado": "hecha"}, motivo="t"))
+    assert error is None
+    assert _escrituras(base) == [
+        ("UPDATE tareas SET titulo = %s, estado = %s WHERE id = %s",
+         ("otro", "hecha", 1))]
+    columna = _columna_del_codigo()
+    assert crud._por_las_puertas("notas", {columna: AJENO}) == {columna: AJENO}
+
+
+# ── Deshacer ─────────────────────────────────────────────────────────────
+
+def _huella(antes, despues):
+    return {"accion": "editar", "tabla": "tareas", "registro_id": 1,
+            "antes": antes, "despues": despues}
+
+
+def test_deshacer_no_deja_escrito_un_responsable_que_no_vale():
+    """Una edición le cambió el responsable a alguien que HOY ya no puede
+    tenerla. Deshacerla lo volvería a escribir: no se hace, y se dice por qué.
+    No se deshace la mitad: la edición entera se queda como está."""
+    _con_gente(LA_CASA)
+    base, error = _sonda_deshacer(crud.deshacer, AJENO)
+    assert isinstance(error, ValueError), "deshacer dejó escrito a quien no vale"
+    assert not _escribio_algo(base), f"deshacer escribió algo: {base.sql}"
+    assert str(AJENO) not in str(error)
+    for _, nombre in config.personas_del_panel():
+        assert nombre in str(error)
+
+    # Lo tenía alguien con nombre que después perdió el acceso.
+    _con_gente({DUENO: "Zutana", OTRA: "Mengano"}, permitidos=(DUENO,))
+    base, error = _sonda_deshacer(crud.deshacer, OTRA)
+    assert isinstance(error, ValueError)
+    assert not _escribio_algo(base)
+
+
+def test_deshacer_un_cambio_de_titulo_no_toca_el_responsable():
+    """EL CASO DEL TÍTULO. Se cambia el título por Telegram, después alguien le
+    pone responsable en el panel, y luego se deshace lo del título. Deshacer
+    reescribía TODAS las columnas del `antes`, así que le devolvía a la tarea
+    el responsable de aquel momento y pisaba el nuevo sin preguntarle a nadie.
+
+    Ahora la columna con puerta vuelve atrás sólo si ESA edición la cambió. Se
+    prueba con los tres responsables posibles en el `antes`: ninguno, uno que
+    vale y uno que ya no vale —que tampoco puede bloquear deshacer un título—.
+    Y con una huella que no dice qué quedó: si no se sabe, no se toca.
+    """
+    _con_gente(LA_CASA)
+    columna = _columna_del_codigo()
+    for resp in (None, OTRA, AJENO):
+        for despues in (_fila(1, titulo="nuevo", responsable=resp), None):
+            base = _BaseDeCrud(huella=_huella(
+                _fila(1, titulo="viejo", responsable=resp), despues))
+            error = _correr(base, lambda: crud.deshacer(77))
+            assert error is None, f"no deshizo el título ({resp}): {error}"
+            escrito = _escrituras(base)
+            assert len(escrito) == 1 and "titulo" in escrito[0][0], escrito
+            assert not re.search(rf"\b{columna}\b", escrito[0][0]), (
+                f"deshacer un cambio de título reescribió {columna}: "
+                f"{escrito[0][0]}")
+
+
+def test_deshacer_devuelve_el_responsable_que_esa_edicion_cambio():
+    """El control: si la edición SÍ cambió el responsable, deshacerla lo
+    devuelve — a una persona que vale, o a «sin responsable»."""
+    _con_gente(LA_CASA)
+    columna = _columna_del_codigo()
+    for antes, despues in ((OTRA, DUENO), (None, OTRA)):
+        base = _BaseDeCrud(huella=_huella(_fila(1, responsable=antes),
+                                          _fila(1, responsable=despues)))
+        error = _correr(base, lambda: crud.deshacer(77))
+        assert error is None, f"no devolvió {antes!r}: {error}"
+        assert _escribio(base, columna), _escrituras(base)
+
+
+def test_la_huella_que_deja_el_panel_se_deshace_por_la_misma_puerta():
+    """La huella no es inventada: es la que escribe `db.asignar_responsable`,
+    tal cual la manda a `log_acciones`. Deshacerla devuelve el responsable de
+    antes; y si ése ya no puede tenerla, no se deshace."""
+    _con_gente(LA_CASA)
+    columna = _columna_del_codigo()
+    ok, conn = _asignar(1, OTRA, [_fila(1, responsable=DUENO)])
+    assert ok is True
+    params = [p for s, p in conn.sql if "log_acciones" in s][0]
+    huella = {"accion": "editar", "tabla": "tareas", "registro_id": params[0],
+              "antes": json.loads(params[1]), "despues": json.loads(params[2])}
+
+    base = _BaseDeCrud(huella=huella)
+    assert _correr(base, lambda: crud.deshacer(77)) is None
+    assert _escribio(base, columna), _escrituras(base)
+
+    _con_gente({DUENO: "Zutana", OTRA: "Mengano"}, permitidos=(OTRA,))
+    base = _BaseDeCrud(huella=huella)
+    assert isinstance(_correr(base, lambda: crud.deshacer(77)), ValueError)
+    assert not _escribio_algo(base)
 
 
 # ── La pantalla ──────────────────────────────────────────────────────────
