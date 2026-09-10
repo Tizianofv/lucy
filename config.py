@@ -79,6 +79,118 @@ CHAT_IDS_PERMITIDOS = (CHAT_ID_DUENO,) + tuple(
     c for c in CHAT_IDS_CASA if c != CHAT_ID_DUENO)
 
 
+# ── CÓMO SE LLAMA CADA UNO ───────────────────────────────────────────────────
+#
+# El panel de tareas necesita decir QUIÉN tiene pendiente cada tarea, y para
+# eso hace falta un nombre. En este sistema no había ninguno: medido sobre el
+# esquema (16 tablas, 150 columnas) no hay una sola tabla que tenga a la vez un
+# chat y un nombre, y en los 71 `.py` del repo no hay ningún mapa de número a
+# nombre ni ninguna llamada a Telegram para pedir un perfil.
+#
+# POR QUÉ EN UNA VARIABLE DE ENTORNO Y NO EN EL CÓDIGO. Decisión de la sala:
+# así Tiziano cambia un nombre o da de alta a una tercera persona él solo,
+# desde Railway, sin que nadie despliegue nada. En el código, cada nombre nuevo
+# costaría un despliegue a producción.
+#
+# LA FORMA: pares `chat:nombre` separados por coma (o por punto y coma, igual
+# que CHAT_IDS_CASA).
+#
+#     NOMBRES_POR_CHAT="111111:Tiziano, 222222:Rosi"
+#
+# Es una lista de PARES y no dos listas paralelas a propósito: con dos listas,
+# reordenar una le pone a una persona el nombre de la otra y no hay forma de
+# notarlo. Acá cada nombre viaja pegado a su chat y el orden no significa nada.
+#
+# Y es una variable APARTE de CHAT_IDS_CASA, no un reemplazo: aquélla decide
+# quién ENTRA —es la única línea que dice quién ve las finanzas de esta casa— y
+# ésta solo dice cómo se llama. Un error de dedo escribiendo nombres no puede
+# darle acceso a nadie.
+#
+# QUÉ PASA CON LO QUE NO SE ENTIENDE: se descarta y SE CUENTA. Un par sin `:`,
+# con un chat que no es número o con el nombre vacío no se adivina; entra en
+# `NOMBRES_MAL_ESCRITOS` y el panel lo dice. Descartarlo callado es cómo una
+# persona desaparece de la lista sin que nadie sepa por qué.
+def _leer_nombres(crudo: str) -> tuple[dict[int, str], int]:
+    """{chat: nombre} y cuántas entradas no se entendieron.
+
+    Se parte por el PRIMER `:` para que un nombre pueda llevar dos puntos sin
+    romper nada. Si el mismo chat aparece dos veces, manda el último — que es
+    lo que hace cualquiera al corregir una línea sin borrar la anterior.
+    """
+    nombres: dict[int, str] = {}
+    malos = 0
+    for pieza in crudo.replace(";", ",").split(","):
+        pieza = pieza.strip()
+        if not pieza:
+            continue
+        chat, sep, nombre = pieza.partition(":")
+        nombre = nombre.strip()
+        if not sep or not nombre:
+            malos += 1
+            continue
+        try:
+            nombres[int(chat.strip())] = nombre
+        except ValueError:
+            malos += 1
+    return nombres, malos
+
+
+NOMBRES_POR_CHAT, NOMBRES_MAL_ESCRITOS = _leer_nombres(
+    os.environ.get("NOMBRES_POR_CHAT", ""))
+
+
+def personas_del_panel() -> tuple[tuple[int, str], ...]:
+    """A quién se le puede asignar una tarea: [(chat, nombre), …].
+
+    LAS DOS CONDICIONES SALEN DE LO REAL, ninguna está tecleada acá:
+
+      · que pueda ENTRAR al panel — `CHAT_IDS_PERMITIDOS`, la misma tupla que
+        usa `web.auth.puede_entrar`. Asignarle una tarea a alguien que no puede
+        abrir la pantalla es dejarle un pendiente donde nunca lo va a ver.
+      · que TENGA NOMBRE en `NOMBRES_POR_CHAT`. Sin nombre no hay nada honesto
+        que pintar: inventarlo sería mentir y poner el número de chat lo
+        descartó Tiziano.
+
+    El día que entre una tercera persona, aparece acá sola: se la agrega a las
+    dos variables y nadie toca una línea de código. Se lee en cada llamada —y
+    no se calcula una vez al importar— justamente para eso.
+
+    El orden es el de `CHAT_IDS_PERMITIDOS`, o sea el dueño primero.
+    """
+    return tuple((c, NOMBRES_POR_CHAT[c]) for c in CHAT_IDS_PERMITIDOS
+                 if c in NOMBRES_POR_CHAT)
+
+
+def puede_ser_responsable(chat_id) -> bool:
+    """LA PUERTA ÚNICA de quién puede quedar como responsable de una tarea.
+
+    La llaman directo la ruta del panel y `db.asignar_responsable`. Los dos
+    escritores GENÉRICOS —`acciones.crud.editar` y `acciones.crud.deshacer`,
+    que no nombran la columna porque la sacan de los datos— llegan acá por
+    `crud._por_las_puertas`. Quién escribe la columna no se da por sabido: lo
+    cuenta `tests/test_responsable.py` recorriendo cada `execute` del
+    repositorio, y hasta dónde llega ese recorrido está dicho ahí, en LA
+    FRONTERA, y en ningún otro sitio.
+
+    Que la respuesta se derive de `personas_del_panel()` y no de una lista
+    propia es lo que impide que las dos se separen: si mañana alguien deja de
+    poder entrar al panel, deja de poder ser responsable el mismo día.
+    """
+    return any(c == chat_id for c, _ in personas_del_panel())
+
+
+def chats_sin_nombre() -> int:
+    """Cuántos de los que ENTRAN al panel no tienen nombre en la variable.
+
+    Devuelve una cuenta y nunca un chat: el número de Telegram de una persona
+    no es material de pantalla. Mientras esto sea mayor que cero hay alguien
+    que puede abrir el panel y a quien no se le puede asignar nada, y el panel
+    tiene que decirlo — callarlo deja a Tiziano buscando en el desplegable un
+    nombre que nunca va a estar.
+    """
+    return sum(1 for c in CHAT_IDS_PERMITIDOS if c not in NOMBRES_POR_CHAT)
+
+
 # ── LA PUERTA ÚNICA DE LOS BUZONES ────────────────────────────────────────────
 #
 # `CORREO_CUENTAS` de arriba es la lista CRUDA, con las credenciales. Nadie la

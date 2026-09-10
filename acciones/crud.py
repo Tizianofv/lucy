@@ -19,6 +19,7 @@ from decimal import Decimal, InvalidOperation
 
 from psycopg.rows import dict_row
 
+import config
 import db.db as db
 from config import TZ
 
@@ -419,6 +420,77 @@ NO_EDITABLES = {"id", "bandeja_id", "creado_en", "borrado_en"}
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}([T ]|$)")
 
 
+# ── LAS COLUMNAS CON PUERTA ──────────────────────────────────────────────
+#
+# `editar` y `deshacer` son escritores GENÉRICOS: el nombre de la columna que
+# escriben no está en ningún texto de este archivo. Sale de los datos —los
+# `cambios` que manda el modelo, o el `antes` de una huella— y se arma al vuelo
+# en el SQL. Por eso ninguno de los dos puede «acordarse» de la puerta de una
+# columna concreta: no la nombran nunca.
+#
+# Así que la decisión vive UNA vez, acá, y los dos pasan por `_por_las_puertas`
+# con los valores que están a punto de escribir. Se mira el VALOR que va a
+# quedar, no cómo se escribió la llamada.
+#
+# Hoy hay una sola columna con puerta: quién tiene pendiente una tarea. Lo
+# decidió Tiziano el 10-sep-2026: Lucy puede asignar responsable por Telegram,
+# pero solo a quien entra al panel, igual que el panel, y un chat que no vale se
+# rechaza. La puerta es la misma que usa el panel, `config.puede_ser_responsable`.
+
+def _responsable_que_vale(valor):
+    """El chat que va a quedar como responsable, o ValueError explicando por qué no.
+
+    Sin responsable es lo normal y no pasa por la puerta: no hay a quién
+    validar. Llega como None o como texto vacío.
+
+    El chat puede venir como número o como texto con un número —el JSON del
+    modelo no promete cuál—, y se guarda como número. `True` no es un chat
+    aunque Python lo compare igual a 1. Cualquier otra cosa no vale.
+
+    El mensaje dice quién SÍ puede, por nombre y nunca por número: lo lee el
+    modelo y puede terminar en un aviso de Telegram, y el número de chat de una
+    persona no es algo que haga falta para entender el rechazo.
+    """
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        return None
+    chat = None
+    if isinstance(valor, int) and not isinstance(valor, bool):
+        chat = valor
+    elif isinstance(valor, str):
+        try:
+            chat = int(valor.strip())
+        except ValueError:
+            chat = None
+    if chat is not None and config.puede_ser_responsable(chat):
+        return chat
+    nombres = [nombre for _, nombre in config.personas_del_panel()]
+    quienes = (f"hoy: {', '.join(nombres)}" if nombres
+               else "hoy nadie: falta NOMBRES_POR_CHAT")
+    # Corto a propósito: el botón de Telegram recorta el aviso, y lo que se
+    # pierde primero es el final. Por eso la razón va delante y los nombres
+    # detrás.
+    raise ValueError(
+        "ese chat no puede ser responsable: solo quien entra al panel y tiene "
+        f"nombre ({quienes})")
+
+
+PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale}}
+
+
+def _por_las_puertas(tabla: str, valores: dict) -> dict:
+    """Los `valores` que van a escribirse, después de pasar por su puerta.
+
+    Devuelve una copia con los valores de las columnas con puerta ya
+    normalizados, o lanza ValueError si alguno no vale. Las columnas sin puerta
+    salen tal cual: para ellas esto no cambia nada.
+    """
+    salida = dict(valores)
+    for columna, puerta in PUERTAS.get(tabla, {}).items():
+        if columna in salida:
+            salida[columna] = puerta(salida[columna])
+    return salida
+
+
 def _adaptar(v):
     """Las fechas viajan como texto ISO en el JSON del modelo; Postgres las
     quiere como datetime para una columna timestamptz."""
@@ -476,6 +548,14 @@ async def editar(
         campos["categoria"] = valor
         # Si además NO le corresponde a este tipo de movimiento, se rechaza más
         # abajo, cuando ya se leyó la fila y se sabe si es gasto o ingreso.
+
+    # Las columnas con puerta, ANTES de abrir la conexión y con la misma forma
+    # que la categoría de arriba: si lo pedido no vale, se rechaza la edición
+    # entera con el motivo, en vez de escribir la mitad. Ver `PUERTAS`.
+    try:
+        campos = _por_las_puertas(tabla, campos)
+    except ValueError as e:
+        raise ValueError(f"No cambié nada: {e}.") from e
 
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -783,7 +863,8 @@ async def deshacer(log_id: int) -> str:
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
-            "SELECT accion, tabla, registro_id, antes FROM log_acciones WHERE id = %s",
+            "SELECT accion, tabla, registro_id, antes, despues "
+            "FROM log_acciones WHERE id = %s",
             (log_id,),
         )
         huella = await cur.fetchone()
@@ -807,9 +888,28 @@ async def deshacer(log_id: int) -> str:
 
         elif huella["accion"] == "editar":
             antes = huella["antes"] or {}
-            columnas = [c for c in antes if c not in NO_EDITABLES]
+            despues = huella.get("despues") or {}
+            con_puerta = PUERTAS.get(tabla, {})
+            # Una columna CON PUERTA vuelve atrás solo si ESTA edición la
+            # cambió, o sea si el `despues` de la huella la trae con otro valor.
+            # Sin esto, deshacer un cambio de título le devolvía a la tarea el
+            # responsable que tenía en ese momento, pisando el que alguien le
+            # puso después y sin preguntarle a la puerta. Si la huella no dice
+            # qué quedó, no se sabe si la cambió, y entonces no se toca.
+            #   Las columnas SIN puerta siguen como siempre: vuelven todas las
+            # del `antes`, también las que esta edición no tocó. Eso vale para
+            # todas las tablas y no se decidió en este cambio.
+            columnas = [c for c in antes if c not in NO_EDITABLES
+                        and (c not in con_puerta
+                             or (c in despues and despues[c] != antes[c]))]
             if not columnas:
                 raise ValueError("Esa edición no guardó con qué volver atrás.")
+            try:
+                _por_las_puertas(tabla, {c: antes[c] for c in columnas})
+            except ValueError as e:
+                raise ValueError(
+                    f"No lo deshice: la tarea volvería a quien la tenía, y {e}."
+                ) from e
             asignaciones = ", ".join(f"{c} = r.{c}" for c in columnas)
             await conn.execute(
                 f"UPDATE {tabla} t SET {asignaciones} "

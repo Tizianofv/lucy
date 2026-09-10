@@ -581,13 +581,14 @@ async def papelera(request: Request, restaurado: int = 0):
 
 
 @app.get("/tareas", response_class=HTMLResponse)
-async def tareas(request: Request, guardadas: int = 0, creada: int = 0):
+async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
+                 asignadas: int = 0):
     """El panel de tareas: lo que hay que hacer, para las dos personas.
 
     UNA SOLA LISTA PARA LOS DOS, por decisión de Tiziano —"está bien que Rosi
-    vea todo"—. La columna de quién la anotó alcanza para saber de quién es
-    cada cosa; partir la lista en dos por persona sería inventarle al panel una
-    frontera que el trabajo de esta casa no tiene.
+    vea todo"—. La columna RESPONSABLE dice quién tiene pendiente cada cosa;
+    partir la lista en dos por persona sería inventarle al panel una frontera
+    que el trabajo de esta casa no tiene.
 
     ESTA RUTA NO SABE QUÉ ES "ATRASADA". El criterio vive entero en
     `db.grupo_de_tarea` y esta función solo pinta lo que aquella devuelve. Es
@@ -595,10 +596,29 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0):
     reescribía en cada consulta y daba números distintos según quién la
     escribiera.
 
-    `yo` es el chat de quien está mirando. Sirve para que la columna "Quién"
-    diga "yo" en vez de un número de Telegram, y sale de la sesión —o sea del
-    dato que ya se comprobó para dejar entrar— y no de una lista de nombres
-    escrita a mano en ninguna parte.
+    DE DÓNDE SALEN LOS NOMBRES, que es la parte que no existía en este sistema.
+    Ninguna tabla de esta base tiene a la vez un chat y un nombre —medido sobre
+    las 16 tablas y las 150 columnas del esquema—, así que los nombres viven en
+    la variable `NOMBRES_POR_CHAT` de Railway. Se le pasan a la plantilla dos
+    cosas distintas y conviene no confundirlas:
+
+      · `personas` — a quién SE LE PUEDE ASIGNAR hoy. Sale de
+        `config.personas_del_panel()`: los que pueden entrar al panel Y tienen
+        nombre. Es lo que llena el desplegable, y por eso una tercera persona
+        aparece sola el día que Tiziano la agregue a las dos variables.
+      · `nombres` — cómo se llama CADA chat que tenga nombre, se le pueda
+        asignar hoy o no. Es para PINTAR lo que ya está guardado: si alguien
+        deja de poder entrar al panel, las tareas que tenía siguen diciendo su
+        nombre. Esconderlo o cambiarlo por otra cosa sería reescribir el
+        pasado.
+
+    Y LO QUE FALTA SE DICE. `sin_nombre` son los que pueden entrar y no tienen
+    nombre puesto: mientras eso no sea cero, hay alguien a quien no se le puede
+    asignar nada. `mal_escritos` son las entradas de la variable que no se
+    entendieron. Las dos son CUENTAS y nunca un chat — el número de Telegram de
+    una persona no es material de pantalla, y Tiziano ya descartó enseñarlo.
+    Callar cualquiera de las dos dejaría a alguien buscando en el desplegable
+    un nombre que nunca va a aparecer, sin ninguna pista de por qué.
     """
     chat = _sesion(request)
     if not auth.puede_entrar(chat):
@@ -607,13 +627,45 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0):
     return plantillas.TemplateResponse(
         request, "tareas.html",
         {"grupos": datos["grupos"], "hay_mas": datos["hay_mas"],
-         "yo": chat, "guardadas": guardadas, "tope": db.TOPE_TAREAS,
-         "hecha": db.ESTADO_HECHA, "creada": creada})
+         "guardadas": guardadas, "asignadas": asignadas,
+         "tope": db.TOPE_TAREAS, "hecha": db.ESTADO_HECHA, "creada": creada,
+         "personas": config.personas_del_panel(),
+         "asignables": [c for c, _ in config.personas_del_panel()],
+         "nombres": config.NOMBRES_POR_CHAT,
+         "sin_nombre": config.chats_sin_nombre(),
+         "mal_escritos": config.NOMBRES_MAL_ESCRITOS})
+
+
+def _responsable_pedido(crudo: str):
+    """Lee un `resp_<id>` del formulario. Devuelve (vale, chat | None).
+
+    Tres respuestas y no dos, porque son tres cosas distintas:
+
+      · ("", …)  → (True, None): SIN RESPONSABLE. Es una petición legítima y
+        de primera clase —así nacieron las 57 tareas que ya existían—, no un
+        campo vacío que haya que rellenar.
+      · un chat que puede serlo  → (True, chat).
+      · cualquier otra cosa —texto, un chat que no entra al panel, un número
+        inventado— → (False, None), y el que llama no escribe nada.
+
+    QUIÉN PUEDE SER RESPONSABLE NO SE DECIDE ACÁ. Se le pregunta a
+    `config.puede_ser_responsable`, que es la misma puerta que vuelve a mirar
+    `db.asignar_responsable` antes de escribir. Que esté en los dos sitios no
+    es duplicar el criterio: el criterio está UNA vez y los dos lo llaman.
+    """
+    crudo = (crudo or "").strip()
+    if not crudo:
+        return True, None
+    try:
+        chat = int(crudo)
+    except ValueError:
+        return False, None
+    return (True, chat) if config.puede_ser_responsable(chat) else (False, None)
 
 
 @app.post("/tareas")
 async def guardar_tareas(request: Request):
-    """Cerrar VARIAS tareas de una vez. La tercera escritura del panel.
+    """Cerrar VARIAS tareas de una vez y cambiarles el responsable.
 
     UN SOLO BOTÓN PARA TODA LA TABLA, igual que /categorias y por el mismo
     motivo, que ahí está escrito con la cicatriz puesta: cuando cada fila se
@@ -642,12 +694,31 @@ async def guardar_tareas(request: Request):
     NO HAY REDIRECT A UN DESTINO ELEGIBLE. De acá se vuelve siempre a /tareas,
     así que no existe el parámetro `volver` que /categorias y /efectivo tienen
     que defender contra "//evil.com". El agujero que no existe no se tapa.
+
+    EL RESPONSABLE VIAJA EN EL MISMO ENVÍO, y por eso es un desplegable dentro
+    del formulario que ya había y no una pantalla aparte: cerrar dos y pasarle
+    una tercera a la otra persona es UN gesto en la vida real, y partirlo en
+    dos recargues es exactamente el defecto que este formulario único vino a
+    arreglar. `/tareas/nueva` está aparte por otra razón —un <form> dentro de
+    otro es HTML inválido—, que acá no aplica: el <select> vive DENTRO del
+    mismo <form>.
+
+    Y AQUÍ TAMBIÉN `prev_resp_` HACE FALTA, por un motivo distinto al de las
+    casillas. Un <select> SIEMPRE viaja, incluso el que nadie tocó, así que sin
+    el valor previo cada envío reescribiría el responsable de las cuarenta
+    filas de la pantalla y llenaría `log_acciones` de ediciones que nadie
+    pidió. Con él solo se escriben las que de verdad cambiaron.
+
+    Y `db.asignar_responsable` vuelve a mirar la fila EN LA BASE antes de
+    escribir, igual que `marcar_tarea_hecha`: la pantalla que lleva diez
+    minutos abierta no puede pisar lo que el otro acaba de cambiar con un valor
+    que ya coincidía.
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
 
     formulario = await request.form()
-    hechas, ignoradas = 0, 0
+    hechas, asignadas, ignoradas = 0, 0, 0
     for campo in formulario:
         if not campo.startswith("hecha_"):
             continue
@@ -665,14 +736,41 @@ async def guardar_tareas(request: Request):
         else:
             ignoradas += 1
 
+    for campo in formulario:
+        if not campo.startswith("resp_"):
+            continue
+        try:
+            tid = int(campo[len("resp_"):])
+        except ValueError:
+            ignoradas += 1
+            continue
+        pedido = str(formulario.get(campo, "")).strip()
+        if pedido == str(formulario.get(f"prev_resp_{tid}", "")).strip():
+            # Nadie tocó este desplegable: dice lo mismo que cuando se pintó.
+            continue
+        vale, chat = _responsable_pedido(pedido)
+        if not vale:
+            ignoradas += 1
+            continue
+        if await db.asignar_responsable(tid, chat):
+            asignadas += 1
+        else:
+            ignoradas += 1
+
     if ignoradas:
         # Un rechazo que no deja rastro en ningún lado es un fallo silencioso,
         # y este panel paga por que todo sea auditable. Va acá y no en db.db
         # porque el logger de este módulo existe y el de aquél no (ver el
         # hallazgo sobre db/db.py:1648).
-        log.warning("Panel de tareas: %s marca(s) sin efecto —la tarea no "
-                    "existe, está en la papelera o ya estaba hecha", ignoradas)
-    return RedirectResponse(f"/tareas?guardadas={hechas}", status_code=303)
+        #
+        # No se registra QUÉ responsable se pidió: sería el número de Telegram
+        # de una persona en el log de Railway, y ese número no hace falta para
+        # entender qué pasó.
+        log.warning("Panel de tareas: %s cambio(s) sin efecto —la tarea no "
+                    "existe, está en la papelera, ya estaba así, o el "
+                    "responsable pedido no entra al panel", ignoradas)
+    return RedirectResponse(
+        f"/tareas?guardadas={hechas}&asignadas={asignadas}", status_code=303)
 
 
 @app.get("/tareas/nueva", response_class=HTMLResponse)

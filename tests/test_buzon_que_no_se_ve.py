@@ -3645,9 +3645,19 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # O sea: 31 → 33 exentos (dos pruebas) y 37 → 38 vigilados (un módulo). Los dos
     # trabajos tocaron además `db/db.py`, `web/app.py` y `cerebro/agente.py`, ya
     # vigilados, y la aserción de fondo de arriba siguió verde sobre todos ellos.
-    assert medido == {"en disco": 71, "exentos": 33, "vigilados": 38}, (
+    #
+    # 10-sep-2026: 71 → 72 en disco y 33 → 34 exentos por
+    # `tests/test_responsable.py`, del trabajo que cambió la columna «Quién la
+    # anotó» del panel de tareas por RESPONSABLE. Los VIGILADOS siguen en 38, y
+    # es la respuesta correcta y no una casualidad: la exención sale de
+    # `testpaths` de pytest.ini, o sea del ROL del archivo, no de que se llame
+    # `test_*`. Ese trabajo NO agregó ningún módulo de producción —tocó
+    # `config.py`, `db/db.py`, `web/app.py` y `tools/humo.py`, los cuatro ya en
+    # el reparto de antes—, así que no había nada nuevo que vigilar. La
+    # aserción de fondo de arriba corrió sobre todos ellos y quedó verde.
+    assert medido == {"en disco": 72, "exentos": 34, "vigilados": 38}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "9-sep-2026 era {'en disco': 71, 'exentos': 33, 'vigilados': 38}. La "
+        "10-sep-2026 era {'en disco': 72, 'exentos': 34, 'vigilados': 38}. La "
         "aserción de fondo —cero archivos alcanzan la lista cruda— YA CORRIÓ "
         "arriba y quedó verde, así que esto NO es una fuga. Si los vigilados "
         "bajaron, algo se está saltando de más y «cero falsos positivos» dejó "

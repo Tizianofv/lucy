@@ -341,30 +341,44 @@ def test_el_formulario_exige_sesion():
         bucle.close()
 
 
-# ── Quién la anotó ───────────────────────────────────────────────────────
+# ── De quién queda constancia ────────────────────────────────────────────
 
 def test_medido_una_tarea_sin_bandeja_no_registra_a_nadie():
     """LA MEDICIÓN QUE JUSTIFICA EL DISEÑO, y por eso está escrita como prueba
     y no en un comentario.
 
-    Hoy, una tarea con `bandeja_id` NULO sale en el panel —bien: esconderla
-    sería peor— pero su columna «Quién la anotó» dice «—». O sea que si el alta
-    del panel dejara `bandeja_id` en nulo, nadie quedaría registrado. No es una
-    mentira, pero tampoco es el registro que el panel promete.
+    Una tarea con `bandeja_id` NULO no deja constancia de NADIE: `bandeja` es
+    el único sitio de este sistema donde queda escrito de dónde salió una fila.
+    Por eso `crear_tarea_desde_el_panel` escribe dos filas y no una.
+
+    LO QUE CAMBIÓ EL 10-SEP-2026, y hay que decirlo o esta prueba se lee mal:
+    esa constancia YA NO SE PINTA en el panel. La columna «Quién la anotó»
+    salía de `tareas.bandeja_id → bandeja.chat_id` y Tiziano la sacó —«nno es
+    relevante quien la anoto»—; lo que se ve en su lugar es el RESPONSABLE, que
+    es otra pregunta. La constancia sigue haciendo falta igual: es la
+    trazabilidad de la fila y el `bandeja_id` que viaja en cada huella de
+    `log_acciones`.
+
+    Así que lo que se mide acá es lo que quedó siendo verdad: la fila SALE en
+    el panel aunque le falte —esconderla sería peor—, y sin `bandeja_id` no hay
+    de dónde sacar de quién es.
     """
     conn = _Conn(tareas=[{"id": 1, "titulo": "sin dueño", "estado": "pendiente",
                           "vence_en": None, "bandeja_id": None,
+                          "responsable_chat_id": None,
                           "creado_en": datetime(2026, 9, 1, tzinfo=UTC),
                           "borrado_en": None}])
     datos = _con_base(conn, lambda: db.tareas_por_grupo(hoy=date(2026, 9, 9)))
     filas = [f for g in datos["grupos"] for f in g["filas"]]
     assert len(filas) == 1, "la tarea sin bandeja desapareció del panel"
-    assert filas[0]["quien"] is None, (
-        "con bandeja_id nulo no hay de dónde sacar quién la anotó")
+    assert filas[0]["bandeja_id"] is None, (
+        "sin bandeja_id no hay de dónde sacar de quién salió la tarea")
 
     html = _con_base(conn, lambda: panel.tareas(_get("/tareas"))).body.decode()
     assert "sin dueño" in html
-    assert ">—<" in html, "la columna tendría que quedar en blanco, y queda"
+    assert "Quién la anotó" not in html, (
+        "la columna vieja volvió a la pantalla; se cambió por Responsable, no "
+        "se conservan las dos")
 
 
 def test_la_tarea_a_mano_queda_a_nombre_de_quien_entro():
@@ -519,8 +533,16 @@ def test_la_tarea_escrita_aparece_en_la_pantalla_y_en_su_grupo():
     assert db.grupo_de_tarea(conn.tareas[0]["estado"],
                              conn.tareas[0]["vence_en"], hoy) == "hoy", (
         "la tarea nació en el día equivocado")
-    # Quién la anotó: «yo», porque la sesión es la del dueño.
-    assert ">yo<" in html, "la columna de quién la anotó quedó en blanco"
+    # Y NACE SIN RESPONSABLE, que es lo normal: una tarea recién escrita es
+    # una tarea que nadie tomó todavía. Quién la anotó no se pinta desde el
+    # 10-sep-2026; asignarle un responsable por el hecho de haberla escrito
+    # sería confundir las dos preguntas otra vez.
+    columnas = re.search(r"INSERT INTO tareas\s*\(([^)]*)\)",
+                         inspect.getsource(db.crear_tarea_desde_el_panel))
+    assert "responsable" not in columnas.group(1), (
+        "el alta a mano le pone un responsable que nadie pidió: una tarea "
+        "recién escrita es una tarea que nadie tomó todavía")
+    assert 'name="resp_' in html, "no se puede asignar el responsable"
 
 
 def test_la_tarea_sin_fecha_cae_en_su_grupo_con_nombre_propio():
