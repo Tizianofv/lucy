@@ -25,12 +25,21 @@ CONEXIÓN DEVUELVE LAS FILAS QUE SE LE PREPARAN. O sea que ninguna prueba de
 comportamiento de este archivo puede ver lo que el SQL hace con las filas antes
 de devolverlas.
 
-Eso no es teoría: cambiando `LEFT JOIN` por `JOIN` en una copia, las 484
-pruebas siguieron VERDES —y `tools/humo.py` también habría salido verde, porque
-un INNER JOIN corre perfecto y solo devuelve 90 filas en vez de 91—. Por eso
+Eso no es teoría: cuando esta consulta se unía con `bandeja`, cambiar
+`LEFT JOIN` por `JOIN` en una copia dejó las 484 pruebas VERDES —y
+`tools/humo.py` también habría salido verde, porque un INNER JOIN corre
+perfecto y solo devuelve 90 filas en vez de 91—. Por eso
 `test_ningun_join_de_esta_consulta_puede_descartar_una_tarea` mira el TEXTO del
 SQL, que es lo que el resto de este archivo evita: ahí es lo único que hay, y
-está dicho con su límite al lado.
+está dicho con su límite al lado. Desde el 10-sep-2026 esa consulta no tiene
+ningún JOIN —la columna que lo justificaba salió del panel—, y esa guarda queda
+esperando al que alguien escriba mañana; lo que sí comprueba hoy es que
+`tareas` siga mandando en el FROM.
+
+Y el texto del SQL se saca con `_sql_de`, del árbol de sintaxis, no con
+`inspect.getsource`. Los docstrings de este repo son largos y están en español,
+y una frase como «todo JOIN de esta consulta» se lee como un JOIN que no es
+LEFT: la guarda terminaba midiendo la prosa que EXPLICA el SQL en vez del SQL.
 
 Que las columnas existan de verdad en la base lo cubre `tools/humo.py`, que
 necesita DATABASE_URL. El test de columnas de abajo compara contra
@@ -129,10 +138,18 @@ class _Pool:
         return _CM(self._conn)
 
 
-def _fila(id, estado="pendiente", vence_en=None, titulo=None, quien=DUENO):
+def _fila(id, estado="pendiente", vence_en=None, titulo=None,
+          responsable=None):
+    """Una fila como la devuelve la consulta del panel.
+
+    `responsable` es None por defecto porque ES el estado normal: las 57 tareas
+    vivas de producción nacieron sin responsable y se asignan desde el panel.
+    Ponerle un valor por defecto haría que ninguna prueba de este archivo
+    pintara nunca el caso más común.
+    """
     return {"id": id, "titulo": titulo or f"tarea {id}", "estado": estado,
             "vence_en": vence_en, "creado_en": datetime(2026, 8, 1, tzinfo=UTC),
-            "bandeja_id": 900 + id, "quien": quien,
+            "bandeja_id": 900 + id, "responsable_chat_id": responsable,
             "completado_en": None}
 
 
@@ -154,6 +171,39 @@ def _con_base(filas, fn):
 def _grupos(filas, hoy):
     datos, _ = _con_base(filas, lambda: db.tareas_por_grupo(hoy=hoy))
     return {g["clave"]: g["filas"] for g in datos["grupos"]}
+
+
+def _sql_de(fn) -> str:
+    """El SQL que ESCRIBE una función, sin su docstring ni sus comentarios.
+
+    POR QUÉ NO `inspect.getsource` A SECAS, que es lo que había acá y costó dos
+    rojos falsos el 10-sep-2026. Las guardas de abajo buscan `LEFT JOIN` y
+    `b.columna` con expresiones regulares, y el texto que les llegaba incluía
+    la prosa del docstring — que en este repo es larga y está en español. Una
+    frase tan normal como «todo JOIN de esta consulta» se leía como un
+    `JOIN de` que no era LEFT, y «traía `b.chat_id`» se leía como una columna
+    que la consulta usa. O sea: la guarda medía lo que alguien había escrito
+    EXPLICANDO el SQL en vez de medir el SQL.
+
+    Acá el texto sale del árbol de sintaxis: se parsea la función, se descarta
+    el docstring y se juntan los literales de cadena que quedan, que es de
+    donde salen las consultas de este módulo. Los comentarios `#` no son nodos
+    del árbol y desaparecen solos. Lo que queda es lo que de verdad viaja a
+    Postgres, y ninguna cantidad de prosa lo puede mover.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    arbol = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    cuerpo = arbol.body[0].body
+    if (cuerpo and isinstance(cuerpo[0], ast.Expr)
+            and isinstance(cuerpo[0].value, ast.Constant)
+            and isinstance(cuerpo[0].value.value, str)):
+        cuerpo = cuerpo[1:]
+    trozos = [n.value for nodo in cuerpo for n in ast.walk(nodo)
+              if isinstance(n, ast.Constant) and isinstance(n.value, str)]
+    return " ".join(" ".join(t.split()) for t in trozos)
 
 
 # ── El criterio, sin base de por medio ───────────────────────────────────
@@ -301,19 +351,26 @@ def test_una_clave_de_grupo_que_nadie_previo_se_pinta_igual():
 
 
 def test_la_tarea_sin_bandeja_no_se_esconde_al_repartirla():
-    """En producción se sabe quién anotó 90 de las 91. La que falta sale igual,
-    con un guion: una fila que se esconde porque le falta un dato accesorio es
-    la misma familia de fallo que las 4 sin fecha.
+    """Una tarea a la que le falta un dato accesorio sale IGUAL. Es la misma
+    familia de fallo que las 4 sin fecha, que llevaban meses invisibles.
 
-    ESTA MITAD ES DE COMPORTAMIENTO, y solo cubre el reparto en Python: una
-    fila con `quien` en None llega entera hasta su grupo. La otra mitad —que el
-    SQL no la descarte antes de llegar acá— NO se puede ver desde una suite
-    hermética, y va en la prueba de abajo con su límite dicho.
+    En producción, `bandeja_id` estaba en 90 de las 91 filas. Esa columna hoy
+    ya no se pinta —era la de «Quién la anotó», que Tiziano sacó del panel el
+    10-sep-2026— pero sigue viajando en la consulta y sigue siendo el
+    `bandeja_id` de cada huella de `log_acciones`, así que la pregunta de si
+    una fila sin ella sobrevive al reparto sigue en pie. Y con ella la de la
+    columna que la reemplazó: una tarea SIN RESPONSABLE es lo normal —así
+    nacieron las 57 vivas— y no puede desaparecer por eso.
+
+    ESTA MITAD ES DE COMPORTAMIENTO, y solo cubre el reparto en Python. La otra
+    mitad —que el SQL no descarte la fila antes de llegar acá— NO se puede ver
+    desde una suite hermética, y va en la prueba de abajo con su límite dicho.
     """
-    filas = [_fila(1, quien=None), _fila(2)]
+    filas = [_fila(1), _fila(2, responsable=DUENO)]
+    filas[0]["bandeja_id"] = None
     grupos = _grupos(filas, date(2026, 9, 8))
     ids = {f["id"] for fs in grupos.values() for f in fs}
-    assert ids == {1, 2}, "se perdió la tarea sin bandeja"
+    assert ids == {1, 2}, "se perdió una tarea a la que le falta un accesorio"
 
 
 def test_ningun_join_de_esta_consulta_puede_descartar_una_tarea():
@@ -334,19 +391,36 @@ def test_ningun_join_de_esta_consulta_puede_descartar_una_tarea():
     Así que esto es lo más fuerte que se puede hacer sin una base delante, y se
     dice como lo que es. Lo que lo salva de ser una lista tecleada es que la
     lista sale del SQL —se cuentan los JOIN que HAY, no los que me acuerdo—:
-    el tercer JOIN que alguien escriba mañana tiene que cumplirlo igual, o esto
-    se pone rojo solo.
+    el JOIN que alguien escriba mañana tiene que cumplirlo igual, o esto se
+    pone rojo solo.
+
+    HOY LA CONSULTA NO TIENE NINGUNO, y por eso la comprobación no exige que
+    haya alguno. Hasta el 10-sep-2026 traía una unión con `bandeja` para pintar
+    la columna «Quién la anotó», que Tiziano sacó del panel. Un test que
+    exigiera un JOIN estaría exigiendo que se pinte una columna que ya no
+    existe. Lo que se comprueba, y sigue mordiendo, son dos cosas que no
+    dependen de cuántos haya:
+
+      · el que HAYA tiene que ser LEFT;
+      · y `tareas` tiene que ser la tabla que manda en el FROM. Si mañana
+        alguien la mueve a un JOIN y pone otra en el FROM, la regla «ninguna
+        tabla accesoria puede quitar una fila de tareas» se invierte sin que
+        una sola letra diga LEFT.
     """
-    import inspect
     import re
-    sql = inspect.getsource(db.tareas_por_grupo)
+    sql = _sql_de(db.tareas_por_grupo)
     joins = re.findall(r"(\w+)\s+JOIN\s+(\w+)", sql)
-    assert joins, "no se encontró ningún JOIN: ¿cambió la consulta?"
     malos = [f"{previo} JOIN {tabla}" for previo, tabla in joins
              if previo.upper() != "LEFT"]
     assert not malos, (
         f"estos JOIN pueden descartar tareas enteras: {malos}. Una tarea sin "
-        "bandeja desaparecería del panel y nadie se enteraría")
+        "la fila accesoria desaparecería del panel y nadie se enteraría")
+    de_donde = re.findall(r"\bFROM\s+(\w+)", sql)
+    assert de_donde == ["tareas"], (
+        f"esta consulta ya no sale de `tareas`, sale de {de_donde}. `tareas` "
+        "tiene que mandar en el FROM: desde cualquier otra tabla, una tarea "
+        "sin su fila accesoria desaparece del panel aunque todos los JOIN "
+        "digan LEFT")
 
 
 def test_el_tope_no_recorta_callado():
@@ -391,14 +465,40 @@ def test_las_columnas_de_la_consulta_existen_en_el_esquema():
     """Las columnas que nombra el SELECT se sacan del código y se comprueban
     contra db/schema.sql. Ninguna de las dos listas se teclea acá.
 
+    NI SIQUIERA LA DE ALIAS. Acá decía `(("t", "tareas"), ("b", "bandeja"))`, y
+    eso era exactamente la lista escrita a mano que este archivo persigue en
+    todo lo demás: el día que la consulta dejó de unirse con `bandeja`, el par
+    `("b", "bandeja")` seguía ahí exigiendo columnas de una tabla que ya no se
+    consulta. Ahora los alias salen del propio SQL —de sus FROM y sus JOIN—,
+    así que una tabla que entre o salga se refleja sola.
+
+    Y SE COMPRUEBA QUE NO QUEDE NINGÚN PREFIJO SUELTO: si el SELECT nombra
+    `x.algo` y ningún FROM ni JOIN declara `x`, es un alias mal escrito, que es
+    justo el error que esta prueba existe para agarrar sin DATABASE_URL. Sin
+    esa vuelta, un typo en el alias se saltaba la comprobación entera en vez de
+    ponerse rojo.
+
     Esto NO reemplaza a tools/humo.py: schema.sql describe la base, no ES la
     base. Lo que agarra es el typo, sin necesidad de DATABASE_URL.
     """
-    import inspect
     import re
-    sql = inspect.getsource(db.tareas_por_grupo)
+    sql = _sql_de(db.tareas_por_grupo)
     declaradas = db.columnas_declaradas()
-    for alias, tabla in (("t", "tareas"), ("b", "bandeja")):
+
+    # `FROM tareas t` y `LEFT JOIN bandeja b`: la tabla y el alias que le pone
+    # esta consulta, leídos de la consulta.
+    por_alias = {alias: tabla for tabla, alias in
+                 re.findall(r"(?:FROM|JOIN)\s+(\w+)\s+(\w+)", sql)}
+    assert por_alias, "no se encontró ninguna tabla con alias en el SQL"
+
+    usados = set(re.findall(r"\b([a-z_]+)\.[a-z_]+\b", sql))
+    huerfanos = usados - set(por_alias)
+    assert not huerfanos, (
+        f"el SQL nombra columnas de {sorted(huerfanos)} y ningún FROM ni JOIN "
+        "declara ese alias: está mal escrito, y las columnas que cuelgan de él "
+        "no las comprueba nadie")
+
+    for alias, tabla in por_alias.items():
         nombres = set(re.findall(rf"\b{alias}\.([a-z_]+)\b", sql))
         assert nombres, f"no se encontró ninguna columna de {tabla} en el SQL"
         faltan = nombres - set(declaradas[tabla])
@@ -587,8 +687,8 @@ def test_la_pantalla_se_pinta_con_todos_los_grupos():
              _fila(3),                                      # sin fecha
              _fila(4, vence_en=_en(5)),                     # próxima
              _fila(5, estado="descartado"),                 # otro estado
-             _fila(6, estado="hecha", quien=DUENO + 7),     # de la otra persona
-             _fila(7, quien=None)]                          # sin bandeja
+             _fila(6, estado="hecha", responsable=DUENO),   # con responsable
+             _fila(7)]                                      # sin responsable
 
     galleta = f"{panel.COOKIE}={auth.crear_token(DUENO, auth.VIDA_SESION)}"
     peticion = Request({"type": "http", "http_version": "1.1", "method": "GET",
@@ -613,11 +713,18 @@ def test_la_pantalla_se_pinta_con_todos_los_grupos():
     assert 'name="prev_1"' in html, (
         "sin el valor previo no se distingue 'no la toqué' de 'la desmarqué'")
     assert "descartado" in html, "el estado que nadie declaró no se ve"
-    # Quién la anotó: "yo" para quien mira, el chat del otro, y un guion cuando
-    # no se sabe. Las tres cosas, no dos.
-    assert ">yo<" in html
-    assert str(DUENO + 7) in html
-    assert "—" in html
+    # La columna RESPONSABLE reemplazó a «Quién la anotó», y no se conservan
+    # las dos: la vieja tiene que haberse ido de la cabecera de la tabla.
+    assert "Responsable" in html, "no se pintó la columna del responsable"
+    assert "Quién la anotó" not in html, (
+        "la columna vieja sigue en la pantalla; Tiziano pidió cambiarla, no "
+        "tener las dos")
+    # Y se puede CAMBIAR desde acá, con su valor previo al lado por el mismo
+    # motivo que `prev_`: un <select> siempre viaja, tocado o no.
+    assert 'name="resp_1"' in html, "no se puede cambiar el responsable"
+    assert 'name="prev_resp_1"' in html, (
+        "sin el valor previo, cada envío reescribiría el responsable de toda "
+        "la pantalla")
     # Lo ya hecho se ve hecho y no se puede volver a mandar.
     assert "checked disabled" in html
 

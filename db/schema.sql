@@ -146,6 +146,21 @@ CREATE TABLE tareas (
   prioridad       TEXT,                            -- baja | media | alta
   proyecto_id     BIGINT REFERENCES proyectos(id),
   persona_id      BIGINT REFERENCES personas(id),  -- "preguntarle a Pedro por el presupuesto"
+                                                   --   DE QUIÉN TRATA la tarea, NO quién la tiene
+                                                   --   pendiente. En uso en 30 de las 57 vivas
+                                                   --   (medido el 10-sep-2026): reciclarla habría
+                                                   --   pisado ese dato. Por eso la de abajo es nueva.
+  responsable_chat_id BIGINT,                      -- QUIÉN LA TIENE PENDIENTE. Es un chat de
+                                                   --   Telegram, el mismo con el que esa persona
+                                                   --   entra al panel; su nombre sale de la
+                                                   --   variable NOMBRES_POR_CHAT (ver config.py),
+                                                   --   no de ninguna tabla. NULL = sin responsable,
+                                                   --   que es lo NORMAL: las 57 tareas que ya
+                                                   --   existían nacieron sin uno y se asignan desde
+                                                   --   el panel. Sin FK porque no hay tabla de
+                                                   --   chats: la lista de quién vale sale de
+                                                   --   config.puede_ser_responsable(), que la deriva
+                                                   --   de quién puede ENTRAR al panel.
   estado          TEXT NOT NULL DEFAULT 'pendiente', -- pendiente | hecha | pospuesta
   pospuesta_veces INT NOT NULL DEFAULT 0,          -- alimenta "bolas que se caen" (req 28)
   completado_en   TIMESTAMPTZ,

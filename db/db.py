@@ -19,7 +19,11 @@ from psycopg_pool import AsyncConnectionPool
 # TZ es la zona de Santo Domingo, y viene de config para que haya UNA sola en
 # todo Lucy: la usa el panel de tareas para decidir a qué DÍA pertenece un
 # `vence_en`, que es un instante y no una fecha (ver `dia_rd`).
-from config import DATABASE_URL, TZ
+#
+# `puede_ser_responsable` viene de config por lo mismo: es LA puerta de quién
+# puede quedar con una tarea pendiente, y tiene que ser la misma para la ruta
+# del panel y para la escritura de acá. Dos copias del criterio se separan.
+from config import DATABASE_URL, TZ, puede_ser_responsable
 
 
 class MovimientoRechazado(Exception):
@@ -1804,11 +1808,20 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
     Python que se prueba con un `hoy` fijo, y la consulta queda tan tonta que
     no tiene dónde esconder una regla.
 
-    `quien` sale de tareas.bandeja_id → bandeja.chat_id, con LEFT JOIN: la
-    tarea que no tenga bandeja tiene que salir igual con un guion. Contra
-    producción el 8-sep-2026 eso se sabía en 90 de las 91 filas, y la que falta
-    NO se esconde — una tarea que no aparece porque le falta un dato accesorio
-    es la misma familia de fallo que las 4 sin fecha.
+    `responsable_chat_id` es QUIÉN TIENE PENDIENTE la tarea, y sale de la
+    propia fila: es un chat de Telegram, el mismo con el que esa persona entra
+    al panel. Su NOMBRE no está en ninguna tabla —no existe en este sistema una
+    que tenga a la vez un chat y un nombre— y lo pone quien pinta, con
+    `config.NOMBRES_POR_CHAT`. NULL es lo normal: una tarea sin responsable es
+    una tarea que nadie tomó todavía, no un error.
+
+    ESTA CONSULTA YA NO SE UNE CON `bandeja`. Hasta el 10-sep-2026 traía
+    `b.chat_id AS quien` para la columna «Quién la anotó», que Tiziano sacó del
+    panel —«nno es relevante quien la anoto»—. `tareas.bandeja_id` sigue en el
+    SELECT y sigue escribiéndose: es la trazabilidad de la fila y la que va en
+    `log_acciones`. Lo que se fue es la unión, que solo servía para pintar un
+    número. La regla de que todo JOIN de acá tenga que ser LEFT sigue viva en
+    `tests/test_panel_tareas.py`, esperando al que alguien escriba mañana.
 
     Devuelve {"grupos": [{clave, titulo, filas}], "hay_mas": bool}. Los grupos
     vacíos no se pintan, y ninguno se pierde: ver el bucle del final.
@@ -1818,9 +1831,8 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
         await cur.execute(
             """
             SELECT t.id, t.titulo, t.estado, t.vence_en, t.creado_en,
-                   t.bandeja_id, b.chat_id AS quien
+                   t.bandeja_id, t.responsable_chat_id
               FROM tareas t
-              LEFT JOIN bandeja b ON b.id = t.bandeja_id
              WHERE t.borrado_en IS NULL
              ORDER BY t.vence_en ASC NULLS LAST, t.creado_en ASC, t.id ASC
              LIMIT %s
@@ -1905,6 +1917,71 @@ async def marcar_tarea_hecha(tarea_id: int) -> bool:
         return True
 
 
+async def asignar_responsable(tarea_id: int, chat_id: int | None) -> bool:
+    """Pone (o quita) quién tiene pendiente UNA tarea. Devuelve si cambió algo.
+
+    QUITAR ES UNA OPERACIÓN DE PRIMERA, no un caso raro: `chat_id=None` deja la
+    tarea sin responsable, que es el estado en el que nacieron las 57 que ya
+    existían. Una tarea que nadie tomó todavía no es un error y no hay nada que
+    validar; por eso `None` no pasa por la puerta de abajo.
+
+    LA PUERTA ES `config.puede_ser_responsable`, Y ES LA MISMA QUE USA LA RUTA.
+    Está acá además de en el panel a propósito: la validación de un formulario
+    protege al formulario, no a la tabla. Cualquier camino que aparezca mañana
+    —otra pantalla, el agente, un script— llega a la columna por esta función y
+    se encuentra la misma puerta. Y no es una lista tecleada: sale de quién
+    puede ENTRAR al panel cruzado con quién tiene nombre, o sea de las dos
+    variables de Railway. La tercera persona que Tiziano dé de alta pasa sola.
+
+    LO QUE YA ESTABA NO SE REESCRIBE: si la tarea ya tenía a esa misma persona
+    —o ya estaba sin nadie y se manda vaciarla otra vez— devuelve False sin
+    tocar nada. Es la misma decisión que `marcar_tarea_hecha` y por el mismo
+    motivo: una huella en `log_acciones` de una edición que no pasó es basura
+    permanente en la tabla que ES el deshacer de este proyecto.
+
+    LA HUELLA GUARDA LA FILA ENTERA en `antes`, y no solo la columna que
+    cambia, porque así es como `acciones.crud.deshacer` sabe volver atrás: su
+    rama de 'editar' arma la escritura de vuelta con las columnas que
+    encuentra ahí. El
+    actor es 'panel' —no 'lucy'— porque no fue Lucy, igual que en
+    `marcar_tarea_hecha`, `poner_categoria` y `a_la_papelera`.
+
+    El UPDATE y el INSERT van en el MISMO bloque de conexión, o sea en la misma
+    transacción: o entran los dos o no entra ninguno.
+    """
+    if chat_id is not None and not puede_ser_responsable(chat_id):
+        # Ni se abre conexión. Un chat que no puede entrar al panel no puede
+        # quedar con una tarea: sería dejarle un pendiente donde nunca lo va a
+        # ver, y el panel no tendría con qué nombrarlo.
+        return False
+
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, titulo, estado, vence_en, responsable_chat_id, "
+            "bandeja_id FROM tareas WHERE id = %s AND borrado_en IS NULL",
+            (tarea_id,))
+        antes = await cur.fetchone()
+        if antes is None or antes.get("responsable_chat_id") == chat_id:
+            # No existe, está en la papelera, o ya decía eso mismo.
+            return False
+        await conn.execute(
+            "UPDATE tareas SET responsable_chat_id = %s WHERE id = %s",
+            (chat_id, tarea_id))
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo,
+               bandeja_id)
+            VALUES ('panel', 'editar', 'tareas', %s, %s, %s,
+                    'responsable cambiado desde el panel de tareas', %s)
+            """,
+            (tarea_id, json.dumps(antes, default=str, ensure_ascii=False),
+             json.dumps({"responsable_chat_id": chat_id}, ensure_ascii=False),
+             antes.get("bandeja_id")))
+        return True
+
+
 # Los minutos-antes de una tarea escrita desde el panel: NINGUNO.
 #
 # El formulario pide un DÍA, no una hora. `anticipos_min` con su default de la
@@ -1928,23 +2005,30 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
     """Una tarea escrita a mano en el panel. La cuarta escritura del panel.
 
     QUIÉN LA ANOTÓ NO SE PUEDE MENTIR, y por eso esta función escribe DOS filas
-    y no una. La columna "Quién la anotó" del panel no es un campo de `tareas`:
-    sale de `tareas.bandeja_id → bandeja.chat_id` (ver `tareas_por_grupo`). O
-    sea que una tarea con `bandeja_id` NULO se pinta con un guion — medido:
-    `tareas_por_grupo` la reparte igual y la plantilla imprime «—» porque
-    `quien` viene None. No miente, pero tampoco registra a nadie, y el encargo
-    pide las dos cosas.
+    y no una. La fila de `bandeja` se crea de verdad, con el chat de la SESIÓN
+    —el mismo dato que ya se comprobó para dejar entrar, no un nombre escrito a
+    mano en ninguna parte— y la tarea cuelga de ella. Una tarea con `bandeja_id`
+    NULO no deja constancia de nadie, y el encargo que creó esta función pedía
+    que la dejara.
 
-    Así que la fila de `bandeja` se crea de verdad, con el chat de la SESIÓN —el
-    mismo dato que ya se comprobó para dejar entrar, no un nombre escrito a
-    mano en ninguna parte— y la tarea cuelga de ella. Entonces la columna dice
-    lo que pasó: esa persona la anotó.
+    OJO CON LO QUE ESTO YA NO ES, desde el 10-sep-2026: el panel tenía una
+    columna «Quién la anotó» que salía de `tareas.bandeja_id → bandeja.chat_id`,
+    y Tiziano la sacó —«nno es relevante quien la anoto»—. Lo que se ve hoy en
+    esa columna es el RESPONSABLE (`tareas.responsable_chat_id`), que es otra
+    pregunta: quién la tiene pendiente, no quién la escribió. Una tarea recién
+    escrita a mano nace SIN responsable, como todas.
+
+    O sea que lo que esta fila de `bandeja` sostiene ya no es una columna de la
+    pantalla: es la trazabilidad de la fila —de dónde salió— y el `bandeja_id`
+    que viaja en cada huella de `log_acciones`. Sigue haciendo falta; solo dejó
+    de mirarse desde el panel.
 
     NO ES UNA COLUMNA NUEVA NI UNA MIGRACIÓN. `bandeja` es la columna vertebral
     del proyecto y ya recibe filas que no son mensajes de Telegram:
     `registrar_aviso` mete las del despertador con `origen='despertador'`. Ésta
-    es la misma idea con `origen='panel'`. Cero DDL, cero cambio en la consulta
-    del panel, cero cambio en la plantilla.
+    es la misma idea con `origen='panel'`. Cero DDL de esta función: la única
+    columna que este panel tuvo que agregarle a `tareas` es
+    `responsable_chat_id`, y no la escribe acá — una tarea nace sin responsable.
 
     LA FILA DE BANDEJA VA MUDA, y eso es deliberado. `contenido_raw`,
     `transcripcion` y `respuesta_lucy` quedan NULOS, así que las dos consultas
