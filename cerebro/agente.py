@@ -789,6 +789,11 @@ async def _ejecutar_herramienta(
             # `_anotar` dice con su nombre tal como está en la variable. Cuáles
             # tienen puerta lo dice `crud.PUERTAS`, no una lista de acá. Las
             # demás columnas siguen contándose como se pidieron.
+            #   Y esto NO es una preferencia de redacción: lo mide, corriendo,
+            # `tests/test_responsable.py::test_el_parte_de_una_columna_CON_
+            # PUERTA_dice_lo_que_QUEDO`. Hasta el 11-sep-2026 era una elección
+            # escrita acá y en ninguna prueba: cambiar `escrito` por `cambios`
+            # dejaba las 598 en verde.
             con_puerta = crud.PUERTAS.get(tabla, {})
             escrito = {k: (despues.get(k) if k in con_puerta else v)
                        for k, v in cambios.items()}

@@ -2213,6 +2213,256 @@ def test_el_enlace_del_panel_lleva_el_chat_y_por_eso_no_se_traduce_la_salida():
         "traducir la salida ya no rompería el enlace: revisar la frontera")
 
 
+# ═════════════════════════════════════════════════════════════════════════
+# UN QUIÉN SE ESCRIBE DE UNA SOLA MANERA
+# ═════════════════════════════════════════════════════════════════════════
+#
+# LO QUE FALTABA, y no era una línea mal puesta.
+#
+# El número de una persona entra por un lado y tiene que poder volver a
+# decirse con su nombre por el otro. Son dos mitades escritas en archivos
+# distintos:
+#
+#   · la ENTRADA — `config.chat_escrito`, que dice qué texto es un chat;
+#   · la SALIDA — `agente._con_nombres`, que cambia la cifra por el nombre y
+#     compara el número ENTERO, sin otra cifra pegada delante ni detrás.
+#
+# Hasta el 11-sep-2026 la entrada era más ancha que la salida: cualquier texto
+# de cifras con signo opcional se leía con `int()`, así que `0<chat>`,
+# `00<chat>` y `+<chat>` entraban como la misma persona y ninguno de los tres
+# se podía deshacer. O sea que el MISMO QUIÉN existía escrito de infinitas
+# maneras y solo una de ellas se sabía traducir.
+#
+# Hoy eso no se ve porque el parte se arma con lo que QUEDÓ escrito. Medido
+# sobre este mismo árbol el 11-sep-2026, cambiando esa sola pieza para que
+# usara lo PEDIDO, con la casa en {700000001: "Mengano"}:
+#
+#     pedido "mengano"     -> «… responsable_chat_id=mengano»
+#     pedido "0700000001"  -> «… responsable_chat_id=0700000001»   ← a Telegram
+#
+# El segundo es el número de una persona real con un cero delante, saliendo
+# entero en el mensaje que Lucy manda. Las 598 pruebas seguían en verde.
+#
+# LAS DOS COSAS QUE SE HICIERON, y son distintas a propósito:
+#
+#   1. SE BORRÓ EL CASO. La entrada dejó de ser más ancha que la salida: una
+#      persona se escribe de UNA sola manera. Ensanchar la traducción no era
+#      posible —las escrituras de un número son infinitas—, y ponerle fondo a
+#      la entrada sí.
+#   2. SE ATÓ LO QUE QUEDABA SUELTO. Que el parte diga lo que quedó y no lo
+#      que se pidió era una elección escrita en un comentario y en ninguna
+#      prueba. Ahora está medida corriendo.
+
+def _escrituras_a_probar() -> list[str]:
+    """Textos con los que alimentar las pruebas de acá: combustible, no criterio.
+
+    Salen de los chats REALES de la variable, deformados de todas las maneras
+    que `int()` se traga, más los nombres reales y un par de cosas que no son
+    ninguna de las dos. Esta lista NO decide nada: lo que se exige está escrito
+    como una regla en cada prueba, y agregarle una forma más acá no cambia el
+    criterio — solo le da otra piedra que tirarle.
+    """
+    fuera = []
+    for chat in list(config.NOMBRES_POR_CHAT) + [AJENO]:
+        t = str(chat)
+        fuera += [t, f"  {t}  ", f"\t{t}\n", f"0{t}", f"00{t}", f"+{t}",
+                  f"+0{t}", f"{t}.0", f"{t} ", f" {t}"]
+    fuera += list(config.NOMBRES_POR_CHAT.values())
+    fuera += ["mengano", "  Méngano ", "la flaca", "", "   ", "1_000", "٧٠٠"]
+    return fuera
+
+
+def test_lo_que_se_lee_como_chat_se_escribe_de_vuelta_IGUAL():
+    """LA REGLA, y cabe en una línea: `str(chat) == texto`.
+
+    No se enumeran las formas malas —son infinitas: un cero delante, dos,
+    tres—. Se exige lo contrario, que sí tiene fondo: lo que se lee como chat
+    tiene que ser exactamente cómo se escribe ese chat. Cualquier otra
+    escritura, la que sea, cae por la regla y no por estar en una lista.
+
+    El contador del final es el control: sin él, una lectura que no aceptara
+    nada dejaría la prueba en verde sin haber mirado nada.
+    """
+    leidos = 0
+    for texto in _escrituras_a_probar():
+        chat = config.chat_escrito(texto)
+        if chat is None:
+            continue
+        leidos += 1
+        assert texto.strip() == str(chat), (
+            f"«{texto}» se leyó como el chat {chat}, y no es cómo se escribe "
+            "ese número: hay dos maneras de decir la misma persona")
+    assert leidos >= len(config.NOMBRES_POR_CHAT), (
+        f"solo se leyeron {leidos} chats: la prueba no está midiendo nada")
+
+
+def test_todo_RESPONSABLE_que_se_acepta_se_puede_volver_a_decir_con_el_NOMBRE():
+    """EL CONTRATO ENTRE LAS DOS MITADES, que es lo que faltaba de verdad.
+
+    Una mitad decide qué queda escrito; la otra vuelve a decir ese número con
+    el nombre de la persona. Mientras la primera acepte una escritura que la
+    segunda no sabe deshacer, lo PEDIDO y lo ESCRITO dicen cosas distintas, y
+    cualquier frase que repita lo pedido saca a la calle el número de alguien.
+
+    Se mide sobre LO QUE LA PUERTA ACEPTA, no sobre una lista de formas malas:
+    si mañana la entrada se ensancha sin ensanchar la traducción, esto se pone
+    rojo solo, valga la forma nueva lo que valga.
+
+    Roja antes del arreglo del 11-sep-2026 con `0<chat>`, que se aceptaba y
+    salía crudo.
+    """
+    _con_gente(LA_CASA_SIN_EL_DUENO, permitidos=tuple(LA_CASA_SIN_EL_DUENO))
+    aceptadas = 0
+    for texto in _escrituras_a_probar():
+        try:
+            quedo = crud._responsable_que_vale(texto)
+        except ValueError:
+            continue
+        if quedo is None:
+            continue
+        aceptadas += 1
+        assert str(quedo) not in agente._con_nombres(texto), (
+            f"«{texto}» se acepta y deja escrito el chat {quedo}, pero dicho "
+            "en voz alta sigue enseñando ese número entero: lo que se pide y "
+            "lo que se escribe son dos personas distintas para la traducción")
+    assert aceptadas >= 2, (
+        f"solo {aceptadas} escrituras se aceptaron: la prueba no mide nada")
+
+
+def test_los_DOS_caminos_leen_un_chat_escrito_con_LA_MISMA_funcion():
+    """Telegram y el panel tienen que estar de acuerdo en qué texto es un chat.
+
+    No se comparan los dos códigos —dos criterios distintos pueden dar el
+    mismo resultado hoy y separarse mañana—: se le cambia la lectura A LA
+    FUENTE COMPARTIDA y se exige que los DOS reaccionen. El que se hubiera
+    quedado con un `int()` propio seguiría diciendo que sí donde la fuente dice
+    que no, y ahí se pone rojo.
+    """
+    _con_gente(LA_CASA_SIN_EL_DUENO, permitidos=tuple(LA_CASA_SIN_EL_DUENO))
+    canonico = str(OTRA)
+    assert crud._responsable_que_vale(canonico) == OTRA, "punto de partida malo"
+    assert panel._responsable_pedido(canonico) == (True, OTRA), "punto de partida malo"
+
+    original = config.chat_escrito
+    config.chat_escrito = lambda texto: None
+    try:
+        assert isinstance(_pide(canonico), str), (
+            "`crud` leyó el chat sin preguntarle a `config.chat_escrito`")
+        assert panel._responsable_pedido(canonico) == (False, None), (
+            "el panel leyó el chat sin preguntarle a `config.chat_escrito`")
+    finally:
+        config.chat_escrito = original
+
+
+def test_ninguna_funcion_de_LA_PUERTA_lee_un_chat_por_su_cuenta():
+    """Y los hermanos no salen de una lista de acá: salen del disco.
+
+    LA REGLA: una función que decide si un chat puede ser responsable no
+    convierte texto en número por su cuenta. Eso lo hace `config.chat_escrito`,
+    que es la única que dice qué texto es un chat. Se mide como un `int(...)`
+    escrito DENTRO de esa función; `isinstance(x, int)` no es una llamada y no
+    cuenta.
+
+    Quiénes son esas funciones se lee de los `.py` del repositorio —la misma
+    puerta de barrido que usa el censo—, y solo del CÓDIGO: nombrar la puerta
+    en una prosa no mete a nadie en la lista ni lo saca. La cuarta que aparezca
+    mañana queda cubierta sin tocar esto.
+    """
+    import test_buzon_que_no_se_ve as barrido
+
+    raiz = Path(RAIZ).resolve()
+    pruebas = [p.resolve() for p in barrido._testpaths(raiz)]
+    encontradas, culpables = set(), {}
+    for py in barrido._py_en_disco(raiz):
+        real = py.resolve()
+        if any(c == real or c in real.parents for c in pruebas):
+            continue
+        rel = real.relative_to(raiz).as_posix()
+        arbol = ast.parse(real.read_text(encoding="utf-8"), str(real))
+        for nodo in ast.walk(arbol):
+            if not isinstance(nodo, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if _PUERTA not in _nombres_de_codigo(nodo):
+                continue
+            quien = f"{rel}::{nodo.name}"
+            encontradas.add(quien)
+            lineas = [c.lineno for c in ast.walk(nodo)
+                      if isinstance(c, ast.Call)
+                      and isinstance(c.func, ast.Name) and c.func.id == "int"]
+            if lineas:
+                culpables[quien] = lineas
+
+    for fn in (crud._responsable_que_vale, panel._responsable_pedido):
+        assert _id_de(fn) in encontradas, (
+            f"el barrido no encontró {_id_de(fn)}, que sí nombra la puerta: "
+            f"lo que encontró fue {sorted(encontradas)}")
+    assert not culpables, (
+        "estas funciones deciden quién puede ser responsable y además leen un "
+        f"número por su cuenta, en vez de `config.chat_escrito`: {culpables}")
+
+
+def test_el_parte_de_una_columna_CON_PUERTA_dice_lo_que_QUEDO():
+    """EL TURNO ENTERO: lo que sale por Telegram es lo que quedó en la base.
+
+    Se pide con el nombre como lo escribe cualquiera —en minúscula— y el parte
+    tiene que decir el nombre tal como está en la variable, que es algo que
+    SOLO se consigue traduciendo el chat que quedó escrito. Lo esperado sale de
+    la fila de la base y de la variable, no está tecleado acá.
+
+    Ésta es la que muerde si alguien vuelve a armar el parte con lo que se
+    PIDIÓ: medido el 11-sep-2026, con ese cambio el parte decía «mengano».
+    """
+    _con_gente(LA_CASA_SIN_EL_DUENO, permitidos=tuple(LA_CASA_SIN_EL_DUENO))
+    columna = _columna_del_codigo()
+    pedido = "mengano"
+    salida, _, base = _turno(
+        [{"herramienta": "editar",
+          "argumentos": {"tabla": "tareas", "id": 1,
+                         "cambios": {columna: pedido}}},
+         {"herramienta": "responder",
+          "argumentos": {"texto": "Listo.", "clasificacion": "orden"}}],
+        _fila(1, titulo="Llamar al plomero"))
+
+    quedo = base.fila[columna]
+    assert quedo == OTRA, f"no quedó escrito el chat de esa persona: {quedo}"
+    assert f"{columna}={config.NOMBRES_POR_CHAT[quedo]}" in salida, (
+        f"el parte no dice lo que quedó escrito: {salida!r}")
+    assert pedido not in salida, (
+        f"el parte repitió lo que se PIDIÓ en vez de lo que quedó: {salida!r}")
+
+
+def test_una_escritura_rara_del_numero_NO_escribe_y_el_aviso_no_lleva_cifras():
+    """El otro lado del mismo turno, con una entrada que el archivo no usa.
+
+    `0<chat>` no es cómo se escribe ese número, así que no es un chat: se lee
+    como nombre, no es de nadie, y no se escribe nada. El aviso que vuelve dice
+    a quién SÍ se le puede asignar y no lleva ninguna cifra larga — ni la del
+    chat, ni la que se pidió.
+
+    Antes del 11-sep-2026 esto SÍ escribía, y por eso hacía falta.
+    """
+    _con_gente(LA_CASA_SIN_EL_DUENO, permitidos=tuple(LA_CASA_SIN_EL_DUENO))
+    columna = _columna_del_codigo()
+    con_cero = "0" + str(OTRA)
+    salida, visto, base = _turno(
+        [{"herramienta": "editar",
+          "argumentos": {"tabla": "tareas", "id": 1,
+                         "cambios": {columna: con_cero}}},
+         {"herramienta": "responder",
+          "argumentos": {"texto": "¿De quién es?", "clasificacion": "orden"}}],
+        _fila(1, titulo="Llamar al plomero"))
+
+    assert not [s for s, _ in base.sql if s.startswith("UPDATE tareas")], (
+        f"escribió con «{con_cero}», que no es cómo se escribe ese número")
+    ultimo = "\n".join(str(m.get("content")) for m in visto[-1])
+    assert "Mengano" in ultimo, (
+        "el motivo no le dijo al modelo a quién sí se le puede asignar")
+    assert not re.findall(r"\d{4,}", ultimo.split("[resultado]")[-1]), ultimo
+    assert not re.findall(r"\d{4,}", salida), (
+        f"salió una cifra larga por Telegram: {salida!r}")
+
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q"]))

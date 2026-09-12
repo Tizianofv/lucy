@@ -444,10 +444,10 @@ _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}([T ]|$)")
 # misma puerta que un número escrito a mano. Nombre y número son dos formas de
 # decir QUIÉN; la puerta es la única que decide SI puede.
 
-# Un chat escrito como texto: solo cifras ASCII, con signo opcional. `int()`
-# aceptaría también "1_000" o cifras de otros alfabetos, y eso ya no es un
-# número que alguien escriba: se trata como nombre y no aparece.
-_CHAT_ESCRITO = re.compile(r"[+-]?[0-9]+")
+# Qué texto es un chat NO se decide acá: `config.chat_escrito`, la misma que
+# lee el desplegable del panel. Una sola lectura para los dos caminos, por el
+# mismo motivo que una sola puerta — ver su docstring, que trae la regla y la
+# cicatriz del 11-sep-2026.
 
 
 def _clave_de_nombre(texto: str) -> str:
@@ -503,10 +503,14 @@ def _responsable_que_vale(valor):
 
     QUIÉN, de tres formas, y las tres terminan en la MISMA puerta:
       · un número —el JSON del modelo no promete si viene como número o como
-        texto con cifras—, y se guarda como número;
+        texto con cifras—, y se guarda como número. De texto lo lee
+        `config.chat_escrito`, que acepta UNA sola escritura por persona y por
+        eso lo pedido y lo escrito no pueden decir cifras distintas;
       · un nombre, que se busca en la variable (ver `_chat_del_nombre`);
       · cualquier otra cosa no dice quién. `True` no es un chat aunque Python
-        lo compare igual a 1.
+        lo compare igual a 1. Un número escrito de cualquier otra manera
+        —`0700…`, `+700…`— tampoco es un chat: se lee como nombre, no es de
+        nadie, y el rechazo dice a quién sí se le puede asignar.
 
     El mensaje dice quién SÍ puede, por nombre y nunca por número: lo lee el
     modelo y puede terminar en un aviso de Telegram. Y NO repite lo que se
@@ -517,11 +521,16 @@ def _responsable_que_vale(valor):
     chat, motivo = None, "eso no dice quién"
     if isinstance(valor, int) and not isinstance(valor, bool):
         chat, motivo = valor, "ese chat no puede ser responsable"
-    elif isinstance(valor, str) and _CHAT_ESCRITO.fullmatch(valor.strip()):
-        chat, motivo = int(valor.strip()), "ese chat no puede ser responsable"
     elif isinstance(valor, str):
-        chat, motivo = _chat_del_nombre(valor)
-        motivo = motivo or "esa persona no puede ser responsable"
+        # Se le pregunta UNA vez y con eso se decide por cuál de las dos ramas
+        # va: si el texto es un chat, es un chat; si no, es un nombre. No hay
+        # una tercera lectura en ningún lado.
+        chat = config.chat_escrito(valor)
+        if chat is not None:
+            motivo = "ese chat no puede ser responsable"
+        else:
+            chat, motivo = _chat_del_nombre(valor)
+            motivo = motivo or "esa persona no puede ser responsable"
     if chat is not None and config.puede_ser_responsable(chat):
         return chat
     nombres = [nombre for _, nombre in config.personas_del_panel()]

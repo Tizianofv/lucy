@@ -652,13 +652,19 @@ def _responsable_pedido(crudo: str):
     `config.puede_ser_responsable`, que es la misma puerta que vuelve a mirar
     `db.asignar_responsable` antes de escribir. Que esté en los dos sitios no
     es duplicar el criterio: el criterio está UNA vez y los dos lo llaman.
+
+    Y QUÉ TEXTO ES UN CHAT TAMPOCO SE DECIDE ACÁ: `config.chat_escrito`, la
+    misma que usa el camino de Telegram. Con un `int()` propio este formulario
+    leía `0<chat>` y `+<chat>` como el chat de una persona —el desplegable no
+    los manda, pero un envío a mano sí— y entonces había DOS lecturas distintas
+    de qué es un chat escrito. Que la lectura esté en un solo sitio es lo que
+    impide que se separen, igual que con la puerta.
     """
     crudo = (crudo or "").strip()
     if not crudo:
         return True, None
-    try:
-        chat = int(crudo)
-    except ValueError:
+    chat = config.chat_escrito(crudo)
+    if chat is None:
         return False, None
     return (True, chat) if config.puede_ser_responsable(chat) else (False, None)
 
