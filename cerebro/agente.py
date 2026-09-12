@@ -117,6 +117,16 @@ HERRAMIENTAS DISPONIBLES:
   cambios {"estado": "hecha", "completado_en": "<ahora en ISO>"}.
   Consultá antes para encontrar el id correcto: editar a ciegas es adivinar.
 
+  RESPONSABLE DE UNA TAREA (quién la tiene pendiente): en "cambios" va
+  {"responsable_chat_id": "<nombre>"} con el NOMBRE de la persona, tal como
+  está en esta lista, y nunca un número: {PERSONAS_DEL_PANEL}.
+  Sin responsable = null. Si el nombre pedido no está en la lista, o es un
+  apodo y no está claro de quién, se pregunta antes de editar; si editar lo
+  rechaza, el motivo trae a quién sí se le puede asignar.
+  En lo que devuelve consultar, los chats de la casa ya vienen con el nombre
+  de la persona en lugar del número. El SQL no puede comparar esa columna
+  contra un nombre: para saber qué tiene alguien, se trae la columna y se lee.
+
   EL CÓDIGO M-####. El panel muestra cada movimiento con un código —M-0086— que
   es su id: M-0086 es movimientos.id = 86. Cuando Tiziano lo nombre ("el M-0086
   es Colmado", "M-174 ponelo en No suma", "el 86 es de la casa del papá"), ya
@@ -428,6 +438,10 @@ def herramientas_del_prompt() -> str:
         nota de cada una— salen del `<nav>` de `web/plantillas/base.html`, que
         es el menú que ve quien abre el panel. El 9-sep-2026 se publicó
         `/tareas` y la descripción se quedó hablando solo de plata, en verde.
+      · A quién se le puede asignar una tarea sale de
+        `config.personas_del_panel()`, en cada mensaje: la tercera persona que
+        se agregue a la variable aparece sola. Van los NOMBRES; los números de
+        chat no entran al prompt.
 
     ESTE ES EL ÚNICO SITIO QUE SE BANCA UN MENÚ ILEGIBLE, y el motivo se midió
     el 9-sep-2026 sobre `ca2c421`: `_sistema()` se arma en CADA mensaje, no solo
@@ -463,9 +477,14 @@ def herramientas_del_prompt() -> str:
             "lo demás, pero hasta que esto se arregle no sabe qué pantallas "
             "tiene el panel y no va a afirmar que algo está ahí.", e)
         pantallas = _menu.SIN_MENU
+    nombres = [nombre for _, nombre in config.personas_del_panel()]
+    personas = (", ".join(f'"{n}"' for n in nombres) if nombres else
+                "(hoy nadie: falta NOMBRES_POR_CHAT, así que no se le puede "
+                "asignar a nadie)")
     return HERRAMIENTAS.replace(
         "{CATEGORIAS}", ", ".join(f'"{c}"' for c in CATEGORIAS)
-    ).replace("{PANTALLAS_DEL_PANEL}", pantallas)
+    ).replace("{PANTALLAS_DEL_PANEL}", pantallas
+    ).replace("{PERSONAS_DEL_PANEL}", personas)
 
 
 async def _avisar_choques(evento_id: int) -> str:
@@ -557,6 +576,89 @@ SOLO_A_MANO = ("archivar", "preferencia")
 MAX_EN_EL_PARTE = MAX_PASOS
 
 
+# ── Los números de chat no se le enseñan a nadie ─────────────────────────
+#
+# Una tarea puede tener responsable (`tareas.responsable_chat_id`), y ese valor
+# es el número de Telegram de una persona. Por Telegram se asigna con el nombre
+# (ver `crud._chat_del_nombre`), pero el número sigue viviendo en la base y
+# vuelve a salir por dos sitios: lo que el modelo lee (una consulta a `tareas`
+# o a `log_acciones`, un error) y lo que la casa escribe en el parte.
+#
+# No se persigue cada camino que pueda traerlo, porque salen de escritores y
+# lectores GENÉRICOS que arman la columna al vuelo y un SQL que el modelo
+# escribe a su gusto. Se traduce en las dos JUNTAS por donde todo eso tiene que
+# pasar dentro de un turno, mirando el VALOR y no quién lo trae:
+#
+#   · `_lo_que_ve_el_modelo` — la única llamada al modelo de `atender`. El
+#     modelo recibe el nombre donde había un número de chat, venga de una
+#     consulta, de un error, del historial o de lo que escribió la persona. No
+#     puede repetir lo que nunca vio.
+#   · `_anotar` — la única entrada al parte que escribe la casa.
+#
+# LA FRONTERA: lo que esto NO cubre, y es la consecuencia de la regla de arriba.
+#
+#   1. Solo se traducen los chats que TIENEN nombre en `NOMBRES_POR_CHAT`: sin
+#      nombre no hay nada honesto que poner. La puerta no deja asignar a nadie
+#      sin nombre, pero si después se le quita el nombre a alguien que ya tenía
+#      tareas, su número vuelve a verse. NO se tradujo `CHAT_IDS_PERMITIDOS`
+#      como «sin nombre» a propósito: el dueño está siempre ahí, y con un chat
+#      corto (en la suite vale "1") cualquier «1» del texto se volvería otra
+#      cosa.
+#   2. Cualquier cifra idéntica a un chat con nombre —un monto, una referencia,
+#      un título— también se ve como ese nombre. Un chat de Telegram tiene nueve
+#      o diez cifras, así que es una coincidencia exacta, no un parecido.
+#   3. El texto que el modelo manda con `responder` o `preguntar` NO se
+#      traduce al salir, y a propósito: el enlace del panel lleva el chat de
+#      quien lo pide (`web.auth.crear_token`, `chat.vence.firma`) y quedaría
+#      roto. Ese texto está cubierto por la primera junta: el modelo no puede
+#      escribir un número que no leyó. Un número que nadie configuró, escrito a
+#      mano por la persona, sí puede volverle: es el que ella misma escribió.
+#   4. Fuera de `atender` hay otras llamadas al modelo que no pasan por acá
+#      (`consultar.responder`, `preguntar.repreguntar`,
+#      `deepseek.interpretar_texto`, el clasificador de correo, la visión) y
+#      otras salidas a Telegram (`acciones/botones.py`, el despertador,
+#      `main.py`, `captura/telegram.py`). Lo que cada una tiene en la mano está
+#      medido en `tests/test_responsable.py`, en «NINGÚN NÚMERO DE CHAT».
+#   5. Los registros del proceso (`log.info`) no pasan por acá.
+
+def _con_nombres(texto: str) -> str:
+    """El texto con cada número de chat que tiene nombre cambiado por el nombre.
+
+    La lista sale de `config.NOMBRES_POR_CHAT` en cada llamada: una persona que
+    se agrega a la variable queda cubierta sin tocar código. Se compara la
+    cifra ENTERA —no puede tener otra cifra pegada delante ni detrás— para que
+    un chat no se coma el pedazo de un número más largo.
+    """
+    nombres = config.NOMBRES_POR_CHAT
+    if not nombres or not isinstance(texto, str) or not texto:
+        return texto
+    # Los más largos primero: con `-100123` y `100123` a la vez, el signo tiene
+    # que ir con su número.
+    chats = sorted((str(c) for c in nombres), key=len, reverse=True)
+    patron = re.compile(
+        r"(?<![0-9])(" + "|".join(re.escape(c) for c in chats) + r")(?![0-9])")
+    return patron.sub(lambda m: nombres[int(m.group(1))], texto)
+
+
+def _lo_que_ve_el_modelo(mensajes: list[dict]) -> list[dict]:
+    """Los mensajes tal como se le mandan al modelo: sin números de chat.
+
+    Es una copia: lo que se guarda en la bandeja y en el diálogo no cambia. Lo
+    que cambia es lo que el modelo lee, y se vuelve a traducir en cada paso con
+    la variable de ese momento.
+
+    Solo se toca el `content` que ES TEXTO. Un mensaje sin `content`, o con uno
+    que no es texto, sale copiado tal cual: escribirle la clave al pasar le
+    cambia la FORMA al mensaje que se le manda al modelo, y esta función existe
+    para cambiarle el contenido, no la forma. Medido el 11-sep-2026 sobre este
+    mismo archivo: con `{**m, "content": ...}` a secas, un `{"role":
+    "assistant"}` salía convertido en `{"role": "assistant", "content": None}`.
+    """
+    return [{**m, "content": _con_nombres(m["content"])}
+            if isinstance(m.get("content"), str) else dict(m)
+            for m in mensajes]
+
+
 def _anotar(acciones: list[dict], log_id, que: str) -> None:
     """Apunta UNA escritura: su asa para deshacer y qué fue, en palabras.
 
@@ -564,9 +666,13 @@ def _anotar(acciones: list[dict], log_id, que: str) -> None:
     con lo que la herramienta tiene delante en ese instante, y no después: el
     caso en que el parte hace falta de verdad es justo aquel en el que el turno
     se quedó sin pasos y ya no puede volver a mirar la base.
+
+    Y por ser la única entrada, es donde se le quitan los números de chat: una
+    frase nueva que alguien escriba mañana con un valor de la base pasa por acá
+    igual (ver «Los números de chat no se le enseñan a nadie»).
     """
     if log_id:
-        acciones.append({"log_id": int(log_id), "que": que})
+        acciones.append({"log_id": int(log_id), "que": _con_nombres(que)})
 
 
 def _como_se_llama(fila: dict | None) -> str:
@@ -583,8 +689,21 @@ def _como_se_llama(fila: dict | None) -> str:
 
 
 def _resumen_cambios(cambios: dict) -> str:
-    """Los cambios de una edición, cortos, para que quepan en una línea."""
-    partes = [f"{k}={str(v)[:30]}" for k, v in cambios.items()]
+    """Los cambios de una edición, cortos, para que quepan en una línea.
+
+    CADA VALOR SE DICE SIN NÚMEROS DE CHAT ANTES DE CORTARLO, y no después.
+    `_anotar` traduce la frase entera y sigue siendo la red, pero para cuando
+    llega ya pasó la tijera de acá — y medio número de chat no se parece a
+    ningún número de chat, así que no hay nada que traducir.
+
+    Medido el 11-sep-2026 sobre este archivo, editando título, estado y
+    responsable en una sola orden: el parte salía
+    «… estado=pendiente, responsable_chat_id=700…» — tres cifras del número de
+    una persona y su nombre en ninguna parte, o sea las dos mitades del daño a
+    la vez. Traducir antes de cortar borra el caso en vez de manejarlo: el
+    número nunca llega a la tijera.
+    """
+    partes = [f"{k}={_con_nombres(str(v))[:30]}" for k, v in cambios.items()]
     resumen = ", ".join(partes)
     return resumen[:80] + ("…" if len(resumen) > 80 else "")
 
@@ -665,8 +784,21 @@ async def _ejecutar_herramienta(
             nombre_fila = _como_se_llama(despues)
             quien = (f"«{nombre_fila}»" if nombre_fila
                      else f"{tabla} #{int(args.get('id') or 0)}")
+            # Las columnas con puerta se cuentan con lo que QUEDÓ escrito, no
+            # con lo que se pidió: se pide «rosi» y queda el chat de Rosi, que
+            # `_anotar` dice con su nombre tal como está en la variable. Cuáles
+            # tienen puerta lo dice `crud.PUERTAS`, no una lista de acá. Las
+            # demás columnas siguen contándose como se pidieron.
+            #   Y esto NO es una preferencia de redacción: lo mide, corriendo,
+            # `tests/test_responsable.py::test_el_parte_de_una_columna_CON_
+            # PUERTA_dice_lo_que_QUEDO`. Hasta el 11-sep-2026 era una elección
+            # escrita acá y en ninguna prueba: cambiar `escrito` por `cambios`
+            # dejaba las 598 en verde.
+            con_puerta = crud.PUERTAS.get(tabla, {})
+            escrito = {k: (despues.get(k) if k in con_puerta else v)
+                       for k, v in cambios.items()}
             _anotar(acciones, log_id,
-                    f"{quien} → {_resumen_cambios(cambios)}")
+                    f"{quien} → {_resumen_cambios(escrito)}")
             resultado = f"OK: editado (acción #{log_id}, reversible)."
             # Mover una cita puede crear un choque que antes no existía: la
             # casa le acerca el dato acá, en el momento en que aparece.
@@ -967,7 +1099,7 @@ async def atender(fila: dict, texto: str, bot) -> None:
                  bandeja_id, pasos + 1, len(mensajes))
         crudo = (await motor.cliente.chat.completions.create(
             model=motor.MODELO,
-            messages=mensajes,
+            messages=_lo_que_ve_el_modelo(mensajes),
             response_format={"type": "json_object"},
             temperature=0,
         )).choices[0].message.content or ""

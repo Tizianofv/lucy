@@ -80,6 +80,8 @@ sys.modules.setdefault("psycopg_pool", _pool)
 import config  # noqa: E402
 import db.db as db  # noqa: E402
 import acciones.crud as crud  # noqa: E402
+import cerebro.agente as agente  # noqa: E402
+import cerebro.consultar as consultar  # noqa: E402
 import web.app as panel  # noqa: E402
 import web.auth as auth  # noqa: E402
 
@@ -1493,6 +1495,972 @@ def test_un_campo_con_basura_no_revienta_la_pantalla():
     assert asignadas == [(5, OTRA)]
     # No hay destino elegible: de acá se vuelve siempre a /tareas.
     assert r.headers["location"].startswith("/tareas?")
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# POR TELEGRAM SE DICE EL NOMBRE
+# ═════════════════════════════════════════════════════════════════════════
+#
+# Lo pedido, en una línea: que Lucy entienda «la tarea 40 es de Rosi» y que al
+# confirmar nunca enseñe un número de chat.
+#
+# Son dos mitades y se prueban por separado porque fallan por separado:
+#
+#   · ENTENDER EL NOMBRE — `crud._chat_del_nombre` convierte el nombre en chat
+#     ANTES de la puerta, y el chat que sale pasa por la MISMA puerta que un
+#     número escrito a mano. Nombre y número dicen QUIÉN; la puerta decide SI
+#     puede, y sigue habiendo una sola.
+#   · NO ENSEÑAR EL NÚMERO — `agente._con_nombres` en las dos juntas del turno:
+#     lo que el modelo lee y lo que la casa escribe en el parte.
+#
+# Y una tercera que no es del pedido pero lo sostiene: el PROMPT lleva los
+# nombres y ningún número, porque un modelo que no tiene los números no puede
+# escribirlos ni equivocarse con ellos.
+
+# Una casa SIN EL DUEÑO, y es la misma cicatriz que explica los chats de
+# arriba. `CHAT_ID_DUENO` puede valer "1" —depende de qué archivo de la suite
+# gane el `setdefault`, o sea del orden de recolección— y "1" aparece decenas
+# de veces en el prompt del agente y en cualquier texto. Una prueba que buscara
+# ese chat mediría el orden de la suite en vez de medir lo que dice medir; con
+# la suite entera da rojo y con el archivo solo da verde, que es la peor forma
+# de fallar. Los dos de acá son de nueve cifras y sueltos: buscarlos significa
+# lo que dice que significa.
+#
+# Se usa donde se busca UN CHAT CONCRETO. Donde se buscan cifras largas
+# cualesquiera (`\d{4,}`) da igual, y ahí se usa `LA_CASA`.
+LA_CASA_SIN_EL_DUENO = {OTRA: "Mengano", TERCERA: "Perencejo"}
+
+
+def _pide(valor):
+    """Lo que `crud` responde a «el responsable es <valor>»: chat o el motivo."""
+    try:
+        return crud._responsable_que_vale(valor)
+    except ValueError as e:
+        return str(e)
+
+
+# ── Entender el nombre ───────────────────────────────────────────────────
+
+def test_el_nombre_se_entiende_como_se_escribe_por_telegram():
+    """Nadie escribe por Telegram con mayúscula, tilde ni espaciado prolijo.
+
+    Las cuatro formas tienen que dar el MISMO chat, y ese chat sale de la
+    variable: no está escrito acá. Si alguien le quita el plegado de tildes o
+    de mayúsculas a `_clave_de_nombre`, tres de estas cuatro se ponen rojas.
+    """
+    _con_gente(LA_CASA)
+    for escrito in ("Mengano", "mengano", "MENGANO", "  Méngano  "):
+        assert _pide(escrito) == OTRA, f"«{escrito}» no cayó en la misma persona"
+
+
+def test_una_tercera_persona_se_asigna_por_NOMBRE_sin_tocar_codigo():
+    """La lista sale de la variable en CADA llamada, no de nada tecleado.
+
+    Antes de darla de alta su nombre no es de nadie; después, es suyo. Ninguna
+    línea de código cambia entre las dos mitades de esta prueba.
+    """
+    _con_gente(LA_CASA)
+    assert isinstance(_pide("Perencejo"), str), (
+        "aceptó un nombre que todavía no es de nadie")
+
+    _con_gente({**LA_CASA, TERCERA: "Perencejo"})
+    assert _pide("Perencejo") == TERCERA
+
+
+def test_un_nombre_que_no_es_de_nadie_no_se_adivina_y_dice_quienes_hay():
+    """Un apodo o un pedazo de nombre se rechaza, y el rechazo sirve de algo.
+
+    «Meng» es prefijo de «Mengano» y aun así no vale: adivinar por parecido es
+    cómo una tarea termina con el responsable equivocado. Y el motivo trae los
+    nombres que SÍ hay, que es lo que el modelo necesita para repreguntar.
+    """
+    _con_gente(LA_CASA)
+    for escrito in ("Meng", "la flaca", "el de arriba", "Mengana"):
+        motivo = _pide(escrito)
+        assert isinstance(motivo, str), f"«{escrito}» se coló como si fuera alguien"
+        assert "Zutana" in motivo and "Mengano" in motivo, motivo
+
+
+def test_un_nombre_que_es_de_DOS_personas_no_se_desempata():
+    """Elegir por orden sería adivinar, y el orden de la variable no significa
+    nada. Con dos entradas que dan la misma clave no se escribe ninguna."""
+    _con_gente({DUENO: "Ana", OTRA: "ána"})
+    motivo = _pide("Ana")
+    assert isinstance(motivo, str), "eligió una de las dos"
+    assert "más de una persona" in motivo, motivo
+
+
+def test_el_nombre_de_quien_NO_entra_al_panel_lo_rechaza_LA_PUERTA():
+    """`_chat_del_nombre` busca entre TODOS los que tienen nombre, también los
+    que no entran al panel. A ésos los rechaza la puerta, no la búsqueda: así
+    sigue habiendo un solo sitio que decide quién puede.
+
+    Se distingue de «ese nombre no es de nadie» por el motivo, que es lo único
+    que separa las dos ramas desde afuera.
+    """
+    _con_gente({DUENO: "Zutana", AJENO: "Fulano"}, permitidos=(DUENO,))
+    motivo = _pide("Fulano")
+    assert isinstance(motivo, str), "escribió a alguien que no entra al panel"
+    assert "no puede ser responsable" in motivo, motivo
+    assert "no es de nadie" not in motivo, (
+        "lo rechazó la búsqueda del nombre y no la puerta: " + motivo)
+
+
+def test_el_NOMBRE_y_el_NUMERO_terminan_en_la_MISMA_puerta():
+    """Las dos formas de decir QUIÉN dan el mismo resultado, siempre.
+
+    Con la puerta abierta las dos escriben el mismo chat; con la misma persona
+    fuera del panel las dos se rechazan. Si mañana el nombre se saltara la
+    puerta, la segunda mitad se pone roja.
+    """
+    _con_gente(LA_CASA)
+    assert _pide("Mengano") == _pide(OTRA) == _pide(str(OTRA)) == OTRA
+
+    _con_gente({DUENO: "Zutana", OTRA: "Mengano"}, permitidos=(DUENO,))
+    assert all(isinstance(_pide(v), str) for v in ("Mengano", OTRA, str(OTRA))), (
+        "una de las tres formas se saltó la puerta")
+
+
+def test_ningun_rechazo_enseña_un_numero_de_chat():
+    """El motivo lo lee el modelo y puede terminar en un aviso de Telegram.
+
+    No lleva números: ni el de nadie de la casa, ni el que se pidió. Lo
+    segundo importa porque el que pide ya lo sabe y repetirlo solo lo esparce.
+    Se busca CUALQUIER cifra larga, no los chats concretos: así también cae un
+    número que alguien invente.
+    """
+    _con_gente({**LA_CASA, TERCERA: "Perencejo"})
+    for valor in ("Meng", "la flaca", AJENO, str(AJENO), f" {AJENO} ",
+                  True, 3.5, ["Mengano"], {"n": 1}, "1_000"):
+        motivo = _pide(valor)
+        assert isinstance(motivo, str), f"{valor!r} no fue rechazado"
+        sueltas = re.findall(r"\d{4,}", motivo)
+        assert not sueltas, f"el rechazo de {valor!r} enseña cifras: {sueltas}"
+
+
+# ── El prompt: nombres, y ningún número ──────────────────────────────────
+
+def _bloque_del_responsable(prompt: str) -> str:
+    i = prompt.index("RESPONSABLE DE UNA TAREA")
+    return prompt[i:prompt.index("\n\n", i)]
+
+
+def test_el_prompt_lleva_los_NOMBRES_y_ningun_numero_de_chat():
+    """El modelo tiene que saber a quién se le puede asignar, y NO tiene que
+    tener los números: lo que no está delante no se puede escribir por error.
+
+    Los nombres se derivan de `config.personas_del_panel()` —la misma fuente
+    que la puerta— y se buscan las cifras en el prompt ENTERO, no solo en el
+    bloque del responsable: un número que se colara por otro lado valdría
+    igual de poco.
+    """
+    _con_gente(LA_CASA_SIN_EL_DUENO, permitidos=tuple(LA_CASA_SIN_EL_DUENO))
+    prompt = agente.herramientas_del_prompt()
+    for _, nombre in config.personas_del_panel():
+        assert nombre in prompt, f"falta {nombre} en el prompt"
+    for chat, _ in config.personas_del_panel():
+        assert str(chat) not in prompt, f"el prompt lleva el chat de alguien"
+
+
+def test_una_persona_nueva_aparece_sola_en_el_prompt():
+    """Se lee en cada mensaje, no una vez al importar: dar de alta a alguien en
+    Railway lo pone en el prompt sin desplegar nada."""
+    _con_gente(LA_CASA)
+    assert "Perencejo" not in agente.herramientas_del_prompt()
+    _con_gente({**LA_CASA, TERCERA: "Perencejo"})
+    assert "Perencejo" in agente.herramientas_del_prompt()
+
+
+def test_sin_nadie_el_prompt_lo_DICE_en_vez_de_callarlo():
+    """Sin la variable no hay a quién asignar. Dejar la lista vacía haría que
+    el modelo se inventara un nombre; decirlo lo empuja a avisar."""
+    _con_gente({}, permitidos=(DUENO,))
+    bloque = _bloque_del_responsable(agente.herramientas_del_prompt())
+    assert "nadie" in bloque.lower(), bloque
+
+
+def test_no_queda_ningun_marcador_sin_sustituir_en_el_prompt():
+    """Derivado, no tecleado: se buscan TODOS los `{MARCADOR}` del texto fuente
+    y se exige que ninguno sobreviva al armado. Un marcador nuevo que alguien
+    agregue y se olvide de sustituir llega al modelo como llaves literales, y
+    esto lo agarra sin que nadie lo venga a apuntar acá.
+    """
+    _con_gente(LA_CASA)
+    marcadores = set(re.findall(r"\{[A-Z_]{3,}\}", agente.HERRAMIENTAS))
+    assert marcadores, "no hay marcadores: la prueba dejó de medir algo"
+    quedan = [m for m in marcadores if m in agente.herramientas_del_prompt()]
+    assert not quedan, f"marcadores sin sustituir: {quedan}"
+
+
+# ── No enseñar el número: la traducción ──────────────────────────────────
+
+def test_el_chat_se_cambia_por_el_nombre_y_no_se_come_otro_numero():
+    """La cifra tiene que ir ENTERA: ni pegada a otra cifra delante ni detrás.
+
+    Sin eso un chat se comería el pedazo de un monto o de una referencia y el
+    texto saldría con un nombre en medio de un número.
+    """
+    _con_gente(LA_CASA)
+    assert agente._con_nombres(f"responsable_chat_id: {OTRA}") == (
+        "responsable_chat_id: Mengano")
+    assert agente._con_nombres(f"{DUENO} y {OTRA}") == "Zutana y Mengano"
+    for entero in (f"1{OTRA}", f"{OTRA}1", f"9{OTRA}9"):
+        assert agente._con_nombres(entero) == entero, (
+            f"se comió un pedazo de {entero}")
+
+
+def test_lo_que_ve_el_modelo_es_una_copia_y_no_le_cambia_la_forma():
+    """Dos cosas a la vez, y las dos se rompieron de verdad.
+
+    · Es una COPIA: lo que se guarda en la bandeja y en el diálogo tiene que
+      quedar con el número, que es el dato.
+    · No le inventa campos. Medido el 11-sep-2026: con `{**m, "content": ...}`
+      a secas, un mensaje sin `content` salía con `content: None` puesto, o
+      sea que la función le cambiaba la FORMA al mensaje además del contenido.
+    """
+    _con_gente(LA_CASA)
+    original = [{"role": "user", "content": f"la tarea es de {OTRA}"},
+                {"role": "assistant"},
+                {"role": "tool", "content": None, "extra": 1}]
+    copia = [dict(m) for m in original]
+
+    visto = agente._lo_que_ve_el_modelo(original)
+
+    assert visto[0]["content"] == "la tarea es de Mengano"
+    assert "content" not in visto[1], f"le inventó un campo: {visto[1]}"
+    assert visto[2] == {"role": "tool", "content": None, "extra": 1}
+    assert original == copia, "mutó los mensajes originales"
+
+
+def test_el_parte_dice_el_NOMBRE_aunque_la_frase_se_corte():
+    """LA TIJERA VA DESPUÉS DE LA TRADUCCIÓN, y no al revés.
+
+    Medido el 11-sep-2026 sobre `cerebro/agente.py`: editando título, estado y
+    responsable en una sola orden, el resumen pasaba de 80 caracteres, la
+    tijera partía el número por la mitad y `_anotar` ya no reconocía lo que
+    quedaba. El parte salía con «responsable_chat_id=700…»: tres cifras del
+    número de una persona, y su nombre en ninguna parte.
+
+    Se mide con una frase que SÍ se corta —la de abajo pasa de 80— porque con
+    una corta el defecto no aparece.
+    """
+    _con_gente(LA_CASA)
+    cambios = {"titulo": "Llamar al plomero por lo del baño de arriba",
+               "estado": "pendiente",
+               "responsable_chat_id": OTRA}
+    acciones: list = []
+    agente._anotar(acciones, 7,
+                   f"«Llamar al plomero» → {agente._resumen_cambios(cambios)}")
+    parte = agente._parte_de_lo_hecho(acciones)
+
+    assert "…" in parte, "la frase no se cortó: esta prueba no está midiendo nada"
+    sueltas = re.findall(r"\d{3,}", parte)
+    assert not sueltas, f"el parte enseña cifras del chat: {sueltas} en {parte!r}"
+
+
+def test_anotar_traduce_CUALQUIER_frase_aunque_no_venga_de_un_resumen():
+    """LA RED, medida por donde de verdad hace de red.
+
+    `_resumen_cambios` traduce cada valor antes de cortarlo (arriba), así que
+    la frase de `editar` le llega a `_anotar` ya sin números y no lo ejercita.
+    Pero `editar` no es la única herramienta que anota: `crear`, `archivar` y
+    `deshacer` arman su frase a mano, con lo que tienen delante, y ninguna
+    pasa por un resumen. Para ésas `_anotar` es lo único que hay.
+
+    MEDIDO EL 11-sep-2026, y por eso existe esta prueba y no basta con la de
+    la frase cortada: quitándole la traducción a `_anotar` —dejando
+    `"que": que`— las 63 pruebas de este archivo seguían VERDES. Es la costura
+    de siempre: la prueba entraba por el camino cómodo, el que ya traducía
+    antes, y daba por cubierto el otro.
+
+    Se le pasa una frase cruda, como la que arma `crear` con el título que
+    escribió la persona, y se exige que salga traducida.
+    """
+    _con_gente(LA_CASA_SIN_EL_DUENO, permitidos=tuple(LA_CASA_SIN_EL_DUENO))
+    acciones: list = []
+    agente._anotar(acciones, 9, f"anoté «lo de {OTRA}» (tareas #3)")
+
+    assert acciones == [{"log_id": 9, "que": "anoté «lo de Mengano» (tareas #3)"}], (
+        f"`_anotar` no tradujo la frase: {acciones}")
+
+
+def test_toda_llamada_al_modelo_de_ATENDER_pasa_por_la_junta():
+    """DERIVADO del árbol de `cerebro/agente.py`, no de una lista.
+
+    `atender` es el único sitio del agente que le habla al modelo, y sus
+    mensajes tienen que ir por `_lo_que_ve_el_modelo`. Si mañana alguien
+    agrega un segundo paso al modelo y le pasa `mensajes` crudo, esto se pone
+    rojo sin que nadie tenga que acordarse de venir a apuntarlo.
+    """
+    fuente = Path(RAIZ, "cerebro", "agente.py").read_text(encoding="utf-8")
+    llamadas = [n for n in ast.walk(ast.parse(fuente))
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "create"
+                and isinstance(n.func.value, ast.Attribute)
+                and n.func.value.attr == "completions"]
+    assert llamadas, "no hay ninguna llamada al modelo: cambió la forma"
+    for llamada in llamadas:
+        msgs = next((k.value for k in llamada.keywords if k.arg == "messages"),
+                    None)
+        assert (isinstance(msgs, ast.Call) and isinstance(msgs.func, ast.Name)
+                and msgs.func.id == "_lo_que_ve_el_modelo"), (
+            f"la llamada al modelo de la línea {llamada.lineno} no pasa por la "
+            f"junta: messages={ast.unparse(msgs) if msgs else None}")
+
+
+def test_al_parte_se_entra_SOLO_por_anotar():
+    """La otra junta, derivada igual: en todo `cerebro/agente.py` la lista de
+    acciones solo se toca dentro de `_anotar`.
+
+    Sin esto, una frase nueva escrita en cualquier herramienta entraría al
+    parte sin traducir, y el mensaje que la casa manda volvería a llevar el
+    número. Es lo que hace que la traducción no dependa de acordarse.
+    """
+    arbol = ast.parse(Path(RAIZ, "cerebro", "agente.py").read_text(
+        encoding="utf-8"))
+    fuera = []
+    for nodo in ast.walk(arbol):
+        if not isinstance(nodo, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if nodo.name == "_anotar":
+            continue
+        for hijo in ast.walk(nodo):
+            if (isinstance(hijo, ast.Call)
+                    and isinstance(hijo.func, ast.Attribute)
+                    and hijo.func.attr in ("append", "extend")
+                    and isinstance(hijo.func.value, ast.Name)
+                    and hijo.func.value.id == "acciones"):
+                fuera.append(f"{nodo.name}:{hijo.lineno}")
+    assert not fuera, f"se escribe en el parte sin pasar por `_anotar`: {fuera}"
+
+
+# ── El turno entero: de «la tarea 40 es de Mengano» al mensaje que sale ───
+#
+# Las pruebas de arriba miden cada pieza. Ésta corre `atender()` DE VERDAD con
+# `crud.editar` REAL, y lo único de mentira es lo que está fuera del proceso:
+# el modelo, la base y Telegram. Es la única forma de ver la cadena completa —
+# el nombre entra, la puerta decide, la base guarda el número, y lo que sale
+# por Telegram lleva el nombre.
+#
+# La base de acá APLICA el UPDATE sobre la fila, a diferencia de `_BaseDeCrud`,
+# que sirve siempre la misma. Sin eso el `después` que `editar` devuelve no
+# tendría el chat recién escrito, y el parte se estaría armando con lo que se
+# PIDIÓ en vez de con lo que QUEDÓ — que es justo la diferencia que se mide.
+
+class _CursorDelTurno:
+    def __init__(self, base):
+        self._base = base
+        self._fila = None
+
+    async def execute(self, sql, params=None):
+        s = " ".join(sql.split())
+        self._base.sql.append((s, params))
+        if s.startswith("INSERT INTO log_acciones"):
+            self._base.log += 1
+            self._fila = (self._base.log,)
+        elif s.startswith("UPDATE tareas"):
+            columnas = re.findall(r"(\w+) = %s", s)
+            for columna, valor in zip(columnas, params or ()):
+                self._base.fila[columna] = valor
+            self._fila = None
+        elif s.startswith("SELECT"):
+            self._fila = dict(self._base.fila)
+        else:
+            self._fila = None
+        return self
+
+    async def fetchone(self):
+        return self._fila
+
+    async def fetchall(self):
+        return [self._fila] if self._fila else []
+
+
+class _BaseDelTurno:
+    def __init__(self, fila):
+        self.fila = dict(fila)
+        self.sql: list = []
+        self.log = 4000
+
+    def cursor(self, row_factory=None):
+        return _CursorDelTurno(self)
+
+    async def execute(self, sql, params=None):
+        return await _CursorDelTurno(self).execute(sql, params)
+
+
+class _BotDeMentira:
+    def __init__(self):
+        self.enviados: list = []
+
+    async def send_message(self, text, **kw):
+        self.enviados.append(text)
+        return types.SimpleNamespace(message_id=1)
+
+
+def _turno(guion: list[dict], fila: dict):
+    """Corre `atender()` con `guion` como respuestas del modelo.
+
+    Devuelve (el texto que salió a Telegram, lo que el modelo vio en cada
+    paso, la base). Los dobles se ponen sobre los módulos y el fixture
+    `_devolver_los_modulos_a_su_sitio` de conftest.py los quita al terminar.
+    """
+    import cerebro.deepseek as motor
+
+    visto: list = []
+    paso = {"n": 0}
+
+    class _Completions:
+        async def create(self, **kw):
+            visto.append([dict(m) for m in kw["messages"]])
+            i = min(paso["n"], len(guion) - 1)
+            paso["n"] += 1
+            return types.SimpleNamespace(choices=[types.SimpleNamespace(
+                message=types.SimpleNamespace(
+                    content=json.dumps(guion[i], ensure_ascii=False)))])
+
+    motor.cliente = types.SimpleNamespace(
+        chat=types.SimpleNamespace(completions=_Completions()))
+
+    base = _BaseDelTurno(fila)
+
+    async def _nada(*a, **k):
+        return None
+
+    async def _vacio(*a, **k):
+        return []
+
+    db.buscar_esperando_respuesta = _nada
+    db.ultimos_intercambios = _vacio
+    db.listar_preferencias = _vacio
+    db.cambiar_estado = _nada
+    db.guardar_respuesta = _nada
+    db.guardar_interpretacion = _nada
+
+    async def _ejecutar_sql(sql):
+        return [dict(base.fila)]
+
+    consultar._ejecutar = _ejecutar_sql
+    consultar._validar = lambda sql: sql
+
+    bot = _BotDeMentira()
+    entrada = {"id": 77, "chat_id": DUENO, "telegram_msg_id": 9,
+               "tipo_entrada": "texto"}
+    guardado = db.pool
+    db.pool = _Pool(base)
+    bucle = asyncio.new_event_loop()
+    try:
+        bucle.run_until_complete(agente.atender(entrada, "la 1 es de Mengano",
+                                                bot))
+    finally:
+        bucle.close()
+        db.pool = guardado
+    return bot.enviados[-1], visto, base
+
+
+def test_por_telegram_se_asigna_con_el_NOMBRE_y_queda_escrito_el_chat():
+    """La cadena entera, con `crud.editar` real y la puerta corriendo.
+
+    El modelo manda el NOMBRE —que es lo único que el prompt le da—, y en la
+    base queda el NÚMERO. Se mira el SQL que salió, no lo que devolvió la
+    función: es la única forma de ver qué se escribió de verdad.
+    """
+    _con_gente(LA_CASA)
+    columna = _columna_del_codigo()
+    salida, _, base = _turno(
+        [{"herramienta": "editar",
+          "argumentos": {"tabla": "tareas", "id": 1,
+                         "cambios": {columna: "mengano"}}},
+         {"herramienta": "responder",
+          "argumentos": {"texto": "Listo.", "clasificacion": "orden"}}],
+        _fila(1, titulo="Llamar al plomero"))
+
+    escrituras = [(s, p) for s, p in base.sql if s.startswith("UPDATE tareas")]
+    assert len(escrituras) == 1, base.sql
+    assert columna in escrituras[0][0], escrituras[0]
+    assert OTRA in escrituras[0][1], (
+        f"no quedó escrito el chat de esa persona: {escrituras[0][1]}")
+    assert base.fila[columna] == OTRA
+
+
+def test_el_mensaje_que_SALE_lleva_el_nombre_y_ningun_numero_de_chat():
+    """La segunda mitad del pedido, medida sobre lo que de verdad sale.
+
+    Se busca el chat de cada persona de la casa en el texto enviado, y además
+    cualquier cifra larga suelta: así también cae un número que se escapara
+    por un camino que nadie previó.
+    """
+    _con_gente(LA_CASA_SIN_EL_DUENO, permitidos=tuple(LA_CASA_SIN_EL_DUENO))
+    columna = _columna_del_codigo()
+    salida, _, _ = _turno(
+        [{"herramienta": "editar",
+          "argumentos": {"tabla": "tareas", "id": 1,
+                         "cambios": {columna: "Mengano"}}},
+         {"herramienta": "responder",
+          "argumentos": {"texto": "Listo.", "clasificacion": "orden"}}],
+        _fila(1, titulo="Llamar al plomero"))
+
+    assert "Mengano" in salida, salida
+    for chat in LA_CASA_SIN_EL_DUENO:
+        assert str(chat) not in salida, f"el mensaje enseña un chat: {salida!r}"
+    assert not re.findall(r"\d{4,}", salida), salida
+
+
+def test_lo_que_la_base_le_sirve_al_modelo_llega_YA_con_el_nombre():
+    """EL CASO QUE SOSTIENE TODO LO DEMÁS.
+
+    La herramienta `consultar` devuelve las filas crudas de la base, y una
+    fila de `tareas` trae el número de chat. Lo que se mide es que el modelo
+    no lo vea NUNCA: la junta traduce todos los mensajes en cada paso, venga
+    el número de una consulta, de un error o del historial.
+
+    Y se mide sobre lo que la llamada al modelo recibió, no sobre lo que la
+    herramienta devolvió: entre las dos cosas está justamente la junta.
+    """
+    _con_gente(LA_CASA)
+    salida, visto, _ = _turno(
+        [{"herramienta": "consultar",
+          "argumentos": {"sql": "SELECT * FROM tareas"}},
+         {"herramienta": "responder",
+          "argumentos": {"texto": "Listo.", "clasificacion": "orden"}}],
+        _fila(1, titulo="Llamar al plomero", responsable=OTRA))
+
+    assert len(visto) >= 2, "el turno no llegó a un segundo paso"
+    segundo = "\n".join(str(m.get("content")) for m in visto[-1])
+    assert "Mengano" in segundo, (
+        "el resultado de consultar no llegó al modelo: la prueba no mide nada")
+    assert str(OTRA) not in segundo, (
+        "el modelo vio el número de chat que le sirvió la base")
+
+
+def test_un_nombre_que_no_vale_NO_escribe_y_el_aviso_no_lleva_numeros():
+    """El otro lado: lo que pasa cuando el nombre no es de nadie.
+
+    No se escribe nada —ni a medias— y el motivo que el modelo recibe sirve
+    para repreguntar sin esparcir ningún número.
+    """
+    _con_gente(LA_CASA)
+    columna = _columna_del_codigo()
+    salida, visto, base = _turno(
+        [{"herramienta": "editar",
+          "argumentos": {"tabla": "tareas", "id": 1,
+                         "cambios": {columna: "la flaca"}}},
+         {"herramienta": "responder",
+          "argumentos": {"texto": "¿Quién es la flaca?",
+                         "clasificacion": "orden"}}],
+        _fila(1, titulo="Llamar al plomero"))
+
+    assert not [s for s, _ in base.sql if s.startswith("UPDATE tareas")], (
+        "escribió con un nombre que no es de nadie")
+    ultimo = "\n".join(str(m.get("content")) for m in visto[-1])
+    assert "Zutana" in ultimo and "Mengano" in ultimo, (
+        "el motivo no le dijo al modelo a quién sí se le puede asignar")
+    assert not re.findall(r"\d{4,}", ultimo.split("[resultado]")[-1]), ultimo
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# NINGÚN NÚMERO DE CHAT: qué tiene en la mano cada llamada al modelo
+# ═════════════════════════════════════════════════════════════════════════
+#
+# `cerebro/agente.py` declara en «Los números de chat no se le enseñan a nadie»
+# que fuera de `atender` hay OTRAS llamadas al modelo que no pasan por la
+# junta. Esto es lo que sostiene esa frontera, y lo sostiene de tres maneras
+# distintas porque una sola no alcanza:
+#
+#   1. EL CONJUNTO SE DERIVA del repositorio, no se teclea. Una llamada nueva
+#      —en un archivo que todavía no existe— se pone roja hasta que alguien la
+#      clasifique. El cubo estricto es lo NO declarado, y se llega a él por
+#      olvido, que es como tiene que ser.
+#   2. LA DE `atender` PASA POR LA JUNTA (arriba, por el árbol del archivo).
+#   3. LA ÚNICA QUE PODRÍA VER EL NÚMERO no tiene llamador vivo, y eso se
+#      comprueba corriendo el barrido, no leyendo el código.
+#
+# LO QUE ESTO NO VE: si una de las declaradas empieza mañana a recibir filas de
+# `tareas` por un camino que no sea una llamada escrita en el repositorio. Eso
+# no se puede ver desde acá y se dice, en vez de prometerlo.
+
+# `archivo::función` → por qué no necesita la junta. Se comprueba que el
+# conjunto sea EXACTAMENTE éste: sobra una, roja; falta una, roja.
+LLAMADAS_AL_MODELO_SIN_JUNTA = {
+    "captura/correo.py::clasificar":
+        "clasifica un correo; lo que le pasa es el correo, no filas de tareas",
+    "cerebro/consultar.py::_corregir":
+        "le muestra al modelo su propio SQL y el error de Postgres, sin filas",
+    "cerebro/consultar.py::responder":
+        "LA ÚNICA que recibe filas crudas de la base — ver la prueba de abajo",
+    "cerebro/deepseek.py::verificar_modelo":
+        "un saludo al arranque para comprobar que el modelo contesta",
+    "cerebro/deepseek.py::interpretar_texto":
+        "interpreta el texto que escribió la persona, sin mirar la base",
+    "cerebro/preguntar.py::repreguntar":
+        "arma una repregunta con el texto de la persona, sin mirar la base",
+    "cerebro/vision.py::leer":
+        "lee una imagen; lo que le pasa es la imagen",
+}
+
+
+def _llamadas_al_modelo() -> dict:
+    """Cada `<algo>.completions.create(...)` del repositorio fuera de las
+    pruebas → si sus mensajes pasan por la junta. Ver LA FRONTERA del censo de
+    `execute`, más arriba: se recorre el disco por la misma puerta."""
+    import test_buzon_que_no_se_ve as barrido
+
+    raiz = Path(RAIZ).resolve()
+    pruebas = [p.resolve() for p in barrido._testpaths(raiz)]
+
+    def _adentro(nodo, funcion=None):
+        for hijo in ast.iter_child_nodes(nodo):
+            dentro = (hijo if isinstance(hijo, (ast.FunctionDef,
+                                                ast.AsyncFunctionDef))
+                      else funcion)
+            if (isinstance(hijo, ast.Call)
+                    and isinstance(hijo.func, ast.Attribute)
+                    and hijo.func.attr == "create"
+                    and isinstance(hijo.func.value, ast.Attribute)
+                    and hijo.func.value.attr == "completions"):
+                yield funcion, hijo
+            yield from _adentro(hijo, dentro)
+
+    censo: dict = {}
+    for py in barrido._py_en_disco(raiz):
+        real = py.resolve()
+        if any(c == real or c in real.parents for c in pruebas):
+            continue
+        rel = real.relative_to(raiz).as_posix()
+        arbol = ast.parse(real.read_text(encoding="utf-8"), str(real))
+        for funcion, llamada in _adentro(arbol):
+            quien = f"{rel}::{funcion.name if funcion else '<módulo>'}"
+            msgs = next((k.value for k in llamada.keywords
+                         if k.arg == "messages"), None)
+            junta = (isinstance(msgs, ast.Call)
+                     and isinstance(msgs.func, ast.Name)
+                     and msgs.func.id == "_lo_que_ve_el_modelo")
+            censo[quien] = censo.get(quien, False) or junta
+    return censo
+
+
+def test_toda_llamada_al_modelo_del_repositorio_esta_clasificada():
+    """El trinquete de los dos lados.
+
+    Una llamada al modelo que nadie clasificó se pone roja, y una entrada del
+    inventario que ya no corresponde a ninguna llamada, también. Lo segundo es
+    lo que impide que esto se quede describiendo un repositorio de antes.
+    """
+    censo = _llamadas_al_modelo()
+    assert censo, "el barrido no encontró ninguna llamada al modelo"
+
+    con_junta = {q for q, j in censo.items() if j}
+    sin_junta = {q for q, j in censo.items() if not j}
+
+    assert con_junta == {"cerebro/agente.py::atender"}, (
+        f"cambió quién pasa por la junta: {sorted(con_junta)}")
+    nuevas = sin_junta - set(LLAMADAS_AL_MODELO_SIN_JUNTA)
+    assert not nuevas, (
+        "llamadas al modelo sin clasificar. Cada una tiene que decir qué tiene "
+        f"en la mano antes de darla por buena: {sorted(nuevas)}")
+    fantasmas = set(LLAMADAS_AL_MODELO_SIN_JUNTA) - sin_junta
+    assert not fantasmas, (
+        f"el inventario nombra llamadas que ya no existen: {sorted(fantasmas)}")
+
+
+def test_la_unica_que_recibe_filas_de_la_base_no_tiene_llamador_vivo():
+    """`consultar.responder` corre el SQL del modelo y le devuelve las filas
+    CRUDAS a un segundo modelo para que las redacte. O sea que ésa sí vería el
+    número de chat de una tarea.
+
+    Hoy no la llama nadie: `atender` usa `consultar._validar` y
+    `consultar._ejecutar` por su cuenta y mete el resultado en `mensajes`, que
+    es lo que pasa por la junta. Lo que se mide acá es eso — que no tenga
+    llamador — y se mide barriendo el disco, no leyendo el archivo. El día que
+    alguien la enganche, esto se pone rojo y hay que decidir qué hacer con las
+    filas antes, no después.
+    """
+    import test_buzon_que_no_se_ve as barrido
+
+    raiz = Path(RAIZ).resolve()
+    pruebas = [p.resolve() for p in barrido._testpaths(raiz)]
+    llamadores = []
+    for py in barrido._py_en_disco(raiz):
+        real = py.resolve()
+        if any(c == real or c in real.parents for c in pruebas):
+            continue
+        rel = real.relative_to(raiz).as_posix()
+        for nodo in ast.walk(ast.parse(real.read_text(encoding="utf-8"),
+                                       str(real))):
+            if (isinstance(nodo, ast.Call)
+                    and isinstance(nodo.func, ast.Attribute)
+                    and nodo.func.attr == "responder"):
+                llamadores.append(f"{rel}:{nodo.lineno}")
+    assert not llamadores, (
+        "alguien llama a `responder`, que le sirve filas crudas de la base a "
+        f"un segundo modelo: {llamadores}")
+
+
+def test_el_enlace_del_panel_lleva_el_chat_y_por_eso_no_se_traduce_la_salida():
+    """La frontera dice que el texto que el modelo MANDA no se traduce al
+    salir, y da un motivo: el enlace del panel lleva el chat de quien lo pide,
+    y traducirlo lo rompería.
+
+    Eso es una afirmación sobre otro módulo, así que se comprueba contra él y
+    no se cree. Si mañana el token deja de llevar el chat en claro, el motivo
+    de la frontera deja de valer y esto lo dice.
+    """
+    _con_gente(LA_CASA)
+    token = auth.crear_token(OTRA)
+    assert token.startswith(f"{OTRA}."), (
+        f"el token ya no lleva el chat en claro: {token.split('.')[0]}")
+    assert agente._con_nombres(token) != token, (
+        "traducir la salida ya no rompería el enlace: revisar la frontera")
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# UN QUIÉN SE ESCRIBE DE UNA SOLA MANERA
+# ═════════════════════════════════════════════════════════════════════════
+#
+# LO QUE FALTABA, y no era una línea mal puesta.
+#
+# El número de una persona entra por un lado y tiene que poder volver a
+# decirse con su nombre por el otro. Son dos mitades escritas en archivos
+# distintos:
+#
+#   · la ENTRADA — `config.chat_escrito`, que dice qué texto es un chat;
+#   · la SALIDA — `agente._con_nombres`, que cambia la cifra por el nombre y
+#     compara el número ENTERO, sin otra cifra pegada delante ni detrás.
+#
+# Hasta el 11-sep-2026 la entrada era más ancha que la salida: cualquier texto
+# de cifras con signo opcional se leía con `int()`, así que `0<chat>`,
+# `00<chat>` y `+<chat>` entraban como la misma persona y ninguno de los tres
+# se podía deshacer. O sea que el MISMO QUIÉN existía escrito de infinitas
+# maneras y solo una de ellas se sabía traducir.
+#
+# Hoy eso no se ve porque el parte se arma con lo que QUEDÓ escrito. Medido
+# sobre este mismo árbol el 11-sep-2026, cambiando esa sola pieza para que
+# usara lo PEDIDO, con la casa en {700000001: "Mengano"}:
+#
+#     pedido "mengano"     -> «… responsable_chat_id=mengano»
+#     pedido "0700000001"  -> «… responsable_chat_id=0700000001»   ← a Telegram
+#
+# El segundo es el número de una persona real con un cero delante, saliendo
+# entero en el mensaje que Lucy manda. Las 598 pruebas seguían en verde.
+#
+# LAS DOS COSAS QUE SE HICIERON, y son distintas a propósito:
+#
+#   1. SE BORRÓ EL CASO. La entrada dejó de ser más ancha que la salida: una
+#      persona se escribe de UNA sola manera. Ensanchar la traducción no era
+#      posible —las escrituras de un número son infinitas—, y ponerle fondo a
+#      la entrada sí.
+#   2. SE ATÓ LO QUE QUEDABA SUELTO. Que el parte diga lo que quedó y no lo
+#      que se pidió era una elección escrita en un comentario y en ninguna
+#      prueba. Ahora está medida corriendo.
+
+def _escrituras_a_probar() -> list[str]:
+    """Textos con los que alimentar las pruebas de acá: combustible, no criterio.
+
+    Salen de los chats REALES de la variable, deformados de todas las maneras
+    que `int()` se traga, más los nombres reales y un par de cosas que no son
+    ninguna de las dos. Esta lista NO decide nada: lo que se exige está escrito
+    como una regla en cada prueba, y agregarle una forma más acá no cambia el
+    criterio — solo le da otra piedra que tirarle.
+    """
+    fuera = []
+    for chat in list(config.NOMBRES_POR_CHAT) + [AJENO]:
+        t = str(chat)
+        fuera += [t, f"  {t}  ", f"\t{t}\n", f"0{t}", f"00{t}", f"+{t}",
+                  f"+0{t}", f"{t}.0", f"{t} ", f" {t}"]
+    fuera += list(config.NOMBRES_POR_CHAT.values())
+    fuera += ["mengano", "  Méngano ", "la flaca", "", "   ", "1_000", "٧٠٠"]
+    return fuera
+
+
+def test_lo_que_se_lee_como_chat_se_escribe_de_vuelta_IGUAL():
+    """LA REGLA, y cabe en una línea: `str(chat) == texto`.
+
+    No se enumeran las formas malas —son infinitas: un cero delante, dos,
+    tres—. Se exige lo contrario, que sí tiene fondo: lo que se lee como chat
+    tiene que ser exactamente cómo se escribe ese chat. Cualquier otra
+    escritura, la que sea, cae por la regla y no por estar en una lista.
+
+    El contador del final es el control: sin él, una lectura que no aceptara
+    nada dejaría la prueba en verde sin haber mirado nada.
+    """
+    leidos = 0
+    for texto in _escrituras_a_probar():
+        chat = config.chat_escrito(texto)
+        if chat is None:
+            continue
+        leidos += 1
+        assert texto.strip() == str(chat), (
+            f"«{texto}» se leyó como el chat {chat}, y no es cómo se escribe "
+            "ese número: hay dos maneras de decir la misma persona")
+    assert leidos >= len(config.NOMBRES_POR_CHAT), (
+        f"solo se leyeron {leidos} chats: la prueba no está midiendo nada")
+
+
+def test_todo_RESPONSABLE_que_se_acepta_se_puede_volver_a_decir_con_el_NOMBRE():
+    """EL CONTRATO ENTRE LAS DOS MITADES, que es lo que faltaba de verdad.
+
+    Una mitad decide qué queda escrito; la otra vuelve a decir ese número con
+    el nombre de la persona. Mientras la primera acepte una escritura que la
+    segunda no sabe deshacer, lo PEDIDO y lo ESCRITO dicen cosas distintas, y
+    cualquier frase que repita lo pedido saca a la calle el número de alguien.
+
+    Se mide sobre LO QUE LA PUERTA ACEPTA, no sobre una lista de formas malas:
+    si mañana la entrada se ensancha sin ensanchar la traducción, esto se pone
+    rojo solo, valga la forma nueva lo que valga.
+
+    Roja antes del arreglo del 11-sep-2026 con `0<chat>`, que se aceptaba y
+    salía crudo.
+    """
+    _con_gente(LA_CASA_SIN_EL_DUENO, permitidos=tuple(LA_CASA_SIN_EL_DUENO))
+    aceptadas = 0
+    for texto in _escrituras_a_probar():
+        try:
+            quedo = crud._responsable_que_vale(texto)
+        except ValueError:
+            continue
+        if quedo is None:
+            continue
+        aceptadas += 1
+        assert str(quedo) not in agente._con_nombres(texto), (
+            f"«{texto}» se acepta y deja escrito el chat {quedo}, pero dicho "
+            "en voz alta sigue enseñando ese número entero: lo que se pide y "
+            "lo que se escribe son dos personas distintas para la traducción")
+    assert aceptadas >= 2, (
+        f"solo {aceptadas} escrituras se aceptaron: la prueba no mide nada")
+
+
+def test_los_DOS_caminos_leen_un_chat_escrito_con_LA_MISMA_funcion():
+    """Telegram y el panel tienen que estar de acuerdo en qué texto es un chat.
+
+    No se comparan los dos códigos —dos criterios distintos pueden dar el
+    mismo resultado hoy y separarse mañana—: se le cambia la lectura A LA
+    FUENTE COMPARTIDA y se exige que los DOS reaccionen. El que se hubiera
+    quedado con un `int()` propio seguiría diciendo que sí donde la fuente dice
+    que no, y ahí se pone rojo.
+    """
+    _con_gente(LA_CASA_SIN_EL_DUENO, permitidos=tuple(LA_CASA_SIN_EL_DUENO))
+    canonico = str(OTRA)
+    assert crud._responsable_que_vale(canonico) == OTRA, "punto de partida malo"
+    assert panel._responsable_pedido(canonico) == (True, OTRA), "punto de partida malo"
+
+    original = config.chat_escrito
+    config.chat_escrito = lambda texto: None
+    try:
+        assert isinstance(_pide(canonico), str), (
+            "`crud` leyó el chat sin preguntarle a `config.chat_escrito`")
+        assert panel._responsable_pedido(canonico) == (False, None), (
+            "el panel leyó el chat sin preguntarle a `config.chat_escrito`")
+    finally:
+        config.chat_escrito = original
+
+
+def test_ninguna_funcion_de_LA_PUERTA_lee_un_chat_por_su_cuenta():
+    """Y los hermanos no salen de una lista de acá: salen del disco.
+
+    LA REGLA: una función que decide si un chat puede ser responsable no
+    convierte texto en número por su cuenta. Eso lo hace `config.chat_escrito`,
+    que es la única que dice qué texto es un chat. Se mide como un `int(...)`
+    escrito DENTRO de esa función; `isinstance(x, int)` no es una llamada y no
+    cuenta.
+
+    Quiénes son esas funciones se lee de los `.py` del repositorio —la misma
+    puerta de barrido que usa el censo—, y solo del CÓDIGO: nombrar la puerta
+    en una prosa no mete a nadie en la lista ni lo saca. La cuarta que aparezca
+    mañana queda cubierta sin tocar esto.
+    """
+    import test_buzon_que_no_se_ve as barrido
+
+    raiz = Path(RAIZ).resolve()
+    pruebas = [p.resolve() for p in barrido._testpaths(raiz)]
+    encontradas, culpables = set(), {}
+    for py in barrido._py_en_disco(raiz):
+        real = py.resolve()
+        if any(c == real or c in real.parents for c in pruebas):
+            continue
+        rel = real.relative_to(raiz).as_posix()
+        arbol = ast.parse(real.read_text(encoding="utf-8"), str(real))
+        for nodo in ast.walk(arbol):
+            if not isinstance(nodo, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if _PUERTA not in _nombres_de_codigo(nodo):
+                continue
+            quien = f"{rel}::{nodo.name}"
+            encontradas.add(quien)
+            lineas = [c.lineno for c in ast.walk(nodo)
+                      if isinstance(c, ast.Call)
+                      and isinstance(c.func, ast.Name) and c.func.id == "int"]
+            if lineas:
+                culpables[quien] = lineas
+
+    for fn in (crud._responsable_que_vale, panel._responsable_pedido):
+        assert _id_de(fn) in encontradas, (
+            f"el barrido no encontró {_id_de(fn)}, que sí nombra la puerta: "
+            f"lo que encontró fue {sorted(encontradas)}")
+    assert not culpables, (
+        "estas funciones deciden quién puede ser responsable y además leen un "
+        f"número por su cuenta, en vez de `config.chat_escrito`: {culpables}")
+
+
+def test_el_parte_de_una_columna_CON_PUERTA_dice_lo_que_QUEDO():
+    """EL TURNO ENTERO: lo que sale por Telegram es lo que quedó en la base.
+
+    Se pide con el nombre como lo escribe cualquiera —en minúscula— y el parte
+    tiene que decir el nombre tal como está en la variable, que es algo que
+    SOLO se consigue traduciendo el chat que quedó escrito. Lo esperado sale de
+    la fila de la base y de la variable, no está tecleado acá.
+
+    Ésta es la que muerde si alguien vuelve a armar el parte con lo que se
+    PIDIÓ: medido el 11-sep-2026, con ese cambio el parte decía «mengano».
+    """
+    _con_gente(LA_CASA_SIN_EL_DUENO, permitidos=tuple(LA_CASA_SIN_EL_DUENO))
+    columna = _columna_del_codigo()
+    pedido = "mengano"
+    salida, _, base = _turno(
+        [{"herramienta": "editar",
+          "argumentos": {"tabla": "tareas", "id": 1,
+                         "cambios": {columna: pedido}}},
+         {"herramienta": "responder",
+          "argumentos": {"texto": "Listo.", "clasificacion": "orden"}}],
+        _fila(1, titulo="Llamar al plomero"))
+
+    quedo = base.fila[columna]
+    assert quedo == OTRA, f"no quedó escrito el chat de esa persona: {quedo}"
+    assert f"{columna}={config.NOMBRES_POR_CHAT[quedo]}" in salida, (
+        f"el parte no dice lo que quedó escrito: {salida!r}")
+    assert pedido not in salida, (
+        f"el parte repitió lo que se PIDIÓ en vez de lo que quedó: {salida!r}")
+
+
+def test_una_escritura_rara_del_numero_NO_escribe_y_el_aviso_no_lleva_cifras():
+    """El otro lado del mismo turno, con una entrada que el archivo no usa.
+
+    `0<chat>` no es cómo se escribe ese número, así que no es un chat: se lee
+    como nombre, no es de nadie, y no se escribe nada. El aviso que vuelve dice
+    a quién SÍ se le puede asignar y no lleva ninguna cifra larga — ni la del
+    chat, ni la que se pidió.
+
+    Antes del 11-sep-2026 esto SÍ escribía, y por eso hacía falta.
+    """
+    _con_gente(LA_CASA_SIN_EL_DUENO, permitidos=tuple(LA_CASA_SIN_EL_DUENO))
+    columna = _columna_del_codigo()
+    con_cero = "0" + str(OTRA)
+    salida, visto, base = _turno(
+        [{"herramienta": "editar",
+          "argumentos": {"tabla": "tareas", "id": 1,
+                         "cambios": {columna: con_cero}}},
+         {"herramienta": "responder",
+          "argumentos": {"texto": "¿De quién es?", "clasificacion": "orden"}}],
+        _fila(1, titulo="Llamar al plomero"))
+
+    assert not [s for s, _ in base.sql if s.startswith("UPDATE tareas")], (
+        f"escribió con «{con_cero}», que no es cómo se escribe ese número")
+    ultimo = "\n".join(str(m.get("content")) for m in visto[-1])
+    assert "Mengano" in ultimo, (
+        "el motivo no le dijo al modelo a quién sí se le puede asignar")
+    assert not re.findall(r"\d{4,}", ultimo.split("[resultado]")[-1]), ultimo
+    assert not re.findall(r"\d{4,}", salida), (
+        f"salió una cifra larga por Telegram: {salida!r}")
+
 
 
 if __name__ == "__main__":

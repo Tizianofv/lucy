@@ -161,6 +161,49 @@ def personas_del_panel() -> tuple[tuple[int, str], ...]:
                  if c in NOMBRES_POR_CHAT)
 
 
+def chat_escrito(texto):
+    """El chat que dice ese TEXTO, o None si ese texto no es un chat.
+
+    LA ÚNICA QUE DECIDE QUÉ TEXTO ES UN CHAT. La llaman los dos caminos por los
+    que alguien puede pedir un responsable escribiéndolo: el panel
+    (`web.app._responsable_pedido`) y Telegram (`acciones.crud`). Tener una
+    sola es lo que impide que los dos se separen, igual que con
+    `puede_ser_responsable`.
+
+    LA REGLA, ENTERA, EN UNA LÍNEA: vale si el texto —sin los espacios de
+    alrededor— es EXACTAMENTE cómo se escribe ese número, o sea
+    `str(int(t)) == t`. Nada más. `int()` por su cuenta se traga además un cero
+    delante, un `+`, un `1_000` y las cifras de otros alfabetos; ninguna de esas
+    cuatro cosas es cómo alguien escribe un chat, y las cuatro caen por la misma
+    regla sin que ninguna esté nombrada acá.
+
+    POR QUÉ TAN ESTRECHO, y es la cicatriz del 11-sep-2026. El número se guarda
+    UNA vez y se vuelve a decir con el nombre de la persona
+    (`cerebro.agente._con_nombres`), que compara la cifra entera. Mientras la
+    entrada acepte `0<chat>` y la salida solo sepa deshacer `<chat>`, el mismo
+    QUIÉN existe escrito de dos maneras y una de ellas no se puede traducir:
+    cualquier frase que repita lo PEDIDO en vez de lo que QUEDÓ saca a la calle
+    el número de una persona. Se midió el turno entero y salía por Telegram.
+
+    Y no se arregla ensanchando la traducción: las escrituras de un mismo
+    número son infinitas —un cero delante, dos, tres— y no se terminan de
+    enumerar nunca. Se le pone fondo a la entrada, que sí lo tiene: UNA por
+    persona.
+
+    El negativo se lee como lo que es: un chat de grupo de Telegram empieza por
+    `-` y `str(-100) == "-100"`, así que la misma regla lo deja pasar sin
+    ninguna excepción escrita.
+    """
+    if not isinstance(texto, str):
+        return None
+    t = texto.strip()
+    try:
+        chat = int(t)
+    except ValueError:
+        return None
+    return chat if str(chat) == t else None
+
+
 def puede_ser_responsable(chat_id) -> bool:
     """LA PUERTA ÚNICA de quién puede quedar como responsable de una tarea.
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
@@ -436,6 +437,63 @@ _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}([T ]|$)")
 # decidió Tiziano el 10-sep-2026: Lucy puede asignar responsable por Telegram,
 # pero solo a quien entra al panel, igual que el panel, y un chat que no vale se
 # rechaza. La puerta es la misma que usa el panel, `config.puede_ser_responsable`.
+#
+# Por Telegram se pide con el NOMBRE («la tarea 40 es de Rosi»), no con el
+# número: el modelo no tiene los números y no debe tenerlos. El nombre se
+# convierte en chat ACÁ, antes de la puerta, y el chat que sale pasa por la
+# misma puerta que un número escrito a mano. Nombre y número son dos formas de
+# decir QUIÉN; la puerta es la única que decide SI puede.
+
+# Qué texto es un chat NO se decide acá: `config.chat_escrito`, la misma que
+# lee el desplegable del panel. Una sola lectura para los dos caminos, por el
+# mismo motivo que una sola puerta — ver su docstring, que trae la regla y la
+# cicatriz del 11-sep-2026.
+
+
+def _clave_de_nombre(texto: str) -> str:
+    """El nombre sin lo que no distingue a una persona de otra.
+
+    Se quitan las mayúsculas, las tildes y los espacios de más, y nada más.
+    «rosi», «ROSI», « Rosí » y «Rosi» son la misma clave: por Telegram nadie
+    escribe con tilde ni con mayúscula, y ninguna de esas diferencias puede
+    señalar a otra persona. Si dos entradas de la variable dan la misma clave,
+    no se desempata con esto: ver `_chat_del_nombre`.
+    """
+    sin_tildes = "".join(c for c in unicodedata.normalize("NFKD", texto)
+                         if not unicodedata.combining(c))
+    return " ".join(sin_tildes.casefold().split())
+
+
+def _chat_del_nombre(texto: str):
+    """(chat, None) si ese nombre es de UNA persona; (None, motivo) si no.
+
+    La lista sale de `config.NOMBRES_POR_CHAT` en cada llamada, no de nada
+    tecleado: la tercera persona que Tiziano agregue a la variable se encuentra
+    sin tocar código. Se busca entre TODOS los que tienen nombre, también los
+    que no entran al panel, a propósito: a esos no los rechaza esta función sino
+    la puerta, y así hay una sola que decide.
+
+    LO QUE NO SE ADIVINA, y por qué:
+      · Un apodo o un pedazo de nombre («la flaca», «Ros»). La variable no
+        tiene apodos, y la tabla `personas` sí los tiene pero no está atada a
+        ningún chat: tomar un alias de ahí sería suponer que la Rosi del perfil
+        es la del chat. Se rechaza, y el rechazo dice los nombres que sí hay
+        para que el modelo pregunte.
+      · Dos entradas con la misma clave («Ana» y «ána» en dos chats). Elegir
+        una por orden sería adivinar, y el orden de la variable no significa
+        nada (ver `config._leer_nombres`). Tampoco se desempata por quién entra
+        al panel: el nombre tiene que decir QUIÉN antes de preguntar si PUEDE,
+        o se le asigna la tarea a la otra persona sin que nadie lo note.
+    """
+    clave = _clave_de_nombre(texto)
+    chats = [chat for chat, nombre in config.NOMBRES_POR_CHAT.items()
+             if _clave_de_nombre(nombre) == clave]
+    if len(chats) == 1:
+        return chats[0], None
+    if chats:
+        return None, "ese nombre es de más de una persona y no elijo"
+    return None, "ese nombre no es de nadie de la casa"
+
 
 def _responsable_que_vale(valor):
     """El chat que va a quedar como responsable, o ValueError explicando por qué no.
@@ -443,24 +501,36 @@ def _responsable_que_vale(valor):
     Sin responsable es lo normal y no pasa por la puerta: no hay a quién
     validar. Llega como None o como texto vacío.
 
-    El chat puede venir como número o como texto con un número —el JSON del
-    modelo no promete cuál—, y se guarda como número. `True` no es un chat
-    aunque Python lo compare igual a 1. Cualquier otra cosa no vale.
+    QUIÉN, de tres formas, y las tres terminan en la MISMA puerta:
+      · un número —el JSON del modelo no promete si viene como número o como
+        texto con cifras—, y se guarda como número. De texto lo lee
+        `config.chat_escrito`, que acepta UNA sola escritura por persona y por
+        eso lo pedido y lo escrito no pueden decir cifras distintas;
+      · un nombre, que se busca en la variable (ver `_chat_del_nombre`);
+      · cualquier otra cosa no dice quién. `True` no es un chat aunque Python
+        lo compare igual a 1. Un número escrito de cualquier otra manera
+        —`0700…`, `+700…`— tampoco es un chat: se lee como nombre, no es de
+        nadie, y el rechazo dice a quién sí se le puede asignar.
 
     El mensaje dice quién SÍ puede, por nombre y nunca por número: lo lee el
-    modelo y puede terminar en un aviso de Telegram, y el número de chat de una
-    persona no es algo que haga falta para entender el rechazo.
+    modelo y puede terminar en un aviso de Telegram. Y NO repite lo que se
+    pidió: el que pidió ya lo sabe, y lo pedido puede traer un número.
     """
     if valor is None or (isinstance(valor, str) and not valor.strip()):
         return None
-    chat = None
+    chat, motivo = None, "eso no dice quién"
     if isinstance(valor, int) and not isinstance(valor, bool):
-        chat = valor
+        chat, motivo = valor, "ese chat no puede ser responsable"
     elif isinstance(valor, str):
-        try:
-            chat = int(valor.strip())
-        except ValueError:
-            chat = None
+        # Se le pregunta UNA vez y con eso se decide por cuál de las dos ramas
+        # va: si el texto es un chat, es un chat; si no, es un nombre. No hay
+        # una tercera lectura en ningún lado.
+        chat = config.chat_escrito(valor)
+        if chat is not None:
+            motivo = "ese chat no puede ser responsable"
+        else:
+            chat, motivo = _chat_del_nombre(valor)
+            motivo = motivo or "esa persona no puede ser responsable"
     if chat is not None and config.puede_ser_responsable(chat):
         return chat
     nombres = [nombre for _, nombre in config.personas_del_panel()]
@@ -470,8 +540,7 @@ def _responsable_que_vale(valor):
     # pierde primero es el final. Por eso la razón va delante y los nombres
     # detrás.
     raise ValueError(
-        "ese chat no puede ser responsable: solo quien entra al panel y tiene "
-        f"nombre ({quienes})")
+        f"{motivo}: solo quien entra al panel y tiene nombre ({quienes})")
 
 
 PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale}}
