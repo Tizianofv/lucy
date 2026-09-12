@@ -1758,6 +1758,32 @@ def test_el_parte_dice_el_NOMBRE_aunque_la_frase_se_corte():
     assert not sueltas, f"el parte enseña cifras del chat: {sueltas} en {parte!r}"
 
 
+def test_anotar_traduce_CUALQUIER_frase_aunque_no_venga_de_un_resumen():
+    """LA RED, medida por donde de verdad hace de red.
+
+    `_resumen_cambios` traduce cada valor antes de cortarlo (arriba), así que
+    la frase de `editar` le llega a `_anotar` ya sin números y no lo ejercita.
+    Pero `editar` no es la única herramienta que anota: `crear`, `archivar` y
+    `deshacer` arman su frase a mano, con lo que tienen delante, y ninguna
+    pasa por un resumen. Para ésas `_anotar` es lo único que hay.
+
+    MEDIDO EL 11-sep-2026, y por eso existe esta prueba y no basta con la de
+    la frase cortada: quitándole la traducción a `_anotar` —dejando
+    `"que": que`— las 63 pruebas de este archivo seguían VERDES. Es la costura
+    de siempre: la prueba entraba por el camino cómodo, el que ya traducía
+    antes, y daba por cubierto el otro.
+
+    Se le pasa una frase cruda, como la que arma `crear` con el título que
+    escribió la persona, y se exige que salga traducida.
+    """
+    _con_gente(LA_CASA_SIN_EL_DUENO, permitidos=tuple(LA_CASA_SIN_EL_DUENO))
+    acciones: list = []
+    agente._anotar(acciones, 9, f"anoté «lo de {OTRA}» (tareas #3)")
+
+    assert acciones == [{"log_id": 9, "que": "anoté «lo de Mengano» (tareas #3)"}], (
+        f"`_anotar` no tradujo la frase: {acciones}")
+
+
 def test_toda_llamada_al_modelo_de_ATENDER_pasa_por_la_junta():
     """DERIVADO del árbol de `cerebro/agente.py`, no de una lista.
 
