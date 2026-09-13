@@ -104,7 +104,10 @@ aviso de Telegram que ya sonó.</p>
              {% if t.estado == hecha %}checked disabled
              title="ya está hecha"{% endif %}>
     </td>
-    <td>{{ t.titulo }}</td>
+    {# El título lleva a la pantalla de la tarea, donde se leen y se escriben
+       los comentarios. Es un ENLACE y no un formulario: esta lista tiene uno
+       solo a propósito. #}
+    <td><a href="/tareas/{{ t.id }}">{{ t.titulo }}</a></td>
     <td class="suave">
       {# LA FECHA SE MUEVE ACÁ MISMO, pero solo en las PENDIENTES: la regla vive
          en `db.mover_vence`, y la pantalla no ofrece el campo donde la

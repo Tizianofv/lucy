@@ -334,6 +334,20 @@ def _para_el_campo(cuando) -> str:
 plantillas.env.filters["para_el_campo"] = _para_el_campo
 
 
+def _hora_rd(cuando) -> str:
+    """Un instante → «20/09/2026 15:30», en hora de Santo Domingo. Para leer,
+    no para un campo. Un instante sin zona se lee como UTC, igual que en
+    `db.dia_rd`."""
+    if not isinstance(cuando, datetime):
+        return ""
+    if cuando.tzinfo is None:
+        cuando = cuando.replace(tzinfo=timezone.utc)
+    return cuando.astimezone(config.TZ).strftime("%d/%m/%Y %H:%M")
+
+
+plantillas.env.filters["hora_rd"] = _hora_rd
+
+
 def _sesion(request: Request) -> int | None:
     return auth.validar(request.cookies.get(COOKIE))
 
@@ -960,6 +974,100 @@ async def crear_tarea(request: Request):
     # que VERSE en su grupo. Un "guardado" que no muestra lo guardado obliga a
     # confiar, y este panel existe para no tener que confiar.
     return RedirectResponse(f"/tareas?creada={tid}", status_code=303)
+
+
+# El largo máximo de un comentario. No es una regla de negocio: `texto` es TEXT
+# y no tiene tope, así que sin esto un POST hecho a mano puede guardar megabytes
+# que después hay que pintar y mandarle al modelo. Es la misma idea que
+# LARGO_TITULO, con más holgura porque un comentario es para escribir más.
+LARGO_COMENTARIO = 2000
+
+
+def _texto_de_comentario(crudo: str) -> str | None:
+    """El cuadro de texto → el comentario a guardar, o None si no vale.
+
+    Los saltos de línea del navegador (\\r\\n) se guardan como \\n: así el mismo
+    comentario es el mismo texto, lo haya escrito quien lo haya escrito. Y
+    Lucy lo reconoce por su texto exacto (`cerebro.consultar`).
+    """
+    limpio = (crudo or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not limpio or len(limpio) > LARGO_COMENTARIO:
+        return None
+    return limpio
+
+
+@app.get("/tareas/{tid}", response_class=HTMLResponse)
+async def tarea_detalle(request: Request, tid: int, error: str = "",
+                        comentado: int = 0, borrado: int = 0):
+    """Una tarea con sus comentarios, y el cuadro para escribir uno.
+
+    VA EN SU PROPIA PANTALLA, a la que se entra tocando el título en /tareas.
+    Esa lista tiene UN SOLO formulario a propósito (ver `guardar_tareas`), y un
+    cuadro de texto por fila en una lista de cincuenta no se usa en un celular.
+
+    QUIÉN ESCRIBIÓ CADA COMENTARIO se pinta con su NOMBRE, sacado de
+    `NOMBRES_POR_CHAT`. Si no tiene nombre se pinta «sin nombre», nunca el
+    número de chat (Tiziano descartó enseñarlo en el panel).
+
+    La ruta `/tareas/nueva` está registrada ANTES que ésta, así que «nueva»
+    nunca llega acá.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    datos = await db.tarea_con_comentarios(tid)
+    contexto = {"tarea": None, "comentarios": [],
+                "nombres": config.NOMBRES_POR_CHAT, "error": error,
+                "comentado": comentado, "borrado": borrado,
+                "largo_comentario": LARGO_COMENTARIO}
+    if datos is None:
+        return plantillas.TemplateResponse(
+            request, "tarea_detalle.html", contexto, status_code=404)
+    contexto.update(tarea=datos["tarea"], comentarios=datos["comentarios"])
+    return plantillas.TemplateResponse(request, "tarea_detalle.html", contexto)
+
+
+@app.post("/tareas/{tid}/comentarios")
+async def comentar(request: Request, tid: int):
+    """Escribir un comentario en una tarea.
+
+    EL AUTOR SALE DE LA SESIÓN, no del formulario: es el chat del token
+    firmado de la cookie, el mismo que ya se comprobó para dejar entrar. Si el
+    formulario trae un campo que diga otro autor, se ignora: la ruta no lo lee.
+
+    Nada de lo que se rechaza devuelve un 500: todo vuelve a la pantalla de la
+    tarea con `?error=`, y cada rechazo deja una línea en el log. El texto
+    escrito NO vuelve en la URL, por lo mismo que en «Agregar tarea».
+    """
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    formulario = await request.form()
+    texto = _texto_de_comentario(str(formulario.get("texto", "")))
+    if texto is None:
+        log.warning("Panel de tareas: comentario rechazado por el texto "
+                    "(vacío o más largo de %s)", LARGO_COMENTARIO)
+        return RedirectResponse(f"/tareas/{tid}?error=texto", status_code=303)
+    cid = await db.comentar_tarea(tid, chat, texto)
+    if cid is None:
+        log.warning("Panel de tareas: comentario no guardado —la tarea no "
+                    "existe o está en la papelera")
+        return RedirectResponse(f"/tareas/{tid}?error=tarea", status_code=303)
+    return RedirectResponse(f"/tareas/{tid}?comentado=1", status_code=303)
+
+
+@app.post("/tareas/{tid}/comentarios/{cid}/borrar")
+async def borrar_comentario_de_tarea(request: Request, tid: int, cid: int):
+    """Borrar un comentario. Cualquiera de los dos puede borrar cualquiera, por
+    decisión de Tiziano. Quién lo borró sale de la sesión y queda guardado."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    if not await db.borrar_comentario(cid, tid, chat):
+        log.warning("Panel de tareas: comentario no borrado —no existe, ya "
+                    "estaba borrado o es de otra tarea")
+        return RedirectResponse(f"/tareas/{tid}?error=comentario",
+                                status_code=303)
+    return RedirectResponse(f"/tareas/{tid}?borrado=1", status_code=303)
 
 
 @app.get("/salud", response_class=HTMLResponse)

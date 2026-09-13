@@ -93,6 +93,13 @@ async def main() -> int:
         # asignar_responsable) no se prueban acá, porque humo.py no escribe en
         # producción.
         ("tareas_por_grupo", lambda: db.tareas_por_grupo()),
+        # La tabla de comentarios nace con la migración del 13-sep-2026
+        # (db/migrations/2026-09-13_comentarios_de_tareas.sql). Contra una base
+        # sin esa migración, esta línea revienta con «relation ... does not
+        # exist», y es la única que lo dice: la suite es hermética y sale verde
+        # igual. Es una LECTURA (tarea 0, que no existe); las escrituras
+        # (comentar_tarea, borrar_comentario) no se prueban acá.
+        ("comentarios_de_tarea", lambda: db.comentarios_de_tarea(0)),
     ]
 
     rojas = []

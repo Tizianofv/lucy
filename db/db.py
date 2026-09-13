@@ -2101,6 +2101,142 @@ async def mover_vence(tarea_id: int, vence_en: datetime | None) -> bool:
         return True
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# LOS COMENTARIOS DE UNA TAREA (13-sep-2026)
+#
+# Decisiones de Tiziano: se guardan APARTE (tabla `comentarios_tarea`), cada uno
+# con quién y cuándo, y nadie —ni Lucy— pisa el de otro; comentan los dos que
+# entran al panel; Lucy los lee; cualquiera de los dos puede borrar cualquiera.
+#
+# QUIÉN ESCRIBE O BORRA NO SE DECIDE ACÁ: se le pregunta a
+# `web.auth.puede_entrar`, la misma puerta que usa el panel para dejar entrar.
+# Está en la escritura además de en la ruta porque la validación de un
+# formulario protege al formulario, no a la tabla (la misma razón que en
+# `asignar_responsable`). Se importa dentro de cada función porque `web.app`
+# importa este módulo al arrancar.
+#
+# NADIE CAMBIA EL TEXTO: en este archivo ninguna escritura cambia `texto`, y
+# `acciones.crud` no puede escribir esta tabla porque no está en `crud.TABLAS`.
+# Lo comprueba `tests/test_comentarios_de_tareas.py`.
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def comentarios_de_tarea(tarea_id: int) -> list[dict]:
+    """Los comentarios vivos de una tarea, del más viejo al más nuevo."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, tarea_id, autor_chat_id, creado_en, texto "
+            "FROM comentarios_tarea "
+            "WHERE tarea_id = %s AND borrado_en IS NULL "
+            "ORDER BY creado_en ASC, id ASC", (tarea_id,))
+        return list(await cur.fetchall())
+
+
+async def tarea_con_comentarios(tarea_id: int) -> dict | None:
+    """La tarea y sus comentarios, para la pantalla de una tarea. None si la
+    tarea no existe o está en la papelera."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, titulo, detalle, estado, vence_en, responsable_chat_id "
+            "FROM tareas WHERE id = %s AND borrado_en IS NULL", (tarea_id,))
+        tarea = await cur.fetchone()
+    if tarea is None:
+        return None
+    return {"tarea": tarea, "comentarios": await comentarios_de_tarea(tarea_id)}
+
+
+async def comentar_tarea(tarea_id: int, autor_chat_id: int,
+                         texto: str) -> int | None:
+    """Guarda UN comentario. Devuelve su id, o None si no se guardó.
+
+    `autor_chat_id` es el chat de la SESIÓN del panel, el mismo que ya se
+    comprobó para dejar entrar. Nunca sale de un campo del formulario: un
+    formulario que preguntara «quién sos» aceptaría la respuesta que le den.
+
+    No se guarda si quien escribe no puede entrar al panel, si el texto está
+    vacío, o si la tarea no existe o está en la papelera.
+
+    Deja su huella en log_acciones con actor 'panel', como toda escritura del
+    panel. La fila y la huella van en la misma transacción.
+    """
+    from web.auth import puede_entrar
+
+    limpio = (texto or "").strip()
+    if not limpio or not puede_entrar(autor_chat_id):
+        return None
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, bandeja_id FROM tareas "
+            "WHERE id = %s AND borrado_en IS NULL", (tarea_id,))
+        tarea = await cur.fetchone()
+        if tarea is None:
+            return None
+        await cur.execute(
+            """
+            INSERT INTO comentarios_tarea (tarea_id, autor_chat_id, texto)
+            VALUES (%s, %s, %s)
+            RETURNING *
+            """,
+            (tarea_id, autor_chat_id, limpio))
+        fila = await cur.fetchone()
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo,
+               bandeja_id)
+            VALUES ('panel', 'crear', 'comentarios_tarea', %s, NULL, %s,
+                    'comentario escrito desde el panel de tareas', %s)
+            """,
+            (fila["id"], json.dumps(fila, default=str, ensure_ascii=False),
+             tarea.get("bandeja_id")))
+        return fila["id"]
+
+
+async def borrar_comentario(comentario_id: int, tarea_id: int,
+                            chat_id: int) -> bool:
+    """Borra UN comentario (lo marca). Devuelve si de verdad cambió algo.
+
+    CUALQUIERA DE LOS DOS PUEDE BORRAR CUALQUIER COMENTARIO, por decisión de
+    Tiziano: no se compara `chat_id` con el autor. Sí se exige que `chat_id`
+    pueda entrar al panel, y se guarda quién lo borró.
+
+    El texto NO se toca: se llenan `borrado_en` y `borrado_por_chat_id`, y el
+    comentario deja de verse. El comentario tiene que ser de ESA tarea: con otro
+    `tarea_id`, no se borra nada.
+    """
+    from web.auth import puede_entrar
+
+    if not puede_entrar(chat_id):
+        return False
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, tarea_id, autor_chat_id, creado_en, texto "
+            "FROM comentarios_tarea "
+            "WHERE id = %s AND tarea_id = %s AND borrado_en IS NULL",
+            (comentario_id, tarea_id))
+        antes = await cur.fetchone()
+        if antes is None:
+            return False
+        await conn.execute(
+            "UPDATE comentarios_tarea "
+            "SET borrado_en = now(), borrado_por_chat_id = %s "
+            "WHERE id = %s AND borrado_en IS NULL",
+            (chat_id, comentario_id))
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo)
+            VALUES ('panel', 'borrar', 'comentarios_tarea', %s, %s, %s,
+                    'comentario borrado desde el panel de tareas')
+            """,
+            (comentario_id, json.dumps(antes, default=str, ensure_ascii=False),
+             json.dumps({"borrado_por_chat_id": chat_id})))
+        return True
+
+
 # Los minutos-antes de una tarea escrita desde el panel: NINGUNO.
 #
 # El formulario pide un DÍA, no una hora. `anticipos_min` con su default de la
