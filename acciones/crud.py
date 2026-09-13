@@ -679,16 +679,18 @@ async def editar(
         # caso real: si la fecha vino sin zona horaria, comparar aware con
         # naive lanza TypeError, y perder la edición entera por no poder
         # contar una posposición sería castigo desproporcionado.
+        #   QUÉ ES POSPONER NO SE DECIDE ACÁ desde el 13-sep-2026: lo decide
+        # `db.cuenta_como_posposicion`, la misma función que usa el panel
+        # (`db.mover_vence`). Tiziano pidió que mover para más tarde desde el
+        # panel cuente igual que por el chat, y dos copias del criterio se
+        # separan.
         if (tabla == "tareas" and "pospuesta_veces" not in campos
-                and isinstance(campos.get("vence_en"), datetime)
-                and antes.get("vence_en") is not None
-                and antes.get("estado") == "pendiente"
-                and campos.get("estado", "pendiente") == "pendiente"):
-            try:
-                if campos["vence_en"] > antes["vence_en"]:
-                    campos["pospuesta_veces"] = (antes.get("pospuesta_veces") or 0) + 1
-            except TypeError:
-                pass
+                and "vence_en" in campos
+                and db.cuenta_como_posposicion(
+                    antes.get("estado"), antes.get("vence_en"),
+                    campos.get("estado", antes.get("estado")),
+                    campos["vence_en"])):
+            campos["pospuesta_veces"] = (antes.get("pospuesta_veces") or 0) + 1
 
         asignaciones = ", ".join(f"{c} = %s" for c in campos)
         await conn.execute(

@@ -30,6 +30,11 @@
 <p class="vacio">Responsable cambiado en {{ asignadas }}
   tarea{{ 's' if asignadas > 1 }}.</p>
 {% endif %}
+{% if movidas %}
+{# Aparte también: mover una fecha es otra cosa que cerrar o reasignar. #}
+<p class="vacio">Fecha cambiada en {{ movidas }}
+  tarea{{ 's' if movidas > 1 }}.</p>
+{% endif %}
 
 {# LO QUE FALTA PARA PODER ASIGNAR SE DICE, y se dice acá arriba aunque hoy
    esté vacío. Los nombres no salen de ninguna tabla —en esta base no hay
@@ -63,6 +68,9 @@ primeras. Nada se perdió, pero no está todo a la vista.</p>
 {% else %}
 <p class="suave">Una sola lista para los dos. «Atrasada» es por DÍA, no por
 hora: lo que vence hoy más temprano todavía es de hoy.</p>
+<p class="suave">La fecha y la hora de cada pendiente se cambian aquí mismo.
+Si borras la fecha, la tarea queda «Sin fecha». Mover la fecha no repite un
+aviso de Telegram que ya sonó.</p>
 
 {# UN SOLO formulario para toda la pantalla, como en /sin-clasificar. Con un
    formulario por fila, cerrar una recargaba la página y se llevaba puesto todo
@@ -98,7 +106,27 @@ hora: lo que vence hoy más temprano todavía es de hoy.</p>
     </td>
     <td>{{ t.titulo }}</td>
     <td class="suave">
-      {%- if t.vence_dia -%}
+      {# LA FECHA SE MUEVE ACÁ MISMO, pero solo en las PENDIENTES: la regla vive
+         en `db.mover_vence`, y la pantalla no ofrece el campo donde la
+         escritura lo rechazaría. Las demás se quedan como texto.
+
+         DÍA Y HORA, por decisión de Tiziano: la hora es la que decide cuándo
+         suena el aviso. El valor está en hora de Santo Domingo
+         (`para_el_campo`), la misma zona con la que el servidor lo vuelve a
+         leer.
+
+         `prev_vence_` va al lado por el mismo motivo que `prev_resp_`: el
+         campo viaja siempre, tocado o no, y sin el valor previo cada envío
+         reescribiría la fecha de todas las filas.
+
+         Vacío = sin fecha. Borrar el campo QUITA la fecha, y eso se puede. #}
+      {%- if t.estado == pendiente -%}
+        <input type="hidden" name="prev_vence_{{ t.id }}"
+               value="{{ t.vence_en|para_el_campo }}">
+        <input type="datetime-local" name="vence_{{ t.id }}"
+               value="{{ t.vence_en|para_el_campo }}"
+               min="{{ piso_fecha }}T00:00" aria-label="Vence">
+      {%- elif t.vence_dia -%}
         {{ t.vence_dia.strftime('%d/%m/%Y') }}
       {%- else -%}
         sin fecha

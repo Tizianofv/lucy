@@ -1982,6 +1982,125 @@ async def asignar_responsable(tarea_id: int, chat_id: int | None) -> bool:
         return True
 
 
+def cuenta_como_posposicion(estado_antes, vence_antes,
+                            estado_despues, vence_despues) -> bool:
+    """¿Este cambio de fecha es «posponer»? LA definición, para los dos caminos.
+
+    Posponer es mover para MÁS TARDE una tarea que estaba pendiente y sigue
+    pendiente. El resumen de la mañana usa la cuenta (`tareas.pospuesta_veces`)
+    para nombrar las tareas que se están quedando.
+
+    LA LLAMAN LOS DOS ESCRITORES DE LA FECHA: `acciones.crud.editar` (el chat) y
+    `mover_vence` (el panel). Hasta el 13-sep-2026 el criterio vivía escrito
+    dentro de `crud.editar`, y el panel no contaba. Tiziano decidió que mover
+    para más tarde desde el panel SÍ cuenta, igual que por el chat. Si cada
+    camino tuviera su copia del criterio, las dos copias se separarían. Por eso
+    hay una sola función, y una prueba la cambia y exige que los dos caminos
+    reaccionen (`tests/test_fechas_del_panel.py`).
+
+    NO CUENTA:
+      · poner fecha a una tarea que no tenía (no había fecha que posponer);
+      · quitarle la fecha (no es «más tarde», es «sin fecha»);
+      · adelantarla;
+      · una tarea que no estaba pendiente, o que deja de estarlo en el mismo
+        cambio.
+
+    Si la fecha nueva no se puede comparar con la vieja (una con zona horaria
+    y otra sin zona da TypeError), no cuenta. Es la misma decisión que ya tenía
+    `crud.editar`: perder la edición entera por no poder contar una posposición
+    sería desproporcionado.
+    """
+    if estado_antes != ESTADO_PENDIENTE or estado_despues != ESTADO_PENDIENTE:
+        return False
+    if vence_antes is None or not isinstance(vence_despues, datetime):
+        return False
+    try:
+        return vence_despues > vence_antes
+    except TypeError:
+        return False
+
+
+async def mover_vence(tarea_id: int, vence_en: datetime | None) -> bool:
+    """Cambia (o quita) la fecha de UNA tarea pendiente desde el panel.
+
+    Devuelve si de verdad cambió algo. `vence_en=None` QUITA la fecha: la tarea
+    pasa al grupo «Sin fecha». Tiziano decidió que eso se puede hacer desde el
+    panel.
+
+    EL AVISO POR TELEGRAM NO SE VUELVE A ARMAR, por decisión de Tiziano: igual
+    que cuando la fecha se mueve por el chat. Por eso este UPDATE NO toca
+    `avisos_enviados` ni `anticipos_min`. Eso quiere decir dos cosas, y las dos
+    son iguales a lo que ya hace el chat:
+      · una tarea que YA avisó guarda esa campanada, y en la fecha nueva no
+        vuelve a sonar;
+      · una tarea que todavía NO había avisado sigue teniendo su campanada
+        pendiente, y suena a la hora nueva.
+
+    MOVER PARA MÁS TARDE CUENTA COMO POSPONER, también por decisión de Tiziano.
+    El criterio no se escribe acá: se le pregunta a `cuenta_como_posposicion`,
+    la misma función que usa el chat.
+
+    SOLO PENDIENTES. Una tarea hecha, descartada o en cualquier otro estado no
+    se mueve: devuelve False sin escribir. La pantalla solo ofrece el campo en
+    las pendientes, pero la regla vive acá para que un envío hecho a mano
+    tampoco la salte.
+
+    LA HUELLA DICE 'panel', no 'lucy', igual que `marcar_tarea_hecha` y
+    `asignar_responsable`: no fue Lucy. `acciones.crud._registrar` firma 'lucy'
+    y por eso no se usa acá.
+
+    `antes` guarda SOLO las columnas que este cambio escribe (más el id y el
+    bandeja_id, que `deshacer` no toca). La rama 'editar' de
+    `acciones.crud.deshacer` devuelve todas las columnas que encuentra en
+    `antes`. Con la fila entera, deshacer un cambio de fecha podía devolverle
+    también el estado o el título que la tarea tenía en ese momento, pisando
+    lo que alguien cambió después.
+
+    LO QUE YA DECÍA ESO NO SE REESCRIBE: devuelve False sin huella. Una huella
+    de una edición que no pasó es basura permanente en la tabla que ES el
+    deshacer. El UPDATE y el INSERT van en el mismo bloque de conexión, o sea
+    en la misma transacción.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, estado, vence_en, pospuesta_veces, bandeja_id "
+            "FROM tareas WHERE id = %s AND borrado_en IS NULL", (tarea_id,))
+        fila = await cur.fetchone()
+        if fila is None or fila.get("estado") != ESTADO_PENDIENTE:
+            # No existe, está en la papelera, o no está pendiente.
+            return False
+        if fila.get("vence_en") == vence_en:
+            return False
+
+        veces = fila.get("pospuesta_veces") or 0
+        if cuenta_como_posposicion(fila.get("estado"), fila.get("vence_en"),
+                                   ESTADO_PENDIENTE, vence_en):
+            veces += 1
+
+        await conn.execute(
+            "UPDATE tareas SET vence_en = %s, pospuesta_veces = %s "
+            "WHERE id = %s",
+            (vence_en, veces, tarea_id))
+        antes = {"id": fila["id"], "vence_en": fila.get("vence_en"),
+                 "pospuesta_veces": fila.get("pospuesta_veces") or 0,
+                 "bandeja_id": fila.get("bandeja_id")}
+        despues = {"vence_en": vence_en, "pospuesta_veces": veces}
+        motivo = ("fecha movida desde el panel de tareas" if vence_en is not None
+                  else "fecha quitada desde el panel de tareas")
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo,
+               bandeja_id)
+            VALUES ('panel', 'editar', 'tareas', %s, %s, %s, %s, %s)
+            """,
+            (tarea_id, json.dumps(antes, default=str, ensure_ascii=False),
+             json.dumps(despues, default=str, ensure_ascii=False), motivo,
+             fila.get("bandeja_id")))
+        return True
+
+
 # Los minutos-antes de una tarea escrita desde el panel: NINGUNO.
 #
 # El formulario pide un DÍA, no una hora. `anticipos_min` con su default de la

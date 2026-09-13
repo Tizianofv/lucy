@@ -270,6 +270,70 @@ def _vence_valido(texto: str, piso: date = PISO_FECHA):
                           tzinfo=config.TZ)
 
 
+# El campo de día y hora del navegador (`<input type="datetime-local">`) manda
+# exactamente esta forma: 2026-09-20T15:30, a veces con segundos. Nada más se
+# acepta: ni un día suelto, ni una zona horaria pegada. La zona la pone el
+# servidor (ver `_vence_con_hora_valido`).
+_FECHA_Y_HORA = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?")
+
+
+def _vence_con_hora_valido(texto: str, piso: date = PISO_FECHA):
+    """El campo de fecha de una tarea de la lista → (aceptado, instante).
+
+    Es el hermano de `_vence_valido`, que lee el campo de «Agregar tarea». La
+    diferencia es la que decidió Tiziano para mover fechas desde la lista: acá
+    se pide DÍA Y HORA, no solo el día. Por eso un día suelto («2026-09-20»)
+    se RECHAZA: guardarle una hora inventada (23:59) sería elegir por la
+    persona la hora a la que suena el aviso.
+
+    Devuelve `(True, None)` cuando viene VACÍO: eso es QUITAR la fecha, y
+    Tiziano decidió que desde el panel se puede. La tarea pasa a «Sin fecha».
+
+    Devuelve `(False, None)` si no es la forma exacta del campo, si no es una
+    fecha que exista, o si cae por debajo del piso (la misma malla contra un
+    dígito del año mal tecleado que usan /efectivo y «Agregar tarea»).
+
+    LA HORA ES LA DE SANTO DOMINGO. El navegador manda una hora sin zona, y
+    `tareas.vence_en` es un instante. La zona sale de `config.TZ`, la misma que
+    usa `db.dia_rd` para repartir la lista en grupos: con otra zona, la tarea
+    caería en otro día del que se ve en la pantalla.
+    """
+    limpio = (texto or "").strip()
+    if not limpio:
+        return True, None
+    if not _FECHA_Y_HORA.fullmatch(limpio):
+        return False, None
+    try:
+        crudo = datetime.fromisoformat(limpio)
+    except ValueError:
+        return False, None
+    if crudo.date() < piso:
+        return False, None
+    return True, crudo.replace(tzinfo=config.TZ)
+
+
+def _para_el_campo(cuando) -> str:
+    """Un instante → el valor del campo de día y hora, EN SANTO DOMINGO.
+
+    Es la vuelta de `_vence_con_hora_valido`, y las dos usan la misma zona
+    (`config.TZ`): lo que se pinta es lo que se vuelve a leer. Un instante sin
+    zona se lee como UTC, igual que en `db.dia_rd`. `None` → "", que en el
+    campo es «sin fecha».
+
+    Se corta al minuto: el campo del navegador trabaja por minutos, y el valor
+    pintado viaja también como `prev_vence_`. Si la fila no se tocó, el campo
+    vuelve igual a `prev_vence_` y el servidor no escribe nada.
+    """
+    if not isinstance(cuando, datetime):
+        return ""
+    if cuando.tzinfo is None:
+        cuando = cuando.replace(tzinfo=timezone.utc)
+    return cuando.astimezone(config.TZ).strftime("%Y-%m-%dT%H:%M")
+
+
+plantillas.env.filters["para_el_campo"] = _para_el_campo
+
+
 def _sesion(request: Request) -> int | None:
     return auth.validar(request.cookies.get(COOKIE))
 
@@ -582,7 +646,7 @@ async def papelera(request: Request, restaurado: int = 0):
 
 @app.get("/tareas", response_class=HTMLResponse)
 async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
-                 asignadas: int = 0):
+                 asignadas: int = 0, movidas: int = 0):
     """El panel de tareas: lo que hay que hacer, para las dos personas.
 
     UNA SOLA LISTA PARA LOS DOS, por decisión de Tiziano —"está bien que Rosi
@@ -627,8 +691,12 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
     return plantillas.TemplateResponse(
         request, "tareas.html",
         {"grupos": datos["grupos"], "hay_mas": datos["hay_mas"],
-         "guardadas": guardadas, "asignadas": asignadas,
+         "guardadas": guardadas, "asignadas": asignadas, "movidas": movidas,
          "tope": db.TOPE_TAREAS, "hecha": db.ESTADO_HECHA, "creada": creada,
+         # La fecha solo se puede mover en las PENDIENTES, y la regla vive en
+         # `db.mover_vence`. Se le pasa el mismo valor a la plantilla para que
+         # la pantalla no ofrezca el campo donde la escritura lo rechazaría.
+         "pendiente": db.ESTADO_PENDIENTE, "piso_fecha": PISO_FECHA.isoformat(),
          "personas": config.personas_del_panel(),
          "asignables": [c for c, _ in config.personas_del_panel()],
          "nombres": config.NOMBRES_POR_CHAT,
@@ -719,12 +787,45 @@ async def guardar_tareas(request: Request):
     escribir, igual que `marcar_tarea_hecha`: la pantalla que lleva diez
     minutos abierta no puede pisar lo que el otro acaba de cambiar con un valor
     que ya coincidía.
+
+    LA FECHA TAMBIÉN VIAJA EN EL MISMO ENVÍO (13-sep-2026): cada pendiente
+    trae `vence_<id>` (día y hora) y `prev_vence_<id>` (lo que se pintó). Solo
+    se escriben las filas cuyo campo cambió, por el mismo motivo que el
+    responsable: el campo viaja siempre, tocado o no. Vacío QUITA la fecha.
+
+    LAS FECHAS VAN ANTES QUE LAS CASILLAS DE «HECHA». Si en el mismo envío
+    alguien mueve la fecha de una tarea y la marca hecha, las dos cosas se
+    guardan. En el orden contrario, la tarea ya estaría hecha cuando llegara la
+    fecha, `db.mover_vence` la rechazaría (solo mueve pendientes) y el cambio
+    que la persona escribió se perdería.
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
 
     formulario = await request.form()
-    hechas, asignadas, ignoradas = 0, 0, 0
+    hechas, asignadas, movidas, ignoradas = 0, 0, 0, 0
+
+    for campo in formulario:
+        if not campo.startswith("vence_"):
+            continue
+        try:
+            tid = int(campo[len("vence_"):])
+        except ValueError:
+            ignoradas += 1
+            continue
+        pedido = str(formulario.get(campo, "")).strip()
+        if pedido == str(formulario.get(f"prev_vence_{tid}", "")).strip():
+            # Nadie tocó este campo: dice lo mismo que cuando se pintó.
+            continue
+        vale, vence_en = _vence_con_hora_valido(pedido)
+        if not vale:
+            ignoradas += 1
+            continue
+        if await db.mover_vence(tid, vence_en):
+            movidas += 1
+        else:
+            ignoradas += 1
+
     for campo in formulario:
         if not campo.startswith("hecha_"):
             continue
@@ -773,10 +874,12 @@ async def guardar_tareas(request: Request):
         # de una persona en el log de Railway, y ese número no hace falta para
         # entender qué pasó.
         log.warning("Panel de tareas: %s cambio(s) sin efecto —la tarea no "
-                    "existe, está en la papelera, ya estaba así, o el "
-                    "responsable pedido no entra al panel", ignoradas)
+                    "existe, está en la papelera, ya estaba así, no está "
+                    "pendiente, la fecha no se entendió, o el responsable "
+                    "pedido no entra al panel", ignoradas)
     return RedirectResponse(
-        f"/tareas?guardadas={hechas}&asignadas={asignadas}", status_code=303)
+        f"/tareas?guardadas={hechas}&asignadas={asignadas}&movidas={movidas}",
+        status_code=303)
 
 
 @app.get("/tareas/nueva", response_class=HTMLResponse)
