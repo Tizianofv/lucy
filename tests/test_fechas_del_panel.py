@@ -70,6 +70,68 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Aplica el UPDATE a la fila guardada. Así la prueba del aviso (F1) puede mirar
 # la fila COMO QUEDÓ y preguntarle al despertador si sonaría, en vez de buscar
 # palabras en el SQL.
+#
+# LO QUE NO SABE APLICAR, LO RECHAZA. Hasta el 13-sep-2026 aplicaba solo las
+# columnas escritas con `%s` y se saltaba en silencio las demás: con
+# `avisos_enviados = '{}'` escrito literal en el UPDATE de `db.mover_vence` —la
+# forma en que `cerebro/despertador.py` escribe esa columna al reprogramar una
+# recurrente— el aviso se volvía a armar y la prueba de F1 seguía verde. Una
+# segunda sentencia que no empezara exactamente por «UPDATE tareas SET» (con un
+# alias, en minúsculas) tampoco la veía. Ahora:
+#   · cada asignación del SET se aplica o revienta (`_valor_literal`);
+#   · toda sentencia que no sea un SELECT y que el doble no conozca revienta.
+# «El doble no la entendió» ya no puede terminar en verde. Lo comprueba
+# `test_el_doble_aplica_cada_asignacion_o_se_niega`, con formas que
+# `mover_vence` hoy no usa.
+#
+# EL FONDO, en una línea: el doble ve toda sentencia que pase por `db.pool`. Lo
+# que la base hiciera por su cuenta (un disparador, una regla) no pasa por acá;
+# `test_la_base_no_tiene_disparadores_ni_reglas` exige que no haya ninguno.
+
+_ENTERO = re.compile(r"-?\d+")
+
+
+def _partir_por_comas(texto: str) -> list[str]:
+    """`a = %s, b = '{0,5}'` -> ["a = %s", "b = '{0,5}'"]. Las comas de
+    adentro de comillas o de paréntesis no parten."""
+    partes, actual, nivel, en_comillas = [], "", 0, False
+    for ch in texto:
+        if ch == "'":
+            en_comillas = not en_comillas
+        elif not en_comillas and ch in "()":
+            nivel += 1 if ch == "(" else -1
+        if ch == "," and nivel == 0 and not en_comillas:
+            partes.append(actual.strip())
+            actual = ""
+        else:
+            actual += ch
+    partes.append(actual.strip())
+    return partes
+
+
+def _valor_literal(expresion: str, sql: str):
+    """El valor de Python de un literal SQL: NULL, un entero, un texto entre
+    comillas, o un arreglo de enteros ('{}', '{0,30}'), con o sin `::tipo`.
+    Cualquier otra cosa revienta."""
+    e = expresion.strip()
+    if e.upper() == "NULL":
+        return None
+    if _ENTERO.fullmatch(e):
+        return int(e)
+    m = re.fullmatch(r"'((?:[^']|'')*)'(?:::[\w\[\]]+)?", e)
+    if m:
+        texto = m.group(1).replace("''", "'")
+        arreglo = re.fullmatch(r"\{(.*)\}", texto)
+        if arreglo is None:
+            return texto
+        items = [x.strip() for x in arreglo.group(1).split(",") if x.strip()]
+        if all(_ENTERO.fullmatch(x) for x in items):
+            return [int(x) for x in items]
+    raise AssertionError(
+        f"el doble de base no sabe aplicar «{e}» en: {sql}. Enséñale esa forma "
+        f"en tests/test_fechas_del_panel.py: saltársela dejaría la prueba verde "
+        f"sin haber visto qué se escribe.")
+
 
 class _Cursor:
     def __init__(self, base):
@@ -81,21 +143,46 @@ class _Cursor:
         b = self._base
         b.sql.append((s, params))
         self._filas = []
-        if s.startswith("SELECT") and "FROM tareas" in s:
-            tid = params[0]
-            fila = b.tareas.get(tid)
-            if fila is not None and fila.get("borrado_en") is None:
-                self._filas = [dict(fila)]
-        elif s.startswith("UPDATE tareas SET"):
-            m = re.match(r"UPDATE tareas SET (.*) WHERE id = %s", s)
-            columnas = [c.split("=")[0].strip() for c in m.group(1).split(",")]
-            fila = b.tareas[params[-1]]
-            for col, valor in zip(columnas, params[:-1]):
-                fila[col] = valor
-        elif s.startswith("INSERT INTO log_acciones"):
+        verbo = s.split(" ", 1)[0].upper()
+        update = re.fullmatch(r"UPDATE tareas SET (.+?) WHERE id = %s(?: RETURNING \*)?",
+                              s, re.I)
+        if verbo == "SELECT":
+            if "FROM tareas" in s:
+                tid = params[0]
+                fila = b.tareas.get(tid)
+                if fila is not None and fila.get("borrado_en") is None:
+                    self._filas = [dict(fila)]
+        elif update is not None:
+            self._aplicar(update.group(1), list(params or ()), s)
+        elif re.match(r"INSERT INTO log_acciones\b", s, re.I):
             b.log.append((s, params))
             self._filas = [(5000,)]
+        else:
+            raise AssertionError(
+                f"el doble de base no conoce esta sentencia: {s}. Enséñasela en "
+                f"tests/test_fechas_del_panel.py antes de usarla.")
         return self
+
+    def _aplicar(self, asignaciones: str, params: list, sql: str) -> None:
+        if not params:
+            raise AssertionError(f"falta el id del WHERE en: {sql}")
+        *valores, tid = params
+        cambios = {}
+        for asignacion in _partir_por_comas(asignaciones):
+            columna, igual, expresion = asignacion.partition("=")
+            columna = columna.strip().lower()
+            if not igual or not re.fullmatch(r"[a-z_]+", columna):
+                raise AssertionError(
+                    f"el doble de base no entiende «{asignacion}» en: {sql}")
+            if expresion.strip() == "%s":
+                if not valores:
+                    raise AssertionError(f"faltan parámetros en: {sql}")
+                cambios[columna] = valores.pop(0)
+            else:
+                cambios[columna] = _valor_literal(expresion, sql)
+        if valores:
+            raise AssertionError(f"sobran parámetros en: {sql}")
+        self._base.tareas[tid].update(cambios)
 
     async def fetchone(self):
         return self._filas[0] if self._filas else None
@@ -261,7 +348,9 @@ def test_F1_mover_la_fecha_no_vuelve_a_armar_un_aviso_que_ya_sono():
 
     Se pregunta al despertador de verdad (`_campanadas`, la decisión pura de
     qué suena) sobre la fila COMO QUEDÓ, no se buscan palabras en el SQL. Si
-    la escritura vaciara `avisos_enviados`, esto se pone rojo.
+    una sentencia que pase por `db.pool` vaciara `avisos_enviados` —con `%s` o
+    con el literal `'{}'`—, esto se pone rojo: el doble aplica cada asignación
+    o se niega (ver «LO QUE NO SABE APLICAR, LO RECHAZA», arriba).
     """
     import cerebro.despertador as despertador
 
@@ -423,14 +512,82 @@ def test_lo_que_escribe_existe_en_el_esquema():
     sql = " ".join(n.value for nodo in cuerpo for n in ast.walk(nodo)
                    if isinstance(n, ast.Constant) and isinstance(n.value, str))
     sql = " ".join(sql.split())
-    sets = re.findall(r"UPDATE tareas SET (.*?) WHERE", sql)
+    sets = re.findall(r"UPDATE tareas SET (.*?) WHERE", sql, re.I)
     assert len(sets) == 1, f"se esperaba un solo UPDATE de tareas: {sets}"
-    escritas = set(re.findall(r"\b([a-z_]+) = %s", sets[0]))
+    # TODAS las asignaciones, lleven `%s` o un literal. Hasta el 13-sep-2026
+    # solo contaba las de `= %s`, y `avisos_enviados = '{}'` no aparecía.
+    escritas = {a.partition("=")[0].strip().lower()
+                for a in _partir_por_comas(sets[0])}
     leidas = set(re.findall(r"SELECT (.*?) FROM tareas", sql)[0].replace(" ", "")
                  .split(","))
     assert escritas == {"vence_en", "pospuesta_veces"}, escritas
     faltan = (escritas | leidas) - set(db.columnas_declaradas()["tareas"])
     assert not faltan, f"columnas que db/schema.sql no declara: {faltan}"
+
+
+def _aplicar_con_el_doble(sql, params):
+    base = _Base(_tarea(avisos_enviados=[0], pospuesta_veces=4))
+    bucle = asyncio.new_event_loop()
+    try:
+        bucle.run_until_complete(base.execute(sql, params))
+    finally:
+        bucle.close()
+    return base.tareas[1]
+
+
+def test_el_doble_aplica_cada_asignacion_o_se_niega():
+    """El doble es la mitad de la prueba de F1: si se salta una asignación, F1
+    queda verde sin haber visto qué se escribió. Se le dan formas que
+    `mover_vence` hoy NO usa, porque las que usa ya las ejercita F1."""
+    f = _aplicar_con_el_doble(
+        "UPDATE tareas SET avisos_enviados = '{}' WHERE id = %s", (1,))
+    assert f["avisos_enviados"] == [], f
+    f = _aplicar_con_el_doble(
+        "update tareas set avisos_enviados = '{}'::int[], vence_en = NULL "
+        "where id = %s", (1,))
+    assert f["avisos_enviados"] == [] and f["vence_en"] is None, f
+    f = _aplicar_con_el_doble(
+        "UPDATE tareas SET pospuesta_veces = 0, avisos_enviados = '{0,30}', "
+        "estado = 'hecha' WHERE id = %s RETURNING *", (1,))
+    assert (f["pospuesta_veces"], f["avisos_enviados"], f["estado"]) == (
+        0, [0, 30], "hecha"), f
+    f = _aplicar_con_el_doble(
+        "UPDATE tareas SET avisos_enviados = %s, vence_en = %s WHERE id = %s",
+        ([], MARTES, 1))
+    assert f["avisos_enviados"] == [] and f["vence_en"] == MARTES, f
+
+    for sql, params in (
+            ("UPDATE tareas SET avisos_enviados = array[]::int[] WHERE id = %s", (1,)),
+            ("UPDATE tareas SET pospuesta_veces = pospuesta_veces + 1 WHERE id = %s", (1,)),
+            ("UPDATE tareas t SET avisos_enviados = '{}' WHERE t.id = %s", (1,)),
+            ("UPDATE tareas SET avisos_enviados = '{}' WHERE id = %s "
+             "AND borrado_en IS NULL", (1,)),
+            ("WITH x AS (UPDATE tareas SET avisos_enviados = '{}' WHERE id = 1) "
+             "SELECT 1", None),
+            ("DELETE FROM tareas WHERE id = %s", (1,)),
+            ("UPDATE tareas SET vence_en = %s WHERE id = %s", (1,)),
+            ("UPDATE tareas SET vence_en = %s WHERE id = %s", (MARTES, [], 1))):
+        try:
+            _aplicar_con_el_doble(sql, params)
+        except AssertionError:
+            continue
+        raise AssertionError(f"el doble aceptó sin saber aplicarla: {sql}")
+
+
+def test_la_base_no_tiene_disparadores_ni_reglas():
+    """El fondo del doble es `db.pool`: lo que la base hiciera sola al escribir
+    una tarea no lo ve. Se exige que ni el esquema ni ninguna migración cree un
+    disparador o una regla; el día que haga falta uno, esta prueba avisa que la
+    de F1 dejó de verlo todo."""
+    from pathlib import Path
+
+    archivos = [Path(RAIZ, "db", "schema.sql"),
+                *sorted(Path(RAIZ, "db", "migrations").glob("*.sql"))]
+    for archivo in archivos:
+        sql = db._sin_comentarios(archivo.read_text(encoding="utf-8"))
+        assert not re.search(r"\bCREATE\s+(OR\s+REPLACE\s+)?"
+                             r"(CONSTRAINT\s+)?(TRIGGER|RULE)\b", sql, re.I), (
+            f"{archivo.name} crea un disparador o una regla")
 
 
 # ═════════════════════════════════════════════════════════════════════════

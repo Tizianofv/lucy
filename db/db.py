@@ -2115,9 +2115,24 @@ async def mover_vence(tarea_id: int, vence_en: datetime | None) -> bool:
 # `asignar_responsable`). Se importa dentro de cada función porque `web.app`
 # importa este módulo al arrancar.
 #
-# NADIE CAMBIA EL TEXTO: en este archivo ninguna escritura cambia `texto`, y
-# `acciones.crud` no puede escribir esta tabla porque no está en `crud.TABLAS`.
-# Lo comprueba `tests/test_comentarios_de_tareas.py`.
+# EL TEXTO DE UN COMENTARIO: qué está comprobado y qué no.
+#   · `acciones.crud` —los escritores genéricos que usa Lucy— no puede escribir
+#     esta tabla porque no está en `crud.TABLAS`. Se comprueba CORRIENDO
+#     `crud.editar`, `crud.borrar` y `crud.deshacer` contra ella.
+#   · En este archivo la única escritura que actualiza la tabla es
+#     `borrar_comentario`, y solo llena `borrado_en` y `borrado_por_chat_id`.
+#   · LA BASE NO LO IMPIDE. Y la prueba que barre el repositorio solo ve una
+#     actualización escrita con el verbo y el nombre de la tabla enteros dentro
+#     de un texto literal. No ve la tabla en una variable (la forma de
+#     `acciones.crud.deshacer`, que arma la sentencia con `{tabla}`) ni el verbo
+#     armado por partes. Hasta dónde ve lo mide
+#     `test_hasta_donde_ve_el_barrido_del_texto`.
+#   · Lo que lo cerraría sin depender de cómo se escriba el código: que la base
+#     lo rechace, con un disparador que antes de cada actualización falle si el
+#     texto nuevo es distinto del viejo. No se escribió: va en una migración de
+#     producción y donde se hizo este cambio no hubo un Postgres en el que
+#     probarlo.
+# Todo lo de arriba lo comprueba `tests/test_comentarios_de_tareas.py`.
 # ═══════════════════════════════════════════════════════════════════════════
 
 async def comentarios_de_tarea(tarea_id: int) -> list[dict]:

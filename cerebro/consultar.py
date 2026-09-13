@@ -96,10 +96,13 @@ TABLAS_DE_MAQUINARIA = {
 # tarea»). El modelo tiene que poder distinguir de dónde salió ese texto, igual
 # que ya distingue un [correo] o una [foto] de lo que escribe Tiziano.
 #
-# Por eso cada comentario que sale de una consulta llega ENVUELTO entre estas dos
-# marcas, con la aclaración adentro. No es un freno: no se bloquea ni se quita
-# nada. Es la procedencia puesta al lado del dato, y el prompt (en
-# NOTAS_DE_TABLA) dice qué hacer cuando un comentario pide algo.
+# Por eso un comentario que sale de una consulta TAL CUAL —entero, dentro de un
+# texto más largo, o metido en un json como valor o como clave— llega ENVUELTO
+# entre estas dos marcas, con la aclaración adentro. Uno que la consulta
+# transforma no: la lista de lo que no se cubre, medida por una prueba, está en
+# `encuadrar_comentarios`. No es un freno: no se bloquea ni se quita nada. Es
+# la procedencia puesta al lado del dato, y el prompt (en NOTAS_DE_TABLA) dice
+# qué hacer cuando un comentario pide algo.
 #
 # DÓNDE SE ENVUELVE: en `_ejecutar`, que es la única puerta por la que una
 # consulta de Lucy llega a la base. Ahí no se sabe qué columna es un comentario,
@@ -427,21 +430,45 @@ async def _ejecutar(sql: str) -> list[dict]:
     return encuadrar_comentarios(filas, presentes)
 
 
-def _textos_de(valor):
-    """Todos los textos de una fila, también los que vienen anidados.
+def _mapear_textos(filas: list, fn) -> list:
+    """LA ÚNICA manera de recorrer lo que devolvió una consulta.
 
-    Un `json_agg` o un `row_to_json` llegan de psycopg como listas y
-    diccionarios, y el `despues` de log_acciones es un diccionario. Un
-    comentario escondido ahí adentro sigue siendo un comentario.
+    La usan las dos mitades del encuadre: la búsqueda
+    (`_comentarios_presentes`, que junta los textos para preguntarle a la base)
+    y el envoltorio (`encuadrar_comentarios`, que los cambia). Si cada una
+    recorriera a su manera, lo que una mira y la otra no saldría sin marca: así
+    salían las CLAVES de un json hasta el 13-sep-2026, porque ninguna de las dos
+    las miraba.
+
+    Qué se recorre, en una línea: todo texto que venga en un VALOR de la fila, a
+    cualquier profundidad de listas, tuplas y diccionarios, más las CLAVES de
+    esos diccionarios. Un `json_agg`, un `json_object_agg(texto, …)` o el
+    `despues` de log_acciones llegan de psycopg como listas y diccionarios.
+
+    Lo único que no se toca son los nombres de columna de la fila: Postgres los
+    saca del SQL de la consulta (sus alias, o los nombres de la tabla), nunca de
+    un dato guardado, así que ahí no puede venir un comentario.
+
+    Si al cambiar las claves de un diccionario dos quedaran iguales, revienta:
+    perder un valor en silencio es peor que no poder contestar.
     """
-    if isinstance(valor, str):
-        yield valor
-    elif isinstance(valor, dict):
-        for v in valor.values():
-            yield from _textos_de(v)
-    elif isinstance(valor, (list, tuple)):
-        for v in valor:
-            yield from _textos_de(v)
+    def _valor(v):
+        if isinstance(v, str):
+            return fn(v)
+        if isinstance(v, dict):
+            nuevo = {_valor(k): _valor(x) for k, x in v.items()}
+            if len(nuevo) != len(v):
+                raise ValueError("Al marcar los comentarios, dos claves de un "
+                                 "json quedaron iguales.")
+            return nuevo
+        if isinstance(v, list):
+            return [_valor(x) for x in v]
+        if isinstance(v, tuple):
+            return tuple(_valor(x) for x in v)
+        return v
+
+    return [{k: _valor(x) for k, x in f.items()} if isinstance(f, dict)
+            else _valor(f) for f in filas]
 
 
 async def _comentarios_presentes(conn, filas) -> list[str]:
@@ -464,7 +491,9 @@ async def _comentarios_presentes(conn, filas) -> list[str]:
     comentarios sin su marca. `consultar` le devuelve el error al modelo, y el
     modelo dice que no pudo mirar.
     """
-    pajar = "\n".join(_textos_de(filas))
+    textos: list[str] = []
+    _mapear_textos(filas, lambda t: textos.append(t) or t)
+    pajar = "\n".join(textos)
     if not pajar:
         return []
     try:
@@ -489,24 +518,37 @@ async def _comentarios_presentes(conn, filas) -> list[str]:
 def encuadrar_comentarios(filas: list, textos) -> list:
     """Las filas con cada comentario envuelto entre ABRE y CIERRA.
 
-    Se busca el texto EXACTO del comentario dentro de cada valor, anidados
-    incluidos, y se envuelve donde aparezca, entero o dentro de un texto más
-    largo (un string_agg). Todos en una sola pasada, el más largo primero, así
-    un comentario que está contenido en otro no se envuelve dos veces.
+    Se busca el texto EXACTO del comentario en todo lo que recorre
+    `_mapear_textos` —valores anidados y claves de json incluidos— y se
+    envuelve donde aparezca, entero o dentro de un texto más largo (un
+    string_agg). Todos en una sola pasada, el más largo primero, así un
+    comentario que está contenido en otro no se envuelve dos veces.
 
-    Si el comentario empieza o termina con letra o número, al lado no puede
-    haber otra letra o número: «ok» no se envuelve dentro de «Booking».
+    PEGADO A OTRA LETRA O NÚMERO, la regla en una línea: un comentario que es
+    UNA SOLA PALABRA (solo letras, números o _) se envuelve únicamente si al
+    lado no hay otra letra o número —«ok» no se envuelve dentro de «Booking»—;
+    uno que lleva adentro un espacio o un signo se envuelve donde aparezca,
+    pegado o no. Así salen marcados dos comentarios juntados sin separador
+    (`string_agg(texto, '')`) y uno con un número pegado delante
+    (`id || texto`). El precio es envolver de más, nunca de menos.
 
     Las marcas ⟦ y ⟧ que traiga el propio comentario se cambian por ( y ).
     Si no, un comentario con un ⟧ en el medio cerraría su propia marca y lo
     que sigue parecería texto de afuera.
 
-    LO QUE ESTO NO CUBRE, y es la consecuencia de mirar el valor:
-      1. Un comentario que la consulta TRANSFORMA (upper, substring, replace,
-         un corte) ya no es el mismo texto y no se reconoce.
-      2. Un texto que no es comentario pero es IDÉNTICO a uno (un título igual
-         a un comentario) también sale envuelto.
-      3. Solo se miran los textos que devolvió la consulta, hasta LIMITE_FILAS.
+    LO QUE ESTO NO CUBRE, y es la consecuencia de mirar el valor. Cada caso de
+    esta lista lo mide `test_hasta_donde_llega_el_encuadre`, en
+    tests/test_comentarios_de_tareas.py:
+      1. Un comentario que la consulta TRANSFORMA ya no es el mismo texto y no
+         se reconoce: upper, substring, replace, un corte, y también pasar a
+         texto el json que lo trae (`despues::text`), que le escapa las
+         comillas y los saltos de línea.
+      2. Un comentario de UNA SOLA PALABRA pegado a otra letra o número: de
+         «ok» y «listo» juntados sin separador sale «oklisto», sin marca.
+      3. Un texto que no es comentario pero CONTIENE uno también sale
+         envuelto: un título igual a un comentario, o «de nuevo» dentro de
+         «se puede nuevo».
+      4. Solo se miran los textos que devolvió la consulta, hasta LIMITE_FILAS.
     """
     unicos = sorted({t for t in textos if isinstance(t, str) and t},
                     key=len, reverse=True)
@@ -514,9 +556,9 @@ def encuadrar_comentarios(filas: list, textos) -> list:
         return filas
 
     def _alternativa(t: str) -> str:
-        antes = r"(?<!\w)" if re.match(r"\w", t[0]) else ""
-        despues = r"(?!\w)" if re.match(r"\w", t[-1]) else ""
-        return f"{antes}{re.escape(t)}{despues}"
+        if re.fullmatch(r"\w+", t):
+            return rf"(?<!\w){re.escape(t)}(?!\w)"
+        return re.escape(t)
 
     patron = re.compile("|".join(f"(?:{_alternativa(t)})" for t in unicos))
 
@@ -524,18 +566,7 @@ def encuadrar_comentarios(filas: list, textos) -> list:
         limpio = m.group(0).replace("⟦", "(").replace("⟧", ")")
         return f"{ABRE_COMENTARIO}{limpio}{CIERRA_COMENTARIO}"
 
-    def _envolver(v):
-        if isinstance(v, str):
-            return patron.sub(_marcar, v)
-        if isinstance(v, dict):
-            return {k: _envolver(x) for k, x in v.items()}
-        if isinstance(v, list):
-            return [_envolver(x) for x in v]
-        if isinstance(v, tuple):
-            return tuple(_envolver(x) for x in v)
-        return v
-
-    return [_envolver(f) for f in filas]
+    return _mapear_textos(filas, lambda v: patron.sub(_marcar, v))
 
 
 async def _corregir(pregunta: str, sql: str, error: str) -> str:

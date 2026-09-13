@@ -172,7 +172,8 @@ CREATE TABLE tareas (
 -- Lo que las personas de la casa le comentan a una tarea desde el panel
 -- (13-sep-2026). Aparte de `tareas.detalle` a propósito: aquél es un solo texto
 -- sin autor que Lucy reescribe por el chat. Acá cada comentario tiene quién y
--- cuándo, nadie cambia el texto de otro, y borrar es marcar. El porqué entero,
+-- cuándo, y borrar es marcar. El código no reescribe el texto, pero la base no
+-- lo impide: ver «LOS COMENTARIOS DE UNA TAREA» en db/db.py. El porqué entero,
 -- en db/migrations/2026-09-13_comentarios_de_tareas.sql.
 CREATE TABLE comentarios_tarea (
   id                  BIGSERIAL PRIMARY KEY,
@@ -182,7 +183,7 @@ CREATE TABLE comentarios_tarea (
                                                        --   del panel; el nombre sale de
                                                        --   NOMBRES_POR_CHAT
   creado_en           TIMESTAMPTZ NOT NULL DEFAULT now(),
-  texto               TEXT NOT NULL,                   -- nunca se reescribe
+  texto               TEXT NOT NULL,                   -- el código no lo reescribe; la base no lo impide
   borrado_en          TIMESTAMPTZ,
   borrado_por_chat_id BIGINT                           -- quién lo borró (cualquiera de los dos puede)
 );

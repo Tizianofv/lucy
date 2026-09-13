@@ -19,9 +19,11 @@
 -- existe tabla de chats.
 --
 -- BORRAR ES MARCAR, como en el resto de la base: `borrado_en` y
--- `borrado_por_chat_id`. El texto no se toca nunca. En el código no hay ninguna
--- escritura que cambie `texto`, y `acciones.crud` no puede escribir esta tabla
--- (no está en `crud.TABLAS`).
+-- `borrado_por_chat_id`. La escritura que borra no toca `texto`, y
+-- `acciones.crud` no puede escribir esta tabla (no está en `crud.TABLAS`).
+-- ESTA TABLA NO IMPIDE que se reescriba el texto: nada en la base rechaza un
+-- UPDATE de `texto`. Qué está comprobado, qué no y qué lo cerraría, en el
+-- bloque «LOS COMENTARIOS DE UNA TAREA» de db/db.py.
 --
 -- SOBRE LO QUE PASÓ EL 10-sep-2026 (`cached plan must not change result type`,
 -- al agregarle una columna a `tareas` con la app viva). Ese error sale cuando
