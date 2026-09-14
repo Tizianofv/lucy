@@ -3655,9 +3655,21 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `config.py`, `db/db.py`, `web/app.py` y `tools/humo.py`, los cuatro ya en
     # el reparto de antes—, así que no había nada nuevo que vigilar. La
     # aserción de fondo de arriba corrió sobre todos ellos y quedó verde.
-    assert medido == {"en disco": 72, "exentos": 34, "vigilados": 38}, (
+    #
+    # 13-sep-2026: 72 → 73 en disco y 34 → 35 exentos por
+    # `tests/test_fechas_del_panel.py`, del trabajo que deja mover la fecha de
+    # una tarea desde el panel. Los VIGILADOS siguen en 38: ese trabajo tocó
+    # `db/db.py`, `acciones/crud.py` y `web/app.py`, los tres ya vigilados, y no
+    # agregó ningún módulo de producción. La aserción de fondo corrió sobre
+    # ellos y quedó verde.
+    #
+    # 13-sep-2026, segundo commit del mismo trabajo: 73 → 74 en disco y 35 → 36
+    # exentos por `tests/test_comentarios_de_tareas.py`. Los VIGILADOS siguen en
+    # 38: los comentarios tocaron `db/db.py`, `web/app.py`,
+    # `cerebro/consultar.py` y `tools/humo.py`, todos ya vigilados.
+    assert medido == {"en disco": 74, "exentos": 36, "vigilados": 38}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "10-sep-2026 era {'en disco': 72, 'exentos': 34, 'vigilados': 38}. La "
+        "13-sep-2026 era {'en disco': 74, 'exentos': 36, 'vigilados': 38}. La "
         "aserción de fondo —cero archivos alcanzan la lista cruda— YA CORRIÓ "
         "arriba y quedó verde, así que esto NO es una fuga. Si los vigilados "
         "bajaron, algo se está saltando de más y «cero falsos positivos» dejó "

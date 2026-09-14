@@ -1982,6 +1982,281 @@ async def asignar_responsable(tarea_id: int, chat_id: int | None) -> bool:
         return True
 
 
+def cuenta_como_posposicion(estado_antes, vence_antes,
+                            estado_despues, vence_despues) -> bool:
+    """¿Este cambio de fecha es «posponer»? LA definición, para los dos caminos.
+
+    Posponer es mover para MÁS TARDE una tarea que estaba pendiente y sigue
+    pendiente. El resumen de la mañana usa la cuenta (`tareas.pospuesta_veces`)
+    para nombrar las tareas que se están quedando.
+
+    LA LLAMAN LOS DOS ESCRITORES DE LA FECHA: `acciones.crud.editar` (el chat) y
+    `mover_vence` (el panel). Hasta el 13-sep-2026 el criterio vivía escrito
+    dentro de `crud.editar`, y el panel no contaba. Tiziano decidió que mover
+    para más tarde desde el panel SÍ cuenta, igual que por el chat. Si cada
+    camino tuviera su copia del criterio, las dos copias se separarían. Por eso
+    hay una sola función, y una prueba la cambia y exige que los dos caminos
+    reaccionen (`tests/test_fechas_del_panel.py`).
+
+    NO CUENTA:
+      · poner fecha a una tarea que no tenía (no había fecha que posponer);
+      · quitarle la fecha (no es «más tarde», es «sin fecha»);
+      · adelantarla;
+      · una tarea que no estaba pendiente, o que deja de estarlo en el mismo
+        cambio.
+
+    Si la fecha nueva no se puede comparar con la vieja (una con zona horaria
+    y otra sin zona da TypeError), no cuenta. Es la misma decisión que ya tenía
+    `crud.editar`: perder la edición entera por no poder contar una posposición
+    sería desproporcionado.
+    """
+    if estado_antes != ESTADO_PENDIENTE or estado_despues != ESTADO_PENDIENTE:
+        return False
+    if vence_antes is None or not isinstance(vence_despues, datetime):
+        return False
+    try:
+        return vence_despues > vence_antes
+    except TypeError:
+        return False
+
+
+async def mover_vence(tarea_id: int, vence_en: datetime | None) -> bool:
+    """Cambia (o quita) la fecha de UNA tarea pendiente desde el panel.
+
+    Devuelve si de verdad cambió algo. `vence_en=None` QUITA la fecha: la tarea
+    pasa al grupo «Sin fecha». Tiziano decidió que eso se puede hacer desde el
+    panel.
+
+    EL AVISO POR TELEGRAM NO SE VUELVE A ARMAR, por decisión de Tiziano: igual
+    que cuando la fecha se mueve por el chat. Por eso este UPDATE NO toca
+    `avisos_enviados` ni `anticipos_min`. Eso quiere decir dos cosas, y las dos
+    son iguales a lo que ya hace el chat:
+      · una tarea que YA avisó guarda esa campanada, y en la fecha nueva no
+        vuelve a sonar;
+      · una tarea que todavía NO había avisado sigue teniendo su campanada
+        pendiente, y suena a la hora nueva.
+
+    MOVER PARA MÁS TARDE CUENTA COMO POSPONER, también por decisión de Tiziano.
+    El criterio no se escribe acá: se le pregunta a `cuenta_como_posposicion`,
+    la misma función que usa el chat.
+
+    SOLO PENDIENTES. Una tarea hecha, descartada o en cualquier otro estado no
+    se mueve: devuelve False sin escribir. La pantalla solo ofrece el campo en
+    las pendientes, pero la regla vive acá para que un envío hecho a mano
+    tampoco la salte.
+
+    LA HUELLA DICE 'panel', no 'lucy', igual que `marcar_tarea_hecha` y
+    `asignar_responsable`: no fue Lucy. `acciones.crud._registrar` firma 'lucy'
+    y por eso no se usa acá.
+
+    `antes` guarda SOLO las columnas que este cambio escribe (más el id y el
+    bandeja_id, que `deshacer` no toca). La rama 'editar' de
+    `acciones.crud.deshacer` devuelve todas las columnas que encuentra en
+    `antes`. Con la fila entera, deshacer un cambio de fecha podía devolverle
+    también el estado o el título que la tarea tenía en ese momento, pisando
+    lo que alguien cambió después.
+
+    LO QUE YA DECÍA ESO NO SE REESCRIBE: devuelve False sin huella. Una huella
+    de una edición que no pasó es basura permanente en la tabla que ES el
+    deshacer. El UPDATE y el INSERT van en el mismo bloque de conexión, o sea
+    en la misma transacción.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, estado, vence_en, pospuesta_veces, bandeja_id "
+            "FROM tareas WHERE id = %s AND borrado_en IS NULL", (tarea_id,))
+        fila = await cur.fetchone()
+        if fila is None or fila.get("estado") != ESTADO_PENDIENTE:
+            # No existe, está en la papelera, o no está pendiente.
+            return False
+        if fila.get("vence_en") == vence_en:
+            return False
+
+        veces = fila.get("pospuesta_veces") or 0
+        if cuenta_como_posposicion(fila.get("estado"), fila.get("vence_en"),
+                                   ESTADO_PENDIENTE, vence_en):
+            veces += 1
+
+        await conn.execute(
+            "UPDATE tareas SET vence_en = %s, pospuesta_veces = %s "
+            "WHERE id = %s",
+            (vence_en, veces, tarea_id))
+        antes = {"id": fila["id"], "vence_en": fila.get("vence_en"),
+                 "pospuesta_veces": fila.get("pospuesta_veces") or 0,
+                 "bandeja_id": fila.get("bandeja_id")}
+        despues = {"vence_en": vence_en, "pospuesta_veces": veces}
+        motivo = ("fecha movida desde el panel de tareas" if vence_en is not None
+                  else "fecha quitada desde el panel de tareas")
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo,
+               bandeja_id)
+            VALUES ('panel', 'editar', 'tareas', %s, %s, %s, %s, %s)
+            """,
+            (tarea_id, json.dumps(antes, default=str, ensure_ascii=False),
+             json.dumps(despues, default=str, ensure_ascii=False), motivo,
+             fila.get("bandeja_id")))
+        return True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LOS COMENTARIOS DE UNA TAREA (13-sep-2026)
+#
+# Decisiones de Tiziano: se guardan APARTE (tabla `comentarios_tarea`), cada uno
+# con quién y cuándo, y nadie —ni Lucy— pisa el de otro; comentan los dos que
+# entran al panel; Lucy los lee; cualquiera de los dos puede borrar cualquiera.
+#
+# QUIÉN ESCRIBE O BORRA NO SE DECIDE ACÁ: se le pregunta a
+# `web.auth.puede_entrar`, la misma puerta que usa el panel para dejar entrar.
+# Está en la escritura además de en la ruta porque la validación de un
+# formulario protege al formulario, no a la tabla (la misma razón que en
+# `asignar_responsable`). Se importa dentro de cada función porque `web.app`
+# importa este módulo al arrancar.
+#
+# EL TEXTO DE UN COMENTARIO: qué está comprobado y qué no.
+#   · `acciones.crud` —los escritores genéricos que usa Lucy— no puede escribir
+#     esta tabla porque no está en `crud.TABLAS`. Se comprueba CORRIENDO
+#     `crud.editar`, `crud.borrar` y `crud.deshacer` contra ella.
+#   · En este archivo la única escritura que actualiza la tabla es
+#     `borrar_comentario`, y solo llena `borrado_en` y `borrado_por_chat_id`.
+#   · LA BASE NO LO IMPIDE, y el código de mañana tampoco está vigilado de
+#     verdad. La prueba que barre los .py solo ve esto, dicho en una línea:
+#     DENTRO DE UNA FUNCIÓN, sus textos literales traen seguido
+#     «update comentarios_tarea set columna = … where» (en mayúsculas o no),
+#     con el nombre pelado de la tabla justo después del verbo. Lo escrito de
+#     otra manera no lo ve, y eso incluye SQL de todos los días: la tabla en una
+#     variable (como arma sus sentencias `acciones.crud.deshacer`), el verbo
+#     partido, una constante de módulo o de clase, un alias, `public.` o
+#     `only` delante del nombre, el nombre entre comillas dobles, sin `where`.
+#     Esas formas están medidas como escapes en
+#     `test_hasta_donde_ve_el_barrido_del_texto`, y la lista no es completa.
+#   · Lo que lo cerraría sin depender de cómo se escriba el código: que la base
+#     lo rechace, con un disparador que antes de cada actualización falle si el
+#     texto nuevo es distinto del viejo. No se escribió: va en una migración de
+#     producción y donde se hizo este cambio no hubo un Postgres en el que
+#     probarlo.
+# Todo lo de arriba lo comprueba `tests/test_comentarios_de_tareas.py`.
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def comentarios_de_tarea(tarea_id: int) -> list[dict]:
+    """Los comentarios vivos de una tarea, del más viejo al más nuevo."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, tarea_id, autor_chat_id, creado_en, texto "
+            "FROM comentarios_tarea "
+            "WHERE tarea_id = %s AND borrado_en IS NULL "
+            "ORDER BY creado_en ASC, id ASC", (tarea_id,))
+        return list(await cur.fetchall())
+
+
+async def tarea_con_comentarios(tarea_id: int) -> dict | None:
+    """La tarea y sus comentarios, para la pantalla de una tarea. None si la
+    tarea no existe o está en la papelera."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, titulo, detalle, estado, vence_en, responsable_chat_id "
+            "FROM tareas WHERE id = %s AND borrado_en IS NULL", (tarea_id,))
+        tarea = await cur.fetchone()
+    if tarea is None:
+        return None
+    return {"tarea": tarea, "comentarios": await comentarios_de_tarea(tarea_id)}
+
+
+async def comentar_tarea(tarea_id: int, autor_chat_id: int,
+                         texto: str) -> int | None:
+    """Guarda UN comentario. Devuelve su id, o None si no se guardó.
+
+    `autor_chat_id` es el chat de la SESIÓN del panel, el mismo que ya se
+    comprobó para dejar entrar. Nunca sale de un campo del formulario: un
+    formulario que preguntara «quién sos» aceptaría la respuesta que le den.
+
+    No se guarda si quien escribe no puede entrar al panel, si el texto está
+    vacío, o si la tarea no existe o está en la papelera.
+
+    Deja su huella en log_acciones con actor 'panel', como toda escritura del
+    panel. La fila y la huella van en la misma transacción.
+    """
+    from web.auth import puede_entrar
+
+    limpio = (texto or "").strip()
+    if not limpio or not puede_entrar(autor_chat_id):
+        return None
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, bandeja_id FROM tareas "
+            "WHERE id = %s AND borrado_en IS NULL", (tarea_id,))
+        tarea = await cur.fetchone()
+        if tarea is None:
+            return None
+        await cur.execute(
+            """
+            INSERT INTO comentarios_tarea (tarea_id, autor_chat_id, texto)
+            VALUES (%s, %s, %s)
+            RETURNING *
+            """,
+            (tarea_id, autor_chat_id, limpio))
+        fila = await cur.fetchone()
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo,
+               bandeja_id)
+            VALUES ('panel', 'crear', 'comentarios_tarea', %s, NULL, %s,
+                    'comentario escrito desde el panel de tareas', %s)
+            """,
+            (fila["id"], json.dumps(fila, default=str, ensure_ascii=False),
+             tarea.get("bandeja_id")))
+        return fila["id"]
+
+
+async def borrar_comentario(comentario_id: int, tarea_id: int,
+                            chat_id: int) -> bool:
+    """Borra UN comentario (lo marca). Devuelve si de verdad cambió algo.
+
+    CUALQUIERA DE LOS DOS PUEDE BORRAR CUALQUIER COMENTARIO, por decisión de
+    Tiziano: no se compara `chat_id` con el autor. Sí se exige que `chat_id`
+    pueda entrar al panel, y se guarda quién lo borró.
+
+    El texto NO se toca: se llenan `borrado_en` y `borrado_por_chat_id`, y el
+    comentario deja de verse. El comentario tiene que ser de ESA tarea: con otro
+    `tarea_id`, no se borra nada.
+    """
+    from web.auth import puede_entrar
+
+    if not puede_entrar(chat_id):
+        return False
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, tarea_id, autor_chat_id, creado_en, texto "
+            "FROM comentarios_tarea "
+            "WHERE id = %s AND tarea_id = %s AND borrado_en IS NULL",
+            (comentario_id, tarea_id))
+        antes = await cur.fetchone()
+        if antes is None:
+            return False
+        await conn.execute(
+            "UPDATE comentarios_tarea "
+            "SET borrado_en = now(), borrado_por_chat_id = %s "
+            "WHERE id = %s AND borrado_en IS NULL",
+            (chat_id, comentario_id))
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo)
+            VALUES ('panel', 'borrar', 'comentarios_tarea', %s, %s, %s,
+                    'comentario borrado desde el panel de tareas')
+            """,
+            (comentario_id, json.dumps(antes, default=str, ensure_ascii=False),
+             json.dumps({"borrado_por_chat_id": chat_id})))
+        return True
+
+
 # Los minutos-antes de una tarea escrita desde el panel: NINGUNO.
 #
 # El formulario pide un DÍA, no una hora. `anticipos_min` con su default de la

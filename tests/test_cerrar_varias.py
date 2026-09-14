@@ -2207,9 +2207,19 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
     # apariciones está DENTRO de un comentario (línea 353). El número sale de
     # `columnas_declaradas()`, que parsea, no de contar líneas que casan.
     sin_juzgar = declaradas - vigiladas
-    assert len(declaradas) == 16 and len(vigiladas) == 8, (
+    # 13-sep-2026: 16 → 17 por `comentarios_tarea`. Queda FUERA de
+    # `crud.TABLAS`, y eso es una decisión de Tiziano, no un olvido: «nadie —ni
+    # Lucy— pisa el comentario de otro». Si entrara en `crud.TABLAS`, el agente
+    # podría editarla, archivarla y deshacerla con sus herramientas genéricas.
+    # La escriben SOLO las rutas del panel (`db.comentar_tarea`,
+    # `db.borrar_comentario`), que dejan su huella con actor 'panel'. Lo que eso
+    # deja sin juzgar acá: una herramienta del agente que escribiera en esa tabla
+    # saldría verde en ESTA guarda. Ninguna lo hace hoy, y
+    # `tests/test_comentarios_de_tareas.py` pone rojo cualquier UPDATE que toque
+    # algo más que el borrado.
+    assert len(declaradas) == 17 and len(vigiladas) == 8, (
         f"el reparto de tablas cambió: el esquema declara {len(declaradas)} y "
-        f"`crud.TABLAS` vigila {len(vigiladas)} (el 8-sep-2026 eran 16 y 8). "
+        f"`crud.TABLAS` vigila {len(vigiladas)} (el 13-sep-2026 eran 17 y 8). "
         f"Las que quedan sin juzgar serían {sorted(sin_juzgar)}. No se afloja "
         f"este número: se decide si las nuevas entran en la vigilancia y se "
         f"actualiza la frontera.")
@@ -2219,8 +2229,9 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
     # se la mira aparte (`_Libro.huellas`). `backups` es donde escribe
     # `db/backup.py:360`, que es legítimo y por eso sigue verde.
     assert sin_juzgar == {
-        "backups", "bandeja", "categorias_aprendidas", "consumos_estado",
-        "correo_estado", "correo_reportado", "cuentas_propias", "log_acciones",
+        "backups", "bandeja", "categorias_aprendidas", "comentarios_tarea",
+        "consumos_estado", "correo_estado", "correo_reportado",
+        "cuentas_propias", "log_acciones",
     }, (f"cambió qué tablas quedan fuera del juicio de esta guarda: "
         f"{sorted(sin_juzgar)}. Una escritura a cualquiera de ellas se VE pero "
         f"no se exige que deje huella ni que salga en el parte.")

@@ -1,0 +1,71 @@
+{% extends "base.html" %}{% set activo='tareas' %}
+{% block titulo %}Tarea{% endblock %}
+{% block cuerpo %}
+<div class="barra"><a href="/tareas">← Volver a la lista</a></div>
+
+{% if not tarea %}
+<h1>Tarea</h1>
+<p class="aviso">Esa tarea no existe o está en la papelera.</p>
+{% else %}
+<h1>{{ tarea.titulo }}</h1>
+<p class="suave">
+  {%- if tarea.vence_en %}Vence el {{ tarea.vence_en|hora_rd }}{% else %}Sin fecha{% endif %}
+  · {{ tarea.estado }}
+  {%- if tarea.responsable_chat_id is not none %}
+  · Responsable: {{ nombres.get(tarea.responsable_chat_id, 'sin nombre') }}{% endif %}
+</p>
+
+{# `detalle` es el texto que Lucy le puso a la tarea al anotarla. Se enseña
+   para leer, no se edita acá: los comentarios van aparte, en su tabla, para
+   que Lucy no los pueda pisar cuando reescribe ese texto. #}
+{% if tarea.detalle %}
+<div class="tarjeta">
+  <div class="suave">Detalle</div>
+  <div style="white-space:pre-wrap">{{ tarea.detalle }}</div>
+</div>
+{% endif %}
+
+{% if comentado %}<p class="aviso ok">Comentario guardado.</p>{% endif %}
+{% if borrado %}<p class="aviso ok">Comentario borrado.</p>{% endif %}
+{% if error == 'texto' %}
+<p class="aviso">El comentario está vacío, o pasa de {{ largo_comentario }}
+caracteres.</p>
+{% elif error == 'tarea' %}
+<p class="aviso">No se guardó: la tarea ya no está.</p>
+{% elif error == 'comentario' %}
+<p class="aviso">Ese comentario ya no estaba.</p>
+{% endif %}
+
+<h2>Comentarios · {{ comentarios|length }}</h2>
+{% if not comentarios %}
+<p class="vacio">Todavía nadie comentó esta tarea.</p>
+{% endif %}
+{% for c in comentarios %}
+<div class="tarjeta">
+  {# QUIÉN, con su NOMBRE. Si no tiene nombre en NOMBRES_POR_CHAT se dice
+     «sin nombre»: el número de chat de una persona no se enseña. #}
+  <div class="suave"><b>{{ nombres.get(c.autor_chat_id, 'sin nombre') }}</b>
+    · {{ c.creado_en|hora_rd }}</div>
+  <div style="white-space:pre-wrap">{{ c.texto }}</div>
+  {# Un formulario por comentario, y está bien acá: esta pantalla no es la
+     lista, y cada botón borra una sola cosa. #}
+  <form method="post" action="/tareas/{{ tarea.id }}/comentarios/{{ c.id }}/borrar">
+    <div class="barra"><button>Borrar</button></div>
+  </form>
+</div>
+{% endfor %}
+
+<form method="post" action="/tareas/{{ tarea.id }}/comentarios">
+  <p>
+    <label for="texto">Agregar un comentario</label><br>
+    <textarea id="texto" name="texto" required rows="4"
+              maxlength="{{ largo_comentario }}"
+              style="width:100%;max-width:34rem;font:inherit;padding:.45rem .6rem;border-radius:7px;border:1px solid var(--linea);background:var(--fondo);color:var(--texto)"></textarea>
+  </p>
+  <div class="barra"><button>Guardar el comentario</button></div>
+</form>
+<p class="suave">Queda a tu nombre y con la hora. Cualquiera de los dos lo
+puede borrar; desde el panel no se puede editar. Lucy lo lee cuando le preguntan por esta
+tarea, como lo que es: un comentario, no una orden.</p>
+{% endif %}
+{% endblock %}
