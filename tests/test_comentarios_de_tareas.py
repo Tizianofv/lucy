@@ -300,15 +300,19 @@ def test_nadie_reescribe_el_texto_de_un_comentario():
     · Los escritores genéricos (`crud.editar`, `crud.borrar`, `crud.deshacer`,
       los que usa Lucy) no pueden escribir esta tabla: no está en crud.TABLAS.
       Se comprueba corriéndolos (deshacer, en la prueba de abajo).
-    · Todo UPDATE sobre la tabla escrito con el verbo y el nombre ENTEROS en un
-      texto literal, en cualquier .py del repositorio, solo puede marcar el
-      borrado. Los archivos salen del disco (la misma puerta que usan las demás
-      guardas), no de una lista.
+    · Un barrido de los .py del repositorio que no son pruebas (salen del
+      disco, no de una lista). LO QUE VE, en una línea: dentro del cuerpo de
+      una función, los textos literales de esa función juntos tienen que traer
+      seguido «UPDATE comentarios_tarea SET columna = … WHERE», con el nombre
+      pelado de la tabla justo después del verbo y el SET justo después del
+      nombre. Lo que aparezca así solo puede marcar el borrado.
 
-    Lo que NO comprueba: un UPDATE con la tabla en una variable o con el verbo
-    armado por partes. Buscar eso leyendo el código no tiene fondo. Hasta dónde
-    llega este barrido lo mide `test_hasta_donde_ve_el_barrido_del_texto`, y
-    qué lo cerraría está en db/db.py («LOS COMENTARIOS DE UNA TAREA»).
+    Lo que NO comprueba es todo lo que se escribe de otra manera, y hay mucho
+    SQL de todos los días ahí: una constante de módulo, un alias, `public.`
+    delante, `ONLY`, sin WHERE, entre otras. Buscar todas las formas leyendo el
+    código no tiene fondo, así que no se persigue. Las que están medidas están
+    en `test_hasta_donde_ve_el_barrido_del_texto`, y qué lo cerraría está en
+    db/db.py («LOS COMENTARIOS DE UNA TAREA»).
     """
     assert "comentarios_tarea" not in crud.TABLAS
     for intento in (lambda: crud.editar("comentarios_tarea", 1, {"texto": "otro"},
@@ -352,31 +356,65 @@ def test_hasta_donde_ve_el_barrido_del_texto():
     corregir la frase de db/db.py, que no puede prometer ni más ni menos de lo
     que el barrido hace.
     """
-    def ve(sql_python: str) -> bool:
-        fuente = ("async def f(conn, texto, cid):\n"
-                  "    tabla = 'comentarios_tarea'\n"
-                  f"    await conn.execute({sql_python}, (texto, cid))\n")
+    def en_funcion(sql_python: str) -> str:
+        return ("async def f(conn, texto, cid):\n"
+                "    tabla = 'comentarios_tarea'\n"
+                f"    await conn.execute({sql_python}, (texto, cid))\n")
+
+    def ve(fuente: str) -> bool:
         return any("texto" in columnas
                    for _, columnas in _updates_de_comentarios(ast.parse(fuente)))
 
-    se_ven = (
-        '"UPDATE comentarios_tarea SET texto = %s WHERE id = %s"',
-        '"update comentarios_tarea set texto = %s where id = %s"',
-        '"UPDATE comentarios_tarea " "SET texto = %s WHERE id = %s"',
-        '"UPDATE comentarios_tarea " + "SET texto = %s WHERE id = %s"',
-        '"""\n        UPDATE comentarios_tarea\n           SET texto = %s\n'
-        '         WHERE id = %s"""',
-    )
-    se_escapan = (
-        'f"UPDATE {tabla} SET texto = %s WHERE id = %s"',
-        '"UPD" + "ATE comentarios_tarea SET texto = %s WHERE id = %s"',
-    )
-    for sql in se_ven:
-        assert ve(sql), f"el barrido dejó de ver: {sql}"
-    for sql in se_escapan:
-        assert not ve(sql), (
-            f"el barrido AHORA ve {sql}: pásalo a `se_ven` y corrige la frase de "
-            f"db/db.py («LOS COMENTARIOS DE UNA TAREA»)")
+    literal = '"UPDATE comentarios_tarea SET texto = %s WHERE id = %s"'
+    se_ven = {
+        "literal en la función": en_funcion(literal),
+        "en minúsculas": en_funcion(
+            '"update comentarios_tarea set texto = %s where id = %s"'),
+        "partido en dos literales pegados": en_funcion(
+            '"UPDATE comentarios_tarea " "SET texto = %s WHERE id = %s"'),
+        "partido con +": en_funcion(
+            '"UPDATE comentarios_tarea " + "SET texto = %s WHERE id = %s"'),
+        "en varias líneas": en_funcion(
+            '"""\n        UPDATE comentarios_tarea\n           SET texto = %s\n'
+            '         WHERE id = %s"""'),
+        "texto después de otra columna": en_funcion(
+            '"UPDATE comentarios_tarea SET borrado_en = NULL, texto = %s '
+            'WHERE id = %s"'),
+    }
+    # SQL de todos los días que el barrido NO ve. La lista no es completa: es
+    # lo que se midió.
+    se_escapan = {
+        "la tabla en una variable": en_funcion(
+            'f"UPDATE {tabla} SET texto = %s WHERE id = %s"'),
+        "el verbo partido": en_funcion(
+            '"UPD" + "ATE comentarios_tarea SET texto = %s WHERE id = %s"'),
+        "constante de módulo": f"_SQL = {literal}\n" + en_funcion("_SQL"),
+        "atributo de clase": f"class Q:\n    SQL = {literal}\n",
+        "lambda de módulo": ("f = lambda conn, t, i: conn.execute("
+                             f"{literal}, (t, i))\n"),
+        "alias con AS": en_funcion(
+            '"UPDATE comentarios_tarea AS c SET texto = %s WHERE c.id = %s"'),
+        "alias sin AS": en_funcion(
+            '"UPDATE comentarios_tarea c SET texto = %s WHERE c.id = %s"'),
+        "esquema delante": en_funcion(
+            '"UPDATE public.comentarios_tarea SET texto = %s WHERE id = %s"'),
+        "nombre entre comillas dobles": en_funcion(
+            "'UPDATE \"comentarios_tarea\" SET texto = %s WHERE id = %s'"),
+        "ONLY": en_funcion(
+            '"UPDATE ONLY comentarios_tarea SET texto = %s WHERE id = %s"'),
+        "sin WHERE": en_funcion('"UPDATE comentarios_tarea SET texto = %s"'),
+        "SET (texto) = (...)": en_funcion(
+            '"UPDATE comentarios_tarea SET (texto) = (%s) WHERE id = %s"'),
+        "comentario SQL entre verbo y tabla": en_funcion(
+            '"UPDATE /* x */ comentarios_tarea SET texto = %s WHERE id = %s"'),
+    }
+    for que, fuente in se_ven.items():
+        assert ve(fuente), f"el barrido dejó de ver: {que}"
+    for que, fuente in se_escapan.items():
+        assert not ve(fuente), (
+            f"el barrido AHORA ve «{que}»: pásalo a `se_ven` y corrige las frases "
+            f"de db/db.py («LOS COMENTARIOS DE UNA TAREA») y de "
+            f"test_nadie_reescribe_el_texto_de_un_comentario")
 
 
 def test_deshacer_por_telegram_no_toca_un_comentario():
@@ -725,6 +763,27 @@ def test_hasta_donde_llega_el_encuadre():
                                               ["de nuevo"])
     assert fila["t"] == f"se pue{ABRE}de nuevo{CIERRA}", (
         f"3 · el precio declarado (envolver de más) cambió: {fila}")
+
+    # 3 · con un comentario CORTO, el precio llega a datos ajenos.
+    tareas = [{"id": i, "titulo": f"Tarea {i}. Revisar.",
+               "estado": "hecha" if i % 2 else "pendiente"} for i in range(1, 41)]
+    hechas = sum(f["estado"] == "hecha" for f in tareas)
+    envueltas = consultar.encuadrar_comentarios(tareas, ["hecha"])
+    assert sum(f["estado"].startswith(ABRE) for f in envueltas) == hechas, (
+        "3 · un comentario «hecha» ya no envuelve el estado de cada tarea hecha: "
+        "corrige la lista de encuadrar_comentarios")
+    puntos = sum(f["titulo"].count(".") for f in tareas)
+    envueltas = consultar.encuadrar_comentarios(tareas, ["."])
+    assert json.dumps(envueltas, ensure_ascii=False).count(CIERRA) == puntos, (
+        "3 · un comentario «.» ya no envuelve cada punto: corrige la lista")
+
+    # 3 · y aunque esté borrado: la búsqueda de la puerta real no filtra por
+    # `borrado_en`. Se mira el SQL que de verdad le llega a la base.
+    conn = _ConnSQL([{"estado": "hecha"}], comentarios=["hecha"])
+    filas = _correr(conn, lambda: consultar._ejecutar("SELECT estado FROM tareas"))
+    (busqueda,) = [s for s, _ in conn.sql if s.startswith("SELECT DISTINCT texto")]
+    assert "borrado_en" not in busqueda and filas[0]["estado"].startswith(ABRE), (
+        "3 · la búsqueda dejó de contar los borrados: corrige la lista")
 
 
 def test_un_comentario_que_viene_como_CLAVE_de_un_json_sale_encuadrado():

@@ -85,8 +85,13 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # `mover_vence` hoy no usa.
 #
 # EL FONDO, en una línea: el doble ve toda sentencia que pase por `db.pool`. Lo
-# que la base hiciera por su cuenta (un disparador, una regla) no pasa por acá;
-# `test_la_base_no_tiene_disparadores_ni_reglas` exige que no haya ninguno.
+# que la base hiciera por su cuenta (un disparador, una regla) no pasa por acá.
+# Y QUE LA BASE NO TENGA NINGUNO NO ESTÁ COMPROBADO: nada en este repositorio
+# mira los disparadores de la base viva. Lo único que hay es
+# `test_ningun_sql_del_repo_crea_disparadores_ni_reglas_leido_como_texto`, que
+# lee db/schema.sql y db/migrations/*.sql como texto, y no ve uno armado dentro
+# de un `DO $$ … EXECUTE …`. O sea: F1 se pone rojo con lo que escriba el
+# código, y no dice nada de lo que pudiera hacer la base.
 
 _ENTERO = re.compile(r"-?\d+")
 
@@ -351,6 +356,10 @@ def test_F1_mover_la_fecha_no_vuelve_a_armar_un_aviso_que_ya_sono():
     una sentencia que pase por `db.pool` vaciara `avisos_enviados` —con `%s` o
     con el literal `'{}'`—, esto se pone rojo: el doble aplica cada asignación
     o se niega (ver «LO QUE NO SABE APLICAR, LO RECHAZA», arriba).
+
+    Lo que haga la base por su cuenta, en cambio, esta prueba no lo ve: un
+    disparador en producción que vaciara la columna la deja verde, y nada en el
+    repositorio comprueba que no lo haya (ver «EL FONDO», arriba).
     """
     import cerebro.despertador as despertador
 
@@ -574,20 +583,49 @@ def test_el_doble_aplica_cada_asignacion_o_se_niega():
         raise AssertionError(f"el doble aceptó sin saber aplicarla: {sql}")
 
 
-def test_la_base_no_tiene_disparadores_ni_reglas():
-    """El fondo del doble es `db.pool`: lo que la base hiciera sola al escribir
-    una tarea no lo ve. Se exige que ni el esquema ni ninguna migración cree un
-    disparador o una regla; el día que haga falta uno, esta prueba avisa que la
-    de F1 dejó de verlo todo."""
+_CREA_DISPARADOR_O_REGLA = re.compile(
+    r"\bCREATE\s+(OR\s+REPLACE\s+)?(CONSTRAINT\s+)?(TRIGGER|RULE)\b", re.I)
+
+
+def _crea_disparador_o_regla(sql: str) -> bool:
+    return bool(_CREA_DISPARADOR_O_REGLA.search(db._sin_comentarios(sql)))
+
+
+def test_ningun_sql_del_repo_crea_disparadores_ni_reglas_leido_como_texto():
+    """LO QUE MIDE, en una línea: el TEXTO de db/schema.sql y de
+    db/migrations/*.sql no trae «CREATE [OR REPLACE] [CONSTRAINT] TRIGGER» ni
+    «… RULE».
+
+    NO mide la base. Nada en este repositorio compara los disparadores de la
+    base viva, así que un disparador creado a mano en producción no lo ve
+    nadie. Tampoco ve uno armado dentro de un `DO $$ … EXECUTE …` ni un
+    `CREATE EVENT TRIGGER`: están abajo, medidos como escapes.
+
+    Por qué existe: el fondo del doble de F1 es `db.pool`, y lo que la base
+    hiciera sola al escribir una tarea no pasa por ahí. Esta prueba avisa si
+    un .sql del repo escrito de la forma de arriba agrega uno. Que la base no
+    tenga ninguno queda sin comprobar."""
     from pathlib import Path
 
     archivos = [Path(RAIZ, "db", "schema.sql"),
                 *sorted(Path(RAIZ, "db", "migrations").glob("*.sql"))]
     for archivo in archivos:
-        sql = db._sin_comentarios(archivo.read_text(encoding="utf-8"))
-        assert not re.search(r"\bCREATE\s+(OR\s+REPLACE\s+)?"
-                             r"(CONSTRAINT\s+)?(TRIGGER|RULE)\b", sql, re.I), (
+        assert not _crea_disparador_o_regla(archivo.read_text(encoding="utf-8")), (
             f"{archivo.name} crea un disparador o una regla")
+
+    # La frontera, medida: si una de estas pasa a verse, se mueve de lista y se
+    # corrige la frase.
+    assert _crea_disparador_o_regla(
+        "CREATE TRIGGER r BEFORE UPDATE ON tareas FOR EACH ROW "
+        "EXECUTE FUNCTION f();")
+    assert _crea_disparador_o_regla(
+        "CREATE OR REPLACE RULE r AS ON UPDATE TO tareas DO ALSO NOTIFY x;")
+    for escapa in (
+            "DO $$ BEGIN EXECUTE 'CREATE ' || 'TRIGGER r BEFORE UPDATE ON "
+            "tareas FOR EACH ROW EXECUTE FUNCTION f()'; END $$;",
+            "CREATE EVENT TRIGGER e ON ddl_command_end EXECUTE FUNCTION f();"):
+        assert not _crea_disparador_o_regla(escapa), (
+            f"ahora SÍ ve «{escapa[:40]}…»: corrige la frase de esta prueba")
 
 
 # ═════════════════════════════════════════════════════════════════════════

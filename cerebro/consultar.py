@@ -547,7 +547,16 @@ def encuadrar_comentarios(filas: list, textos) -> list:
          «ok» y «listo» juntados sin separador sale «oklisto», sin marca.
       3. Un texto que no es comentario pero CONTIENE uno también sale
          envuelto: un título igual a un comentario, o «de nuevo» dentro de
-         «se puede nuevo».
+         «se puede nuevo». Con un comentario CORTO eso llega a datos que no
+         tienen nada que ver: uno que diga «hecha» envuelve la columna `estado`
+         de cada tarea hecha, así que Lucy lee ese estado como si fuera un
+         comentario, y uno que diga «.» envuelve cada punto de cada texto. Y
+         sigue pasando mientras el comentario exista, AUNQUE ESTÉ BORRADO,
+         porque `_comentarios_presentes` cuenta también los borrados.
+         No se cierra, por dos motivos. Por el valor no hay manera de
+         distinguir el «hecha» que escribió una persona del «hecha» del estado.
+         Y si se dejaran fuera los borrados, el texto de uno borrado que traiga
+         una consulta saldría sin marca.
       4. Solo se miran los textos que devolvió la consulta, hasta LIMITE_FILAS.
     """
     unicos = sorted({t for t in textos if isinstance(t, str) and t},
