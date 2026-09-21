@@ -879,23 +879,30 @@ async def lugar_por_nombre(nombre: str) -> dict | None:
         return await cur.fetchone()
 
 
-async def registrar_aviso(chat_id: int, texto: str) -> int:
+async def registrar_aviso(chat_id: int, texto: str, origen: str = "despertador") -> int:
     """Deja constancia en la bandeja de algo que Lucy dijo POR SU CUENTA.
 
     Los avisos del despertador entran a la conversación como una fila más
     (origen 'despertador', sin dicho, con respuesta_lucy): así la memoria
     corta y la de largo plazo los ven igual que a cualquier otro intercambio.
     Lo que Lucy dice proactivamente también es parte de la historia.
+
+    `origen` es libre (la columna no tiene vocabulario cerrado; ver
+    `db/schema.sql`) — `cerebro/copia_dueno.py` lo usa con 'copia_dueno' para
+    poder distinguir, si hiciera falta mirar la bandeja, una copia de un
+    aviso real del despertador. Al modelo no le llega esta columna: lo que ve
+    es solo `respuesta_lucy` (`cerebro/agente.py::atender`), así que la marca
+    que de verdad importa para que Lucy sepa que es una copia va en el TEXTO.
     """
     async with pool.connection() as conn:
         cur = await conn.execute(
             """
             INSERT INTO bandeja
               (origen, tipo_entrada, chat_id, estado, respuesta_lucy, procesado_en)
-            VALUES ('despertador', 'aviso', %s, 'procesado', %s, now())
+            VALUES (%s, 'aviso', %s, 'procesado', %s, now())
             RETURNING id
             """,
-            (chat_id, texto[:4000]),
+            (origen, chat_id, texto[:4000]),
         )
         return (await cur.fetchone())[0]
 

@@ -161,6 +161,55 @@ def personas_del_panel() -> tuple[tuple[int, str], ...]:
                  if c in NOMBRES_POR_CHAT)
 
 
+# ── COPIA AL DUEÑO ────────────────────────────────────────────────────────
+#
+# Decisión de Tiziano, 21-sep-2026: «lo que me llega a mí también le llega a
+# Rosi, nada cambiado, simplemente lo mismo» / «no importa si me llega algo
+# más quiero que le lleguen a ella también» / «exacto, todo».
+#
+# LA FORMA: nombres separados por coma (o por punto y coma), buscados contra
+# `personas_del_panel()` — la MISMA lista de quién puede entrar y cómo se
+# llama que ya existe, no una lista propia. Por eso solo se le puede copiar a
+# alguien que YA tiene acceso a Lucy: escribir acá un nombre no le abre la
+# puerta a nadie, y si mañana alguien deja de poder entrar, deja de recibir
+# copia el mismo día sin tocar esta variable.
+#
+#     COPIAS_DEL_DUENO="Rosi"
+#
+# QUÉ PASA SI UN NOMBRE NO RESUELVE: no se copia a NADIE —ni a los nombres
+# que sí resolvieron— y queda un aviso en el registro. Es la misma regla que
+# `cuentas_de_correo`: ante lo que no se entiende, la salida segura es «como
+# si la variable no existiera», nunca «copiar a medias sin que se sepa qué
+# falta».
+#
+# Vacía (el default): nadie se copia. Todo queda exactamente como hoy.
+_NOMBRES_DE_COPIA = tuple(
+    n.strip() for n in os.environ.get("COPIAS_DEL_DUENO", "").replace(";", ",").split(",")
+    if n.strip()
+)
+
+
+def chats_de_copia() -> tuple[int, ...]:
+    """A qué chats se copia cada mensaje que Lucy le manda al dueño.
+
+    Se deriva de `personas_del_panel()` en cada llamada, igual que
+    `puede_ser_responsable`: no hay una lista propia que se pueda separar de
+    quién puede entrar de verdad.
+    """
+    if not _NOMBRES_DE_COPIA:
+        return ()
+    por_nombre = {nombre: chat for chat, nombre in personas_del_panel()}
+    resueltos = tuple(por_nombre[n] for n in _NOMBRES_DE_COPIA if n in por_nombre)
+    if len(resueltos) != len(_NOMBRES_DE_COPIA):
+        faltan = [n for n in _NOMBRES_DE_COPIA if n not in por_nombre]
+        log.warning(
+            "COPIAS_DEL_DUENO tiene nombre(s) que no resuelven contra "
+            "personas_del_panel() (%s): no se copia a nadie hasta "
+            "corregirlo.", ", ".join(faltan))
+        return ()
+    return resueltos
+
+
 def chat_escrito(texto):
     """El chat que dice ese TEXTO, o None si ese texto no es un chat.
 

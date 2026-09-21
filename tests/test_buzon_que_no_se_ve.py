@@ -3667,9 +3667,22 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # exentos por `tests/test_comentarios_de_tareas.py`. Los VIGILADOS siguen en
     # 38: los comentarios tocaron `db/db.py`, `web/app.py`,
     # `cerebro/consultar.py` y `tools/humo.py`, todos ya vigilados.
-    assert medido == {"en disco": 74, "exentos": 36, "vigilados": 38}, (
+    #
+    # 21-sep-2026: 74 → 75 en disco y 38 → 39 vigilados, sin mover los EXENTOS
+    # (siguen en 36), por `cerebro/copia_dueno.py` (que Rosi reciba copia de
+    # todo lo que Lucy le manda al dueño). Es un módulo de PRODUCCIÓN nuevo
+    # que importa y usa `config` (`config.CHAT_ID_DUENO`, `config.chats_de_copia`),
+    # así que tenía que sumar a vigilados y no a exentos — la exención sale del
+    # ROL del archivo (`testpaths` de pytest.ini), y éste no es un test. El
+    # mismo trabajo tocó `config.py`, `db/db.py`, `main.py` y `cerebro/agente.py`,
+    # los cuatro ya vigilados, así que no suman de nuevo.
+    #
+    # 21-sep-2026, mismo trabajo: 75 → 76 en disco y 36 → 37 exentos por
+    # `tests/test_copia_a_rosi.py`, que prueba lo de arriba. Los VIGILADOS
+    # siguen en 39: es un archivo de `testpaths`, o sea EXENTO por rol.
+    assert medido == {"en disco": 76, "exentos": 37, "vigilados": 39}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "13-sep-2026 era {'en disco': 74, 'exentos': 36, 'vigilados': 38}. La "
+        "21-sep-2026 era {'en disco': 76, 'exentos': 37, 'vigilados': 39}. La "
         "aserción de fondo —cero archivos alcanzan la lista cruda— YA CORRIÓ "
         "arriba y quedó verde, así que esto NO es una fuga. Si los vigilados "
         "bajaron, algo se está saltando de más y «cero falsos positivos» dejó "

@@ -37,6 +37,7 @@ import acciones.botones as botones
 import acciones.crud as crud
 import captura.correo as correo
 import cerebro.consultar as consultar
+import cerebro.copia_dueno as copia_dueno
 import cerebro.deepseek as motor
 import cerebro.memoria as memoria
 import cerebro.viaje as viaje
@@ -1054,6 +1055,7 @@ async def atender(fila: dict, texto: str, bot) -> None:
         clasificacion: str | None = "orden",
         estado: str = "procesado",
         motivo: str = "panel",
+        copiar: bool = True,
     ) -> None:
         """LA ÚNICA SALIDA DEL TURNO. Manda, reporta lo escrito y cierra la fila.
 
@@ -1075,12 +1077,22 @@ async def atender(fila: dict, texto: str, bot) -> None:
         a propósito: mandar ANTES de marcar es lo que hace que un envío fallido
         devuelva la fila a la cola en vez de dejarla esperando una respuesta a
         una pregunta que nunca salió.
+
+        `copiar=False` es la única excepción a que todo lo que le llega al
+        dueño le llegue también a quien está en `config.chats_de_copia()`
+        (`cerebro/copia_dueno.py`): la usa la herramienta "panel", porque el
+        enlace que se manda entra en el panel COMO el dueño — copiarlo sería
+        mandarle a otra persona una llave a nombre de Tiziano.
         """
         parte = _parte_de_lo_hecho(acciones)
         texto_final = f"{salida}\n\n{parte}".strip() if parte else salida
         markup = (botones.teclado_deshacer_todo(bandeja_id, len(acciones))
                   if acciones else None)
-        await _enviar(bot, texto_final, reply_markup=markup, **responder_kw)
+        if copiar:
+            await _enviar(bot, texto_final, reply_markup=markup, **responder_kw)
+        else:
+            with copia_dueno.sin_copiar():
+                await _enviar(bot, texto_final, reply_markup=markup, **responder_kw)
         await db.guardar_respuesta(bandeja_id, texto_final)
         await db.guardar_interpretacion(
             bandeja_id, clasificacion,
@@ -1172,9 +1184,13 @@ async def atender(fila: dict, texto: str, bot) -> None:
                 await _fin_del_turno("No tenés acceso al panel de finanzas.")
                 return
             token = _auth.crear_token(chat_id)
+            # copiar=False: decisión de Tiziano, 21-sep-2026. El enlace entra
+            # como QUIEN LO PIDIÓ (ver el comentario de arriba); copiarlo le
+            # daría a quien reciba la copia una llave emitida a nombre de otro.
             await _fin_del_turno(
                 f"Acá está el panel — vence en 10 minutos:\n"
-                f"{config.PANEL_URL}/entrar?t={token}")
+                f"{config.PANEL_URL}/entrar?t={token}",
+                copiar=False)
             return
 
         if nombre == "responder":

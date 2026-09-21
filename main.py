@@ -21,6 +21,7 @@ from telegram.ext import (
 
 import acciones.botones as botones
 import cerebro.calendario as calendario
+import cerebro.copia_dueno as copia_dueno
 import cerebro.deepseek as motor
 import cerebro.vision as vision
 import cerebro.whisper as whisper
@@ -197,6 +198,12 @@ async def _al_fallar(update: object, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 def main() -> None:
+    # Antes de construir nada: la puerta única de la copia al dueño vive en
+    # la CLASE `telegram.Bot`, así que el orden respecto de `build()` no
+    # cambia el resultado — pero instalarla primero es lo más simple de leer
+    # (ver `cerebro/copia_dueno.py`).
+    copia_dueno.instalar()
+
     app = (
         ApplicationBuilder()
         .token(config.TELEGRAM_TOKEN)
