@@ -168,6 +168,12 @@ async def test_sin_copias_configuradas_el_dueno_recibe_una_sola_vez(puerta, bot)
 # ── 3) Si falla la copia, al dueño le llegó igual ─────────────────────────
 
 async def test_si_falla_la_copia_el_envio_al_dueno_no_falla(puerta, bot):
+    """OJO con esta prueba: tiene que seguir pasando por `_send_message_con_copia`
+    (lo que `puerta` deja instalado en `telegram.Bot.send_message`). Si acá se
+    reasignara TAMBIÉN `telegram.Bot.send_message`, se estaría reemplazando el
+    parche entero y la prueba dejaría de medir su try/except — mide otra cosa
+    y pasa igual. Por eso se toca únicamente `copia_dueno._original_send_message`,
+    que es la función que el parche llama por dentro."""
     _permitir("Rosi", {DUENO: "Tiziano", ROSI: "Rosi"})
 
     async def _rompe_con_rosi(self, chat_id, text, **kwargs):
@@ -176,7 +182,6 @@ async def test_si_falla_la_copia_el_envio_al_dueno_no_falla(puerta, bot):
         puerta.append({"self": self, "chat_id": chat_id, "text": text, **kwargs})
         return types.SimpleNamespace(message_id=1)
 
-    telegram.Bot.send_message = _rompe_con_rosi
     copia_dueno._original_send_message = _rompe_con_rosi
 
     # No debe propagar la excepción: al dueño ya le llegó el suyo.
@@ -189,13 +194,13 @@ async def test_si_falla_la_copia_el_envio_al_dueno_no_falla(puerta, bot):
 async def test_si_falla_el_envio_al_dueno_no_hay_copia(puerta, bot):
     """Al revés: si Telegram rechaza el mensaje AL DUEÑO, la excepción se
     propaga (como hoy) y no se manda nada a nadie más — no hay de dónde
-    copiar un mensaje que nunca salió."""
+    copiar un mensaje que nunca salió. Igual que arriba: solo se toca
+    `copia_dueno._original_send_message`, no `telegram.Bot.send_message`."""
     _permitir("Rosi", {DUENO: "Tiziano", ROSI: "Rosi"})
 
     async def _rompe_siempre(self, chat_id, text, **kwargs):
         raise telegram.error.BadRequest("mensaje inválido")
 
-    telegram.Bot.send_message = _rompe_siempre
     copia_dueno._original_send_message = _rompe_siempre
 
     with pytest.raises(telegram.error.BadRequest):
@@ -358,7 +363,6 @@ async def test_si_falla_la_copia_no_se_anota_nada_en_memoria(puerta, monkeypatch
             raise RuntimeError("falló el envío a Rosi")
         return types.SimpleNamespace(message_id=1)
 
-    telegram.Bot.send_message = _rompe_con_rosi
     copia_dueno._original_send_message = _rompe_con_rosi
     bot_real = telegram.Bot(token="123456:token-de-prueba")
 
