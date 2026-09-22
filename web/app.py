@@ -1292,6 +1292,13 @@ async def agregar_pasos(request: Request, tid: int):
 async def marcar_paso(request: Request, tid: int, pid: int):
     """Marcar (o desmarcar) UN micro-paso (encargo 7).
 
+    LA PERTENENCIA SE COMPRUEBA ANTES DE ESCRIBIR (arreglo tras el NO PASA
+    del testigo sobre `bebf6c9`): `db.pertenece_paso(tid, pid)`, la MISMA
+    pieza que usa `quitar_paso` más abajo. Hasta este arreglo la
+    comprobación era `despues.get("tarea_id") != tid` -- DESPUÉS de que el
+    `UPDATE` ya había corrido: el paso de otra tarea quedaba marcado igual,
+    aunque la respuesta dijera error.
+
     Reusa `crud.editar` ENTERO -- la misma huella, el mismo deshacer que
     cualquier otra edición genérica -- en vez de una escritura aparte. El
     valor que llega es el que el checkbox YA tiene DESPUÉS del clic (ver la
@@ -1300,12 +1307,14 @@ async def marcar_paso(request: Request, tid: int, pid: int):
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
+    if not await db.pertenece_paso(tid, pid):
+        return RedirectResponse(f"/tareas/{tid}?error=pasos", status_code=303)
     formulario = await request.form()
     hecho = str(formulario.get("hecho", "")).strip() == "1"
     despues, _log_id = await crud.editar(
         "micro_pasos", pid, {"hecho": hecho},
         motivo="Paso marcado desde el panel de tareas", actor="panel")
-    if despues is None or despues.get("tarea_id") != tid:
+    if despues is None:
         return RedirectResponse(f"/tareas/{tid}?error=pasos", status_code=303)
     return RedirectResponse(f"/tareas/{tid}", status_code=303)
 
@@ -1314,9 +1323,19 @@ async def marcar_paso(request: Request, tid: int, pid: int):
 async def quitar_paso(request: Request, tid: int, pid: int):
     """Quitar UN micro-paso (encargo 7). `crud.borrar` -- ya gratis, `micro_
     pasos` está en `crud.TABLAS`, así que esto es soft-delete + huella +
-    deshacer, sin escribir nada nuevo."""
+    deshacer, sin escribir nada nuevo.
+
+    LA PERTENENCIA SE COMPRUEBA ANTES DE ESCRIBIR (arreglo tras el NO PASA
+    del testigo sobre `bebf6c9`): `db.pertenece_paso(tid, pid)`, la MISMA
+    pieza que usa `marcar_paso` arriba. Hasta este arreglo esta ruta NO
+    comprobaba nada -- `crud.borrar` solo mira el `id` del paso, nunca de
+    quién es -- así que bastaba con adivinar el id de un paso ajeno en la
+    URL para borrarlo.
+    """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
+    if not await db.pertenece_paso(tid, pid):
+        return RedirectResponse(f"/tareas/{tid}?error=pasos", status_code=303)
     log_id = await crud.borrar(
         "micro_pasos", pid, motivo="Paso quitado desde el panel de tareas")
     if log_id is None:

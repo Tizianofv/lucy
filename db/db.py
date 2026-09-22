@@ -2891,6 +2891,33 @@ async def pasos_de_tarea(tarea_id: int) -> list[dict]:
             raise
 
 
+async def pertenece_paso(tarea_id: int, paso_id: int) -> bool:
+    """¿Ese micro-paso es de VERDAD de esa tarea, y sigue vivo? (encargo 7,
+    arreglo tras el NO PASA del testigo sobre `bebf6c9`.)
+
+    LA MISMA PIEZA para las dos rutas del panel que tocan un paso por su id
+    -- `web/app.py::marcar_paso` y `quitar_paso` -- y las dos la llaman
+    ANTES de escribir, no después. Hasta este arreglo, `quitar_paso` no
+    comprobaba nada (`crud.borrar("micro_pasos", pid, ...)` sin mirar
+    `tid`: se podía borrar el paso de OTRA tarea con solo adivinar su id en
+    la URL) y `marcar_paso` sí comprobaba, pero DESPUÉS de haber escrito
+    (`despues.get("tarea_id") != tid`, una vez que el UPDATE ya había
+    corrido) -- la escritura quedaba hecha igual, aunque la respuesta dijera
+    error.
+
+    Vivo: `borrado_en IS NULL`, igual que `pasos_de_tarea`. Un paso ya
+    quitado no "pertenece" para estos efectos -- no hay nada que marcar ni
+    que volver a quitar.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT 1 FROM micro_pasos "
+            " WHERE id = %s AND tarea_id = %s AND borrado_en IS NULL",
+            (paso_id, tarea_id))
+        return await cur.fetchone() is not None
+
+
 async def conteo_pasos(tarea_ids: list[int]) -> dict[int, dict]:
     """`{tarea_id: {"hechos": N, "total": M}}` para las tareas de la lista,
     SOLO las que de verdad tienen al menos un paso vivo -- una tarea sin
