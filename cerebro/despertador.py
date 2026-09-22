@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 from psycopg.rows import dict_row
 
 import acciones.crud as crud
+import cerebro.copia_dueno as copia_dueno
 import config
 import db.db as db
 from cerebro.deepseek import DIAS
@@ -99,15 +100,32 @@ SEMANAL_RESCATE_DESDE = 6    # 6:00 AM
 SEMANAL_RESCATE_HASTA = 9    # 9:00 AM: más tarde ya pisa el briefing matinal
 
 
-async def _avisar(bot, texto: str) -> None:
-    """Manda el aviso Y lo deja en la bandeja como parte de la conversación.
+async def _avisar(bot, texto: str, destino: int | None = None, *,
+                   sin_copia: bool = False) -> None:
+    """Manda el aviso a `destino` (el dueño si no se dice otro) Y lo deja en
+    SU bandeja como parte de la conversación.
 
-    Sin el registro, el próximo mensaje de Tiziano ("salgo del estudio")
+    Sin el registro, el próximo mensaje de esa persona ("salgo del estudio")
     llegaría al agente sin la pregunta que lo causó: proactividad que rompe
     el hilo en vez de empezarlo.
+
+    `sin_copia` (encargo 2, 22-sep-2026): este aviso YA tiene camino propio
+    por destinatario (hoy, un recordatorio con `responsable_chat_id`
+    resuelto) y copiarlo ADEMÁS a Rosi (`config.chats_de_copia()`) sería
+    mandarle dos veces lo mismo -- o, peor, mandarle un recordatorio que es
+    de Tiziano. Mismo mecanismo que ya usa `cerebro/interpretar.py` para el
+    briefing y el plan semanal del dueño: `copia_dueno.sin_copiar()`, nunca
+    una lista de destinos tecleada. Los avisos que TODAVÍA no tienen camino
+    propio (hoy, el de respaldo) no pasan `sin_copia` y se siguen copiando
+    igual que antes -- tocarlos es de otro encargo.
     """
-    await bot.send_message(chat_id=config.CHAT_ID_DUENO, text=texto[:4000])
-    await db.registrar_aviso(config.CHAT_ID_DUENO, texto)
+    destino = config.CHAT_ID_DUENO if destino is None else destino
+    if sin_copia:
+        with copia_dueno.sin_copiar():
+            await bot.send_message(chat_id=destino, text=texto[:4000])
+    else:
+        await bot.send_message(chat_id=destino, text=texto[:4000])
+    await db.registrar_aviso(destino, texto)
 
 
 # ── El respaldo que no está (30-ago-2026) ────────────────────────────────────
@@ -252,9 +270,15 @@ async def revisar(bot) -> int:
     # hoy a cualquier fila vieja si Lucy estuvo caída un rato largo; esto no
     # le agrega ni le quita nada a esa regla, solo la deja actuar sobre una
     # fila que hasta ahora estaba escondida.
+    # `responsable_chat_id` viaja en las DOS ramas del UNION -- NULL en
+    # `eventos` a propósito, porque esa tabla no tiene la columna
+    # (`db/schema.sql:313-336`, medido el 22-sep-2026: el `CREATE TABLE
+    # eventos` no trae nada parecido). Una cita no tiene dueño: sigue
+    # avisándole a Tiziano, sin excepción, porque no hay dato que diga de
+    # quién es.
     con_primero = """
             SELECT 'tareas' AS tabla, id, titulo, vence_en AS cuando,
-                   avisos_enviados, anticipos_min
+                   avisos_enviados, anticipos_min, t.responsable_chat_id
               FROM tareas t
              WHERE estado = 'pendiente' AND borrado_en IS NULL
                AND vence_en IS NOT NULL
@@ -270,7 +294,7 @@ async def revisar(bot) -> int:
                         AND ant.estado = 'pendiente')
             UNION ALL
             SELECT 'eventos', id, titulo, inicia_en,
-                   avisos_enviados, anticipos_min
+                   avisos_enviados, anticipos_min, NULL::BIGINT
               FROM eventos
              WHERE borrado_en IS NULL
                AND cardinality(anticipos_min) > 0
@@ -287,7 +311,7 @@ async def revisar(bot) -> int:
     # que la sala aplique la migración.
     sin_primero = """
             SELECT 'tareas' AS tabla, id, titulo, vence_en AS cuando,
-                   avisos_enviados, anticipos_min
+                   avisos_enviados, anticipos_min, responsable_chat_id
               FROM tareas
              WHERE estado = 'pendiente' AND borrado_en IS NULL
                AND vence_en IS NOT NULL
@@ -298,7 +322,7 @@ async def revisar(bot) -> int:
                AND NOT (avisos_enviados @> anticipos_min)
             UNION ALL
             SELECT 'eventos', id, titulo, inicia_en,
-                   avisos_enviados, anticipos_min
+                   avisos_enviados, anticipos_min, NULL::BIGINT
               FROM eventos
              WHERE borrado_en IS NULL
                AND cardinality(anticipos_min) > 0
@@ -353,7 +377,25 @@ async def revisar(bot) -> int:
             # "en -40 min" sería ridículo; la honestidad suena distinto:
             texto = f"⏰ Ojo, esto venció a las {hora}: {f['titulo']}"
 
-        await _avisar(bot, texto)
+        # A QUIÉN (encargo 2, 22-sep-2026): el responsable de la TAREA, si
+        # tiene uno puesto y sigue siendo alguien con acceso -- MISMA puerta
+        # que `_destinatarios_de_tareas` (`config.puede_ser_responsable`),
+        # para que un chat_id viejo sin acceso no reciba nada. Sin
+        # responsable, o si es una CITA (`responsable_chat_id` siempre NULL,
+        # no hay dato de quién es), al dueño -- como siempre.
+        responsable = f.get("responsable_chat_id")
+        if responsable is not None and config.puede_ser_responsable(responsable):
+            destino = responsable
+        else:
+            destino = config.CHAT_ID_DUENO
+        # `sin_copia=True` siempre: si `destino` es el dueño, este
+        # recordatorio ya está resuelto (suyo, o de una cita sin dueño) y
+        # copiarlo a Rosi sería mandarle un aviso que no es de ella; si
+        # `destino` es otra persona, la copia general ni se dispara para
+        # ese chat (solo copia lo que sale HACIA el dueño), así que el flag
+        # no cambia nada -- pero decirlo explícito es más claro que confiar
+        # en ese detalle.
+        await _avisar(bot, texto, destino, sin_copia=True)
 
         nuevos = sorted(enviados | {m for m in anticipos if faltan <= m})
         async with db.pool.connection() as conn:

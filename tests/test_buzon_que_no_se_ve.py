@@ -3748,14 +3748,22 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # vigilados` cuenta por ROL (todo `.py` fuera de `testpaths`), no por si
     # el archivo usa `config` -- mismo motivo por el que los dos `cerebro/`
     # del encargo «Primero:» (comentario de arriba) tampoco sumaron.
-    assert medido == {"en disco": 83, "exentos": 43, "vigilados": 40}, (
+    #
+    # 22-sep-2026, rama `trabajo/rosi-recordatorios` (encargo 2 del mismo
+    # diseño): 83 → 84 en disco y 43 → 44 EXENTOS por
+    # `tests/test_recordatorios_por_responsable.py` (el recordatorio de una
+    # tarea va a su `responsable_chat_id`; sin responsable, o para una
+    # cita, al dueño). Es un archivo de `testpaths`, EXENTO por rol. Los
+    # VIGILADOS siguen en 40: el trabajo tocó solo `cerebro/despertador.py`,
+    # que YA estaba vigilado de antes.
+    assert medido == {"en disco": 84, "exentos": 44, "vigilados": 40}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "22-sep-2026 (rama rosi-briefing) era {'en disco': 83, 'exentos': "
-        "43, 'vigilados': 40}. La aserción de fondo —cero archivos alcanzan "
-        "la lista cruda— YA CORRIÓ arriba y quedó verde, así que esto NO es "
-        "una fuga. Si los vigilados bajaron, algo se está saltando de más y "
-        "«cero falsos positivos» dejó de significar lo que decía; si "
-        "subieron, hay código nuevo que mirar")
+        "22-sep-2026 (rama rosi-recordatorios) era {'en disco': 84, "
+        "'exentos': 44, 'vigilados': 40}. La aserción de fondo —cero "
+        "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
+        "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
+        "está saltando de más y «cero falsos positivos» dejó de "
+        "significar lo que decía; si subieron, hay código nuevo que mirar")
 
 
 def test_la_guarda_no_rojea_a_quien_usa_config_como_se_debe():
