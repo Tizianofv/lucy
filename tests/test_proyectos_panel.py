@@ -810,11 +810,63 @@ def _fila_proyecto_area_panel(**extra):
 # `db.crear_tarea_desde_el_panel`, `db.convertir_tarea_en_proyecto`,
 # `db._buscar_o_crear`), no hay parámetro que perder -- el texto ES el
 # valor -- así que no hace falta que pase por `_registrar`.
+#
+# TERCERA VUELTA (NO PASA del testigo sobre `03ba8c2`, y acá se corrige la
+# FRASE, no la guarda -- decisión de Tiziano: la serie de este mismo hallazgo
+# ya no se sigue tapando hueco por hueco, se dice el límite y se publica).
+# El control del testigo dio rojo -- el arreglo de la segunda vuelta SÍ tapó
+# lo suyo -- pero encontró un límite nuevo: esta prueba solo ve un
+# `INSERT INTO log_acciones` cuando llega como TEXTO FIJO, escrito directo
+# como argumento de `.execute(...)` (un `ast.Constant` de tipo `str`, ahí
+# mismo, en la llamada). Un `f"...{tabla}..."` (un `ast.JoinedStr`, no un
+# `ast.Constant`) o un `sql = "INSERT INTO log_acciones..."` guardado antes
+# en una variable y pasado como `cur.execute(sql, ...)` (un `ast.Name`, no un
+# `ast.Constant`) se le escapan los dos -- el testigo lo midió con las dos
+# formas y las dos dieron `1 passed`, es decir: esta prueba no los ve, no que
+# los vea y los apruebe.
+#
+# QUÉ QUEDA DE RED en esos dos casos: el `bandeja_id` sigue viajando y
+# `_registrar` sigue siendo, hoy, el único sitio de `acciones/crud.py` que
+# arma esta sentencia con `actor` como parámetro -- nada de esto lo prueba
+# esta guarda, es lo que YA es cierto leyendo el código a mano en las vueltas
+# anteriores. Y las dos pruebas de punta a punta de más arriba
+# (`test_cambiar_area_de_tarea_de_punta_a_punta_queda_con_actor_panel`,
+# `test_cambiar_area_de_proyecto_de_punta_a_punta_queda_con_actor_panel`)
+# siguen midiendo, corriendo, que HOY el `actor` de verdad llega a
+# `log_acciones` como `'panel'` -- esa red no depende de esta prueba de
+# hermanos ni de cómo esté escrito el SQL en el archivo.
+#
+# QUÉ HARÍA FALTA PARA CERRARLO DEL TODO, para quien lo retome: no alcanza
+# con mirar `ast.Constant` -- hay que reconstruir el TEXTO de cada
+# `f"..."` (un `ast.JoinedStr`: concatenar sus partes `ast.Constant` e
+# ignorar las `ast.FormattedValue`, que es lo que ya hace
+# `tests/test_panel_tareas.py::_sql_de` con los literales de una función
+# entera) y, para el caso de `sql = "..."` guardado antes, rastrear hacia
+# atrás en el mismo bloque qué `ast.Assign` le dio valor al nombre que
+# `.execute()` recibe -- que es exactamente el problema de "rastrear a dónde
+# viaja una referencia en Python", declarado sin fondo en la Regla 18 de
+# `CLAUDE.md` de la sala («cuando lo real no tiene fondo, se le pone un fondo
+# con una regla dicha en una línea y lo que queda fuera se declara con su
+# frontera medida»): CADA vuelta de este NO PASA encontró una forma más de
+# escribir el mismo `INSERT`, ninguna rebuscada, y no hay ninguna señal de
+# que la próxima sea la última.
 
 def test_todo_actor_variable_en_log_acciones_pasa_por_registrar():
     """Deriva del disco -- no de una lista de dos nombres -- todo módulo que
     escribe en `log_acciones`, y exige que el ÚNICO sitio donde `actor` viaja
-    como parámetro (no como literal) sea `acciones/crud.py::_registrar`."""
+    como parámetro (no como literal) sea `acciones/crud.py::_registrar`.
+
+    SU LÍMITE, medido por el testigo (tercera vuelta, NO PASA sobre
+    `03ba8c2`): esto SOLO ve un `INSERT INTO log_acciones` cuando está
+    escrito como una cadena FIJA, directo como argumento de `.execute(...)`
+    -- técnicamente, un `ast.Constant` de tipo `str` en `nodo.args`. NO ve un
+    f-string (`f"...INSERT INTO log_acciones..."`, un `ast.JoinedStr`) ni un
+    SQL guardado antes en una variable (`sql = "INSERT INTO
+    log_acciones..."` y después `cur.execute(sql, ...)`, un `ast.Name`): las
+    dos formas dieron `1 passed` con esta prueba puesta, sea cual sea el
+    `actor` que usen adentro. Ver el comentario de arriba de esta sección
+    para qué queda de red en esos dos casos y qué haría falta para cerrarlos.
+    """
     import ast
     import re
     from pathlib import Path
