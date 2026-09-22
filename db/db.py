@@ -2486,11 +2486,16 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
     sin que este código tenga que comprobarlo dos veces. Quien llama decide
     si `area` es `None` («sin área») o una de las claves de `areas`; esta
     función no valida el valor -- lo mismo que `crear_tarea_desde_el_panel`
-    no valida `titulo` contra ningún vocabulario: quien llama (la ruta HTTP)
-    ya limitó las opciones a un `<select>` con lo que `db.areas()` devuelve, y
-    si algo escribe acá con una clave que no existe, la FK
-    `tareas.area REFERENCES areas(clave)` la rechaza -- el mismo patrón que ya
-    usan las categorías de gastos.
+    no valida `titulo` contra ningún vocabulario: la ruta HTTP
+    (`web/app.py::crear_tarea`) ya lo hizo, comparando contra `db.areas()` en
+    código —el mismo patrón de vocabulario cerrado que ya usan las
+    categorías de gastos (`acciones/crud.py::editar`, comparando contra
+    `CATEGORIAS`), NO la FK—. La FK `tareas.area REFERENCES areas(clave)`
+    sigue ahí, pero como red de más atrás: por Telegram, la misma
+    comprobación la hace `acciones/crud.py::_area_que_vale` (hallazgo del
+    testigo sobre `e94b37a`: antes de eso, el camino de `editar()` no
+    validaba nada y llegaba derecho a la FK/CHECK, con el texto crudo de
+    psycopg).
 
     SIN GUARDA DE DUPLICADOS, al revés que el alta por Telegram
     (`acciones/crud.py:_duplicado_pendiente`). Los motivos, por orden de peso:

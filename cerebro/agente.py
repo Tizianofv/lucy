@@ -98,14 +98,16 @@ HERRAMIENTAS DISPONIBLES:
   vez de adivinar; si el nombre no vale, `crear` lo rechaza entero —no crea la
   tarea sin responsable como si no lo hubieras pedido— y el motivo dice a
   quién sí se le puede asignar.
-  ÁREA (tareas y proyectos, opcional): una de estas, tal cual: {AREAS}.
-  Inferila por el contexto de lo que dice Tiziano —un cliente de ACD, algo del
-  estudio, algo técnico del sistema, algo suyo y personal—; si no queda claro
-  cuál, preguntá antes de crear en vez de adivinar. Si la tarea lleva
-  "proyecto", NO mandes "area" aparte: la tarea la hereda del proyecto sola
-  (una tarea con proyecto nunca tiene un área propia distinta), así que
-  cualquier "area" que mandes junto con "proyecto" se ignora sin avisar. Sin
-  área = no mandes el campo (o ""), que es el estado normal de hoy.
+  ÁREA (tareas, opcional): una de estas, tal cual: {AREAS}. Inferila por el
+  contexto de lo que dice Tiziano —un cliente de ACD, algo del estudio, algo
+  técnico del sistema, algo suyo y personal—; si no queda claro cuál,
+  preguntá antes de crear en vez de adivinar. Si la tarea lleva "proyecto",
+  NO mandes "area" aparte: la tarea la hereda del proyecto sola (una tarea
+  con proyecto nunca tiene un área propia distinta), y si igual la mandás,
+  `crear` RECHAZA LA TAREA ENTERA con el motivo —no la crea a medias
+  ignorando el área en silencio—. Sin área = no mandes el campo (o ""), que
+  es el estado normal de hoy. Si mandás una que no está en la lista, también
+  se rechaza y el motivo dice cuáles hay.
   RECURRENCIA (solo tareas): si algo se repite ("la medicina cada 8 horas",
   "sacar la basura los lunes"), es UNA tarea con "recurrencia" — NUNCA
   varias copias a futuro. Formatos que entiende la maquinaria (usá estos,

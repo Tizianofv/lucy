@@ -268,19 +268,26 @@ async def crear_desde_interpretacion(
     persona_id = await db.buscar_o_crear_persona(str(r.get("persona") or ""))
     proyecto_id = await db.buscar_o_crear_proyecto(str(r.get("proyecto") or ""))
 
-    # EL ÁREA, SOLO PARA TAREAS (encargo 4). "Una tarea dentro de un proyecto
-    # nunca tiene un área propia distinta" (decisión de Tiziano, "No, toma la
-    # del proyecto") se hace IRREPRESENTABLE también en ESTE camino, no solo
-    # en la base: si la tarea tiene proyecto, lo que se haya pedido en "area"
-    # se IGNORA -- no es un rechazo, porque el área de todos modos sale del
-    # proyecto (`COALESCE(p.area, t.area)` en `db.tareas_por_grupo`), así que
-    # guardarla igual sería una copia que se puede desincronizar del
-    # proyecto sin que nadie lo note. Sin proyecto, se manda tal cual: si no
-    # es una clave que exista en `areas`, la FK `tareas.area → areas.clave`
-    # la rechaza -- SIN GUARDA acá, por pedido explícito del encargo 4
-    # ("nada de guardas sobre lo que escribe el modelo").
-    area_pedida = str(r.get("area") or "").strip() or None
-    area_tarea = area_pedida if proyecto_id is None else None
+    # EL ÁREA, SOLO PARA TAREAS (encargo 4), por la MISMA puerta que usa
+    # `editar()` para cambiarla — `_area_que_vale`, y no una copia del
+    # criterio (hallazgo del testigo sobre `e94b37a`: la primera versión de
+    # esto validaba distinto que `editar`, que no validaba nada). Valida
+    # contra `db.areas()` con el mismo tipo de mensaje que ya usa la
+    # categoría de un movimiento — vocabulario cerrado, comparado en
+    # código, como las categorías (`db/schema.sql:273` no tiene ni FK ni
+    # CHECK en `categoria`; acá SÍ hay FK/CHECK, pero se valida IGUAL en
+    # código para dar el mismo tipo de mensaje explicando cuáles hay, en
+    # vez del texto crudo de psycopg). Y si la tarea tiene proyecto,
+    # cualquier área pedida se RECHAZA, no se ignora — ver el docstring de
+    # `_area_que_vale`.
+    if clas == "tarea":
+        try:
+            area_tarea = await _area_que_vale(
+                r.get("area"), tabla="tareas", proyecto_id=proyecto_id)
+        except ValueError as e:
+            raise ValueError(f"No creé la tarea: {e}.") from e
+    else:
+        area_tarea = None
 
     async with db.pool.connection() as conn:
         if clas == "tarea":
@@ -676,6 +683,51 @@ def _responsable_que_vale(valor):
         f"{motivo}: solo quien entra al panel y tiene nombre ({quienes})")
 
 
+async def _area_que_vale(valor, *, tabla: str, proyecto_id=None):
+    """El área que va a quedar en `tareas` o `proyectos`, o ValueError
+    explicando por qué no. LA ÚNICA función que decide esto: la usan
+    `crear_desde_interpretacion` (al crear una tarea) y `editar` (tareas Y
+    proyectos, por Telegram) — dos criterios que hoy coincidieran habrían
+    empezado a separarse el primer día que alguien tocara uno solo. NO es
+    la puerta de `PUERTAS`/`_por_las_puertas` (esa es sync y de un solo
+    valor); acá hace falta `db.areas()` (async) y, para una tarea, el
+    proyecto que va a quedar — dos cosas que esa forma no puede cargar.
+
+    Sin dato (None o vacío) no pasa por la puerta: no hay nada que validar,
+    y es el estado normal de hoy en las tareas y proyectos que ya existen.
+
+    `proyecto_id` es el que la TAREA tiene o va a tener DESPUÉS de esta
+    escritura — None para un proyecto (ahí no aplica) o para una tarea sin
+    proyecto. Con proyecto puesto, CUALQUIER área pedida se RECHAZA — no se
+    ignora en silencio: «una tarea con proyecto nunca tiene área propia
+    distinta» (decisión de Tiziano, "No, toma la del proyecto") es la
+    misma clase de regla que "un responsable que no vale corta la
+    escritura entera" — un pedido explícito que no hace nada y contesta
+    "OK" es la forma más barata de perder un dato sin que nadie se entere.
+
+    Con proyecto puesto o no, si el valor no está en `db.areas()` también
+    se rechaza, con el mismo tipo de mensaje —"no es un área, son: ..."—
+    que ya usa la categoría de un movimiento
+    (`editar`, más abajo): es el MISMO patrón de vocabulario cerrado, no
+    una guarda sobre lo que escribe el modelo — se compara un valor contra
+    la tabla, no se juzga cómo está redactada una frase.
+    """
+    valor = (valor or "").strip() or None
+    if valor is None:
+        return None
+    if tabla == "tareas" and proyecto_id is not None:
+        raise ValueError(
+            "esa tarea tiene proyecto, y el área sale del proyecto: no se "
+            "le puede poner una propia. Si hace falta otra área, se "
+            "cambia la del PROYECTO")
+    validas = {a["clave"] for a in await db.areas()}
+    if valor not in validas:
+        lista = (", ".join(f'"{c}"' for c in sorted(validas)) if validas
+                 else "(ninguna declarada todavía)")
+        raise ValueError(f"'{valor}' no es un área. Son: {lista}")
+    return valor
+
+
 PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale}}
 
 
@@ -775,6 +827,39 @@ async def editar(
         desconocidas = set(campos) - set(antes)
         if desconocidas:
             raise ValueError(f"Esa tabla no tiene: {', '.join(sorted(desconocidas))}")
+        # (Si la migración del encargo 4 no se aplicó, `tareas`/`proyectos` no
+        # tienen la columna `area` todavía, así que un `{"area": ...}` cae en
+        # el `raise` de arriba, con un motivo claro -- no hace falta ningún
+        # SAVEPOINT de tolerancia en `editar`: el `SELECT *` de más arriba ya
+        # dice qué columnas existen de verdad.)
+
+        # EL ÁREA (encargo 4), en TAREAS y en PROYECTOS, por la MISMA puerta
+        # que usa `crear_desde_interpretacion` — `_area_que_vale`, ni una
+        # validación aparte ni ninguna. Hallazgo del testigo sobre `e94b37a`:
+        # esta función no comprobaba nada, así que "área inventada" y "tarea
+        # con proyecto + área" pasaban derecho hasta la FK/CHECK de Postgres,
+        # que revienta con su texto crudo (ver el `except Exception` de
+        # `cerebro/agente.py::_ejecutar_herramienta`).
+        #
+        # EL PROYECTO QUE CUENTA es el que la tarea va a tener DESPUÉS de
+        # este UPDATE: lo pedido en estos MISMOS `cambios` si está, si no el
+        # que ya tenía. Así, pedir SOLO {"area": "X"} sobre una tarea que ya
+        # tiene proyecto se rechaza igual que si se pidieran las dos cosas
+        # juntas -- es la misma pregunta, "¿con qué proyecto va a quedar?",
+        # nada más que con un dato que viene de `antes` en vez de `campos`.
+        if tabla == "tareas" and "area" in campos:
+            proyecto_final = campos.get("proyecto_id", antes.get("proyecto_id"))
+            try:
+                campos["area"] = await _area_que_vale(
+                    campos["area"], tabla="tareas", proyecto_id=proyecto_final)
+            except ValueError as e:
+                raise ValueError(f"No cambié nada: {e}.") from e
+        elif tabla == "proyectos" and "area" in campos:
+            try:
+                campos["area"] = await _area_que_vale(
+                    campos["area"], tabla="proyectos")
+            except ValueError as e:
+                raise ValueError(f"No cambié nada: {e}.") from e
 
         # Un ingreso no lleva categoría: los rubros dicen EN QUÉ se gastó. La
         # única excepción es la marca "No suma".

@@ -73,11 +73,39 @@ def _con_gente(nombres):
 #    semántica pretendida (IS NOT DISTINCT FROM para fechas NULL incluido).
 # ---------------------------------------------------------------------------
 class _Cur:
-    def __init__(self, row):
+    def __init__(self, row=None, filas=None):
         self._row = row
+        # `filas`, para `db.areas()`: una lista de dicts para `fetchall()`.
+        # Si no se pasa, se deriva de `row` (una sola fila) para no romper
+        # a nadie que ya usaba `_Cur(row)` esperando solo `fetchone()`.
+        self._filas = filas if filas is not None else (
+            [row] if row is not None else [])
 
     async def fetchone(self):
         return self._row
+
+    async def fetchall(self):
+        return self._filas
+
+
+class _CursorGenerico:
+    """El `cursor()` que usa `db.areas()` -- ejecuta y se acuerda del
+    resultado, a diferencia de `FakeConn.execute()`, que devuelve un `_Cur`
+    nuevo cada vez sin que nadie lo retenga."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._cur = None
+
+    async def execute(self, sql, params=None):
+        self._cur = await self._conn.execute(sql, params)
+        return self._cur
+
+    async def fetchone(self):
+        return await self._cur.fetchone()
+
+    async def fetchall(self):
+        return await self._cur.fetchall()
 
 
 class _ErrorSQL(Exception):
@@ -108,7 +136,7 @@ class _Transaccion:
 
 
 class FakeConn:
-    def __init__(self, sin_columna_area: bool = False):
+    def __init__(self, sin_columna_area: bool = False, areas=None):
         self.tareas: list[dict] = []
         self.eventos: list[dict] = []
         self.logs: list[dict] = []
@@ -120,9 +148,20 @@ class FakeConn:
         # revienta con 42703 y `crear_desde_interpretacion` tiene que caer al
         # de 9 (sin área).
         self.sin_columna_area = sin_columna_area
+        # Lo que `db.areas()` devuelve -- la puerta `_area_que_vale` valida
+        # contra esto. Vacía por omisión: como si la migración no se hubiera
+        # aplicado, igual que `sin_columna_area`. Los dos SIEMPRE van juntos
+        # en una base real -- la migración crea la tabla `areas` y las
+        # columnas `area` en la MISMA transacción -- así que un test que
+        # pida un área con `areas=[]` tiene que esperar un rechazo, no un
+        # área guardada.
+        self.areas = list(areas or [])
 
     def transaction(self):
         return _Transaccion(self)
+
+    def cursor(self, row_factory=None):
+        return _CursorGenerico(self)
 
     # -- helpers de siembra (una fila que "ya existía") ---------------------
     def seed_tarea(self, titulo, vence, *, estado="pendiente", borrado_en=None,
@@ -152,6 +191,9 @@ class FakeConn:
         s = " ".join(sql.split())
         p = params or ()
         self.sql.append((s, p))
+
+        if s.startswith("SELECT clave, color FROM areas"):
+            return _Cur(filas=list(self.areas))
 
         if s.startswith("SELECT id FROM tareas WHERE borrado_en IS NULL AND estado"):
             titulo, cuando = p
@@ -454,22 +496,23 @@ async def test_una_cita_con_responsable_no_lo_escribe_ni_lo_valida():
 
 # ── El área (encargo 4) ────────────────────────────────────────────────
 #
-# LA FRONTERA: lo que NO prueba nada de acá abajo es que Postgres rechace un
-# área que no está en `areas.clave` (la FK) o una tarea con proyecto Y área a
-# la vez (el CHECK `tareas_area_no_con_proyecto`) -- `FakeConn` acepta
-# cualquier valor que se le mande, no valida nada. Eso es a propósito: el
-# encargo 4 pide "nada de guardas sobre lo que escribe el modelo", así que no
-# hay ninguna validación en Python que probar -- la garantía vive en la base,
-# y verificarla de verdad necesita Postgres (`tools/humo.py`, DATABASE_URL).
-# Lo que SÍ se prueba acá es la parte que SÍ es código Python: que el área se
-# guarda cuando corresponde, se ignora cuando la tarea tiene proyecto (eso lo
-# decide `crear_desde_interpretacion` ANTES de tocar la base, sin esperar a
-# que la FK lo rechace), y que la ausencia de la columna no rompe la
-# creación.
+# Vuelta corregida tras el NO PASA del testigo sobre `e94b37a`: el área tiene
+# que validarse en CÓDIGO, con el mismo tipo de mensaje que ya usa la
+# categoría de un movimiento (`crud.editar`, más abajo en este archivo) --
+# eso NO es una guarda sobre lo que escribe el modelo, es vocabulario
+# cerrado, igual que las categorías. `crud._area_que_vale` es la única
+# función que decide esto, para `crear_desde_interpretacion` y para
+# `editar()` (tareas y proyectos) por igual.
+#
+# LA FRONTERA que SÍ sigue en pie: la FK `area → areas.clave` y el CHECK
+# `tareas_area_no_con_proyecto` son la red de seguridad de la BASE, y no se
+# pueden probar sin Postgres -- `FakeConn` no los modela. Lo que se prueba
+# acá es que el CÓDIGO rechace antes de llegar a esa red, con un motivo
+# legible, y que no haya un segundo criterio en ningún lado.
 
 async def test_el_area_pedida_se_guarda_si_la_tarea_no_tiene_proyecto():
     _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
-    conn = FakeConn()
+    conn = FakeConn(areas=[{"clave": "CDS", "color": "#2b6cb0"}])
     _instalar(conn)  # buscar_o_crear_proyecto -> None, siempre
 
     await crud.crear_desde_interpretacion(
@@ -483,7 +526,7 @@ async def test_el_area_pedida_se_guarda_si_la_tarea_no_tiene_proyecto():
 
 async def test_sin_pedir_area_la_tarea_queda_sin_area():
     _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
-    conn = FakeConn()
+    conn = FakeConn(areas=[{"clave": "CDS", "color": "#2b6cb0"}])
     _instalar(conn)
 
     await crud.crear_desde_interpretacion(
@@ -492,14 +535,64 @@ async def test_sin_pedir_area_la_tarea_queda_sin_area():
     assert conn.tareas[0]["area"] is None
 
 
-async def test_el_area_se_ignora_si_la_tarea_tiene_proyecto():
+async def test_un_area_que_no_existe_rechaza_la_creacion_entera():
+    """Vocabulario cerrado, como las categorías: una clave que no está en
+    `db.areas()` no crea la tarea a medias sin área -- la rechaza entera, con
+    un mensaje que dice cuáles hay, igual que un responsable que no vale."""
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn(areas=[{"clave": "CDS", "color": "#1"},
+                           {"clave": "ACD", "color": "#2"}])
+    _instalar(conn)
+
+    try:
+        await crud.crear_desde_interpretacion(
+            1, {"clasificacion": "tarea", "titulo": "algo",
+                "area": "Marketing"})
+        assert False, "debió rechazar un área que no existe"
+    except ValueError as e:
+        mensaje = str(e)
+        assert "Marketing" in mensaje
+        assert '"CDS"' in mensaje and '"ACD"' in mensaje, (
+            f"el motivo no dice cuáles áreas hay: {mensaje!r}")
+    assert conn.tareas == [], "no debió crear nada"
+
+
+async def test_el_area_se_rechaza_si_la_tarea_tiene_proyecto():
     """«Una tarea dentro de un proyecto nunca tiene un área propia distinta»
     (decisión de Tiziano). Si Lucy manda "area" Y "proyecto" juntos -- el
     modelo no siempre sigue la indicación del prompt al pie de la letra --,
-    el área se ignora en vez de guardarse una copia que se puede
-    desincronizar del proyecto."""
+    se RECHAZA la creación entera, con el motivo. No se ignora en silencio:
+    un pedido que no hace nada y contesta "creada" es la forma más barata de
+    perder un dato sin que nadie se entere."""
     _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
-    conn = FakeConn()
+    conn = FakeConn(areas=[{"clave": "CDS", "color": "#1"}])
+
+    async def _cero_persona(_):
+        return None
+
+    async def _con_proyecto_77(_):
+        return 77
+
+    db.pool = FakePool(conn)
+    db.buscar_o_crear_persona = _cero_persona
+    db.buscar_o_crear_proyecto = _con_proyecto_77
+
+    try:
+        await crud.crear_desde_interpretacion(
+            1, {"clasificacion": "tarea", "titulo": "algo del proyecto",
+                "proyecto": "Álbum nuevo", "area": "CDS"})
+        assert False, "debió rechazar el área por tener proyecto"
+    except ValueError as e:
+        assert "proyecto" in str(e).lower()
+    assert conn.tareas == [], (
+        "no debió crear la tarea ignorando el área en silencio")
+
+
+async def test_sin_pedir_area_se_crea_igual_con_proyecto():
+    """Sin "area" en el pedido no hay nada que rechazar: una tarea con
+    proyecto y sin área pedida se crea normal, como siempre."""
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn(areas=[{"clave": "CDS", "color": "#1"}])
 
     async def _cero_persona(_):
         return None
@@ -513,37 +606,269 @@ async def test_el_area_se_ignora_si_la_tarea_tiene_proyecto():
 
     await crud.crear_desde_interpretacion(
         1, {"clasificacion": "tarea", "titulo": "algo del proyecto",
-            "proyecto": "Álbum nuevo", "area": "CDS"})
+            "proyecto": "Álbum nuevo"})
 
     assert len(conn.tareas) == 1
-    assert conn.tareas[0]["area"] is None, (
-        f"el área tenía que ignorarse por tener proyecto: {conn.tareas[0]}")
+    assert conn.tareas[0]["area"] is None
 
 
-async def test_el_area_cae_a_la_version_sin_area_si_la_columna_no_existe():
-    """La migración del encargo 4 puede no haber corrido todavía. El INSERT
-    con área (10 parámetros) revienta con 42703 y el código tiene que crear
-    la tarea igual, cayendo al INSERT de 9 -- sin área -- en vez de fallar
-    la creación entera."""
+async def test_sin_pedir_area_se_crea_igual_si_la_columna_no_existe():
+    """La migración del encargo 4 puede no haber corrido todavía. Sin
+    "area" pedida no hay nada que validar (la puerta ni llama a
+    `db.areas()`), así que el INSERT con área (10 parámetros, área en NULL)
+    revienta con 42703 igual -- porque la COLUMNA no existe, aunque el valor
+    sea NULL -- y el código cae al INSERT de 9 -- sin área -- en vez de
+    fallar la creación entera."""
     _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
     conn = FakeConn(sin_columna_area=True)
     _instalar(conn)
 
     tabla, rid, _log = await crud.crear_desde_interpretacion(
-        1, {"clasificacion": "tarea", "titulo": "sin migrar todavía",
-            "area": "CDS"})
+        1, {"clasificacion": "tarea", "titulo": "sin migrar todavía"})
 
     assert tabla == "tareas"
     assert len(conn.tareas) == 1, (
         "con la columna ausente, la tarea tiene que crearse igual")
-    assert "area" not in conn.tareas[0] or conn.tareas[0]["area"] is None, (
-        f"no puede haber guardado un área que la tabla no tiene: {conn.tareas[0]}")
-    # Y de verdad SE INTENTÓ con área primero: no es que el código nunca la
-    # haya pedido.
+    assert conn.tareas[0]["area"] is None
     insert_tareas = [s for s, _ in conn.sql if s.startswith("INSERT INTO tareas")]
     assert len(insert_tareas) == 2, (
         f"tenía que intentar con área (y fallar) y después sin área: "
         f"{insert_tareas}")
+
+
+async def test_pedir_un_area_si_la_columna_no_existe_se_rechaza_con_motivo():
+    """Y si SÍ se pide un área mientras la migración no corrió -- tabla
+    `areas` y columna `tareas.area` van en la MISMA transacción, así que las
+    dos faltan juntas --, la puerta la rechaza ANTES de tocar la base: ningún
+    área es válida todavía, y el motivo lo dice, en vez de un texto crudo de
+    Postgres o una tarea creada fingiendo que el área se guardó."""
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn(sin_columna_area=True)  # areas=[] por omisión: coherente
+    _instalar(conn)
+
+    try:
+        await crud.crear_desde_interpretacion(
+            1, {"clasificacion": "tarea", "titulo": "sin migrar todavía",
+                "area": "CDS"})
+        assert False, "debió rechazar: no hay ningún área declarada todavía"
+    except ValueError as e:
+        assert "ninguna" in str(e).lower()
+    assert conn.tareas == []
+
+
+# ── `crud.editar` sobre `area` (encargo 4, NO PASA sobre e94b37a) ─────────
+#
+# El testigo encontró que `editar()` no validaba `area` en absoluto -- ni
+# contra `db.areas()`, ni contra "esta tarea ya tiene proyecto" -- así que
+# los dos casos pasaban derecho hasta la FK/CHECK de Postgres, que revienta
+# con su texto crudo. Estos tests corren `crud.editar` DE VERDAD, con
+# `crud._area_que_vale` sin mockear -- la MISMA función que ya prueban los
+# tests de `crear_desde_interpretacion` de arriba.
+
+class _CurEditarArea:
+    """Sirve los `SELECT * FROM <tabla>` (antes y después del UPDATE) y el
+    `SELECT clave, color FROM areas` que ahora pide `_area_que_vale`."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self._row = None
+        self._filas: list = []
+
+    async def execute(self, sql, params=None):
+        s = " ".join(sql.split())
+        if s.startswith("SELECT clave, color FROM areas"):
+            self._filas = list(self._conn.areas)
+            return self
+        if s.startswith("SELECT * FROM"):
+            self._row = dict(self._conn.fila)
+            return self
+        raise AssertionError(f"SQL no modelado por _CurEditarArea: {s[:90]}")
+
+    async def fetchone(self):
+        return self._row
+
+    async def fetchall(self):
+        return self._filas
+
+
+class _ConnEditarArea:
+    """Modela lo justo para `crud.editar` sobre UNA fila de `tareas` o
+    `proyectos`, con soporte para `db.areas()` (el SAVEPOINT que usa
+    `_area_que_vale` a través de `db.areas()`)."""
+
+    def __init__(self, fila, areas=None):
+        self.fila = dict(fila)
+        self.campos_guardados: dict | None = None
+        self.areas = list(areas or [])
+        self._logid = 3000
+
+    def cursor(self, row_factory=None):
+        return _CurEditarArea(self)
+
+    def transaction(self):
+        return _Transaccion(self)
+
+    async def execute(self, sql, params=None):
+        s = " ".join(sql.split())
+        p = params or ()
+        if s.startswith("UPDATE"):
+            asignaciones = s.split(" SET ", 1)[1].split(" WHERE ")[0]
+            columnas = [a.split("=")[0].strip() for a in asignaciones.split(", ")]
+            self.campos_guardados = dict(zip(columnas, p))
+            self.fila.update(self.campos_guardados)
+            return _Cur(None)
+        if s.startswith("INSERT INTO log_acciones"):
+            self._logid += 1
+            return _Cur((self._logid,))
+        raise AssertionError(f"SQL no modelado por _ConnEditarArea: {s[:90]}")
+
+
+def _fila_tarea_area(**extra):
+    fila = {"id": 40, "bandeja_id": 1, "titulo": "Mezclar el tema",
+            "detalle": None, "vence_en": None, "estado": "pendiente",
+            "recurrencia": None, "pospuesta_veces": 0, "anticipos_min": [0],
+            "avisos_enviados": [], "borrado_en": None,
+            "creado_en": datetime(2026, 8, 1, 9, 0),
+            "responsable_chat_id": None, "proyecto_id": None, "area": None}
+    fila.update(extra)
+    return fila
+
+
+def _fila_proyecto_area(**extra):
+    fila = {"id": 5, "nombre": "Álbum nuevo", "borrado_en": None,
+            "creado_en": datetime(2026, 8, 1, 9, 0), "area": None}
+    fila.update(extra)
+    return fila
+
+
+async def test_editar_guarda_el_area_en_una_tarea_sin_proyecto():
+    conn = _ConnEditarArea(_fila_tarea_area(),
+                           areas=[{"clave": "CDS", "color": "#1"}])
+    db.pool = FakePool(conn)
+    despues, log_id = await crud.editar(
+        "tareas", 40, {"area": "CDS"}, motivo="test")
+    assert despues["area"] == "CDS"
+    assert log_id is not None
+
+
+async def test_editar_rechaza_un_area_que_no_esta_declarada():
+    conn = _ConnEditarArea(_fila_tarea_area(),
+                           areas=[{"clave": "CDS", "color": "#1"}])
+    db.pool = FakePool(conn)
+    try:
+        await crud.editar("tareas", 40, {"area": "Marketing"}, motivo="test")
+        assert False, "debió rechazar un área que no existe"
+    except ValueError as e:
+        assert "Marketing" in str(e) and '"CDS"' in str(e)
+    assert conn.campos_guardados is None, "no debió escribir nada"
+
+
+async def test_editar_rechaza_el_area_si_la_tarea_ya_tiene_proyecto():
+    """LO QUE EL TESTIGO ENCONTRÓ SOBRE e94b37a: antes de este arreglo,
+    `editar` no miraba `antes["proyecto_id"]` en absoluto -- este es el
+    camino que llegaba derecho a la FK/CHECK de Postgres."""
+    conn = _ConnEditarArea(_fila_tarea_area(proyecto_id=5),
+                           areas=[{"clave": "CDS", "color": "#1"}])
+    db.pool = FakePool(conn)
+    try:
+        await crud.editar("tareas", 40, {"area": "CDS"}, motivo="test")
+        assert False, "debió rechazar: esa tarea ya tiene proyecto"
+    except ValueError as e:
+        assert "proyecto" in str(e).lower()
+    assert conn.campos_guardados is None
+
+
+async def test_editar_rechaza_el_area_si_el_proyecto_se_pone_en_el_mismo_pedido():
+    """Y si el proyecto se le pone EN ESTE MISMO `editar` -- junto con el
+    área, en un solo pedido --, la pregunta es la misma: ¿con qué proyecto
+    va a quedar DESPUÉS de esto? El área se rechaza igual, mirando
+    `campos["proyecto_id"]` y no solo `antes["proyecto_id"]`."""
+    conn = _ConnEditarArea(_fila_tarea_area(proyecto_id=None),
+                           areas=[{"clave": "CDS", "color": "#1"}])
+    db.pool = FakePool(conn)
+    try:
+        await crud.editar(
+            "tareas", 40, {"proyecto_id": 5, "area": "CDS"}, motivo="test")
+        assert False, "debió rechazar: va a quedar con proyecto"
+    except ValueError as e:
+        assert "proyecto" in str(e).lower()
+    assert conn.campos_guardados is None
+
+
+async def test_editar_area_null_no_se_rechaza_aunque_tenga_proyecto():
+    """Quitarle el área a una tarea (`"area": null`) es un no-op inofensivo
+    incluso si tiene proyecto: no hay nada que rechazar, porque no se está
+    pidiendo un área propia."""
+    conn = _ConnEditarArea(_fila_tarea_area(proyecto_id=5, area=None),
+                           areas=[{"clave": "CDS", "color": "#1"}])
+    db.pool = FakePool(conn)
+    despues, log_id = await crud.editar(
+        "tareas", 40, {"area": None}, motivo="test")
+    assert despues["area"] is None
+    assert log_id is not None
+
+
+async def test_editar_guarda_el_area_en_un_proyecto_siempre():
+    """En un PROYECTO no hay "ya tiene proyecto" que mirar -- se valida
+    solo contra `db.areas()`."""
+    conn = _ConnEditarArea(_fila_proyecto_area(),
+                           areas=[{"clave": "ACD", "color": "#2"}])
+    db.pool = FakePool(conn)
+    despues, log_id = await crud.editar(
+        "proyectos", 5, {"area": "ACD"}, motivo="test")
+    assert despues["area"] == "ACD"
+
+
+async def test_editar_rechaza_un_area_de_proyecto_que_no_existe():
+    conn = _ConnEditarArea(_fila_proyecto_area(),
+                           areas=[{"clave": "ACD", "color": "#2"}])
+    db.pool = FakePool(conn)
+    try:
+        await crud.editar("proyectos", 5, {"area": "Marketing"}, motivo="t")
+        assert False, "debió rechazar un área que no existe"
+    except ValueError as e:
+        assert "Marketing" in str(e)
+    assert conn.campos_guardados is None
+
+
+# ── LA PUERTA ÚNICA: nada más en crud.py escribe `area` por su cuenta ────
+
+def test_todo_lo_que_toca_area_en_crud_pasa_por_la_misma_puerta():
+    """No una lista tecleada de "los sitios que ya sé que hay": se recorre
+    CADA función de `acciones/crud.py` que mencione `area` en su cuerpo -- lo
+    real, sacado del árbol de sintaxis -- y se exige que TODAS llamen a
+    `_area_que_vale`. Así, el día que alguien agregue un tercer sitio que
+    escriba `area` sin pasar por la puerta, esto se pone rojo solo, en vez de
+    depender de que alguien se acuerde de mirar.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    fuente = inspect.getsource(crud)
+    arbol = ast.parse(fuente)
+    culpables = []
+    vistas = []
+    for nodo in ast.walk(arbol):
+        if not isinstance(nodo, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if nodo.name == "_area_que_vale":
+            continue  # la puerta misma, obviamente menciona "area"
+        texto = ast.unparse(nodo)
+        if '"area"' not in texto and "'area'" not in texto:
+            continue
+        vistas.append(nodo.name)
+        if "_area_que_vale(" not in texto:
+            culpables.append(nodo.name)
+    assert vistas, "no se encontró ninguna función que mencione 'area' -- la prueba dejó de medir algo"
+    assert set(vistas) == {"crear_desde_interpretacion", "editar"}, (
+        f"aparecieron funciones nuevas que tocan 'area': "
+        f"{set(vistas) - {'crear_desde_interpretacion', 'editar'}}. Revisá "
+        f"si pasan por _area_que_vale y agregalas a la lista esperada de "
+        f"esta prueba.")
+    assert not culpables, (
+        f"estas funciones de crud.py mencionan 'area' sin llamar a "
+        f"_area_que_vale: {culpables}")
 
 
 # ── El testigo sobre eeb07dd: el duplicado NO PUEDE tirar el responsable ──

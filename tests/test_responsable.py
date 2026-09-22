@@ -1736,7 +1736,7 @@ def test_no_queda_ningun_marcador_sin_sustituir_en_el_prompt():
 # ── Las áreas en el prompt (encargo 4) ────────────────────────────────────
 
 def _bloque_del_area_al_crear(prompt: str) -> str:
-    i = prompt.index("ÁREA (tareas y proyectos, opcional)")
+    i = prompt.index("ÁREA (tareas, opcional)")
     return prompt[i:prompt.index("\n\n", i)]
 
 
