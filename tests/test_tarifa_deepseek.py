@@ -176,8 +176,10 @@ def test_el_encargo_tiene_su_hueco_y_lo_llena():
     # Si alguien reescribe el encargo y se lleva puesto el {cuando}, format()
     # no revienta (deja el texto igual) pero el domingo diría "arranca hoy".
     assert "{cuando}" in despertador.ENCARGO_SEMANAL
-    assert "arranca mañana lunes" in despertador._encargo_semanal(False)
-    assert "arranca hoy lunes" in despertador._encargo_semanal(True)
+    assert "arranca mañana lunes" in despertador._encargo_semanal(
+        False, config.CHAT_ID_DUENO)
+    assert "arranca hoy lunes" in despertador._encargo_semanal(
+        True, config.CHAT_ID_DUENO)
 
 
 def test_semanal_dispara_a_las_20():
@@ -257,26 +259,40 @@ def test_dedupe_no_alcanza_a_la_semana_pasada():
 # 6) El ciclo diferido no pierde trabajo — end to end sobre _semanal()
 # ---------------------------------------------------------------------------
 class FakeDB:
-    """Modela la bandeja para _semanal: qué encargos hay y cuándo se guardaron."""
+    """Modela `tareas` y `bandeja` para `_semanal`: quiénes son destinatarios
+    (`_destinatarios_de_tareas`, `SELECT ... FROM tareas`) y qué encargos ya
+    se dejaron hoy, por destinatario (`db.destinos_con_encargo_hoy`,
+    `SELECT ... FROM bandeja`) -- las DOS consultas que `_semanal` hace hoy.
+
+    `asignados` son los `responsable_chat_id` que hay que devolver como si
+    tuvieran una tarea pendiente puesta (vacío por defecto: solo el dueño es
+    destinatario, que es el comportamiento de antes de este encargo).
+    """
 
     def __init__(self):
-        self.encargos: list[tuple[datetime, str]] = []
+        self.encargos: list[tuple[datetime, int, str]] = []  # (cuándo, chat, texto)
         self.ahora = _local(2, 20)
+        self.asignados: set[int] = set()
 
-    # — lo que _semanal consulta —
     def connection(self):
         fake = self
 
         class _Cur:
-            async def fetchone(self):
-                return fake._hay_reciente()
+            def __init__(self, filas):
+                self._filas = filas
+
+            async def fetchall(self):
+                return self._filas
 
         class _Conn:
             async def execute(self, sql, params=None):
                 s = " ".join(sql.split())
+                if "FROM tareas" in s:
+                    return _Cur([(c,) for c in fake.asignados])
                 assert "FROM bandeja" in s, f"SQL inesperado: {s[:80]}"
-                fake._desde = params[0]
-                return _Cur()
+                desde = params[2]   # (origen, patron, desde) -- ver db.db.destinos_con_encargo_hoy
+                chats = {c for t, c, _ in fake.encargos if t >= desde}
+                return _Cur([(c,) for c in chats])
 
         class _CM:
             async def __aenter__(self):
@@ -287,11 +303,8 @@ class FakeDB:
 
         return _CM()
 
-    def _hay_reciente(self):
-        return 1 if any(t >= self._desde for t, _ in self.encargos) else None
-
     async def guardar(self, *, tipo_entrada, contenido_raw, chat_id, origen):
-        self.encargos.append((self.ahora, contenido_raw))
+        self.encargos.append((self.ahora, chat_id, contenido_raw))
         return len(self.encargos)
 
 
@@ -319,7 +332,7 @@ async def test_domingo_normal_deja_un_encargo():
         fake.ahora = _local(2, 20, 40)
         assert await despertador._semanal() == 0
         assert len(fake.encargos) == 1
-        assert "mañana lunes" in fake.encargos[0][1]
+        assert "mañana lunes" in fake.encargos[0][2]
     finally:
         restaurar()
 
@@ -344,8 +357,8 @@ async def test_lo_diferido_no_se_pierde():
         assert await despertador._semanal() == 1
         assert len(fake.encargos) == 1
         # Y el texto se adaptó: el lunes la semana ya arrancó.
-        assert "hoy lunes" in fake.encargos[0][1]
-        assert "mañana lunes" not in fake.encargos[0][1]
+        assert "hoy lunes" in fake.encargos[0][2]
+        assert "mañana lunes" not in fake.encargos[0][2]
 
         # No vuelve a salir en el resto de la ventana de rescate.
         fake.ahora = _local(3, 8, 30)

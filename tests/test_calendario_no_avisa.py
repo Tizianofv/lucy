@@ -455,7 +455,8 @@ def test_el_plan_semanal_no_puede_gastarse_los_pasos_reordenando():
     quitaría.
     """
     from cerebro import despertador
-    encargo = despertador.ENCARGO_SEMANAL.format(cuando="arranca hoy lunes")
+    encargo = despertador.ENCARGO_SEMANAL.format(
+        cuando="arranca hoy lunes", quien="TIZIANO", filtro="SOLO tus tareas")
     assert despertador.MAX_REUBICADAS < despertador.MAX_PASOS if hasattr(
         despertador, "MAX_PASOS") else True
     assert str(despertador.MAX_REUBICADAS) in encargo, (

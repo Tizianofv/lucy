@@ -3736,13 +3736,26 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # vigilado de antes (usa `config.CHAT_ID_DUENO` y ahora también
     # `config.NOMBRES_POR_CHAT`, pero seguía contando desde antes de este
     # encargo).
-    assert medido == {"en disco": 82, "exentos": 42, "vigilados": 40}, (
+    # 22-sep-2026, rama `trabajo/rosi-briefing` (encargo 1 del diseño
+    # "Rosi independiente"): 82 → 83 en disco y 42 → 43 EXENTOS por
+    # `tests/test_briefing_por_persona.py` (el briefing matinal y el plan
+    # semanal, uno por destinatario). Es un archivo de `testpaths`, EXENTO
+    # por rol. Los VIGILADOS siguen en 40: el trabajo tocó `cerebro/
+    # despertador.py` y `cerebro/interpretar.py` -- el primero YA vigilado
+    # de antes por rol (no por usar `config`, que ya usaba); el segundo
+    # empezó a importar `config` en este encargo (antes no lo usaba), pero
+    # YA estaba contado en vigilados desde siempre porque `_archivos_
+    # vigilados` cuenta por ROL (todo `.py` fuera de `testpaths`), no por si
+    # el archivo usa `config` -- mismo motivo por el que los dos `cerebro/`
+    # del encargo «Primero:» (comentario de arriba) tampoco sumaron.
+    assert medido == {"en disco": 83, "exentos": 43, "vigilados": 40}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "22-sep-2026 era {'en disco': 82, 'exentos': 42, 'vigilados': 40}. La "
-        "aserción de fondo —cero archivos alcanzan la lista cruda— YA CORRIÓ "
-        "arriba y quedó verde, así que esto NO es una fuga. Si los vigilados "
-        "bajaron, algo se está saltando de más y «cero falsos positivos» dejó "
-        "de significar lo que decía; si subieron, hay código nuevo que mirar")
+        "22-sep-2026 (rama rosi-briefing) era {'en disco': 83, 'exentos': "
+        "43, 'vigilados': 40}. La aserción de fondo —cero archivos alcanzan "
+        "la lista cruda— YA CORRIÓ arriba y quedó verde, así que esto NO es "
+        "una fuga. Si los vigilados bajaron, algo se está saltando de más y "
+        "«cero falsos positivos» dejó de significar lo que decía; si "
+        "subieron, hay código nuevo que mirar")
 
 
 def test_la_guarda_no_rojea_a_quien_usa_config_como_se_debe():

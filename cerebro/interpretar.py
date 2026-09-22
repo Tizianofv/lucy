@@ -24,11 +24,13 @@ import captura.consumos as consumos
 import captura.correo as correo
 import cerebro.agente as agente
 import cerebro.calendario as calendario
+import cerebro.copia_dueno as copia_dueno
 import cerebro.despertador as despertador
 import cerebro.memoria as memoria
 import cerebro.preguntar as preguntar
 import cerebro.vision as vision
 import cerebro.whisper as whisper
+import config
 import db.db as db
 
 log = logging.getLogger("lucy.interpretar")
@@ -140,6 +142,27 @@ async def _obtener_texto(fila: dict, bot) -> str | None:
     return texto
 
 
+def _es_briefing_o_semanal_del_dueno(fila: dict) -> bool:
+    """¿Esta fila es el briefing matinal o el plan semanal QUE LE TOCA AL
+    DUEÑO -- el que solo habla de SUS tareas desde que
+    `despertador._destinatarios_de_tareas` reparte uno por persona?
+
+    Solo estos dos se arman por persona hoy; lo que todavía no tiene camino
+    propio (recordatorios, reporte de correo, canario bancario, 911, aviso
+    de respaldo) sigue yendo por la copia general -- este encargo es
+    únicamente briefing y plan semanal, y por eso la comprobación es
+    textual contra las DOS marcas que esos dos, y solo esos dos, usan
+    (`despertador.MARCA_BRIEFING`, `despertador.MARCA_SEMANAL`).
+    """
+    if fila.get("origen") != "despertador":
+        return False
+    if fila.get("chat_id") != config.CHAT_ID_DUENO:
+        return False
+    crudo = fila.get("contenido_raw") or ""
+    return (crudo.startswith(despertador.MARCA_BRIEFING)
+            or crudo.startswith(despertador.MARCA_SEMANAL))
+
+
 async def _procesar(fila: dict, bot) -> None:
     """Un mensaje → texto → agente. Un fallo acá no puede tumbar el bucle."""
     try:
@@ -147,7 +170,19 @@ async def _procesar(fila: dict, bot) -> None:
         if not texto or not texto.strip():
             await db.marcar_error(fila["id"], "Sin contenido que interpretar.")
             return
-        await agente.atender(fila, texto, bot)
+        if _es_briefing_o_semanal_del_dueno(fila):
+            # El briefing y el plan semanal del DUEÑO ya no hablan de "todas
+            # las tareas": desde que se reparten por persona, el suyo habla
+            # SOLO de las de él. Copiárselo a Rosi además del suyo propio
+            # sería mandarle dos resúmenes con el mismo nombre -- y uno de
+            # ellos, encima, de tareas que no son las de ella. La copia
+            # general no distingue esto por contenido, así que se apaga acá,
+            # para este turno nada más (mismo mecanismo que ya usa el
+            # enlace del panel, `cerebro/agente.py`, herramienta "panel").
+            with copia_dueno.sin_copiar():
+                await agente.atender(fila, texto, bot)
+        else:
+            await agente.atender(fila, texto, bot)
     except Exception as e:
         await _fallo(fila, e, bot)
 

@@ -407,48 +407,109 @@ def _toca_semanal(ahora: datetime) -> bool:
 # de distancia de sobra y sigue lejísimos del plan de la semana pasada.
 SEMANAL_DEDUPE_H = 24
 
+# LA MARCA de cada encargo, la MISMA que arranca su texto -- la lee
+# `db.destinos_con_encargo_hoy` para saber a quién YA se le dejó el suyo hoy.
+# Vive en una constante y no repetida a mano en dos sitios (la búsqueda y el
+# texto) por el mismo motivo que `correo.MARCA_ENCARGO`: quien cambie la
+# primera frase sin tocar esto abre el candado sin darse cuenta.
+MARCA_BRIEFING = "Prepará el briefing matinal de"
+MARCA_SEMANAL = "Prepará la semana de"
+
+
+async def _destinatarios_de_tareas() -> tuple[int, ...]:
+    """A quién arreglarle SU PROPIO briefing y SU PROPIO plan semanal.
+
+    El dueño SIEMPRE está (decisión de Tiziano, 22-sep-2026: las tareas sin
+    responsable le salen a él mientras nadie las asigne). Además, cada quien
+    tenga AL MENOS UNA tarea pendiente con `responsable_chat_id` puesto --
+    sacado de la base en cada llamada, no de una lista tecleada, y filtrado
+    por `config.puede_ser_responsable` (LA MISMA puerta que decide quién
+    puede QUEDAR asignado -- `db.asignar_responsable`, `crud.py::
+    _por_las_puertas`) para que un chat_id viejo sin acceso no reciba nada.
+
+    El dueño va primero y el resto en orden de chat_id: no importa CUÁL es
+    el orden mientras sea el mismo en cada llamada, para que dos vueltas
+    seguidas del despertador no dejen "faltan" (más abajo, en `_briefing` y
+    `_semanal`) en un orden distinto sin motivo.
+    """
+    async with db.pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            SELECT DISTINCT responsable_chat_id FROM tareas
+             WHERE estado = 'pendiente' AND borrado_en IS NULL
+               AND responsable_chat_id IS NOT NULL
+            """
+        )
+        filas = await cur.fetchall()
+    asignados = {f[0] for f in filas if config.puede_ser_responsable(f[0])}
+    asignados.discard(config.CHAT_ID_DUENO)
+    return (config.CHAT_ID_DUENO,) + tuple(sorted(asignados))
+
+
+def _quien_y_filtro(destino: int) -> tuple[str, str]:
+    """Cómo se llama este destinatario y con qué filtro de tareas es SUYO.
+
+    El dueño ve lo suyo Y lo que nadie asignó todavía (mismo criterio en
+    briefing y plan semanal); cualquier otra persona ve SOLO lo que tiene
+    puesto su propio chat_id. `config.NOMBRES_POR_CHAT` es la MISMA fuente
+    que ya usa el panel y `acciones/botones.py::_quien` -- no una copia.
+    """
+    if destino == config.CHAT_ID_DUENO:
+        return "TIZIANO", (
+            f"SOLO las tareas cuyo responsable_chat_id sea NULL (sin "
+            f"asignar) o {destino} (las tuyas). Las que tengan puesto otro "
+            "responsable_chat_id no son tuyas: no las nombres.")
+    nombre = config.NOMBRES_POR_CHAT.get(destino, "esta persona")
+    return nombre, (
+        f"SOLO las tareas cuyo responsable_chat_id sea EXACTAMENTE "
+        f"{destino} (las de {nombre}). Las que tengan otro responsable, o "
+        "ninguno, no son de esta persona: no las nombres.")
+
 
 async def _semanal() -> int:
-    """Deja el encargo del plan semanal, el domingo por la noche.
+    """Deja el encargo del plan semanal, el domingo por la noche -- uno por
+    cada persona con tareas asignadas, más el dueño siempre.
 
     Mismo patrón que el briefing: este módulo mira el reloj, el agente
     piensa. La diferencia está en el encargo: acá Lucy primero ORDENA la
     casa ella sola (reubicar lo colgado) y recién después habla — y habla
     solo del futuro.
+
+    El candado de "ya salió hoy" es POR DESTINATARIO, con el MISMO mecanismo
+    que ya usa el reporte de correo (`db.destinos_con_encargo_hoy`) -- no uno
+    nuevo. Antes era un único `SELECT 1 ... LIMIT 1` que cerraba para
+    cualquiera en cuanto UNO recibía el suyo; con dos destinatarios eso
+    dejaba al segundo sin plan hasta el domingo siguiente.
     """
     ahora = datetime.now(TZ)
     if not _toca_semanal(ahora):
         return 0
 
     desde = ahora - timedelta(hours=SEMANAL_DEDUPE_H)
-    async with db.pool.connection() as conn:
-        cur = await conn.execute(
-            """
-            SELECT 1 FROM bandeja
-             WHERE origen = 'despertador' AND tipo_entrada = 'sistema'
-               AND contenido_raw LIKE 'Prepará la semana%%'
-               AND creado_en >= %s
-             LIMIT 1
-            """,
-            (desde,),
-        )
-        if await cur.fetchone() is not None:
-            return 0
+    destinatarios = await _destinatarios_de_tareas()
+    ya = await db.destinos_con_encargo_hoy("despertador", MARCA_SEMANAL, desde)
+    faltan = [d for d in destinatarios if d not in ya]
+    if not faltan:
+        return 0
 
     rescate = ahora.weekday() == SEMANAL_RESCATE_DIA
-    await db.guardar_en_bandeja(
-        tipo_entrada="sistema",
-        contenido_raw=_encargo_semanal(rescate),
-        chat_id=config.CHAT_ID_DUENO,
-        origen="despertador",
-    )
-    log.info("Encargo del plan semanal dejado en la bandeja%s.",
-             " (rescate del lunes)" if rescate else "")
-    return 1
+    for destino in faltan:
+        await db.guardar_en_bandeja(
+            tipo_entrada="sistema",
+            contenido_raw=_encargo_semanal(rescate, destino),
+            chat_id=destino,
+            origen="despertador",
+        )
+    log.info("Encargo del plan semanal dejado en la bandeja%s (%s "
+             "destinatario%s).", " (rescate del lunes)" if rescate else "",
+             len(faltan), "" if len(faltan) == 1 else "s")
+    return len(faltan)
 
 
-def _encargo_semanal(rescate: bool = False) -> str:
-    """El encargo del plan semanal. En el rescate del lunes, la semana ya arrancó.
+def _encargo_semanal(rescate: bool = False,
+                      destino: int = config.CHAT_ID_DUENO) -> str:
+    """El encargo del plan semanal, PARA ESE destinatario. En el rescate del
+    lunes, la semana ya arrancó.
 
     Es un detalle de una línea, pero de los que delatan a un robot: mandar el
     lunes a las 6 AM un "prepará la semana que arranca mañana lunes" hace que
@@ -456,9 +517,12 @@ def _encargo_semanal(rescate: bool = False) -> str:
 
     Va por `{cuando}` y no por un reemplazo de texto a propósito: si alguien
     reescribe el encargo y se lleva puesto el hueco, esto revienta al toque en
-    vez de mandar callado el día equivocado.
+    vez de mandar callado el día equivocado. Mismo motivo para `{quien}` y
+    `{filtro}`.
     """
+    quien, filtro = _quien_y_filtro(destino)
     return ENCARGO_SEMANAL.format(
+        quien=quien, filtro=filtro,
         cuando="arranca hoy lunes" if rescate else "arranca mañana lunes")
 
 
@@ -476,10 +540,11 @@ def _encargo_semanal(rescate: bool = False) -> str:
 MAX_REUBICADAS = 5
 
 ENCARGO_SEMANAL = (
-    "Prepará la semana que {cuando}. En DOS tiempos:\n"
-    "PRIMERO, ordená la casa vos sola, sin contarle nada: consultá las "
-    "tareas vencidas sin hacer y las estancadas, y ponele con editar una "
-    "fecha nueva dentro de la semana entrante A LAS " + str(MAX_REUBICADAS) +
+    "Prepará la semana de {quien}, que {cuando}. En DOS tiempos:\n"
+    "PRIMERO, ordená la casa vos sola, sin contarle nada: consultá, mirando "
+    "{filtro}, las tareas vencidas sin hacer y las estancadas dentro de ese "
+    "filtro, y ponele con editar una fecha nueva dentro de la semana "
+    "entrante A LAS " + str(MAX_REUBICADAS) +
     " MÁS IMPORTANTES que sigan teniendo sentido — no a todas (que sume "
     "posposición está bien, para eso existe). El mensaje del SEGUNDO tiempo "
     "es obligatorio: si te quedás sin pasos reubicando, no llega, y entonces "
@@ -487,11 +552,12 @@ ENCARGO_SEMANAL = (
     "sin reubicar, no las toques: decí cuántas son en una línea. Si alguna te "
     "parece que ya murió, no la borres callada: preguntale solo por esa.\n"
     "SEGUNDO, mandale UN mensaje mirando SOLO hacia adelante: las citas de "
-    "la semana con hora y lugar (si dos chocan, decilo), lo que vence cada "
-    "día, y lo que reubicaste YA INTEGRADO como parte del plan — sin decir "
-    "'esto quedó de la semana pasada' ni rendirle cuentas del pasado. Tono "
-    "de plan, no de informe. Si la semana está vacía, decíselo en una línea "
-    "y listo."
+    "la semana con hora y lugar (si dos chocan, decilo — las citas son de "
+    "la casa entera, no las filtres), lo que vence cada día de ESE filtro "
+    "de tareas, y lo que reubicaste YA INTEGRADO como parte del plan — sin "
+    "decir 'esto quedó de la semana pasada' ni rendirle cuentas del pasado. "
+    "Tono de plan, no de informe. Si la semana está vacía de esas tareas, "
+    "decíselo en una línea y listo."
 )
 
 
@@ -629,64 +695,71 @@ async def _reprogramar_recurrentes() -> int:
 
 
 async def _briefing() -> int:
-    """Deja el encargo del briefing una vez por día, en la ventana matinal.
+    """Deja el encargo del briefing una vez por día, en la ventana matinal --
+    uno por cada persona con tareas asignadas, más el dueño siempre.
 
     Cada pieza en su oficio: este módulo solo mira el reloj, el agente
     piensa. El encargo cae en la bandeja como [sistema], y el agente consulta
     la agenda REAL y redacta el resumen — acá no se arma ningún texto de
     briefing, porque armarlo sin mirar los datos sería opinar sin consultar.
 
-    La marca de "hoy ya salió" es la propia fila de la bandeja: no hace falta
-    una tabla nueva para recordar un hecho que la bandeja ya registra.
+    El candado de "hoy ya salió" es POR DESTINATARIO
+    (`db.destinos_con_encargo_hoy`, el MISMO mecanismo que ya usa el reporte
+    de correo): la marca sigue siendo la propia fila de la bandeja, no hace
+    falta una tabla nueva, pero ahora se pregunta con nombre y apellido --
+    antes un `LIMIT 1` global cerraba el candado para TODOS en cuanto
+    cualquiera recibía el suyo.
     """
     ahora = datetime.now(TZ)
     if not (BRIEFING_DESDE <= ahora.hour < BRIEFING_HASTA):
         return 0
 
     hoy_arranca = ahora.replace(hour=0, minute=0, second=0, microsecond=0)
-    async with db.pool.connection() as conn:
-        cur = await conn.execute(
-            """
-            SELECT 1 FROM bandeja
-             WHERE origen = 'despertador' AND tipo_entrada = 'sistema'
-               AND contenido_raw LIKE 'Prepará el briefing%%'
-               AND creado_en >= %s
-             LIMIT 1
-            """,
-            (hoy_arranca,),
-        )
-        if await cur.fetchone() is not None:
-            return 0
+    destinatarios = await _destinatarios_de_tareas()
+    ya = await db.destinos_con_encargo_hoy(
+        "despertador", MARCA_BRIEFING, hoy_arranca)
+    faltan = [d for d in destinatarios if d not in ya]
+    if not faltan:
+        return 0
 
     fecha = f"{DIAS[ahora.weekday()]} {ahora.strftime('%d/%m/%Y')}"
-    encargo = (
-        f"Prepará el briefing matinal de hoy, {fecha}. Consultá la base y "
-        "armá UN solo mensaje breve y ordenado con lo que aplique: 1) las "
-        "citas de HOY, con hora y lugar — y si dos se pisan en el tiempo, "
-        "decilo con todas las letras; 2) las tareas que vencen hoy; 3) las "
-        "atrasadas (vencieron antes de hoy y siguen pendientes); 4) las bolas "
-        "que se están cayendo: tareas pospuestas 2 o más veces "
-        "(pospuesta_veces) o pendientes sin fecha desde hace más de 7 días — "
-        "decile cuánto llevan rodando, sin regañar. "
-        "OJO CON «PRIMERO:» (primero_id): una tarea que todavía espera a "
-        "otra que sigue pendiente NO va en 'vence hoy' ni en 'atrasadas' ni "
-        "en 'por dónde empezar' — no se puede empezar todavía. Si la que "
-        "esperaba a otra hoy vencida está libre porque la de antes ya está "
-        "hecha, sí entra normal. "
-        "Y AL CIERRE, lo más útil de todo: POR DÓNDE EMPEZAR. Elegí las 2 o 3 "
-        "cosas del día que de verdad importan y decí en qué orden encararlas, "
-        "con una razón corta cada una. Cruzá urgencia (vence hoy, atrasado, "
-        "choque de agenda) con importancia (prioridad alta, proyecto activo, "
-        "alguien esperando). No es repetir la lista: es tu recomendación de qué "
-        "mover primero y por qué. Respetá lo que Tiziano ya te dijo sobre cómo "
-        "priorizar. Omití las secciones vacías sin mencionarlas. Si no hay nada "
-        "de nada, un buenos días de una línea y listo. No le preguntes nada."
-    )
-    await db.guardar_en_bandeja(
-        tipo_entrada="sistema",
-        contenido_raw=encargo,
-        chat_id=config.CHAT_ID_DUENO,
-        origen="despertador",
-    )
-    log.info("Encargo del briefing matinal dejado en la bandeja.")
-    return 1
+    for destino in faltan:
+        quien, filtro = _quien_y_filtro(destino)
+        encargo = (
+            f"Prepará el briefing matinal de {quien}, hoy {fecha}. Consultá "
+            f"la base y armá UN solo mensaje breve y ordenado con lo que "
+            f"aplique, mirando {filtro} para los puntos 2, 3 y 4 (las citas "
+            "del punto 1 son de la casa entera, no las filtres por "
+            "responsable): 1) las citas de HOY, con hora y lugar — y si dos "
+            "se pisan en el tiempo, decilo con todas las letras; 2) las "
+            "tareas que vencen hoy; 3) las atrasadas (vencieron antes de "
+            "hoy y siguen pendientes); 4) las bolas que se están cayendo: "
+            "tareas pospuestas 2 o más veces (pospuesta_veces) o "
+            "pendientes sin fecha desde hace más de 7 días — decile cuánto "
+            "llevan rodando, sin regañar. "
+            "OJO CON «PRIMERO:» (primero_id): una tarea que todavía espera a "
+            "otra que sigue pendiente NO va en 'vence hoy' ni en 'atrasadas' "
+            "ni en 'por dónde empezar' — no se puede empezar todavía. Si la "
+            "que esperaba a otra hoy vencida está libre porque la de antes "
+            "ya está hecha, sí entra normal. "
+            "Y AL CIERRE, lo más útil de todo: POR DÓNDE EMPEZAR. Elegí las "
+            "2 o 3 cosas del día que de verdad importan (DENTRO del filtro "
+            "de arriba) y decí en qué orden encararlas, con una razón corta "
+            "cada una. Cruzá urgencia (vence hoy, atrasado, choque de "
+            "agenda) con importancia (prioridad alta, proyecto activo, "
+            "alguien esperando). No es repetir la lista: es tu "
+            "recomendación de qué mover primero y por qué. Respetá lo que "
+            "Tiziano ya te dijo sobre cómo priorizar. Omití las secciones "
+            "vacías sin mencionarlas. Si no hay nada de nada dentro del "
+            "filtro, un buenos días de una línea y listo. No le preguntes "
+            "nada."
+        )
+        await db.guardar_en_bandeja(
+            tipo_entrada="sistema",
+            contenido_raw=encargo,
+            chat_id=destino,
+            origen="despertador",
+        )
+    log.info("Encargo del briefing matinal dejado en la bandeja (%s "
+             "destinatario%s).", len(faltan), "" if len(faltan) == 1 else "s")
+    return len(faltan)
