@@ -61,6 +61,15 @@ from psycopg.rows import dict_row
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import db.sin_preparadas as sin_preparadas  # noqa: E402
 
+# AL NIVEL DEL MÓDULO, no dentro de una función. Un testigo midió que, con
+# la llamada metida en `main()`, "importar este archivo" y "que el arreglo
+# se aplique" eran dos cosas distintas: nada corre `main()` con solo
+# importar, así que un proceso que solo importara `db.backup` —o una
+# prueba que solo mide el import— no veía el arreglo puesto, aunque
+# `python3 db/backup.py` sí lo aplicara al llegar al `if __name__`. Acá
+# arriba, cargar el archivo YA lo deja apagado, se llegue a `main()` o no.
+sin_preparadas.aplicar()
+
 # En Windows, psycopg async necesita otra política; el backup es sincrónico,
 # así que no aplica. Se deja el import de psycopg sincrónico a propósito.
 
@@ -382,11 +391,9 @@ def hacer_backup() -> Path:
     }
 
     url = _url()
-    # SIN CONSULTAS PREPARADAS: deja `psycopg.Connection.connect` —la que
-    # usa este `with`— con `prepare_threshold=None` como su propio default,
-    # así que la llamada de abajo ya nace apagada sin nombrarlo acá. El
-    # porqué está en db/sin_preparadas.py.
-    sin_preparadas.aplicar()
+    # SIN CONSULTAS PREPARADAS: `sin_preparadas.aplicar()` ya corrió al
+    # cargar este archivo (arriba del todo, antes de esta función), así
+    # que la llamada de abajo ya nace apagada sin nombrarlo acá.
     with psycopg.connect(url, autocommit=True, row_factory=dict_row) as conn:
         datos["esquema"] = _catalogo(conn)
 

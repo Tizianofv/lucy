@@ -48,6 +48,13 @@ from decimal import Decimal
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import db.sin_preparadas as sin_preparadas  # noqa: E402
 
+# AL NIVEL DEL MÓDULO, no dentro de main(). Con la llamada metida en
+# main(), "importar este archivo" y "que el arreglo se aplique" eran dos
+# cosas distintas — un testigo lo midió sobre db/backup.py, con el mismo
+# defecto. Acá arriba, cargar el archivo YA lo deja apagado, se llegue a
+# main() o no.
+sin_preparadas.aplicar()
+
 CARPETA = os.path.expanduser("~/Google Drive/My Drive/Lucy/backups")
 
 

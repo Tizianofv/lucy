@@ -15,24 +15,45 @@ detecto todas las formas de escribir la llamada?", sino "¿se puede hacer
 que el caso no exista?".
 
 LA RESPUESTA, medida contra el psycopg instalado (versión 3.x, paquete
-`psycopg`):
+`psycopg`) — Y CORREGIDA el 22-sep-2026, tercera vuelta: un testigo midió
+la frase de acá abajo y encontró que decía algo que NO es cierto.
 
-  `psycopg.connect`, `psycopg.Connection.connect` y CUALQUIER alias que
-  alguien le ponga —`from psycopg import connect as lo_que_sea`— son EL
-  MISMO objeto función. Medido:
+  `psycopg.connect` y `psycopg.Connection.connect` NO son el mismo objeto:
+  `Connection.connect` es un `classmethod`, y CADA VEZ que se lo lee por
+  atributo (`psycopg.connect`, o `Connection.connect` de nuevo) Python crea
+  un objeto "bound method" NUEVO. Medido:
 
-      psycopg.connect is psycopg.Connection.connect        # True
-      psycopg.connect.__kwdefaults__ is \
-          psycopg.Connection.connect.__func__.__kwdefaults__  # True
+      psycopg.connect is psycopg.Connection.connect        # False
+      a = psycopg.Connection.connect
+      b = psycopg.Connection.connect
+      a is b                                                # False
 
-  Un alias no copia la función: apunta al mismo objeto, y Python resuelve
-  los valores por omisión de esa función CADA VEZ QUE SE LLAMA, leyendo
-  `__kwdefaults__` en ese momento — no cuando se importó el alias. Por
-  eso cambiar `__kwdefaults__["prepare_threshold"]` UNA vez, acá, cambia
-  lo que ve cualquier nombre que apunte a la función, se haya capturado
-  antes o después de este cambio, y aunque el nombre no exista todavía.
-  No hay lista de alias que perseguir porque no hay alias que mirar: hay
-  UNA función, y se le cambia el default.
+  Lo que SÍ es el mismo objeto, en cualquier lectura, es lo de ADENTRO: la
+  función plana (`__func__`) y el diccionario de sus valores por omisión
+  (`__kwdefaults__`), que Python guarda una única vez por función y no por
+  cada bound method que se cree para envolverla. Medido:
+
+      psycopg.connect.__func__ is psycopg.Connection.connect.__func__       # True
+      psycopg.connect.__kwdefaults__ is psycopg.Connection.connect.__kwdefaults__  # True
+      a.__kwdefaults__ is b.__kwdefaults__                                  # True
+
+  (Python reenvía `__kwdefaults__` del bound method a `__func__` cuando se
+  lo pide por atributo — por eso alcanza con escribir `clase.connect.
+  __kwdefaults__[...]`, sin pasar por `.__func__` a mano.)
+
+  Un alias —`from psycopg import connect as lo_que_sea`— tampoco copia
+  nada de esto: guarda una REFERENCIA a un bound method (o, si se hace
+  `x = Connection.connect`, un bound method fresco, pero que envuelve el
+  MISMO `__func__`). Y Python resuelve los valores por omisión de un
+  argumento solo-por-nombre CADA VEZ QUE SE LLAMA, leyendo
+  `__func__.__kwdefaults__` en ese momento — no cuando se creó el bound
+  method ni cuando se importó el alias. Por eso cambiar
+  `__kwdefaults__["prepare_threshold"]` UNA vez, acá, cambia lo que ve
+  cualquier nombre que en algún momento llame a `connect` —se haya
+  capturado antes o después de este cambio, y aunque el nombre no exista
+  todavía—: todos terminan resolviendo el mismo `__func__`, y ahí es donde
+  vive el valor. No hay lista de alias que perseguir porque no hay alias
+  que mirar: hay UNA función por debajo, y se le cambia el default.
 
   Se repite para `psycopg.AsyncConnection.connect` (la que usa el pool de
   `db/db.py`, vía `AsyncConnectionPool(..., connection_class=AsyncConnection)`
