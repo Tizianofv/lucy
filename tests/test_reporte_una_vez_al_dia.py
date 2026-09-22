@@ -110,11 +110,16 @@ class _Bandeja:
     async def ya_hubo_encargo_hoy(self, origen, prefijo, desde):
         return bool(self._encargos_de_hoy(origen, prefijo, desde))
 
-    async def marcar_correo_reportado(self, cuenta, uid, **kw):
-        self.reportados.append((cuenta, uid))
+    async def marcar_correo_reportado(self, cuenta, uid, *, destino=None, **kw):
+        self.reportados.append((cuenta, uid, destino))
 
-    async def correos_ya_reportados(self, cuenta, uids):
-        ya = {u for c, u in self.reportados if c == cuenta}
+    async def correos_ya_reportados(self, cuenta, uids, destino=None):
+        # Este archivo no prueba el reparto de un MISMO buzón a VARIOS
+        # destinos (eso vive en tests/test_correo_directo_a_los_dos.py, con
+        # SQL real en sqlite) -- acá cada cuenta sigue teniendo un único
+        # destino, así que filtrar por destino o no filtrar da lo mismo. Se
+        # ignora el parámetro a propósito, para no duplicar esa prueba.
+        ya = {u for c, u, _ in self.reportados if c == cuenta}
         return {u for u in uids if u in ya}
 
     async def listar_preferencias(self):
@@ -253,7 +258,7 @@ def test_el_texto_del_encargo_y_el_del_candado_son_el_mismo():
         {"from": "Jorge <jorge@ejemplo.com>", "cuenta": "x@y.com", "uid": 1,
          "snippet": "hola",
          "clasificacion": {"nivel": "accion", "area": "cds_clientes",
-                           "asunto_corto": "cotización"}}])
+                           "asunto_corto": "cotización"}}], config.CHAT_ID_DUENO)
     assert texto.startswith(correo.MARCA_ENCARGO), (
         "el encargo ya no empieza con MARCA_ENCARGO: el candado no lo va a "
         f"reconocer.\n  encargo: {texto[:80]!r}\n  marca:   {correo.MARCA_ENCARGO!r}")

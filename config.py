@@ -330,8 +330,8 @@ def chats_sin_nombre() -> int:
 # "Lucy le cuenta a Tiziano lo que le escriben a Rosi". El sistema tiene que
 # poder hacer lo primero sin lo segundo.
 
-def destino_del_reporte(cuenta: dict) -> int:
-    """A qué chat va el reporte de ESTE buzón. 0 = a nadie.
+def destinos_del_reporte(cuenta: dict) -> tuple[int, ...]:
+    """A qué chats va el reporte de ESTE buzón. () = a nadie.
 
     Sin el campo `reporte_a`, va al dueño — que es como se comportaba antes y
     por eso no rompe nada existente. Con él, el buzón se puede escanear para
@@ -339,23 +339,50 @@ def destino_del_reporte(cuenta: dict) -> int:
 
     `reporte_a: 0` (o false) = este buzón NO se le enseña a nadie.
 
+    VARIOS DESTINOS (encargo 3, "Rosi independiente", 22-sep-2026):
+    `reporte_a` acepta ahora también una LISTA de chats — es la MISMA puerta,
+    extendida, no un campo nuevo aparte. Un buzón que hoy solo informa al
+    dueño puede pasar a informarle también a otra persona sin que el código
+    invente de quién es cada buzón: eso lo sigue diciendo esta variable, no
+    una lista tecleada en otro archivo. `reporte_a: [111, 222]` = a los dos
+    chats, cada uno con su propio reporte independiente.
+
     Vive en config y no en `captura/correo.py` porque es política de
     configuración —qué dice la variable de entorno sobre cada buzón— y porque
     tiene que estar donde está la lista cruda: es lo que la convierte en las
-    dos vistas de abajo. `captura.correo.destino_del_reporte` sigue existiendo
-    como alias.
+    dos vistas de abajo. `captura.correo.destinos_del_reporte` sigue
+    existiendo como alias.
     """
     v = cuenta.get("reporte_a", cuenta.get("reporte", True))
     if v is True:
-        return CHAT_ID_DUENO
+        return (CHAT_ID_DUENO,)
     if v is False or v == 0:
-        return 0
+        return ()
+    if isinstance(v, (list, tuple)):
+        try:
+            return tuple(int(x) for x in v)
+        except (TypeError, ValueError):
+            log.warning("reporte_a inválido en %s (%r): mando al dueño.",
+                        cuenta.get("user"), v)
+            return (CHAT_ID_DUENO,)
     try:
-        return int(v)
+        return (int(v),)
     except (TypeError, ValueError):
         log.warning("reporte_a inválido en %s (%r): mando al dueño.",
                     cuenta.get("user"), v)
-        return CHAT_ID_DUENO
+        return (CHAT_ID_DUENO,)
+
+
+def destino_del_reporte(cuenta: dict) -> int:
+    """Compatibilidad con el código y las pruebas de antes del encargo 3: el
+    PRIMER destino de `destinos_del_reporte`, o 0 si no hay ninguno.
+
+    Sigue sirviendo para todo lo que solo necesita saber SI hay a quién
+    informar (`cuentas_de_correo("mostrar")`). Lo que necesita TODOS los
+    destinos —el reporte de correo en sí— usa `destinos_del_reporte`.
+    """
+    d = destinos_del_reporte(cuenta)
+    return d[0] if d else 0
 
 
 def cuentas_de_correo(para: str) -> list[dict]:

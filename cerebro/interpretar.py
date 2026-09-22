@@ -142,25 +142,36 @@ async def _obtener_texto(fila: dict, bot) -> str | None:
     return texto
 
 
-def _es_briefing_o_semanal_del_dueno(fila: dict) -> bool:
-    """¿Esta fila es el briefing matinal o el plan semanal QUE LE TOCA AL
-    DUEÑO -- el que solo habla de SUS tareas desde que
-    `despertador._destinatarios_de_tareas` reparte uno por persona?
+def _es_encargo_propio_del_dueno(fila: dict) -> bool:
+    """¿Esta fila es un encargo QUE LE TOCA AL DUEÑO, de los que ya se
+    reparten por persona (así que copiárselo a Rosi además de lo que ella
+    ya recibe por su cuenta sería mandarle dos veces lo mismo -- o, en el
+    caso del correo, contenido que no es suyo)?
 
-    Solo estos dos se arman por persona hoy; lo que todavía no tiene camino
-    propio (recordatorios, reporte de correo, canario bancario, 911, aviso
-    de respaldo) sigue yendo por la copia general -- este encargo es
-    únicamente briefing y plan semanal, y por eso la comprobación es
-    textual contra las DOS marcas que esos dos, y solo esos dos, usan
-    (`despertador.MARCA_BRIEFING`, `despertador.MARCA_SEMANAL`).
+    Hoy son TRES los que se reparten por persona:
+      · el briefing matinal y el plan semanal (encargo 1) -- origen
+        'despertador', marca `despertador.MARCA_BRIEFING`/`MARCA_SEMANAL`.
+      · el reporte de correo de la mañana (encargo 3) -- origen 'correo',
+        marca `captura.correo.MARCA_ENCARGO`. El del dueño sigue trayendo
+        SUS DOS buzones (el mixto y el del estudio) sin cambiar en nada;
+        lo que cambia es que YA NO hace falta copiárselo a Rosi, porque el
+        buzón del estudio ahora le llega a ella directo, sin el suyo.
+
+    Lo que todavía NO tiene camino propio (recordatorios de tareas del
+    dueño y de citas, canario bancario, 911, aviso de respaldo) sigue
+    yendo por la copia general -- por eso la comprobación es textual
+    contra marcas puntuales, no "todo lo que venga de estos módulos".
     """
-    if fila.get("origen") != "despertador":
-        return False
     if fila.get("chat_id") != config.CHAT_ID_DUENO:
         return False
     crudo = fila.get("contenido_raw") or ""
-    return (crudo.startswith(despertador.MARCA_BRIEFING)
-            or crudo.startswith(despertador.MARCA_SEMANAL))
+    origen = fila.get("origen")
+    if origen == "despertador":
+        return (crudo.startswith(despertador.MARCA_BRIEFING)
+                or crudo.startswith(despertador.MARCA_SEMANAL))
+    if origen == "correo":
+        return crudo.startswith(correo.MARCA_ENCARGO)
+    return False
 
 
 async def _procesar(fila: dict, bot) -> None:
@@ -170,15 +181,19 @@ async def _procesar(fila: dict, bot) -> None:
         if not texto or not texto.strip():
             await db.marcar_error(fila["id"], "Sin contenido que interpretar.")
             return
-        if _es_briefing_o_semanal_del_dueno(fila):
-            # El briefing y el plan semanal del DUEÑO ya no hablan de "todas
-            # las tareas": desde que se reparten por persona, el suyo habla
-            # SOLO de las de él. Copiárselo a Rosi además del suyo propio
-            # sería mandarle dos resúmenes con el mismo nombre -- y uno de
-            # ellos, encima, de tareas que no son las de ella. La copia
-            # general no distingue esto por contenido, así que se apaga acá,
-            # para este turno nada más (mismo mecanismo que ya usa el
-            # enlace del panel, `cerebro/agente.py`, herramienta "panel").
+        if _es_encargo_propio_del_dueno(fila):
+            # El briefing, el plan semanal y el reporte de correo del DUEÑO
+            # ya no son "lo mismo que le llega a cualquiera de la casa":
+            # desde que se reparten por persona, cada uno habla SOLO de lo
+            # suyo -- sus tareas, sus DOS buzones de correo. Copiárselo a
+            # Rosi además de lo que ella ya recibe por su cuenta sería
+            # mandarle contenido que no es de ella (las tareas de Tiziano,
+            # o el buzón personal de Tiziano -- justo lo que el encargo 3
+            # prohíbe: "que ninguna línea del buzón personal pueda llegarle
+            # por ningún camino"). La copia general no distingue esto por
+            # contenido, así que se apaga acá, para este turno nada más
+            # (mismo mecanismo que ya usa el enlace del panel,
+            # `cerebro/agente.py`, herramienta "panel").
             with copia_dueno.sin_copiar():
                 await agente.atender(fila, texto, bot)
         else:

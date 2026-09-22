@@ -130,9 +130,24 @@ CREATE TABLE correo_reportado (
   asunto       TEXT,
   bandeja_id   BIGINT REFERENCES bandeja(id), -- el encargo del reporte que lo mencionó
   leido_en     TIMESTAMPTZ,                   -- NULL = informado pero aún sin marcar en Gmail
-  -- (cuenta, uid) es la clave del ON CONFLICT de db.marcar_correo_reportado.
-  PRIMARY KEY (cuenta, uid)
+  -- A QUIÉN se le informó (encargo 3, "Rosi independiente", 22-sep-2026):
+  -- "ya informado" es un hecho del PAR (correo, destinatario), no solo del
+  -- correo -- el mismo correo del buzón del estudio puede estar informado a
+  -- Tiziano y SIN informar a Rosi (o al revés) al mismo tiempo. NULL solo
+  -- aparece en filas viejas, de antes de que existiera esta columna; el
+  -- código las trata como "informadas al dueño" (db.correos_ya_reportados),
+  -- que era el único destino que existía entonces. Ver
+  -- db/migrations/2026-09-22_correo_reportado_por_destino.sql.
+  destino_chat_id BIGINT
 );
+-- Reemplaza la PRIMARY KEY (cuenta, uid) vieja: con el destino sumado, el
+-- mismo correo puede tener una fila por cada persona a la que se le avisó.
+-- Es la clave del ON CONFLICT de db.marcar_correo_reportado. MISMO NOMBRE
+-- que la migración de arriba, para que una base armada desde este archivo y
+-- una migrada terminen con la restricción UNA sola vez
+-- (tests/test_esquema_reproduce_la_base.py lo exige).
+CREATE UNIQUE INDEX idx_correo_reportado_destino
+  ON correo_reportado (cuenta, uid, destino_chat_id);
 -- Existe en la base real y no estaba en ningún archivo del repo (medido el
 -- 5-sep-2026 contra producción). Nadie sabe quién lo creó, y hoy ninguna
 -- consulta del código filtra ni ordena por `reportado_en` — `grep -rn

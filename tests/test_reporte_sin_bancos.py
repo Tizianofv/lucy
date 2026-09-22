@@ -47,6 +47,7 @@ for n, attrs in (("psycopg", {}), ("psycopg.rows", {"dict_row": object}),
 
 import captura.correo as correo  # noqa: E402
 import cerebro.bancos as bancos  # noqa: E402
+import config  # noqa: E402
 import db.db as db  # noqa: E402
 
 
@@ -84,13 +85,20 @@ class _AsyncioConHilo:
 def _montar(crudos):
     correo.asyncio = _AsyncioConHilo(crudos)
 
-    async def _ya(cuenta, uids):
+    async def _ya(cuenta, uids, destino=None):
         return set()
     db.correos_ya_reportados = _ya
 
 
 async def _hecho(v):
     return v
+
+
+def _pendientes(cuenta, reglas=""):
+    """Un solo destino (el dueño) en este archivo; desenvuelve el
+    {destino: lista} al plano de antes."""
+    return _correr(correo._pendientes_de(
+        cuenta, reglas, (config.CHAT_ID_DUENO,))).get(config.CHAT_ID_DUENO, [])
 
 
 def test_los_bancos_registrados_no_llegan_al_reporte():
@@ -105,7 +113,7 @@ def test_los_bancos_registrados_no_llegan_al_reporte():
     correo.clasificar = lambda c, r="": _hecho(
         {"ambito": "", "area": "", "nivel": "accion",
          "asunto_corto": c["subject"], "motivo": ""})
-    salida = _correr(correo._pendientes_de({"user": "x@y.com"}, ""))
+    salida = _pendientes({"user": "x@y.com"})
     remitentes = [c["from"] for c in salida]
     assert len(salida) == 1, f"esperaba 1 correo, llegaron {len(salida)}"
     assert "jorge@ejemplo.com" in remitentes[0]
@@ -129,7 +137,7 @@ def test_un_correo_normal_del_mismo_dominio_si_pasa():
     correo.clasificar = lambda c, r="": _hecho(
         {"ambito": "", "area": "", "nivel": "accion",
          "asunto_corto": c["subject"], "motivo": ""})
-    salida = _correr(correo._pendientes_de({"user": "x@y.com"}, ""))
+    salida = _pendientes({"user": "x@y.com"})
     assert len(salida) == 1, "un humano del banco no es una alerta automática"
 
 

@@ -29,7 +29,7 @@ import db.sin_preparadas  # noqa: F401
 # `puede_ser_responsable` viene de config por lo mismo: es LA puerta de quién
 # puede quedar con una tarea pendiente, y tiene que ser la misma para la ruta
 # del panel y para la escritura de acá. Dos copias del criterio se separan.
-from config import DATABASE_URL, TZ, puede_ser_responsable
+from config import CHAT_ID_DUENO, DATABASE_URL, TZ, puede_ser_responsable
 
 
 class MovimientoRechazado(Exception):
@@ -680,44 +680,118 @@ async def leer_estado_correo(cuenta: str) -> dict | None:
         return await cur.fetchone()
 
 
-async def correos_ya_reportados(cuenta: str, uids: list[int]) -> set[int]:
-    """De esos uids, cuáles ya se le informaron a Tiziano.
+async def correos_ya_reportados(cuenta: str, uids: list[int],
+                                 destino: int = CHAT_ID_DUENO) -> set[int]:
+    """De esos uids, cuáles ya se le informaron a ESE destino.
 
     Es la memoria que hace posible mirar los SIN LEER en vez de un puntero que
     se consume: sin ella, un correo que él no marque leído volvería a aparecer
     cada mañana hasta el fin de los tiempos. Informado una vez, informado.
+
+    POR DESTINO desde el encargo 3 ("Rosi independiente", 22-sep-2026): que un
+    correo del buzón del estudio ya se le haya informado a Tiziano no puede
+    borrarle a Rosi la oportunidad de que se lo informen a ella, y al revés.
+    Una fila con `destino_chat_id IS NULL` es de ANTES de este encargo, cuando
+    solo existía un destino por buzón (el dueño) -- se cuenta como "informada
+    al dueño" únicamente cuando `destino` ES el dueño; para cualquier otro
+    destino (Rosi, o quien sea mañana) esas filas viejas no dicen nada, así
+    que no la excluyen.
+
+    SI LA COLUMNA TODAVÍA NO EXISTE (la migración de este encargo no se
+    aplicó: SQLSTATE 42703), cae a la consulta de ANTES -- sin filtrar por
+    destino -- mismo patrón que `cerebro/despertador.py::revisar` con
+    `primero_id`. Con eso, hasta que la migración corra, TODO destino ve como
+    "ya informado" lo que ya se le informó a cualquiera -- sub-informa, nunca
+    sobre-informa, que es el lado seguro mientras la migración no está.
     """
     if not uids:
         return set()
+    es_dueno = destino == CHAT_ID_DUENO
     async with pool.connection() as conn:
-        cur = await conn.execute(
-            "SELECT uid FROM correo_reportado WHERE cuenta = %s AND uid = ANY(%s)",
-            (cuenta, [int(u) for u in uids]),
-        )
-        return {r[0] for r in await cur.fetchall()}
+        try:
+            async with conn.transaction():
+                cur = await conn.execute(
+                    """
+                    SELECT uid FROM correo_reportado
+                     WHERE cuenta = %s AND uid = ANY(%s)
+                       AND (destino_chat_id = %s
+                            OR (destino_chat_id IS NULL AND %s))
+                    """,
+                    (cuenta, [int(u) for u in uids], destino, es_dueno),
+                )
+                return {r[0] for r in await cur.fetchall()}
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate != "42703":
+                raise
+            cur = await conn.execute(
+                "SELECT uid FROM correo_reportado WHERE cuenta = %s AND uid = ANY(%s)",
+                (cuenta, [int(u) for u in uids]),
+            )
+            return {r[0] for r in await cur.fetchall()}
 
 
-async def marcar_correo_reportado(cuenta: str, uid: int, *, nivel: str = "",
-                                  ambito: str = "", area: str = "",
-                                  asunto: str = "", bandeja_id: int | None = None
-                                  ) -> None:
-    """Deja constancia de que ese correo ya se informó, con su clasificación.
+async def marcar_correo_reportado(cuenta: str, uid: int, *,
+                                  destino: int = CHAT_ID_DUENO,
+                                  nivel: str = "", ambito: str = "",
+                                  area: str = "", asunto: str = "",
+                                  bandeja_id: int | None = None) -> None:
+    """Deja constancia de que ese correo ya se le informó a ESE destino, con
+    su clasificación.
 
     Guardar CÓMO se clasificó no es adorno: es lo que después permite contestar
     "¿por qué no me avisaste de esto?" con datos en la mano, y afinar las
     reglas con hechos en vez de impresiones.
+
+    Una fila por (cuenta, uid, destino) -- el mismo correo puede tener una
+    fila para Tiziano y otra para Rosi, cada una con su propio `bandeja_id`
+    (el encargo que se lo contó a ESA persona).
+
+    SI LA COLUMNA TODAVÍA NO EXISTE (SQLSTATE 42703), cae al INSERT de antes
+    -- sin destino -- para no romper el reporte mientras la migración no
+    corrió. Ver `correos_ya_reportados` para el porqué completo.
     """
     async with pool.connection() as conn:
-        await conn.execute(
-            """
-            INSERT INTO correo_reportado
-              (cuenta, uid, nivel, ambito, area, asunto, bandeja_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (cuenta, uid) DO NOTHING
-            """,
-            (cuenta, int(uid), nivel or None, ambito or None, area or None,
-             (asunto or "")[:300] or None, bandeja_id),
-        )
+        try:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    INSERT INTO correo_reportado
+                      (cuenta, uid, destino_chat_id, nivel, ambito, area,
+                       asunto, bandeja_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (cuenta, uid, destino_chat_id) DO NOTHING
+                    """,
+                    (cuenta, int(uid), destino, nivel or None, ambito or None,
+                     area or None, (asunto or "")[:300] or None, bandeja_id),
+                )
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate != "42703":
+                raise
+            # `ON CONFLICT DO NOTHING` A SECAS -- sin columnas -- a propósito:
+            # antes de la migración, la restricción única en producción sigue
+            # siendo la PK vieja (cuenta, uid); después, es el índice nuevo
+            # (cuenta, uid, destino_chat_id). Nombrar columnas ataría este
+            # camino de compatibilidad a UNA de las dos formas, y dejaría de
+            # ser compatible con la otra. Sin lista, Postgres lo aplica
+            # contra CUALQUIER restricción única que choque, sea cual sea.
+            await conn.execute(
+                """
+                INSERT INTO correo_reportado
+                  (cuenta, uid, nivel, ambito, area, asunto, bandeja_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (cuenta, int(uid), nivel or None, ambito or None, area or None,
+                 (asunto or "")[:300] or None, bandeja_id),
+            )
 
 
 async def correos_por_marcar_leidos() -> list[dict]:

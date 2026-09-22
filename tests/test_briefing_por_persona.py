@@ -320,18 +320,18 @@ def test_semanal_un_encargo_por_destinatario_y_filtro_correcto():
 
 
 # ---------------------------------------------------------------------------
-# 3) interpretar._es_briefing_o_semanal_del_dueno: distingue hermanos
+# 3) interpretar._es_encargo_propio_del_dueno: distingue hermanos
 # ---------------------------------------------------------------------------
 def test_reconoce_el_briefing_del_dueno():
     fila = {"origen": "despertador", "chat_id": DUENO,
             "contenido_raw": despertador.MARCA_BRIEFING + " Alfa, hoy ..."}
-    assert interpretar._es_briefing_o_semanal_del_dueno(fila) is True
+    assert interpretar._es_encargo_propio_del_dueno(fila) is True
 
 
 def test_reconoce_el_semanal_del_dueno():
     fila = {"origen": "despertador", "chat_id": DUENO,
             "contenido_raw": despertador.MARCA_SEMANAL + " Alfa, que arranca..."}
-    assert interpretar._es_briefing_o_semanal_del_dueno(fila) is True
+    assert interpretar._es_encargo_propio_del_dueno(fila) is True
 
 
 def test_el_briefing_de_beta_no_es_el_del_dueno():
@@ -341,7 +341,7 @@ def test_el_briefing_de_beta_no_es_el_del_dueno():
     no es "la del dueño"."""
     fila = {"origen": "despertador", "chat_id": BETA,
             "contenido_raw": despertador.MARCA_BRIEFING + " Beta, hoy ..."}
-    assert interpretar._es_briefing_o_semanal_del_dueno(fila) is False
+    assert interpretar._es_encargo_propio_del_dueno(fila) is False
 
 
 def test_el_recordatorio_del_dueno_no_se_confunde_con_el_briefing():
@@ -352,11 +352,11 @@ def test_el_recordatorio_del_dueno_no_se_confunde_con_el_briefing():
     copiándose como hasta ahora."""
     fila = {"origen": "despertador", "chat_id": DUENO,
             "contenido_raw": "⏰ Ya es la hora: pagar la luz (03:00 PM)"}
-    assert interpretar._es_briefing_o_semanal_del_dueno(fila) is False
+    assert interpretar._es_encargo_propio_del_dueno(fila) is False
 
     fila_backup = {"origen": "despertador", "chat_id": DUENO,
                    "contenido_raw": db.AVISO_BACKUP_PREFIJO + "\n\n..."}
-    assert interpretar._es_briefing_o_semanal_del_dueno(fila_backup) is False
+    assert interpretar._es_encargo_propio_del_dueno(fila_backup) is False
 
 
 def test_un_encargo_de_otro_origen_con_texto_parecido_no_cuela():
@@ -364,7 +364,7 @@ def test_un_encargo_de_otro_origen_con_texto_parecido_no_cuela():
     uno de estos dos (por ejemplo, algo escrito a mano en el panel)."""
     fila = {"origen": "panel", "chat_id": DUENO,
             "contenido_raw": despertador.MARCA_BRIEFING + " Alfa, hoy ..."}
-    assert interpretar._es_briefing_o_semanal_del_dueno(fila) is False
+    assert interpretar._es_encargo_propio_del_dueno(fila) is False
 
 
 # ---------------------------------------------------------------------------

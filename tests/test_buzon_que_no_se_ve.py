@@ -362,10 +362,11 @@ class _BaseFalsa:
         self.encargos.append(dict(kw))
         return len(self.encargos)
 
-    async def marcar_correo_reportado(self, cuenta, uid, *, bandeja_id=None, **kw):
-        self.marcados.append({"cuenta": cuenta, "uid": uid})
+    async def marcar_correo_reportado(self, cuenta, uid, *, bandeja_id=None,
+                                      destino=None, **kw):
+        self.marcados.append({"cuenta": cuenta, "uid": uid, "destino": destino})
 
-    async def correos_ya_reportados(self, cuenta, uids):
+    async def correos_ya_reportados(self, cuenta, uids, destino=None):
         return set()
 
     async def listar_preferencias(self):
@@ -3756,10 +3757,22 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # cita, al dueño). Es un archivo de `testpaths`, EXENTO por rol. Los
     # VIGILADOS siguen en 40: el trabajo tocó solo `cerebro/despertador.py`,
     # que YA estaba vigilado de antes.
-    assert medido == {"en disco": 84, "exentos": 44, "vigilados": 40}, (
+    #
+    # 22-sep-2026, rama `trabajo/rosi-correo` (encargo 3 del mismo diseño):
+    # 84 → 85 en disco y 44 → 45 EXENTOS por
+    # `tests/test_correo_directo_a_los_dos.py` (el resumen del correo,
+    # directo a los dos: el buzón del estudio también a Rosi, el mixto solo
+    # a Tiziano, con la dedupe por destino contra SQLite real). Es un
+    # archivo de `testpaths`, EXENTO por rol. Los VIGILADOS siguen en 40: el
+    # trabajo tocó `config.py`, `db/db.py`, `captura/correo.py` y
+    # `cerebro/interpretar.py`, los cuatro ya vigilados de antes. La
+    # migración nueva (`db/migrations/2026-09-22_correo_reportado_por_
+    # destino.sql`) no es un `.py`: el barrido de este archivo no la ve, ni
+    # tiene que verla.
+    assert medido == {"en disco": 85, "exentos": 45, "vigilados": 40}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "22-sep-2026 (rama rosi-recordatorios) era {'en disco': 84, "
-        "'exentos': 44, 'vigilados': 40}. La aserción de fondo —cero "
+        "22-sep-2026 (rama rosi-correo) era {'en disco': 85, "
+        "'exentos': 45, 'vigilados': 40}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

@@ -680,12 +680,14 @@ async def leer(cuenta: str, uid: str) -> dict | None:
 # larga de por qué la puerta es única está en `config.py`, en el bloque
 # "LA PUERTA ÚNICA DE LOS BUZONES".
 destino_del_reporte = config.destino_del_reporte
+destinos_del_reporte = config.destinos_del_reporte
 cuentas = config.cuentas_de_correo
 
 
-async def _pendientes_de(cuenta: dict, reglas: str = "") -> list[dict]:
-    """Los correos SIN LEER de esta cuenta que todavía no se informaron, ya
-    clasificados. Es la materia prima del reporte.
+async def _pendientes_de(cuenta: dict, reglas: str, destinos: tuple[int, ...]
+                          ) -> dict[int, list[dict]]:
+    """Los correos SIN LEER de esta cuenta que todavía no se le informaron a
+    CADA destino, ya clasificados y repartidos: {destino: [correos]}.
 
     No toca el puntero ni marca nada: solo mira. Lo que se informa y lo que se
     marca leído se decide después, cuando el reporte de verdad haya salido.
@@ -696,15 +698,28 @@ async def _pendientes_de(cuenta: dict, reglas: str = "") -> list[dict]:
     y bajar el cuerpo— y solo hasta `MAX_CLASIFICA_POR_VUELTA`. Bajar el cuerpo
     de todos, como se hacía hasta el 5-sep-2026, pagaba lo caro por correos que
     dos líneas después se tiraban.
+
+    POR DESTINO (encargo 3, "Rosi independiente", 22-sep-2026): un buzón con
+    dos destinos (por ejemplo, el del estudio → dueño Y Rosi) puede tener
+    "nuevos" distintos para cada uno -- lo que ya se le contó a Tiziano puede
+    seguir sin contársele a Rosi. Por eso "ya informado" se mira UNA VEZ POR
+    DESTINO (`db.correos_ya_reportados(..., destino)`), pero la clasificación
+    cara (DeepSeek, el cuerpo) se paga UNA sola vez por correo, sobre la UNIÓN
+    de lo que es nuevo para AL MENOS UN destino -- nunca el doble por tener
+    dos destinatarios.
     """
     crudos = await asyncio.to_thread(
         _sin_leer_sync, cuenta, VENTANA_DIAS, con_cuerpo=False)
     if not crudos:
-        return []
+        return {}
 
-    ya = await db.correos_ya_reportados(
-        cuenta["user"], [c["uid"] for c in crudos])
-    nuevos = [c for c in crudos if c["uid"] not in ya]
+    uids = [c["uid"] for c in crudos]
+    ya_por_destino = {
+        d: await db.correos_ya_reportados(cuenta["user"], uids, d)
+        for d in destinos
+    }
+    nuevos = [c for c in crudos
+              if any(c["uid"] not in ya_por_destino[d] for d in destinos)]
 
     # Los correos de los bancos que la ingesta ya sabe leer NO entran al
     # reporte. Cada consumo con tarjeta llega como un correo y el clasificador
@@ -734,7 +749,7 @@ async def _pendientes_de(cuenta: dict, reglas: str = "") -> list[dict]:
                 log.info("Reporte: %s correos bancarios fuera (los lee la "
                          "ingesta).", antes - len(nuevos))
     if not nuevos:
-        return []
+        return {}
 
     # LO MÁS VIEJO PRIMERO. El uid de IMAP crece con la llegada al buzón, así
     # que ordenar por uid es ordenar por antigüedad. Es lo que lleva más
@@ -801,7 +816,13 @@ async def _pendientes_de(cuenta: dict, reglas: str = "") -> list[dict]:
         extractos = {c["uid"]: c.get("snippet", "") for c in cuerpos}
         for c in caros:
             c["snippet"] = extractos.get(c["uid"], "")
-    return nuevos
+
+    # EL REPARTO FINAL: cada destino se lleva SOLO los correos que eran
+    # nuevos PARA ÉL -- el mismo `c` (con su clasificación ya resuelta, sin
+    # volver a pagarla) puede aparecer en la lista de más de un destino.
+    por_destino = {d: [c for c in nuevos if c["uid"] not in ya_por_destino[d]]
+                   for d in destinos}
+    return {d: lista for d, lista in por_destino.items() if lista}
 
 
 def _linea(c: dict) -> str:
@@ -844,14 +865,25 @@ def _por_remitente(correos: list[dict], top: int = 25) -> str:
     return listado
 
 
-def _encargo(pendientes: list[dict]) -> str:
-    """El encargo que se le deja al agente para que redacte el reporte.
+def _encargo(pendientes: list[dict], destino: int) -> str:
+    """El encargo que se le deja al agente para que redacte el reporte, PARA
+    ESE destino.
 
     Igual que el briefing: acá se juntan y clasifican los datos, y el AGENTE
     los convierte en un mensaje humano. Lo que este texto sí fija es la
     política que Tiziano definió: qué nivel lleva cuánto detalle, y que nada
-    —ni la publicidad— puede quedar sin mencionarse.
+    —ni la publicidad— puede quedar sin mencionarse. Esa POLÍTICA es la misma
+    para cualquier destino (encargo 3, 22-sep-2026): lo único que cambia es A
+    QUIÉN se le dice que "todavía no se lo informaste" -- `config.
+    NOMBRES_POR_CHAT`, la MISMA fuente que ya usa el briefing por persona, no
+    un nombre tecleado acá.
     """
+    # El dueño es "Tiziano" siempre, sin pasar por NOMBRES_POR_CHAT -- mismo
+    # criterio que `despertador._quien_y_filtro` (encargo 1): así no depende
+    # de que esa variable lo tenga cargado. Cualquier otro destino sí sale de
+    # ahí, la MISMA fuente que ya usa el panel.
+    quien = ("Tiziano" if destino == config.CHAT_ID_DUENO
+             else config.NOMBRES_POR_CHAT.get(destino, "quien va a leer esto"))
     orden = {"911": 0, "accion": 1, "dudoso": 2, "enterarte": 3, "mencion": 4,
              SIN_CLASIFICAR: 5}
     pendientes = sorted(pendientes, key=lambda c: orden.get(
@@ -881,7 +913,7 @@ def _encargo(pendientes: list[dict]) -> str:
             f"son de: {_por_remitente(sin_juzgar)}")
     return (
         f"{MARCA_ENCARGO} Estos son los {total} correos SIN LEER que "
-        "todavía no le informaste a Tiziano, ya clasificados por vos misma "
+        f"todavía no le informaste a {quien}, ya clasificados por vos misma "
         f"(nivel|área):\n\n{lineas}\n\n"
         "Armá UN mensaje, en este orden y con este detalle — es la política que "
         "él definió:\n"
@@ -921,7 +953,13 @@ async def revisar_ahora() -> list[dict]:
     fallos: list[str] = []
     for cuenta in config.cuentas_de_correo("mostrar"):
         try:
-            salida += await _pendientes_de(cuenta, reglas)
+            # Fuera de alcance del encargo 3: esto es "revisá el correo" a
+            # mano, que sigue siendo UNA sola vista (la del dueño, como
+            # siempre) -- no se reparte por persona.
+            por_destino = await _pendientes_de(
+                cuenta, reglas, (config.CHAT_ID_DUENO,))
+            for lista in por_destino.values():
+                salida += lista
         except Exception as e:
             fallos.append(f"{cuenta.get('user', '?')} ({type(e).__name__}: {e})")
             log.warning("Falló la revisión de %s.", cuenta.get("user", "?"),
@@ -1173,7 +1211,10 @@ async def reporte_diario() -> int:
     hoy_arranca = ahora.replace(hour=0, minute=0, second=0, microsecond=0)
     ya_reportados = await db.destinos_con_encargo_hoy(
         "correo", MARCA_ENCARGO, hoy_arranca)
-    destinos = {d for d in map(destino_del_reporte, cuentas_visibles) if d}
+    # Un buzón puede tener VARIOS destinos (encargo 3, "Rosi independiente",
+    # 22-sep-2026): `destinos` es la UNIÓN de todos, de todos los buzones.
+    destinos = {d for cuenta in cuentas_visibles
+                for d in destinos_del_reporte(cuenta)}
     if not destinos - ya_reportados:
         # Todos los que informan a alguien ya informaron. Se sale ANTES de
         # abrir IMAP: son ~100 vueltas por mañana.
@@ -1181,19 +1222,30 @@ async def reporte_diario() -> int:
 
     reglas = await _reglas()
     # Los correos se agrupan POR DESTINO, no en un solo montón: cada buzón
-    # informa a quien le corresponde. Hoy todos van al dueño porque ninguna
-    # cuenta declara `reporte_a`, pero la estructura ya no lo obliga.
+    # informa a quien le corresponde. Hoy el buzón del dueño (el mixto) va
+    # SOLO a él; el del estudio, a él Y a Rosi (si la variable lo declara);
+    # la estructura no obliga a ningún reparto en particular -- lo dice
+    # `reporte_a` de cada cuenta.
     por_destino: dict[int, list[dict]] = {}
     for cuenta in cuentas_visibles:
-        destino = destino_del_reporte(cuenta)
-        if destino in ya_reportados:
-            continue          # ese chat ya tuvo su reporte hoy
+        destinos_cuenta = tuple(d for d in destinos_del_reporte(cuenta)
+                                 if d not in ya_reportados)
+        if not destinos_cuenta:
+            continue          # todos los destinos de este buzón ya tuvieron su reporte hoy
         try:
-            por_destino.setdefault(destino, []).extend(
-                await _pendientes_de(cuenta, reglas))
+            pendientes_cuenta = await _pendientes_de(
+                cuenta, reglas, destinos_cuenta)
         except Exception:
             log.warning("Falló la revisión de %s; sigo con las demás.",
                         cuenta.get("user", "?"), exc_info=True)
+            continue
+        for destino, lista in pendientes_cuenta.items():
+            por_destino.setdefault(destino, []).extend(lista)
+    # OJO: un mismo correo puede vivir en la lista de MÁS de un destino (el
+    # buzón del estudio, informado al dueño Y a Rosi) -- `pendientes` de
+    # abajo es solo para CONTAR cuántos correos entraron al reporte en
+    # total, no para deduplicar nada: cada destino se marca por separado más
+    # abajo (`db.marcar_correo_reportado`, una fila por (correo, destino)).
     pendientes = [c for lista in por_destino.values() for c in lista]
 
     if not pendientes:
@@ -1237,13 +1289,13 @@ async def reporte_diario() -> int:
         if not lista:
             continue
         bandeja_id = await db.guardar_en_bandeja(
-            tipo_entrada="sistema", contenido_raw=_encargo(lista),
+            tipo_entrada="sistema", contenido_raw=_encargo(lista, destino),
             chat_id=destino, origen="correo")
         encargos[destino] = bandeja_id
         for c in lista:
             cl = c["clasificacion"]
             await db.marcar_correo_reportado(
-                c["cuenta"], c["uid"], nivel=cl["nivel"],
+                c["cuenta"], c["uid"], destino=destino, nivel=cl["nivel"],
                 ambito=cl.get("ambito", ""), area=cl.get("area", ""),
                 asunto=c["subject"], bandeja_id=bandeja_id)
 

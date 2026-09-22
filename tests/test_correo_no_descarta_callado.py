@@ -149,12 +149,15 @@ class _BaseFalsa:
         self.encargos.append(dict(kw))
         return len(self.encargos)
 
-    async def marcar_correo_reportado(self, cuenta, uid, *, bandeja_id=None, **kw):
+    async def marcar_correo_reportado(self, cuenta, uid, *, bandeja_id=None,
+                                      destino=None, **kw):
         self.marcados.append({"cuenta": cuenta, "uid": uid,
-                              "bandeja_id": bandeja_id})
+                              "bandeja_id": bandeja_id, "destino": destino})
         self._ya.add((cuenta, uid))
 
-    async def correos_ya_reportados(self, cuenta, uids):
+    async def correos_ya_reportados(self, cuenta, uids, destino=None):
+        # Un solo destino en este archivo (ver `_pendientes`); el reparto por
+        # VARIOS vive en tests/test_correo_directo_a_los_dos.py.
         return {u for u in uids if (cuenta, u) in self._ya}
 
     async def listar_preferencias(self):
@@ -220,6 +223,14 @@ def _correr(c):
 CUENTA = {"user": "tizianofv@gmail.com", "pass": "x"}
 
 
+def _pendientes(cuenta, reglas=""):
+    """Este archivo no prueba el reparto por VARIOS destinos (eso vive en
+    tests/test_correo_directo_a_los_dos.py) -- un solo destino, el dueño, y
+    se desenvuelve el diccionario {destino: lista} al plano de antes."""
+    return _correr(correo._pendientes_de(
+        cuenta, reglas, (config.CHAT_ID_DUENO,))).get(config.CHAT_ID_DUENO, [])
+
+
 # ── 1. El tope ya no descarta ─────────────────────────────────────────────
 
 def test_ningun_correo_sin_leer_se_queda_afuera_por_un_tope():
@@ -231,7 +242,7 @@ def test_ningun_correo_sin_leer_se_queda_afuera_por_un_tope():
     buzon = [(i, _eml(f"Persona {i} <p{i}@ejemplo.com>", f"asunto {i}"))
              for i in range(1, 151)]
     _montar(buzon)
-    salida = _correr(correo._pendientes_de(CUENTA, ""))
+    salida = _pendientes(CUENTA)
     assert len(salida) == len(buzon), (
         f"el buzón tiene {len(buzon)} correos sin leer y al reporte llegaron "
         f"{len(salida)}: hay algo descartando en silencio")
@@ -251,7 +262,7 @@ def test_lo_viejo_sin_informar_no_se_pierde_detras_de_lo_nuevo_ya_informado():
     viejos = [u for u, _ in buzon[:20]]
     ya = [(CUENTA["user"], u) for u, _ in buzon[20:]]
     _montar(buzon, ya_reportados=ya)
-    salida = _correr(correo._pendientes_de(CUENTA, ""))
+    salida = _pendientes(CUENTA)
     assert sorted(c["uid"] for c in salida) == viejos, (
         f"esperaba los {len(viejos)} sin informar {viejos[:3]}…, "
         f"llegaron {sorted(c['uid'] for c in salida)[:5]}… "
@@ -386,7 +397,7 @@ def test_el_trabajo_de_una_vuelta_esta_acotado():
     assert len(buzon) > cupo, "el buzón de la prueba no desborda el cupo"
     base = _montar(buzon)
 
-    salida = _correr(correo._pendientes_de(CUENTA, ""))
+    salida = _pendientes(CUENTA)
     assert len(salida) == len(buzon), "esto lo cubre la prueba de arriba"
 
     assert len(base.clasificados) == cupo, (
@@ -411,7 +422,7 @@ def test_el_cupo_se_lo_lleva_lo_mas_viejo():
     buzon = _buzon_de_un_dia_malo(200)
     cupo = correo.MAX_CLASIFICA_POR_VUELTA
     base = _montar(buzon)
-    _correr(correo._pendientes_de(CUENTA, ""))
+    _pendientes(CUENTA)
     mas_viejos = sorted(u for u, _ in buzon)[:cupo]
     assert sorted(base.clasificados) == mas_viejos, (
         f"el cupo se gastó en {sorted(base.clasificados)[:3]}… y los más viejos "
@@ -428,7 +439,7 @@ def test_el_reporte_no_baja_el_cuerpo_de_lo_que_no_lo_muestra():
     buzon = [(i, _eml(f"Boletín <no-reply@marca{i}.com>", f"oferta {i}"))
              for i in range(1, 41)]
     base = _montar(buzon)
-    salida = _correr(correo._pendientes_de(CUENTA, ""))
+    salida = _pendientes(CUENTA)
     assert len(salida) == len(buzon), "el ruido se informa igual, como mención"
     assert base.clasificados == [], (
         f"el ruido evidente gastó {len(base.clasificados)} llamadas a DeepSeek")
@@ -492,7 +503,7 @@ def test_un_asunto_con_bytes_crudos_no_deja_el_buzon_entero_afuera():
              (2, _eml("Ana <ana@ejemplo.com>", "sin tildes")),
              (3, _eml("Luis <luis@ejemplo.com>", "reunión del jueves"))]
     _montar(buzon)
-    salida = _correr(correo._pendientes_de(CUENTA, ""))
+    salida = _pendientes(CUENTA)
     assert len(salida) == len(buzon), (
         f"el buzón tiene {len(buzon)} correos y llegaron {len(salida)}: una "
         "cabecera mal formada se llevó el buzón por delante")
