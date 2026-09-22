@@ -35,6 +35,7 @@ import db.db as db  # noqa: E402
 import web.app as panel  # noqa: E402
 import web.auth as auth  # noqa: E402
 
+RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 UTC = timezone.utc
 # NO se hardcodea 424242: `config.CHAT_ID_DUENO` se fija UNA vez por proceso,
 # al primer `import config` -- y `tests/test_crud_dedup.py` corre antes en la
@@ -785,53 +786,105 @@ def _fila_proyecto_area_panel(**extra):
 # ── Hermanos: otros sitios que escriben `log_acciones` con un `actor` que
 # viene de afuera de la función que escribe ────────────────────────────────
 #
-# Se recorre `acciones/crud.py` y `db/db.py` -- los dos archivos que escriben
-# en `log_acciones`, medido con grep -- buscando cada `INSERT INTO
-# log_acciones`. Los de `db.py` llevan el actor LITERAL en el SQL ('panel' o
-# 'lucy', según la función, ver `db.crear_tarea_desde_el_panel`,
-# `db.convertir_tarea_en_proyecto`, `db._buscar_o_crear`): no hay parámetro
-# que se pueda perder porque no hay parámetro, el texto ES el valor. El
-# ÚNICO sitio donde el actor es una VARIABLE que viaja como argumento hasta
-# el INSERT es `acciones.crud._registrar` (parámetro `actor`, con default
-# 'lucy') -- y el único llamador que le pasa algo distinto del default es
-# `editar()`, que a su vez lo recibe de SUS llamadores. Ésa es la cadena que
-# las dos pruebas de arriba miden de punta a punta; no hay un segundo hilo
-# "actor que viene de afuera" en este archivo.
+# SEGUNDA VUELTA (NO PASA del testigo sobre `25f7d0b`): la primera versión de
+# esta prueba SOLO miraba `acciones/crud.py`, tecleado con un `import`
+# directo. El comentario y el docstring decían "junto con db/db.py", pero el
+# código nunca lo abría -- el testigo lo demostró agregando una función
+# nueva en `db/db.py` con `actor` como variable, fuera de `_registrar`, y la
+# prueba siguió en VERDE.
+#
+# Ahora la lista de módulos sale de lo real: TODO `.py` del repo, fuera de
+# `tests/`, que contenga el texto `INSERT INTO log_acciones` -- con el MISMO
+# barrido que ya usa `tests/test_responsable.py::_censo`
+# (`test_buzon_que_no_se_ve._py_en_disco` / `_testpaths`, que a su vez
+# pregunta a cada carpeta qué es -- venv, caché, `testpaths` de pytest.ini --
+# en vez de tener una lista de nombres). No hace falta reinventar ese barrido
+# ni tecleado uno nuevo.
+#
+# Por cada `INSERT INTO log_acciones` se leen sus COLUMNAS y sus VALORES del
+# propio SQL: si el valor que le toca a `actor` es un `%s` (una VARIABLE que
+# viaja como parámetro), ese sitio tiene que ser `acciones/crud.py::_registrar`
+# -- cualquier otro es un lugar nuevo donde `actor` se puede perder en
+# silencio, igual que pasó en el NO PASA anterior. Si el valor es un literal
+# (`'panel'`, `'lucy'`, como en TODOS los `INSERT` de `db/db.py` hoy: ver
+# `db.crear_tarea_desde_el_panel`, `db.convertir_tarea_en_proyecto`,
+# `db._buscar_o_crear`), no hay parámetro que perder -- el texto ES el
+# valor -- así que no hace falta que pase por `_registrar`.
 
-def test_registrar_es_el_unico_sitio_con_actor_como_variable():
-    """No una lista tecleada: se recorren TODOS los `INSERT INTO
-    log_acciones` de `acciones/crud.py` (el único módulo, junto con
-    `db/db.py`, que escribe ahí) y se exige que sea `_registrar` -- y solo
-    `_registrar` -- quien lo arme con un parámetro. Si mañana alguien agrega
-    un segundo INSERT directo con un actor variable, esta prueba lo agarra
-    sin que nadie tenga que acordarse de mirar."""
+def test_todo_actor_variable_en_log_acciones_pasa_por_registrar():
+    """Deriva del disco -- no de una lista de dos nombres -- todo módulo que
+    escribe en `log_acciones`, y exige que el ÚNICO sitio donde `actor` viaja
+    como parámetro (no como literal) sea `acciones/crud.py::_registrar`."""
     import ast
-    import inspect
-    from acciones import crud as crud_modulo
+    import re
+    from pathlib import Path
 
-    fuente = inspect.getsource(crud_modulo)
-    arbol = ast.parse(fuente)
-    sitios = []
-    for nodo in ast.walk(arbol):
-        if not isinstance(nodo, ast.Call):
+    import test_buzon_que_no_se_ve as barrido
+
+    raiz = Path(RAIZ).resolve()
+    pruebas = [p.resolve() for p in barrido._testpaths(raiz)]
+
+    def _columnas_y_valores(sql: str):
+        m = re.search(
+            r"log_acciones\s*\(([^)]*)\)\s*VALUES\s*\(([^)]*)\)", sql,
+            re.IGNORECASE | re.DOTALL)
+        if not m:
+            return None, None
+        return (_split_top_level(m.group(1)), _split_top_level(m.group(2)))
+
+    def _funcion_de(nodo, arbol):
+        padre = None
+        for f in ast.walk(arbol):
+            if (isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and any(n is nodo for n in ast.walk(f))):
+                if padre is None or len(ast.dump(f)) < len(ast.dump(padre)):
+                    padre = f
+        return padre.name if padre else "<módulo>"
+
+    sitios_con_actor_variable = []
+    modulos_vistos = []
+    for py in barrido._py_en_disco(raiz):
+        real = py.resolve()
+        if any(c == real or c in real.parents for c in pruebas):
+            continue  # los archivos de test no cuentan como "código real"
+        texto = real.read_text(encoding="utf-8")
+        if "INSERT INTO log_acciones" not in texto:
             continue
-        if not (isinstance(nodo.func, ast.Attribute)
-                and nodo.func.attr == "execute"):
-            continue
-        for arg in nodo.args:
-            if (isinstance(arg, ast.Constant) and isinstance(arg.value, str)
-                    and "INSERT INTO log_acciones" in arg.value):
-                # ¿en qué función está este nodo?
-                padre = None
-                for f in ast.walk(arbol):
-                    if (isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))
-                            and any(n is nodo for n in ast.walk(f))):
-                        if padre is None or len(ast.dump(f)) < len(ast.dump(padre)):
-                            padre = f
-                sitios.append(padre.name if padre else "<módulo>")
-    assert sitios, ("no se encontró ningún INSERT INTO log_acciones en "
-                    "acciones/crud.py -- la prueba dejó de medir algo")
-    assert set(sitios) == {"_registrar"}, (
-        f"hay INSERT INTO log_acciones fuera de _registrar: {sitios} -- "
-        "cada uno es un sitio donde 'actor' podría perderse sin que la "
-        "prueba de punta a punta de arriba lo vea")
+        modulos_vistos.append(real.relative_to(raiz).as_posix())
+        arbol = ast.parse(texto, str(real))
+        for nodo in ast.walk(arbol):
+            if not isinstance(nodo, ast.Call):
+                continue
+            if not (isinstance(nodo.func, ast.Attribute)
+                    and nodo.func.attr == "execute"):
+                continue
+            for arg in nodo.args:
+                if not (isinstance(arg, ast.Constant)
+                        and isinstance(arg.value, str)
+                        and "INSERT INTO log_acciones" in arg.value):
+                    continue
+                sql = " ".join(arg.value.split())
+                columnas, valores = _columnas_y_valores(sql)
+                if columnas is None or "actor" not in columnas:
+                    continue
+                i = columnas.index("actor")
+                valor_actor = valores[i] if i < len(valores) else ""
+                if valor_actor != "%s":
+                    continue  # literal: no hay parámetro que perder
+                nombre_funcion = _funcion_de(nodo, arbol)
+                ruta = real.relative_to(raiz).as_posix()
+                if not (ruta == "acciones/crud.py"
+                        and nombre_funcion == "_registrar"):
+                    sitios_con_actor_variable.append(f"{ruta}::{nombre_funcion}")
+
+    assert "acciones/crud.py" in modulos_vistos, (
+        "el barrido no encontró acciones/crud.py -- la prueba dejó de medir "
+        f"algo. Módulos vistos: {modulos_vistos}")
+    assert "db/db.py" in modulos_vistos, (
+        "el barrido no encontró db/db.py -- exactamente el hueco que el "
+        f"testigo encontró sobre 25f7d0b. Módulos vistos: {modulos_vistos}")
+    assert not sitios_con_actor_variable, (
+        f"estos sitios escriben 'actor' en log_acciones como VARIABLE, fuera "
+        f"de acciones/crud.py::_registrar: {sitios_con_actor_variable} -- "
+        f"cada uno es un lugar donde el actor se puede perder en silencio, "
+        f"sin que las pruebas de punta a punta de arriba lo vean")
