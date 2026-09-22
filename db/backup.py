@@ -377,7 +377,13 @@ def hacer_backup() -> Path:
     }
 
     url = _url()
-    with psycopg.connect(url, autocommit=True, row_factory=dict_row) as conn:
+    # SIN CONSULTAS PREPARADAS, igual que el pool de db/db.py:58 y por el
+    # mismo motivo — ver ese comentario. Acá la conexión es corta, pero
+    # "corta" no es una garantía escrita en ningún sitio: es más barato
+    # apagarlo siempre que confiar en que nunca se repita una consulta
+    # cinco veces.
+    with psycopg.connect(url, autocommit=True, row_factory=dict_row,
+                         prepare_threshold=None) as conn:
         datos["esquema"] = _catalogo(conn)
 
         tablas = [r["tablename"] for r in conn.execute(

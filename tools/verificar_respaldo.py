@@ -81,7 +81,9 @@ def main() -> int:
         problemas.append("no dice cuándo se tomó")
 
     import psycopg
-    with psycopg.connect(url) as conn:
+    # SIN CONSULTAS PREPARADAS, igual que el pool de db/db.py:58 (encargo 3,
+    # 22-sep-2026) y por el mismo motivo.
+    with psycopg.connect(url, prepare_threshold=None) as conn:
         reales = [r[0] for r in conn.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_schema = 'public' ORDER BY 1")]

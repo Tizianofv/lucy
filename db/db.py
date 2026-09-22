@@ -55,7 +55,28 @@ _ERRORES_DE_FILA = tuple(
     if isinstance(c, type) and issubclass(c, BaseException))
 
 # Pool de conexiones reutilizables. Se abre al arrancar el bot (ver main.py).
-pool = AsyncConnectionPool(DATABASE_URL, open=False)
+#
+# SIN CONSULTAS PREPARADAS (encargo 3, 22-sep-2026). psycopg prepara una
+# consulta repetida a partir de la quinta vez que la ve IDÉNTICA en la misma
+# conexión (`prepare_threshold`, default 5 — psycopg/_preparing.py:36 del
+# paquete instalado) y le guarda a Postgres un PLAN. Si a `tareas` se le
+# agrega una columna MIENTRAS ese plan sigue vivo, la siguiente ejecución
+# revienta con `cached plan must not change result type` — pasó de verdad el
+# 10-sep-2026 publicando el Responsable de Lucy, contra el `SELECT * FROM
+# tareas` de `cerebro/despertador.py:519` (`_reprogramar_recurrentes`, que
+# corre en cada vuelta del despertador y es justo el tipo de consulta
+# repetida que psycopg llega a preparar).
+#
+# `prepare_threshold=None` apaga la preparación entera: `PrepareManager.get`
+# (psycopg/_preparing.py:63) devuelve `Prepare.NO` sin mirar el contador, así
+# que nunca se le pide a Postgres un plan que una migración pueda invalidar.
+# Es un `kwargs` del pool porque así es como `AsyncConnectionPool` arma CADA
+# conexión nueva: `pool_async.py:650`,
+# `self.connection_class.connect(self.conninfo, **kwargs)`. No se puede medir
+# contra un Postgres real en esta Mac —no hay uno—; queda dicho así y se
+# verificó leyendo el código de la librería instalada, citado arriba.
+pool = AsyncConnectionPool(
+    DATABASE_URL, open=False, kwargs={"prepare_threshold": None})
 
 # La firma del aviso de respaldo en la bandeja. Es a la vez lo primero que
 # Tiziano lee y la clave con la que se busca el aviso anterior, así que vive en

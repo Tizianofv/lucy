@@ -3680,9 +3680,18 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 21-sep-2026, mismo trabajo: 75 → 76 en disco y 36 → 37 exentos por
     # `tests/test_copia_a_rosi.py`, que prueba lo de arriba. Los VIGILADOS
     # siguen en 39: es un archivo de `testpaths`, o sea EXENTO por rol.
-    assert medido == {"en disco": 76, "exentos": 37, "vigilados": 39}, (
+    #
+    # 22-sep-2026: 76 → 77 en disco y 37 → 38 exentos por
+    # `tests/test_sin_preparadas.py` (encargo 3: que ninguna conexión de
+    # Lucy prepare consultas). Los VIGILADOS siguen en 39: es un archivo de
+    # `testpaths`, EXENTO por rol. El mismo trabajo tocó `db/db.py`,
+    # `db/backup.py` y dos guiones de `tools/` (para pasarles
+    # `prepare_threshold=None`), pero `db/db.py` ya estaba vigilado y los
+    # otros tres no importan ni usan `config`, así que ninguno entra al
+    # reparto de este archivo.
+    assert medido == {"en disco": 77, "exentos": 38, "vigilados": 39}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "21-sep-2026 era {'en disco': 76, 'exentos': 37, 'vigilados': 39}. La "
+        "22-sep-2026 era {'en disco': 77, 'exentos': 38, 'vigilados': 39}. La "
         "aserción de fondo —cero archivos alcanzan la lista cruda— YA CORRIÓ "
         "arriba y quedó verde, así que esto NO es una fuga. Si los vigilados "
         "bajaron, algo se está saltando de más y «cero falsos positivos» dejó "

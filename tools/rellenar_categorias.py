@@ -36,7 +36,9 @@ def main() -> int:
         print("Falta DATABASE_URL en el entorno.", file=sys.stderr)
         return 2
 
-    with psycopg.connect(url) as conn:
+    # SIN CONSULTAS PREPARADAS, igual que el pool de db/db.py:58 (encargo 3,
+    # 22-sep-2026) y por el mismo motivo.
+    with psycopg.connect(url, prepare_threshold=None) as conn:
         aprendidas = {r[0]: r[1] for r in conn.execute(
             "SELECT comercio, categoria FROM categorias_aprendidas "
             "WHERE borrado_en IS NULL")}
