@@ -291,6 +291,20 @@ def test_responsable_sin_acceso_cae_al_dueno():
         restaurar_gente()
 
 
+def test_el_sql_de_eventos_nunca_declara_un_responsable_real():
+    """Comprobación ESTRUCTURAL, sobre el texto de `revisar()`: las DOS
+    ramas de `eventos` (con y sin `primero_id`) tienen que traer un
+    `NULL::BIGINT` fijo para `responsable_chat_id` -- si algún día alguien
+    intenta ponerle un valor real (por ejemplo, reusar `id`), esta prueba
+    lo dice sin necesitar Postgres."""
+    import inspect
+    fuente = inspect.getsource(despertador.revisar)
+    apariciones = fuente.count("NULL::BIGINT")
+    assert apariciones == 2, (
+        f"esperaba 2 apariciones de NULL::BIGINT (una por rama de eventos, "
+        f"con y sin primero_id), hay {apariciones}")
+
+
 def test_una_cita_siempre_le_llega_al_dueno_aunque_haya_responsables():
     """Los eventos no tienen `responsable_chat_id` -- la columna ni existe
     en `eventos` -- así que la fila llega con NULL sin importar quién más
