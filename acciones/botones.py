@@ -134,11 +134,39 @@ async def _cerrar_tarjeta(q, remate: str) -> None:
         log.warning("No pude editar la tarjeta: %s", e)
 
 
+def _quien(chat_id: int) -> str:
+    """Cómo se llama quien apretó, para el motivo de la huella (encargo 8).
+    LA MISMA fuente que ya usa el panel para pintar nombres --
+    `config.NOMBRES_POR_CHAT`, no una copia. Sin nombre puesto, se dice
+    así, nunca el número de chat: Tiziano ya descartó enseñarlo en el
+    panel, y acá tampoco corresponde."""
+    return config.NOMBRES_POR_CHAT.get(chat_id, "alguien sin nombre")
+
+
 async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
 
-    # Candado, igual que en los mensajes: el bot es de Tiziano y de nadie más.
-    if q.message.chat_id != config.CHAT_ID_DUENO:
+    # EL CANDADO (encargo 8, decisión de Tiziano: "Sí, que le funcionen").
+    # Hasta este encargo era `!= config.CHAT_ID_DUENO` -- "el bot es de
+    # Tiziano y de nadie más" -- y le cortaba los botones a Rosi aunque ya
+    # pudiera entrar al panel y escribirle a Lucy por su cuenta. LA MISMA
+    # PUERTA que ya usan el panel (`web/auth.py::puede_entrar`, vía
+    # `web/app.py`) y el agente cuando manda el enlace del panel
+    # (`cerebro/agente.py`, herramienta "panel") -- no una lista nueva. Se
+    # importa ACÁ ADENTRO y no arriba del archivo por el mismo motivo que
+    # ya declaran `db.db.comentar_tarea`/`borrar_comentario`: `acciones` y
+    # `cerebro` no dependen de `web` al arrancar, solo cuando hace falta.
+    #
+    # ESTA ES LA ÚNICA PUERTA de todo este archivo -- corre ANTES de
+    # separar `q.data` en `accion`/`bandeja_id`/`registro_id`, así que
+    # NINGUNA rama de abajo («ok», «alt», «no», «acc», «und», «undt», ni
+    # una que se agregue mañana) es alcanzable sin pasar por acá primero.
+    # `tests/test_botones_rosi.py::
+    # test_todo_manejador_de_boton_pasa_por_la_misma_puerta` lo mide
+    # corriendo, no leyendo.
+    from web.auth import puede_entrar
+
+    if not puede_entrar(q.message.chat_id):
         await q.answer()
         return
 
@@ -221,7 +249,10 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await _cerrar_tarjeta(q, "⚠️ <b>Perdí el plan de esa orden</b>")
             return
 
-        motivo = (f"Orden de Tiziano (bandeja #{bandeja_id}): "
+        # QUIÉN, no siempre Tiziano desde el encargo 8: `_quien` lee el
+        # nombre del chat que de verdad apretó, de la misma variable que
+        # ya usa el panel.
+        motivo = (f"Orden de {_quien(q.message.chat_id)} (bandeja #{bandeja_id}): "
                   f"{plan.get('resumen') or plan.get('accion')}")
         try:
             if plan.get("accion") == "borrar":
@@ -265,19 +296,20 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     interpretacion = dict(fila["interpretacion"])
-    motivo = f"Confirmado por Tiziano desde la bandeja #{bandeja_id}"
+    quien = _quien(q.message.chat_id)  # encargo 8: no siempre es Tiziano
+    motivo = f"Confirmado por {quien} desde la bandeja #{bandeja_id}"
 
     if accion == "alt":
-        # Tiziano prefirió la segunda opción. Se deja escrito cuál se descartó:
-        # ese par (lo que Lucy propuso, lo que él eligió) es exactamente lo que
-        # después permite detectar el patrón y dejar de preguntar.
+        # Prefirió la segunda opción. Se deja escrito cuál se descartó: ese
+        # par (lo que Lucy propuso, lo que él o ella eligió) es exactamente
+        # lo que después permite detectar el patrón y dejar de preguntar.
         elegida = interpretacion.get("alternativa")
         if not elegida:
             await db.cambiar_estado(bandeja_id, "esperando_confirmacion")
             await q.answer("Esa tarjeta no tenía alternativa.", show_alert=True)
             return
         motivo = (
-            f"Tiziano eligió '{elegida}' en vez de "
+            f"{quien} eligió '{elegida}' en vez de "
             f"'{interpretacion.get('clasificacion')}' (bandeja #{bandeja_id})"
         )
         interpretacion["clasificacion"] = elegida
