@@ -388,14 +388,19 @@ async def revisar(bot) -> int:
             destino = responsable
         else:
             destino = config.CHAT_ID_DUENO
-        # `sin_copia=True` siempre: si `destino` es el dueño, este
-        # recordatorio ya está resuelto (suyo, o de una cita sin dueño) y
-        # copiarlo a Rosi sería mandarle un aviso que no es de ella; si
-        # `destino` es otra persona, la copia general ni se dispara para
-        # ese chat (solo copia lo que sale HACIA el dueño), así que el flag
-        # no cambia nada -- pero decirlo explícito es más claro que confiar
-        # en ese detalle.
-        await _avisar(bot, texto, destino, sin_copia=True)
+        # `sin_copia` SOLO para tareas (NO PASA del testigo sobre `921abdd`:
+        # el flag salía incondicional y apagaba también la copia de los
+        # recordatorios de CITAS, que el diseño de este encargo deja
+        # explícitamente "sin cambio"). Una cita no tiene responsable propio
+        # -- Tiziano decidió el 22-sep-2026 que lo va a tener ("Que las
+        # citas tengan dueño"), pero en un encargo APARTE (responsable en
+        # `eventos`, igual que en tareas) que todavía no existe. Hasta que
+        # exista, el recordatorio de una cita es indistinguible del que
+        # había ANTES de este encargo: le llega al dueño Y se sigue
+        # copiando a Rosi igual que hoy -- por eso NO lleva `sin_copia`. El
+        # de una TAREA con responsable sí es nuevo (antes no existía ese
+        # camino), así que sí lo lleva: es lo único que este encargo agrega.
+        await _avisar(bot, texto, destino, sin_copia=(f["tabla"] == "tareas"))
 
         nuevos = sorted(enviados | {m for m in anticipos if faltan <= m})
         async with db.pool.connection() as conn:

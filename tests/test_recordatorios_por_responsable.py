@@ -1,11 +1,22 @@
 # -*- coding: utf-8 -*-
 """Recordatorios por responsable (encargo 2, 22-sep-2026).
 
-Diseño: `disenos/lucy-rosi-independiente/DISENO.md`, "Encargo 2". Decisión
-de Tiziano en el encargo (vía la sala): el recordatorio de una tarea va a
-`responsable_chat_id`; sin responsable, al dueño. Las citas (`eventos`) no
-tienen esa columna (medido contra `db/schema.sql:313-336` el 22-sep-2026:
-el `CREATE TABLE eventos` no la trae) -- siguen yendo SIEMPRE al dueño.
+Diseño: `disenos/lucy-rosi-independiente/DISENO.md`, "Encargo 2": el
+recordatorio de una tarea va a `responsable_chat_id`; sin responsable, al
+dueño. Las citas (`eventos`) no tienen esa columna (medido contra
+`db/schema.sql:313-336` el 22-sep-2026: el `CREATE TABLE eventos` no la
+trae) -- siguen yendo SIEMPRE al dueño Y SIGUEN COPIÁNDOSE A ROSI, sin
+cambio de ningún tipo, ni en a quién le llegan ni en si se copian.
+
+CORREGIDO tras el NO PASA del testigo sobre `921abdd`: la primera versión
+de este encargo apagaba la copia (`sin_copia=True`) para TODO recordatorio
+que terminara yendo al dueño, tareas y citas por igual -- eso apagaba
+también la copia de las citas, que el diseño deja "sin cambio". Tiziano no
+tomó esa decisión: lo que sí decidió (22-sep-2026, textual: "Que las citas
+tengan dueño") es que `eventos` va a tener su propio responsable, pero en
+OTRO encargo, que todavía no existe. Hasta que exista, `sin_copia` se pasa
+SOLO para recordatorios de TAREAS (`f["tabla"] == "tareas"`) -- nunca para
+citas.
 
 HERMANOS, A PROPÓSITO NI TIZIANO NI ROSI -- Beta y Gamma, igual que
 `tests/test_briefing_por_persona.py`, para probar que el ruteo sale de
@@ -321,10 +332,16 @@ def test_una_cita_siempre_le_llega_al_dueno_aunque_haya_responsables():
 
 
 # ---------------------------------------------------------------------------
-# 2) La copia: el recordatorio del dueño no se copia; el de Beta/Gamma va
-#    directo (la copia ni se dispara para ellos).
+# 2) La copia: el recordatorio del dueño de una TAREA no se copia; el de una
+#    CITA SÍ, sin cambio -- ésta es la pareja que faltaba (NO PASA del
+#    testigo sobre `921abdd`): antes `sin_copia=True` salía para las dos por
+#    igual, y una cita al dueño dejaba de copiarse a Rosi sin que el diseño
+#    lo pidiera. Las citas todavía no tienen responsable propio (eso es
+#    "Que las citas tengan dueño", un encargo aparte que Tiziano pidió el
+#    22-sep-2026 y que todavía no existe): hasta que exista, su recordatorio
+#    es indistinguible de como era ANTES de este encargo entero.
 # ---------------------------------------------------------------------------
-def test_el_recordatorio_del_dueno_no_se_copia():
+def test_el_recordatorio_de_una_tarea_del_dueno_no_se_copia():
     conn = FakeConn([_fila("tareas", 6, "Pagar la luz", AHORA, None)])
     _instalar(conn)
     restaurar_gente = _con_gente()
@@ -333,6 +350,25 @@ def test_el_recordatorio_del_dueno_no_se_copia():
         _correr(despertador.revisar(bot))
         assert bot.enviados[0]["chat_id"] == DUENO
         assert bot.enviados[0]["sin_copia"] is True
+    finally:
+        restaurar_gente()
+
+
+def test_el_recordatorio_de_una_cita_SI_se_copia_sin_cambio():
+    """La pareja exacta de la prueba de arriba: mismo destino (el dueño),
+    misma forma de fila, pero `tabla == "eventos"` -- y acá `sin_copia`
+    TIENE que ser False, porque una cita todavía no tiene responsable
+    propio y el diseño no toca su copia."""
+    conn = FakeConn([_fila("eventos", 9, "Dentista", AHORA, None)])
+    _instalar(conn)
+    restaurar_gente = _con_gente()
+    bot = _BotFalso()
+    try:
+        _correr(despertador.revisar(bot))
+        assert bot.enviados[0]["chat_id"] == DUENO
+        assert bot.enviados[0]["sin_copia"] is False, (
+            "el recordatorio de una cita al dueño tiene que seguir "
+            "copiándose a Rosi, sin cambio")
     finally:
         restaurar_gente()
 
