@@ -73,6 +73,9 @@
   <a href="/tareas" class="{{ 'on' if activo=='tareas' }}"
      data-tambien="los pendientes, las tareas, qué hay que hacer, la lista"
      data-nota="es de las DOS personas de la casa, así que sirve igual para ver los propios y para ver cómo va todo. Ahí también se cambia la fecha y la hora de cada pendiente, o se le quita, y tocando el título de una tarea se leen y se escriben sus comentarios">Tareas</a>
+  <a href="/proyectos" class="{{ 'on' if activo=='proyectos' }}"
+     data-tambien="los proyectos, en qué proyecto está, dentro de qué proyecto"
+     data-nota="cada proyecto con su área, su estado y sus tareas. Una tarea suelta se convierte en proyecto con un botón, desde su propia pantalla. El área de una tarea o un proyecto se cambia acá o en /tareas/{id}">Proyectos</a>
   <a href="/sin-clasificar" class="{{ 'on' if activo=='cola' }}"
      data-tambien="lo que falta clasificar, lo que quedó sin categoría">Sin clasificar</a>
   <a href="/movimientos" class="{{ 'on' if activo=='movs' }}"

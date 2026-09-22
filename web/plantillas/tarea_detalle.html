@@ -15,6 +15,56 @@
   · Responsable: {{ nombres.get(tarea.responsable_chat_id, 'sin nombre') }}{% endif %}
 </p>
 
+{% if area_guardada %}<p class="aviso ok">Área guardada.</p>{% endif %}
+{% if error == 'area' %}
+<p class="aviso">Esa área ya no está en la lista.</p>
+{% elif error == 'convertir' %}
+<p class="aviso">No se convirtió en proyecto: o ya no está pendiente, o ya
+tiene proyecto.</p>
+{% endif %}
+
+{# EL ÁREA (encargo 4/5). Con proyecto, la hereda -- no se ofrece cambiarla
+   acá, se cambia la del PROYECTO (enlazado). Sin proyecto, un <select> propio
+   que postea a /tareas/{id}/area -- otro formulario más en esta pantalla, que
+   ya tiene el suyo para comentar y uno por comentario para borrar. #}
+<div class="tarjeta">
+  {% if tarea.proyecto_id %}
+  <p class="suave" style="margin:0">
+    Proyecto:
+    <a href="/proyectos#proyecto-{{ tarea.proyecto_id }}">{{ tarea.proyecto_nombre }}</a>
+    — el área la hereda de ahí
+    {%- if tarea.area and tarea.area in colores_area %}
+    (<span class="etiqueta-area" style="background:{{ colores_area[tarea.area] }}">{{ tarea.area }}</span>)
+    {%- else %} (sin área){% endif -%}.
+  </p>
+  {% else %}
+  <form method="post" action="/tareas/{{ tarea.id }}/area" class="barra">
+    <label for="area" class="suave">Área:</label>
+    <select id="area" name="area">
+      <option value="" {%- if not tarea.area %} selected{% endif %}>Sin área</option>
+      {% for a in areas %}
+      <option value="{{ a.clave }}" {%- if tarea.area == a.clave %} selected{% endif %}>{{ a.clave }}</option>
+      {% endfor %}
+    </select>
+    <button>Guardar</button>
+  </form>
+  {% endif %}
+</div>
+
+{# EL BOTÓN «CONVERTIR EN PROYECTO» (encargo 5, requisito 2). Solo tiene
+   sentido sobre una tarea PENDIENTE y SIN proyecto -- ver el docstring de
+   `db.convertir_tarea_en_proyecto` para qué pasa con el responsable, el área
+   y los comentarios. Sin formulario intermedio: un botón, un click. #}
+{% if tarea.estado == pendiente and not tarea.proyecto_id %}
+<form method="post" action="/tareas/{{ tarea.id }}/convertir-en-proyecto">
+  <div class="barra">
+    <button>Convertir en proyecto</button>
+    <span class="suave">La tarea se archiva; el proyecto nace con este
+      título, este detalle como descripción y esta área.</span>
+  </div>
+</form>
+{% endif %}
+
 {# `detalle` es el texto que Lucy le puso a la tarea al anotarla. Se enseña
    para leer, no se edita acá: los comentarios van aparte, en su tabla, para
    que Lucy no los pueda pisar cuando reescribe ese texto. #}

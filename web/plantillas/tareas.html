@@ -116,8 +116,16 @@ aviso de Telegram que ya sonó.</p>
     </td>
     {# El título lleva a la pantalla de la tarea, donde se leen y se escriben
        los comentarios. Es un ENLACE y no un formulario: esta lista tiene uno
-       solo a propósito. #}
-    <td><a href="/tareas/{{ t.id }}">{{ t.titulo }}</a></td>
+       solo a propósito. Debajo, el NOMBRE DEL PROYECTO (encargo 5, requisito
+       1) si la tarea cuelga de uno -- también un enlace, a su tarjeta en
+       /proyectos. Sin proyecto no se pinta nada acá: no hay "sin proyecto"
+       que decir, al revés que el área, que sí tiene su propio estado
+       "vacío" que mostrar. #}
+    <td><a href="/tareas/{{ t.id }}">{{ t.titulo }}</a>
+      {%- if t.proyecto_nombre %}
+      <br><a class="suave" href="/proyectos#proyecto-{{ t.proyecto_id }}">{{ t.proyecto_nombre }}</a>
+      {%- endif %}
+    </td>
     {# LA ETIQUETA DE ÁREA (encargo 4), en la MISMA lista, siempre visible: sin
        área se ve GRIS con su propio texto, nunca escondida. El color sale de
        `colores_area`, que a su vez sale de `db.areas()` -- si la clave de esta

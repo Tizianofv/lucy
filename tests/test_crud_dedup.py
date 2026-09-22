@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import sys
 import types
 from datetime import datetime
@@ -246,9 +247,17 @@ class FakeConn:
         if s.startswith("INSERT INTO log_acciones"):
             self._logid += 1
             lid = self._logid
-            accion, tabla, registro_id = p[0], p[1], p[2]
-            self.logs.append({"id": lid, "tabla": tabla,
-                              "registro_id": registro_id, "accion": accion})
+            # Por NOMBRE de columna, leído del propio INSERT -- no por
+            # posición fija. `_registrar` agregó `actor` como parámetro
+            # (encargo 5, antes iba como literal 'lucy' en el SQL), y una
+            # lectura por índice fijo se habría desincronizado en silencio.
+            m = re.search(r"log_acciones\s*\(([^)]*)\)", s)
+            columnas = [c.strip() for c in m.group(1).split(",")]
+            fila = dict(zip(columnas, p))
+            self.logs.append({"id": lid, "tabla": fila.get("tabla"),
+                              "registro_id": fila.get("registro_id"),
+                              "accion": fila.get("accion"),
+                              "actor": fila.get("actor")})
             return _Cur((lid,))
 
         # El responsable de una tarea que YA existía (encargo 2, arreglo del
@@ -295,7 +304,7 @@ def _instalar(conn):
     async def _cero_persona(_):
         return None
 
-    async def _cero_proyecto(_):
+    async def _cero_proyecto(_, bandeja_id=None):
         return None
 
     db.buscar_o_crear_persona = _cero_persona
@@ -573,7 +582,7 @@ async def test_el_area_se_ignora_en_silencio_si_la_tarea_tiene_proyecto():
     async def _cero_persona(_):
         return None
 
-    async def _con_proyecto_77(_):
+    async def _con_proyecto_77(_, bandeja_id=None):
         return 77
 
     db.pool = FakePool(conn)
@@ -598,7 +607,7 @@ async def test_sin_pedir_area_se_crea_igual_con_proyecto():
     async def _cero_persona(_):
         return None
 
-    async def _con_proyecto_77(_):
+    async def _con_proyecto_77(_, bandeja_id=None):
         return 77
 
     db.pool = FakePool(conn)

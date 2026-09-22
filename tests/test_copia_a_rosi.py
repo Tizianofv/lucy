@@ -291,12 +291,17 @@ async def test_la_herramienta_panel_no_copia_el_enlace(monkeypatch, puerta):
     async def _sin_areas():
         return []
 
+    async def _sin_proyectos():
+        return []
+
     monkeypatch.setattr(db, "buscar_esperando_respuesta", _sin_pendiente)
     monkeypatch.setattr(db, "ultimos_intercambios", _historial_vacio)
     monkeypatch.setattr(db, "listar_preferencias", _sin_preferencias)
     # `atender()` también trae la lista de áreas (encargo 4) con `db.areas()`;
     # se stubea vacía por el mismo motivo que `listar_preferencias`.
     monkeypatch.setattr(db, "areas", _sin_areas)
+    # Y la de proyectos vivos (encargo 5), con `db.proyectos_vivos()`.
+    monkeypatch.setattr(db, "proyectos_vivos", _sin_proyectos)
     monkeypatch.setattr(db, "guardar_respuesta", _nada)
     monkeypatch.setattr(db, "guardar_interpretacion", _nada)
     monkeypatch.setattr(db, "cambiar_estado", _nada)

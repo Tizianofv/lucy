@@ -1,0 +1,78 @@
+{% extends "base.html" %}{% set activo='proyectos' %}
+{% block titulo %}Proyectos{% endblock %}
+{% block cuerpo %}
+<h1>Proyectos</h1>
+
+{# Igual que en /tareas/nueva: una clave por la URL, traducida acá para quien
+   lo lee desde el celular, no desde el log. #}
+{% if error == 'area' %}
+<p class="aviso">Esa área ya no está en la lista, o ese proyecto ya no
+existe.</p>
+{% elif error == 'proyecto' %}
+<p class="aviso">Ese proyecto ya no está.</p>
+{% endif %}
+{% if creado %}
+<p class="aviso ok">Proyecto creado (#{{ creado }}). Está más abajo, con la
+tarea que le dio origen ya archivada.</p>
+{% endif %}
+{% if area_guardada %}
+<p class="aviso ok">Área guardada.</p>
+{% endif %}
+
+{% if not proyectos %}
+<p class="vacio">No hay ningún proyecto todavía. Se crean desde una tarea, con
+el botón «Convertir en proyecto» de su pantalla.</p>
+{% else %}
+<p class="suave">Cada tarea de acá abajo es la MISMA que se ve en
+<a href="/tareas">Tareas</a> si sigue pendiente -- ésta es la vista por
+proyecto, con las hechas incluidas.</p>
+
+{% for p in proyectos %}
+<div class="tarjeta" id="proyecto-{{ p.id }}">
+  <h2 style="margin-top:0">{{ p.nombre }}
+    {%- if p.area %}
+    <span class="etiqueta-area" style="background:{{ p.color or '#6b6b6b' }}">{{ p.area }}</span>
+    {%- else %}
+    <span class="etiqueta-area etiqueta-area-vacia">sin área</span>
+    {%- endif %}
+  </h2>
+  <p class="suave">
+    Estado: {{ p.estado }}
+    {%- if p.descripcion %} · {{ p.descripcion }}{% endif %}
+  </p>
+
+  {# EL <SELECT> DE ÁREA, un formulario propio por proyecto -- esta pantalla
+     no tiene el formulario único de /tareas (no hay «cerrar varias» acá), así
+     que cada proyecto puede tener el suyo, igual que ya hace /tareas/{tid}
+     con sus comentarios. Pasa por la MISMA puerta que Telegram
+     (`crud._area_que_vale`, vía `crud.editar` -- ver `cambiar_area_de_proyecto`
+     en web/app.py). #}
+  <form method="post" action="/proyectos/{{ p.id }}/area" class="barra">
+    <label for="area-{{ p.id }}" class="suave">Área:</label>
+    <select id="area-{{ p.id }}" name="area">
+      <option value="" {%- if not p.area %} selected{% endif %}>Sin área</option>
+      {% for a in areas %}
+      <option value="{{ a.clave }}" {%- if p.area == a.clave %} selected{% endif %}>{{ a.clave }}</option>
+      {% endfor %}
+    </select>
+    <button>Guardar</button>
+  </form>
+
+  {% if not p.tareas %}
+  <p class="vacio">Sin tareas todavía.</p>
+  {% else %}
+  <table>
+    <tr><th>Tarea</th><th>Vence</th><th>Estado</th></tr>
+    {% for t in p.tareas %}
+    <tr>
+      <td><a href="/tareas/{{ t.id }}">{{ t.titulo }}</a></td>
+      <td class="suave">{{ t.vence_en|hora_rd if t.vence_en else 'sin fecha' }}</td>
+      <td class="suave">{{ t.estado }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+{% endblock %}

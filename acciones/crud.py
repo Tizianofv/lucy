@@ -121,21 +121,29 @@ async def _registrar(
     despues: dict | None = None,
     motivo: str | None = None,
     bandeja_id: int | None = None,
+    actor: str = "lucy",
 ) -> int:
     """Escribe la huella en log_acciones. Siempre dentro de la transacción.
 
     Devuelve el id de la huella: es el asa por la que después se agarra el
     deshacer. Sin ese número, "deshacé lo último" tendría que adivinar qué
     fue lo último.
+
+    `actor` es 'lucy' por omisión -- todo lo que ya llamaba a esta función es
+    Telegram/`crud`, y eso no cambia. `web/app.py` (encargo 5, cambiar el área
+    de una tarea o un proyecto desde el panel) es el único llamador que manda
+    `actor='panel'` explícito, reusando `editar()` entero -- validación por
+    `_area_que_vale` incluida -- en vez de tener una segunda escritura.
     """
     cur = await conn.execute(
         """
         INSERT INTO log_acciones
           (actor, accion, tabla, registro_id, antes, despues, motivo, bandeja_id)
-        VALUES ('lucy', %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
+            actor,
             accion,
             tabla,
             registro_id,
@@ -266,7 +274,8 @@ async def crear_desde_interpretacion(
     # crear una persona de más es inofensivo y reutilizable, mientras que
     # meterlo adentro alargaría la transacción de la entidad sin ganar nada.
     persona_id = await db.buscar_o_crear_persona(str(r.get("persona") or ""))
-    proyecto_id = await db.buscar_o_crear_proyecto(str(r.get("proyecto") or ""))
+    proyecto_id = await db.buscar_o_crear_proyecto(
+        str(r.get("proyecto") or ""), bandeja_id=bandeja_id)
 
     # EL ÁREA, SOLO PARA TAREAS (encargo 4), por la MISMA puerta que usa
     # `editar()` para cambiarla — `_area_que_vale`, y no una copia del
@@ -768,12 +777,20 @@ def _adaptar(v):
 
 
 async def editar(
-    tabla: str, registro_id: int, cambios: dict, motivo: str
+    tabla: str, registro_id: int, cambios: dict, motivo: str,
+    *, actor: str = "lucy",
 ) -> tuple[dict | None, int | None]:
     """Aplica cambios a una fila existente. Devuelve (después, log_id).
 
     Guarda el antes Y el después en el log: con eso, deshacer una edición es
     volver a escribir el 'antes', igual que con el borrado.
+
+    `actor` es 'lucy' por omisión -- todos los llamadores de siempre son
+    Telegram. `web/app.py` (encargo 5) es el único que manda `actor='panel'`,
+    para cambiar el área de una tarea o un proyecto DESDE EL PANEL
+    reutilizando esta misma función entera -- la MISMA puerta
+    (`_area_que_vale`), la misma huella, el mismo deshacer -- en vez de una
+    segunda escritura con su propio criterio.
     """
     if tabla not in TABLAS:
         raise ValueError(f"Tabla no permitida: {tabla}")
@@ -958,7 +975,7 @@ async def editar(
         log_id = await _registrar(
             conn, accion="editar", tabla=tabla, registro_id=registro_id,
             antes=antes, despues=despues, motivo=motivo,
-            bandeja_id=antes.get("bandeja_id"),
+            bandeja_id=antes.get("bandeja_id"), actor=actor,
         )
 
     # Y APRENDE, igual que el panel. Sin esto había dos puertas que hacían

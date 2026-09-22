@@ -1784,6 +1784,55 @@ def test_el_editar_tambien_ofrece_las_areas_que_se_pasan():
         "el tool 'editar' no ofrece las áreas para cambiarle el área a algo")
 
 
+# ── Los proyectos en el prompt (encargo 5) ────────────────────────────────
+
+def _bloque_de_proyectos_al_crear(prompt: str) -> str:
+    i = prompt.index("PROYECTOS que ya existen")
+    return prompt[i:prompt.index("\n\n", i)]
+
+
+def test_los_proyectos_que_se_pasan_aparecen_con_area_y_estado():
+    """Ni una lista tecleada acá tampoco: lo que aparece es lo que se pasó
+    por parámetro, con su área y su estado -- para que Lucy pueda decir "ya
+    existe uno parecido, ¿es ése?" en vez de crear un duplicado por una
+    diferencia de tipeo."""
+    prompt = agente.herramientas_del_prompt(
+        proyectos=[{"nombre": "Álbum nuevo", "area": "CDS", "estado": "activo"},
+                  {"nombre": "Renovar el estudio", "area": None,
+                   "estado": "pausado"}])
+    bloque = _bloque_de_proyectos_al_crear(prompt)
+    assert '"Álbum nuevo" (CDS, activo)' in bloque, bloque
+    assert '"Renovar el estudio" (sin área, pausado)' in bloque, bloque
+
+
+def test_un_proyecto_nuevo_aparece_solo_sin_tocar_el_prompt():
+    antes = agente.herramientas_del_prompt(
+        proyectos=[{"nombre": "A", "area": None, "estado": "activo"}])
+    assert "Cortometraje" not in antes
+    despues = agente.herramientas_del_prompt(
+        proyectos=[{"nombre": "A", "area": None, "estado": "activo"},
+                  {"nombre": "Cortometraje", "area": "CDS", "estado": "activo"}])
+    assert "Cortometraje" in despues
+
+
+def test_sin_proyectos_vivos_el_prompt_lo_dice_en_vez_de_inventar():
+    bloque_vacio = _bloque_de_proyectos_al_crear(
+        agente.herramientas_del_prompt(proyectos=[]))
+    bloque_none = _bloque_de_proyectos_al_crear(agente.herramientas_del_prompt())
+    assert "ninguno vivo" in bloque_vacio.lower()
+    assert "ninguno vivo" in bloque_none.lower(), (
+        "sin pasar el argumento tiene que tratarse igual que una lista vacía")
+
+
+def test_no_queda_ningun_marcador_de_proyectos_sin_sustituir():
+    marcadores = set(re.findall(r"\{[A-Z_]{3,}\}", agente.HERRAMIENTAS))
+    assert "{PROYECTOS}" in marcadores, (
+        "no se encontró el marcador {PROYECTOS} en HERRAMIENTAS -- la prueba "
+        "dejó de medir algo")
+    quedan = [m for m in marcadores if m in agente.herramientas_del_prompt()]
+    assert not quedan, f"marcadores sin sustituir: {quedan}"
+
+
 # ── No enseñar el número: la traducción ──────────────────────────────────
 
 def test_el_chat_se_cambia_por_el_nombre_y_no_se_come_otro_numero():
@@ -2030,6 +2079,8 @@ def _turno(guion: list[dict], fila: dict):
     # no modela porque no es lo que este archivo prueba. Se stubea vacía, igual
     # que `listar_preferencias`: este turno no tiene nada que ver con áreas.
     db.areas = _vacio
+    # Mismo motivo: `atender()` también trae `db.proyectos_vivos()` (encargo 5).
+    db.proyectos_vivos = _vacio
     db.cambiar_estado = _nada
     db.guardar_respuesta = _nada
     db.guardar_interpretacion = _nada

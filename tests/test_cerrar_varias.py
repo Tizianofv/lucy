@@ -184,6 +184,8 @@ def _montar(turnos: list[dict]) -> tuple[_BotFalso, dict]:
     # stubea vacía por el mismo motivo que `listar_preferencias`: este
     # archivo prueba cerrar varias tareas, no áreas.
     db.areas = _vacio
+    # Mismo motivo: `atender()` también trae `db.proyectos_vivos()` (encargo 5).
+    db.proyectos_vivos = _vacio
     db.cambiar_estado = _nada
     db.guardar_respuesta = _nada
 
@@ -761,13 +763,33 @@ TABLA_DE_HUELLAS = "log_acciones"
 # enumeradas a propósito y no deducidas: a lo que perdona no se puede llegar por
 # olvido. Lo que no esté en esta lista cae del lado estricto y se pone rojo.
 #
-# `acciones/crud.py:236` lo dice así: «Personas y proyectos se resuelven fuera
-# de la transacción a propósito: crear una persona de más es inofensivo y
-# reutilizable». Es una decisión de diseño escrita y no la toco. Pero medida
-# tiene consecuencia, y queda dicha acá porque nadie más la iba a ver:
-# «anotá llamar a Rosita» crea una fila en `personas` que NO sale en el parte y
-# que el botón de deshacer NO revierte.
-EXENTAS_DE_HUELLA = ("buscar_o_crear_persona", "buscar_o_crear_proyecto")
+# VACÍO desde el encargo 5 (22-sep-2026), y las dos salidas por motivos
+# DISTINTOS -- ninguna es "ya no hace falta vigilar esto":
+#
+#   · `buscar_o_crear_proyecto` SÍ deja huella ahora (era el propio hallazgo
+#     del encargo 5: "3 de los 4 proyectos de producción no tienen rastro").
+#     `db/db.py::_buscar_o_crear` escribe `INSERT INTO log_acciones` cuando
+#     crea una fila nueva en `proyectos`, en el MISMO bloque de conexión --
+#     ya no pertenece al cubo indulgente.
+#
+#   · `buscar_o_crear_persona` TODAVÍA no deja huella en el código real --
+#     `acciones/crud.py` lo sigue diciendo: «crear una persona de más es
+#     inofensivo y reutilizable», y «anotá llamar a Rosita» TODAVÍA crea una
+#     fila en `personas` que no sale en el parte ni el botón de deshacer
+#     revierte. Sale de esta lista por una razón de HARNESS, no de código:
+#     para poder escribir la huella de `proyectos`, `_buscar_o_crear` pasó a
+#     usar `conn.cursor(row_factory=dict_row)` -- y el cursor de mentira de
+#     ESTE archivo (`_CursorEspia.fetchone`) devuelve una fila PLAUSIBLE para
+#     cualquier SELECT en modo dict, así que en este barrido el SELECT
+#     "¿ya existe esa persona?" siempre "encuentra" una y el INSERT nunca se
+#     llega a probar -- la exención queda MUERTA (no dispara nunca) y la
+#     regla de acá arriba es clara: "a lo que perdona no se puede llegar por
+#     olvido", pero una exención muerta tampoco se deja por comodidad. Si
+#     algún día el harness cambia y el INSERT de `personas` vuelve a
+#     ejercitarse acá, este barrido lo va a marcar como "escribió sin
+#     huella" -- y va a tener razón: eso sigue siendo cierto en el código de
+#     verdad, con o sin este barrido.
+EXENTAS_DE_HUELLA = ()
 
 # ── El otro cubo indulgente, también nombrado uno por uno ────────────────
 #
@@ -1015,6 +1037,30 @@ class _ConexionEspia:
     def __exit__(self, *a):
         return False
 
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    def transaction(self):
+        """El SAVEPOINT de mentira que usan `db.areas()`, `db.tareas_por_grupo()`
+        y `crear_desde_interpretacion` (encargos 4 y 5) para poder caer a una
+        consulta sin `area` si la columna todavía no existe. Acá nunca falla.
+
+        SIN ESTO el barrido pasaba en VERDE por una razón equivocada, medido
+        hoy: `crear_desde_interpretacion` reventaba con AttributeError ANTES
+        de llegar al INSERT de `tareas` -- `_ejecutar_herramienta` se lo traga
+        y devuelve "ERROR: ..." -- pero la fila de `crear` en `escribieron`
+        igual quedaba puesta, porque `buscar_o_crear_persona`/
+        `buscar_o_crear_proyecto` ya habían escrito en tablas de dominio antes
+        de llegar ahí. El barrido no estaba viendo que la tarea se creara de
+        verdad -- veía un efecto lateral y lo confundía con el hecho.
+        """
+        return _TransaccionEspia()
+
+
+class _TransaccionEspia:
     async def __aenter__(self):
         return self
 
@@ -1593,8 +1639,10 @@ def _montar_sobre_la_base(libro: _Libro):
     db.buscar_esperando_respuesta = _nada
     db.ultimos_intercambios = _vacio
     db.listar_preferencias = _vacio
-    # Mismo motivo que arriba: `atender()` también trae `db.areas()`.
+    # Mismo motivo que arriba: `atender()` también trae `db.areas()` y
+    # `db.proyectos_vivos()` (encargo 5).
     db.areas = _vacio
+    db.proyectos_vivos = _vacio
 
     async def _ejecutar_sql(sql):
         return [{"id": 100 + i, "titulo": TITULOS[i]} for i in range(12)]
@@ -1948,6 +1996,13 @@ def test_ninguna_escritura_llega_a_la_base_sin_su_huella():
             extra = {**mixto, "clasificacion": "tarea"}
             if "responsable_chat_id" in claves:
                 extra["responsable_chat_id"] = ""   # sin responsable: normal
+            if "area" in claves:
+                # Mismo motivo que responsable_chat_id, encargo 4: "tareas"
+                # (el genérico de `mixto`) no es una clave de `db.areas()`, y
+                # `_area_que_vale` la rechaza -- sin esto, NINGÚN bundle
+                # llegaba a escribir la tarea, y el piso de abajo lo cantaba
+                # sin decir que la causa era el área, no el resto.
+                extra["area"] = ""   # sin área: normal
             bundles.append(extra)
         return bundles
 

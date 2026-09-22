@@ -991,7 +991,8 @@ async def cambiar_estado(bandeja_id: int, estado: str, desde: str | None = None)
         return cur.rowcount > 0
 
 
-async def _buscar_o_crear(tabla: str, nombre: str) -> int | None:
+async def _buscar_o_crear(tabla: str, nombre: str, *,
+                          bandeja_id: int | None = None) -> int | None:
     """Devuelve el id de la persona/proyecto con ese nombre; la crea si no está.
 
     Sin esto, "Ana", "ana" y "Ana García" serían tres personas distintas y la
@@ -999,13 +1000,34 @@ async def _buscar_o_crear(tabla: str, nombre: str) -> int | None:
     de la verdad. Por eso la búsqueda es insensible a mayúsculas y acentos
     (unaccent no está garantizado, así que comparamos en minúsculas) y mira
     también los alias.
+
+    LA HUELLA, SOLO PARA `proyectos` (encargo 5, hallazgo del propio diseño:
+    "cuando Lucy crea una tarea nombrando un proyecto que no existe, lo crea
+    SIN DEJAR RASTRO en el registro -- 3 de los 4 proyectos de producción no
+    tienen rastro"). Cuando la fila YA existía, no hay nada que registrar: no
+    se creó nada. Cuando se crea de verdad, se deja la misma huella que
+    cualquier otra creación -- `accion='crear'`, con lo que quedó guardado en
+    `despues` -- así que `deshacer()` la revierte gratis, sin código nuevo:
+    "proyectos" ya está en `acciones.crud.TABLAS` y la rama 'crear' de
+    `deshacer()` es genérica para cualquier tabla ahí.
+
+    `personas` NO lleva huella -- no se pidió, y agregarla sería un segundo
+    problema resuelto en el mismo cambio (Regla 15 de la sala: uno a la vez).
+
+    No se puede usar `acciones.crud._registrar` acá: ese vive en `crud.py`, que
+    IMPORTA este módulo (`import db.db as db`), así que importarlo de vuelta
+    sería un ciclo. Se escribe la fila de `log_acciones` a mano, con la MISMA
+    forma que ya usan las demás escrituras del panel en este archivo (ver
+    `crear_tarea_desde_el_panel`, `gasto_en_efectivo`), actor `'lucy'` porque
+    esto lo dispara SIEMPRE una interpretación de Telegram, nunca el panel.
     """
     nombre = (nombre or "").strip()
     if not nombre:
         return None
 
     async with pool.connection() as conn:
-        cur = await conn.execute(
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
             f"""
             SELECT id FROM {tabla}
              WHERE borrado_en IS NULL
@@ -1018,20 +1040,160 @@ async def _buscar_o_crear(tabla: str, nombre: str) -> int | None:
         )
         fila = await cur.fetchone()
         if fila:
-            return fila[0]
+            return fila["id"]
 
-        cur = await conn.execute(
-            f"INSERT INTO {tabla} (nombre) VALUES (%s) RETURNING id", (nombre,)
+        await cur.execute(
+            f"INSERT INTO {tabla} (nombre) VALUES (%s) RETURNING *", (nombre,)
         )
-        return (await cur.fetchone())[0]
+        nueva = await cur.fetchone()
+        if tabla == "proyectos":
+            await conn.execute(
+                """
+                INSERT INTO log_acciones
+                  (actor, accion, tabla, registro_id, antes, despues, motivo,
+                   bandeja_id)
+                VALUES ('lucy', 'crear', 'proyectos', %s, NULL, %s,
+                        'Proyecto nuevo, nombrado al crear una tarea', %s)
+                """,
+                (nueva["id"],
+                 json.dumps(nueva, default=str, ensure_ascii=False),
+                 bandeja_id))
+        return nueva["id"]
 
 
 async def buscar_o_crear_persona(nombre: str) -> int | None:
     return await _buscar_o_crear("personas", nombre)
 
 
-async def buscar_o_crear_proyecto(nombre: str) -> int | None:
-    return await _buscar_o_crear("proyectos", nombre)
+async def buscar_o_crear_proyecto(nombre: str, *,
+                                  bandeja_id: int | None = None) -> int | None:
+    return await _buscar_o_crear("proyectos", nombre, bandeja_id=bandeja_id)
+
+
+async def convertir_tarea_en_proyecto(tarea_id: int) -> dict:
+    """El botón «convertir en proyecto» (encargo 5). Una tarea SUELTA se
+    convierte en un proyecto propio. Devuelve
+    `{proyecto_id, proyecto_nombre, log_id_proyecto, log_id_tarea}`.
+
+    SOLO CALIFICA una tarea pendiente y sin proyecto -- ValueError con el
+    motivo si no. Pendiente, porque las 12 que motivan esto lo son, y
+    convertir algo ya cerrado no tiene con qué llenarse (¿un proyecto
+    "hecho" desde el minuto cero?). Sin proyecto, porque una tarea CON
+    proyecto ya es parte de uno -- convertirla otra vez no dice nada nuevo y
+    dejaría un proyecto con una sola tarea adentro que a su vez es "de" otro
+    proyecto, sin que nadie lo haya pedido.
+
+    NO SE RESTRINGE POR FECHA. Las 12 tareas que motivan el encargo no tienen
+    fecha, pero nada en el pedido dice que haga falta no tenerla -- si mañana
+    hace falta convertir una CON fecha, la fecha simplemente se pierde (ver
+    abajo), igual que se pierde hoy sin este botón si alguien la reescribe a
+    mano. Queda anotado acá por si la decisión correcta es otra: se restringe
+    agregando `AND vence_en IS NULL` al `WHERE` de abajo.
+
+    QUÉ PASA CON CADA COSA DE LA TAREA ORIGINAL (decisión de este encargo,
+    ninguna le pertenecía a Tiziano -- son todas preguntas con una respuesta
+    técnica, no de negocio):
+      · TÍTULO Y DETALLE → `proyectos.nombre` y `proyectos.descripcion`. Es
+        la traducción obvia: son los mismos dos campos que ya tiene una
+        tarea, con otro nombre.
+      · ÁREA → `proyectos.area`, tal cual la tenía la tarea (una tarea sin
+        proyecto puede tener la suya propia, encargo 4). Con esto el
+        proyecto nace con la misma área que ya se le había puesto a la
+        tarea -- no hay ninguna pregunta nueva que hacerle a `_area_que_vale`
+        ni a nada: se copia el valor, y punto.
+      · LA TAREA ORIGINAL se ARCHIVA (soft-delete, `borrado_en = now()`) —
+        NO se muda adentro del proyecto nuevo como su primera tarea. Una
+        tarea titulada "Álbum nuevo" viviendo DENTRO de un proyecto también
+        llamado "Álbum nuevo" sería un duplicado que no dice nada; archivarla
+        dice "esto dejó de ser una tarea suelta, ahora es el proyecto
+        mismo", y sigue estando -- en la papelera, recuperable.
+      · RESPONSABLE (`responsable_chat_id`) Y COMENTARIOS (`comentarios_tarea`,
+        por `tarea_id`) → SE QUEDAN EN LA TAREA ARCHIVADA, tal cual estaban.
+        `proyectos` no tiene ninguna de las dos columnas/tablas -- no hay a
+        dónde migrarlos -- así que no se pierden (siguen en la fila, que
+        sigue existiendo, solo archivada) pero tampoco aparecen en ningún
+        lado nuevo. Si el proyecto necesita su propio responsable o su
+        propia conversación algún día, eso es una pregunta nueva, para
+        Tiziano, no una consecuencia de este botón.
+
+    DOS HUELLAS, NO UNA, y las dos con la forma que YA existe en
+    `log_acciones` -- nada nuevo que enseñarle a `deshacer()`:
+      · `accion='crear', tabla='proyectos'` — deshacerla archiva el proyecto
+        (la rama 'crear' de `deshacer()` ya es genérica para cualquier tabla
+        de `acciones.crud.TABLAS`, y 'proyectos' ya está ahí).
+      · `accion='borrar', tabla='tareas'`, con el `antes` completo — deshacerla
+        le quita `borrado_en` a la tarea (la rama 'borrar' de `deshacer()`,
+        igual de genérica).
+      Las dos en la MISMA transacción que las escrituras que registran, y
+      cada motivo nombra al otro lado (el id del proyecto en la huella de la
+      tarea, y viceversa) para que se puedan leer juntas en el registro. Un
+      "deshacer" completo de esta conversión hoy pide deshacer las DOS
+      huellas por separado -- no existe un tercer tipo de acción combinada
+      en `log_acciones`, y esta función no lo inventa: usa el vocabulario que
+      ya hay.
+
+    `actor='panel'`, como toda escritura que dispara este botón -- no lo
+    dispara Lucy. El `bandeja_id` de las dos huellas es el que YA tenía la
+    tarea: no hace falta una fila de `bandeja` nueva, la trazabilidad sigue
+    siendo la de la tarea original.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT * FROM tareas WHERE id = %s AND borrado_en IS NULL",
+            (tarea_id,))
+        tarea = await cur.fetchone()
+        if tarea is None:
+            raise ValueError("Esa tarea no existe o ya está en la papelera.")
+        if tarea["estado"] != ESTADO_PENDIENTE:
+            raise ValueError(
+                "Solo se puede convertir una tarea pendiente en proyecto.")
+        if tarea.get("proyecto_id") is not None:
+            raise ValueError("Esa tarea ya tiene proyecto: no se convierte.")
+
+        await cur.execute(
+            """
+            INSERT INTO proyectos (nombre, descripcion, area)
+            VALUES (%s, %s, %s)
+            RETURNING *
+            """,
+            (tarea["titulo"], tarea.get("detalle"), tarea.get("area")))
+        proyecto = await cur.fetchone()
+
+        await cur.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo,
+               bandeja_id)
+            VALUES ('panel', 'crear', 'proyectos', %s, NULL, %s, %s, %s)
+            RETURNING id
+            """,
+            (proyecto["id"],
+             json.dumps(proyecto, default=str, ensure_ascii=False),
+             f"Convertida desde la tarea #{tarea_id} (botón del panel)",
+             tarea.get("bandeja_id")))
+        log_id_proyecto = (await cur.fetchone())["id"]
+
+        await conn.execute(
+            "UPDATE tareas SET borrado_en = now() WHERE id = %s", (tarea_id,))
+
+        await cur.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo,
+               bandeja_id)
+            VALUES ('panel', 'borrar', 'tareas', %s, %s, NULL, %s, %s)
+            RETURNING id
+            """,
+            (tarea_id,
+             json.dumps(tarea, default=str, ensure_ascii=False),
+             f"Convertida en el proyecto #{proyecto['id']} "
+             f"'{proyecto['nombre']}' (botón del panel)",
+             tarea.get("bandeja_id")))
+        log_id_tarea = (await cur.fetchone())["id"]
+
+    return {"proyecto_id": proyecto["id"], "proyecto_nombre": proyecto["nombre"],
+            "log_id_proyecto": log_id_proyecto, "log_id_tarea": log_id_tarea}
 
 
 async def choques_de_evento(evento_id: int) -> list[dict]:
@@ -1904,6 +2066,83 @@ async def areas() -> list[dict]:
             raise
 
 
+async def proyectos_vivos() -> list[dict]:
+    """Los proyectos no archivados, para que Lucy los reciba como información
+    (encargo 5, requisito 3) y entienda "dentro del proyecto X" sin tener que
+    consultar primero. `[{id, nombre, area, estado}, ...]`, por nombre.
+
+    "Vivos" = no borrados (`borrado_en IS NULL`), SIN filtrar por `estado`
+    ('activo'|'pausado'|'cerrado'): son dos preguntas distintas -- un
+    proyecto pausado sigue siendo un proyecto real, y Lucy tiene que poder
+    reconocerlo si Tiziano lo nombra. El `estado` viaja en la fila para que
+    ella lo vea y decida (o pregunte) si hace falta, no para que esta
+    función decida por ella.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, nombre, area, estado FROM proyectos "
+            " WHERE borrado_en IS NULL ORDER BY nombre")
+        return list(await cur.fetchall())
+
+
+async def proyectos_con_tareas() -> list[dict]:
+    """Cada proyecto vivo, con su área, su estado y sus tareas en orden
+    (encargo 5, requisito 1). `[{id, nombre, descripcion, estado, area,
+    color, tareas: [...]}, ...]`.
+
+    LOS PROYECTOS se ordenan por `estado` (activo, pausado, cerrado -- en ese
+    orden, el que un humano leería primero) y dentro de cada estado por
+    nombre. Ninguna parte del encargo dijo un orden para los proyectos entre
+    sí (solo para SUS TAREAS): ésta es una decisión de presentación, técnica,
+    no de negocio.
+
+    LAS TAREAS de cada proyecto, en el MISMO criterio que ya usa
+    `tareas_por_grupo`: `vence_en ASC NULLS LAST, creado_en ASC`. Van TODAS
+    las vivas de ese proyecto -- pendientes y hechas -- porque esta pantalla
+    contesta "qué hay en este proyecto", no "qué falta hacer": eso ya lo
+    tiene `/tareas`.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        # El ORDER BY va LITERAL, sin armarlo con un f-string: una consulta
+        # que un censo (`tests/test_responsable.py::_censo`) no pueda resolver
+        # como texto fijo cae en el cubo de "escritor genérico" aunque sea un
+        # SELECT puro -- ese censo busca escrituras dinámicas de
+        # `responsable_chat_id` en TODO el repo, y una plantilla con `{...}`
+        # se ve igual de "no legible" le escriba algo o no.
+        await cur.execute(
+            """
+            SELECT p.id, p.nombre, p.descripcion, p.estado, p.area, a.color
+              FROM proyectos p
+              LEFT JOIN areas a ON a.clave = p.area
+             WHERE p.borrado_en IS NULL
+             ORDER BY CASE p.estado WHEN 'activo' THEN 0
+                                     WHEN 'pausado' THEN 1 ELSE 2 END,
+                      p.nombre
+            """)
+        proyectos = list(await cur.fetchall())
+        if not proyectos:
+            return []
+
+        await cur.execute(
+            """
+            SELECT id, proyecto_id, titulo, estado, vence_en, completado_en
+              FROM tareas
+             WHERE borrado_en IS NULL AND proyecto_id = ANY(%s)
+             ORDER BY vence_en ASC NULLS LAST, creado_en ASC, id ASC
+            """,
+            ([p["id"] for p in proyectos],))
+        tareas = list(await cur.fetchall())
+
+    por_proyecto: dict[int, list] = {p["id"]: [] for p in proyectos}
+    for t in tareas:
+        por_proyecto[t["proyecto_id"]].append(t)
+    for p in proyectos:
+        p["tareas"] = por_proyecto[p["id"]]
+    return proyectos
+
+
 async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -> dict:
     """Las tareas vivas, repartidas en los grupos del panel.
 
@@ -1958,7 +2197,8 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
     con_area = """
             SELECT t.id, t.titulo, t.estado, t.vence_en, t.creado_en,
                    t.bandeja_id, t.responsable_chat_id, t.completado_en,
-                   COALESCE(p.area, t.area) AS area
+                   COALESCE(p.area, t.area) AS area, t.proyecto_id,
+                   p.nombre AS proyecto_nombre
               FROM tareas t
               LEFT JOIN proyectos p ON p.id = t.proyecto_id
              WHERE t.borrado_en IS NULL
@@ -2005,6 +2245,13 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
         # en vez de que la plantilla tenga que adivinar si falta la clave o
         # si de verdad no hay área.
         f.setdefault("area", None)
+        # Mismo motivo que "area": el NOMBRE del proyecto (encargo 5) sale del
+        # mismo LEFT JOIN, y con la consulta sin área tampoco viaja -- pero
+        # una tarea sin proyecto YA da `None` de por sí (el JOIN no encuentra
+        # fila), así que este `setdefault` es solo para el caso "la consulta
+        # con área falló entera" (columna ausente), no para "sin proyecto".
+        f.setdefault("proyecto_nombre", None)
+        f.setdefault("proyecto_id", None)
         clave = grupo_de_tarea(f.get("estado"), f.get("vence_en"), hoy,
                                f.get("completado_en"))
         por_clave.setdefault(clave, []).append(f)
@@ -2313,12 +2560,27 @@ async def comentarios_de_tarea(tarea_id: int) -> list[dict]:
 
 async def tarea_con_comentarios(tarea_id: int) -> dict | None:
     """La tarea y sus comentarios, para la pantalla de una tarea. None si la
-    tarea no existe o está en la papelera."""
+    tarea no existe o está en la papelera.
+
+    `proyecto_id`/`proyecto_nombre` y `area` (encargo 5) viajan igual que en
+    `tareas_por_grupo`: el nombre del proyecto para pintarlo, y el área ya
+    resuelta con `COALESCE(p.area, t.area)` -- si la tarea tiene proyecto, la
+    hereda; si no, es la suya. `proyecto_id is None` es también la condición
+    que usa `/tareas/{id}` para decidir si ofrece el botón «convertir en
+    proyecto»: solo tiene sentido sobre una tarea que todavía no es parte de
+    ningún proyecto.
+    """
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
-            "SELECT id, titulo, detalle, estado, vence_en, responsable_chat_id "
-            "FROM tareas WHERE id = %s AND borrado_en IS NULL", (tarea_id,))
+            """
+            SELECT t.id, t.titulo, t.detalle, t.estado, t.vence_en,
+                   t.responsable_chat_id, t.proyecto_id, p.nombre AS proyecto_nombre,
+                   COALESCE(p.area, t.area) AS area
+              FROM tareas t
+              LEFT JOIN proyectos p ON p.id = t.proyecto_id
+             WHERE t.id = %s AND t.borrado_en IS NULL
+            """, (tarea_id,))
         tarea = await cur.fetchone()
     if tarea is None:
         return None

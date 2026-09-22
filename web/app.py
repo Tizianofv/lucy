@@ -51,6 +51,7 @@ from fastapi.templating import Jinja2Templates
 import config
 import db.db as db
 import web.auth as auth
+from acciones import crud
 from cerebro.bancos.categorias import (CATEGORIAS, NO_SUMAN,
                                        categoria_permitida)
 
@@ -768,6 +769,111 @@ async def tareas_historial(request: Request):
          "dias": db.DIAS_HISTORIAL})
 
 
+@app.get("/proyectos", response_class=HTMLResponse)
+async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
+                    error: str = ""):
+    """Cada proyecto vivo, con su área, su estado y sus tareas en orden
+    (encargo 5, requisito 1).
+
+    SOLO LECTURA salvo por el <select> de área de cada proyecto, que postea a
+    `/proyectos/{pid}/area` — un formulario POR PROYECTO, y está bien acá
+    (esta pantalla no es `/tareas`: no tiene el formulario único de cerrar
+    varias de una vez, así que nada impide que cada proyecto tenga el suyo,
+    igual que ya hace `/tareas/{tid}` con sus comentarios).
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    return plantillas.TemplateResponse(
+        request, "proyectos.html",
+        {"proyectos": await db.proyectos_con_tareas(),
+         "areas": await db.areas(), "error": error,
+         "area_guardada": area_guardada, "creado": creado,
+         "pendiente": db.ESTADO_PENDIENTE, "hecha": db.ESTADO_HECHA})
+
+
+@app.post("/proyectos/{pid}/area")
+async def cambiar_area_de_proyecto(request: Request, pid: int):
+    """Cambiar el área de un proyecto (pedido de Tiziano: "no veo las
+    posibilidades de cambiarlo", encargo 5).
+
+    POR LA MISMA PUERTA que Telegram: `crud.editar("proyectos", ...)`, que ya
+    valida con `crud._area_que_vale` — sin una segunda comprobación acá. El
+    único trabajo de esta ruta es traducir el formulario y el error a algo
+    que se pueda mostrar; la decisión de qué área vale la toma esa función,
+    en un solo sitio para los dos caminos (panel y Telegram).
+
+    `actor='panel'`, como toda escritura que dispara un botón del panel — la
+    huella queda igual de clara sobre quién la disparó que
+    `crear_tarea_desde_el_panel` o `convertir_tarea_en_proyecto`.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    area = str(formulario.get("area", "")).strip() or None
+    try:
+        despues, _log_id = await crud.editar(
+            "proyectos", pid, {"area": area},
+            motivo="Área cambiada desde el panel", actor="panel")
+    except ValueError as e:
+        log.warning("Panel de proyectos: área rechazada para #%s: %s", pid, e)
+        return RedirectResponse("/proyectos?error=area", status_code=303)
+    if despues is None:
+        return RedirectResponse(f"/proyectos?error=proyecto", status_code=303)
+    return RedirectResponse(f"/proyectos?area_guardada={pid}", status_code=303)
+
+
+@app.post("/tareas/{tid}/area")
+async def cambiar_area_de_tarea(request: Request, tid: int):
+    """Cambiar el área de UNA tarea suelta (sin proyecto) desde el panel.
+
+    MISMA PUERTA que Telegram: `crud.editar("tareas", ...)`, que llama a
+    `crud._area_que_vale` — la única función que decide si un área vale, y la
+    que YA sabe que una tarea con proyecto no tiene área propia (la hereda,
+    silenciosamente, sin rechazar nada). Si esta ruta se llama sobre una
+    tarea CON proyecto, `_area_que_vale` la ignora igual que por Telegram: no
+    hay una comprobación aparte acá que diga "no se puede" antes de tiempo —
+    la pantalla ya no ofrece el `<select>` en ese caso (ver
+    `tarea_detalle.html`), pero si alguien postea de todos modos, el
+    resultado es el mismo que pedirlo por chat.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    area = str(formulario.get("area", "")).strip() or None
+    try:
+        despues, _log_id = await crud.editar(
+            "tareas", tid, {"area": area},
+            motivo="Área cambiada desde el panel", actor="panel")
+    except ValueError as e:
+        log.warning("Panel de tareas: área rechazada para #%s: %s", tid, e)
+        return RedirectResponse(f"/tareas/{tid}?error=area", status_code=303)
+    if despues is None:
+        return RedirectResponse(f"/tareas/{tid}?error=tarea", status_code=303)
+    return RedirectResponse(f"/tareas/{tid}?area_guardada=1", status_code=303)
+
+
+@app.post("/tareas/{tid}/convertir-en-proyecto")
+async def convertir_en_proyecto(request: Request, tid: int):
+    """El botón «convertir en proyecto» (encargo 5, requisito 2).
+
+    Sin formulario intermedio: un botón, un click. `db.convertir_tarea_en_proyecto`
+    hace todo el trabajo —valida, crea el proyecto, archiva la tarea, dos
+    huellas— dentro de una sola transacción; ver su docstring para qué pasa
+    con el responsable, el área y los comentarios de la tarea original.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    try:
+        resultado = await db.convertir_tarea_en_proyecto(tid)
+    except ValueError as e:
+        log.warning("Panel de tareas: no se convirtió #%s en proyecto: %s", tid, e)
+        return RedirectResponse(f"/tareas/{tid}?error=convertir", status_code=303)
+    return RedirectResponse(
+        f"/proyectos?creado={resultado['proyecto_id']}"
+        f"#proyecto-{resultado['proyecto_id']}",
+        status_code=303)
+
+
 def _responsable_pedido(crudo: str):
     """Lee un `resp_<id>` del formulario. Devuelve (vale, chat | None).
 
@@ -1074,7 +1180,8 @@ def _texto_de_comentario(crudo: str) -> str | None:
 
 @app.get("/tareas/{tid}", response_class=HTMLResponse)
 async def tarea_detalle(request: Request, tid: int, error: str = "",
-                        comentado: int = 0, borrado: int = 0):
+                        comentado: int = 0, borrado: int = 0,
+                        area_guardada: int = 0):
     """Una tarea con sus comentarios, y el cuadro para escribir uno.
 
     VA EN SU PROPIA PANTALLA, a la que se entra tocando el título en /tareas.
@@ -1087,14 +1194,22 @@ async def tarea_detalle(request: Request, tid: int, error: str = "",
 
     La ruta `/tareas/nueva` está registrada ANTES que ésta, así que «nueva»
     nunca llega acá.
+
+    `areas` (encargo 5) es para el `<select>` de cambiar el área -- que la
+    plantilla solo ofrece si `tarea.proyecto_id is none`, y para el botón
+    «convertir en proyecto» -- que solo ofrece si además está pendiente.
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     datos = await db.tarea_con_comentarios(tid)
+    areas = await db.areas()
     contexto = {"tarea": None, "comentarios": [],
                 "nombres": config.NOMBRES_POR_CHAT, "error": error,
                 "comentado": comentado, "borrado": borrado,
-                "largo_comentario": LARGO_COMENTARIO}
+                "area_guardada": area_guardada,
+                "largo_comentario": LARGO_COMENTARIO,
+                "areas": areas, "pendiente": db.ESTADO_PENDIENTE,
+                "colores_area": {a["clave"]: a["color"] for a in areas}}
     if datos is None:
         return plantillas.TemplateResponse(
             request, "tarea_detalle.html", contexto, status_code=404)

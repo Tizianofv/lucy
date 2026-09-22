@@ -90,6 +90,14 @@ HERRAMIENTAS DISPONIBLES:
           "monto": 0, "moneda": "DOP", "referencia": "", "contraparte": "",
           "responsable_chat_id": "", "area": ""}
   Crea la fila real. Personas y proyectos se enlazan solos por nombre.
+  PROYECTOS que ya existen, para que "dentro del proyecto X" los reconozca
+  en vez de crear uno nuevo parecido: {PROYECTOS}. Si "X" se parece a uno de
+  éstos pero no es exacto, preguntá cuál es en vez de adivinar —dos
+  proyectos casi iguales por una diferencia de tipeo separan sus tareas en
+  dos historias que deberían ser una—. Si de verdad no existe, se crea solo,
+  con ese nombre. NADA DE ESTO ES UNA GUARDA: es información para que decidas
+  mejor: `crear` no rechaza ningún nombre de proyecto por no estar en la
+  lista.
   RESPONSABLE (solo tareas, opcional): "crea X para Rosi" = mandalo YA en
   esta misma llamada, con el NOMBRE tal como está en esta lista, y nunca un
   número: {PERSONAS_DEL_PANEL}. Sin responsable = no mandes el campo (o "").
@@ -432,18 +440,20 @@ estructura visual es importante". Un muro de texto no se lee, se saltea.
 
 
 def _sistema(preferencias: list[dict] | None = None,
-             areas: list[dict] | None = None) -> str:
+             areas: list[dict] | None = None,
+             proyectos: list[dict] | None = None) -> str:
     """El prompt de sistema se arma en cada llamada: el 'ahora' no se cachea.
 
     Las preferencias (req 35) se inyectan acá, arriba de las herramientas: son
     el 'dentro de los límites que vos fijás'. Van con su id para que Lucy pueda
     olvidar una por número cuando Tiziano lo pida.
 
-    `areas` (encargo 4) es OPCIONAL, con el mismo motivo que `preferencias`:
-    todas las pruebas de este archivo que llaman `_sistema()` sin argumentos
-    —y las que llaman `herramientas_del_prompt()` directo— siguen andando, y
-    `atender()` es el único que de verdad la trae de la base (`db.areas()`,
-    que ya tolera que la tabla no exista) antes de armar el prompt.
+    `areas` (encargo 4) y `proyectos` (encargo 5) son OPCIONALES, con el mismo
+    motivo que `preferencias`: todas las pruebas de este archivo que llaman
+    `_sistema()` sin argumentos —y las que llaman `herramientas_del_prompt()`
+    directo— siguen andando, y `atender()` es el único que de verdad las trae
+    de la base (`db.areas()`, `db.proyectos_vivos()`) antes de armar el
+    prompt.
     """
     bloque = ""
     if preferencias:
@@ -464,11 +474,12 @@ def _sistema(preferencias: list[dict] | None = None,
         # texto: una lista duplicada se desincroniza el día que se agregue una,
         # y el agente le ofrecería a Tiziano categorías que ya no existen.
         f"{consultar.ESQUEMA}\n\n"
-        + herramientas_del_prompt(areas)
+        + herramientas_del_prompt(areas, proyectos)
     )
 
 
-def herramientas_del_prompt(areas: list[dict] | None = None) -> str:
+def herramientas_del_prompt(areas: list[dict] | None = None,
+                            proyectos: list[dict] | None = None) -> str:
     """`HERRAMIENTAS` con las listas inyectadas desde su fuente real.
 
     Ninguna se teclea en el texto: una lista duplicada se desincroniza el día
@@ -532,11 +543,23 @@ def herramientas_del_prompt(areas: list[dict] | None = None) -> str:
                 "(hoy ninguna declarada: no le pongas área a nada, y si "
                 "Tiziano te pide una explicale que todavía no hay ninguna "
                 "creada)")
+    # PROYECTOS (encargo 5): cada uno con su área y su estado, para que Lucy
+    # pueda reconocer "dentro del proyecto X" sin consultar primero, y para
+    # que un proyecto pausado o cerrado no se confunda con uno activo. Sin
+    # ninguno vivo, se dice así — inventar una lista sería peor que admitir
+    # que no hay.
+    proyectos_txt = (
+        ", ".join(
+            f'"{p["nombre"]}" ({p.get("area") or "sin área"}, {p["estado"]})'
+            for p in (proyectos or []))
+        if proyectos else
+        "(hoy ninguno vivo)")
     return HERRAMIENTAS.replace(
         "{CATEGORIAS}", ", ".join(f'"{c}"' for c in CATEGORIAS)
     ).replace("{PANTALLAS_DEL_PANEL}", pantallas
     ).replace("{PERSONAS_DEL_PANEL}", personas
-    ).replace("{AREAS}", areas_txt)
+    ).replace("{AREAS}", areas_txt
+    ).replace("{PROYECTOS}", proyectos_txt)
 
 
 async def _avisar_choques(evento_id: int) -> str:
@@ -1079,8 +1102,9 @@ async def atender(fila: dict, texto: str, bot) -> None:
 
     preferencias = await db.listar_preferencias()
     areas = await db.areas()
+    proyectos = await db.proyectos_vivos()
     mensajes: list[dict] = [
-        {"role": "system", "content": _sistema(preferencias, areas)}]
+        {"role": "system", "content": _sistema(preferencias, areas, proyectos)}]
     for h in historial:
         # Una fila puede ser solo de Lucy (un aviso del despertador: sin
         # dicho). Entra igual: sus palabras proactivas son parte del hilo.

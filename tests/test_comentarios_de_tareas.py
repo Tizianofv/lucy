@@ -609,10 +609,16 @@ def test_la_pantalla_de_la_tarea_dice_el_NOMBRE_y_no_el_numero():
     async def _datos(tid):
         return datos if tid == 5 else None
 
+    # `tarea_detalle` ahora también pide `db.areas()` (encargo 5, para el
+    # <select> de cambiar el área) en CADA llamada, exista o no la tarea. Se
+    # stubea vacía: esta prueba mide los comentarios, no las áreas.
+    async def _sin_areas():
+        return []
+
     with _LaCasa():
         r = _llamar(lambda: panel.tarea_detalle(
             _peticion("GET", "/tareas/5"), 5, comentado=1),
-            tarea_con_comentarios=_datos)
+            tarea_con_comentarios=_datos, areas=_sin_areas)
         html = r.body.decode()
         assert r.status_code == 200
         assert "Mengano" in html and "sin nombre" in html
@@ -628,7 +634,7 @@ def test_la_pantalla_de_la_tarea_dice_el_NOMBRE_y_no_el_numero():
         assert "Comentario guardado" in html
 
         r = _llamar(lambda: panel.tarea_detalle(_peticion("GET", "/tareas/9"), 9),
-                    tarea_con_comentarios=_datos)
+                    tarea_con_comentarios=_datos, areas=_sin_areas)
         assert r.status_code == 404
 
 
