@@ -600,3 +600,238 @@ def test_proyectos_pide_lo_que_hace_falta_para_pintar_la_pagina():
 
     assert set(llamados) == {"proyectos_con_tareas", "areas"}
     assert r.status_code == 200
+
+
+# ── DE PUNTA A PUNTA: la ruta del panel hasta `log_acciones` de verdad ────
+#
+# NO PASA del testigo sobre `43e024e`: los tests de arriba espían
+# `crud.editar` ENTERO, así que nunca ejercitan lo que pasa DENTRO -- que el
+# `actor='panel'` que la ruta manda de verdad llegue hasta la fila que
+# `_registrar` escribe en `log_acciones`. El testigo lo demostró mutando:
+# quitar `actor=actor` de la llamada a `_registrar` en `crud.editar` (línea
+# ~978) dejó la suite en VERDE. Acá se corre `crud.editar` REAL -- sin
+# mockear nada de `acciones.crud` -- desde la ruta del panel hasta el INSERT
+# de la huella, y se lee el `actor` que de verdad quedó escrito.
+
+class _CursorEditarPanel:
+    def __init__(self, conn):
+        self._conn = conn
+        self._row = None
+        self._filas: list = []
+
+    async def execute(self, sql, params=None):
+        s = " ".join(sql.split())
+        p = params or ()
+        self._conn.sql.append((s, p))
+        if s.startswith("SELECT clave, color FROM areas"):
+            self._filas = list(self._conn.areas)
+        elif s.startswith("SELECT * FROM"):
+            self._row = dict(self._conn.fila)
+        else:
+            raise AssertionError(
+                f"SQL no modelado por _CursorEditarPanel: {s[:90]}")
+        return self
+
+    async def fetchone(self):
+        return self._row
+
+    async def fetchall(self):
+        return self._filas
+
+
+class _ConnEditarPanel:
+    """Modela lo justo para que `crud.editar` corra ENTERO -- validación por
+    `_area_que_vale` (que abre su PROPIA conexión vía `db.areas()`, de ahí el
+    `.transaction()` y el `SELECT clave, color FROM areas`), el `UPDATE`, y
+    el `INSERT INTO log_acciones` de `_registrar`, del que se lee el `actor`
+    que de verdad quedó -- no uno espiado por fuera de la función."""
+
+    def __init__(self, fila, areas=None):
+        self.fila = dict(fila)
+        self.areas = list(areas or [])
+        self.logs: list[dict] = []
+        self.sql: list = []
+        self._logid = 9000
+
+    def cursor(self, row_factory=None):
+        return _CursorEditarPanel(self)
+
+    def transaction(self):
+        return _TransaccionPanel()
+
+    async def execute(self, sql, params=None):
+        s = " ".join(sql.split())
+        p = params or ()
+        self.sql.append((s, p))
+        if s.startswith("UPDATE"):
+            asignaciones = s.split(" SET ", 1)[1].split(" WHERE ")[0]
+            columnas = [a.split("=")[0].strip() for a in asignaciones.split(", ")]
+            self.fila.update(dict(zip(columnas, p)))
+            return _CursorEditarPanel(self)
+        if s.startswith("INSERT INTO log_acciones"):
+            self._logid += 1
+            # Todas las columnas de `_registrar` viajan como `%s` (ya no hay
+            # un `'lucy'` literal desde que `actor` es parámetro) -- por eso
+            # alcanza con `zip` posicional, sin distinguir literal de
+            # placeholder como en `db.py`.
+            m = re.search(r"log_acciones\s*\(([^)]*)\)", s)
+            columnas = [c.strip() for c in m.group(1).split(",")]
+            fila = dict(zip(columnas, p))
+            fila["id"] = self._logid
+            self.logs.append(fila)
+            cur = _CursorEditarPanel(self)
+            cur._row = (self._logid,)
+            return cur
+        raise AssertionError(f"SQL no modelado por _ConnEditarPanel: {s[:90]}")
+
+
+class _TransaccionPanel:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *e):
+        return False
+
+
+class _CMPanel:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, *e):
+        return False
+
+
+class _PoolPanel:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def connection(self):
+        return _CMPanel(self._conn)
+
+
+def test_cambiar_area_de_tarea_de_punta_a_punta_queda_con_actor_panel():
+    """Corre la RUTA real -> `crud.editar` real -> `_registrar` real. Lo que
+    se mide es la fila que de verdad quedó en `log_acciones`, no lo que la
+    ruta le pasó a un espía."""
+    conn = _ConnEditarPanel(
+        _fila_tarea_area_panel(area=None),
+        areas=[{"clave": "CDS", "color": "#1"}])
+    guardado = db.pool
+    db.pool = _PoolPanel(conn)
+    try:
+        r = _llamar(lambda: panel.cambiar_area_de_tarea(
+            _peticion("POST", "/tareas/40/area", {"area": "CDS"}), 40))
+    finally:
+        db.pool = guardado
+
+    assert r.status_code == 303
+    assert conn.fila["area"] == "CDS", "el área no quedó escrita de verdad"
+    assert len(conn.logs) == 1, (
+        f"no quedó ninguna huella en log_acciones: {conn.sql}")
+    huella = conn.logs[0]
+    assert huella["accion"] == "editar"
+    assert huella["tabla"] == "tareas"
+    assert huella["actor"] == "panel", (
+        f"la huella quedó con actor={huella['actor']!r} en vez de 'panel' -- "
+        "un cambio de área hecho desde el panel se vería en el registro "
+        "como si lo hubiera hecho Lucy por Telegram")
+
+
+def test_cambiar_area_de_proyecto_de_punta_a_punta_queda_con_actor_panel():
+    conn = _ConnEditarPanel(
+        _fila_proyecto_area_panel(area=None),
+        areas=[{"clave": "ACD", "color": "#2"}])
+    guardado = db.pool
+    db.pool = _PoolPanel(conn)
+    try:
+        r = _llamar(lambda: panel.cambiar_area_de_proyecto(
+            _peticion("POST", "/proyectos/5/area", {"area": "ACD"}), 5))
+    finally:
+        db.pool = guardado
+
+    assert r.status_code == 303
+    assert conn.fila["area"] == "ACD"
+    assert len(conn.logs) == 1, (
+        f"no quedó ninguna huella en log_acciones: {conn.sql}")
+    huella = conn.logs[0]
+    assert huella["accion"] == "editar"
+    assert huella["tabla"] == "proyectos"
+    assert huella["actor"] == "panel", (
+        f"la huella quedó con actor={huella['actor']!r} en vez de 'panel'")
+
+
+def _fila_tarea_area_panel(**extra):
+    fila = {"id": 40, "bandeja_id": 1, "titulo": "Mezclar el tema",
+            "detalle": None, "vence_en": None, "estado": "pendiente",
+            "recurrencia": None, "pospuesta_veces": 0, "anticipos_min": [0],
+            "avisos_enviados": [], "borrado_en": None,
+            "creado_en": datetime(2026, 8, 1, tzinfo=UTC),
+            "responsable_chat_id": None, "proyecto_id": None, "area": None}
+    fila.update(extra)
+    return fila
+
+
+def _fila_proyecto_area_panel(**extra):
+    fila = {"id": 5, "nombre": "Álbum nuevo", "descripcion": None,
+            "estado": "activo", "borrado_en": None,
+            "creado_en": datetime(2026, 8, 1, tzinfo=UTC), "area": None}
+    fila.update(extra)
+    return fila
+
+
+# ── Hermanos: otros sitios que escriben `log_acciones` con un `actor` que
+# viene de afuera de la función que escribe ────────────────────────────────
+#
+# Se recorre `acciones/crud.py` y `db/db.py` -- los dos archivos que escriben
+# en `log_acciones`, medido con grep -- buscando cada `INSERT INTO
+# log_acciones`. Los de `db.py` llevan el actor LITERAL en el SQL ('panel' o
+# 'lucy', según la función, ver `db.crear_tarea_desde_el_panel`,
+# `db.convertir_tarea_en_proyecto`, `db._buscar_o_crear`): no hay parámetro
+# que se pueda perder porque no hay parámetro, el texto ES el valor. El
+# ÚNICO sitio donde el actor es una VARIABLE que viaja como argumento hasta
+# el INSERT es `acciones.crud._registrar` (parámetro `actor`, con default
+# 'lucy') -- y el único llamador que le pasa algo distinto del default es
+# `editar()`, que a su vez lo recibe de SUS llamadores. Ésa es la cadena que
+# las dos pruebas de arriba miden de punta a punta; no hay un segundo hilo
+# "actor que viene de afuera" en este archivo.
+
+def test_registrar_es_el_unico_sitio_con_actor_como_variable():
+    """No una lista tecleada: se recorren TODOS los `INSERT INTO
+    log_acciones` de `acciones/crud.py` (el único módulo, junto con
+    `db/db.py`, que escribe ahí) y se exige que sea `_registrar` -- y solo
+    `_registrar` -- quien lo arme con un parámetro. Si mañana alguien agrega
+    un segundo INSERT directo con un actor variable, esta prueba lo agarra
+    sin que nadie tenga que acordarse de mirar."""
+    import ast
+    import inspect
+    from acciones import crud as crud_modulo
+
+    fuente = inspect.getsource(crud_modulo)
+    arbol = ast.parse(fuente)
+    sitios = []
+    for nodo in ast.walk(arbol):
+        if not isinstance(nodo, ast.Call):
+            continue
+        if not (isinstance(nodo.func, ast.Attribute)
+                and nodo.func.attr == "execute"):
+            continue
+        for arg in nodo.args:
+            if (isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+                    and "INSERT INTO log_acciones" in arg.value):
+                # ¿en qué función está este nodo?
+                padre = None
+                for f in ast.walk(arbol):
+                    if (isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef))
+                            and any(n is nodo for n in ast.walk(f))):
+                        if padre is None or len(ast.dump(f)) < len(ast.dump(padre)):
+                            padre = f
+                sitios.append(padre.name if padre else "<módulo>")
+    assert sitios, ("no se encontró ningún INSERT INTO log_acciones en "
+                    "acciones/crud.py -- la prueba dejó de medir algo")
+    assert set(sitios) == {"_registrar"}, (
+        f"hay INSERT INTO log_acciones fuera de _registrar: {sitios} -- "
+        "cada uno es un sitio donde 'actor' podría perderse sin que la "
+        "prueba de punta a punta de arriba lo vea")
