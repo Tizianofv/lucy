@@ -1645,6 +1645,29 @@ def _bloque_del_responsable(prompt: str) -> str:
     return prompt[i:prompt.index("\n\n", i)]
 
 
+def _bloque_del_responsable_al_crear(prompt: str) -> str:
+    i = prompt.index("RESPONSABLE (solo tareas, opcional)")
+    return prompt[i:prompt.index("\n\n", i)]
+
+
+def test_crear_TAMBIEN_ofrece_el_responsable_con_NOMBRES_y_sin_numeros():
+    """Encargo 2: poner el responsable al crear es DARLE INFORMACIÓN a Lucy,
+    no una guarda nueva — la misma lista que ya recibe `editar`, en un sitio
+    más. Si el bloque de `crear` no la lleva, el modelo no puede hacer «crea X
+    para Rosi» en un solo paso, aunque `editar` siga funcionando igual.
+    """
+    _con_gente(LA_CASA_SIN_EL_DUENO, permitidos=tuple(LA_CASA_SIN_EL_DUENO))
+    prompt = agente.herramientas_del_prompt()
+    assert '"responsable_chat_id"' in prompt.split("· editar")[0], (
+        "el tool 'crear' no declara 'responsable_chat_id' en su JSON")
+    bloque = _bloque_del_responsable_al_crear(prompt)
+    for _, nombre in config.personas_del_panel():
+        assert nombre in bloque, f"falta {nombre} en el bloque de crear"
+    for chat, _ in config.personas_del_panel():
+        assert str(chat) not in bloque, (
+            "el bloque de crear lleva un número de chat")
+
+
 def test_el_prompt_lleva_los_NOMBRES_y_ningun_numero_de_chat():
     """El modelo tiene que saber a quién se le puede asignar, y NO tiene que
     tener los números: lo que no está delante no se puede escribir por error.
