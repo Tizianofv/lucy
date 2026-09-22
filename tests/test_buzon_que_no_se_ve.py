@@ -3689,9 +3689,19 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `prepare_threshold=None`), pero `db/db.py` ya estaba vigilado y los
     # otros tres no importan ni usan `config`, así que ninguno entra al
     # reparto de este archivo.
-    assert medido == {"en disco": 77, "exentos": 38, "vigilados": 39}, (
+    #
+    # 22-sep-2026, segunda vuelta del mismo encargo (tras un NO PASA del
+    # testigo): 77 → 78 en disco y 39 → 40 VIGILADOS por `db/sin_preparadas.py`
+    # —módulo de producción nuevo, el único sitio que apaga las consultas
+    # preparadas para todo el proceso—. Los EXENTOS siguen en 38: no es un
+    # archivo de `testpaths`, así que entra a vigilados y no a exentos, sea o
+    # no que use `config` (no lo usa, pero `_archivos_vigilados` no filtra por
+    # eso: vigila TODO lo que no esté exento por rol). `tests/test_sin_preparadas.py`
+    # se reescribió entero para medir el hecho corriendo en vez de leer texto,
+    # pero sigue siendo el mismo archivo — no suma de nuevo a EXENTOS.
+    assert medido == {"en disco": 78, "exentos": 38, "vigilados": 40}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "22-sep-2026 era {'en disco': 77, 'exentos': 38, 'vigilados': 39}. La "
+        "22-sep-2026 era {'en disco': 78, 'exentos': 38, 'vigilados': 40}. La "
         "aserción de fondo —cero archivos alcanzan la lista cruda— YA CORRIÓ "
         "arriba y quedó verde, así que esto NO es una fuga. Si los vigilados "
         "bajaron, algo se está saltando de más y «cero falsos positivos» dejó "
@@ -5354,6 +5364,19 @@ def test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_cuesta_hoy():
     es `hasattr`, y la octava llamada —`tools/humo.py:87`— llevaba ahí todo el
     tiempo sin que nadie la contara. No es una regresión: es el precio de dejar
     de teclear la lista, y se paga entero acá.
+
+    POR QUÉ EL NÚMERO PASÓ DE 8 A 12, el 22-sep-2026 (encargo 3, segunda
+    vuelta): `db/sin_preparadas.py` —el sitio único que apaga las consultas
+    preparadas de todo el proceso, sin importar cómo se escriba la conexión—
+    necesita preguntar por nombre si el psycopg de turno es de verdad o un
+    doble de pruebas, y las cuatro llamadas piden todas un nombre que sí se
+    puede enumerar (`"Connection"`, `"AsyncConnection"`, `"connect"`,
+    `"__kwdefaults__"` — ninguno armado al vuelo):
+
+        db/sin_preparadas.py:94   getattr(modulo, "Connection", None)
+        db/sin_preparadas.py:95   getattr(modulo, "AsyncConnection", None)
+        db/sin_preparadas.py:97   hasattr(getattr(c, "connect", None), "__kwdefaults__")
+                                   (una llamada a hasattr y una a getattr anidada)
     """
     permitidos = _atributos_que_config_ofrece()
     assert _infracciones(
@@ -5386,9 +5409,9 @@ def test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_cuesta_hoy():
         "el sitio se reescribe con el nombre a la vista, o el límite se "
         "renegocia con Tiziano, pero no se afloja la aserción")
 
-    assert cuantos == 8, (
+    assert cuantos == 12, (
         f"{_MARCA_CONTADOR}los archivos vigilados tienen {cuantos} llamadas a "
-        "getattr y el 7-sep-2026 eran 8. La aserción de fondo —ninguna de esas "
+        "getattr y el 22-sep-2026 eran 12. La aserción de fondo —ninguna de esas "
         "llamadas pide un nombre que no se pueda enumerar— YA CORRIÓ arriba y "
         "quedó verde, así que esto NO es una fuga: es el precio del límite, que "
         "se movió. Hay que volver a mirar cuánto cuesta antes de darlo por "

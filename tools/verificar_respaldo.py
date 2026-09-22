@@ -42,6 +42,12 @@ import sys
 from datetime import datetime, timezone
 from decimal import Decimal
 
+# Repo en sys.path para `import db.sin_preparadas` — este archivo, corrido
+# como `python3 tools/verificar_respaldo.py`, arranca con solo `tools/` en
+# el path, no la raíz.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import db.sin_preparadas as sin_preparadas  # noqa: E402
+
 CARPETA = os.path.expanduser("~/Google Drive/My Drive/Lucy/backups")
 
 
@@ -81,9 +87,12 @@ def main() -> int:
         problemas.append("no dice cuándo se tomó")
 
     import psycopg
-    # SIN CONSULTAS PREPARADAS, igual que el pool de db/db.py:58 (encargo 3,
-    # 22-sep-2026) y por el mismo motivo.
-    with psycopg.connect(url, prepare_threshold=None) as conn:
+    # SIN CONSULTAS PREPARADAS: deja `psycopg.Connection.connect` con
+    # `prepare_threshold=None` como su propio default. Ver
+    # db/sin_preparadas.py para el porqué de un solo sitio para todo el
+    # proceso, en vez de un keyword acá.
+    sin_preparadas.aplicar()
+    with psycopg.connect(url) as conn:
         reales = [r[0] for r in conn.execute(
             "SELECT table_name FROM information_schema.tables "
             "WHERE table_schema = 'public' ORDER BY 1")]

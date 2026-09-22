@@ -56,6 +56,11 @@ from urllib.parse import unquote, urlsplit, urlunsplit
 import psycopg
 from psycopg.rows import dict_row
 
+# Repo en sys.path para `import db.sin_preparadas` — este archivo, corrido
+# como `python3 db/backup.py`, arranca con solo `db/` en el path, no la raíz.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import db.sin_preparadas as sin_preparadas  # noqa: E402
+
 # En Windows, psycopg async necesita otra política; el backup es sincrónico,
 # así que no aplica. Se deja el import de psycopg sincrónico a propósito.
 
@@ -377,13 +382,12 @@ def hacer_backup() -> Path:
     }
 
     url = _url()
-    # SIN CONSULTAS PREPARADAS, igual que el pool de db/db.py:58 y por el
-    # mismo motivo — ver ese comentario. Acá la conexión es corta, pero
-    # "corta" no es una garantía escrita en ningún sitio: es más barato
-    # apagarlo siempre que confiar en que nunca se repita una consulta
-    # cinco veces.
-    with psycopg.connect(url, autocommit=True, row_factory=dict_row,
-                         prepare_threshold=None) as conn:
+    # SIN CONSULTAS PREPARADAS: deja `psycopg.Connection.connect` —la que
+    # usa este `with`— con `prepare_threshold=None` como su propio default,
+    # así que la llamada de abajo ya nace apagada sin nombrarlo acá. El
+    # porqué está en db/sin_preparadas.py.
+    sin_preparadas.aplicar()
+    with psycopg.connect(url, autocommit=True, row_factory=dict_row) as conn:
         datos["esquema"] = _catalogo(conn)
 
         tablas = [r["tablename"] for r in conn.execute(

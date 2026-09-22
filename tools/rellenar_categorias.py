@@ -25,6 +25,7 @@ import psycopg
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import db.sin_preparadas as sin_preparadas  # noqa: E402
 from cerebro.bancos.categorias import (  # noqa: E402
     CLAVES, Categorizador, normalizar_comercio)
 
@@ -36,9 +37,12 @@ def main() -> int:
         print("Falta DATABASE_URL en el entorno.", file=sys.stderr)
         return 2
 
-    # SIN CONSULTAS PREPARADAS, igual que el pool de db/db.py:58 (encargo 3,
-    # 22-sep-2026) y por el mismo motivo.
-    with psycopg.connect(url, prepare_threshold=None) as conn:
+    # SIN CONSULTAS PREPARADAS: deja `psycopg.Connection.connect` con
+    # `prepare_threshold=None` como su propio default. Ver
+    # db/sin_preparadas.py para el porqué de un solo sitio para todo el
+    # proceso, en vez de un keyword acá.
+    sin_preparadas.aplicar()
+    with psycopg.connect(url) as conn:
         aprendidas = {r[0]: r[1] for r in conn.execute(
             "SELECT comercio, categoria FROM categorias_aprendidas "
             "WHERE borrado_en IS NULL")}
