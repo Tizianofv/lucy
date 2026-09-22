@@ -849,9 +849,17 @@ def test_los_pasos_de_una_tarea_borrada_se_quedan_colgados():
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_la_lista_pinta_el_conteo_de_pasos():
+    """Ojo con medir las palabras `pasos_total`/`pasos_hechos` sueltas:
+    aparecen también en un comentario de la plantilla, así que una
+    mutación que saque el `<span>` de verdad y deje el comentario intacto
+    seguiría en verde con esa comprobación (mismo defecto que ya se
+    encontró una vez con `fila-espera`, encargo 6). Se exige la expresión
+    Jinja EXACTA tal como queda escrita en el `<span>`."""
     from pathlib import Path
     html = Path(_ROOT, "web", "plantillas", "tareas.html").read_text(encoding="utf-8")
-    assert "pasos_total" in html and "pasos_hechos" in html
+    assert "{{ t.pasos_hechos }} de {{ t.pasos_total }}" in html, (
+        "no se pinta el «X de Y» -- se buscó la expresión Jinja exacta, no "
+        "las palabras sueltas, que también aparecen en un comentario")
 
 
 def test_la_pagina_de_la_tarea_tiene_la_lista_de_chequeo():
