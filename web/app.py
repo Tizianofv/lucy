@@ -697,14 +697,23 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
     una persona no es material de pantalla, y Tiziano ya descartó enseñarlo.
     Callar cualquiera de las dos dejaría a alguien buscando en el desplegable
     un nombre que nunca va a aparecer, sin ninguna pista de por qué.
+
+    LAS CERRADAS HACE `db.DIAS_HISTORIAL` DÍAS O MÁS NO SE PINTAN ACÁ. Esta
+    ruta es la única que las saca a propósito: `db.tareas_por_grupo` sí las
+    reparte, en su propia clave declarada 'historial' — igual de real que
+    'otros' o 'sin_fecha' — y acá se descarta esa clave antes de pintar. No se
+    dejan de PEDIR a la base ni se dejan de CONTAR para `hay_mas`: se dejan de
+    MOSTRAR, que es lo único que "se archivan" quiere decir en este panel. La
+    página completa está en `/tareas/historial`.
     """
     chat = _sesion(request)
     if not auth.puede_entrar(chat):
         return _fuera(request)
     datos = await db.tareas_por_grupo()
+    grupos = [g for g in datos["grupos"] if g["clave"] != "historial"]
     return plantillas.TemplateResponse(
         request, "tareas.html",
-        {"grupos": datos["grupos"], "hay_mas": datos["hay_mas"],
+        {"grupos": grupos, "hay_mas": datos["hay_mas"],
          "guardadas": guardadas, "asignadas": asignadas, "movidas": movidas,
          "tope": db.TOPE_TAREAS, "hecha": db.ESTADO_HECHA, "creada": creada,
          # La fecha solo se puede mover en las PENDIENTES, y la regla vive en
@@ -716,6 +725,35 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
          "nombres": config.NOMBRES_POR_CHAT,
          "sin_nombre": config.chats_sin_nombre(),
          "mal_escritos": config.NOMBRES_MAL_ESCRITOS})
+
+
+@app.get("/tareas/historial", response_class=HTMLResponse)
+async def tareas_historial(request: Request):
+    """Las tareas cerradas hace `db.DIAS_HISTORIAL` días o más.
+
+    Es el mismo cálculo que la ruta `/tareas` le esconde al panel —la clave
+    'historial' de `db.tareas_por_grupo`— y nada más: esta ruta no vuelve a
+    decidir qué cuenta como vieja, porque ese criterio vive UNA vez, en
+    `db.grupo_de_tarea`, igual que "atrasada".
+
+    MISMO ACCESO QUE EL PANEL, la misma cookie de sesión: quien puede ver las
+    tareas de hoy puede ver las de antes. No hay una puerta nueva que abrir ni
+    que rotar.
+
+    No hay forma de cerrar ni de reabrir una tarea desde acá — es una
+    consulta, no un formulario — así que no hace falta CSRF ni nada que
+    escriba: mostrar el Historial no puede, por construcción, mover una fila.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    datos = await db.tareas_por_grupo()
+    historial = next((g for g in datos["grupos"] if g["clave"] == "historial"),
+                     None)
+    return plantillas.TemplateResponse(
+        request, "tareas_historial.html",
+        {"filas": historial["filas"] if historial else [],
+         "tope": db.TOPE_TAREAS, "hay_mas": datos["hay_mas"],
+         "dias": db.DIAS_HISTORIAL})
 
 
 def _responsable_pedido(crudo: str):

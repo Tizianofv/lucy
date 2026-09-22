@@ -139,18 +139,23 @@ class _Pool:
 
 
 def _fila(id, estado="pendiente", vence_en=None, titulo=None,
-          responsable=None):
+          responsable=None, completado_en=None):
     """Una fila como la devuelve la consulta del panel.
 
     `responsable` es None por defecto porque ES el estado normal: las 57 tareas
     vivas de producción nacieron sin responsable y se asignan desde el panel.
     Ponerle un valor por defecto haría que ninguna prueba de este archivo
     pintara nunca el caso más común.
+
+    `completado_en` también es None por defecto, por el mismo motivo: la
+    mayoría de las filas de este archivo son pendientes, y una 'hecha' sin
+    fecha de cierre —el 'descartado' real de producción— es justo el caso que
+    no se puede archivar por falta de dato.
     """
     return {"id": id, "titulo": titulo or f"tarea {id}", "estado": estado,
             "vence_en": vence_en, "creado_en": datetime(2026, 8, 1, tzinfo=UTC),
             "bandeja_id": 900 + id, "responsable_chat_id": responsable,
-            "completado_en": None}
+            "completado_en": completado_en}
 
 
 def _con_base(filas, fn):
@@ -265,6 +270,106 @@ def test_la_zona_no_depende_del_reloj_de_la_maquina():
     assert db.dia_rd(None) is None
 
 
+# ── El Historial: lo cerrado hace 3 días o más ───────────────────────────
+#
+# Documento de alcance, sección 5: "las tareas marcadas como hecha se
+# archivan automáticamente 3 días después de completarse [...] dejan de
+# aparecer en la vista principal, y quedan accesibles en un historial". Acá
+# NO se archiva nada de verdad —no hay UPDATE, no hay proceso programado—:
+# se calcula, igual que "atrasada", cada vez que se pinta.
+
+def test_lo_cerrado_hace_3_dias_o_mas_se_va_al_historial():
+    """A LOS 3 DÍAS SALE DEL PANEL. Cerrada el 5, hoy el 8: van 3 días
+    completos (5, 6, 7 ya pasaron enteros), y `DIAS_HISTORIAL` es 3."""
+    hoy = date(2026, 9, 8)
+    cerrada_hace_3 = datetime(2026, 9, 5, 15, 0, tzinfo=UTC)
+    assert db.DIAS_HISTORIAL == 3
+    assert db.grupo_de_tarea("hecha", None, hoy, cerrada_hace_3) == "historial"
+
+
+def test_lo_cerrado_hace_2_dias_todavia_no_sale():
+    """A LOS 2 DÍAS TODAVÍA NO SALE. Un día menos que el caso de arriba, y el
+    resultado tiene que ser el otro: sigue en 'otros', visible en el panel."""
+    hoy = date(2026, 9, 8)
+    cerrada_hace_2 = datetime(2026, 9, 6, 15, 0, tzinfo=UTC)
+    assert db.grupo_de_tarea("hecha", None, hoy, cerrada_hace_2) == "otros"
+
+
+def test_cerrada_hoy_mismo_no_sale():
+    """El borde de abajo: cerrarla hoy no la manda al Historial ni por
+    error. 0 días de gracia consumidos, y hacen falta 3."""
+    hoy = date(2026, 9, 8)
+    assert db.grupo_de_tarea(
+        "hecha", None, hoy, datetime(2026, 9, 8, 12, 0, tzinfo=UTC)) == "otros"
+
+
+def test_el_corte_del_historial_es_por_dia_en_santo_domingo_no_en_utc():
+    """MISMA REGLA QUE 'ATRASADA': el día de cierre se cuenta en Santo
+    Domingo, no en UTC. Las 11 de la noche del 5-sep en Santo Domingo son las
+    3 de la mañana del 6-sep en UTC — un criterio en UTC correría el cierre un
+    día y cambiaría cuándo se va al Historial."""
+    hoy = date(2026, 9, 8)
+    de_noche_en_rd = datetime(2026, 9, 6, 3, 0, tzinfo=UTC)  # 5-sep 23:00 RD
+    assert db.dia_rd(de_noche_en_rd) == date(2026, 9, 5)
+    # Contado desde el día de RD (5-sep), hoy 8-sep son 3 días: se va.
+    assert db.grupo_de_tarea("hecha", None, hoy, de_noche_en_rd) == "historial"
+
+
+def test_sin_fecha_de_cierre_no_hay_historial_posible():
+    """LO QUE NO TENGA `completado_en` SE QUEDA DONDE SE VE HOY. Es el caso
+    real de producción: el único 'descartado' no tiene fecha de cierre, y sin
+    ella no hay desde cuándo contar. Esconderlo sería perderlo, igual que las
+    sin fecha de vencer."""
+    hoy = date(2026, 9, 8)
+    assert db.grupo_de_tarea("descartado", None, hoy, None) == "otros"
+    assert db.grupo_de_tarea("hecha", None, hoy, None) == "otros"
+
+
+def test_un_estado_que_nadie_declaro_con_fecha_de_cierre_tambien_se_archiva():
+    """El criterio mira si HAY `completado_en`, no si el estado es 'hecha' a
+    secas — la misma razón por la que 'otros' no filtra por una lista de
+    estados. Un estado inventado, cerrado hace 3 días, se va igual: si se
+    mirara el estado literal, un 'cancelada' o cualquier otro que use
+    `completado_en` mañana se quedaría pegado en el panel para siempre."""
+    hoy = date(2026, 9, 8)
+    cerrada_hace_5 = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
+    assert db.grupo_de_tarea(
+        "un_estado_que_nadie_escribio_todavia", None, hoy, cerrada_hace_5
+    ) == "historial"
+
+
+def test_grupos_de_tareas_declara_historial():
+    """'historial' tiene que estar declarado como los demás grupos, y no
+    aparecer por accidente: es la clave que `web/app.py` usa para separar el
+    panel del Historial, y las dos rutas confían en que sea un nombre fijo."""
+    declaradas = dict(db.GRUPOS_DE_TAREAS)
+    assert declaradas.get("historial") == "Historial"
+
+
+def test_tareas_por_grupo_reparte_las_cerradas_viejas_en_historial():
+    """De punta a punta, sin doblar `grupo_de_tarea`: la consulta trae
+    `completado_en`, el reparto la usa, y la fila cerrada hace rato aparece en
+    la clave 'historial' con su día de cierre ya calculado para pintar."""
+    hoy = date(2026, 9, 8)
+    filas = [_fila(1, estado="hecha",
+                   completado_en=datetime(2026, 9, 4, 12, tzinfo=UTC)),  # vieja
+             _fila(2, estado="hecha",
+                   completado_en=datetime(2026, 9, 7, 12, tzinfo=UTC)),  # nueva
+             _fila(3, estado="descartado")]                              # sin fecha
+    datos, _ = _con_base(filas, lambda: db.tareas_por_grupo(hoy=hoy))
+    grupos = {g["clave"]: g["filas"] for g in datos["grupos"]}
+
+    assert {f["id"] for f in grupos.get("historial", [])} == {1}, (
+        "la cerrada hace 4 días no llegó al Historial")
+    assert {f["id"] for f in grupos.get("otros", [])} == {2, 3}, (
+        "la cerrada hace 1 día o la sin fecha de cierre no deberían estar en "
+        "el Historial todavía")
+    assert grupos["historial"][0]["completado_dia"] == date(2026, 9, 4), (
+        "no se calculó el día de cierre para pintarlo en el Historial")
+    # Ninguna fila se perdió por el camino, sea cual sea su grupo.
+    assert sum(len(fs) for fs in grupos.values()) == 3
+
+
 # ── Que nada desaparezca ─────────────────────────────────────────────────
 
 def test_las_tareas_sin_fecha_aparecen_y_con_su_propio_titulo():
@@ -337,7 +442,7 @@ def test_una_clave_de_grupo_que_nadie_previo_se_pinta_igual():
     """
     declaradas = {c for c, _ in db.GRUPOS_DE_TAREAS}
     guardado = db.grupo_de_tarea
-    db.grupo_de_tarea = lambda estado, vence, hoy: "grupo_del_futuro"
+    db.grupo_de_tarea = lambda estado, vence, hoy, completado_en=None: "grupo_del_futuro"
     try:
         datos, _ = _con_base([_fila(1), _fila(2)],
                              lambda: db.tareas_por_grupo(hoy=date(2026, 9, 8)))
@@ -727,6 +832,100 @@ def test_la_pantalla_se_pinta_con_todos_los_grupos():
         "la pantalla")
     # Lo ya hecho se ve hecho y no se puede volver a mandar.
     assert "checked disabled" in html
+
+
+def test_el_panel_no_pinta_lo_que_ya_esta_en_historial():
+    """LA MITAD DE COMPORTAMIENTO DEL ENCARGO 1: una tarea cerrada hace 5 días
+    no se pinta en /tareas — ni su título ni su fila — aunque siga viva en la
+    base y siga en la respuesta de `db.tareas_por_grupo` bajo su propia clave.
+    La ruta la saca a propósito; no desaparece de la consulta."""
+    from starlette.requests import Request
+    import web.app as panel
+
+    hoy_rd = datetime.now(config.TZ).date()
+    vieja = hoy_rd - timedelta(days=5)
+    filas = [_fila(1),
+             _fila(9, estado="hecha", titulo="tarea vieja archivable",
+                   completado_en=datetime(vieja.year, vieja.month, vieja.day,
+                                          12, tzinfo=UTC))]
+
+    galleta = f"{panel.COOKIE}={auth.crear_token(DUENO, auth.VIDA_SESION)}"
+    peticion = Request({"type": "http", "http_version": "1.1", "method": "GET",
+                        "scheme": "https", "server": ("t", 443),
+                        "path": "/tareas", "root_path": "", "query_string": b"",
+                        "headers": [(b"host", b"t"),
+                                    (b"cookie", galleta.encode())],
+                        "app": panel.app})
+
+    r, _ = _con_base(filas, lambda: panel.tareas(peticion))
+    assert r.status_code == 200
+    html = r.body.decode()
+    assert "tarea vieja archivable" not in html, (
+        "una tarea cerrada hace 5 días se sigue pintando en /tareas")
+    assert "<h2>Historial" not in html, (
+        "el panel pintó el grupo 'Historial' entero, que no le corresponde a "
+        "esta ruta")
+
+
+def test_la_pantalla_de_historial_exige_sesion():
+    """Mismo candado que /tareas: quien no puede ver las tareas de hoy no
+    puede ver las de antes tampoco."""
+    from starlette.requests import Request
+    import web.app as panel
+
+    def _pedir(cabeceras):
+        return Request({"type": "http", "http_version": "1.1", "method": "GET",
+                        "scheme": "https", "server": ("t", 443),
+                        "path": "/tareas/historial", "root_path": "",
+                        "query_string": b"", "headers": cabeceras,
+                        "app": panel.app})
+
+    bucle = asyncio.new_event_loop()
+    try:
+        r = bucle.run_until_complete(panel.tareas_historial(_pedir(
+            [(b"host", b"t")])))
+        assert r.status_code == 401, f"entró sin cookie: {r.status_code}"
+
+        ajeno = auth.crear_token(DUENO + 1, auth.VIDA_SESION)
+        r = bucle.run_until_complete(panel.tareas_historial(_pedir(
+            [(b"host", b"t"),
+             (b"cookie", f"{panel.COOKIE}={ajeno}".encode())])))
+        assert r.status_code == 401, f"entró un chat ajeno: {r.status_code}"
+    finally:
+        bucle.close()
+
+
+def test_la_pantalla_de_historial_pinta_lo_cerrado_y_su_fecha():
+    """La otra mitad: /tareas/historial SÍ enseña lo que /tareas esconde, y
+    con la fecha en que se cerró — no con la de hoy, no en blanco."""
+    from starlette.requests import Request
+    import web.app as panel
+
+    hoy_rd = datetime.now(config.TZ).date()
+    vieja = hoy_rd - timedelta(days=10)
+    filas = [_fila(1),  # pendiente: no le toca aparecer acá
+             _fila(9, estado="hecha", titulo="tarea vieja archivable",
+                   completado_en=datetime(vieja.year, vieja.month, vieja.day,
+                                          12, tzinfo=UTC))]
+
+    galleta = f"{panel.COOKIE}={auth.crear_token(DUENO, auth.VIDA_SESION)}"
+    peticion = Request({"type": "http", "http_version": "1.1", "method": "GET",
+                        "scheme": "https", "server": ("t", 443),
+                        "path": "/tareas/historial", "root_path": "",
+                        "query_string": b"",
+                        "headers": [(b"host", b"t"),
+                                    (b"cookie", galleta.encode())],
+                        "app": panel.app})
+
+    r, _ = _con_base(filas, lambda: panel.tareas_historial(peticion))
+    assert r.status_code == 200
+    html = r.body.decode()
+    assert "tarea vieja archivable" in html, (
+        "el Historial no pintó la tarea cerrada hace 10 días")
+    assert vieja.strftime("%d/%m/%Y") in html, (
+        "el Historial no muestra CUÁNDO se cerró la tarea")
+    assert "tarea 1" not in html, (
+        "el Historial pintó una tarea pendiente, que no es de esta pantalla")
 
 
 def test_un_solo_formulario_para_toda_la_pantalla():

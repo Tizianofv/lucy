@@ -656,6 +656,9 @@ def test_la_ruta_de_agregar_tarea_no_la_come_la_de_una_tarea():
     assert _quien("/tareas/nueva") == panel.tarea_nueva.__name__
     assert _quien("/tareas/nueva", "POST") == panel.crear_tarea.__name__
     assert _quien("/tareas") == panel.tareas.__name__
+    # Mismo riesgo que /tareas/nueva: `/tareas/{tid}` (con `tid: int`) podría
+    # tragarse `/tareas/historial` si alguna vez cambiara de orden o de tipo.
+    assert _quien("/tareas/historial") == panel.tareas_historial.__name__
     assert _quien("/tareas/5") == panel.tarea_detalle.__name__
     assert _quien("/tareas/5/comentarios", "POST") == panel.comentar.__name__
     assert (_quien("/tareas/5/comentarios/9/borrar", "POST")

@@ -1,0 +1,36 @@
+{% extends "base.html" %}{% set activo='tareas' %}
+{% block titulo %}Historial{% endblock %}
+{% block cuerpo %}
+<div class="barra"><a href="/tareas">← Volver a la lista</a></div>
+<h1>Historial</h1>
+
+{% if hay_mas %}
+<p class="aviso">Hay más de {{ tope }} tareas en total y esta pantalla parte de
+esa misma consulta. Nada se perdió, pero no está todo a la vista.</p>
+{% endif %}
+
+{% if not filas %}
+<p class="vacio">Todavía no hay nada acá. Lo que se cierre hoy aparece en
+{{ dias }} días.</p>
+{% else %}
+<p class="suave">Lo que se cerró hace {{ dias }} días o más. No se borró ni se
+movió nada — dejó de verse en /tareas, y esto es exactamente lo que había
+ahí.</p>
+<div class="scroll"><table>
+<tr><th>Tarea</th><th>Se cerró</th><th>Estado</th></tr>
+{% for t in filas %}
+<tr>
+  <td><a href="/tareas/{{ t.id }}">{{ t.titulo }}</a></td>
+  <td class="suave">
+    {%- if t.completado_dia -%}
+      {{ t.completado_dia.strftime('%d/%m/%Y') }}
+    {%- else -%}
+      sin fecha
+    {%- endif -%}
+  </td>
+  <td class="suave">{{ t.estado }}</td>
+</tr>
+{% endfor %}
+</table></div>
+{% endif %}
+{% endblock %}

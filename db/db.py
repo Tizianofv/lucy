@@ -1724,12 +1724,21 @@ ESTADO_HECHA = "hecha"
 # devuelve la consulta. Una clave que no esté acá se pinta igual, al final, con
 # su clave cruda por título — ver `tareas_por_grupo`. Que un grupo pueda
 # aparecer sin permiso es deliberado: lo contrario es cómo se pierde una fila.
+#
+# "historial" SÍ está declarado, y es la única excepción a "todo lo que se
+# reparte se pinta en el panel": `web/app.py::tareas` lo saca a propósito antes
+# de pintar, porque para eso existe — que las cerradas hace 3 días o más dejen
+# de verse ahí. `web/app.py::tareas_historial` hace lo contrario: se queda solo
+# con esa clave. Que esté declarada (y no un accidente sin nombre) es lo que
+# permite que las dos rutas la traten como lo que es, no como una fila
+# perdida.
 GRUPOS_DE_TAREAS = (
     ("atrasadas", "Atrasadas"),
     ("hoy", "Hoy"),
     ("sin_fecha", "Sin fecha"),
     ("proximas", "Próximas"),
     ("otros", "Otros estados"),
+    ("historial", "Historial"),
 )
 
 # Techo de la consulta. Hoy la tabla tiene 91 filas vivas, así que no muerde;
@@ -1737,6 +1746,18 @@ GRUPOS_DE_TAREAS = (
 # vuelve una de más, `tareas_por_grupo` lo dice con `hay_mas`. Un LIMIT que
 # recorta callado es la forma más barata de perder una tarea.
 TOPE_TAREAS = 500
+
+# Cuántos días de gracia tiene una tarea CERRADA antes de irse del panel al
+# Historial. Sale de la sección 5 del documento de alcance: "se archivan
+# automáticamente 3 días después de completarse [...] dejan de aparecer en la
+# vista principal, y quedan accesibles en un historial". Va acá, pegado al
+# criterio que lo usa (`grupo_de_tarea`), por el mismo motivo que TOPE_TAREAS:
+# un número que decide qué se ve vive junto a quien lo usa, no repetido.
+#
+# OJO CON LA PALABRA: esto NO es "archivar". En este código "archivar" ya
+# significa mandar a la papelera (`cerebro/agente.py:255`). Acá no se mueve ni
+# se borra nada — se calcula, cada vez que se pinta, a qué grupo va la fila.
+DIAS_HISTORIAL = 3
 
 
 def dia_rd(cuando) -> date | None:
@@ -1773,8 +1794,9 @@ def hoy_rd() -> date:
     return datetime.now(TZ).date()
 
 
-def grupo_de_tarea(estado, vence_en, hoy: date) -> str:
-    """A qué grupo del panel pertenece una tarea. LA definición de "atrasada".
+def grupo_de_tarea(estado, vence_en, hoy: date, completado_en=None) -> str:
+    """A qué grupo del panel pertenece una tarea. LA definición de "atrasada"
+    Y de "cuándo se va al Historial".
 
     ATRASADA ES POR DÍA, NO POR INSTANTE, y esa es la decisión central. Una
     tarea que vence hoy a las 9 de la mañana NO está atrasada a las 10: lo
@@ -1789,8 +1811,21 @@ def grupo_de_tarea(estado, vence_en, hoy: date) -> str:
     ya existe y nadie declaró, 'descartado'— aparece en el panel en vez de
     desaparecer de él. Al grupo indulgente no se llega por olvido; acá el
     olvido lleva al grupo que SE VE.
+
+    Y DENTRO DE ESE 'otros', LAS QUE YA SE CERRARON HACE `DIAS_HISTORIAL` DÍAS
+    O MÁS SE VAN A 'historial' — por DÍA, con el mismo `dia_rd` que decide
+    "atrasada", así que el corte cae a medianoche de Santo Domingo y no a
+    cualquier hora. NO se mira el estado ('hecha', 'descartado', el que sea):
+    se mira si HAY `completado_en`. Mirar el estado sería teclear de nuevo la
+    lista que este archivo ya evita más arriba. Sin `completado_en` —hoy, el
+    'descartado' de producción— no hay desde cuándo contar, así que se queda
+    en 'otros': perderla sería el mismo defecto que perder las sin fecha.
     """
     if estado != ESTADO_PENDIENTE:
+        if completado_en is not None:
+            dia_cierre = dia_rd(completado_en)
+            if dia_cierre is not None and (hoy - dia_cierre).days >= DIAS_HISTORIAL:
+                return "historial"
         return "otros"
     dia = dia_rd(vence_en)
     if dia is None:
@@ -1830,6 +1865,12 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
     número. La regla de que todo JOIN de acá tenga que ser LEFT sigue viva en
     `tests/test_panel_tareas.py`, esperando al que alguien escriba mañana.
 
+    `completado_en` viaja por lo mismo que `responsable_chat_id`: es lo que
+    `grupo_de_tarea` necesita para decidir si una cerrada ya se fue al
+    Historial, y `web/app.py::tareas_historial` la usa para pintar CUÁNDO se
+    cerró. No se calcula acá si "ya toca": eso es al criterio, no a la
+    consulta — la misma separación que ya tiene "atrasada".
+
     Devuelve {"grupos": [{clave, titulo, filas}], "hay_mas": bool}. Los grupos
     vacíos no se pintan, y ninguno se pierde: ver el bucle del final.
     """
@@ -1838,7 +1879,7 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
         await cur.execute(
             """
             SELECT t.id, t.titulo, t.estado, t.vence_en, t.creado_en,
-                   t.bandeja_id, t.responsable_chat_id
+                   t.bandeja_id, t.responsable_chat_id, t.completado_en
               FROM tareas t
              WHERE t.borrado_en IS NULL
              ORDER BY t.vence_en ASC NULLS LAST, t.creado_en ASC, t.id ASC
@@ -1854,7 +1895,9 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
     por_clave: dict = {}
     for f in filas:
         f["vence_dia"] = dia_rd(f.get("vence_en"))
-        clave = grupo_de_tarea(f.get("estado"), f.get("vence_en"), hoy)
+        f["completado_dia"] = dia_rd(f.get("completado_en"))
+        clave = grupo_de_tarea(f.get("estado"), f.get("vence_en"), hoy,
+                               f.get("completado_en"))
         por_clave.setdefault(clave, []).append(f)
 
     # Primero los grupos declarados, en su orden. Después, CUALQUIER clave que

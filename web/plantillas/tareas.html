@@ -10,8 +10,16 @@
 
    Y va ACÁ ARRIBA, fuera del `{% if not grupos %}` de abajo: cuando no hay
    ninguna tarea es justo cuando hace falta escribir la primera. Un botón de
-   «agregar» que desaparece con la lista vacía deja la pantalla sin salida. #}
-<div class="barra"><a href="/tareas/nueva">+ Agregar tarea</a></div>
+   «agregar» que desaparece con la lista vacía deja la pantalla sin salida.
+
+   El enlace al Historial va AL LADO y no adentro del `<nav>` de base.html: ese
+   `<nav>` es la lista de pantallas que Lucy lee para el prompt
+   (`web/menu.py`), y esta pantalla no cambia lo que Lucy sabe. Sigue estando
+   a un clic, igual que /tareas/nueva. #}
+<div class="barra">
+  <a href="/tareas/nueva">+ Agregar tarea</a>
+  <a href="/tareas/historial">Historial</a>
+</div>
 
 {% if creada %}
 {# Se nombra el id de lo que se creó, no un «listo». La tarea está pintada más
@@ -68,6 +76,8 @@ primeras. Nada se perdió, pero no está todo a la vista.</p>
 {% else %}
 <p class="suave">Una sola lista para los dos. «Atrasada» es por DÍA, no por
 hora: lo que vence hoy más temprano todavía es de hoy.</p>
+<p class="suave">Lo cerrado hace 3 días o más ya no sale acá. Sigue completo en
+el <a href="/tareas/historial">Historial</a>, con la fecha en que se cerró.</p>
 <p class="suave">La fecha y la hora de cada pendiente se cambian aquí mismo.
 Si borras la fecha, la tarea queda «Sin fecha». Mover la fecha no repite un
 aviso de Telegram que ya sonó.</p>
