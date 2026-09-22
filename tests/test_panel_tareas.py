@@ -671,7 +671,16 @@ def test_tareas_por_grupo_cae_a_sin_area_si_la_columna_no_existe():
     entero se rompa. La fila que la base «devuelve» en este escenario no trae
     ninguna clave `area` -- así sería de verdad una fila de la consulta vieja
     -- y aun así el resultado tiene que traer `area: None`, puesto por el
-    código y no por la fixture."""
+    código y no por la fixture.
+
+    OJO: esto tiene que pasar por `_con_base(..., sin_columna_area=True)`, NO
+    por el helper `_grupos()` -- ése no reenvía la bandera, así que con él
+    esta prueba no ejercitaría el `except`/SAVEPOINT en absoluto: la consulta
+    CON área nunca fallaría, y "pasaría" por el `setdefault` de una fila que
+    de casualidad no traía `area`, no por la caída de verdad. (Medido
+    mutando: con `_grupos()` esta prueba seguía VERDE aunque se apagara el
+    `except` entero -- se corrigió acá.)
+    """
     fila_sin_columna = {"id": 9, "titulo": "sin migrar", "estado": "pendiente",
                         "vence_en": None,
                         "creado_en": datetime(2026, 8, 1, tzinfo=UTC),
@@ -679,8 +688,9 @@ def test_tareas_por_grupo_cae_a_sin_area_si_la_columna_no_existe():
                         "completado_en": None}
     assert "area" not in fila_sin_columna, (
         "la fixture no puede tener área: se está simulando la columna ausente")
-    grupos = _grupos([fila_sin_columna], hoy=date(2026, 9, 8))
-    todas = [t for g in grupos.values() for t in g]
+    datos, _ = _con_base([fila_sin_columna], lambda: db.tareas_por_grupo(
+        hoy=date(2026, 9, 8)), sin_columna_area=True)
+    todas = [t for g in datos["grupos"] for t in g["filas"]]
     assert todas and todas[0]["area"] is None, (
         f"con la columna ausente, el área tiene que quedar en None: {todas}")
 
