@@ -703,6 +703,36 @@ def test_el_briefing_le_dice_a_lucy_que_no_proponga_lo_que_espera():
         "cómo saber que no debe proponer una tarea que todavía espera")
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# 6) El panel: la plantilla de verdad trae la fila gris y el selector.
+#    Se lee el ARCHIVO, como ya hace `tests/test_panel_tareas.py::
+#    test_un_solo_formulario_para_toda_la_pantalla` -- no hay un motor de
+#    plantillas Jinja instalado para renderizar de verdad en este entorno
+#    hermético, así que lo que se puede comprobar sin un servidor es que el
+#    marcado que la lógica necesita está en el archivo que Jinja va a leer.
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_la_lista_pinta_gris_y_la_flecha_hacia_la_tarea_que_espera():
+    from pathlib import Path
+    html = Path(_ROOT, "web", "plantillas", "tareas.html").read_text(encoding="utf-8")
+    assert "primero_esperando" in html, (
+        "la plantilla no consulta primero_esperando: no hay cómo decidir "
+        "si pinta gris")
+    assert "fila-espera" in html, "no se aplica la clase que la pinta gris"
+    assert "→ Primero:" in html, "no se pinta la flecha con el texto"
+    css = Path(_ROOT, "web", "plantillas", "base.html").read_text(encoding="utf-8")
+    assert ".fila-espera" in css, "la clase no tiene estilo definido"
+
+
+def test_la_pagina_de_la_tarea_tiene_el_selector_de_primero():
+    from pathlib import Path
+    html = Path(_ROOT, "web", "plantillas", "tarea_detalle.html").read_text(
+        encoding="utf-8")
+    assert 'name="primero_id"' in html, "no hay <select> para elegir «Primero:»"
+    assert '/tareas/{{ tarea.id }}/primero' in html, (
+        "el <select> no postea a la ruta que lo guarda")
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-v"]))
