@@ -347,6 +347,18 @@ CREATE TABLE eventos (
   gcal_id       TEXT,                            -- id del evento en Google
   gcal_cal_id   TEXT,                            -- id del calendario (clave + push)
   gcal_calendar TEXT,                            -- nombre legible ('CDS Sala P'…)
+  -- QUIÉN es dueño de esta cita ("Que las citas tengan dueño", Tiziano,
+  -- 22-sep-2026 -- diseño en disenos/lucy-citas-con-dueno/DISENO.md). Un
+  -- ARRAY y no un solo chat como tareas.responsable_chat_id, a propósito:
+  -- Tiziano, textual, «Puede ser de los dos» -- una cita puede ser de
+  -- Tiziano y de Rosi a la vez. '{}' (vacío) = sin dueño, que es el estado
+  -- normal de casi toda cita hoy (medido el 22-sep-2026: 413 de 418 vienen
+  -- de Google, y esta columna nace vacía para todas -- no hay backfill).
+  -- Sin FK a una tabla de chats por lo mismo que responsable_chat_id: no
+  -- existe esa tabla; la lista de quién PUEDE ser dueño la deriva
+  -- `config.puede_ser_responsable()`, la MISMA puerta que ya usan las
+  -- tareas -- no una nueva.
+  duenos_chat_id BIGINT[] NOT NULL DEFAULT '{}',
   borrado_en   TIMESTAMPTZ
 );
 -- Upsert del sync: un evento de Google es único por (calendario, id).

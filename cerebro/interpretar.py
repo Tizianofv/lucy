@@ -157,10 +157,15 @@ def _es_encargo_propio_del_dueno(fila: dict) -> bool:
         lo que cambia es que YA NO hace falta copiárselo a Rosi, porque el
         buzón del estudio ahora le llega a ella directo, sin el suyo.
 
-    Lo que todavía NO tiene camino propio (recordatorios de tareas del
-    dueño y de citas, canario bancario, 911, aviso de respaldo) sigue
-    yendo por la copia general -- por eso la comprobación es textual
-    contra marcas puntuales, no "todo lo que venga de estos módulos".
+    Lo que todavía NO tiene camino propio (recordatorios de citas, canario
+    bancario, 911, aviso de respaldo) sigue yendo por la copia general --
+    por eso la comprobación es textual contra marcas puntuales, no "todo lo
+    que venga de estos módulos". CORREGIDO 22-sep-2026: esta lista decía
+    también "recordatorios de tareas del dueño", y ya no es cierto -- el
+    recordatorio de una tarea del dueño se apaga en
+    `despertador._avisar` con `sin_copia=(f["tabla"] == "tareas")`, un
+    mecanismo APARTE de esta función (no pasa por acá: `_avisar` manda
+    directo por Telegram, sin pasar por la bandeja ni por `_procesar`).
     """
     if fila.get("chat_id") != config.CHAT_ID_DUENO:
         return False

@@ -1,0 +1,65 @@
+-- Las citas con dueño (encargos 1+2 del diseño "Rosi independiente" /
+-- "lucy-citas-con-dueno", 22-sep-2026).
+--
+-- Decisión de Tiziano, textual: «Que las citas tengan dueño» — y sobre la
+-- forma del dato, también textual: «Puede ser de los dos» (Tiziano y Rosi a
+-- la vez en la misma cita). Diseño completo en
+-- disenos/lucy-citas-con-dueno/DISENO.md.
+--
+-- POR QUÉ UN ARRAY Y NO UN SOLO CHAT (como tareas.responsable_chat_id): una
+-- cita puede tener CERO, UNO o DOS dueños a la vez, y un `BIGINT` no puede
+-- decir "los dos" sin inventar una tercera columna o una convención de
+-- texto. Mismo principio que `anticipos_min`/`avisos_enviados`, que ya son
+-- arrays de INT en esta misma tabla.
+--
+-- '{}' (vacío) es el estado normal: nace así toda cita, nueva o vieja —
+-- ESTA MIGRACIÓN NO BACKFILLEA NADA. Medido el 22-sep-2026 contra
+-- producción: 122 citas vivas, 413/418 nacidas de Google Calendar, ninguna
+-- con un dueño real que este código pudiera inventar sin preguntar. El
+-- encargo 4 del diseño (Google → dueño por calendario, con la tabla que
+-- Tiziano ya aprobó) es el que les va a poner dueño a las que correspondan
+-- — no esta migración.
+--
+-- SIN CHAT_ID REAL EN EL REPO: `duenos_chat_id` nace vacía para TODAS las
+-- filas, así que no hace falta escribir ningún número de chat acá — el
+-- repositorio de Lucy es público.
+--
+-- QUÉ PASA CON EL CÓDIGO VIEJO (el que corre en producción HOY, antes de
+-- que este encargo se despliegue) si esta migración se aplica primero:
+-- NADA se rompe. Medido leyendo cada escritura y cada lectura de `eventos`
+-- en el código de antes de este encargo:
+--   · Los dos INSERT existentes (`acciones/crud.py::crear_desde_
+--     interpretacion`, `cerebro/calendario.py::_guardar`) nombran sus
+--     columnas explícitas — ninguno hace `INSERT INTO eventos VALUES
+--     (...)` posicional — así que una columna nueva CON DEFAULT ('{}') no
+--     les hace falta mencionarla: Postgres la completa sola.
+--   · No hay un solo `SELECT * FROM eventos` en el código de antes de este
+--     encargo (medido con `grep -rn "SELECT \* FROM eventos"`, sin
+--     resultados fuera de tests) que pudiera desarmar una tupla por
+--     posición y correrse con una columna de más.
+--   · `crud.editar()` SÍ hace `SELECT * FROM {tabla} WHERE id = %s ...`
+--     con `dict_row` (por NOMBRE de columna, no por posición) para decidir
+--     qué columnas existen de verdad -- así que ANTES de que el código de
+--     este encargo se despliegue, pedirle a Lucy "poné a Rosi en esa cita"
+--     simplemente fallaría con "Esa tabla no tiene: duenos_chat_id" (el
+--     mismo mensaje que ya da hoy si se le pide una columna que no existe),
+--     no con un error de servidor.
+-- CONCLUSIÓN: esta migración se puede aplicar ANTES o DESPUÉS del `push`
+-- del código de este encargo, en cualquier orden, sin respaldo especial
+-- más allá del respaldo de rutina que pide toda DDL (`db/backup.py`).
+--
+-- NO SE APLICA ACÁ. Esto lo corre la sala. El código de este encargo tolera
+-- que la columna todavía no exista (SQLSTATE 42703) tanto al crear como al
+-- editar una cita — ver `acciones/crud.py::crear_desde_interpretacion` (cae
+-- al INSERT de antes si se pidió SIN dueño; si se pidió CON dueño y la
+-- columna no existe, avisa en vez de fingir que se guardó) y `crud.editar`
+-- (ya tolera cualquier columna ausente por sí solo, con el `SELECT *`
+-- descripto arriba — no hace falta tocarlo para esto).
+--
+-- Idempotente: correrlo dos veces no hace nada la segunda.
+
+BEGIN;
+
+ALTER TABLE eventos ADD COLUMN IF NOT EXISTS duenos_chat_id BIGINT[] NOT NULL DEFAULT '{}';
+
+COMMIT;

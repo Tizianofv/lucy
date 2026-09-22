@@ -467,17 +467,66 @@ async def crear_desde_interpretacion(
                 return tabla, ya[0], ya[1]
             dur = int(r.get("duracion_min") or 0)
             termina = cuando + timedelta(minutes=dur) if dur > 0 else None
-            cur = await conn.execute(
+
+            # EL/LOS DUEÑOS, por la MISMA puerta que usa `editar()` para
+            # cambiarlos -- `_por_las_puertas` con `PUERTAS["eventos"]`, no
+            # una copia del criterio. "Anotá la cita de mañana para Rosi" en
+            # un solo paso, igual que ya pasa con el responsable de una
+            # tarea. Sin dato (el caso normal hoy: 413/418 citas vienen de
+            # Google, sin que nadie las "pida"), `_duenos_que_valen` devuelve
+            # `[]` sin validar nada. Si lo pedido no vale, esto CORTA LA
+            # CREACIÓN ENTERA -- no crea la cita sin dueño como si no se
+            # hubiera pedido nada.
+            try:
+                duenos_chat_id = _por_las_puertas(
+                    "eventos", {"duenos_chat_id": r.get("duenos_chat_id")}
+                )["duenos_chat_id"]
+            except ValueError as e:
+                raise ValueError(f"No creé la cita: {e}.") from e
+
+            params_evento = (
+                bandeja_id, titulo, cuando, termina,
+                str(r.get("lugar") or "") or None, persona_id, proyecto_id,
+                detalle, _anticipos(r.get("anticipos_min")))
+            con_duenos = """
+                INSERT INTO eventos
+                  (bandeja_id, titulo, inicia_en, termina_en, lugar,
+                   persona_id, proyecto_id, notas, anticipos_min,
+                   duenos_chat_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                 """
+            sin_duenos = """
                 INSERT INTO eventos
                   (bandeja_id, titulo, inicia_en, termina_en, lugar,
                    persona_id, proyecto_id, notas, anticipos_min)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-                """,
-                (bandeja_id, titulo, cuando, termina, str(r.get("lugar") or "") or None,
-                 persona_id, proyecto_id, detalle,
-                 _anticipos(r.get("anticipos_min"))),
-            )
+                """
+
+            def _es_columna_ausente(e: Exception) -> bool:
+                try:
+                    return e.sqlstate == "42703"
+                except AttributeError:
+                    return False
+
+            # SI `eventos.duenos_chat_id` TODAVÍA NO EXISTE (la migración de
+            # este encargo no se aplicó: SQLSTATE 42703), cae al INSERT de
+            # antes -- mismo patrón que usa la rama de arriba (`tareas`) con
+            # `area`/`primero_id`. Si SE PIDIÓ un dueño y la columna no
+            # existe, no se puede fingir que se guardó: se avisa en vez de
+            # crear la cita en silencio sin el dueño pedido.
+            try:
+                async with conn.transaction():
+                    cur = await conn.execute(
+                        con_duenos, params_evento + (duenos_chat_id,))
+            except Exception as e:
+                if not _es_columna_ausente(e):
+                    raise
+                if duenos_chat_id:
+                    raise ValueError(
+                        "No creé la cita: pediste dueño, pero la base "
+                        "todavía no tiene esa columna (falta aplicar la "
+                        "migración de \"las citas con dueño\").") from e
+                cur = await conn.execute(sin_duenos, params_evento)
 
         elif clas in ("nota", "idea"):
             tabla = "notas"
@@ -740,6 +789,42 @@ def _responsable_que_vale(valor):
     # detrás.
     raise ValueError(
         f"{motivo}: solo quien entra al panel y tiene nombre ({quienes})")
+
+
+def _duenos_que_valen(valor):
+    """La lista de chats que van a quedar como dueños de una CITA, o
+    ValueError explicando por qué no (encargo "las citas con dueño",
+    22-sep-2026).
+
+    SIN DUEÑO es lo normal (`None`, texto vacío, o lista vacía) y devuelve
+    `[]` sin validar nada -- mismo criterio que `_responsable_que_vale` con
+    "sin responsable".
+
+    UNO o VARIOS: «Puede ser de los dos» (Tiziano, textual) -- una cita
+    puede tener a Tiziano y a Rosi a la vez. Se escribe igual que un
+    responsable de tarea (un número, un texto-chat, o un nombre) o como una
+    LISTA de esas mismas formas: `["Tiziano", "Rosi"]`. Cada elemento pasa,
+    UNO POR UNO, por `_responsable_que_vale` -- la MISMA puerta que ya
+    valida el responsable de una tarea, no una copia del criterio. Si
+    CUALQUIER elemento no vale, `_responsable_que_vale` lanza su propio
+    `ValueError` con el motivo, y esta función lo deja subir tal cual: no
+    hay guardado parcial ("le puse solo a Tiziano porque Rosi no valía").
+
+    Duplicados se juntan en uno solo, conservando el orden en que se
+    pidieron -- para que `["Rosi", "Rosi"]` no deje dos veces el mismo chat
+    en el array de Postgres.
+    """
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        return []
+    items = valor if isinstance(valor, (list, tuple)) else [valor]
+    salida: list[int] = []
+    for item in items:
+        chat = _responsable_que_vale(item)
+        if chat is None:
+            continue  # un hueco vacío adentro de la lista no es un dueño ni un error
+        if chat not in salida:
+            salida.append(chat)
+    return salida
 
 
 async def _area_que_vale(valor, *, tabla: str, proyecto_id=None):
@@ -1007,7 +1092,8 @@ async def crear_pasos(
     return creados
 
 
-PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale}}
+PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale},
+          "eventos": {"duenos_chat_id": _duenos_que_valen}}
 
 
 def _por_las_puertas(tabla: str, valores: dict) -> dict:

@@ -88,7 +88,8 @@ HERRAMIENTAS DISPONIBLES:
           "recurrencia": "", "anticipos_min": [0], "detalle": "",
           "duracion_min": 0, "lugar": "", "persona": "", "proyecto": "",
           "monto": 0, "moneda": "DOP", "referencia": "", "contraparte": "",
-          "responsable_chat_id": "", "area": "", "primero_id": 0}
+          "responsable_chat_id": "", "duenos_chat_id": "", "area": "",
+          "primero_id": 0}
   Crea la fila real. Personas y proyectos se enlazan solos por nombre.
   PROYECTOS que ya existen, para que "dentro del proyecto X" los reconozca
   en vez de crear uno nuevo parecido: {PROYECTOS}. Si "X" se parece a uno de
@@ -106,6 +107,13 @@ HERRAMIENTAS DISPONIBLES:
   vez de adivinar; si el nombre no vale, `crear` lo rechaza entero —no crea la
   tarea sin responsable como si no lo hubieras pedido— y el motivo dice a
   quién sí se le puede asignar.
+  DUEÑO(S) (solo citas, opcional): "anotá la cita de mañana para Rosi" =
+  mandalo YA en esta misma llamada, "duenos_chat_id": "<nombre>" (uno) o
+  ["<nombre>", "<nombre>"] (los dos a la vez —puede ser de las dos
+  personas). Mismos nombres que arriba: {PERSONAS_DEL_PANEL}. Sin dueño = no
+  mandes el campo (o ""); es el estado normal de casi toda cita. Misma regla
+  que el responsable de una tarea: nombre que no está en la lista o es
+  ambiguo, preguntá antes; si no vale, `crear` rechaza la cita entera.
   ÁREA (tareas, opcional): una de estas, tal cual: {AREAS}. Inferila por el
   contexto de lo que dice Tiziano —un cliente de ACD, algo del estudio, algo
   técnico del sistema, algo suyo y personal—; si no queda claro cuál,
@@ -168,6 +176,15 @@ HERRAMIENTAS DISPONIBLES:
   En lo que devuelve consultar, los chats de la casa ya vienen con el nombre
   de la persona en lugar del número. El SQL no puede comparar esa columna
   contra un nombre: para saber qué tiene alguien, se trae la columna y se lee.
+
+  DUEÑO(S) DE UNA CITA (de quién es, no de quién trata): en "cambios" va
+  {"duenos_chat_id": "<nombre>"} con UN nombre, o {"duenos_chat_id":
+  ["<nombre>", "<nombre>"]} con VARIOS si la cita es de más de una persona
+  a la vez — puede ser de las dos. Mismos nombres que arriba: {PERSONAS_DEL_PANEL}.
+  Sin dueño = null o []; es el estado normal de casi toda cita (la mayoría
+  vienen de Google Calendar, no las creás ni las asignás vos). Igual que con
+  el responsable: si un nombre no está en la lista o es ambiguo, preguntá
+  antes de editar.
 
   ÁREA DE UNA TAREA O UN PROYECTO: en "cambios" va {"area": "<clave>"}, una de
   estas, tal cual: {AREAS}. En un PROYECTO se puede editar siempre —es lo que

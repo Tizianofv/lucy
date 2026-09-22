@@ -3769,10 +3769,20 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # migración nueva (`db/migrations/2026-09-22_correo_reportado_por_
     # destino.sql`) no es un `.py`: el barrido de este archivo no la ve, ni
     # tiene que verla.
-    assert medido == {"en disco": 85, "exentos": 45, "vigilados": 40}, (
+    #
+    # 22-sep-2026, rama `trabajo/citas-dueno` (encargos 1+2 del diseño
+    # "lucy-citas-con-dueno"): 85 → 86 en disco y 45 → 46 EXENTOS por
+    # `tests/test_citas_con_dueno.py` (la columna `eventos.duenos_chat_id`,
+    # crear/editar una cita por Telegram, con SQL real de `acciones/
+    # crud.py` contra SQLite). Es un archivo de `testpaths`, EXENTO por rol.
+    # Los VIGILADOS siguen en 40: el trabajo tocó `acciones/crud.py`,
+    # `cerebro/agente.py` y `cerebro/interpretar.py` (solo texto, un
+    # docstring), los tres ya vigilados de antes. La migración nueva
+    # (`db/migrations/2026-09-22_citas_con_dueno.sql`) no es un `.py`.
+    assert medido == {"en disco": 86, "exentos": 46, "vigilados": 40}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "22-sep-2026 (rama rosi-correo) era {'en disco': 85, "
-        "'exentos': 45, 'vigilados': 40}. La aserción de fondo —cero "
+        "22-sep-2026 (rama citas-dueno) era {'en disco': 86, "
+        "'exentos': 46, 'vigilados': 40}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "
