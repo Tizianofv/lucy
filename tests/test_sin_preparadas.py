@@ -103,15 +103,41 @@ objeto en cualquier lectura es `__func__` (la función de adentro) y su
   DE DÓNDE SALE LA LISTA, y por qué no está tecleada: `_puntos_de_
   arranque()` recorre TODOS los `.py` fuera de `testpaths`
   (`test_buzon_que_no_se_ve._py_en_disco`, la misma puerta que usa el
-  resto de la suite) y se queda con los que tengan una llamada que abre
-  una conexión —`Connection`/`AsyncConnection`/`connect`/`AsyncConnectionPool`
-  y las demás clases de pool, derivadas del PAQUETE INSTALADO por la
-  misma `_nombres_de_pool`/`_nombres_de_atajo` de arriba, no una lista de
-  nombres escrita a mano—, y le suma `main.py` aparte, porque ÉSE no abre
-  la conexión él mismo: la abre transitivamente, importando `db.db`, y es
-  el arranque real del proceso del bot. Un guion nuevo en `tools/` que
-  abra su propia conexión mañana ENTRA SOLO en la lista la próxima vez
-  que esto corra — no hay que acordarse de agregarlo.
+  resto de la suite) y se queda con los que IMPORTEN `psycopg` o
+  `psycopg_pool`, de la forma que sea —`import psycopg`, `import psycopg
+  as p`, `from psycopg import connect as lo_que_sea`, `from psycopg.rows
+  import dict_row`, `import psycopg_pool`—, y le suma `main.py` aparte,
+  porque ÉSE no importa psycopg él mismo: abre la conexión
+  transitivamente, importando `db.db`, y es el arranque real del proceso
+  del bot.
+
+  CUARTA VUELTA: esto ANTES miraba el NOMBRE CON EL QUE SE LLAMA en el
+  sitio de la llamada (`connect(...)`, `AsyncConnectionPool(...)`), y un
+  testigo lo rompió con `from psycopg import connect as abrir_conexion`
+  —el nombre en la llamada ya no era ninguno de los conocidos, así que el
+  archivo entero se perdía del barrido—. Ahora mira el MÓDULO DE ORIGEN
+  del `import`, que un alias no puede esconder: `from psycopg import
+  connect as lo_que_sea` sigue diciendo, en el propio nodo
+  `ast.ImportFrom`, que el módulo es `"psycopg"` — el nombre local
+  (`lo_que_sea`) es aparte y no se mira. Un guion nuevo en `tools/` que
+  importe psycopg mañana, con cualquier alias, ENTRA SOLO en la lista la
+  próxima vez que esto corra — no hay que acordarse de agregarlo. Y
+  entran también los archivos que solo usan `dict_row`: no cuesta nada
+  medirlos, y así no hay que decidir a mano cuáles de verdad abren una
+  conexión.
+
+  LO QUE ESTO NO VE, dicho para que se pueda predecir sin correr nada:
+  un `import` cuyo nombre de módulo no es un LITERAL de texto en el
+  árbol de sintaxis. `importlib.import_module("psyc" + "opg")`,
+  `__import__(nombre_armado_en_una_variable)`, o un `exec("import
+  psycopg")` no dejan ningún `ast.Import`/`ast.ImportFrom` con
+  `module == "psycopg"` que este barrido pueda leer, y un archivo escrito
+  así se perdería del barrido igual que se perdía antes por el nombre de
+  la llamada. Es la misma familia de límite que ya tienen otras guardas
+  de este repositorio contra código armado en tiempo de ejecución en vez
+  de escrito en el archivo, y no se persigue más allá de acá: si aparece
+  un caso real de esa forma, se declara aparte, no se agranda esta
+  comprobación para adivinar texto que no está.
 
   CÓMO SE MIDE SIN QUE EL GUION HAGA TRABAJO DE VERDAD: tres de los
   cuatro archivos que abren conexión (`db/db.py`, `db/backup.py`,
@@ -136,7 +162,6 @@ from __future__ import annotations
 import ast
 import contextlib
 import importlib
-import inspect
 import os
 import subprocess
 import sys
@@ -185,7 +210,6 @@ def _modulo_de_verdad(nombre: str):
 
 
 PSYCOPG = _modulo_de_verdad("psycopg")
-PSYCOPG_POOL = _modulo_de_verdad("psycopg_pool")
 
 
 @contextlib.contextmanager
@@ -337,69 +361,63 @@ def test_aplicar_es_idempotente_y_no_revienta_con_un_psycopg_de_mentira():
 
 
 # ── PUNTOS DE ARRANQUE: un proceso nuevo por archivo, nada llamado a mano ──
+#
+# CUARTA VUELTA, mismo día — un tercer NO PASA, y otra vez por lo mismo:
+# la vuelta anterior decidía "¿este archivo abre una conexión?" mirando el
+# NOMBRE CON EL QUE SE LLAMA en el sitio de la llamada (`connect(...)`,
+# `AsyncConnectionPool(...)`). Un testigo escribió
+# `from psycopg import connect as abrir_conexion` y llamó `abrir_conexion
+# (...)`: el nombre en el sitio de la llamada ya no era ninguno de los
+# conocidos, así que el archivo entero se perdía del barrido —ni se
+# probaba, ni podía dar rojo—. Tercera vez que esto pasa en el mismo
+# encargo, siempre con la misma forma: preguntar CÓMO SE ESCRIBE en vez
+# de preguntar QUÉ ES.
+#
+# LA PREGUNTA QUE NO DEPENDE DE CÓMO SE ESCRIBE LA LLAMADA: no "¿llama a
+# algo que se llama `connect`?", sino "¿el archivo IMPORTA el módulo
+# `psycopg` o `psycopg_pool`, con cualquier alias?". Un `import`
+# —`import psycopg`, `import psycopg as p`, `from psycopg import connect
+# as lo_que_sea`, `from psycopg.rows import dict_row`, `import
+# psycopg_pool`— siempre nombra el MÓDULO DE ORIGEN de forma literal en
+# el propio `ast.Import`/`ast.ImportFrom`, así que no hay alias posible
+# para el nombre local que lo esconda: el nombre que se le ponga a lo
+# importado no aparece en esta comprobación, solo de DÓNDE viene.
+#
+# Y por eso ya no hace falta distinguir "abre una conexión" de "solo usa
+# `dict_row`": CUALQUIER archivo que importe psycopg entra al barrido —
+# medirlo de más no cuesta nada (es un `import` y una lectura de
+# `__kwdefaults__`, no abre nada de verdad) y así no hay que decidir a
+# mano cuáles se conectan, que es exactamente el tipo de decisión tecleada
+# que este archivo viene arrastrando.
 
-def _nombres_de_pool() -> set[str]:
-    """Las clases de `psycopg_pool` que abren conexiones: tienen un
-    `.connection` invocable — derivado del paquete instalado (vía
-    `PSYCOPG_POOL`, ya resuelto contra dobles de otras suites), no
-    tecleado."""
-    return {
-        nombre for nombre in dir(PSYCOPG_POOL)
-        if not nombre.startswith("__")
-        and inspect.isclass(getattr(PSYCOPG_POOL, nombre, None))
-        and callable(getattr(getattr(PSYCOPG_POOL, nombre), "connection", None))
-    }
-
-
-def _nombres_de_atajo() -> set[str]:
-    """Los atributos de `psycopg` que son un método ya vinculado a una
-    subclase de `BaseConnection` — `psycopg.connect` es exactamente
-    esto. Mismo comentario que `_nombres_de_pool()` sobre por qué no hace
-    falta el módulo resuelto acá."""
-    salida = set()
-    due = getattr(PSYCOPG, "BaseConnection", None)
-    if due is None:
-        return salida
-    for nombre in dir(PSYCOPG):
-        obj = getattr(PSYCOPG, nombre, None)
-        clase = getattr(obj, "__self__", None)
-        if inspect.ismethod(obj) and inspect.isclass(clase) and issubclass(clase, due):
-            salida.add(nombre)
-    return salida
-
-
-def _nombre_llamado(nodo: ast.Call) -> str | None:
-    """El nombre por el que se llamó a algo —atributo o nombre suelto—, o
-    None si la llamada no tiene una forma reconocible (`f()()`, …)."""
-    if isinstance(nodo.func, ast.Attribute):
-        return nodo.func.attr
-    if isinstance(nodo.func, ast.Name):
-        return nodo.func.id
-    return None
-
-
-def _abre_conexion(arbol: ast.AST) -> bool:
-    """True si el árbol de sintaxis de un archivo tiene AL MENOS una
-    llamada cuyo nombre es uno de los que abren una conexión —derivados
-    del paquete instalado, ver `_nombres_de_pool()` / `_nombres_de_atajo()`
-    más arriba—. No importa si lleva `prepare_threshold` o no: eso ya no
-    lo mide esta parte del archivo (lo miden las pruebas del `connect()`
-    real, arriba). Acá solo se usa para saber QUÉ ARCHIVOS vale la pena
-    correr en un proceso aparte.
+def _importa_psycopg(arbol: ast.AST) -> bool:
+    """True si el árbol de sintaxis de un archivo tiene un `import` (en
+    cualquiera de sus dos formas) cuyo MÓDULO DE ORIGEN es `psycopg` o
+    `psycopg_pool` —o un submódulo suyo, como `psycopg.rows`—. Se mira el
+    módulo, nunca el nombre local que el `import` le ponga a lo
+    importado: ESE es el que un alias puede cambiar, el módulo de origen
+    no.
     """
-    nombres = _nombres_de_pool() | _nombres_de_atajo()
+    def _es_psycopg(nombre: str) -> bool:
+        return (nombre == "psycopg" or nombre.startswith("psycopg.")
+                or nombre == "psycopg_pool" or nombre.startswith("psycopg_pool."))
+
     for nodo in ast.walk(arbol):
-        if isinstance(nodo, ast.Call) and _nombre_llamado(nodo) in nombres:
-            return True
+        if isinstance(nodo, ast.Import):
+            if any(_es_psycopg(a.name) for a in nodo.names):
+                return True
+        elif isinstance(nodo, ast.ImportFrom) and nodo.module:
+            if _es_psycopg(nodo.module):
+                return True
     return False
 
 
 def _puntos_de_arranque() -> list[Path]:
     """Los `.py` fuera de `testpaths` que de verdad pueden ser el primer
-    código de Lucy en correr: los que abren una conexión por su cuenta
-    (derivado, recorriendo el disco — ver `_abre_conexion`), más
-    `main.py`, que es el arranque real del proceso del bot aunque la
-    conexión la abra `db.db` por dentro.
+    código de Lucy en correr: los que importan `psycopg`/`psycopg_pool`
+    de cualquier forma (derivado, recorriendo el disco — ver
+    `_importa_psycopg`), más `main.py`, que es el arranque real del
+    proceso del bot aunque la conexión la abra `db.db` por dentro.
     """
     import test_buzon_que_no_se_ve as barrido
 
@@ -414,7 +432,7 @@ def _puntos_de_arranque() -> list[Path]:
             arbol = ast.parse(real.read_text(encoding="utf-8"), str(real))
         except SyntaxError:
             continue
-        if _abre_conexion(arbol):
+        if _importa_psycopg(arbol):
             encontrados.append(real)
 
     main_py = (raiz / "main.py").resolve()
@@ -499,9 +517,9 @@ def test_los_puntos_de_arranque_no_estan_vacios():
     """La guarda de la guarda: si `_puntos_de_arranque()` da vacío, el
     resto de esta sección pasaría en verde sin haber corrido nada."""
     puntos = _puntos_de_arranque()
-    assert puntos, "no se derivó ningún punto de arranque: revisar _abre_conexion"
+    assert puntos, "no se derivó ningún punto de arranque: revisar _importa_psycopg"
     relativos = {p.relative_to(RAIZ.resolve()).as_posix() for p in puntos}
-    esperados = {"main.py", "db/db.py", "db/backup.py",
+    esperados = {"main.py", "db/db.py", "db/backup.py", "db/sin_preparadas.py",
                 "tools/rellenar_categorias.py", "tools/verificar_respaldo.py"}
     assert esperados <= relativos, (
         f"faltan puntos de arranque conocidos: {esperados - relativos}")
@@ -511,11 +529,22 @@ def test_cada_punto_de_arranque_deja_sin_preparar_SOLO_con_importarlo():
     """LA PRUEBA QUE ATRAPA EL SEGUNDO NO PASA. Por cada punto de arranque,
     un proceso nuevo que solo lo importa — sin llamar a `aplicar()` a
     mano, sin que ninguna otra suite haya corrido antes en ese proceso —
-    tiene que dar `None` en los dos defaults. Si a alguno de
-    `db/db.py`, `db/backup.py`, `tools/rellenar_categorias.py` o
-    `tools/verificar_respaldo.py` le borraran su `sin_preparadas.
-    aplicar()`, esto se pone rojo SOLO con ese archivo — no hace falta que
-    ningún otro archivo lo delate."""
+    tiene que dar `None` en los dos defaults. Si a alguno de `db/db.py`,
+    `db/backup.py`, `tools/rellenar_categorias.py` o `tools/verificar_
+    respaldo.py` le borraran SU llamada a `sin_preparadas.aplicar()` —hoy
+    exactamente una por archivo, al nivel del módulo—, esto se pone rojo
+    con ESE archivo.
+
+    OJO, LECCIÓN DE LA TERCERA VUELTA: esto mide lo que el archivo deja
+    en `__kwdefaults__` DESPUÉS de terminar de importarse, no cuántas
+    veces aparece la palabra `aplicar()` en su texto. Si un archivo
+    tuviera DOS llamadas y se borrara una sola, la otra igual dejaría el
+    default en `None` y esta prueba (con razón) seguiría en verde —eso no
+    es un hueco, es que el arreglo seguía aplicado—. Lo que hace falta
+    para que la prueba sirva es que cada archivo tenga LA SUYA, una sola
+    vez, y que borrarla de verdad dependa de `db.db` para quedar
+    protegido; con eso, esta prueba se pone roja con ese archivo
+    exactamente."""
     fallos = []
     for archivo in _puntos_de_arranque():
         rel = archivo.relative_to(RAIZ.resolve()).as_posix()

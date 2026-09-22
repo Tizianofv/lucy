@@ -149,3 +149,15 @@ def aplicar(modulo=None) -> None:
                 "que este archivo asume. Revisar db/sin_preparadas.py contra "
                 "la versión nueva de psycopg antes de seguir.")
     _YA_APLICADO = True
+
+
+# APLICADO TAMBIÉN ACÁ, al importar el módulo — no solo cuando alguien
+# más lo llama. Así CUALQUIER archivo que haga `import db.sin_preparadas`
+# queda protegido aunque se olvide de escribir la segunda línea
+# (`sin_preparadas.aplicar()`). Los cuatro sitios que sí la llaman
+# explícita (`db/db.py`, `db/backup.py`, `tools/rellenar_categorias.py`,
+# `tools/verificar_respaldo.py`) no dependen de esto para funcionar — es
+# redundante a propósito, y la llamada explícita documenta ahí mismo, en
+# cada archivo, que depende del arreglo — pero esto es lo que hace que ni
+# siquiera haga falta acordarse de esa segunda línea.
+aplicar()

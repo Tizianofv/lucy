@@ -94,11 +94,9 @@ def main() -> int:
         problemas.append("no dice cuándo se tomó")
 
     import psycopg
-    # SIN CONSULTAS PREPARADAS: deja `psycopg.Connection.connect` con
-    # `prepare_threshold=None` como su propio default. Ver
-    # db/sin_preparadas.py para el porqué de un solo sitio para todo el
-    # proceso, en vez de un keyword acá.
-    sin_preparadas.aplicar()
+    # SIN CONSULTAS PREPARADAS: `sin_preparadas.aplicar()` ya corrió al
+    # cargar este archivo (arriba del todo), así que la llamada de abajo
+    # ya nace apagada sin nombrarlo acá.
     with psycopg.connect(url) as conn:
         reales = [r[0] for r in conn.execute(
             "SELECT table_name FROM information_schema.tables "
