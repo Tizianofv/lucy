@@ -254,10 +254,13 @@ def test_tiziano_recibe_los_dos_buzones_beta_solo_el_del_estudio():
     assert "personal" in del_dueno["contenido_raw"]
     assert "del estudio" in del_dueno["contenido_raw"], (
         "el dueño tiene que seguir viendo el buzón del estudio, sin cambio")
+    assert "informaste a Tiziano" in del_dueno["contenido_raw"]
 
     assert "del estudio" in del_beta["contenido_raw"]
     assert "personal" not in del_beta["contenido_raw"], (
         "ninguna línea del buzón personal de Tiziano puede llegarle a Beta")
+    assert "informaste a Tiziano" not in del_beta["contenido_raw"], (
+        "el encargo de Beta no puede decir que es un reporte para Tiziano")
 
     # Y el candado quedó por destino: una segunda pasada no repite ninguno.
     assert _correr(correo.reporte_diario()) == 0
