@@ -46,14 +46,14 @@ from decimal import Decimal
 # como `python3 tools/verificar_respaldo.py`, arranca con solo `tools/` en
 # el path, no la raíz.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import db.sin_preparadas as sin_preparadas  # noqa: E402
-
-# AL NIVEL DEL MÓDULO, no dentro de main(). Con la llamada metida en
-# main(), "importar este archivo" y "que el arreglo se aplique" eran dos
-# cosas distintas — un testigo lo midió sobre db/backup.py, con el mismo
-# defecto. Acá arriba, cargar el archivo YA lo deja apagado, se llegue a
-# main() o no.
-sin_preparadas.aplicar()
+# Import por el EFECTO: al cargarse, `db.sin_preparadas` se aplica a sí
+# mismo (ver el final de ese archivo) y deja `prepare_threshold=None`
+# puesto para el proceso entero — no hace falta llamar a nada más acá.
+# Éste era el archivo con DOS llamadas (`aplicar()` acá y otra, vieja,
+# dentro de `main()`) que un testigo encontró: borrar solo una dejaba la
+# otra sosteniendo todo. Ahora no hay ninguna llamada que borrar por
+# accidente: solo este import.
+import db.sin_preparadas  # noqa: E402,F401
 
 CARPETA = os.path.expanduser("~/Google Drive/My Drive/Lucy/backups")
 
@@ -94,9 +94,10 @@ def main() -> int:
         problemas.append("no dice cuándo se tomó")
 
     import psycopg
-    # SIN CONSULTAS PREPARADAS: `sin_preparadas.aplicar()` ya corrió al
-    # cargar este archivo (arriba del todo), así que la llamada de abajo
-    # ya nace apagada sin nombrarlo acá.
+    # SIN CONSULTAS PREPARADAS: el `import db.sin_preparadas` de arriba
+    # ya dejó `psycopg.Connection.connect` con `prepare_threshold=None`
+    # como su propio default, así que la llamada de abajo ya nace
+    # apagada sin nombrarlo acá.
     with psycopg.connect(url) as conn:
         reales = [r[0] for r in conn.execute(
             "SELECT table_name FROM information_schema.tables "

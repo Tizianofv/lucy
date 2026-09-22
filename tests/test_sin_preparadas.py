@@ -139,21 +139,39 @@ objeto en cualquier lectura es `__func__` (la función de adentro) y su
   un caso real de esa forma, se declara aparte, no se agranda esta
   comprobación para adivinar texto que no está.
 
+  Y UN LÍMITE DISTINTO, de la PROTECCIÓN y no del BARRIDO —medido con una
+  mutación propia, no leído—: un archivo que importe psycopg SOLO por
+  `dict_row`, sin importar `db.db` ni `db.sin_preparadas`, entra al
+  barrido (como pide el encargo) pero NO queda protegido — nada en su
+  cadena de imports aplica el arreglo. Hoy los cuatro archivos reales que
+  hacen esto (`cerebro/consultar.py`, `acciones/crud.py`,
+  `cerebro/despertador.py`, `cerebro/memoria.py`) SÍ quedan protegidos,
+  pero de CASUALIDAD: los cuatro importan también `db.db` para su propio
+  trabajo, no porque «solo usar `dict_row`» alcance por sí solo. Un
+  archivo nuevo que importara psycopg de esa forma —solo `dict_row`, sin
+  ningún otro import de Lucy— pasaría el barrido y fallaría la medición.
+  No se persigue con un mecanismo global (interceptar TODO import de
+  psycopg en el proceso, un `sys.meta_path` a medida) porque ningún
+  archivo real hace esto hoy y el costo/riesgo de ese mecanismo es de los
+  que se deciden con Tiziano delante, no de los que se resuelven solos.
+
   CÓMO SE MIDE SIN QUE EL GUION HAGA TRABAJO DE VERDAD: tres de los
   cuatro archivos que abren conexión (`db/db.py`, `db/backup.py`,
   `tools/rellenar_categorias.py`) guardan su lógica bajo
   `if __name__ == "__main__":`, así que IMPORTARLOS no corre nada más
-  que las líneas de arriba —donde vive `sin_preparadas.aplicar()`—. El
-  cuarto, `tools/verificar_respaldo.py`, llama `sys.exit(main())` SIN esa
-  guardia (hallazgo lateral, no arreglado acá: ver el reporte), así que
-  importarlo SÍ ejecuta `main()` — y con `DATABASE_URL` apuntando a una
-  base que no existe, intenta conectarse de verdad y falla con
-  `OperationalError`. Da igual: `sin_preparadas.aplicar()` está en el
-  nivel del módulo, ANTES de que `main()` se llame, así que el valor ya
-  quedó fijado antes de esa falla. El proceso hijo atrapa CUALQUIER
-  excepción de la importación —no le importa cuál, ni si es la falla de
-  red esperada o alguna otra— y sigue: lo único que necesita es que el
-  `__kwdefaults__` ya esté escrito, y eso pasó antes.
+  que las líneas de arriba —donde está el `import db.sin_preparadas`—.
+  El cuarto, `tools/verificar_respaldo.py`, llama `sys.exit(main())` SIN
+  esa guardia (hallazgo lateral, no arreglado acá: ver el reporte), así
+  que importarlo SÍ ejecuta `main()` — y con `DATABASE_URL` apuntando a
+  una base que no existe, intenta conectarse de verdad y falla con
+  `OperationalError`. Da igual: el `import db.sin_preparadas` está en el
+  nivel del módulo, ANTES de que `main()` se llame, y ESE import por sí
+  solo ya deja el valor fijado (ver `db/sin_preparadas.py`: se aplica a
+  sí mismo al cargarse) — así que el valor ya quedó puesto antes de esa
+  falla. El proceso hijo atrapa CUALQUIER excepción de la importación —no
+  le importa cuál, ni si es la falla de red esperada o alguna otra— y
+  sigue: lo único que necesita es que el `__kwdefaults__` ya esté
+  escrito, y eso pasó antes.
 
 Correr:  python3 -m pytest tests/test_sin_preparadas.py
 """
@@ -343,13 +361,16 @@ def test_pedirlo_explicito_TODAVIA_se_respeta():
 
 
 def test_aplicar_es_idempotente_y_no_revienta_con_un_psycopg_de_mentira():
-    """`db/sin_preparadas.py::aplicar()` la llaman `db/db.py`, `db/backup.py`
-    y los dos guiones de `tools/` — y también casi toda la suite de
-    pruebas del repositorio, indirectamente, al importar `db.db` sobre un
-    `psycopg` de mentira (`sys.modules.setdefault(...)`). Tiene que poder
-    correr dos veces seguidas y no reventar cuando `psycopg` no tiene
-    `Connection` ni `AsyncConnection` — si reventara, CUALQUIER prueba de
-    este repositorio que importe `db.db` se caería."""
+    """`db/sin_preparadas.py::aplicar()` corre SOLA al importar ese módulo
+    —`db/db.py`, `db/backup.py` y los dos guiones de `tools/` solo hacen
+    `import db.sin_preparadas`, no la llaman ellos— y también casi toda
+    la suite de pruebas del repositorio la dispara indirectamente, al
+    importar `db.db` sobre un `psycopg` de mentira
+    (`sys.modules.setdefault(...)`). Tiene que poder correr dos veces
+    seguidas y no reventar cuando `psycopg` no tiene `Connection` ni
+    `AsyncConnection` — si reventara, CUALQUIER prueba de este
+    repositorio que importe `db.db` (o `db.sin_preparadas` directo) se
+    caería."""
     import db.sin_preparadas as sin_preparadas
 
     doble = types.ModuleType("psycopg_de_mentira")
@@ -485,9 +506,11 @@ except BaseException:
     # No importa POR QUÉ `main()` no pudo terminar -DATABASE_URL apunta a
     # una base que no existe, y algunos guiones intentan conectarse de
     # verdad antes de que este proceso llegue a leer nada-. Lo que importa
-    # es que `sin_preparadas.aplicar()`, si el archivo la llama, corre
+    # es que el `import db.sin_preparadas` del archivo, si lo tiene, corre
     # ANTES de esa falla -está en el nivel del módulo, antes de cualquier
-    # `main()`-, así que el valor ya quedó fijado pase lo que pase después.
+    # `main()`-, y ESE import por sí solo ya aplica el arreglo (ver
+    # db/sin_preparadas.py), así que el valor ya quedó fijado pase lo que
+    # pase después.
     pass
 
 import psycopg
@@ -526,25 +549,34 @@ def test_los_puntos_de_arranque_no_estan_vacios():
 
 
 def test_cada_punto_de_arranque_deja_sin_preparar_SOLO_con_importarlo():
-    """LA PRUEBA QUE ATRAPA EL SEGUNDO NO PASA. Por cada punto de arranque,
-    un proceso nuevo que solo lo importa — sin llamar a `aplicar()` a
-    mano, sin que ninguna otra suite haya corrido antes en ese proceso —
-    tiene que dar `None` en los dos defaults. Si a alguno de `db/db.py`,
-    `db/backup.py`, `tools/rellenar_categorias.py` o `tools/verificar_
-    respaldo.py` le borraran SU llamada a `sin_preparadas.aplicar()` —hoy
-    exactamente una por archivo, al nivel del módulo—, esto se pone rojo
-    con ESE archivo.
+    """LA PRUEBA QUE ATRAPA EL SEGUNDO Y EL CUARTO NO PASA. Por cada punto
+    de arranque, un proceso nuevo que solo lo importa — sin llamar a
+    `aplicar()` a mano, sin que ninguna otra suite haya corrido antes en
+    ese proceso — tiene que dar `None` en los dos defaults.
 
-    OJO, LECCIÓN DE LA TERCERA VUELTA: esto mide lo que el archivo deja
-    en `__kwdefaults__` DESPUÉS de terminar de importarse, no cuántas
-    veces aparece la palabra `aplicar()` en su texto. Si un archivo
-    tuviera DOS llamadas y se borrara una sola, la otra igual dejaría el
-    default en `None` y esta prueba (con razón) seguiría en verde —eso no
-    es un hueco, es que el arreglo seguía aplicado—. Lo que hace falta
-    para que la prueba sirva es que cada archivo tenga LA SUYA, una sola
-    vez, y que borrarla de verdad dependa de `db.db` para quedar
-    protegido; con eso, esta prueba se pone roja con ese archivo
-    exactamente."""
+    LECCIÓN DE LA TERCERA VUELTA, y por qué esto YA NO llama a
+    `aplicar()` desde ningún archivo de producción: medía lo que el
+    archivo deja en `__kwdefaults__` DESPUÉS de importarse, no cuántas
+    veces aparece la palabra `aplicar()` en su texto — y un testigo
+    encontró que `tools/verificar_respaldo.py` tenía DOS llamadas
+    (una vieja, sin borrar), así que borrar solo una no rompía nada: la
+    otra sostenía todo sin que nadie lo notara. La respuesta no fue
+    "medir mejor cuántas llamadas hay": fue sacarle a los archivos la
+    responsabilidad de LLAMAR, y dejar que `db/sin_preparadas.py` se
+    aplique a sí mismo al importarse (ver el final de ese archivo). Hoy
+    `db/db.py`, `db/backup.py`, `tools/rellenar_categorias.py` y
+    `tools/verificar_respaldo.py` hacen `import db.sin_preparadas` y
+    nada más — no hay ninguna llamada que se pueda duplicar, borrar a
+    medias o dejar sin borrar, porque no hay ninguna llamada.
+
+    Lo que esta prueba de verdad comprueba, entonces, no es "¿llamó a
+    aplicar()?" sino algo más simple y más difícil de falsear: "¿el
+    `import db.sin_preparadas` —directo o transitivo, vía `db.db`— está
+    en la cadena de imports de este archivo?". Si a alguno de los cuatro
+    le borraran ESE import, o si un archivo nuevo abriera una conexión
+    sin agregarlo, esta prueba se pone roja con ese archivo — porque mide
+    el HECHO (`__kwdefaults__` real, en un proceso que solo cargó ese
+    archivo), no el texto."""
     fallos = []
     for archivo in _puntos_de_arranque():
         rel = archivo.relative_to(RAIZ.resolve()).as_posix()

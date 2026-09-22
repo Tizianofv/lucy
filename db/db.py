@@ -16,7 +16,11 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-import db.sin_preparadas as sin_preparadas
+# Import por el EFECTO, no por lo que exporta: al cargarse, este módulo se
+# aplica a sí mismo (ver el final de db/sin_preparadas.py) y deja
+# `prepare_threshold=None` puesto para el proceso entero. Ningún nombre de
+# acá se usa más abajo — por eso sin alias.
+import db.sin_preparadas  # noqa: F401
 
 # TZ es la zona de Santo Domingo, y viene de config para que haya UNA sola en
 # todo Lucy: la usa el panel de tareas para decidir a qué DÍA pertenece un
@@ -65,14 +69,17 @@ _ERRORES_DE_FILA = tuple(
 # type` — pasó de verdad el 10-sep-2026 publicando el Responsable de Lucy,
 # contra el `SELECT * FROM tareas` de `cerebro/despertador.py:519`.
 #
-# Esto NO se le pasa al pool por `kwargs`: `sin_preparadas.aplicar()` ya dejó
-# `psycopg.AsyncConnection.connect` (la que este pool llama por dentro, en
-# `psycopg_pool/pool_async.py:650`) con `prepare_threshold=None` como su
-# PROPIO valor por omisión, así que cualquier conexión que este pool abra ya
-# nace sin preparar sin que este archivo se lo tenga que repetir. El porqué
-# —de un solo sitio para todo el proceso, en vez de un keyword por cada
-# llamada que abre una conexión— está en `db/sin_preparadas.py`.
-sin_preparadas.aplicar()
+# Esto NO se le pasa al pool por `kwargs`, y esta línea de acá arriba
+# —`import db.sin_preparadas`— YA BASTA: el propio módulo se aplica a sí
+# mismo al importarse (ver el final de `db/sin_preparadas.py`, agregado
+# después de que un testigo encontrara que llamar a `.aplicar()` a mano en
+# cada sitio dejaba huecos si alguna de esas llamadas se perdía o
+# duplicaba). Con eso, `psycopg.AsyncConnection.connect` (la que el pool de
+# abajo llama por dentro, en `psycopg_pool/pool_async.py:650`) ya tiene
+# `prepare_threshold=None` como su PROPIO valor por omisión antes de que se
+# construya el pool. El porqué completo —de un solo sitio para todo el
+# proceso, en vez de un keyword por cada llamada que abre una conexión—
+# está en `db/sin_preparadas.py`.
 
 # Pool de conexiones reutilizables. Se abre al arrancar el bot (ver main.py).
 pool = AsyncConnectionPool(DATABASE_URL, open=False)

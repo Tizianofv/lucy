@@ -151,13 +151,22 @@ def aplicar(modulo=None) -> None:
     _YA_APLICADO = True
 
 
-# APLICADO TAMBIÉN ACÁ, al importar el módulo — no solo cuando alguien
-# más lo llama. Así CUALQUIER archivo que haga `import db.sin_preparadas`
-# queda protegido aunque se olvide de escribir la segunda línea
-# (`sin_preparadas.aplicar()`). Los cuatro sitios que sí la llaman
-# explícita (`db/db.py`, `db/backup.py`, `tools/rellenar_categorias.py`,
-# `tools/verificar_respaldo.py`) no dependen de esto para funcionar — es
-# redundante a propósito, y la llamada explícita documenta ahí mismo, en
-# cada archivo, que depende del arreglo — pero esto es lo que hace que ni
-# siquiera haga falta acordarse de esa segunda línea.
+# APLICADO ACÁ MISMO, al importar el módulo — ÉSTE es el único sitio, de
+# verdad. Los cuatro archivos que dependen de esto (`db/db.py`,
+# `db/backup.py`, `tools/rellenar_categorias.py`,
+# `tools/verificar_respaldo.py`) hacen `import db.sin_preparadas` y NADA
+# MÁS — no llaman a `aplicar()` ellos mismos.
+#
+# ESTO CAMBIÓ EN LA CUARTA VUELTA, y por qué: antes, los cuatro llamaban a
+# `aplicar()` explícita, "por las dudas" — pero un testigo hizo notar que
+# `tools/verificar_respaldo.py` había quedado con DOS llamadas (una vieja
+# sin borrar) y que borrar solo una no rompía nada. Cuando se agregó esta
+# línea de acá abajo, esas cuatro llamadas explícitas pasaron a ser
+# REDUNDANTES DE VERDAD —no "redundantes a propósito, por si acaso": no
+# hacían nada que este import no hiciera ya—, y una llamada que no hace
+# nada es exactamente el tipo de cosa que se puede duplicar, borrar a
+# medias o dejar sin borrar sin que nadie note la diferencia. Se
+# quitaron las cuatro. Ahora hay UNA sola forma de que un archivo dependa
+# de este arreglo —`import db.sin_preparadas`— y una sola forma de
+# comprobarlo: que el import esté.
 aplicar()

@@ -59,16 +59,15 @@ from psycopg.rows import dict_row
 # Repo en sys.path para `import db.sin_preparadas` — este archivo, corrido
 # como `python3 db/backup.py`, arranca con solo `db/` en el path, no la raíz.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import db.sin_preparadas as sin_preparadas  # noqa: E402
-
-# AL NIVEL DEL MÓDULO, no dentro de una función. Un testigo midió que, con
-# la llamada metida en `main()`, "importar este archivo" y "que el arreglo
-# se aplique" eran dos cosas distintas: nada corre `main()` con solo
-# importar, así que un proceso que solo importara `db.backup` —o una
-# prueba que solo mide el import— no veía el arreglo puesto, aunque
-# `python3 db/backup.py` sí lo aplicara al llegar al `if __name__`. Acá
-# arriba, cargar el archivo YA lo deja apagado, se llegue a `main()` o no.
-sin_preparadas.aplicar()
+# Import por el EFECTO: al cargarse, `db.sin_preparadas` se aplica a sí
+# mismo (ver el final de ese archivo) y deja `prepare_threshold=None`
+# puesto para el proceso entero — no hace falta llamar a nada más acá. Al
+# NIVEL DEL MÓDULO y no dentro de una función: un testigo midió que "importar
+# este archivo" y "que el arreglo se aplique" eran dos cosas distintas
+# cuando la llamada vivía dentro de `main()` — nada corre `main()` con
+# solo importar. Acá arriba, cargar el archivo YA lo deja apagado, se
+# llegue a `main()` o no.
+import db.sin_preparadas  # noqa: E402,F401
 
 # En Windows, psycopg async necesita otra política; el backup es sincrónico,
 # así que no aplica. Se deja el import de psycopg sincrónico a propósito.

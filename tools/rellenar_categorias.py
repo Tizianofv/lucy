@@ -25,16 +25,12 @@ import psycopg
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import db.sin_preparadas as sin_preparadas  # noqa: E402
+# Import por el EFECTO: al cargarse, `db.sin_preparadas` se aplica a sí
+# mismo (ver el final de ese archivo) y deja `prepare_threshold=None`
+# puesto para el proceso entero — no hace falta llamar a nada más acá.
+import db.sin_preparadas  # noqa: E402,F401
 from cerebro.bancos.categorias import (  # noqa: E402
     CLAVES, Categorizador, normalizar_comercio)
-
-# AL NIVEL DEL MÓDULO, no dentro de main(). Con la llamada metida en
-# main(), "importar este archivo" y "que el arreglo se aplique" eran dos
-# cosas distintas — un testigo lo midió sobre db/backup.py, con el mismo
-# defecto. Acá arriba, cargar el archivo YA lo deja apagado, se llegue a
-# main() o no.
-sin_preparadas.aplicar()
 
 
 def main() -> int:
@@ -44,9 +40,10 @@ def main() -> int:
         print("Falta DATABASE_URL en el entorno.", file=sys.stderr)
         return 2
 
-    # SIN CONSULTAS PREPARADAS: `sin_preparadas.aplicar()` ya corrió al
-    # cargar este archivo (arriba del todo), así que la llamada de abajo
-    # ya nace apagada sin nombrarlo acá.
+    # SIN CONSULTAS PREPARADAS: el `import db.sin_preparadas` de arriba
+    # ya dejó `psycopg.Connection.connect` con `prepare_threshold=None`
+    # como su propio default, así que la llamada de abajo ya nace
+    # apagada sin nombrarlo acá.
     with psycopg.connect(url) as conn:
         aprendidas = {r[0]: r[1] for r in conn.execute(
             "SELECT comercio, categoria FROM categorias_aprendidas "
