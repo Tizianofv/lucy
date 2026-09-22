@@ -840,6 +840,16 @@ def test_todo_lo_que_toca_area_en_crud_pasa_por_la_misma_puerta():
     `_area_que_vale`. Así, el día que alguien agregue un tercer sitio que
     escriba `area` sin pasar por la puerta, esto se pone rojo solo, en vez de
     depender de que alguien se acuerde de mirar.
+
+    LA FRONTERA, medida mutando: esto mira la función ENTERA, no cada rama.
+    Vaciar SOLO la rama de `tareas` dentro de `editar()` y dejar la de
+    `proyectos` intacta NO se ve acá -- `editar` sigue mencionando `area` y
+    sigue llamando `_area_que_vale` en algún lado, así que esta prueba pasa
+    igual. Lo que sí lo atrapa es la prueba directa de esa rama
+    (`test_editar_rechaza_un_area_que_no_esta_declarada`), que llama a
+    `editar()` de verdad. Esta prueba de hermanos agarra un sitio NUEVO que
+    nazca sin la puerta; no agarra una puerta vaciada por dentro en una
+    función que YA la llama en otro lado.
     """
     import ast
     import inspect
