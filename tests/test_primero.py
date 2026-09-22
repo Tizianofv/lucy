@@ -713,12 +713,21 @@ def test_el_briefing_le_dice_a_lucy_que_no_proponga_lo_que_espera():
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_la_lista_pinta_gris_y_la_flecha_hacia_la_tarea_que_espera():
+    """Ojo con medir la PALABRA `fila-espera` suelta: aparece también en un
+    comentario de la plantilla, así que una mutación que saque la clase del
+    `<td>` de verdad y deje el comentario intacto seguiría en verde con esa
+    comprobación (medido mutando -- ver `m7_panel.py` en el scratchpad del
+    testigo/constructor). Por eso se exige la forma EXACTA en que Jinja la
+    aplica -- `class="fila-espera"`, entre comillas, como queda escrita en
+    el `<td>` -- no la palabra sola."""
     from pathlib import Path
     html = Path(_ROOT, "web", "plantillas", "tareas.html").read_text(encoding="utf-8")
     assert "primero_esperando" in html, (
         "la plantilla no consulta primero_esperando: no hay cómo decidir "
         "si pinta gris")
-    assert "fila-espera" in html, "no se aplica la clase que la pinta gris"
+    assert 'class="fila-espera"' in html, (
+        "no se aplica la clase que la pinta gris -- se buscó la forma "
+        "exacta, no la palabra suelta, que también aparece en un comentario")
     assert "→ Primero:" in html, "no se pinta la flecha con el texto"
     css = Path(_ROOT, "web", "plantillas", "base.html").read_text(encoding="utf-8")
     assert ".fila-espera" in css, "la clase no tiene estilo definido"
