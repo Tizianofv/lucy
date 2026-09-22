@@ -137,6 +137,21 @@ class _Cursor:
         return self._filas[0] if self._filas else None
 
 
+class _Transaccion:
+    """El SAVEPOINT de mentira que usa `db.tareas_por_grupo` (encargo 4) para
+    caer a la consulta sin `area` si la columna todavía no existe. Acá nunca
+    falla; solo hace falta para que `async with conn.transaction():` no
+    reviente con AttributeError antes de ejecutar nada."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *e):
+        return False
+
+
 class _Conn:
     def __init__(self, filas):
         self.tareas = filas
@@ -147,6 +162,9 @@ class _Conn:
 
     async def execute(self, sql, params=None):
         return await _Cursor(self).execute(sql, params)
+
+    def transaction(self):
+        return _Transaccion(self)
 
 
 class _Pool:
@@ -1715,6 +1733,57 @@ def test_no_queda_ningun_marcador_sin_sustituir_en_el_prompt():
     assert not quedan, f"marcadores sin sustituir: {quedan}"
 
 
+# ── Las áreas en el prompt (encargo 4) ────────────────────────────────────
+
+def _bloque_del_area_al_crear(prompt: str) -> str:
+    i = prompt.index("ÁREA (tareas y proyectos, opcional)")
+    return prompt[i:prompt.index("\n\n", i)]
+
+
+def test_las_areas_que_se_pasan_aparecen_tal_cual_en_el_prompt():
+    """`herramientas_del_prompt` no tiene ninguna lista de áreas tecleada: lo
+    que aparece es lo que se le pasó por parámetro. Dos claves que NO son
+    ninguna de las 4 de producción, a propósito -- si esto pasara con
+    "CDS"/"ACD" podría ser casualidad de una lista escondida en otro lado."""
+    prompt = agente.herramientas_del_prompt(
+        [{"clave": "Zeta", "color": "#111"}, {"clave": "Omega", "color": "#222"}])
+    bloque = _bloque_del_area_al_crear(prompt)
+    assert '"Zeta"' in bloque and '"Omega"' in bloque, (
+        f"las áreas pasadas no aparecen en el bloque de crear: {bloque}")
+    # Y el COLOR no viaja al prompt: Lucy decide por contexto, no por hex.
+    assert "#111" not in prompt and "#222" not in prompt
+
+
+def test_una_area_nueva_aparece_sola_sin_tocar_el_prompt():
+    """Igual que una persona nueva en NOMBRES_POR_CHAT: si mañana hay una
+    quinta área, aparece sola porque viene de la base, no de una lista
+    copiada en `agente.py`."""
+    antes = agente.herramientas_del_prompt([{"clave": "CDS", "color": "#1"}])
+    assert "Marketing" not in antes
+    despues = agente.herramientas_del_prompt(
+        [{"clave": "CDS", "color": "#1"}, {"clave": "Marketing", "color": "#2"}])
+    assert "Marketing" in despues
+
+
+def test_sin_areas_el_prompt_lo_dice_en_vez_de_inventar():
+    """Sin ninguna área declarada -- la migración no se aplicó, o la tabla
+    está vacía -- el prompt lo DICE, igual que hace con "sin nadie a quien
+    asignar": inventar una lista sería peor que admitir que no hay."""
+    bloque_vacio = _bloque_del_area_al_crear(agente.herramientas_del_prompt([]))
+    bloque_none = _bloque_del_area_al_crear(agente.herramientas_del_prompt())
+    assert "ninguna declarada" in bloque_vacio.lower()
+    assert "ninguna declarada" in bloque_none.lower(), (
+        "sin pasar el argumento tiene que tratarse igual que una lista vacía")
+
+
+def test_el_editar_tambien_ofrece_las_areas_que_se_pasan():
+    prompt = agente.herramientas_del_prompt(
+        [{"clave": "🏠 Personal", "color": "#3"}])
+    bloque_editar = prompt[prompt.index("· editar"):]
+    assert "🏠 Personal" in bloque_editar, (
+        "el tool 'editar' no ofrece las áreas para cambiarle el área a algo")
+
+
 # ── No enseñar el número: la traducción ──────────────────────────────────
 
 def test_el_chat_se_cambia_por_el_nombre_y_no_se_come_otro_numero():
@@ -1956,6 +2025,11 @@ def _turno(guion: list[dict], fila: dict):
     db.buscar_esperando_respuesta = _nada
     db.ultimos_intercambios = _vacio
     db.listar_preferencias = _vacio
+    # `atender()` trae las áreas (encargo 4) con `db.areas()`, que abre su
+    # propia conexión con `conn.transaction()` -- una puerta que `_BaseDelTurno`
+    # no modela porque no es lo que este archivo prueba. Se stubea vacía, igual
+    # que `listar_preferencias`: este turno no tiene nada que ver con áreas.
+    db.areas = _vacio
     db.cambiar_estado = _nada
     db.guardar_respuesta = _nada
     db.guardar_interpretacion = _nada

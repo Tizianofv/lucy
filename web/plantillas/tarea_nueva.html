@@ -13,6 +13,9 @@ caracteres. Sin título no hay tarea: es lo único que dice qué hay que hacer.<
 {% elif error == 'fecha' %}
 <p class="aviso">Esa fecha no se puede guardar. Déjala vacía si la tarea no
 tiene día, o escribe una desde el {{ piso_fecha }} en adelante.</p>
+{% elif error == 'area' %}
+<p class="aviso">Esa área ya no está en la lista. Elige una de las de abajo, o
+déjala en «Sin área».</p>
 {% endif %}
 
 {# UN SOLO formulario, igual que en el resto del panel. Sin JavaScript: si el
@@ -34,6 +37,21 @@ tiene día, o escribe una desde el {{ piso_fecha }} en adelante.</p>
        gasto en efectivo, que es plata que ya salió. #}
     <br><span class="suave">Opcional. Vacío = «Sin fecha», que en esta pantalla
     tiene su propio grupo y se ve igual.</span>
+  </p>
+  <p>
+    <label for="area">Área</label><br>
+    <select id="area" name="area">
+      <option value="">Sin área</option>
+      {# La lista sale de `db.areas()`, no está escrita acá: si mañana hay una
+         quinta área aparece sola. Si la tabla todavía no existe (la migración
+         no se aplicó) `areas` llega vacía y este <select> solo ofrece «Sin
+         área» -- no se rompe la pantalla. #}
+      {% for a in areas %}
+      <option value="{{ a.clave }}">{{ a.clave }}</option>
+      {% endfor %}
+    </select>
+    <br><span class="suave">Opcional. Una tarea sin área se ve igual, con una
+    etiqueta gris.</span>
   </p>
   <div class="barra">
     <button>Guardar la tarea</button>

@@ -88,7 +88,7 @@ HERRAMIENTAS DISPONIBLES:
           "recurrencia": "", "anticipos_min": [0], "detalle": "",
           "duracion_min": 0, "lugar": "", "persona": "", "proyecto": "",
           "monto": 0, "moneda": "DOP", "referencia": "", "contraparte": "",
-          "responsable_chat_id": ""}
+          "responsable_chat_id": "", "area": ""}
   Crea la fila real. Personas y proyectos se enlazan solos por nombre.
   RESPONSABLE (solo tareas, opcional): "crea X para Rosi" = mandalo YA en
   esta misma llamada, con el NOMBRE tal como está en esta lista, y nunca un
@@ -98,6 +98,14 @@ HERRAMIENTAS DISPONIBLES:
   vez de adivinar; si el nombre no vale, `crear` lo rechaza entero —no crea la
   tarea sin responsable como si no lo hubieras pedido— y el motivo dice a
   quién sí se le puede asignar.
+  ÁREA (tareas y proyectos, opcional): una de estas, tal cual: {AREAS}.
+  Inferila por el contexto de lo que dice Tiziano —un cliente de ACD, algo del
+  estudio, algo técnico del sistema, algo suyo y personal—; si no queda claro
+  cuál, preguntá antes de crear en vez de adivinar. Si la tarea lleva
+  "proyecto", NO mandes "area" aparte: la tarea la hereda del proyecto sola
+  (una tarea con proyecto nunca tiene un área propia distinta), así que
+  cualquier "area" que mandes junto con "proyecto" se ignora sin avisar. Sin
+  área = no mandes el campo (o ""), que es el estado normal de hoy.
   RECURRENCIA (solo tareas): si algo se repite ("la medicina cada 8 horas",
   "sacar la basura los lunes"), es UNA tarea con "recurrencia" — NUNCA
   varias copias a futuro. Formatos que entiende la maquinaria (usá estos,
@@ -136,6 +144,15 @@ HERRAMIENTAS DISPONIBLES:
   En lo que devuelve consultar, los chats de la casa ya vienen con el nombre
   de la persona en lugar del número. El SQL no puede comparar esa columna
   contra un nombre: para saber qué tiene alguien, se trae la columna y se lee.
+
+  ÁREA DE UNA TAREA O UN PROYECTO: en "cambios" va {"area": "<clave>"}, una de
+  estas, tal cual: {AREAS}. En un PROYECTO se puede editar siempre —es lo que
+  después heredan todas sus tareas—. En una TAREA, solo si esa tarea NO tiene
+  proyecto: una tarea CON proyecto nunca tiene área propia (la hereda sola), y
+  ponerle "area" se rechaza — si hace falta cambiar el área de una tarea así,
+  se cambia la del PROYECTO. "area": null la deja sin área. Si la clave que
+  mandás no es una de las declaradas, también se rechaza, y el motivo dice
+  por qué (o cuáles hay).
 
   EL CÓDIGO M-####. El panel muestra cada movimiento con un código —M-0086— que
   es su id: M-0086 es movimientos.id = 86. Cuando Tiziano lo nombre ("el M-0086
@@ -408,12 +425,19 @@ estructura visual es importante". Un muro de texto no se lee, se saltea.
 """
 
 
-def _sistema(preferencias: list[dict] | None = None) -> str:
+def _sistema(preferencias: list[dict] | None = None,
+             areas: list[dict] | None = None) -> str:
     """El prompt de sistema se arma en cada llamada: el 'ahora' no se cachea.
 
     Las preferencias (req 35) se inyectan acá, arriba de las herramientas: son
     el 'dentro de los límites que vos fijás'. Van con su id para que Lucy pueda
     olvidar una por número cuando Tiziano lo pida.
+
+    `areas` (encargo 4) es OPCIONAL, con el mismo motivo que `preferencias`:
+    todas las pruebas de este archivo que llaman `_sistema()` sin argumentos
+    —y las que llaman `herramientas_del_prompt()` directo— siguen andando, y
+    `atender()` es el único que de verdad la trae de la base (`db.areas()`,
+    que ya tolera que la tabla no exista) antes de armar el prompt.
     """
     bloque = ""
     if preferencias:
@@ -434,15 +458,15 @@ def _sistema(preferencias: list[dict] | None = None) -> str:
         # texto: una lista duplicada se desincroniza el día que se agregue una,
         # y el agente le ofrecería a Tiziano categorías que ya no existen.
         f"{consultar.ESQUEMA}\n\n"
-        + herramientas_del_prompt()
+        + herramientas_del_prompt(areas)
     )
 
 
-def herramientas_del_prompt() -> str:
-    """`HERRAMIENTAS` con las dos listas inyectadas desde su fuente real.
+def herramientas_del_prompt(areas: list[dict] | None = None) -> str:
+    """`HERRAMIENTAS` con las listas inyectadas desde su fuente real.
 
-    Ninguna de las dos se teclea en el texto: una lista duplicada se
-    desincroniza el día que se le agrega algo y nadie se entera.
+    Ninguna se teclea en el texto: una lista duplicada se desincroniza el día
+    que se le agrega algo y nadie se entera.
       · Las categorías salen de `CATEGORIAS`.
       · Las pantallas —su nombre, su ruta, cómo se las pide una persona y la
         nota de cada una— salen del `<nav>` de `web/plantillas/base.html`, que
@@ -452,6 +476,12 @@ def herramientas_del_prompt() -> str:
         `config.personas_del_panel()`, en cada mensaje: la tercera persona que
         se agregue a la variable aparece sola. Van los NOMBRES; los números de
         chat no entran al prompt.
+      · Las ÁREAS (encargo 4) salen de `db.areas()`, que quien llama —hoy solo
+        `atender()`— ya trajo de la base y pasa acá por parámetro: esta
+        función es SÍNCRONA y no puede ir a buscarlas ella misma. `None` (el
+        default) se trata igual que una lista vacía: "hoy no hay ninguna
+        declarada", el mismo estado que si la migración todavía no se aplicó
+        — `db.areas()` ya devuelve `[]` en ese caso, nunca revienta.
 
     ESTE ES EL ÚNICO SITIO QUE SE BANCA UN MENÚ ILEGIBLE, y el motivo se midió
     el 9-sep-2026 sobre `ca2c421`: `_sistema()` se arma en CADA mensaje, no solo
@@ -491,10 +521,16 @@ def herramientas_del_prompt() -> str:
     personas = (", ".join(f'"{n}"' for n in nombres) if nombres else
                 "(hoy nadie: falta NOMBRES_POR_CHAT, así que no se le puede "
                 "asignar a nadie)")
+    claves_area = [a["clave"] for a in (areas or [])]
+    areas_txt = (", ".join(f'"{c}"' for c in claves_area) if claves_area else
+                "(hoy ninguna declarada: no le pongas área a nada, y si "
+                "Tiziano te pide una explicale que todavía no hay ninguna "
+                "creada)")
     return HERRAMIENTAS.replace(
         "{CATEGORIAS}", ", ".join(f'"{c}"' for c in CATEGORIAS)
     ).replace("{PANTALLAS_DEL_PANEL}", pantallas
-    ).replace("{PERSONAS_DEL_PANEL}", personas)
+    ).replace("{PERSONAS_DEL_PANEL}", personas
+    ).replace("{AREAS}", areas_txt)
 
 
 async def _avisar_choques(evento_id: int) -> str:
@@ -1025,7 +1061,9 @@ async def atender(fila: dict, texto: str, bot) -> None:
     historial = await db.ultimos_intercambios(chat_id, excluir)
 
     preferencias = await db.listar_preferencias()
-    mensajes: list[dict] = [{"role": "system", "content": _sistema(preferencias)}]
+    areas = await db.areas()
+    mensajes: list[dict] = [
+        {"role": "system", "content": _sistema(preferencias, areas)}]
     for h in historial:
         # Una fila puede ser solo de Lucy (un aviso del despertador: sin
         # dicho). Entra igual: sus palabras proactivas son parte del hilo.

@@ -81,6 +81,30 @@ UTC = timezone.utc
 
 # ── Una base de mentira ──────────────────────────────────────────────────
 
+class _ErrorSQL(Exception):
+    """Un error de Postgres de mentira, con el `sqlstate` que haga falta —
+    para probar el `except` de `db.tareas_por_grupo` sin una base real."""
+
+    def __init__(self, sqlstate: str):
+        self.sqlstate = sqlstate
+        super().__init__(f"error de mentira, sqlstate={sqlstate}")
+
+
+class _Transaccion:
+    """El SAVEPOINT de mentira: entra y sale limpio, y NO SE TRAGA la
+    excepción (`return False`), igual que el real — es quien llama
+    (`tareas_por_grupo`) el que decide si la atrapa."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *e):
+        return False
+
+
 class _Cursor:
     """Devuelve las filas preparadas y anota todo el SQL que le llega."""
 
@@ -91,7 +115,20 @@ class _Cursor:
     async def execute(self, sql, params=None):
         s = " ".join(sql.split())
         self._conn.sql.append((s, params))
-        if s.startswith("SELECT t.id, t.titulo"):
+        # `sin_columna_area`: simula que la migración del encargo 4 todavía
+        # no se aplicó — la consulta CON `area` (la que trae el JOIN a
+        # proyectos) revienta como reventaría contra una base real sin esa
+        # columna, y `tareas_por_grupo` tiene que caer a la de antes.
+        if self._conn.sin_columna_area and "COALESCE(p.area, t.area)" in s:
+            raise _ErrorSQL("42703")
+        # `sin_tabla_areas`: simula que la tabla `areas` todavía no existe —
+        # `db.areas()` tiene que devolver `[]` en vez de reventar.
+        if self._conn.sin_tabla_areas and s.startswith(
+                "SELECT clave, color FROM areas"):
+            raise _ErrorSQL("42P01")
+        if s.startswith("SELECT clave, color FROM areas"):
+            self._filas = list(self._conn.areas_registradas)
+        elif s.startswith("SELECT t.id, t.titulo"):
             self._filas = list(self._conn.tareas)
         elif s.startswith("SELECT id, titulo, estado"):
             tid = params[0]
@@ -108,15 +145,22 @@ class _Cursor:
 
 
 class _Conn:
-    def __init__(self, filas):
+    def __init__(self, filas, sin_columna_area: bool = False,
+                 areas_registradas=None, sin_tabla_areas: bool = False):
         self.tareas = filas
         self.sql: list = []
+        self.sin_columna_area = sin_columna_area
+        self.areas_registradas = list(areas_registradas or [])
+        self.sin_tabla_areas = sin_tabla_areas
 
     def cursor(self, row_factory=None):
         return _Cursor(self)
 
     async def execute(self, sql, params=None):
         return await _Cursor(self).execute(sql, params)
+
+    def transaction(self):
+        return _Transaccion(self)
 
 
 class _CM:
@@ -139,7 +183,7 @@ class _Pool:
 
 
 def _fila(id, estado="pendiente", vence_en=None, titulo=None,
-          responsable=None, completado_en=None):
+          responsable=None, completado_en=None, area=None):
     """Una fila como la devuelve la consulta del panel.
 
     `responsable` es None por defecto porque ES el estado normal: las 57 tareas
@@ -151,16 +195,23 @@ def _fila(id, estado="pendiente", vence_en=None, titulo=None,
     mayoría de las filas de este archivo son pendientes, y una 'hecha' sin
     fecha de cierre —el 'descartado' real de producción— es justo el caso que
     no se puede archivar por falta de dato.
+
+    `area` también es None por defecto (encargo 4): las tareas de hoy no
+    tienen ninguna, y "sin área" es un estado normal que se ve con su propia
+    etiqueta gris, no un hueco que haya que rellenar.
     """
     return {"id": id, "titulo": titulo or f"tarea {id}", "estado": estado,
             "vence_en": vence_en, "creado_en": datetime(2026, 8, 1, tzinfo=UTC),
             "bandeja_id": 900 + id, "responsable_chat_id": responsable,
-            "completado_en": completado_en}
+            "completado_en": completado_en, "area": area}
 
 
-def _con_base(filas, fn):
+def _con_base(filas, fn, sin_columna_area: bool = False,
+              areas_registradas=None, sin_tabla_areas: bool = False):
     """Corre una corutina con la base falseada. Devuelve (resultado, conn)."""
-    conn = _Conn(filas)
+    conn = _Conn(filas, sin_columna_area=sin_columna_area,
+                areas_registradas=areas_registradas,
+                sin_tabla_areas=sin_tabla_areas)
     guardado = db.pool
     db.pool = _Pool(conn)
     try:
@@ -511,6 +562,15 @@ def test_ningun_join_de_esta_consulta_puede_descartar_una_tarea():
         alguien la mueve a un JOIN y pone otra en el FROM, la regla «ninguna
         tabla accesoria puede quitar una fila de tareas» se invierte sin que
         una sola letra diga LEFT.
+
+    Desde el encargo 4 (áreas, 22-sep-2026) `tareas_por_grupo` tiene DOS
+    literales de SQL, no uno: `con_area` (con el LEFT JOIN a `proyectos` para
+    heredar el área del proyecto) y `sin_area`, el mismo SELECT de siempre, al
+    que cae si la columna `area` todavía no existe (SQLSTATE 42703). `_sql_de`
+    concatena las dos, así que ahora aparecen DOS `FROM tareas` -- uno por
+    consulta-- en vez de uno. Eso no afloja la garantía: las dos siguen
+    mandando desde `tareas`, y el único JOIN nuevo (a `proyectos`) ya se
+    verificó arriba que es LEFT.
     """
     import re
     sql = _sql_de(db.tareas_por_grupo)
@@ -521,11 +581,11 @@ def test_ningun_join_de_esta_consulta_puede_descartar_una_tarea():
         f"estos JOIN pueden descartar tareas enteras: {malos}. Una tarea sin "
         "la fila accesoria desaparecería del panel y nadie se enteraría")
     de_donde = re.findall(r"\bFROM\s+(\w+)", sql)
-    assert de_donde == ["tareas"], (
+    assert de_donde and all(tabla == "tareas" for tabla in de_donde), (
         f"esta consulta ya no sale de `tareas`, sale de {de_donde}. `tareas` "
-        "tiene que mandar en el FROM: desde cualquier otra tabla, una tarea "
-        "sin su fila accesoria desaparece del panel aunque todos los JOIN "
-        "digan LEFT")
+        "tiene que mandar en el FROM de CADA literal (con_area y sin_area): "
+        "desde cualquier otra tabla, una tarea sin su fila accesoria "
+        "desaparece del panel aunque todos los JOIN digan LEFT")
 
 
 def test_el_tope_no_recorta_callado():
@@ -538,6 +598,108 @@ def test_el_tope_no_recorta_callado():
     assert sum(len(g["filas"]) for g in datos["grupos"]) == 5
     sql, params = conn.sql[0]
     assert params == (6,), "hay que pedir una fila de más para saber si sobra"
+
+
+# ── El área (encargo 4) ───────────────────────────────────────────────────
+
+def test_areas_devuelve_lo_que_hay_en_la_tabla_en_su_orden():
+    """`db.areas()` no tiene ninguna lista de áreas escrita en el código: lo
+    que devuelve es lo que la base le dio, en el orden que la base le dio.
+    Se prueban dos claves que NO son ninguna de las 4 de producción, a
+    propósito: si esto pasara con «CDS»/«ACD» tecleados podría ser casualidad
+    de que coincidan con una lista escondida en algún lado."""
+    filas = [{"clave": "Zeta", "color": "#111111"},
+             {"clave": "Alfa", "color": "#222222"}]
+    datos, _ = _con_base([], lambda: db.areas(), areas_registradas=filas)
+    assert datos == filas, (
+        f"db.areas() no devolvió lo que la base tenía: {datos}")
+
+
+def test_areas_no_revienta_si_la_tabla_todavia_no_existe():
+    """La migración del encargo 4 puede no haber corrido todavía —Lucy tiene
+    que poder arrancar antes de que la sala la aplique—. `db.areas()` tiene
+    que devolver `[]`, no propagar el error."""
+    datos, _ = _con_base([], lambda: db.areas(), sin_tabla_areas=True)
+    assert datos == [], (
+        f"debía devolver [] con la tabla ausente, devolvió: {datos}")
+
+
+def test_areas_propaga_cualquier_otro_fallo():
+    """SOLO `42P01` (la tabla no existe) se traga. Cualquier otro código de
+    error es una falla de verdad y tiene que llegar arriba, no esconderse
+    detrás de un `[]` que mentiría sobre por qué no hay áreas."""
+    conn = _Conn([], sin_tabla_areas=False)
+
+    class _CursorQueRevienta(_Cursor):
+        async def execute(self, sql, params=None):
+            s = " ".join(sql.split())
+            if s.startswith("SELECT clave, color FROM areas"):
+                raise _ErrorSQL("53300")  # too_many_connections, al azar
+            return await super().execute(sql, params)
+
+    conn.cursor = lambda row_factory=None: _CursorQueRevienta(conn)
+    guardado = db.pool
+    db.pool = _Pool(conn)
+    try:
+        bucle = asyncio.new_event_loop()
+        try:
+            try:
+                bucle.run_until_complete(db.areas())
+                assert False, "un 53300 no puede volver como lista vacía"
+            except _ErrorSQL as e:
+                assert e.sqlstate == "53300"
+        finally:
+            bucle.close()
+    finally:
+        db.pool = guardado
+
+
+def test_tareas_por_grupo_trae_el_area_de_cada_fila():
+    """Con la columna puesta, el área que la base devuelve viaja hasta la
+    fila que pinta el panel -- sin que este código la toque ni la traduzca."""
+    filas = [_fila(1, area="CDS"), _fila(2, area=None)]
+    grupos = _grupos(filas, hoy=date(2026, 9, 8))
+    todas = [t for g in grupos.values() for t in g]
+    por_id = {t["id"]: t["area"] for t in todas}
+    assert por_id == {1: "CDS", 2: None}, (
+        f"el área no viajó como vino de la base: {por_id}")
+
+
+def test_tareas_por_grupo_cae_a_sin_area_si_la_columna_no_existe():
+    """Si `tareas.area` todavía no existe (SQLSTATE 42703), la consulta CON
+    área revienta y el código tiene que caer a la de antes -- SIN que el panel
+    entero se rompa. La fila que la base «devuelve» en este escenario no trae
+    ninguna clave `area` -- así sería de verdad una fila de la consulta vieja
+    -- y aun así el resultado tiene que traer `area: None`, puesto por el
+    código y no por la fixture."""
+    fila_sin_columna = {"id": 9, "titulo": "sin migrar", "estado": "pendiente",
+                        "vence_en": None,
+                        "creado_en": datetime(2026, 8, 1, tzinfo=UTC),
+                        "bandeja_id": 909, "responsable_chat_id": None,
+                        "completado_en": None}
+    assert "area" not in fila_sin_columna, (
+        "la fixture no puede tener área: se está simulando la columna ausente")
+    grupos = _grupos([fila_sin_columna], hoy=date(2026, 9, 8))
+    todas = [t for g in grupos.values() for t in g]
+    assert todas and todas[0]["area"] is None, (
+        f"con la columna ausente, el área tiene que quedar en None: {todas}")
+
+
+def test_tareas_por_grupo_cae_a_sin_area_usa_de_verdad_la_consulta_vieja():
+    """Y no solo el resultado: el SQL que de verdad se ejecuta cuando la
+    columna no existe es la consulta SIN `area`, no la consulta con `area`
+    ejecutándose dos veces por accidente."""
+    filas = [_fila(1)]
+    _, conn = _con_base(filas, lambda: db.tareas_por_grupo(
+        hoy=date(2026, 9, 8)), sin_columna_area=True)
+    sqls = [s for s, _ in conn.sql]
+    con_area = [s for s in sqls if "COALESCE(p.area, t.area)" in s]
+    sin_area = [s for s in sqls if s.startswith("SELECT t.id, t.titulo")
+               and "COALESCE(p.area, t.area)" not in s]
+    assert len(con_area) == 1, (
+        f"tiene que INTENTAR la consulta con área una vez: {con_area}")
+    assert len(sin_area) == 1, (
+        f"y CAER a la consulta vieja una vez, no más ni menos: {sin_area}")
 
 
 # ── Los grupos no salen de una lista de estados ──────────────────────────

@@ -87,11 +87,29 @@ class _Cur:
         return self._row
 
 
+class _Transaccion:
+    """El SAVEPOINT de mentira que usa `crear_desde_interpretacion` (encargo
+    4) alrededor del INSERT de `tareas`. Acá nunca falla; solo hace falta
+    para que `async with conn.transaction():` no reviente con AttributeError."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *e):
+        return False
+
+
 class FakeConn:
     def __init__(self):
         self._id = 0
         self._logid = 1000
         self.anticipos_insertados: list | None = None
+
+    def transaction(self):
+        return _Transaccion(self)
 
     async def execute(self, sql, params=None):
         s = " ".join(sql.split())

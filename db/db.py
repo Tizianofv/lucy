@@ -1868,6 +1868,42 @@ def grupo_de_tarea(estado, vence_en, hoy: date, completado_en=None) -> str:
     return "proximas"
 
 
+async def areas() -> list[dict]:
+    """Las áreas declaradas, en su orden: `[{clave, color}, ...]`.
+
+    LA CLAVE ES EL NOMBRE QUE SE VE ('CDS', 'ACD', '🛠️ Técnico',
+    '🏠 Personal') — no hay traducción por medio, ver
+    `db/migrations/2026-09-22_areas.sql`. Panel y Lucy leen esta función; no
+    hay ninguna copia de la lista escrita a mano en ningún otro sitio del
+    código, así que un área nueva aparece sola en los dos.
+
+    SI LA TABLA TODAVÍA NO EXISTE (la migración no se aplicó: SQLSTATE
+    42P01, undefined_table), devuelve `[]` en vez de reventar — mismo patrón
+    que `cerebro/consultar.py::_comentarios_presentes` para el mismo caso.
+    Con `[]`, el panel simplemente no ofrece ningún área para elegir (las
+    tareas existentes se siguen viendo, sin etiqueta) y Lucy no la menciona
+    en el prompt: ninguno de los dos inventa una lista.
+
+    CUALQUIER OTRO FALLO SE PROPAGA: no hay una lista "segura" que inventar
+    si la pregunta de verdad no se pudo contestar.
+    """
+    async with pool.connection() as conn:
+        try:
+            async with conn.transaction():
+                cur = conn.cursor(row_factory=dict_row)
+                await cur.execute(
+                    "SELECT clave, color FROM areas ORDER BY orden, clave")
+                return list(await cur.fetchall())
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate == "42P01":
+                return []
+            raise
+
+
 async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -> dict:
     """Las tareas vivas, repartidas en los grupos del panel.
 
@@ -1898,21 +1934,61 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
     cerró. No se calcula acá si "ya toca": eso es al criterio, no a la
     consulta — la misma separación que ya tiene "atrasada".
 
-    Devuelve {"grupos": [{clave, titulo, filas}], "hay_mas": bool}. Los grupos
-    vacíos no se pintan, y ninguno se pierde: ver el bucle del final.
+    EL ÁREA (encargo 4) sale de `COALESCE(p.area, t.area)`: si la tarea tiene
+    proyecto, la restricción `tareas_area_no_con_proyecto` ya garantiza que
+    `t.area` está en NULL, así que el `COALESCE` termina siendo el área del
+    proyecto sin que este código tenga que preguntar "¿tiene proyecto?" — la
+    base vuelve irrepresentable el caso que habría que manejar acá. El
+    `LEFT JOIN` es obligatorio por la misma regla de siempre: una tarea sin
+    proyecto (la mayoría) no puede desaparecer porque el JOIN la exija.
+
+    SI LA COLUMNA `area` TODAVÍA NO EXISTE (la migración
+    `2026-09-22_areas.sql` no se aplicó: SQLSTATE 42703, undefined_column),
+    esto cae a la consulta de ANTES del encargo 4, sin `area` ni el JOIN —
+    mismo patrón que `cerebro/consultar.py::_comentarios_presentes` usa para
+    una tabla que todavía no existe (42P01), con un SAVEPOINT
+    (`conn.transaction()` anidado) para que el fallo no deje abortada la
+    conexión antes de reintentar. Así Lucy puede arrancar (y el panel puede
+    pintarse) ANTES de que la sala aplique la migración a producción — las
+    tareas simplemente salen sin área, que es como se veían hasta ayer.
+
+    CUALQUIER OTRO FALLO SE PROPAGA: si no se pudo traer las tareas por un
+    motivo distinto, no hay nada seguro que devolver.
     """
-    async with pool.connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(
+    con_area = """
+            SELECT t.id, t.titulo, t.estado, t.vence_en, t.creado_en,
+                   t.bandeja_id, t.responsable_chat_id, t.completado_en,
+                   COALESCE(p.area, t.area) AS area
+              FROM tareas t
+              LEFT JOIN proyectos p ON p.id = t.proyecto_id
+             WHERE t.borrado_en IS NULL
+             ORDER BY t.vence_en ASC NULLS LAST, t.creado_en ASC, t.id ASC
+             LIMIT %s
             """
+    sin_area = """
             SELECT t.id, t.titulo, t.estado, t.vence_en, t.creado_en,
                    t.bandeja_id, t.responsable_chat_id, t.completado_en
               FROM tareas t
              WHERE t.borrado_en IS NULL
              ORDER BY t.vence_en ASC NULLS LAST, t.creado_en ASC, t.id ASC
              LIMIT %s
-            """, (limite + 1,))
-        filas = list(await cur.fetchall())
+            """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            async with conn.transaction():
+                await cur.execute(con_area, (limite + 1,))
+                filas = list(await cur.fetchall())
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate != "42703":
+                raise
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(sin_area, (limite + 1,))
+            filas = list(await cur.fetchall())
 
     hay_mas = len(filas) > limite
     if hay_mas:
@@ -1923,6 +1999,12 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
     for f in filas:
         f["vence_dia"] = dia_rd(f.get("vence_en"))
         f["completado_dia"] = dia_rd(f.get("completado_en"))
+        # `setdefault` y no `f["area"] = f.get("area")`: con la consulta SIN
+        # área (la columna todavía no existe), la clave ni siquiera está en
+        # la fila, y de esta forma queda `None` explícito en los dos casos
+        # en vez de que la plantilla tenga que adivinar si falta la clave o
+        # si de verdad no hay área.
+        f.setdefault("area", None)
         clave = grupo_de_tarea(f.get("estado"), f.get("vence_en"), hoy,
                                f.get("completado_en"))
         por_clave.setdefault(clave, []).append(f)
@@ -2353,7 +2435,8 @@ SIN_ANTICIPOS: list[int] = []
 
 
 async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
-                                     vence_en: datetime | None) -> int:
+                                     vence_en: datetime | None,
+                                     area: str | None = None) -> int:
     """Una tarea escrita a mano en el panel. La cuarta escritura del panel.
 
     QUIÉN LA ANOTÓ NO SE PUEDE MENTIR, y por eso esta función escribe DOS filas
@@ -2395,6 +2478,20 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
     Y va con `estado='procesado'` para que `tomar_pendientes` no la levante:
     no hay nada que interpretar, la tarea ya está creada.
 
+    EL ÁREA (encargo 4) es el único campo nuevo, y esta pantalla NUNCA elige
+    proyecto —`/tareas/nueva` no tiene ese selector (ver su docstring: «SOLO
+    DOS CAMPOS», ahora tres)—, así que `area` siempre puede grabarse sin
+    chocar con `tareas_area_no_con_proyecto`: esa tarea nace con
+    `proyecto_id IS NULL` siempre, y la restricción de la base ya lo permite
+    sin que este código tenga que comprobarlo dos veces. Quien llama decide
+    si `area` es `None` («sin área») o una de las claves de `areas`; esta
+    función no valida el valor -- lo mismo que `crear_tarea_desde_el_panel`
+    no valida `titulo` contra ningún vocabulario: quien llama (la ruta HTTP)
+    ya limitó las opciones a un `<select>` con lo que `db.areas()` devuelve, y
+    si algo escribe acá con una clave que no existe, la FK
+    `tareas.area REFERENCES areas(clave)` la rechaza -- el mismo patrón que ya
+    usan las categorías de gastos.
+
     SIN GUARDA DE DUPLICADOS, al revés que el alta por Telegram
     (`acciones/crud.py:_duplicado_pendiente`). Los motivos, por orden de peso:
 
@@ -2434,18 +2531,45 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
             (chat_id,))
         bandeja_id = (await cur.fetchone())["id"]
 
-        await cur.execute(
+        # EL ÁREA TOLERA LA MIGRACIÓN SIN APLICAR, igual que el lado de lectura
+        # (`tareas_por_grupo`, `areas()`): si `tareas.area` todavía no existe
+        # (SQLSTATE 42703), la tarea se crea igual, sin área -- perder el área
+        # pedida es mejor que no crear la tarea. El SAVEPOINT
+        # (`conn.transaction()` anidado) es necesario porque `bandeja` YA se
+        # insertó arriba, en la MISMA conexión: sin savepoint, un error acá
+        # abortaría toda la transacción y la fila de bandeja se perdería con
+        # ella al reintentar.
+        con_area = """
+            INSERT INTO tareas
+              (bandeja_id, titulo, vence_en, anticipos_min, area)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING *
             """
+        sin_area = """
             INSERT INTO tareas
               (bandeja_id, titulo, vence_en, anticipos_min)
             VALUES (%s, %s, %s, %s)
             RETURNING *
-            """,
-            (bandeja_id, titulo, vence_en, SIN_ANTICIPOS))
-        # RETURNING * y no una fila reconstruida a mano: `despues` tiene que ser
-        # lo que de verdad quedó guardado —con el id, el creado_en y los
-        # defaults que puso Postgres—, no lo que creíamos estar mandando.
-        fila = await cur.fetchone()
+            """
+        try:
+            async with conn.transaction():
+                await cur.execute(
+                    con_area, (bandeja_id, titulo, vence_en, SIN_ANTICIPOS, area))
+                # RETURNING * y no una fila reconstruida a mano: `despues` tiene
+                # que ser lo que de verdad quedó guardado —con el id, el
+                # creado_en y los defaults que puso Postgres—, no lo que
+                # creíamos estar mandando.
+                fila = await cur.fetchone()
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate != "42703":
+                raise
+            await cur.execute(
+                sin_area, (bandeja_id, titulo, vence_en, SIN_ANTICIPOS))
+            fila = await cur.fetchone()
 
         await conn.execute(
             """

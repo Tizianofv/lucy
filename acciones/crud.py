@@ -268,6 +268,20 @@ async def crear_desde_interpretacion(
     persona_id = await db.buscar_o_crear_persona(str(r.get("persona") or ""))
     proyecto_id = await db.buscar_o_crear_proyecto(str(r.get("proyecto") or ""))
 
+    # EL ÁREA, SOLO PARA TAREAS (encargo 4). "Una tarea dentro de un proyecto
+    # nunca tiene un área propia distinta" (decisión de Tiziano, "No, toma la
+    # del proyecto") se hace IRREPRESENTABLE también en ESTE camino, no solo
+    # en la base: si la tarea tiene proyecto, lo que se haya pedido en "area"
+    # se IGNORA -- no es un rechazo, porque el área de todos modos sale del
+    # proyecto (`COALESCE(p.area, t.area)` en `db.tareas_por_grupo`), así que
+    # guardarla igual sería una copia que se puede desincronizar del
+    # proyecto sin que nadie lo note. Sin proyecto, se manda tal cual: si no
+    # es una clave que exista en `areas`, la FK `tareas.area → areas.clave`
+    # la rechaza -- SIN GUARDA acá, por pedido explícito del encargo 4
+    # ("nada de guardas sobre lo que escribe el modelo").
+    area_pedida = str(r.get("area") or "").strip() or None
+    area_tarea = area_pedida if proyecto_id is None else None
+
     async with db.pool.connection() as conn:
         if clas == "tarea":
             tabla = "tareas"
@@ -341,18 +355,44 @@ async def crear_desde_interpretacion(
                             "reasigné — si hay que cambiarla, decímelo "
                             "explícito.")
                 return tabla, ya[0], log_id
-            cur = await conn.execute(
+            # DOS FORMAS DEL INSERT (encargo 4), igual que
+            # `db.crear_tarea_desde_el_panel`: `con_area` trae la columna
+            # `area`, y si `tareas.area` todavía no existe (la migración no
+            # se aplicó: SQLSTATE 42703) se cae a `sin_area` -- la de
+            # siempre -- dentro de un SAVEPOINT para que el fallo no deje
+            # abortada la transacción completa (que también tiene que
+            # escribir `log_acciones` después). Lucy puede seguir creando
+            # tareas ANTES de que la sala aplique la migración.
+            params_base = (
+                bandeja_id, titulo, detalle, cuando,
+                str(r.get("recurrencia") or "").strip() or None,
+                proyecto_id, persona_id, _anticipos(r.get("anticipos_min")),
+                responsable_chat_id)
+            con_area = """
+                INSERT INTO tareas
+                  (bandeja_id, titulo, detalle, vence_en, recurrencia,
+                   proyecto_id, persona_id, anticipos_min,
+                   responsable_chat_id, area)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                 """
+            sin_area = """
                 INSERT INTO tareas
                   (bandeja_id, titulo, detalle, vence_en, recurrencia,
                    proyecto_id, persona_id, anticipos_min, responsable_chat_id)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
-                """,
-                (bandeja_id, titulo, detalle, cuando,
-                 str(r.get("recurrencia") or "").strip() or None,
-                 proyecto_id, persona_id, _anticipos(r.get("anticipos_min")),
-                 responsable_chat_id),
-            )
+                """
+            try:
+                async with conn.transaction():
+                    cur = await conn.execute(
+                        con_area, params_base + (area_tarea,))
+            except Exception as e:
+                try:
+                    sqlstate = e.sqlstate
+                except AttributeError:
+                    raise e from None
+                if sqlstate != "42703":
+                    raise
+                cur = await conn.execute(sin_area, params_base)
 
         elif clas == "cita":
             tabla = "eventos"

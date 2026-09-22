@@ -97,11 +97,18 @@ class _Cursor:
             self._filas = [fila]
 
         elif s.startswith("INSERT INTO tareas"):
+            # Dos formas posibles desde el encargo 4: con área (5 parámetros)
+            # y sin área, la de siempre (4) -- ver `db.crear_tarea_desde_el_panel`.
             c.sig_tarea += 1
-            bandeja_id, titulo, vence_en, anticipos = params
+            if len(params) == 5:
+                bandeja_id, titulo, vence_en, anticipos, area = params
+            else:
+                bandeja_id, titulo, vence_en, anticipos = params
+                area = None
             fila = {"id": c.sig_tarea, "bandeja_id": bandeja_id,
                     "titulo": titulo, "vence_en": vence_en,
-                    "anticipos_min": anticipos, "estado": "pendiente",
+                    "anticipos_min": anticipos, "area": area,
+                    "estado": "pendiente",
                     "creado_en": datetime(2026, 9, 9, 12, tzinfo=UTC),
                     "completado_en": None, "borrado_en": None}
             c.tareas.append(fila)
@@ -109,6 +116,12 @@ class _Cursor:
 
         elif s.startswith("INSERT INTO log_acciones"):
             c.log.append((s, params))
+
+        elif s.startswith("SELECT clave, color FROM areas"):
+            # `db.areas()`: la lista de mentira que se le haya puesto a esta
+            # conexión. Vacía por defecto -- como si la migración del encargo
+            # 4 no se hubiera corrido todavía.
+            self._filas = list(c.areas)
 
         elif s.startswith("SELECT t.id, t.titulo"):
             # El LEFT JOIN contra bandeja, a mano: `quien` es el chat de la
@@ -126,10 +139,27 @@ class _Cursor:
         return self._filas[0] if self._filas else None
 
 
+class _Transaccion:
+    """El SAVEPOINT de mentira que usa `db.tareas_por_grupo` (encargo 4) para
+    poder caer a la consulta sin `area` si la columna todavía no existe. Acá
+    nunca falla, así que no hay nada que atrapar -- pero el `except Exception`
+    de `db.py` necesita el `async with conn.transaction():` para no reventar
+    con AttributeError antes de llegar a ejecutar nada."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *e):
+        return False
+
+
 class _Conn:
-    def __init__(self, tareas=None, bandeja=None):
+    def __init__(self, tareas=None, bandeja=None, areas=None):
         self.tareas = list(tareas or [])
         self.bandeja = list(bandeja or [])
+        self.areas = list(areas or [])
         self.log: list = []
         self.sql: list = []
         self.sig_bandeja = 900
@@ -140,6 +170,9 @@ class _Conn:
 
     async def execute(self, sql, params=None):
         return await _Cursor(self).execute(sql, params)
+
+    def transaction(self):
+        return _Transaccion(self)
 
 
 class _CM:
@@ -496,6 +529,84 @@ def test_no_hay_guarda_de_duplicados_y_es_una_decision_dicha():
     assert len(conn.log) == 2, "una de las dos quedó sin huella"
 
 
+# ── El área (encargo 4) ────────────────────────────────────────────────
+
+def test_el_area_elegida_se_guarda():
+    """Elegir un área en el formulario la deja escrita en la tarea."""
+    conn = _Conn(areas=[{"clave": "CDS", "color": "#2b6cb0"}])
+    r, conn = _mandar({"titulo": "grabar la intro", "area": "CDS"}, conn=conn)
+    assert r.status_code == 303, f"el alta con área devolvió {r.status_code}"
+    assert conn.tareas[0]["area"] == "CDS", (
+        f"el área elegida no quedó guardada: {conn.tareas[0]}")
+
+
+def test_sin_elegir_area_la_tarea_queda_sin_area():
+    """No elegir nada es una respuesta válida, no un error: la tarea nace
+    «sin área», el mismo estado normal que ya tienen las 91 de hoy."""
+    r, conn = _mandar({"titulo": "ordenar cables"})
+    assert r.status_code == 303
+    assert conn.tareas[0]["area"] is None, (
+        f"sin elegir área, se guardó algo: {conn.tareas[0]['area']!r}")
+
+
+def test_un_area_que_no_esta_en_la_lista_se_rechaza():
+    """El `<select>` solo ofrece lo que `db.areas()` devuelve. Si de todos
+    modos llega una clave que no está ahí -- un formulario viejo en caché, o
+    un POST hecho a mano -- se rechaza como un título vacío: no se deja que la
+    FK de la base lo convierta en un 500."""
+    conn = _Conn(areas=[{"clave": "CDS", "color": "#2b6cb0"}])
+    r, conn = _mandar(
+        {"titulo": "una tarea", "area": "Marketing"}, conn=conn)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/tareas/nueva?error=area", (
+        f"no dijo que el área no era válida: {r.headers['location']}")
+    assert conn.tareas == [], "creó la tarea con un área que no existe"
+    assert conn.bandeja == [], "dejó una fila de bandeja huérfana"
+
+
+def test_un_area_valida_pero_de_otra_lista_anterior_tambien_se_rechaza():
+    """Y si la lista de áreas está VACÍA -- la migración no se aplicó, o
+    `db.areas()` no devolvió nada -- CUALQUIER clave se rechaza: no hay nada
+    contra qué validarla, y guardar a ciegas dejaría una FK rota esperando a
+    que la migración corra."""
+    conn = _Conn(areas=[])
+    r, conn = _mandar({"titulo": "una tarea", "area": "CDS"}, conn=conn)
+    assert r.status_code == 303
+    assert r.headers["location"] == "/tareas/nueva?error=area"
+    assert conn.tareas == []
+
+
+def test_el_selector_de_area_sale_de_db_areas_y_no_de_una_lista_escrita():
+    """Dos claves que NO son ninguna de las 4 de producción, a propósito: si
+    el `<select>` las pinta es porque las sacó de la base, no porque estén
+    tecleadas en la plantilla o en la ruta."""
+    conn = _Conn(areas=[{"clave": "Zeta", "color": "#111111"},
+                        {"clave": "Omega", "color": "#222222"}])
+    html = _con_base(conn, lambda: panel.tarea_nueva(_get("/tareas/nueva")))
+    html = html.body.decode()
+    assert '<option value="Zeta">Zeta</option>' in html
+    assert '<option value="Omega">Omega</option>' in html
+    assert 'name="area"' in html
+
+
+def test_el_area_se_ve_en_la_pantalla_con_su_color_y_sin_area_se_ve_gris():
+    """De punta a punta: se crea una tarea CON área y otra SIN, se pinta
+    /tareas con la MISMA base, y las dos etiquetas se ven -- la del área con
+    su color, la de «sin área» sin esconderse."""
+    conn = _Conn(areas=[{"clave": "CDS", "color": "#2b6cb0"}])
+    r, conn = _mandar({"titulo": "con area", "area": "CDS"}, conn=conn)
+    assert r.status_code == 303
+    r2, conn = _mandar({"titulo": "sin area"}, conn=conn)
+    assert r2.status_code == 303
+
+    html = _con_base(conn, lambda: panel.tareas(_get("/tareas"))).body.decode()
+    assert "con area" in html and "sin area" in html
+    assert "background:#2b6cb0" in html, (
+        "la etiqueta de CDS no salió con su color")
+    assert "sin área" in html, (
+        "la tarea sin área no muestra su propia etiqueta")
+
+
 # ── De punta a punta: se escribe y SE VE ─────────────────────────────────
 
 def _crear_y_pintar(campos: dict):
@@ -563,14 +674,14 @@ def test_el_aviso_de_creada_se_pinta_con_el_numero():
 # ── La pantalla del formulario ───────────────────────────────────────────
 
 def _pintar_formulario(error: str = ""):
-    bucle = asyncio.new_event_loop()
-    try:
-        r = bucle.run_until_complete(
-            panel.tarea_nueva(_get("/tareas/nueva"), error=error))
-        assert r.status_code == 200, f"/tareas/nueva devolvió {r.status_code}"
-        return r.body.decode()
-    finally:
-        bucle.close()
+    # GET /tareas/nueva ahora pide `db.areas()` (encargo 4) para llenar el
+    # <select>, así que necesita una base de mentira -- una vacía alcanza:
+    # equivale a la migración sin aplicar, y el formulario tiene que
+    # renderizar igual, solo con «Sin área».
+    r = _con_base(_Conn(), lambda: panel.tarea_nueva(
+        _get("/tareas/nueva"), error=error))
+    assert r.status_code == 200, f"/tareas/nueva devolvió {r.status_code}"
+    return r.body.decode()
 
 
 def test_el_formulario_se_pinta_de_verdad():
@@ -637,18 +748,30 @@ def test_el_alta_solo_toca_columnas_que_el_esquema_declara():
 
     Esto NO reemplaza a `tools/humo.py` —schema.sql describe la base, no ES la
     base— pero agarra el typo sin necesidad de DATABASE_URL.
+
+    DESDE EL ENCARGO 4 (áreas, 22-sep-2026) hay CUATRO `INSERT`, no tres:
+    `tareas` aparece dos veces —`con_area` (con la columna `area`) y `sin_area`
+    (la de siempre, a la que se cae si la migración todavía no corrió, ver
+    `db.crear_tarea_desde_el_panel`)—. Las dos son código real que corre según
+    lo que la base tenga puesto, así que las dos se comprueban.
     """
     fuente = inspect.getsource(db.crear_tarea_desde_el_panel)
     declaradas = db.columnas_declaradas()
     tablas = re.findall(r"INSERT INTO (\w+)\s*\(([^)]*)\)", fuente)
-    assert len(tablas) == 3, (
-        f"se esperaban tres INSERT (bandeja, tareas, log_acciones): {tablas}")
+    assert len(tablas) == 4, (
+        f"se esperaban cuatro INSERT (bandeja, tareas x2, log_acciones): "
+        f"{tablas}")
+    vistas_tareas = 0
     for tabla, crudo in tablas:
         columnas = {c.strip() for c in crudo.split(",") if c.strip()}
         assert columnas, f"no se leyó ninguna columna del INSERT de {tabla}"
         faltan = columnas - set(declaradas.get(tabla, ()))
         assert not faltan, (
             f"{tabla}: columnas que el esquema no declara: {faltan}")
+        if tabla == "tareas":
+            vistas_tareas += 1
+    assert vistas_tareas == 2, (
+        f"esperaba con_area y sin_area, vi {vistas_tareas} INSERT a tareas")
 
 
 def test_el_alta_no_toca_ninguna_tabla_de_mas():

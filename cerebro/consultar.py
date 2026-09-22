@@ -72,7 +72,7 @@ TIMEOUT_SQL = "10s"
 # automático: son los datos de Tiziano. El orden es el del texto.
 TABLAS_DE_TIZIANO = ("bandeja", "tareas", "comentarios_tarea", "eventos",
                      "notas", "movimientos", "personas", "lugares", "proyectos",
-                     "log_acciones")
+                     "log_acciones", "areas")
 
 # Las que NO ve, con el motivo. Están acá y no simplemente ausentes para que
 # una tabla NUEVA no entre en silencio por ninguno de los dos lados: el test
@@ -132,6 +132,8 @@ TITULOS = {
                '"casa").',
     "proyectos": "los proyectos de su vida y de CDS.",
     "log_acciones": "todo lo que Lucy hizo, con el antes y el después.",
+    "areas": "el vocabulario cerrado de áreas -- CDS, ACD, Técnico, "
+             "Personal-- que puede llevar una tarea o un proyecto.",
 }
 
 # El significado de una columna, cuando el nombre no alcanza. Es lo ÚNICO

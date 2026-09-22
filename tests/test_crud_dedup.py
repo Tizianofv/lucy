@@ -80,14 +80,49 @@ class _Cur:
         return self._row
 
 
+class _ErrorSQL(Exception):
+    """Un error de Postgres de mentira, con el `sqlstate` que haga falta --
+    para probar el `except` del INSERT con área sin necesitar una base real."""
+
+    def __init__(self, sqlstate: str):
+        self.sqlstate = sqlstate
+        super().__init__(f"error de mentira, sqlstate={sqlstate}")
+
+
+class _Transaccion:
+    """El SAVEPOINT de mentira que usa `crear_desde_interpretacion` (encargo
+    4) alrededor del INSERT de `tareas`, para poder caer a la versión sin
+    `area` si la columna todavía no existe. Acá nunca falla -- `FakeConn`
+    nunca lanza 42703 -- pero el `async with conn.transaction():` del código
+    real necesita el método para no reventar con AttributeError antes de
+    ejecutar nada."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *e):
+        return False
+
+
 class FakeConn:
-    def __init__(self):
+    def __init__(self, sin_columna_area: bool = False):
         self.tareas: list[dict] = []
         self.eventos: list[dict] = []
         self.logs: list[dict] = []
         self._ids = {"tareas": 0, "eventos": 0}
         self._logid = 1000
         self.sql: list[tuple[str, tuple]] = []  # todo lo ejecutado, para espiar
+        # Simula que `tareas.area` todavía no existe (la migración del
+        # encargo 4 no se aplicó): el INSERT de 10 parámetros (con área)
+        # revienta con 42703 y `crear_desde_interpretacion` tiene que caer al
+        # de 9 (sin área).
+        self.sin_columna_area = sin_columna_area
+
+    def transaction(self):
+        return _Transaccion(self)
 
     # -- helpers de siembra (una fila que "ya existía") ---------------------
     def seed_tarea(self, titulo, vence, *, estado="pendiente", borrado_en=None,
@@ -139,16 +174,23 @@ class FakeConn:
             return _Cur((hits[-1]["id"],) if hits else None)
 
         if s.startswith("INSERT INTO tareas"):
+            if self.sin_columna_area and len(p) > 9:
+                raise _ErrorSQL("42703")
             self._ids["tareas"] += 1
             rid = self._ids["tareas"]
             _bandeja, titulo, _detalle, vence = p[0], p[1], p[2], p[3]
-            # El responsable viaja último en la tupla (encargo 2): por índice
-            # y no por desempaquetado fijo, así que agregar otra columna al
-            # final de acá no le rompe la lectura a nadie más.
+            # El responsable viaja en la posición 8 (encargo 2) y el área en
+            # la 9 (encargo 4, SOLO en la versión `con_area` -- la de
+            # `sin_area`, a la que se cae si la columna no existe, tiene 9
+            # parámetros y no 10). Por índice y no por desempaquetado fijo,
+            # así que agregar otra columna al final no le rompe la lectura a
+            # nadie más.
             responsable = p[8] if len(p) > 8 else None
+            area = p[9] if len(p) > 9 else None
             self.tareas.append({"id": rid, "titulo": titulo, "vence_en": vence,
                                 "estado": "pendiente", "borrado_en": None,
-                                "responsable_chat_id": responsable})
+                                "responsable_chat_id": responsable,
+                                "area": area})
             return _Cur((rid,))
 
         if s.startswith("INSERT INTO eventos"):
@@ -408,6 +450,100 @@ async def test_una_cita_con_responsable_no_lo_escribe_ni_lo_valida():
     assert len(conn.eventos) == 1, (
         "una clasificación que no valga como responsable no puede tumbar la "
         "creación de una cita: ese campo no es suyo")
+
+
+# ── El área (encargo 4) ────────────────────────────────────────────────
+#
+# LA FRONTERA: lo que NO prueba nada de acá abajo es que Postgres rechace un
+# área que no está en `areas.clave` (la FK) o una tarea con proyecto Y área a
+# la vez (el CHECK `tareas_area_no_con_proyecto`) -- `FakeConn` acepta
+# cualquier valor que se le mande, no valida nada. Eso es a propósito: el
+# encargo 4 pide "nada de guardas sobre lo que escribe el modelo", así que no
+# hay ninguna validación en Python que probar -- la garantía vive en la base,
+# y verificarla de verdad necesita Postgres (`tools/humo.py`, DATABASE_URL).
+# Lo que SÍ se prueba acá es la parte que SÍ es código Python: que el área se
+# guarda cuando corresponde, se ignora cuando la tarea tiene proyecto (eso lo
+# decide `crear_desde_interpretacion` ANTES de tocar la base, sin esperar a
+# que la FK lo rechace), y que la ausencia de la columna no rompe la
+# creación.
+
+async def test_el_area_pedida_se_guarda_si_la_tarea_no_tiene_proyecto():
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn()
+    _instalar(conn)  # buscar_o_crear_proyecto -> None, siempre
+
+    await crud.crear_desde_interpretacion(
+        1, {"clasificacion": "tarea", "titulo": "grabar la intro",
+            "area": "CDS"})
+
+    assert len(conn.tareas) == 1
+    assert conn.tareas[0]["area"] == "CDS", (
+        f"el área pedida no se guardó: {conn.tareas[0]}")
+
+
+async def test_sin_pedir_area_la_tarea_queda_sin_area():
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn()
+    _instalar(conn)
+
+    await crud.crear_desde_interpretacion(
+        1, {"clasificacion": "tarea", "titulo": "ordenar cables"})
+
+    assert conn.tareas[0]["area"] is None
+
+
+async def test_el_area_se_ignora_si_la_tarea_tiene_proyecto():
+    """«Una tarea dentro de un proyecto nunca tiene un área propia distinta»
+    (decisión de Tiziano). Si Lucy manda "area" Y "proyecto" juntos -- el
+    modelo no siempre sigue la indicación del prompt al pie de la letra --,
+    el área se ignora en vez de guardarse una copia que se puede
+    desincronizar del proyecto."""
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn()
+
+    async def _cero_persona(_):
+        return None
+
+    async def _con_proyecto_77(_):
+        return 77
+
+    db.pool = FakePool(conn)
+    db.buscar_o_crear_persona = _cero_persona
+    db.buscar_o_crear_proyecto = _con_proyecto_77
+
+    await crud.crear_desde_interpretacion(
+        1, {"clasificacion": "tarea", "titulo": "algo del proyecto",
+            "proyecto": "Álbum nuevo", "area": "CDS"})
+
+    assert len(conn.tareas) == 1
+    assert conn.tareas[0]["area"] is None, (
+        f"el área tenía que ignorarse por tener proyecto: {conn.tareas[0]}")
+
+
+async def test_el_area_cae_a_la_version_sin_area_si_la_columna_no_existe():
+    """La migración del encargo 4 puede no haber corrido todavía. El INSERT
+    con área (10 parámetros) revienta con 42703 y el código tiene que crear
+    la tarea igual, cayendo al INSERT de 9 -- sin área -- en vez de fallar
+    la creación entera."""
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn(sin_columna_area=True)
+    _instalar(conn)
+
+    tabla, rid, _log = await crud.crear_desde_interpretacion(
+        1, {"clasificacion": "tarea", "titulo": "sin migrar todavía",
+            "area": "CDS"})
+
+    assert tabla == "tareas"
+    assert len(conn.tareas) == 1, (
+        "con la columna ausente, la tarea tiene que crearse igual")
+    assert "area" not in conn.tareas[0] or conn.tareas[0]["area"] is None, (
+        f"no puede haber guardado un área que la tabla no tiene: {conn.tareas[0]}")
+    # Y de verdad SE INTENTÓ con área primero: no es que el código nunca la
+    # haya pedido.
+    insert_tareas = [s for s, _ in conn.sql if s.startswith("INSERT INTO tareas")]
+    assert len(insert_tareas) == 2, (
+        f"tenía que intentar con área (y fallar) y después sin área: "
+        f"{insert_tareas}")
 
 
 # ── El testigo sobre eeb07dd: el duplicado NO PUEDE tirar el responsable ──

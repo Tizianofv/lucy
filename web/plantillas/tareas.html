@@ -95,7 +95,7 @@ aviso de Telegram que ya sonó.</p>
   {% for g in grupos %}
   <h2>{{ g.titulo }} · {{ g.filas|length }}</h2>
   <div class="scroll"><table>
-  <tr><th style="width:2.5rem"></th><th>Tarea</th><th>Vence</th>
+  <tr><th style="width:2.5rem"></th><th>Tarea</th><th>Área</th><th>Vence</th>
       <th>Responsable</th><th>Estado</th></tr>
   {% for t in g.filas %}
   <tr>
@@ -118,6 +118,20 @@ aviso de Telegram que ya sonó.</p>
        los comentarios. Es un ENLACE y no un formulario: esta lista tiene uno
        solo a propósito. #}
     <td><a href="/tareas/{{ t.id }}">{{ t.titulo }}</a></td>
+    {# LA ETIQUETA DE ÁREA (encargo 4), en la MISMA lista, siempre visible: sin
+       área se ve GRIS con su propio texto, nunca escondida. El color sale de
+       `colores_area`, que a su vez sale de `db.areas()` -- si la clave de esta
+       fila no está ahí (la migración corrió a medias, o la tabla cambió), cae
+       al mismo gris que "sin área" en vez de romper la pantalla con un color
+       inventado. #}
+    <td>
+      {%- if t.area and t.area in colores_area -%}
+      <span class="etiqueta-area"
+            style="background:{{ colores_area[t.area] }}">{{ t.area }}</span>
+      {%- else -%}
+      <span class="etiqueta-area etiqueta-area-vacia">sin área</span>
+      {%- endif -%}
+    </td>
     <td class="suave">
       {# LA FECHA SE MUEVE ACÁ MISMO, pero solo en las PENDIENTES: la regla vive
          en `db.mover_vence`, y la pantalla no ofrece el campo donde la

@@ -44,6 +44,13 @@
   form.filtros{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1.2rem}
   /* La tabla ancha se desplaza sola en el móvil en vez de romper la página. */
   .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  /* La etiqueta de área (encargo 4): el color de fondo lo pone `style=` en
+     línea, fila por fila —sale de `db.areas()`, no de aquí—; esta clase solo
+     define la forma. La de "sin área" no tiene `style=` con color: se queda
+     con el gris de --suave, siempre visible y nunca oculta. */
+  .etiqueta-area{display:inline-block;padding:.15rem .55rem;border-radius:99px;
+    font-size:.78rem;color:#fff;white-space:nowrap}
+  .etiqueta-area-vacia{background:var(--suave);color:var(--fondo)}
 </style></head><body>
 <!-- Este menú es la lista de pantallas del panel, y es la ÚNICA. De acá la lee
      `web/menu.py` y la inyecta en el prompt de Lucy, así que una pantalla que

@@ -60,12 +60,25 @@ CREATE TABLE personas (
   borrado_en TIMESTAMPTZ
 );
 
+-- Vocabulario cerrado de áreas (encargo 4, 22-sep-2026, migración
+-- 2026-09-22_areas.sql). LA CLAVE ES EL NOMBRE QUE SE VE, no un id sintético
+-- —mismo principio que las categorías de gastos—: lo que guarda `tareas.area`
+-- y `proyectos.area`, lo que Lucy escribe por Telegram y lo que pinta el
+-- panel son la MISMA cadena, sin tabla de traducción en el medio.
+CREATE TABLE areas (
+  clave  TEXT PRIMARY KEY,       -- 'CDS' | 'ACD' | '🛠️ Técnico' | '🏠 Personal'
+  color  TEXT NOT NULL,          -- para la etiqueta del panel, un hex
+  orden  INT NOT NULL DEFAULT 0  -- el orden en que se pintan
+);
+
 CREATE TABLE proyectos (
   id          BIGSERIAL PRIMARY KEY,
   creado_en   TIMESTAMPTZ NOT NULL DEFAULT now(),
   nombre      TEXT NOT NULL,
   descripcion TEXT,
   estado      TEXT NOT NULL DEFAULT 'activo',  -- activo | pausado | cerrado
+  area        TEXT REFERENCES areas(clave),    -- NULL = sin área, se ve con
+                                               --   su propia etiqueta gris
   borrado_en  TIMESTAMPTZ
 );
 
@@ -166,7 +179,23 @@ CREATE TABLE tareas (
   completado_en   TIMESTAMPTZ,
   avisos_enviados INT[] NOT NULL DEFAULT '{}',      -- minutos-antes ya avisados: {30,0} = avisó a -30 y a la hora
   anticipos_min   INT[] NOT NULL DEFAULT '{0}',     -- minutos-antes a avisar (por fila): {0}=solo a la hora; {30,0}=30' antes y a la hora
-  borrado_en      TIMESTAMPTZ
+  area            TEXT REFERENCES areas(clave),    -- el área de una tarea SUELTA (sin proyecto).
+                                                   --   Con proyecto_id puesto, ésta se queda en
+                                                   --   NULL: la restricción de abajo lo impone en
+                                                   --   la base, no en cada escritura. NULL también
+                                                   --   es "sin área todavía", y se ve con su
+                                                   --   etiqueta gris, no se esconde.
+  borrado_en      TIMESTAMPTZ,
+
+  -- «Una tarea dentro de un proyecto nunca tiene un área propia distinta»
+  -- (decisión de Tiziano: el área sale del proyecto, nadie la elige aparte).
+  -- El caso queda IRREPRESENTABLE, no validado en cada escritura: con
+  -- proyecto_id puesto, la base rechaza cualquier INSERT/UPDATE que además
+  -- traiga un área propia — lo intente el panel, `acciones/crud.py` o
+  -- cualquier otra cosa que hable con esta base. Mismo nombre que la
+  -- migración 2026-09-22_areas.sql, para que una base armada desde este
+  -- archivo y una migrada terminen con la restricción UNA sola vez.
+  CONSTRAINT tareas_area_no_con_proyecto CHECK (proyecto_id IS NULL OR area IS NULL)
 );
 
 -- Lo que las personas de la casa le comentan a una tarea desde el panel

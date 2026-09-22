@@ -180,6 +180,10 @@ def _montar(turnos: list[dict]) -> tuple[_BotFalso, dict]:
     db.buscar_esperando_respuesta = _nada
     db.ultimos_intercambios = _vacio
     db.listar_preferencias = _vacio
+    # `atender()` trae la lista de áreas (encargo 4) con `db.areas()`; se
+    # stubea vacía por el mismo motivo que `listar_preferencias`: este
+    # archivo prueba cerrar varias tareas, no áreas.
+    db.areas = _vacio
     db.cambiar_estado = _nada
     db.guardar_respuesta = _nada
 
@@ -1589,6 +1593,8 @@ def _montar_sobre_la_base(libro: _Libro):
     db.buscar_esperando_respuesta = _nada
     db.ultimos_intercambios = _vacio
     db.listar_preferencias = _vacio
+    # Mismo motivo que arriba: `atender()` también trae `db.areas()`.
+    db.areas = _vacio
 
     async def _ejecutar_sql(sql):
         return [{"id": 100 + i, "titulo": TITULOS[i]} for i in range(12)]
@@ -2235,21 +2241,30 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
     # saldría verde en ESTA guarda. Ninguna lo hace hoy, y
     # `tests/test_comentarios_de_tareas.py` pone rojo cualquier UPDATE que toque
     # algo más que el borrado.
-    assert len(declaradas) == 17 and len(vigiladas) == 8, (
+    #
+    # 22-sep-2026: 17 → 18 por `areas` (encargo 4). Queda FUERA de `crud.TABLAS`
+    # a propósito: es el VOCABULARIO cerrado, no una entidad de Tiziano —Lucy
+    # tiene que poder LEERLA (está en `TABLAS_DE_TIZIANO` de `consultar.py`,
+    # para que sepa qué áreas existen) pero no editarla, archivarla ni
+    # deshacerla con sus herramientas genéricas. Si mañana hiciera falta que
+    # el agente agregue o quite un área, eso es una decisión de Tiziano, no
+    # algo que entre solo por estar en `crud.TABLAS`.
+    assert len(declaradas) == 18 and len(vigiladas) == 8, (
         f"el reparto de tablas cambió: el esquema declara {len(declaradas)} y "
-        f"`crud.TABLAS` vigila {len(vigiladas)} (el 13-sep-2026 eran 17 y 8). "
+        f"`crud.TABLAS` vigila {len(vigiladas)} (el 22-sep-2026 eran 18 y 8). "
         f"Las que quedan sin juzgar serían {sorted(sin_juzgar)}. No se afloja "
         f"este número: se decide si las nuevas entran en la vigilancia y se "
         f"actualiza la frontera.")
 
-    # Las ocho que la puerta VE y la guarda NO JUZGA, enumeradas. `log_acciones`
+    # Las nueve que la puerta VE y la guarda NO JUZGA, enumeradas. `log_acciones`
     # está acá porque no es una tabla de dominio: es donde viven las huellas, y
     # se la mira aparte (`_Libro.huellas`). `backups` es donde escribe
-    # `db/backup.py:360`, que es legítimo y por eso sigue verde.
+    # `db/backup.py:360`, que es legítimo y por eso sigue verde. `areas` es el
+    # vocabulario cerrado (ver la nota de arriba).
     assert sin_juzgar == {
-        "backups", "bandeja", "categorias_aprendidas", "comentarios_tarea",
-        "consumos_estado", "correo_estado", "correo_reportado",
-        "cuentas_propias", "log_acciones",
+        "areas", "backups", "bandeja", "categorias_aprendidas",
+        "comentarios_tarea", "consumos_estado", "correo_estado",
+        "correo_reportado", "cuentas_propias", "log_acciones",
     }, (f"cambió qué tablas quedan fuera del juicio de esta guarda: "
         f"{sorted(sin_juzgar)}. Una escritura a cualquiera de ellas se VE pero "
         f"no se exige que deje huella ni que salga en el parte.")

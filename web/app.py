@@ -690,6 +690,15 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
         nombre. Esconderlo o cambiarlo por otra cosa sería reescribir el
         pasado.
 
+    EL ÁREA (encargo 4) se pinta en la MISMA lista, no en cuatro listas
+    separadas por área — eso partiría la pantalla en algo que Tiziano no pidió
+    y escondería una tarea del área equivocada detrás de una pestaña. Cada
+    fila lleva su etiqueta de color al lado del título; sin área se ve gris y
+    con el texto «sin área», nunca escondida. El color de cada clave sale de
+    `db.areas()` —no está escrito acá—, así que una quinta área trae su color
+    solo. Si la migración no se aplicó todavía, `db.areas()` da `[]` y todas
+    las tareas se pintan «sin área»: el panel sigue andando.
+
     Y LO QUE FALTA SE DICE. `sin_nombre` son los que pueden entrar y no tienen
     nombre puesto: mientras eso no sea cero, hay alguien a quien no se le puede
     asignar nada. `mal_escritos` son las entradas de la variable que no se
@@ -724,7 +733,10 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
          "asignables": [c for c, _ in config.personas_del_panel()],
          "nombres": config.NOMBRES_POR_CHAT,
          "sin_nombre": config.chats_sin_nombre(),
-         "mal_escritos": config.NOMBRES_MAL_ESCRITOS})
+         "mal_escritos": config.NOMBRES_MAL_ESCRITOS,
+         # {clave: color}, para pintar la etiqueta de cada fila sin que la
+         # plantilla tenga que adivinar un color por su cuenta.
+         "colores_area": {a["clave"]: a["color"] for a in await db.areas()}})
 
 
 @app.get("/tareas/historial", response_class=HTMLResponse)
@@ -954,23 +966,34 @@ async def tarea_nueva(request: Request, error: str = ""):
     propia, y en /tareas queda un ENLACE —no un formulario— que se ve también
     cuando la lista está vacía, que es justo cuando hace falta escribir la
     primera.
+
+    EL ÁREA (encargo 4) se puede elegir siempre en esta pantalla, sin
+    excepción: `/tareas/nueva` no tiene selector de proyecto —no se pidió, ver
+    el docstring de `crear_tarea`—, así que el caso que tendría que esconder
+    el selector («ya tiene proyecto, el área es la del proyecto») no existe
+    acá. `db.areas()` ya tolera que la tabla no exista (devuelve `[]`), así
+    que si la migración no se aplicó todavía el `<select>` sale vacío —solo
+    queda «Sin área»— en vez de romper la pantalla.
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     return plantillas.TemplateResponse(
         request, "tarea_nueva.html",
         {"error": error, "piso_fecha": PISO_FECHA.isoformat(),
-         "largo_titulo": LARGO_TITULO})
+         "largo_titulo": LARGO_TITULO, "areas": await db.areas()})
 
 
 @app.post("/tareas/nueva")
 async def crear_tarea(request: Request):
     """Escribir una tarea a mano. La cuarta escritura del panel.
 
-    SOLO DOS CAMPOS: título y cuándo vence. La tabla tiene prioridad,
-    recurrencia, proyecto, persona y anticipos, y ninguno entra acá — no se
-    pidieron, y `prioridad` está vacía en las 91 filas de producción. Un campo
-    que nadie llenó es una decisión inventada esperando a que alguien la crea.
+    TRES CAMPOS: título, cuándo vence, y —desde el encargo 4— área. La tabla
+    tiene prioridad, recurrencia, proyecto, persona y anticipos, y ninguno de
+    ésos entra acá — no se pidieron, y `prioridad` está vacía en las 91 filas
+    de producción. Un campo que nadie llenó es una decisión inventada
+    esperando a que alguien la crea. El área SÍ se pidió (requisito 3 del
+    encargo 4): esta pantalla nunca elige proyecto, así que no hay excepción
+    que aplicarle — se ofrece siempre.
 
     QUIÉN LA ANOTÓ SALE DE LA SESIÓN, no de un campo del formulario. Es el
     mismo chat que ya se comprobó para dejar entrar: un formulario que
@@ -981,7 +1004,16 @@ async def crear_tarea(request: Request):
     /efectivo. Y cada rechazo deja una línea en el log del servidor: un rechazo
     sin rastro es un fallo silencioso.
 
-    LO QUE SE ESCRIBIÓ NO VUELVE EN LA URL. Son dos campos y volver a
+    EL ÁREA SE VALIDA CONTRA `db.areas()`, no contra una lista escrita en este
+    archivo: lo que el `<select>` ofreció es lo único que se acepta, y si
+    mañana hay una quinta área, entra sola por los dos lados sin tocar esta
+    ruta. Vacío = sin área, que es válido siempre. Si de todos modos llega una
+    clave que no está en `db.areas()` —el formulario viejo en caché de un
+    navegador, o alguien posteando a mano—, se rechaza igual que un título
+    vacío: no se deja que la FK `tareas.area → areas.clave` lo convierta en un
+    500.
+
+    LO QUE SE ESCRIBIÓ NO VUELVE EN LA URL. Son pocos campos y volver a
     escribirlos cuesta poco; meter el título de una tarea en una query string
     lo deja en el historial del navegador y en el log de cualquier proxy, que
     es un precio bastante más alto.
@@ -1007,7 +1039,13 @@ async def crear_tarea(request: Request):
     if not ok:
         return _vuelta("fecha")
 
-    tid = await db.crear_tarea_desde_el_panel(chat, titulo, vence_en)
+    area = str(formulario.get("area", "")).strip() or None
+    if area is not None:
+        claves_validas = {a["clave"] for a in await db.areas()}
+        if area not in claves_validas:
+            return _vuelta("area")
+
+    tid = await db.crear_tarea_desde_el_panel(chat, titulo, vence_en, area)
     # Se vuelve A LA LISTA y no al formulario: la tarea recién escrita tiene
     # que VERSE en su grupo. Un "guardado" que no muestra lo guardado obliga a
     # confiar, y este panel existe para no tener que confiar.
