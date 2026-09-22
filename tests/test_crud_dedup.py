@@ -508,7 +508,10 @@ async def test_una_cita_con_responsable_no_lo_escribe_ni_lo_valida():
 # `tareas_area_no_con_proyecto` son la red de seguridad de la BASE, y no se
 # pueden probar sin Postgres -- `FakeConn` no los modela. Lo que se prueba
 # acá es que el CÓDIGO rechace antes de llegar a esa red, con un motivo
-# legible, y que no haya un segundo criterio en ningún lado.
+# legible, en los sitios que la prueba de hermanos (más abajo) puede ver --
+# que no son todos: su propio límite está declarado ahí, con la misma forma
+# de esta frase que un testigo encontró prometiendo de más (NO PASA sobre
+# `522fedf`).
 
 async def test_el_area_pedida_se_guarda_si_la_tarea_no_tiene_proyecto():
     _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
@@ -881,13 +884,13 @@ async def test_editar_rechaza_un_area_de_proyecto_que_no_existe():
     assert conn.campos_guardados is None
 
 
-# ── LA PUERTA ÚNICA: nada más en crud.py escribe `area` por su cuenta ────
+# ── LA PUERTA ÚNICA, y hasta dónde la prueba de abajo puede verlo ────────
 
 def test_todo_lo_que_toca_area_o_proyecto_id_en_crud_pasa_por_la_misma_puerta():
-    """No una lista tecleada de "los sitios que ya sé que hay": se recorre
-    CADA función de `acciones/crud.py` que mencione `area` O `proyecto_id` en
-    su cuerpo -- lo real, sacado del árbol de sintaxis -- y se exige que
-    TODAS llamen a `_area_que_vale`.
+    """Se recorre CADA función de `acciones/crud.py` que mencione `area` O
+    `proyecto_id` COMO CLAVE DE DICCIONARIO ENTRECOMILLADA en su cuerpo --
+    `campos["area"]`, `{"proyecto_id": ...}` -- y se exige que TODAS llamen a
+    `_area_que_vale`.
 
     POR QUÉ TAMBIÉN `proyecto_id`, no solo `area` (segunda vuelta, NO PASA
     sobre `2d8451c`): el testigo encontró que `editar("tareas", id,
@@ -900,23 +903,54 @@ def test_todo_lo_que_toca_area_o_proyecto_id_en_crud_pasa_por_la_misma_puerta():
     área. Así que ahora la lista de "sitios a vigilar" se deriva de las DOS
     palabras, no de una.
 
-    Así, el día que alguien agregue un tercer sitio que escriba `area` o
-    `proyecto_id` de una tarea sin pasar por la puerta, esto se pone rojo
-    solo, en vez de depender de que alguien se acuerde de mirar.
+    LA FRONTERA (corregida -- un testigo, NO PASA sobre `522fedf`, encontró
+    que la frase que había acá antes prometía de más, con la MISMA forma que
+    ya se había corregido dos veces en este archivo): esto ve un sitio que
+    escribe `area`/`proyecto_id` como CLAVE DE DICT -- `campos["area"] = ...`,
+    `{"proyecto_id": x}` --, porque así es como `ast.unparse` deja el
+    nombre, entre comillas. NO VE un sitio que escriba la columna como TEXTO
+    SUELTO dentro de una cadena de SQL crudo -- `"UPDATE tareas SET area = %s
+    WHERE id = %s"` -- porque ahí `ast.unparse` deja la cadena ENTERA entre
+    comillas y la palabra `area` queda suelta en el medio, sin las suyas
+    propias: ni `'area'` ni `"area"` aparecen como subcadena. Y este archivo
+    YA TIENE un sitio así, para otra columna: `acciones/crud.py:332`,
+    `"UPDATE tareas SET responsable_chat_id = %s WHERE id = %s"`, dentro de
+    `crear_desde_interpretacion`. Nada impide que mañana alguien escriba
+    `area` de la misma forma -- esta prueba no lo vería, y el propio testigo
+    lo demostró mutando: reescribir la limpieza del área como un `UPDATE`
+    crudo con `area` suelta en el texto deja esta prueba en VERDE. (La
+    mutación de control -- la misma idea pero con `area` como clave de dict
+    -- SÍ la atrapa; eso es lo que de verdad está probado.)
 
-    LA FRONTERA, medida mutando (y ésta SÍ dice la verdad, al revés que la
-    versión anterior de este mismo comentario): esto mira la función
-    ENTERA, no cada rama. Vaciar SOLO la rama de `tareas` dentro de
-    `editar()` y dejar la de `proyectos` intacta NO se ve acá -- `editar`
-    sigue mencionando `area`/`proyecto_id` y sigue llamando a
-    `_area_que_vale` en algún lado, así que esta prueba pasa igual. Lo que
-    SÍ lo atrapa es la prueba directa de esa rama
-    (`test_editar_rechaza_un_area_que_no_esta_declarada`,
-    `test_poner_proyecto_limpia_el_area_sola`, etc.), que llaman a
-    `editar()` de verdad. Esta prueba de hermanos agarra un sitio NUEVO que
-    nazca sin la puerta; no agarra una puerta vaciada por dentro en una
-    función que YA la llama en otro lado -- eso quedó demostrado el
-    9-sep-2026 con la prueba de mutación B) y sigue valiendo igual acá.
+    LO QUE QUEDA DE RED en ese caso, y no es poco: el CHECK
+    `tareas_area_no_con_proyecto` y la FK `area → areas.clave` siguen ahí, en
+    la base -- ver la frontera de la FK/CHECK más arriba en este archivo. Un
+    `UPDATE` crudo que dejara `area` y `proyecto_id` inconsistentes lo
+    rechazaría igual. Lo que se pierde no es la integridad del dato: es el
+    mensaje claro -- Tiziano vería el texto crudo de psycopg
+    (`CheckViolation: ...`) en vez de "esa tarea tiene proyecto, y el área
+    sale del proyecto", que es justo el defecto que esta puerta se armó para
+    evitar.
+
+    QUÉ HARÍA FALTA PARA CERRARLO DE VERDAD, para quien lo retome: no basta
+    con buscar `'area'`/`'proyecto_id'` como subcadena en el texto ya
+    renderizado -- hay que mirar la ESTRUCTURA de cada literal de SQL, no su
+    texto. El patrón ya existe en este repo, dos veces: `tests/
+    test_panel_tareas.py::_sql_de` saca del árbol de sintaxis los literales
+    de cadena de una función (sin su docstring) y los concatena para poder
+    aplicarles una expresión regular al SQL de verdad, no a la prosa que lo
+    explica; y `tests/test_backup_alerta.py::
+    test_las_columnas_que_el_codigo_inserta_existen_en_el_esquema` saca
+    nombres de columna de sentencias `INSERT INTO tabla (col1, col2, ...)`
+    con una expresión regular sobre el texto de esos literales. Lo que
+    falta acá es lo mismo aplicado a `UPDATE tabla SET col = ...`: extraer
+    cada `col` de cada `UPDATE` literal de `crud.py` con una regex tipo
+    `r"UPDATE\\s+(\\w+)\\s+SET\\s+([^WHERE]+)"`, partir las asignaciones por
+    coma y comparar los nombres de columna contra los que sí pasan por
+    `_area_que_vale` -- sumando esa lista a la que ya arma este `ast.walk`
+    en vez de reemplazarla, porque los dos caminos (dict genérico de
+    `editar()`, `UPDATE` literal de `crear_desde_interpretacion`) son reales
+    y conviven en el mismo archivo.
     """
     import ast
     import inspect
@@ -931,6 +965,15 @@ def test_todo_lo_que_toca_area_o_proyecto_id_en_crud_pasa_por_la_misma_puerta():
         if nodo.name == "_area_que_vale":
             continue  # la puerta misma, obviamente menciona las dos
         texto = ast.unparse(nodo)
+        # Busca el nombre ENTRE SUS PROPIAS COMILLAS -- `'area'`, `"area"` --
+        # que es como queda una clave de dict (`campos["area"]`) al pasar por
+        # `ast.unparse`. NO ve `area` suelta dentro de un literal de SQL más
+        # grande (`"UPDATE tareas SET area = %s"`): ahí las comillas que
+        # `ast.unparse` pone son las de LA CADENA ENTERA, no las de la
+        # palabra `area`. Ver el docstring de esta prueba, sección
+        # "LA FRONTERA", para el sitio real de este archivo que ya escribe
+        # así (`crud.py:332`, con `responsable_chat_id`) y lo que haría
+        # falta para verlo también.
         menciona_area = '"area"' in texto or "'area'" in texto
         menciona_proyecto = '"proyecto_id"' in texto or "'proyecto_id'" in texto
         if not (menciona_area or menciona_proyecto):
