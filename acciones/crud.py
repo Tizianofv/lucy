@@ -28,8 +28,16 @@ from config import TZ
 # parametrizar), así que nunca pueden venir de afuera sin pasar por acá.
 # personas y proyectos entraron con el perfil vivo (req 12): antes el agente
 # no podía editarlos y el "perfil" era una tabla que nadie alimentaba.
+# micro_pasos entró con el encargo 7: al estar acá, `editar()` y `borrar()`
+# ya la sirven GRATIS -- marcar un paso hecho es
+# `editar("micro_pasos", id, {"hecho": true}, ...)`, y quitarlo es
+# `borrar("micro_pasos", id, ...)`, sin escribir una rama nueva en
+# `cerebro/agente.py::_ejecutar_herramienta` para ninguna de las dos. Lo
+# único que SÍ hace falta aparte es `crear_pasos`, más abajo: `crear_desde_
+# interpretacion` no sirve para esto (no hay una "clasificación" de micro-
+# paso, y un pedido de "divide X en 4 pasos" crea VARIAS filas de una vez).
 TABLAS = ("tareas", "eventos", "notas", "movimientos", "personas", "proyectos",
-          "lugares", "preferencias")
+          "lugares", "preferencias", "micro_pasos")
 
 
 class FaltanDatos(Exception):
@@ -894,6 +902,111 @@ async def _primero_que_vale(valor, *, tarea_id: int | None = None) -> int | None
     return primero_id
 
 
+async def _tarea_viva_que_vale(tarea_id) -> int:
+    """La tarea a la que unos micro-pasos van a colgarse, o ValueError si no
+    existe o está en la papelera (encargo 7). LA ÚNICA función que decide
+    esto: la usan `crear_pasos` (al crear) y `editar()` (si alguien intenta
+    reparentar un paso ya creado -- ver el bloque de `editar` que la llama).
+
+    Mismo patrón que `_primero_que_vale`: un número, y una consulta contra
+    `tareas` para confirmar que de verdad hay algo ahí y vivo. No valida
+    NADA del texto del paso ni de su orden -- eso no necesita puerta, lo
+    acepta cualquier texto (igual que `tareas.detalle`, que tampoco pasa
+    por ninguna).
+    """
+    try:
+        tid = int(str(tarea_id).strip())
+    except (TypeError, ValueError):
+        raise ValueError(f"'{tarea_id}' no es el número de una tarea")
+    async with db.pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT id FROM tareas WHERE id = %s AND borrado_en IS NULL",
+            (tid,))
+        if await cur.fetchone() is None:
+            raise ValueError(
+                f"no encontré la tarea #{tid} (o está en la papelera)")
+    return tid
+
+
+async def crear_pasos(
+    tarea_id, textos: list[str], *, motivo: str | None = None,
+    bandeja_id: int | None = None, actor: str = "lucy",
+) -> list[tuple[int, int]]:
+    """Divide una tarea en micro-pasos: crea UNA fila por texto, en el orden
+    en que se dieron, después de los que ya hubiera (encargo 7). Devuelve
+    `[(paso_id, log_id), ...]`, uno por fila creada -- así cada paso se puede
+    deshacer POR SEPARADO (`crud.deshacer(log_id)`), sin llevarse los demás.
+
+    NO REEMPLAZA LA LISTA que ya hubiera: "dividí la tarea X en pasos" dos
+    veces AGREGA, no empieza de cero. Borrar un paso individual es
+    `crud.borrar("micro_pasos", id, motivo)` -- ya gratis, por estar
+    `micro_pasos` en `TABLAS` (ver ahí el porqué).
+
+    POR LA MISMA PUERTA que valida a quién se cuelgan -- `_tarea_viva_que_
+    vale` --, y SI LA TABLA TODAVÍA NO EXISTE (la migración de este encargo
+    no se aplicó: SQLSTATE 42P01, undefined_table) se lo dice a quien llama
+    con un ValueError claro, ANTES de escribir nada -- ni un INSERT a
+    medias: el SELECT que calcula el próximo `orden` es el primer acceso a
+    la tabla, y si revienta con 42P01 se convierte acá en ese mensaje. Los
+    INSERT que siguen no repiten la comprobación: para entonces la tabla ya
+    demostró que existe.
+
+    `textos` vacíos o solo espacios se descartan en silencio -- "dividí X en
+    pasos: , , " no debería crear tres filas vacías. Si NINGUNO queda
+    después de limpiar, se lanza `FaltanDatos`: no hay nada que dividir.
+    """
+    limpios = [t.strip() for t in (textos or []) if str(t or "").strip()]
+    if not limpios:
+        raise FaltanDatos("al menos un paso (los que mandaste venían vacíos)")
+
+    tid = await _tarea_viva_que_vale(tarea_id)
+
+    creados: list[tuple[int, int]] = []
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        # `AS siguiente_desde`, con nombre explícito: sin el alias, el
+        # nombre de la columna lo inventa Postgres (`coalesce`), y un doble
+        # de pruebas terminaría adivinando ese detalle de implementación en
+        # vez de leer lo que el propio SQL declara.
+        try:
+            await cur.execute(
+                "SELECT COALESCE(MAX(orden), 0) AS siguiente_desde "
+                "FROM micro_pasos WHERE tarea_id = %s AND borrado_en IS NULL",
+                (tid,))
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate == "42P01":
+                raise ValueError(
+                    "los micro-pasos todavía no están disponibles: la sala "
+                    "no aplicó la migración") from e
+            raise
+        fila_max = await cur.fetchone()
+        siguiente = (fila_max["siguiente_desde"] if fila_max else 0) + 1
+        # A PARTIR DE ACÁ la tabla YA SE PROBÓ que existe (el SELECT de
+        # arriba no reventó), así que los INSERT que siguen no necesitan
+        # repetir la comprobación de 42P01 -- solo el primer acceso a la
+        # tabla paga ese costo, no cada paso de la lista.
+        for i, texto in enumerate(limpios):
+            await cur.execute(
+                """
+                INSERT INTO micro_pasos (tarea_id, texto, orden)
+                VALUES (%s, %s, %s)
+                RETURNING *
+                """,
+                (tid, texto, siguiente + i))
+            paso = await cur.fetchone()
+            log_id = await _registrar(
+                conn, accion="crear", tabla="micro_pasos",
+                registro_id=paso["id"], despues=paso, motivo=motivo,
+                bandeja_id=bandeja_id, actor=actor,
+            )
+            creados.append((paso["id"], log_id))
+    return creados
+
+
 PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale}}
 
 
@@ -1079,6 +1192,21 @@ async def editar(
             try:
                 campos["primero_id"] = await _primero_que_vale(
                     campos["primero_id"], tarea_id=registro_id)
+            except ValueError as e:
+                raise ValueError(f"No cambié nada: {e}.") from e
+
+        # UN MICRO-PASO NO SE PUEDE REPARENTAR A CIEGAS (encargo 7). Nada del
+        # encargo pide poder cambiarle el `tarea_id` a un paso ya creado
+        # -- se crea colgado de una, con `crear_pasos`, y ahí se queda -- pero
+        # `editar()` es GENÉRICO: si alguien mandara `{"tarea_id": 999999}`
+        # sin este bloque, se escribiría sin comprobar que esa tarea existe.
+        # MISMA PUERTA que `crear_pasos` -- `_tarea_viva_que_vale` -- para que
+        # los dos caminos que pueden dejar un `tarea_id` en la tabla usen el
+        # mismo criterio.
+        if tabla == "micro_pasos" and "tarea_id" in campos:
+            try:
+                campos["tarea_id"] = await _tarea_viva_que_vale(
+                    campos["tarea_id"])
             except ValueError as e:
                 raise ValueError(f"No cambié nada: {e}.") from e
 

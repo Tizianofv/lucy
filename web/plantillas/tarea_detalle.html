@@ -113,6 +113,65 @@ tiene proyecto.</p>
 </div>
 {% endif %}
 
+{# LOS MICRO-PASOS (encargo 7): una lista de chequeo dentro de la tarea --
+   NO es una tarea: sin fecha, sin responsable, sin aviso propio (ver
+   db/schema.sql, CREATE TABLE micro_pasos, para el porqué completo). Cada
+   paso lleva su propio formulario -- marcar, quitar, subir, bajar -- igual
+   que ya hace esta pantalla con los comentarios: no hay UN formulario para
+   toda la lista (al revés que /tareas), porque acá cada fila es una acción
+   propia y la lista de una tarea sola no llega a los tamaños que
+   justificaron el formulario único de /tareas. #}
+{% if paso_agregado %}
+<p class="aviso ok">
+  {{ paso_agregado }} paso{{ 's' if paso_agregado > 1 }} agregado{{ 's' if paso_agregado > 1 }}.
+</p>
+{% endif %}
+{% if paso_movido == 0 %}<p class="aviso">Ese paso ya estaba en la punta.</p>{% endif %}
+{% if error == 'pasos' %}
+<p class="aviso">No se guardó: el paso ya no estaba, o el texto venía vacío.</p>
+{% endif %}
+<div class="tarjeta">
+  <h2 style="margin-top:0">Pasos{% if pasos %} · {{ pasos|selectattr('hecho')|list|length }} de {{ pasos|length }}{% endif %}</h2>
+  {% if not pasos %}
+  <p class="vacio">Todavía no hay pasos.</p>
+  {% else %}
+  {% for p in pasos %}
+  <div class="barra" style="justify-content:space-between">
+    <form method="post" action="/tareas/{{ tarea.id }}/pasos/{{ p.id }}/hecho"
+          style="display:flex;gap:.5rem;align-items:center">
+      {# El valor que viaja es el CONTRARIO del que tiene hoy: un click
+         siempre pide "poné lo opuesto a lo que se ve", que es lo único
+         que un checkbox puede querer decir. #}
+      <input type="hidden" name="hecho" value="{{ '0' if p.hecho else '1' }}">
+      <button type="submit" style="all:unset;cursor:pointer"
+              aria-label="{{ 'Desmarcar' if p.hecho else 'Marcar hecho' }}">
+        {{ '☑' if p.hecho else '☐' }}
+      </button>
+      <span{% if p.hecho %} style="text-decoration:line-through;color:var(--suave)"{% endif %}>{{ p.texto }}</span>
+    </form>
+    <span class="barra">
+      <form method="post" action="/tareas/{{ tarea.id }}/pasos/{{ p.id }}/mover">
+        <input type="hidden" name="direccion" value="arriba">
+        <button aria-label="Subir">↑</button>
+      </form>
+      <form method="post" action="/tareas/{{ tarea.id }}/pasos/{{ p.id }}/mover">
+        <input type="hidden" name="direccion" value="abajo">
+        <button aria-label="Bajar">↓</button>
+      </form>
+      <form method="post" action="/tareas/{{ tarea.id }}/pasos/{{ p.id }}/borrar">
+        <button aria-label="Quitar">Quitar</button>
+      </form>
+    </span>
+  </div>
+  {% endfor %}
+  {% endif %}
+  <form method="post" action="/tareas/{{ tarea.id }}/pasos" class="barra" style="margin-top:.8rem">
+    <textarea name="texto" rows="2" placeholder="Un paso por línea"
+              style="width:100%;max-width:34rem;font:inherit;padding:.45rem .6rem;border-radius:7px;border:1px solid var(--linea);background:var(--fondo);color:var(--texto)"></textarea>
+    <button>Agregar</button>
+  </form>
+</div>
+
 {% if comentado %}<p class="aviso ok">Comentario guardado.</p>{% endif %}
 {% if borrado %}<p class="aviso ok">Comentario borrado.</p>{% endif %}
 {% if error == 'texto' %}

@@ -604,7 +604,11 @@ def test_la_pantalla_de_la_tarea_dice_el_NOMBRE_y_no_el_numero():
                        "vence_en": datetime(2026, 9, 20, 19, 30, tzinfo=UTC)},
              "comentarios": [
                  _comentario(101, autor=OTRA, texto="<script>x()</script> ok"),
-                 _comentario(102, autor=SIN_NOMBRE, texto="de alguien sin nombre")]}
+                 _comentario(102, autor=SIN_NOMBRE, texto="de alguien sin nombre")],
+             # `tarea_detalle` (encargo 7) ahora también lee "pasos" de lo que
+             # devuelve `db.tarea_con_comentarios` -- vacía acá: esta prueba
+             # mide los comentarios, no los micro-pasos.
+             "pasos": []}
 
     async def _datos(tid):
         return datos if tid == 5 else None

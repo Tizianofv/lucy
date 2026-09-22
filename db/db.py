@@ -1107,14 +1107,15 @@ async def convertir_tarea_en_proyecto(tarea_id: int) -> dict:
         llamado "Álbum nuevo" sería un duplicado que no dice nada; archivarla
         dice "esto dejó de ser una tarea suelta, ahora es el proyecto
         mismo", y sigue estando -- en la papelera, recuperable.
-      · RESPONSABLE (`responsable_chat_id`) Y COMENTARIOS (`comentarios_tarea`,
-        por `tarea_id`) → SE QUEDAN EN LA TAREA ARCHIVADA, tal cual estaban.
-        `proyectos` no tiene ninguna de las dos columnas/tablas -- no hay a
-        dónde migrarlos -- así que no se pierden (siguen en la fila, que
-        sigue existiendo, solo archivada) pero tampoco aparecen en ningún
-        lado nuevo. Si el proyecto necesita su propio responsable o su
-        propia conversación algún día, eso es una pregunta nueva, para
-        Tiziano, no una consecuencia de este botón.
+      · RESPONSABLE (`responsable_chat_id`), COMENTARIOS (`comentarios_tarea`)
+        Y MICRO-PASOS (`micro_pasos`, encargo 7, por `tarea_id`) → SE QUEDAN
+        EN LA TAREA ARCHIVADA, tal cual estaban. `proyectos` no tiene
+        ninguna de las tres columnas/tablas -- no hay a dónde migrarlos --
+        así que no se pierden (siguen en la fila, que sigue existiendo,
+        solo archivada) pero tampoco aparecen en ningún lado nuevo. Si el
+        proyecto necesita su propio responsable, su propia conversación o
+        su propia lista de chequeo algún día, eso es una pregunta nueva,
+        para Tiziano, no una consecuencia de este botón.
 
     DOS HUELLAS, NO UNA, y las dos con la forma que YA existe en
     `log_acciones` -- nada nuevo que enseñarle a `deshacer()`:
@@ -2289,9 +2290,25 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
     if hay_mas:
         filas = filas[:limite]
 
+    # EL «2 DE 5» (encargo 7): una consulta APARTE, en LOTE, después de
+    # tener la lista final de filas -- no un tercer intercambio con JOIN
+    # dentro de la consulta de arriba. Las dos consultas grandes de este
+    # archivo (`con_area_y_primero` y sus caídas) ya tienen dos JOINs y una
+    # cascada de tolerancia de tres niveles por columnas que pueden no
+    # existir todavía; sumarle un cuarto JOIN a causa de una tabla ENTERA
+    # que puede no existir (no una columna: la migración de este encargo
+    # puede no estar aplicada) habría significado una cascada de SEIS
+    # combinaciones en vez
+    # de tres. `conteo_pasos` ya tolera la tabla ausente por su cuenta
+    # (devuelve `{}`), así que acá no hace falta ningún SAVEPOINT más.
+    conteo = await conteo_pasos([f["id"] for f in filas])
+
     hoy = hoy or hoy_rd()
     por_clave: dict = {}
     for f in filas:
+        c = conteo.get(f["id"])
+        f["pasos_hechos"] = c["hechos"] if c else 0
+        f["pasos_total"] = c["total"] if c else 0
         f["vence_dia"] = dia_rd(f.get("vence_en"))
         f["completado_dia"] = dia_rd(f.get("completado_en"))
         # `setdefault` y no `f["area"] = f.get("area")`: con la consulta SIN
@@ -2694,7 +2711,11 @@ async def tarea_con_comentarios(tarea_id: int) -> dict | None:
     tarea["primero_esperando"] = (
         tarea.get("primero_id") is not None
         and tarea.get("primero_estado") == ESTADO_PENDIENTE)
-    return {"tarea": tarea, "comentarios": await comentarios_de_tarea(tarea_id)}
+    # LOS MICRO-PASOS (encargo 7): `pasos_de_tarea` ya tolera la tabla
+    # ausente por su cuenta (devuelve `[]`), así que no hace falta otro
+    # SAVEPOINT acá -- es una consulta APARTE, no un tercer JOIN.
+    return {"tarea": tarea, "comentarios": await comentarios_de_tarea(tarea_id),
+            "pasos": await pasos_de_tarea(tarea_id)}
 
 
 async def tareas_para_elegir_primero(excluir_id: int) -> list[dict]:
@@ -2821,6 +2842,176 @@ async def borrar_comentario(comentario_id: int, tarea_id: int,
             """,
             (comentario_id, json.dumps(antes, default=str, ensure_ascii=False),
              json.dumps({"borrado_por_chat_id": chat_id})))
+        return True
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# LOS MICRO-PASOS (encargo 7, 22-sep-2026)
+#
+# «No, es una lista de chequeo» (Tiziano): sin fecha, sin responsable, sin
+# aviso propio. Crear y borrar un paso individual ya lo sirve `acciones.
+# crud` GRATIS -- `crear_pasos` (bulk) y `crud.editar`/`crud.borrar`, porque
+# `micro_pasos` está en `crud.TABLAS`. Lo que sigue acá es SOLO lectura
+# (`pasos_de_tarea`, `conteo_pasos`) y la única escritura que no encaja en
+# el molde genérico de `editar()` -- `mover_paso`, que cambia DOS filas a
+# la vez (intercambia el `orden` con el vecino) y por eso dos huellas, no
+# una, igual que `db.convertir_tarea_en_proyecto`.
+#
+# QUÉ PASA CON LOS PASOS DE UNA TAREA SEGÚN LO QUE LE PASE A ELLA: está
+# dicho, completo, al lado de `CREATE TABLE micro_pasos` en db/schema.sql
+# -- no se repite acá para que las dos explicaciones no se separen.
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def pasos_de_tarea(tarea_id: int) -> list[dict]:
+    """Los micro-pasos vivos de una tarea, en su orden. `[{id, texto, hecho,
+    orden}, ...]`.
+
+    SI LA TABLA TODAVÍA NO EXISTE (la migración de este encargo no se
+    aplicó: SQLSTATE 42P01, undefined_table), devuelve `[]` en vez de
+    reventar -- mismo patrón que `db.areas()` para el mismo caso. La página
+    de la tarea sigue funcionando, solo que sin lista de chequeo que
+    mostrar.
+    """
+    async with pool.connection() as conn:
+        try:
+            async with conn.transaction():
+                cur = conn.cursor(row_factory=dict_row)
+                await cur.execute(
+                    "SELECT id, texto, hecho, orden FROM micro_pasos "
+                    " WHERE tarea_id = %s AND borrado_en IS NULL "
+                    " ORDER BY orden, id", (tarea_id,))
+                return list(await cur.fetchall())
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate == "42P01":
+                return []
+            raise
+
+
+async def conteo_pasos(tarea_ids: list[int]) -> dict[int, dict]:
+    """`{tarea_id: {"hechos": N, "total": M}}` para las tareas de la lista,
+    SOLO las que de verdad tienen al menos un paso vivo -- una tarea sin
+    pasos no aparece en el dict, y el llamador la trata como "sin pasos"
+    (ver `tareas_por_grupo`, que hace exactamente eso con `.get`).
+
+    Es la consulta detrás del «2 de 5» de la lista principal. Se pide en
+    LOTE -- un solo `= ANY(%s)`, no una consulta por fila -- por lo mismo
+    que ya evita `tareas_por_grupo` con `bandeja`: una fila por tarea
+    visible sería una consulta más por cada tarea del panel.
+
+    `tarea_ids` vacía devuelve `{}` sin tocar la base: no hay nada que
+    contar, y `= ANY('{}')` sobre una lista vacía es una consulta de más.
+
+    SI LA TABLA TODAVÍA NO EXISTE, devuelve `{}` -- mismo patrón que
+    `pasos_de_tarea`: sin pasos que contar, el panel se pinta igual que
+    antes de este encargo.
+    """
+    if not tarea_ids:
+        return {}
+    async with pool.connection() as conn:
+        try:
+            async with conn.transaction():
+                cur = conn.cursor(row_factory=dict_row)
+                await cur.execute(
+                    """
+                    SELECT tarea_id,
+                           count(*) AS total,
+                           count(*) FILTER (WHERE hecho) AS hechos
+                      FROM micro_pasos
+                     WHERE borrado_en IS NULL AND tarea_id = ANY(%s)
+                     GROUP BY tarea_id
+                    """,
+                    (list(tarea_ids),))
+                filas = await cur.fetchall()
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate == "42P01":
+                return {}
+            raise
+    return {f["tarea_id"]: {"hechos": f["hechos"], "total": f["total"]}
+            for f in filas}
+
+
+async def mover_paso(tarea_id: int, paso_id: int, direccion: str) -> bool:
+    """Sube o baja UN micro-paso, intercambiando su `orden` con el del
+    vecino vivo más cercano en esa dirección. Devuelve si de verdad cambió
+    algo.
+
+    `direccion` es `'arriba'` o `'abajo'`, literal -- la pantalla no ofrece
+    otra cosa. Cualquier otro valor no mueve nada (`False`), sin reventar:
+    un botón mal formado no tiene por qué tumbar la página.
+
+    NO ES UN `editar()` GENÉRICO porque toca DOS filas a la vez -- el paso
+    y su vecino -- y `editar()` está pensado para UNA. Mismo patrón que
+    `db.convertir_tarea_en_proyecto`: dos huellas, no una, en la MISMA
+    transacción, cada una nombrando a la otra en el motivo.
+
+    `actor='panel'`: este botón solo existe en la pantalla de la tarea, no
+    hay forma de moverlo por Telegram (el encargo no lo pidió -- «divide X
+    en pasos» y «ya hice el paso 2» son las dos únicas frases que Lucy
+    entiende).
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, orden FROM micro_pasos "
+            " WHERE id = %s AND tarea_id = %s AND borrado_en IS NULL",
+            (paso_id, tarea_id))
+        actual = await cur.fetchone()
+        if actual is None:
+            return False
+
+        if direccion == "arriba":
+            await cur.execute(
+                "SELECT id, orden FROM micro_pasos "
+                " WHERE tarea_id = %s AND borrado_en IS NULL AND orden < %s "
+                " ORDER BY orden DESC, id DESC LIMIT 1",
+                (tarea_id, actual["orden"]))
+        elif direccion == "abajo":
+            await cur.execute(
+                "SELECT id, orden FROM micro_pasos "
+                " WHERE tarea_id = %s AND borrado_en IS NULL AND orden > %s "
+                " ORDER BY orden ASC, id ASC LIMIT 1",
+                (tarea_id, actual["orden"]))
+        else:
+            return False
+        vecino = await cur.fetchone()
+        if vecino is None:
+            return False  # ya está en la punta: no hay con quién cambiar
+
+        await conn.execute(
+            "UPDATE micro_pasos SET orden = %s WHERE id = %s",
+            (vecino["orden"], actual["id"]))
+        await conn.execute(
+            "UPDATE micro_pasos SET orden = %s WHERE id = %s",
+            (actual["orden"], vecino["id"]))
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo)
+            VALUES ('panel', 'editar', 'micro_pasos', %s, %s, %s, %s)
+            """,
+            (actual["id"],
+             json.dumps({"orden": actual["orden"]}, ensure_ascii=False),
+             json.dumps({"orden": vecino["orden"]}, ensure_ascii=False),
+             f"movido {direccion}, intercambiado con el paso #{vecino['id']}"))
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo)
+            VALUES ('panel', 'editar', 'micro_pasos', %s, %s, %s, %s)
+            """,
+            (vecino["id"],
+             json.dumps({"orden": vecino["orden"]}, ensure_ascii=False),
+             json.dumps({"orden": actual["orden"]}, ensure_ascii=False),
+             f"intercambiado con el paso #{actual['id']} al moverlo "
+             f"{direccion}"))
         return True
 
 

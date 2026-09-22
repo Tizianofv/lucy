@@ -3719,9 +3719,17 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # se les mide eso: `_archivos_vigilados` los cuenta por su rol, no por
     # si usan `config`), así que ya estaban en la lista de producción desde
     # antes de este encargo.
-    assert medido == {"en disco": 80, "exentos": 40, "vigilados": 40}, (
+    #
+    # 22-sep-2026, encargo 7 (micro-pasos): 80 → 81 en disco y 40 → 41
+    # EXENTOS por `tests/test_micro_pasos.py` (la puerta `_tarea_viva_que_
+    # vale`, `crear_pasos`, el «2 de 5», mover un paso). Es un archivo de
+    # `testpaths`, EXENTO por rol. Los VIGILADOS siguen en 40: el trabajo
+    # tocó `db/db.py`, `acciones/crud.py`, `web/app.py`, `cerebro/agente.py`
+    # y `cerebro/consultar.py`, los cinco ya vigilados de antes (los dos de
+    # `cerebro/`, por el mismo motivo que el encargo anterior).
+    assert medido == {"en disco": 81, "exentos": 41, "vigilados": 40}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "22-sep-2026 era {'en disco': 80, 'exentos': 40, 'vigilados': 40}. La "
+        "22-sep-2026 era {'en disco': 81, 'exentos': 41, 'vigilados': 40}. La "
         "aserción de fondo —cero archivos alcanzan la lista cruda— YA CORRIÓ "
         "arriba y quedó verde, así que esto NO es una fuga. Si los vigilados "
         "bajaron, algo se está saltando de más y «cero falsos positivos» dejó "

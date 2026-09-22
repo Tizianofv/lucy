@@ -152,7 +152,8 @@ HERRAMIENTAS DISPONIBLES:
   círculo (X espera a Y y Y ya esperaba, directa o indirectamente, a X),
   `crear` lo rechaza entero y el motivo te dice por qué.
 
-· editar  {"tabla": "tareas|eventos|notas|movimientos|personas|proyectos",
+· editar  {"tabla": "tareas|eventos|notas|movimientos|personas|proyectos|"
+                    "micro_pasos",
            "id": N, "cambios": {"columna": "valor", ...}}
   Cambia algo que ya existe. Marcar hecha una tarea =
   cambios {"estado": "hecha", "completado_en": "<ahora en ISO>"}.
@@ -188,6 +189,15 @@ HERRAMIENTAS DISPONIBLES:
   tarea su propio ID, ni armar una cadena que se muerda la cola (X espera a
   Y y Y ya esperaba a X); si lo pedís, `editar` lo rechaza con el motivo.
 
+  MARCAR UN MICRO-PASO ("ya hice el paso 2"): tabla "micro_pasos",
+  cambios {"hecho": true} (o false para desmarcarlo). Un micro-paso NO es
+  una tarea — no tiene fecha, responsable ni aviso propio, y no aparece en
+  el panel de tareas ni hace sonar el despertador — es una lista de chequeo
+  DENTRO de una tarea. "el paso 2" es su POSICIÓN, no su ID: consultá
+  micro_pasos WHERE tarea_id=<la tarea> ORDER BY orden para encontrar el ID
+  real, y editá ESE. Para QUITAR un paso entero (no solo desmarcarlo), usá
+  `archivar` con tabla "micro_pasos" — es reversible, como todo lo demás.
+
   EL CÓDIGO M-####. El panel muestra cada movimiento con un código —M-0086— que
   es su id: M-0086 es movimientos.id = 86. Cuando Tiziano lo nombre ("el M-0086
   es Colmado", "M-174 ponelo en No suma", "el 86 es de la casa del papá"), ya
@@ -202,6 +212,15 @@ HERRAMIENTAS DISPONIBLES:
   cuenta (el de terceros): no entra en ningún total, ni de gasto ni de ingreso.
   Al cambiar una categoría el sistema APRENDE ese comercio solo — no anuncies
   que lo guardaste aparte, ya está hecho.
+
+· pasos  {"tarea_id": N, "texto": ["paso 1", "paso 2", ...]}
+  "Divide X en pasos": una lista de chequeo DENTRO de la tarea — no crea
+  tareas nuevas, no lleva fecha ni responsable ni aviso propio. Consultá
+  para encontrar el ID de la tarea si Tiziano la nombra por título; mandá
+  cada paso como un texto de la lista, EN EL ORDEN en que los dijo. Se
+  AGREGAN al final de los que ya hubiera — pedirlo dos veces suma pasos, no
+  reemplaza la lista. Para marcar uno hecho o quitarlo, usá `editar` o
+  `archivar` con tabla "micro_pasos" (ver ahí).
 
 · perfil  {"tipo": "persona|proyecto", "nombre": "Rosi",
            "alias": ["la flaca"], "relacion": "hermana",
@@ -925,6 +944,27 @@ async def _ejecutar_herramienta(
                     f"archivé {str(args.get('tabla') or '')} "
                     f"#{int(args.get('id') or 0)}")
             return f"OK: archivado (acción #{log_id}, reversible)."
+
+        if nombre == "pasos":
+            # "texto" tiene que ser una LISTA de pasos. Si el modelo manda un
+            # solo texto suelto (sin corchetes), `list("un solo paso")`
+            # trocearía el string en CARACTERES -- el mismo error de forma
+            # que ya evita `crud._anticipos` para un escalar suelto. Un
+            # string se envuelve en una lista de UN elemento; cualquier otra
+            # cosa que no sea lista se normaliza a `[]` y `crear_pasos` la
+            # rechaza con `FaltanDatos` (capturado por el `except` genérico
+            # de abajo, como toda esta función).
+            crudo = args.get("texto")
+            textos = [crudo] if isinstance(crudo, str) else list(crudo or [])
+            creados = await crud.crear_pasos(
+                args.get("tarea_id"), textos,
+                motivo=f"Dividido en pasos por Lucy desde la bandeja "
+                       f"#{bandeja_id}",
+                bandeja_id=bandeja_id)
+            for paso_id, log_id in creados:
+                _anotar(acciones, log_id, f"agregué el paso #{paso_id}")
+            return (f"OK: {len(creados)} paso(s) agregado(s) "
+                    f"(acciones {[l for _, l in creados]}, reversibles).")
 
         if nombre == "deshacer":
             que = await crud.deshacer(int(args.get("accion") or 0))

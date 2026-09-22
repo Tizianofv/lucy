@@ -1209,7 +1209,8 @@ def _texto_de_comentario(crudo: str) -> str | None:
 @app.get("/tareas/{tid}", response_class=HTMLResponse)
 async def tarea_detalle(request: Request, tid: int, error: str = "",
                         comentado: int = 0, borrado: int = 0,
-                        area_guardada: int = 0, primero_guardado: int = 0):
+                        area_guardada: int = 0, primero_guardado: int = 0,
+                        paso_agregado: int = 0, paso_movido: int = 0):
     """Una tarea con sus comentarios, y el cuadro para escribir uno.
 
     VA EN SU PROPIA PANTALLA, a la que se entra tocando el título en /tareas.
@@ -1233,16 +1234,20 @@ async def tarea_detalle(request: Request, tid: int, error: str = "",
     con el mensaje de `crud._primero_que_vale`, que es quien recorre la
     cadena antes de escribir (ver su docstring para el porqué no lo hace la
     base).
+
+    `pasos` (encargo 7) es la lista de chequeo -- `db.tarea_con_comentarios`
+    ya la trae, tolerando la tabla ausente (ver `db.pasos_de_tarea`).
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     datos = await db.tarea_con_comentarios(tid)
     areas = await db.areas()
-    contexto = {"tarea": None, "comentarios": [],
+    contexto = {"tarea": None, "comentarios": [], "pasos": [],
                 "nombres": config.NOMBRES_POR_CHAT, "error": error,
                 "comentado": comentado, "borrado": borrado,
                 "area_guardada": area_guardada,
                 "primero_guardado": primero_guardado,
+                "paso_agregado": paso_agregado, "paso_movido": paso_movido,
                 "largo_comentario": LARGO_COMENTARIO,
                 "areas": areas, "pendiente": db.ESTADO_PENDIENTE,
                 "colores_area": {a["clave"]: a["color"] for a in areas},
@@ -1251,8 +1256,86 @@ async def tarea_detalle(request: Request, tid: int, error: str = "",
         return plantillas.TemplateResponse(
             request, "tarea_detalle.html", contexto, status_code=404)
     contexto.update(tarea=datos["tarea"], comentarios=datos["comentarios"],
+                    pasos=datos["pasos"],
                     candidatos_primero=await db.tareas_para_elegir_primero(tid))
     return plantillas.TemplateResponse(request, "tarea_detalle.html", contexto)
+
+
+@app.post("/tareas/{tid}/pasos")
+async def agregar_pasos(request: Request, tid: int):
+    """Agregar uno o varios micro-pasos a una tarea (encargo 7).
+
+    UN TEXTO POR LÍNEA: el `<textarea>` del panel manda un solo campo
+    `texto` con saltos de línea -- «divide en 3 pasos» escrito a mano es
+    escribir tres líneas, no rellenar tres campos. `crud.crear_pasos` ya
+    descarta las líneas vacías; acá solo se parte el texto.
+
+    MISMA PUERTA que Telegram: `crud.crear_pasos`, que valida con
+    `_tarea_viva_que_vale` -- sin comprobación aparte acá.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    lineas = str(formulario.get("texto", "")).splitlines()
+    try:
+        creados = await crud.crear_pasos(
+            tid, lineas, motivo="Pasos agregados desde el panel de tareas",
+            actor="panel")
+    except (ValueError, crud.FaltanDatos) as e:
+        log.warning("Panel de tareas: no se agregaron pasos a #%s: %s", tid, e)
+        return RedirectResponse(f"/tareas/{tid}?error=pasos", status_code=303)
+    return RedirectResponse(
+        f"/tareas/{tid}?paso_agregado={len(creados)}", status_code=303)
+
+
+@app.post("/tareas/{tid}/pasos/{pid}/hecho")
+async def marcar_paso(request: Request, tid: int, pid: int):
+    """Marcar (o desmarcar) UN micro-paso (encargo 7).
+
+    Reusa `crud.editar` ENTERO -- la misma huella, el mismo deshacer que
+    cualquier otra edición genérica -- en vez de una escritura aparte. El
+    valor que llega es el que el checkbox YA tiene DESPUÉS del clic (ver la
+    plantilla: cada checkbox manda su propio formulario con el valor al
+    que apunta, no el que tenía).
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    hecho = str(formulario.get("hecho", "")).strip() == "1"
+    despues, _log_id = await crud.editar(
+        "micro_pasos", pid, {"hecho": hecho},
+        motivo="Paso marcado desde el panel de tareas", actor="panel")
+    if despues is None or despues.get("tarea_id") != tid:
+        return RedirectResponse(f"/tareas/{tid}?error=pasos", status_code=303)
+    return RedirectResponse(f"/tareas/{tid}", status_code=303)
+
+
+@app.post("/tareas/{tid}/pasos/{pid}/borrar")
+async def quitar_paso(request: Request, tid: int, pid: int):
+    """Quitar UN micro-paso (encargo 7). `crud.borrar` -- ya gratis, `micro_
+    pasos` está en `crud.TABLAS`, así que esto es soft-delete + huella +
+    deshacer, sin escribir nada nuevo."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    log_id = await crud.borrar(
+        "micro_pasos", pid, motivo="Paso quitado desde el panel de tareas")
+    if log_id is None:
+        return RedirectResponse(f"/tareas/{tid}?error=pasos", status_code=303)
+    return RedirectResponse(f"/tareas/{tid}", status_code=303)
+
+
+@app.post("/tareas/{tid}/pasos/{pid}/mover")
+async def mover_paso_de_tarea(request: Request, tid: int, pid: int):
+    """Subir o bajar UN micro-paso (encargo 7). `db.mover_paso` intercambia
+    el `orden` con el vecino -- no hay `<select>` de orden libre, dos
+    botones alcanzan para una lista corta."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    direccion = str(formulario.get("direccion", ""))
+    movido = await db.mover_paso(tid, pid, direccion)
+    return RedirectResponse(
+        f"/tareas/{tid}?paso_movido={1 if movido else 0}", status_code=303)
 
 
 @app.post("/tareas/{tid}/comentarios")

@@ -2311,9 +2311,18 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
     # deshacerla con sus herramientas genéricas. Si mañana hiciera falta que
     # el agente agregue o quite un área, eso es una decisión de Tiziano, no
     # algo que entre solo por estar en `crud.TABLAS`.
-    assert len(declaradas) == 18 and len(vigiladas) == 8, (
+    #
+    # 22-sep-2026 (mismo día, encargo 7): 18 → 19 por `micro_pasos`. AL
+    # REVÉS que `areas` y `comentarios_tarea`: ésta SÍ entra a `crud.TABLAS`
+    # (8 → 9), a propósito -- «divide X en pasos» y «ya hice el paso 2» le
+    # piden a Lucy CREAR y EDITAR micro-pasos por Telegram, así que
+    # `editar()`/`borrar()`/`deshacer()` genéricos tienen que alcanzarla.
+    # La única escritura que NO pasa por ahí es la creación en lote
+    # (`crud.crear_pasos`, porque un pedido crea VARIAS filas de una vez y
+    # `crear_desde_interpretacion` no tiene una "clasificación" para esto).
+    assert len(declaradas) == 19 and len(vigiladas) == 9, (
         f"el reparto de tablas cambió: el esquema declara {len(declaradas)} y "
-        f"`crud.TABLAS` vigila {len(vigiladas)} (el 22-sep-2026 eran 18 y 8). "
+        f"`crud.TABLAS` vigila {len(vigiladas)} (el 22-sep-2026 eran 19 y 9). "
         f"Las que quedan sin juzgar serían {sorted(sin_juzgar)}. No se afloja "
         f"este número: se decide si las nuevas entran en la vigilancia y se "
         f"actualiza la frontera.")

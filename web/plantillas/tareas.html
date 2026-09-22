@@ -132,6 +132,14 @@ aviso de Telegram que ya sonó.</p>
        se «enciende» sola en el próximo pintado, sin que nadie la toque. #}
     <td{% if t.primero_esperando %} class="fila-espera"{% endif %}>
       <a href="/tareas/{{ t.id }}">{{ t.titulo }}</a>
+      {#- LOS MICRO-PASOS (encargo 7): un «2 de 5» al lado del título, SOLO
+         si la tarea tiene al menos un paso vivo (`t.pasos_total`, de
+         `db.conteo_pasos` -- 0 en las que no tienen ninguno, así que no
+         hay "0 de 0" que mostrar de más). No es un enlace propio: el
+         título YA lleva a la página de la tarea, que es donde se marcan. #}
+      {%- if t.pasos_total %}
+      <span class="suave">· {{ t.pasos_hechos }} de {{ t.pasos_total }}</span>
+      {%- endif -%}
       {%- if t.proyecto_nombre %}
       <br><a class="suave" href="/proyectos#proyecto-{{ t.proyecto_id }}">{{ t.proyecto_nombre }}</a>
       {%- endif %}

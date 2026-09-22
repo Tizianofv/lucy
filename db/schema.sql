@@ -255,6 +255,61 @@ CREATE TABLE comentarios_tarea (
 );
 CREATE INDEX idx_comentarios_tarea_tarea ON comentarios_tarea(tarea_id);
 
+-- LOS MICRO-PASOS (encargo 7, 22-sep-2026): una lista de chequeo DENTRO de
+-- una tarea, para cuando sigue siendo grande. Decisión de Tiziano, textual:
+-- «No, es una lista de chequeo» — así que NO es una tarea: sin fecha, sin
+-- responsable, sin aviso propio. No hace sonar el despertador y no aparece
+-- en ningún grupo del panel de tareas -- solo cuelga de UNA tarea, en su
+-- propia página, con un «2 de 5» en la lista principal.
+--
+-- `hecho` es BOOLEAN y no un `estado` de texto como en `tareas`: acá no hay
+-- tercer estado (no hay «pospuesto» ni «descartado» para un paso) y una
+-- lista de chequeo real solo tiene dos.
+--
+-- `orden` es un entero simple, no una lista enlazada ni una fracción: el
+-- panel lo cambia con dos botones (↑/↓) que INTERCAMBIAN el valor con el
+-- vecino vivo más cercano (`db.mover_paso`) -- alcanza con enteros
+-- consecutivos, no hace falta reordenar todos los demás.
+--
+-- BORRADO SUAVE, igual que el resto: `borrado_en`. «Quitar un paso» no
+-- borra de verdad -- se puede deshacer, como toda escritura de este
+-- proyecto.
+--
+-- QUÉ PASA CON LOS PASOS DE UNA TAREA CUANDO LA TAREA...
+--   ...se marca HECHA: nada. Los pasos se quedan como estaban -- una lista
+--     de chequeo de una tarea ya hecha es historia, no algo que haya que
+--     auto-completar ni borrar. Si alguno quedó sin marcar, se ve así.
+--   ...se BORRA (papelera): nada tampoco. `tarea_id` sigue apuntando a la
+--     fila archivada -- que sigue existiendo físicamente, solo con
+--     `borrado_en` puesto -- así que si la tarea se restaura (deshacer),
+--     sus pasos aparecen exactamente como estaban. No hay ON DELETE CASCADE
+--     porque acá NUNCA hay un DELETE de verdad.
+--   ...se va al HISTORIAL: nada -- eso es una decisión de PANTALLA
+--     (`db.grupo_de_tarea`, por fecha de cierre), no un cambio en la base.
+--     La página de la tarea (`/tareas/{id}`) sigue mostrando sus pasos
+--     igual, esté o no en el Historial.
+--   ...se CONVIERTE EN PROYECTO (`db.convertir_tarea_en_proyecto`): el MISMO
+--     tratamiento que ya reciben el responsable y los comentarios de esa
+--     función (ver su docstring) -- la tarea original se archiva
+--     (soft-delete) y sus pasos se QUEDAN COLGADOS DE ELLA, tal cual
+--     estaban. `proyectos` no tiene micro-pasos como concepto, así que no
+--     hay a dónde migrarlos; no se pierden, solo dejan de aparecer en
+--     ningún lado nuevo.
+-- Ninguno de los cuatro casos necesitaba una decisión de Tiziano: los
+-- cuatro ya estaban resueltos por el mismo principio que rige el resto de
+-- este esquema («nada se guarda que se pueda calcular o conservar solo») y
+-- por el precedente ya aprobado de `comentarios_tarea`.
+CREATE TABLE micro_pasos (
+  id         BIGSERIAL PRIMARY KEY,
+  tarea_id   BIGINT NOT NULL REFERENCES tareas(id),
+  texto      TEXT NOT NULL,
+  hecho      BOOLEAN NOT NULL DEFAULT false,
+  orden      INT NOT NULL DEFAULT 0,
+  creado_en  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  borrado_en TIMESTAMPTZ
+);
+CREATE INDEX idx_micro_pasos_tarea ON micro_pasos(tarea_id) WHERE borrado_en IS NULL;
+
 CREATE TABLE eventos (
   id           BIGSERIAL PRIMARY KEY,
   bandeja_id   BIGINT REFERENCES bandeja(id),
