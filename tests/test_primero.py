@@ -572,9 +572,23 @@ def test_si_la_de_antes_esta_descartada_tambien_se_enciende():
 
 
 def test_si_la_de_antes_se_borra_se_enciende_y_no_hay_titulo_que_mostrar():
-    """El JOIN de `tareas_por_grupo` excluye la tarea "Primero:" borrada, así
-    que `primero_titulo`/`primero_estado` llegan en None -- la fila se ve
-    normal, sin "→ Primero:"."""
+    """ESTO NO PRUEBA EL JOIN -- prueba el REPARTO EN PYTHON que viene
+    DESPUÉS del JOIN (`db.tareas_por_grupo`, el `setdefault`/`primero_
+    esperando` sobre la fila que la base ya devolvió). La fila de acá se
+    fabrica a mano con `primero_titulo=None, primero_estado=None` -- que es
+    lo que la base devolvería SI el JOIN de verdad excluye a la tarea
+    "Primero:" borrada -- y lo que se mide es que, dado ESE insumo, el
+    cálculo de `primero_esperando` reaccione bien. `_CursorPanel.execute`
+    (más arriba en este archivo) devuelve `self._conn.filas` sin mirar el
+    SQL: no hay forma de que este test note si alguien le saca la cláusula
+    `ant.borrado_en IS NULL` al JOIN real.
+
+    QUE EL JOIN DE VERDAD EXCLUYA A LA BORRADA lo prueban, con el SQL real
+    y no con una fila fabricada, `test_el_sql_de_tareas_por_grupo_excluye_
+    la_tarea_primero_borrada` (el texto) y `test_tareas_por_grupo_en_sqlite_
+    excluye_de_verdad_la_tarea_primero_borrada` (el comportamiento, corrido
+    en sqlite) -- hallazgo del testigo sobre `b15649c`: esta prueba sola no
+    alcanzaba, la suite entera seguía en verde quitando esa cláusula."""
     fila = _fila_panel(1, primero_id=2, primero_titulo=None, primero_estado=None)
     resultado = _todas(_grupos([fila]))[1]
     assert resultado["primero_esperando"] is False
@@ -597,6 +611,170 @@ def test_columna_primero_id_ausente_cae_en_cascada_sin_romper_el_panel():
     assert fila["primero_esperando"] is False
     assert fila["primero_id"] is None
     assert fila["primero_titulo"] is None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4-bis) EL SQL DE VERDAD: que el JOIN de `tareas ant` excluya la tarea
+# "Primero:" borrada -- hallazgo del testigo sobre `b15649c`. Las pruebas de
+# arriba fabrican la fila a mano (miden el REPARTO en Python); acá se mide
+# el TEXTO que de verdad emite el código y, cuando se puede, el
+# COMPORTAMIENTO corriendo ese mismo texto contra una base real (sqlite, con
+# el mismo SQL -- solo se traduce `%s` a `?`, que es la única diferencia de
+# sintaxis entre psycopg y sqlite3 para este SELECT puro).
+#
+# LOS DOS HERMANOS: hay exactamente DOS sitios en `db/db.py` que hacen
+# `LEFT JOIN tareas ant ON ant.id = t.primero_id` -- `tareas_por_grupo`
+# (el panel de tareas) y `tarea_con_comentarios` (la página de UNA tarea,
+# con su <select> de «Primero:»). Medido con
+# `grep -n "LEFT JOIN tareas ant" db/db.py` el 22-sep-2026 sobre este mismo
+# commit: exactamente esas dos líneas, ninguna más. `cerebro/despertador.py`
+# tiene un tercer JOIN parecido (`NOT EXISTS (SELECT 1 FROM tareas ant
+# WHERE ant.id = t.primero_id ...)`), ya cubierto por
+# `test_el_despertador_excluye_lo_que_espera_en_su_propia_consulta` de más
+# abajo. `db.tareas_para_elegir_primero` NO es un hermano de este grupo:
+# no mira la tarea "Primero:" de nadie, lista TODAS las tareas vivas como
+# candidatas (filtra su PROPIO `borrado_en`, no el de una que referencia).
+# Y las dos consultas de `acciones/crud.py::_primero_que_vale` (la
+# existencia y el recorrido de la cadena) tampoco: filtran `borrado_en`
+# sobre la CANDIDATA en el primer SELECT (para que no se pueda escribir un
+# «Primero:» apuntando a una tarea borrada), pero el recorrido de la cadena
+# (el segundo SELECT, sin filtro) camina eslabones para detectar un círculo,
+# no para decidir qué se pinta -- que un eslabón intermedio esté borrado no
+# cambia si hay círculo o no.
+
+def _extraer_sql(fn, nombre_variable: str) -> str:
+    """El texto de la variable `nombre_variable` tal como el código la
+    asigna dentro de `fn` (`con_area_y_primero`, `con_primero`...). Se saca
+    del árbol de sintaxis, no se copia a mano: una copia se separa del
+    original el día que alguien edite el SQL y no venga a actualizar acá.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    arbol = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    for nodo in ast.walk(arbol):
+        if (isinstance(nodo, ast.Assign) and len(nodo.targets) == 1
+                and isinstance(nodo.targets[0], ast.Name)
+                and nodo.targets[0].id == nombre_variable
+                and isinstance(nodo.value, ast.Constant)
+                and isinstance(nodo.value.value, str)):
+            return nodo.value.value
+    raise AssertionError(
+        f"no se encontró la variable {nombre_variable!r} asignada a un "
+        f"string dentro de {fn.__name__}")
+
+
+def test_el_sql_de_tareas_por_grupo_excluye_la_tarea_primero_borrada():
+    """El TEXTO real de `con_area_y_primero` (la consulta con área y con
+    «Primero:») tiene que traer la cláusula que excluye del JOIN a la tarea
+    "Primero:" borrada. Mismo criterio que ya mide, y de la misma forma,
+    `test_el_despertador_excluye_lo_que_espera_en_su_propia_consulta` sobre
+    el SQL del despertador."""
+    sql = _extraer_sql(db.tareas_por_grupo, "con_area_y_primero")
+    assert "LEFT JOIN tareas ant" in sql
+    assert "ant.borrado_en IS NULL" in sql, (
+        "sin esta cláusula, una tarea 'Primero:' borrada seguiría trayendo "
+        "su título y su estado, y la que esperaba nunca se 'encendería'")
+
+
+def test_el_sql_de_tarea_con_comentarios_excluye_la_tarea_primero_borrada():
+    """Mismo criterio, sobre el HERMANO: la página de una tarea sola
+    (`db.tarea_con_comentarios`), que arma su propio `<select>` de
+    «Primero:» con el mismo JOIN."""
+    sql = _extraer_sql(db.tarea_con_comentarios, "con_primero")
+    assert "LEFT JOIN tareas ant" in sql
+    assert "ant.borrado_en IS NULL" in sql
+
+
+def _filas_sqlite(sql: str, *, limite: int | None = None,
+                  tid: int | None = None) -> list[dict]:
+    """Corre un SELECT de `db/db.py`, TAL CUAL lo escribió el código, contra
+    una base sqlite en memoria con datos reales. Única traducción: `%s`
+    (psycopg) por `?` (sqlite3) -- es la única diferencia de sintaxis que le
+    importa a este SELECT puro (sin arrays, sin `now()`, sin
+    `make_interval`). Devuelve las filas como dicts.
+
+    LOS DATOS: dos tareas que esperan.
+      · #1 espera a #2, que sigue PENDIENTE y viva -> tiene que traer su
+        título y su estado.
+      · #3 espera a #4, que está BORRADA -> el JOIN tiene que devolver
+        `primero_titulo`/`primero_estado` en NULL.
+      · #5 no espera a nadie (`primero_id` NULL).
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("""
+        CREATE TABLE tareas (
+          id INTEGER PRIMARY KEY, titulo TEXT, detalle TEXT, estado TEXT,
+          vence_en TEXT, creado_en TEXT, bandeja_id INTEGER,
+          responsable_chat_id INTEGER, completado_en TEXT, area TEXT,
+          proyecto_id INTEGER, primero_id INTEGER, borrado_en TEXT
+        )""")
+    conn.execute("""
+        CREATE TABLE proyectos (
+          id INTEGER PRIMARY KEY, area TEXT, nombre TEXT, borrado_en TEXT
+        )""")
+    filas = [
+        (1, "espera a la 2 (viva)", "pendiente", None, 2),
+        (2, "la de antes, viva", "pendiente", None, None),
+        (3, "espera a la 4 (borrada)", "pendiente", None, 4),
+        (4, "la de antes, borrada", "hecha", "2026-09-01", None),
+        (5, "no espera a nadie", "pendiente", None, None),
+    ]
+    for tid_f, titulo, estado, borrado_en, primero_id in filas:
+        conn.execute(
+            "INSERT INTO tareas (id, titulo, detalle, estado, vence_en, "
+            "creado_en, bandeja_id, responsable_chat_id, completado_en, "
+            "area, proyecto_id, primero_id, borrado_en) VALUES "
+            "(?, ?, NULL, ?, NULL, '2026-09-01', NULL, NULL, NULL, NULL, "
+            "NULL, ?, ?)",
+            (tid_f, titulo, estado, primero_id, borrado_en))
+    conn.commit()
+
+    sql_sqlite = sql.replace("%s", "?")
+    parametros: list = []
+    if tid is not None:
+        parametros.append(tid)
+    if limite is not None:
+        parametros.append(limite)
+    cur = conn.execute(sql_sqlite, parametros)
+    filas_out = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return filas_out
+
+
+def test_tareas_por_grupo_en_sqlite_excluye_de_verdad_la_tarea_primero_borrada():
+    """Corre el SQL REAL de `con_area_y_primero` contra sqlite con filas de
+    verdad -- no un texto que se supone que hace esto, sino el
+    comportamiento medido. La tarea #3 espera a la #4, que está borrada:
+    tiene que volver con `primero_titulo`/`primero_estado` en NULL, no con
+    el título ni el estado de la #4."""
+    sql = _extraer_sql(db.tareas_por_grupo, "con_area_y_primero")
+    filas = _filas_sqlite(sql, limite=100)
+    por_id = {f["id"]: f for f in filas}
+
+    assert por_id[1]["primero_titulo"] == "la de antes, viva"
+    assert por_id[1]["primero_estado"] == "pendiente"
+
+    assert por_id[3]["primero_titulo"] is None, (
+        "la tarea 'Primero:' está borrada: el JOIN NO tiene que traer su "
+        "título")
+    assert por_id[3]["primero_estado"] is None
+
+    assert por_id[5]["primero_id"] is None
+
+
+def test_tarea_con_comentarios_en_sqlite_excluye_de_verdad_la_tarea_primero_borrada():
+    """Mismo comportamiento, sobre el hermano `tarea_con_comentarios` --
+    corrido para la tarea #3, que espera a la #4 (borrada)."""
+    sql = _extraer_sql(db.tarea_con_comentarios, "con_primero")
+    filas = _filas_sqlite(sql, tid=3)
+    assert len(filas) == 1
+    assert filas[0]["primero_titulo"] is None
+    assert filas[0]["primero_estado"] is None
 
 
 # ═══════════════════════════════════════════════════════════════════════
