@@ -49,8 +49,22 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+import config  # noqa: E402
 import db.db as db  # noqa: E402
 from acciones import crud  # noqa: E402
+
+
+def _con_gente(nombres):
+    """Casa de mentira: quién puede ser responsable y cómo se llama.
+
+    Igual que `_con_gente` de tests/test_responsable.py, y por el mismo
+    motivo: `config.NOMBRES_POR_CHAT` y `config.CHAT_IDS_PERMITIDOS` se leen
+    EN CADA LLAMADA, así que alcanza con cambiar el atributo del módulo. El
+    fixture autouse de conftest.py devuelve los módulos a su sitio después de
+    cada prueba.
+    """
+    config.NOMBRES_POR_CHAT = dict(nombres)
+    config.CHAT_IDS_PERMITIDOS = tuple(nombres)
 
 
 # ---------------------------------------------------------------------------
@@ -124,8 +138,13 @@ class FakeConn:
             self._ids["tareas"] += 1
             rid = self._ids["tareas"]
             _bandeja, titulo, _detalle, vence = p[0], p[1], p[2], p[3]
+            # El responsable viaja último en la tupla (encargo 2): por índice
+            # y no por desempaquetado fijo, así que agregar otra columna al
+            # final de acá no le rompe la lectura a nadie más.
+            responsable = p[8] if len(p) > 8 else None
             self.tareas.append({"id": rid, "titulo": titulo, "vence_en": vence,
-                                "estado": "pendiente", "borrado_en": None})
+                                "estado": "pendiente", "borrado_en": None,
+                                "responsable_chat_id": responsable})
             return _Cur((rid,))
 
         if s.startswith("INSERT INTO eventos"):
@@ -255,6 +274,152 @@ async def test_tarea_hecha_no_bloquea():
             "cuando": "2026-08-01T10:00:00"})
 
     assert len(conn.tareas) == 2
+
+
+# ── Encargo 2: el responsable, al crear ──────────────────────────────────
+#
+# «crea X para Rosi» tiene que quedar en UN paso: nace con Rosi ya puesta, sin
+# crear y después editar. La validación es la MISMA función que ya usa
+# `editar` (`acciones/crud.py::_por_las_puertas`, con `PUERTAS["tareas"]`), no
+# una copia del criterio para crear.
+
+DUENO = 424242
+ROSI = 700000001
+AJENO = 700000999   # tiene nombre pero NO puede ser responsable (no entra)
+
+
+async def test_responsable_valido_se_guarda_al_crear_en_un_solo_paso():
+    """«crea X para Rosi»: la tarea nace YA con el chat de Rosi, sin un
+    segundo paso de `editar`."""
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn()
+    _instalar(conn)
+
+    tabla, rid, _log = await crud.crear_desde_interpretacion(
+        1, {"clasificacion": "tarea", "titulo": "Llamar al dentista",
+            "responsable_chat_id": "Rosi"})
+
+    assert tabla == "tareas"
+    assert len(conn.tareas) == 1, "tiene que crear UNA tarea, no dos pasos"
+    assert conn.tareas[0]["id"] == rid
+    assert conn.tareas[0]["responsable_chat_id"] == ROSI, (
+        "el responsable no quedó puesto en la misma creación")
+
+
+async def test_un_numero_de_chat_tambien_vale_como_responsable():
+    """El responsable, de tres formas — acá la del número — y las tres
+    terminan en la misma puerta que usa `editar` (ver
+    `acciones/crud.py::_responsable_que_vale`)."""
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn()
+    _instalar(conn)
+
+    await crud.crear_desde_interpretacion(
+        1, {"clasificacion": "tarea", "titulo": "Pagar el internet",
+            "responsable_chat_id": ROSI})
+
+    assert conn.tareas[0]["responsable_chat_id"] == ROSI
+
+
+async def test_responsable_que_no_vale_no_crea_NADA():
+    """Si el nombre pedido no vale, `crear` se rechaza ENTERO: no crea la
+    tarea sin responsable como si no se hubiera pedido nada — eso perdería
+    en silencio el «para Rosi» que sí se pidió."""
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn()
+    _instalar(conn)
+
+    try:
+        await crud.crear_desde_interpretacion(
+            1, {"clasificacion": "tarea", "titulo": "Comprar pintura",
+                "responsable_chat_id": "un nombre que no es de nadie"})
+        assert False, "debió rechazar un responsable que no vale"
+    except ValueError as e:
+        assert "no creé la tarea" in str(e).lower()
+
+    assert conn.tareas == [], "no debió escribir nada"
+    assert conn.logs == [], "no debió dejar ninguna huella"
+
+
+async def test_un_chat_que_no_puede_ser_responsable_tambien_se_rechaza():
+    """Tiene nombre pero no entra al panel: la puerta lo conoce y lo rechaza
+    igual que al editar (`config.puede_ser_responsable`)."""
+    _con_gente({DUENO: "Tiziano", AJENO: "Un Ajeno"})
+    config.CHAT_IDS_PERMITIDOS = (DUENO,)  # AJENO tiene nombre, no permiso
+    conn = FakeConn()
+    _instalar(conn)
+
+    try:
+        await crud.crear_desde_interpretacion(
+            1, {"clasificacion": "tarea", "titulo": "Revisar el aire",
+                "responsable_chat_id": AJENO})
+        assert False, "debió rechazar a alguien que no puede ser responsable"
+    except ValueError:
+        pass
+    assert conn.tareas == []
+
+
+async def test_sin_responsable_todo_queda_igual_que_hoy():
+    """No mandar el campo (el caso normal, hoy) no cambia nada: se crea igual
+    y sin responsable, como antes de este encargo."""
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn()
+    _instalar(conn)
+
+    await crud.crear_desde_interpretacion(
+        1, {"clasificacion": "tarea", "titulo": "Sacar la basura"})
+
+    assert len(conn.tareas) == 1
+    assert conn.tareas[0]["responsable_chat_id"] is None
+
+
+async def test_una_cita_con_responsable_no_lo_escribe_ni_lo_valida():
+    """`responsable_chat_id` es de TAREAS. Una cita que traiga ese campo por
+    error no lo escribe -- ni siquiera lo valida-- porque no es su columna."""
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn()
+    _instalar(conn)
+
+    tabla, rid, _log = await crud.crear_desde_interpretacion(
+        1, {"clasificacion": "cita", "titulo": "Dentista",
+            "cuando": "2026-08-01T10:00:00",
+            "responsable_chat_id": "un nombre que no es de nadie"})
+
+    assert tabla == "eventos"
+    assert len(conn.eventos) == 1, (
+        "una clasificación que no valga como responsable no puede tumbar la "
+        "creación de una cita: ese campo no es suyo")
+
+
+async def test_crear_pasa_por_la_MISMA_puerta_que_usa_editar():
+    """LA prueba de que no hay una copia del criterio: se espía
+    `crud._por_las_puertas` -la función que usa `editar()`- y se comprueba
+    que `crear_desde_interpretacion` la llama con la MISMA tabla y el MISMO
+    valor. Si mañana alguien le escribiera a `crear` su propio chequeo del
+    responsable en vez de reusar la puerta, este espía no vería la llamada y
+    la prueba se pondría roja."""
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn()
+    _instalar(conn)
+
+    llamadas = []
+    original = crud._por_las_puertas
+
+    def _espia(tabla, valores):
+        llamadas.append((tabla, dict(valores)))
+        return original(tabla, valores)
+
+    crud._por_las_puertas = _espia
+    try:
+        await crud.crear_desde_interpretacion(
+            1, {"clasificacion": "tarea", "titulo": "Avisar a Rosi",
+                "responsable_chat_id": "Rosi"})
+    finally:
+        crud._por_las_puertas = original
+
+    assert ("tareas", {"responsable_chat_id": "Rosi"}) in llamadas, (
+        "crear_desde_interpretacion no llamó a _por_las_puertas -la misma "
+        "función que editar()- con el responsable pedido")
 
 
 async def test_cita_mismo_titulo_mismo_inicio_no_crea_segunda():
@@ -482,6 +647,13 @@ _TESTS = [
     test_tarea_sin_fecha_dedup_por_null,
     test_tarea_borrada_no_bloquea,
     test_tarea_hecha_no_bloquea,
+    test_responsable_valido_se_guarda_al_crear_en_un_solo_paso,
+    test_un_numero_de_chat_tambien_vale_como_responsable,
+    test_responsable_que_no_vale_no_crea_NADA,
+    test_un_chat_que_no_puede_ser_responsable_tambien_se_rechaza,
+    test_sin_responsable_todo_queda_igual_que_hoy,
+    test_una_cita_con_responsable_no_lo_escribe_ni_lo_valida,
+    test_crear_pasa_por_la_MISMA_puerta_que_usa_editar,
     test_cita_mismo_titulo_mismo_inicio_no_crea_segunda,
     test_cita_mismo_titulo_inicio_distinto_si_crea,
     # Los dos de abajo son síncronos; el runner hace `await t()`, así que se

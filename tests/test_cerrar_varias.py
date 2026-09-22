@@ -1925,7 +1925,25 @@ def test_ninguna_escritura_llega_a_la_base_sin_su_huella():
             env = _envoltorio(rama, c)
             mixto[c] = {"int": 100, "float": 1.0, "dict": {"estado": "hecha"},
                         "list": ["tareas"]}.get(env, "tareas")
-        return [mixto] + [{c: v for c in claves} for v in CANDIDATOS]
+        bundles = [mixto] + [{c: v for c in claves} for v in CANDIDATOS]
+
+        # Un bundle más, SOLO si la rama tiene "clasificacion" (hoy, únicamente
+        # `crear`): ninguno de los de arriba llega al INSERT de tareas con el
+        # resto de las claves en un valor que no se rechace por su cuenta.
+        # "tareas" (el genérico de `mixto`, plural) no es una clasificación
+        # válida; el único candidato que SÍ vale —"tarea", singular— fuerza
+        # TODAS las claves al mismo valor, y "tarea" tampoco es el nombre de
+        # nadie para las claves que validan contra personas (como el
+        # responsable que agrega el encargo 2). Sin este bundle, cualquier
+        # clave nueva de `crear_desde_interpretacion` con su propia validación
+        # puede dejar a `crear` sin ningún bundle que la ejercite de verdad, y
+        # el piso de abajo lo cantaría sin decir por qué.
+        if "clasificacion" in claves:
+            extra = {**mixto, "clasificacion": "tarea"}
+            if "responsable_chat_id" in claves:
+                extra["responsable_chat_id"] = ""   # sin responsable: normal
+            bundles.append(extra)
+        return bundles
 
     red = _RedDeMensajes()
     red.tender()                       # nada de esto sale a internet

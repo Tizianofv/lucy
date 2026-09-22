@@ -87,8 +87,17 @@ HERRAMIENTAS DISPONIBLES:
           "titulo": "...", "cuando": "ISO 8601 con offset o \\"\\"",
           "recurrencia": "", "anticipos_min": [0], "detalle": "",
           "duracion_min": 0, "lugar": "", "persona": "", "proyecto": "",
-          "monto": 0, "moneda": "DOP", "referencia": "", "contraparte": ""}
+          "monto": 0, "moneda": "DOP", "referencia": "", "contraparte": "",
+          "responsable_chat_id": ""}
   Crea la fila real. Personas y proyectos se enlazan solos por nombre.
+  RESPONSABLE (solo tareas, opcional): "crea X para Rosi" = mandalo YA en
+  esta misma llamada, con el NOMBRE tal como está en esta lista, y nunca un
+  número: {PERSONAS_DEL_PANEL}. Sin responsable = no mandes el campo (o "").
+  Es la MISMA regla que al editar (ver más abajo): si el nombre no está en la
+  lista, o es un apodo y no está claro de quién, preguntá antes de crear en
+  vez de adivinar; si el nombre no vale, `crear` lo rechaza entero —no crea la
+  tarea sin responsable como si no lo hubieras pedido— y el motivo dice a
+  quién sí se le puede asignar.
   RECURRENCIA (solo tareas): si algo se repite ("la medicina cada 8 horas",
   "sacar la basura los lunes"), es UNA tarea con "recurrencia" — NUNCA
   varias copias a futuro. Formatos que entiende la maquinaria (usá estos,

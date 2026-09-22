@@ -235,6 +235,33 @@ async def crear_desde_interpretacion(
     if clas not in ("tarea", "cita", "nota", "idea", "gasto", "ingreso"):
         raise ValueError(f"'{clas}' no crea ninguna entidad.")
 
+    # EL RESPONSABLE, SOLO PARA TAREAS, por la MISMA puerta que usa `editar()`
+    # para cambiarlo — `_por_las_puertas` con `PUERTAS["tareas"]`, y no una
+    # copia del criterio. Poner el responsable al crear es lo que pidió
+    # Tiziano en el encargo 2 del diseño: "crea X para Rosi" en un solo paso,
+    # en vez de crear y después editar.
+    #
+    # Sin dato (el caso normal) `_responsable_que_vale` devuelve None sin
+    # validar nada: "cuando no se dice responsable, todo queda igual que
+    # hoy" es la propia lógica de la puerta, no algo que se decida acá.
+    #
+    # Si lo pedido no vale, esto CORTA LA CREACIÓN ENTERA — no crea la tarea
+    # sin responsable como si no se hubiera pedido nada, que sería peor:
+    # "para Rosi" se perdería en silencio y nadie más que Rosi lo notaría.
+    #
+    # Solo se mira si `clas == "tarea"`: en cualquier otra clasificación
+    # "responsable_chat_id" no es una columna que se vaya a escribir, y
+    # validarlo igual rechazaría una cita o un gasto por un dato que ni
+    # siquiera se va a usar.
+    responsable_chat_id = None
+    if clas == "tarea":
+        try:
+            responsable_chat_id = _por_las_puertas(
+                "tareas", {"responsable_chat_id": r.get("responsable_chat_id")}
+            )["responsable_chat_id"]
+        except ValueError as e:
+            raise ValueError(f"No creé la tarea: {e}.") from e
+
     # Personas y proyectos se resuelven fuera de la transacción a propósito:
     # crear una persona de más es inofensivo y reutilizable, mientras que
     # meterlo adentro alargaría la transacción de la entidad sin ganar nada.
@@ -253,12 +280,13 @@ async def crear_desde_interpretacion(
                 """
                 INSERT INTO tareas
                   (bandeja_id, titulo, detalle, vence_en, recurrencia,
-                   proyecto_id, persona_id, anticipos_min)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                   proyecto_id, persona_id, anticipos_min, responsable_chat_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                 """,
                 (bandeja_id, titulo, detalle, cuando,
                  str(r.get("recurrencia") or "").strip() or None,
-                 proyecto_id, persona_id, _anticipos(r.get("anticipos_min"))),
+                 proyecto_id, persona_id, _anticipos(r.get("anticipos_min")),
+                 responsable_chat_id),
             )
 
         elif clas == "cita":
