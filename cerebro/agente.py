@@ -102,12 +102,12 @@ HERRAMIENTAS DISPONIBLES:
   contexto de lo que dice Tiziano —un cliente de ACD, algo del estudio, algo
   técnico del sistema, algo suyo y personal—; si no queda claro cuál,
   preguntá antes de crear en vez de adivinar. Si la tarea lleva "proyecto",
-  NO mandes "area" aparte: la tarea la hereda del proyecto sola (una tarea
+  NO hace falta que mandes "area": la hereda del proyecto sola (una tarea
   con proyecto nunca tiene un área propia distinta), y si igual la mandás,
-  `crear` RECHAZA LA TAREA ENTERA con el motivo —no la crea a medias
-  ignorando el área en silencio—. Sin área = no mandes el campo (o ""), que
-  es el estado normal de hoy. Si mandás una que no está en la lista, también
-  se rechaza y el motivo dice cuáles hay.
+  se IGNORA sin avisar —la tarea se crea igual, con el área del proyecto—.
+  Sin área = no mandes el campo (o ""), que es el estado normal de hoy. Si
+  mandás una que no está en la lista Y la tarea NO lleva proyecto, se
+  rechaza y el motivo dice cuáles hay.
   RECURRENCIA (solo tareas): si algo se repite ("la medicina cada 8 horas",
   "sacar la basura los lunes"), es UNA tarea con "recurrencia" — NUNCA
   varias copias a futuro. Formatos que entiende la maquinaria (usá estos,
@@ -149,12 +149,16 @@ HERRAMIENTAS DISPONIBLES:
 
   ÁREA DE UNA TAREA O UN PROYECTO: en "cambios" va {"area": "<clave>"}, una de
   estas, tal cual: {AREAS}. En un PROYECTO se puede editar siempre —es lo que
-  después heredan todas sus tareas—. En una TAREA, solo si esa tarea NO tiene
-  proyecto: una tarea CON proyecto nunca tiene área propia (la hereda sola), y
-  ponerle "area" se rechaza — si hace falta cambiar el área de una tarea así,
-  se cambia la del PROYECTO. "area": null la deja sin área. Si la clave que
-  mandás no es una de las declaradas, también se rechaza, y el motivo dice
-  por qué (o cuáles hay).
+  después heredan todas sus tareas—. En una TAREA, solo importa si esa tarea
+  NO tiene proyecto: una tarea CON proyecto nunca tiene área propia —la
+  hereda sola—, así que ponerle "area" a una tarea con proyecto no hace nada
+  (se ignora, sin avisar) y PONERLE PROYECTO A UNA TAREA LE LIMPIA EL ÁREA
+  PROPIA SOLA, en el mismo paso — "poné esta tarea en el proyecto X" nunca
+  hace falta pedirlo en dos pasos. Y sacarle el proyecto a una tarea la deja
+  SIN área hasta que le pongas una nueva —no recupera ninguna vieja—.
+  "area": null la deja sin área. Si la clave que mandás no es una de las
+  declaradas Y la tarea (o el proyecto) queda sin proyecto que la tape,
+  se rechaza, y el motivo dice cuáles hay.
 
   EL CÓDIGO M-####. El panel muestra cada movimiento con un código —M-0086— que
   es su id: M-0086 es movimientos.id = 86. Cuando Tiziano lo nombre ("el M-0086
@@ -843,7 +847,18 @@ async def _ejecutar_herramienta(
             # escrita acá y en ninguna prueba: cambiar `escrito` por `cambios`
             # dejaba las 598 en verde.
             con_puerta = crud.PUERTAS.get(tabla, {})
-            escrito = {k: (despues.get(k) if k in con_puerta else v)
+            # `area` (encargo 4) tiene el MISMO problema que una columna con
+            # puerta, aunque no viva en `crud.PUERTAS` -- esa forma es sync y
+            # de un solo valor, y decidir el área necesita `db.areas()`
+            # (async) y el proyecto que va a quedar, así que vive en
+            # `crud._area_que_vale` en cambio. En una TAREA con proyecto, lo
+            # que QUEDA puede no ser lo que se PIDIÓ: se pide "area": "CDS" y
+            # queda en None, porque la hereda del proyecto. Contar `v` ahí le
+            # diría a Tiziano que se guardó un área que no se guardó.
+            columnas_que_pueden_diferir = (
+                set(con_puerta) | ({"area"} if tabla == "tareas" else set()))
+            escrito = {k: (despues.get(k) if k in columnas_que_pueden_diferir
+                          else v)
                        for k, v in cambios.items()}
             _anotar(acciones, log_id,
                     f"{quien} → {_resumen_cambios(escrito)}")

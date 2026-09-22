@@ -557,13 +557,13 @@ async def test_un_area_que_no_existe_rechaza_la_creacion_entera():
     assert conn.tareas == [], "no debió crear nada"
 
 
-async def test_el_area_se_rechaza_si_la_tarea_tiene_proyecto():
-    """«Una tarea dentro de un proyecto nunca tiene un área propia distinta»
-    (decisión de Tiziano). Si Lucy manda "area" Y "proyecto" juntos -- el
-    modelo no siempre sigue la indicación del prompt al pie de la letra --,
-    se RECHAZA la creación entera, con el motivo. No se ignora en silencio:
-    un pedido que no hace nada y contesta "creada" es la forma más barata de
-    perder un dato sin que nadie se entere."""
+async def test_el_area_se_ignora_en_silencio_si_la_tarea_tiene_proyecto():
+    """SEGUNDA VUELTA (Tiziano corrigió el diseño anterior tras el NO PASA
+    sobre `2d8451c`): «la tarea con proyecto HEREDA el área del proyecto.
+    Cuando una tarea pasa a tener proyecto, su área propia se limpia sola,
+    no se rechaza el pedido». Si Lucy manda "area" Y "proyecto" juntos, la
+    tarea se crea igual -- CON el proyecto -- y el área pedida se descarta
+    sin avisar: no hace falta, porque la que cuenta sale del proyecto."""
     _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
     conn = FakeConn(areas=[{"clave": "CDS", "color": "#1"}])
 
@@ -577,15 +577,13 @@ async def test_el_area_se_rechaza_si_la_tarea_tiene_proyecto():
     db.buscar_o_crear_persona = _cero_persona
     db.buscar_o_crear_proyecto = _con_proyecto_77
 
-    try:
-        await crud.crear_desde_interpretacion(
-            1, {"clasificacion": "tarea", "titulo": "algo del proyecto",
-                "proyecto": "Álbum nuevo", "area": "CDS"})
-        assert False, "debió rechazar el área por tener proyecto"
-    except ValueError as e:
-        assert "proyecto" in str(e).lower()
-    assert conn.tareas == [], (
-        "no debió crear la tarea ignorando el área en silencio")
+    await crud.crear_desde_interpretacion(
+        1, {"clasificacion": "tarea", "titulo": "algo del proyecto",
+            "proyecto": "Álbum nuevo", "area": "CDS"})
+
+    assert len(conn.tareas) == 1, "la tarea sí se tenía que crear"
+    assert conn.tareas[0]["area"] is None, (
+        f"el área pedida tenía que ignorarse, no guardarse: {conn.tareas[0]}")
 
 
 async def test_sin_pedir_area_se_crea_igual_con_proyecto():
@@ -763,36 +761,88 @@ async def test_editar_rechaza_un_area_que_no_esta_declarada():
     assert conn.campos_guardados is None, "no debió escribir nada"
 
 
-async def test_editar_rechaza_el_area_si_la_tarea_ya_tiene_proyecto():
-    """LO QUE EL TESTIGO ENCONTRÓ SOBRE e94b37a: antes de este arreglo,
-    `editar` no miraba `antes["proyecto_id"]` en absoluto -- este es el
-    camino que llegaba derecho a la FK/CHECK de Postgres."""
+async def test_editar_ignora_el_area_pedida_si_la_tarea_ya_tiene_proyecto():
+    """SEGUNDA VUELTA (el testigo sobre `2d8451c` encontró que `editar` no
+    miraba `antes["proyecto_id"]` en absoluto -- eso llegaba derecho a la
+    FK/CHECK de Postgres -- y Tiziano corrigió además el diseño: ya no se
+    rechaza, se limpia sola). Pedir un área explícita sobre una tarea que ya
+    tiene proyecto no falla: se edita igual, con el área quedando en None."""
     conn = _ConnEditarArea(_fila_tarea_area(proyecto_id=5),
                            areas=[{"clave": "CDS", "color": "#1"}])
     db.pool = FakePool(conn)
-    try:
-        await crud.editar("tareas", 40, {"area": "CDS"}, motivo="test")
-        assert False, "debió rechazar: esa tarea ya tiene proyecto"
-    except ValueError as e:
-        assert "proyecto" in str(e).lower()
-    assert conn.campos_guardados is None
+    despues, log_id = await crud.editar(
+        "tareas", 40, {"area": "CDS"}, motivo="test")
+    assert despues["area"] is None, (
+        f"el área pedida tenía que ignorarse, no guardarse: {despues}")
+    assert log_id is not None
 
 
-async def test_editar_rechaza_el_area_si_el_proyecto_se_pone_en_el_mismo_pedido():
+async def test_editar_ignora_el_area_si_el_proyecto_se_pone_en_el_mismo_pedido():
     """Y si el proyecto se le pone EN ESTE MISMO `editar` -- junto con el
     área, en un solo pedido --, la pregunta es la misma: ¿con qué proyecto
-    va a quedar DESPUÉS de esto? El área se rechaza igual, mirando
+    va a quedar DESPUÉS de esto? El área se ignora igual, mirando
     `campos["proyecto_id"]` y no solo `antes["proyecto_id"]`."""
     conn = _ConnEditarArea(_fila_tarea_area(proyecto_id=None),
                            areas=[{"clave": "CDS", "color": "#1"}])
     db.pool = FakePool(conn)
-    try:
-        await crud.editar(
-            "tareas", 40, {"proyecto_id": 5, "area": "CDS"}, motivo="test")
-        assert False, "debió rechazar: va a quedar con proyecto"
-    except ValueError as e:
-        assert "proyecto" in str(e).lower()
-    assert conn.campos_guardados is None
+    despues, log_id = await crud.editar(
+        "tareas", 40, {"proyecto_id": 5, "area": "CDS"}, motivo="test")
+    assert despues["proyecto_id"] == 5
+    assert despues["area"] is None, (
+        f"el área pedida tenía que ignorarse al ponerle proyecto: {despues}")
+
+
+async def test_poner_proyecto_le_limpia_el_area_sola_sin_tocar_area():
+    """EL CASO DEL TESTIGO, textual: "poné esta tarea en el proyecto X"
+    -- SIN mencionar "area" para nada -- sobre una tarea que YA tenía un
+    área propia. Antes de este arreglo, la fila quedaba con `proyecto_id`
+    puesto Y el área vieja intacta: un estado que solo el CHECK de la base
+    atajaba, con su texto crudo. Ahora `editar` lo resuelve solo, en el
+    mismo paso, sin que nadie tenga que pedirlo aparte."""
+    conn = _ConnEditarArea(_fila_tarea_area(proyecto_id=None, area="CDS"),
+                           areas=[{"clave": "CDS", "color": "#1"}])
+    db.pool = FakePool(conn)
+    despues, log_id = await crud.editar(
+        "tareas", 40, {"proyecto_id": 5}, motivo="test")
+    assert despues["proyecto_id"] == 5
+    assert despues["area"] is None, (
+        f"poner proyecto tenía que limpiar el área vieja sola: {despues}")
+    assert conn.campos_guardados["area"] is None, (
+        "el UPDATE tiene que escribir area=NULL de verdad, no solo el dict "
+        "de retorno")
+
+
+async def test_quitar_el_proyecto_deja_la_tarea_sin_area_no_recupera_la_vieja():
+    """Sacarle el proyecto a una tarea la deja SIN área hasta que alguien le
+    ponga una -- no revive ninguna área anterior a que tuviera el
+    proyecto, porque esa información ya no está en ningún lado (nunca se
+    guardó: mientras tuvo proyecto, `tareas.area` se mantuvo en NULL)."""
+    conn = _ConnEditarArea(_fila_tarea_area(proyecto_id=5, area=None),
+                           areas=[{"clave": "CDS", "color": "#1"}])
+    db.pool = FakePool(conn)
+    despues, log_id = await crud.editar(
+        "tareas", 40, {"proyecto_id": None}, motivo="test")
+    assert despues["proyecto_id"] is None
+    assert despues["area"] is None
+
+
+async def test_cambiar_de_proyecto_sigue_sin_area_propia():
+    """Cambiar de un proyecto a OTRO proyecto: la tarea sigue sin área
+    propia -- la sigue heredando, ahora del proyecto nuevo -- y si tenía
+    algo en `area` (no debería, pero por las dudas) se limpia igual."""
+    conn = _ConnEditarArea(_fila_tarea_area(proyecto_id=5, area=None),
+                           areas=[{"clave": "CDS", "color": "#1"}])
+    db.pool = FakePool(conn)
+    despues, log_id = await crud.editar(
+        "tareas", 40, {"proyecto_id": 9}, motivo="test")
+    assert despues["proyecto_id"] == 9
+    assert despues["area"] is None
+    # Y NO se tocó "area" en el UPDATE -- no hacía falta, ya estaba en
+    # None y sigue en None -- así que una base sin la columna `area`
+    # todavía (migración no aplicada) no revienta por un cambio de
+    # proyecto que ni siquiera necesitaba tocarla.
+    assert "area" not in (conn.campos_guardados or {}), (
+        f"no hacía falta escribir 'area' acá: {conn.campos_guardados}")
 
 
 async def test_editar_area_null_no_se_rechaza_aunque_tenga_proyecto():
@@ -833,27 +883,43 @@ async def test_editar_rechaza_un_area_de_proyecto_que_no_existe():
 
 # ── LA PUERTA ÚNICA: nada más en crud.py escribe `area` por su cuenta ────
 
-def test_todo_lo_que_toca_area_en_crud_pasa_por_la_misma_puerta():
+def test_todo_lo_que_toca_area_o_proyecto_id_en_crud_pasa_por_la_misma_puerta():
     """No una lista tecleada de "los sitios que ya sé que hay": se recorre
-    CADA función de `acciones/crud.py` que mencione `area` en su cuerpo -- lo
-    real, sacado del árbol de sintaxis -- y se exige que TODAS llamen a
-    `_area_que_vale`. Así, el día que alguien agregue un tercer sitio que
-    escriba `area` sin pasar por la puerta, esto se pone rojo solo, en vez de
-    depender de que alguien se acuerde de mirar.
+    CADA función de `acciones/crud.py` que mencione `area` O `proyecto_id` en
+    su cuerpo -- lo real, sacado del árbol de sintaxis -- y se exige que
+    TODAS llamen a `_area_que_vale`.
 
-    LA FRONTERA, medida mutando: esto mira la función ENTERA, no cada rama.
-    Vaciar SOLO la rama de `tareas` dentro de `editar()` y dejar la de
-    `proyectos` intacta NO se ve acá -- `editar` sigue mencionando `area` y
-    sigue llamando `_area_que_vale` en algún lado, así que esta prueba pasa
-    igual. Lo que sí lo atrapa es la prueba directa de esa rama
-    (`test_editar_rechaza_un_area_que_no_esta_declarada`), que llama a
+    POR QUÉ TAMBIÉN `proyecto_id`, no solo `area` (segunda vuelta, NO PASA
+    sobre `2d8451c`): el testigo encontró que `editar("tareas", id,
+    {"proyecto_id": 5}, ...)` -- SIN mencionar "area" para nada -- dejaba una
+    fila con proyecto puesto y el área vieja intacta, porque la primera
+    versión de esta prueba (y del código) solo miraba si la función
+    mencionaba "area". Una función puede decidir el área de una tarea sin
+    escribir la palabra "area" en esa rama -- alcanza con tocar
+    `proyecto_id`, porque `_area_que_vale` mira el proyecto para decidir el
+    área. Así que ahora la lista de "sitios a vigilar" se deriva de las DOS
+    palabras, no de una.
+
+    Así, el día que alguien agregue un tercer sitio que escriba `area` o
+    `proyecto_id` de una tarea sin pasar por la puerta, esto se pone rojo
+    solo, en vez de depender de que alguien se acuerde de mirar.
+
+    LA FRONTERA, medida mutando (y ésta SÍ dice la verdad, al revés que la
+    versión anterior de este mismo comentario): esto mira la función
+    ENTERA, no cada rama. Vaciar SOLO la rama de `tareas` dentro de
+    `editar()` y dejar la de `proyectos` intacta NO se ve acá -- `editar`
+    sigue mencionando `area`/`proyecto_id` y sigue llamando a
+    `_area_que_vale` en algún lado, así que esta prueba pasa igual. Lo que
+    SÍ lo atrapa es la prueba directa de esa rama
+    (`test_editar_rechaza_un_area_que_no_esta_declarada`,
+    `test_poner_proyecto_limpia_el_area_sola`, etc.), que llaman a
     `editar()` de verdad. Esta prueba de hermanos agarra un sitio NUEVO que
     nazca sin la puerta; no agarra una puerta vaciada por dentro en una
-    función que YA la llama en otro lado.
+    función que YA la llama en otro lado -- eso quedó demostrado el
+    9-sep-2026 con la prueba de mutación B) y sigue valiendo igual acá.
     """
     import ast
     import inspect
-    import textwrap
 
     fuente = inspect.getsource(crud)
     arbol = ast.parse(fuente)
@@ -863,22 +929,25 @@ def test_todo_lo_que_toca_area_en_crud_pasa_por_la_misma_puerta():
         if not isinstance(nodo, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if nodo.name == "_area_que_vale":
-            continue  # la puerta misma, obviamente menciona "area"
+            continue  # la puerta misma, obviamente menciona las dos
         texto = ast.unparse(nodo)
-        if '"area"' not in texto and "'area'" not in texto:
+        menciona_area = '"area"' in texto or "'area'" in texto
+        menciona_proyecto = '"proyecto_id"' in texto or "'proyecto_id'" in texto
+        if not (menciona_area or menciona_proyecto):
             continue
         vistas.append(nodo.name)
         if "_area_que_vale(" not in texto:
             culpables.append(nodo.name)
-    assert vistas, "no se encontró ninguna función que mencione 'area' -- la prueba dejó de medir algo"
+    assert vistas, ("no se encontró ninguna función que mencione 'area' ni "
+                    "'proyecto_id' -- la prueba dejó de medir algo")
     assert set(vistas) == {"crear_desde_interpretacion", "editar"}, (
-        f"aparecieron funciones nuevas que tocan 'area': "
+        f"aparecieron funciones nuevas que tocan 'area' o 'proyecto_id': "
         f"{set(vistas) - {'crear_desde_interpretacion', 'editar'}}. Revisá "
         f"si pasan por _area_que_vale y agregalas a la lista esperada de "
         f"esta prueba.")
     assert not culpables, (
-        f"estas funciones de crud.py mencionan 'area' sin llamar a "
-        f"_area_que_vale: {culpables}")
+        f"estas funciones de crud.py mencionan 'area' o 'proyecto_id' sin "
+        f"llamar a _area_que_vale: {culpables}")
 
 
 # ── El testigo sobre eeb07dd: el duplicado NO PUEDE tirar el responsable ──

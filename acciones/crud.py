@@ -277,9 +277,11 @@ async def crear_desde_interpretacion(
     # código, como las categorías (`db/schema.sql:273` no tiene ni FK ni
     # CHECK en `categoria`; acá SÍ hay FK/CHECK, pero se valida IGUAL en
     # código para dar el mismo tipo de mensaje explicando cuáles hay, en
-    # vez del texto crudo de psycopg). Y si la tarea tiene proyecto,
-    # cualquier área pedida se RECHAZA, no se ignora — ver el docstring de
-    # `_area_que_vale`.
+    # vez del texto crudo de psycopg). Y si la tarea tiene proyecto, el área
+    # pedida se IGNORA en silencio -- ni se mira, ni se rechaza: hereda la
+    # del proyecto, que es la decisión de Tiziano (ver el docstring de
+    # `_area_que_vale`, corregido en la segunda vuelta tras el NO PASA sobre
+    # `2d8451c`).
     if clas == "tarea":
         try:
             area_tarea = await _area_que_vale(
@@ -693,33 +695,42 @@ async def _area_que_vale(valor, *, tabla: str, proyecto_id=None):
     valor); acá hace falta `db.areas()` (async) y, para una tarea, el
     proyecto que va a quedar — dos cosas que esa forma no puede cargar.
 
-    Sin dato (None o vacío) no pasa por la puerta: no hay nada que validar,
-    y es el estado normal de hoy en las tareas y proyectos que ya existen.
-
     `proyecto_id` es el que la TAREA tiene o va a tener DESPUÉS de esta
     escritura — None para un proyecto (ahí no aplica) o para una tarea sin
-    proyecto. Con proyecto puesto, CUALQUIER área pedida se RECHAZA — no se
-    ignora en silencio: «una tarea con proyecto nunca tiene área propia
-    distinta» (decisión de Tiziano, "No, toma la del proyecto") es la
-    misma clase de regla que "un responsable que no vale corta la
-    escritura entera" — un pedido explícito que no hace nada y contesta
-    "OK" es la forma más barata de perder un dato sin que nadie se entere.
+    proyecto.
 
-    Con proyecto puesto o no, si el valor no está en `db.areas()` también
-    se rechaza, con el mismo tipo de mensaje —"no es un área, son: ..."—
-    que ya usa la categoría de un movimiento
-    (`editar`, más abajo): es el MISMO patrón de vocabulario cerrado, no
-    una guarda sobre lo que escribe el modelo — se compara un valor contra
-    la tabla, no se juzga cómo está redactada una frase.
+    SEGUNDA VUELTA (NO PASA del testigo sobre `2d8451c`): con proyecto
+    puesto, el área queda SIEMPRE en `None` — SIN MIRAR `valor` y SIN
+    RECHAZAR NADA. Es la decisión de Tiziano tal cual la dijo: "la tarea
+    con proyecto HEREDA el área del proyecto. Cuando una tarea pasa a tener
+    proyecto, su área propia se limpia sola, no se rechaza el pedido ni se
+    le pide a nadie que lo haga en dos pasos." Así que "poné esta tarea en
+    el proyecto X" nunca falla por un área vieja que quedó pisada, y un
+    `editar` que mande `area` Y `proyecto_id` juntos tampoco — el área
+    pedida se descarta en silencio, porque de todos modos es irrelevante:
+    la que cuenta sale del proyecto (`COALESCE(p.area, t.area)` en
+    `db.tareas_por_grupo`). La primera versión de esta función RECHAZABA
+    este caso (commit `726f967`) — Tiziano lo corrigió: eso obligaba a un
+    "editar en dos pasos" que él no pidió.
+
+    Sin proyecto (`proyecto_id is None`): sin dato (`valor` es `None` o
+    vacío) no pasa por la puerta — no hay nada que validar, y es el estado
+    normal de una tarea a la que le sacaron el proyecto: se queda sin área
+    hasta que alguien le ponga una, no hereda ninguna vieja. Con dato, se
+    valida contra `db.areas()` — vocabulario cerrado, el MISMO patrón que
+    ya usa la categoría de un movimiento (`editar`, más abajo): se compara
+    un valor contra la tabla, no se juzga cómo está redactada una frase, así
+    que esto NO es una guarda sobre lo que escribe el modelo. Si no está en
+    la lista, se rechaza con el mismo tipo de mensaje —"no es un área,
+    son: ..."—, igual que un responsable que no vale corta la escritura
+    entera: acá SÍ importa que no se ignore en silencio, porque no hay
+    ningún otro sitio (como el proyecto) de donde el área pudiera salir.
     """
+    if tabla == "tareas" and proyecto_id is not None:
+        return None
     valor = (valor or "").strip() or None
     if valor is None:
         return None
-    if tabla == "tareas" and proyecto_id is not None:
-        raise ValueError(
-            "esa tarea tiene proyecto, y el área sale del proyecto: no se "
-            "le puede poner una propia. Si hace falta otra área, se "
-            "cambia la del PROYECTO")
     validas = {a["clave"] for a in await db.areas()}
     if valor not in validas:
         lista = (", ".join(f'"{c}"' for c in sorted(validas)) if validas
@@ -841,19 +852,45 @@ async def editar(
         # que revienta con su texto crudo (ver el `except Exception` de
         # `cerebro/agente.py::_ejecutar_herramienta`).
         #
+        # SEGUNDA VUELTA (NO PASA sobre `2d8451c`): la primera versión solo
+        # entraba acá si `"area" in campos`. `editar("tareas", id,
+        # {"proyecto_id": 5}, ...)` — "poné esta tarea en el proyecto X",
+        # SIN tocar el área — no pasaba por ningún lado: la fila quedaba con
+        # `proyecto_id` puesto Y el área vieja intacta al mismo tiempo, un
+        # estado que solo el CHECK de la base atajaba, con su texto crudo.
+        # Ahora entra si se toca CUALQUIERA de las dos columnas, porque las
+        # dos deciden la misma pregunta: "¿con qué área y con qué proyecto
+        # va a quedar esta tarea DESPUÉS de este UPDATE?" -- un solo cálculo,
+        # no una rama nueva en paralelo para "solo cambió el proyecto".
+        #
         # EL PROYECTO QUE CUENTA es el que la tarea va a tener DESPUÉS de
         # este UPDATE: lo pedido en estos MISMOS `cambios` si está, si no el
-        # que ya tenía. Así, pedir SOLO {"area": "X"} sobre una tarea que ya
-        # tiene proyecto se rechaza igual que si se pidieran las dos cosas
-        # juntas -- es la misma pregunta, "¿con qué proyecto va a quedar?",
-        # nada más que con un dato que viene de `antes` en vez de `campos`.
-        if tabla == "tareas" and "area" in campos:
+        # que ya tenía. Con proyecto puesto, `_area_que_vale` devuelve
+        # `None` SIEMPRE -- ni mira lo que se pidió en "area", ni rechaza
+        # nada: la tarea hereda el área del proyecto (decisión de Tiziano).
+        # Sin proyecto (se lo quitaron, o nunca lo tuvo), el área pedida se
+        # valida contra `db.areas()` como siempre, y si no viene ninguna se
+        # queda con la que ya tenía.
+        #
+        # SOLO SE ESCRIBE SI DE VERDAD CAMBIA (`area_final != antes.get`)
+        # salvo que "area" se haya pedido EXPLÍCITAMENTE -- ahí se escribe
+        # siempre, aunque el valor final sea el mismo que ya tenía, porque
+        # `desconocidas` (más arriba) ya garantizó que la columna existe si
+        # alguien la nombró a propósito. Sin eso, un `editar` que solo toca
+        # `proyecto_id` en una base donde la columna `area` todavía no
+        # existe intentaría escribir una columna que no está, y reventaría
+        # con 42703 por una tarea que ni siquiera tenía área que limpiar.
+        if tabla == "tareas" and ("area" in campos or "proyecto_id" in campos):
+            area_pedida_explicita = "area" in campos
             proyecto_final = campos.get("proyecto_id", antes.get("proyecto_id"))
+            area_pedida = campos.get("area", antes.get("area"))
             try:
-                campos["area"] = await _area_que_vale(
-                    campos["area"], tabla="tareas", proyecto_id=proyecto_final)
+                area_final = await _area_que_vale(
+                    area_pedida, tabla="tareas", proyecto_id=proyecto_final)
             except ValueError as e:
                 raise ValueError(f"No cambié nada: {e}.") from e
+            if area_pedida_explicita or area_final != antes.get("area"):
+                campos["area"] = area_final
         elif tabla == "proyectos" and "area" in campos:
             try:
                 campos["area"] = await _area_que_vale(

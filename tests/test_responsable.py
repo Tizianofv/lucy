@@ -2498,6 +2498,34 @@ def test_ninguna_funcion_de_LA_PUERTA_lee_un_chat_por_su_cuenta():
         f"número por su cuenta, en vez de `config.chat_escrito`: {culpables}")
 
 
+def test_el_parte_no_dice_un_area_puesta_si_la_tarea_tiene_proyecto():
+    """El área (encargo 4) tiene el MISMO problema que las columnas con
+    puerta -- aunque no viva en `crud.PUERTAS` -- porque en una tarea con
+    proyecto lo que QUEDA puede no ser lo que se PIDIÓ: se pide "area":
+    "CDS" y queda en None, porque la tarea la hereda del proyecto (decisión
+    de Tiziano, arreglada tras el NO PASA sobre `2d8451c`). Sin este
+    arreglo el parte diría «área=CDS» aunque la base haya guardado None --
+    exactamente el mismo daño que ya medía la prueba de arriba para
+    `responsable_chat_id`."""
+    _con_gente(LA_CASA_SIN_EL_DUENO, permitidos=tuple(LA_CASA_SIN_EL_DUENO))
+    fila = {"id": 1, "titulo": "Mezclar el tema", "estado": "pendiente",
+            "vence_en": None, "creado_en": datetime(2026, 8, 1, tzinfo=UTC),
+            "bandeja_id": 901, "responsable_chat_id": None,
+            "completado_en": None, "proyecto_id": 5, "area": None}
+    salida, _, base = _turno(
+        [{"herramienta": "editar",
+          "argumentos": {"tabla": "tareas", "id": 1,
+                         "cambios": {"area": "CDS"}}},
+         {"herramienta": "responder",
+          "argumentos": {"texto": "Listo.", "clasificacion": "orden"}}],
+        fila)
+
+    assert base.fila["area"] is None, (
+        f"el área pedida tenía que ignorarse, no guardarse: {base.fila}")
+    assert "CDS" not in salida, (
+        f"el parte repitió lo que se PIDIÓ en vez de lo que quedó: {salida!r}")
+
+
 def test_el_parte_de_una_columna_CON_PUERTA_dice_lo_que_QUEDO():
     """EL TURNO ENTERO: lo que sale por Telegram es lo que quedó en la base.
 
