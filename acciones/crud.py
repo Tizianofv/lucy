@@ -273,9 +273,74 @@ async def crear_desde_interpretacion(
             tabla = "tareas"
             ya = await _duplicado_pendiente(conn, tabla, titulo, cuando)
             if ya is not None:
-                # El agente la re-pidió; ya existía. Se devuelve la de antes
-                # sin crear otra ni escribir un log nuevo.
-                return tabla, ya[0], ya[1]
+                # El agente la re-pidió; ya existía. No se crea otra — pero
+                # el responsable de ESTE mensaje no se puede perder callado
+                # solo porque la tarea ya estaba. Hallazgo del testigo sobre
+                # eeb07dd: `responsable_chat_id` se validaba (líneas de
+                # arriba) y se tiraba entero acá, sin error, sin log, sin
+                # aviso — Tiziano recibía "OK" creyendo que había quedado
+                # asignada.
+                #
+                # Tres casos, y los tres se deciden con la fila de VERDAD
+                # (no con lo que se pidió, que puede estar desactualizado):
+                log_id = ya[1]
+                if responsable_chat_id is not None:
+                    # UNA sola columna, no `SELECT *`: es lo único que hace
+                    # falta para decidir, y `antes`/`despues` de la huella no
+                    # necesitan más — `deshacer()` (más abajo, rama 'editar')
+                    # arma el UPDATE con `jsonb_populate_record` y solo aplica
+                    # las columnas que la huella trae, así que una huella
+                    # PARCIAL con únicamente `responsable_chat_id` deshace
+                    # exactamente esto y nada más, ni de más ni de menos.
+                    cur_actual = await conn.execute(
+                        "SELECT responsable_chat_id FROM tareas WHERE id = %s",
+                        (ya[0],))
+                    fila_actual = await cur_actual.fetchone()
+                    actual = fila_actual[0] if fila_actual else None
+                    if actual == responsable_chat_id:
+                        pass  # ya tiene el mismo: nada que hacer, nada que avisar.
+                    elif actual is None:
+                        # No tenía: se le pone, por la MISMA puerta que ya
+                        # validó `responsable_chat_id` arriba, y con una
+                        # huella accion='editar' — la misma forma que dejaría
+                        # un `editar()` de verdad — para que el deshacer y la
+                        # auditoría no distingan un camino del otro.
+                        await conn.execute(
+                            "UPDATE tareas SET responsable_chat_id = %s "
+                            "WHERE id = %s",
+                            (responsable_chat_id, ya[0]))
+                        # EL ASA DEL DESHACER PASA A SER ESTA EDICIÓN, no la
+                        # creación original. Si se quedara con `ya[1]`,
+                        # "deshacé eso" después de "ya le puse Rosi" borraría
+                        # (archivaría) la tarea entera en vez de solo quitarle
+                        # el responsable que se le acaba de poner — mucho más
+                        # destructivo que lo que se pidió deshacer.
+                        log_id = await _registrar(
+                            conn, accion="editar", tabla="tareas",
+                            registro_id=ya[0],
+                            antes={"responsable_chat_id": actual},
+                            despues={"responsable_chat_id": responsable_chat_id},
+                            motivo=motivo or (
+                                "Responsable puesto al re-crear desde la "
+                                f"bandeja #{bandeja_id} (la tarea ya "
+                                "existía)"),
+                            bandeja_id=bandeja_id,
+                        )
+                    else:
+                        # Ya tenía OTRO: no se pisa sin decirlo. Se corta acá
+                        # con el motivo — "ERROR: ..." es información para el
+                        # modelo, no un fallo (mismo trato que un responsable
+                        # que no vale, más arriba) — y por nombre, nunca por
+                        # número: Tiziano descartó enseñar el chat.
+                        nombres = config.NOMBRES_POR_CHAT
+                        quien = nombres.get(
+                            actual, "alguien que no tiene nombre puesto")
+                        raise ValueError(
+                            f"No creé la tarea: ya existía («{titulo}», "
+                            f"#{ya[0]}) y la tiene {quien}. No la "
+                            "reasigné — si hay que cambiarla, decímelo "
+                            "explícito.")
+                return tabla, ya[0], log_id
             cur = await conn.execute(
                 """
                 INSERT INTO tareas

@@ -87,13 +87,16 @@ class FakeConn:
         self.logs: list[dict] = []
         self._ids = {"tareas": 0, "eventos": 0}
         self._logid = 1000
+        self.sql: list[tuple[str, tuple]] = []  # todo lo ejecutado, para espiar
 
     # -- helpers de siembra (una fila que "ya existía") ---------------------
-    def seed_tarea(self, titulo, vence, *, estado="pendiente", borrado_en=None):
+    def seed_tarea(self, titulo, vence, *, estado="pendiente", borrado_en=None,
+                  responsable_chat_id=None):
         self._ids["tareas"] += 1
         rid = self._ids["tareas"]
         self.tareas.append({"id": rid, "titulo": titulo, "vence_en": vence,
-                            "estado": estado, "borrado_en": borrado_en})
+                            "estado": estado, "borrado_en": borrado_en,
+                            "responsable_chat_id": responsable_chat_id})
         self._logid += 1
         self.logs.append({"id": self._logid, "tabla": "tareas",
                           "registro_id": rid, "accion": "crear"})
@@ -113,6 +116,7 @@ class FakeConn:
     async def execute(self, sql, params=None):
         s = " ".join(sql.split())
         p = params or ()
+        self.sql.append((s, p))
 
         if s.startswith("SELECT id FROM tareas WHERE borrado_en IS NULL AND estado"):
             titulo, cuando = p
@@ -162,6 +166,21 @@ class FakeConn:
             self.logs.append({"id": lid, "tabla": tabla,
                               "registro_id": registro_id, "accion": accion})
             return _Cur((lid,))
+
+        # El responsable de una tarea que YA existía (encargo 2, arreglo del
+        # NO PASA sobre eeb07dd): leer lo que tiene de verdad antes de
+        # decidir, y escribirlo si corresponde.
+        if s.startswith("SELECT responsable_chat_id FROM tareas WHERE id"):
+            (rid,) = p
+            hit = next((t for t in self.tareas if t["id"] == rid), None)
+            return _Cur((hit.get("responsable_chat_id"),) if hit else None)
+
+        if s.startswith("UPDATE tareas SET responsable_chat_id"):
+            responsable, rid = p
+            for t in self.tareas:
+                if t["id"] == rid:
+                    t["responsable_chat_id"] = responsable
+            return _Cur(None)
 
         raise AssertionError(f"SQL no modelado por FakeConn: {s[:90]}")
 
@@ -389,6 +408,88 @@ async def test_una_cita_con_responsable_no_lo_escribe_ni_lo_valida():
     assert len(conn.eventos) == 1, (
         "una clasificación que no valga como responsable no puede tumbar la "
         "creación de una cita: ese campo no es suyo")
+
+
+# ── El testigo sobre eeb07dd: el duplicado NO PUEDE tirar el responsable ──
+#
+# `_duplicado_pendiente` devuelve la fila existente sin ejecutar el INSERT,
+# así que `responsable_chat_id` — ya validado más arriba — se perdía en
+# silencio: "OK" sin que la fila cambiara. Los tres casos, y los tres se
+# deciden contra lo que la fila YA TIENE, no contra lo que se pidió.
+
+async def test_duplicado_sin_responsable_se_lo_pone_y_deja_huella_de_editar():
+    """La tarea ya existía y no tenía responsable: se le pone, con una huella
+    'editar' (no 'crear') para que el botón de deshacer apunte a ESTA
+    edición y no a la creación original."""
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn()
+    _instalar(conn)
+    rid0, log0 = conn.seed_tarea("Llamar al dentista", None)
+
+    tabla, rid, log_id = await crud.crear_desde_interpretacion(
+        1, {"clasificacion": "tarea", "titulo": "Llamar al dentista",
+            "responsable_chat_id": "Rosi"})
+
+    assert (tabla, rid) == ("tareas", rid0), "no debió crear una segunda fila"
+    assert len(conn.tareas) == 1
+    assert conn.tareas[0]["responsable_chat_id"] == ROSI, (
+        "el responsable pedido sobre el duplicado no quedó puesto")
+    assert log_id != log0, (
+        "el asa devuelta sigue siendo la de la creación original: deshacer "
+        "esto archivaría la tarea entera en vez de solo quitarle el "
+        "responsable que se le acaba de poner")
+    huella = next(l for l in conn.logs if l["id"] == log_id)
+    assert huella["accion"] == "editar", (
+        "la huella de poner el responsable tiene que ser un 'editar', igual "
+        "que si se hubiera cambiado a mano")
+
+
+async def test_duplicado_con_el_mismo_responsable_no_toca_nada():
+    """Ya tiene a Rosi y se vuelve a pedir Rosi: nada que hacer, nada que
+    avisar, y CERO escrituras nuevas — ni UPDATE ni huella."""
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn()
+    _instalar(conn)
+    rid0, log0 = conn.seed_tarea("Llamar al dentista", None,
+                                 responsable_chat_id=ROSI)
+    logs_antes = len(conn.logs)
+
+    tabla, rid, log_id = await crud.crear_desde_interpretacion(
+        1, {"clasificacion": "tarea", "titulo": "Llamar al dentista",
+            "responsable_chat_id": "Rosi"})
+
+    assert (tabla, rid, log_id) == ("tareas", rid0, log0)
+    assert conn.tareas[0]["responsable_chat_id"] == ROSI
+    assert len(conn.logs) == logs_antes, (
+        "pedir el mismo responsable que ya tenía no debía escribir ninguna "
+        "huella nueva")
+
+
+async def test_duplicado_con_OTRO_responsable_no_se_pisa_y_avisa():
+    """Ya la tiene Tiziano y alguien pide "para Rosi": NO se reasigna en
+    silencio. Se corta con información -el nombre de quien la tiene, nunca
+    el chat- para que el modelo se lo pueda contar a quien lo pidió."""
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn()
+    _instalar(conn)
+    conn.seed_tarea("Llamar al dentista", None, responsable_chat_id=DUENO)
+
+    try:
+        await crud.crear_desde_interpretacion(
+            1, {"clasificacion": "tarea", "titulo": "Llamar al dentista",
+                "responsable_chat_id": "Rosi"})
+        assert False, "debió avisar en vez de reasignar en silencio"
+    except ValueError as e:
+        mensaje = str(e)
+        assert "Tiziano" in mensaje, (
+            f"el aviso no dice quién la tiene de verdad: {mensaje!r}")
+        assert str(DUENO) not in mensaje, (
+            "el aviso no puede enseñar el número de chat")
+
+    # Y no se tocó nada: sigue siendo de Tiziano, sin UPDATE ni huella nueva.
+    assert conn.tareas[0]["responsable_chat_id"] == DUENO
+    assert not any(s.startswith("UPDATE") for s, _ in conn.sql), (
+        "no debía haber ningún UPDATE: el responsable existente no se toca")
 
 
 async def test_crear_pasa_por_la_MISMA_puerta_que_usa_editar():
@@ -653,6 +754,9 @@ _TESTS = [
     test_un_chat_que_no_puede_ser_responsable_tambien_se_rechaza,
     test_sin_responsable_todo_queda_igual_que_hoy,
     test_una_cita_con_responsable_no_lo_escribe_ni_lo_valida,
+    test_duplicado_sin_responsable_se_lo_pone_y_deja_huella_de_editar,
+    test_duplicado_con_el_mismo_responsable_no_toca_nada,
+    test_duplicado_con_OTRO_responsable_no_se_pisa_y_avisa,
     test_crear_pasa_por_la_MISMA_puerta_que_usa_editar,
     test_cita_mismo_titulo_mismo_inicio_no_crea_segunda,
     test_cita_mismo_titulo_inicio_distinto_si_crea,
