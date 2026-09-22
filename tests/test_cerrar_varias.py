@@ -2003,6 +2003,13 @@ def test_ninguna_escritura_llega_a_la_base_sin_su_huella():
                 # llegaba a escribir la tarea, y el piso de abajo lo cantaba
                 # sin decir que la causa era el área, no el resto.
                 extra["area"] = ""   # sin área: normal
+            if "primero_id" in claves:
+                # Mismo motivo, encargo 6: "tareas" (el genérico de `mixto`)
+                # no es el número de ninguna tarea, y `_primero_que_vale` lo
+                # rechaza ANTES del INSERT -- sin esto, NINGÚN bundle llegaba
+                # a escribir la tarea, y el piso de abajo lo cantaba sin decir
+                # que la causa era «Primero:», no el resto.
+                extra["primero_id"] = ""   # sin «Primero:»: normal
             bundles.append(extra)
         return bundles
 

@@ -51,6 +51,11 @@
   .etiqueta-area{display:inline-block;padding:.15rem .55rem;border-radius:99px;
     font-size:.78rem;color:#fff;white-space:nowrap}
   .etiqueta-area-vacia{background:var(--suave);color:var(--fondo)}
+  /* «Primero:» (encargo 6): la tarea que espera a otra se ve gris tenue y un
+     poco hacia adentro -- no se guarda ningún estado "atenuada" (ver
+     `db.tareas_por_grupo`), esto solo pinta lo que esa función ya calculó. */
+  .fila-espera{color:var(--suave);padding-left:1rem}
+  .fila-espera a{color:var(--suave)}
 </style></head><body>
 <!-- Este menú es la lista de pantallas del panel, y es la ÚNICA. De acá la lee
      `web/menu.py` y la inyecta en el prompt de Lucy, así que una pantalla que

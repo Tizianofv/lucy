@@ -16,12 +16,50 @@
 </p>
 
 {% if area_guardada %}<p class="aviso ok">Área guardada.</p>{% endif %}
+{% if primero_guardado %}<p class="aviso ok">«Primero:» guardado.</p>{% endif %}
 {% if error == 'area' %}
 <p class="aviso">Esa área ya no está en la lista.</p>
+{% elif error == 'primero' %}
+<p class="aviso">No se guardó: o esa tarea no existe, o sería su propia
+«Primero:», o formaría un círculo.</p>
 {% elif error == 'convertir' %}
 <p class="aviso">No se convirtió en proyecto: o ya no está pendiente, o ya
 tiene proyecto.</p>
 {% endif %}
+
+{# «PRIMERO:» (encargo 6). Si la tarea ESPERA a otra que sigue pendiente, se
+   lo dice con todas las letras -- el panel ya la pinta gris en /tareas, pero
+   acá adentro no hay "gris" posible sobre una sola tarjeta, así que es una
+   frase. El <select> ofrece TODAS las candidatas menos ella misma
+   (`db.tareas_para_elegir_primero`); "Ninguna" vacía el campo. Elegir una que
+   formaría un círculo se rechaza al guardar -- ver `error == 'primero'`
+   arriba -- no acá: filtrar círculos en el desplegable exigiría recorrer la
+   cadena de cada candidata en cada pintado, el mismo cálculo que
+   `crud._primero_que_vale` ya hace una vez, al guardar. #}
+<div class="tarjeta">
+  {% if tarea.primero_esperando %}
+  <p class="suave" style="margin:0">
+    → Primero: <a href="/tareas/{{ tarea.primero_id }}">{{ tarea.primero_titulo }}</a>
+    -- todavía pendiente. No va a sonar hasta que esa se marque hecha.
+  </p>
+  {% elif tarea.primero_id %}
+  <p class="suave" style="margin:0">
+    → Primero: {{ tarea.primero_titulo or 'una tarea que ya no está' }}
+    -- ya no espera (esa tarea ya no está pendiente).
+  </p>
+  {% endif %}
+  <form method="post" action="/tareas/{{ tarea.id }}/primero" class="barra">
+    <label for="primero_id" class="suave">Primero:</label>
+    <select id="primero_id" name="primero_id">
+      <option value="" {%- if not tarea.primero_id %} selected{% endif %}>Ninguna</option>
+      {% for c in candidatos_primero %}
+      <option value="{{ c.id }}" {%- if tarea.primero_id == c.id %} selected{% endif %}>
+        {{- c.titulo }}{% if c.estado != pendiente %} ({{ c.estado }}){% endif %}</option>
+      {% endfor %}
+    </select>
+    <button>Guardar</button>
+  </form>
+</div>
 
 {# EL ÁREA (encargo 4/5). Con proyecto, la hereda -- no se ofrece cambiarla
    acá, se cambia la del PROYECTO (enlazado). Sin proyecto, un <select> propio

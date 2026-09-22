@@ -120,10 +120,24 @@ aviso de Telegram que ya sonó.</p>
        1) si la tarea cuelga de uno -- también un enlace, a su tarjeta en
        /proyectos. Sin proyecto no se pinta nada acá: no hay "sin proyecto"
        que decir, al revés que el área, que sí tiene su propio estado
-       "vacío" que mostrar. #}
-    <td><a href="/tareas/{{ t.id }}">{{ t.titulo }}</a>
+       "vacío" que mostrar.
+
+       «PRIMERO:» (encargo 6): si la tarea ESPERA a otra que sigue pendiente
+       (`t.primero_esperando`, calculado en `db.tareas_por_grupo` -- nunca
+       guardado), la fila entera se ve gris tenue y un poco hacia adentro
+       (clase `fila-espera`, ver base.html/estilos), y debajo del título va
+       «→ Primero: <la de antes>». En cuanto la de antes deja de estar
+       pendiente -- hecha, descartada o borrada -- `primero_esperando` da
+       False SOLO porque nunca se guardó "esperando" en ningún lado: la fila
+       se «enciende» sola en el próximo pintado, sin que nadie la toque. #}
+    <td{% if t.primero_esperando %} class="fila-espera"{% endif %}>
+      <a href="/tareas/{{ t.id }}">{{ t.titulo }}</a>
       {%- if t.proyecto_nombre %}
       <br><a class="suave" href="/proyectos#proyecto-{{ t.proyecto_id }}">{{ t.proyecto_nombre }}</a>
+      {%- endif %}
+      {%- if t.primero_esperando %}
+      <br><span class="suave">→ Primero:
+        <a class="suave" href="/tareas/{{ t.primero_id }}">{{ t.primero_titulo }}</a></span>
       {%- endif %}
     </td>
     {# LA ETIQUETA DE ÁREA (encargo 4), en la MISMA lista, siempre visible: sin

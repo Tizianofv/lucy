@@ -852,6 +852,34 @@ async def cambiar_area_de_tarea(request: Request, tid: int):
     return RedirectResponse(f"/tareas/{tid}?area_guardada=1", status_code=303)
 
 
+@app.post("/tareas/{tid}/primero")
+async def cambiar_primero_de_tarea(request: Request, tid: int):
+    """Elegir cuál tarea va «Primero:» (encargo 6). Vacío = no espera a nadie.
+
+    MISMA PUERTA que Telegram: `crud.editar("tareas", ...)`, que llama a
+    `crud._primero_que_vale` -- la única función que decide si un valor de
+    «Primero:» vale, incluida la comprobación de que la tarea no se apunte a
+    sí misma y de que la cadena no forme un CÍRCULO más largo (ver su
+    docstring): si Tiziano elige algo que cerraría un círculo, esta ruta lo
+    va a rechazar con el motivo que le llegue desde ahí, no con uno
+    inventado acá.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    primero = str(formulario.get("primero_id", "")).strip() or None
+    try:
+        despues, _log_id = await crud.editar(
+            "tareas", tid, {"primero_id": primero},
+            motivo="«Primero:» cambiado desde el panel", actor="panel")
+    except ValueError as e:
+        log.warning("Panel de tareas: «Primero:» rechazado para #%s: %s", tid, e)
+        return RedirectResponse(f"/tareas/{tid}?error=primero", status_code=303)
+    if despues is None:
+        return RedirectResponse(f"/tareas/{tid}?error=tarea", status_code=303)
+    return RedirectResponse(f"/tareas/{tid}?primero_guardado=1", status_code=303)
+
+
 @app.post("/tareas/{tid}/convertir-en-proyecto")
 async def convertir_en_proyecto(request: Request, tid: int):
     """El botón «convertir en proyecto» (encargo 5, requisito 2).
@@ -1181,7 +1209,7 @@ def _texto_de_comentario(crudo: str) -> str | None:
 @app.get("/tareas/{tid}", response_class=HTMLResponse)
 async def tarea_detalle(request: Request, tid: int, error: str = "",
                         comentado: int = 0, borrado: int = 0,
-                        area_guardada: int = 0):
+                        area_guardada: int = 0, primero_guardado: int = 0):
     """Una tarea con sus comentarios, y el cuadro para escribir uno.
 
     VA EN SU PROPIA PANTALLA, a la que se entra tocando el título en /tareas.
@@ -1198,6 +1226,13 @@ async def tarea_detalle(request: Request, tid: int, error: str = "",
     `areas` (encargo 5) es para el `<select>` de cambiar el área -- que la
     plantilla solo ofrece si `tarea.proyecto_id is none`, y para el botón
     «convertir en proyecto» -- que solo ofrece si además está pendiente.
+
+    `candidatos_primero` (encargo 6) es para el `<select>` de «Primero:» --
+    TODAS las tareas vivas menos ella misma. `db.tareas_para_elegir_primero`
+    no filtra círculos (ver su docstring): elegir uno se rechaza al GUARDAR,
+    con el mensaje de `crud._primero_que_vale`, que es quien recorre la
+    cadena antes de escribir (ver su docstring para el porqué no lo hace la
+    base).
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
@@ -1207,13 +1242,16 @@ async def tarea_detalle(request: Request, tid: int, error: str = "",
                 "nombres": config.NOMBRES_POR_CHAT, "error": error,
                 "comentado": comentado, "borrado": borrado,
                 "area_guardada": area_guardada,
+                "primero_guardado": primero_guardado,
                 "largo_comentario": LARGO_COMENTARIO,
                 "areas": areas, "pendiente": db.ESTADO_PENDIENTE,
-                "colores_area": {a["clave"]: a["color"] for a in areas}}
+                "colores_area": {a["clave"]: a["color"] for a in areas},
+                "candidatos_primero": []}
     if datos is None:
         return plantillas.TemplateResponse(
             request, "tarea_detalle.html", contexto, status_code=404)
-    contexto.update(tarea=datos["tarea"], comentarios=datos["comentarios"])
+    contexto.update(tarea=datos["tarea"], comentarios=datos["comentarios"],
+                    candidatos_primero=await db.tareas_para_elegir_primero(tid))
     return plantillas.TemplateResponse(request, "tarea_detalle.html", contexto)
 
 

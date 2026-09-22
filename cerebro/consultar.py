@@ -155,6 +155,8 @@ NOTAS_DE_COLUMNA = {
     ("tareas", "estado"): "'pendiente'|'hecha'|'pospuesta'",
     ("tareas", "avisos_enviados"): "int[]: minutos-antes que ya se avisaron",
     ("tareas", "anticipos_min"): "int[]: minutos-antes a los que hay que avisar",
+    ("tareas", "primero_id"): "tareas.id de la tarea que tiene que estar HECHA "
+                              "antes que ésta. NULL = no espera a nadie",
     ("comentarios_tarea", "autor_chat_id"): "quién lo escribió: el chat con el "
                                             "que entró al panel",
     ("comentarios_tarea", "texto"): "lo que escribió, tal cual",
@@ -195,6 +197,15 @@ NOTAS_DE_TABLA = {
         "Cada tarea puede tener comentarios en comentarios_tarea (tarea_id). "
         "Cuando pregunten por una tarea, o por lo que alguien le puso, mirá "
         "también sus comentarios vivos (borrado_en IS NULL).",
+        "primero_id: «Primero:» (encargo 6). Una tarea con primero_id puesto "
+        "ESPERA a esa otra tarea -- solo se puede empezar cuando la de antes "
+        "esté 'hecha'. Mientras la de antes siga 'pendiente', el panel la "
+        "pinta gris y NO suena aunque tenga fecha vencida: no la propongas "
+        "para HOY en el resumen de la mañana ni en ninguna respuesta sobre "
+        "qué hacer ahora -- decí que está esperando a la otra, si hace "
+        "falta nombrarla. En cuanto la de antes deja de estar pendiente "
+        "(hecha, descartada o borrada) la que esperaba vuelve a sonar y a "
+        "poder proponerse normal, sin que nadie la toque.",
     ],
     "comentarios_tarea": [
         "Cada comentario lo escribió A MANO una persona de la casa en el panel "

@@ -698,7 +698,16 @@ def test_tareas_por_grupo_cae_a_sin_area_si_la_columna_no_existe():
 def test_tareas_por_grupo_cae_a_sin_area_usa_de_verdad_la_consulta_vieja():
     """Y no solo el resultado: el SQL que de verdad se ejecuta cuando la
     columna no existe es la consulta SIN `area`, no la consulta con `area`
-    ejecutándose dos veces por accidente."""
+    ejecutándose sin fin por accidente.
+
+    DOS intentos con `COALESCE(p.area, t.area)` y no uno, desde el encargo 6:
+    la cascada ahora tiene TRES niveles -- con área Y «Primero:», con área
+    SIN «Primero:», sin ninguna de las dos -- y acá `sin_columna_area=True`
+    simula que NINGUNA columna nueva existe todavía, así que las dos
+    primeras (las que traen el JOIN de área) revientan por turno antes de
+    caer a la tercera. Ver `test_tareas_por_grupo_cae_a_sin_area_ni_primero_
+    usa_la_consulta_vieja_una_sola_vez`, en tests/test_primero.py, para la
+    prueba de que la caída se DETIENE ahí y no reintenta de nuevo."""
     filas = [_fila(1)]
     _, conn = _con_base(filas, lambda: db.tareas_por_grupo(
         hoy=date(2026, 9, 8)), sin_columna_area=True)
@@ -706,8 +715,9 @@ def test_tareas_por_grupo_cae_a_sin_area_usa_de_verdad_la_consulta_vieja():
     con_area = [s for s in sqls if "COALESCE(p.area, t.area)" in s]
     sin_area = [s for s in sqls if s.startswith("SELECT t.id, t.titulo")
                and "COALESCE(p.area, t.area)" not in s]
-    assert len(con_area) == 1, (
-        f"tiene que INTENTAR la consulta con área una vez: {con_area}")
+    assert len(con_area) == 2, (
+        f"tiene que INTENTAR las dos consultas con área (con y sin "
+        f"«Primero:») antes de caer más abajo: {con_area}")
     assert len(sin_area) == 1, (
         f"y CAER a la consulta vieja una vez, no más ni menos: {sin_area}")
 

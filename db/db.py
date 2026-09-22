@@ -2181,20 +2181,64 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
     `LEFT JOIN` es obligatorio por la misma regla de siempre: una tarea sin
     proyecto (la mayoría) no puede desaparecer porque el JOIN la exija.
 
-    SI LA COLUMNA `area` TODAVÍA NO EXISTE (la migración
-    `2026-09-22_areas.sql` no se aplicó: SQLSTATE 42703, undefined_column),
-    esto cae a la consulta de ANTES del encargo 4, sin `area` ni el JOIN —
-    mismo patrón que `cerebro/consultar.py::_comentarios_presentes` usa para
-    una tabla que todavía no existe (42P01), con un SAVEPOINT
-    (`conn.transaction()` anidado) para que el fallo no deje abortada la
-    conexión antes de reintentar. Así Lucy puede arrancar (y el panel puede
-    pintarse) ANTES de que la sala aplique la migración a producción — las
-    tareas simplemente salen sin área, que es como se veían hasta ayer.
+    «PRIMERO:» (encargo 6) sale de un segundo LEFT JOIN, de `tareas` contra sí
+    misma por `t.primero_id = ant.id`. Cada fila trae `primero_id` (para
+    saber SI espera a alguien), `primero_titulo` (para pintar «→ Primero:
+    <título>») y `primero_estado` (para decidir si la de antes SIGUE
+    pendiente). "Espera" no se guarda en ningún lado: se calcula acá abajo,
+    fila por fila, con el mismo espíritu que "atrasada" — ver
+    `grupo_de_tarea`. El JOIN ya descarta la tarea "Primero:" si está
+    borrada, así que una tarea que esperaba a algo que se borró sale con
+    `primero_titulo=None` y se pinta normal, sin "→ Primero:" — la decisión
+    de Tiziano es que borrar la de antes también "enciende" a la que
+    esperaba.
+
+    SI LA COLUMNA `area` O LA COLUMNA `primero_id` TODAVÍA NO EXISTEN (las
+    migraciones `2026-09-22_areas.sql` o `2026-09-22_primero.sql` no se
+    aplicaron: SQLSTATE 42703, undefined_column), esto cae en cascada —
+    primero a la consulta CON área pero SIN «Primero:» (de antes de este
+    encargo), y si esa TAMBIÉN falla, a la de antes del encargo 4, sin
+    ninguna de las dos — mismo patrón que `cerebro/consultar.py::
+    _comentarios_presentes` usa para una tabla que todavía no existe (42P01),
+    con un SAVEPOINT (`conn.transaction()` anidado) en cada intento para que
+    el fallo no deje abortada la conexión antes de reintentar. Así Lucy puede
+    arrancar (y el panel puede pintarse) ANTES de que la sala aplique
+    NINGUNA de las dos migraciones, y da igual el orden en que las aplique —
+    las tareas simplemente salen sin área y/o sin «Primero:», que es como se
+    veían hasta ayer.
 
     CUALQUIER OTRO FALLO SE PROPAGA: si no se pudo traer las tareas por un
     motivo distinto, no hay nada seguro que devolver.
     """
-    con_area = """
+    # TRES FORMAS DE LA CONSULTA (encargo 6 suma la tercera a las dos que ya
+    # traía el encargo 4): `con_area_y_primero` trae, además del área, la
+    # tarea "Primero:" -- su id, su título (para pintar "→ Primero: <título>")
+    # y su estado (para decidir si "espera": ver el reparto en Python, más
+    # abajo). `t.primero_id` viaja SUELTO, no solo lo del JOIN, porque
+    # `ant.*` sale NULL tanto si `primero_id` es NULL como si la tarea
+    # "Primero:" está borrada -- y esos dos casos necesitan distinguirse en
+    # la plantilla del panel (ver el requisito "si la anterior se borra").
+    #
+    # `ant.borrado_en IS NULL` en el JOIN es la decisión de Tiziano puesta en
+    # SQL: "si la anterior se borra ... se enciende sola" -- una tarea
+    # "Primero:" borrada no cuenta como que sigue esperando, así que ni
+    # siquiera hace falta mirar su estado, el JOIN ya no la trae.
+    con_area_y_primero = """
+            SELECT t.id, t.titulo, t.estado, t.vence_en, t.creado_en,
+                   t.bandeja_id, t.responsable_chat_id, t.completado_en,
+                   COALESCE(p.area, t.area) AS area, t.proyecto_id,
+                   p.nombre AS proyecto_nombre,
+                   t.primero_id, ant.titulo AS primero_titulo,
+                   ant.estado AS primero_estado
+              FROM tareas t
+              LEFT JOIN proyectos p ON p.id = t.proyecto_id
+              LEFT JOIN tareas ant ON ant.id = t.primero_id
+                                   AND ant.borrado_en IS NULL
+             WHERE t.borrado_en IS NULL
+             ORDER BY t.vence_en ASC NULLS LAST, t.creado_en ASC, t.id ASC
+             LIMIT %s
+            """
+    con_area_sin_primero = """
             SELECT t.id, t.titulo, t.estado, t.vence_en, t.creado_en,
                    t.bandeja_id, t.responsable_chat_id, t.completado_en,
                    COALESCE(p.area, t.area) AS area, t.proyecto_id,
@@ -2205,7 +2249,7 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
              ORDER BY t.vence_en ASC NULLS LAST, t.creado_en ASC, t.id ASC
              LIMIT %s
             """
-    sin_area = """
+    sin_area_ni_primero = """
             SELECT t.id, t.titulo, t.estado, t.vence_en, t.creado_en,
                    t.bandeja_id, t.responsable_chat_id, t.completado_en
               FROM tareas t
@@ -2213,22 +2257,33 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
              ORDER BY t.vence_en ASC NULLS LAST, t.creado_en ASC, t.id ASC
              LIMIT %s
             """
+
+    def _columna_ausente(e: Exception) -> bool:
+        try:
+            return e.sqlstate == "42703"
+        except AttributeError:
+            return False
+
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         try:
             async with conn.transaction():
-                await cur.execute(con_area, (limite + 1,))
+                await cur.execute(con_area_y_primero, (limite + 1,))
                 filas = list(await cur.fetchall())
         except Exception as e:
-            try:
-                sqlstate = e.sqlstate
-            except AttributeError:
-                raise e from None
-            if sqlstate != "42703":
+            if not _columna_ausente(e):
                 raise
             cur = conn.cursor(row_factory=dict_row)
-            await cur.execute(sin_area, (limite + 1,))
-            filas = list(await cur.fetchall())
+            try:
+                async with conn.transaction():
+                    await cur.execute(con_area_sin_primero, (limite + 1,))
+                    filas = list(await cur.fetchall())
+            except Exception as e2:
+                if not _columna_ausente(e2):
+                    raise
+                cur = conn.cursor(row_factory=dict_row)
+                await cur.execute(sin_area_ni_primero, (limite + 1,))
+                filas = list(await cur.fetchall())
 
     hay_mas = len(filas) > limite
     if hay_mas:
@@ -2252,6 +2307,24 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
         # con área falló entera" (columna ausente), no para "sin proyecto".
         f.setdefault("proyecto_nombre", None)
         f.setdefault("proyecto_id", None)
+        # «PRIMERO:» (encargo 6). Mismo motivo que "area" arriba: si la
+        # consulta con `primero_id` falló entera (la columna no existe
+        # todavía), la clave ni siquiera está en la fila.
+        f.setdefault("primero_id", None)
+        f.setdefault("primero_titulo", None)
+        f.setdefault("primero_estado", None)
+        # "ESPERA" es la MISMA decisión que toma `grupo_de_tarea` para
+        # "atrasada": se CALCULA acá, cada vez que se pinta, nunca se guarda.
+        # Una tarea "espera" si tiene `primero_id` Y la tarea que apunta
+        # sigue viva y PENDIENTE -- el JOIN de arriba ya excluyó las
+        # borradas, así que alcanza con mirar el estado. En cuanto la de
+        # antes deja de estar pendiente (hecha, descartada, cualquier otro
+        # estado que no sea 'pendiente', o borrada), esto da False SOLO -- la
+        # base nunca guardó "esperando" en ningún lado, así que no hay nada
+        # que "encender": el próximo pintado ya la ve normal.
+        f["primero_esperando"] = (
+            f.get("primero_id") is not None
+            and f.get("primero_estado") == ESTADO_PENDIENTE)
         clave = grupo_de_tarea(f.get("estado"), f.get("vence_en"), hoy,
                                f.get("completado_en"))
         por_clave.setdefault(clave, []).append(f)
@@ -2569,22 +2642,95 @@ async def tarea_con_comentarios(tarea_id: int) -> dict | None:
     que usa `/tareas/{id}` para decidir si ofrece el botón «convertir en
     proyecto»: solo tiene sentido sobre una tarea que todavía no es parte de
     ningún proyecto.
+
+    `primero_id`/`primero_titulo`/`primero_estado` (encargo 6) son para el
+    `<select>` de «Primero:» de esta pantalla y para que, si la tarea espera
+    a otra, se lo diga. SI LA COLUMNA `primero_id` TODAVÍA NO EXISTE
+    (SQLSTATE 42703), esto cae -- con un SAVEPOINT, mismo patrón que
+    `tareas_por_grupo` -- a la consulta de ANTES de este encargo: la pantalla
+    de la tarea sigue funcionando, solo que sin el selector de «Primero:».
     """
-    async with pool.connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(
+    con_primero = """
+            SELECT t.id, t.titulo, t.detalle, t.estado, t.vence_en,
+                   t.responsable_chat_id, t.proyecto_id, p.nombre AS proyecto_nombre,
+                   COALESCE(p.area, t.area) AS area,
+                   t.primero_id, ant.titulo AS primero_titulo,
+                   ant.estado AS primero_estado
+              FROM tareas t
+              LEFT JOIN proyectos p ON p.id = t.proyecto_id
+              LEFT JOIN tareas ant ON ant.id = t.primero_id
+                                   AND ant.borrado_en IS NULL
+             WHERE t.id = %s AND t.borrado_en IS NULL
             """
+    sin_primero = """
             SELECT t.id, t.titulo, t.detalle, t.estado, t.vence_en,
                    t.responsable_chat_id, t.proyecto_id, p.nombre AS proyecto_nombre,
                    COALESCE(p.area, t.area) AS area
               FROM tareas t
               LEFT JOIN proyectos p ON p.id = t.proyecto_id
              WHERE t.id = %s AND t.borrado_en IS NULL
-            """, (tarea_id,))
-        tarea = await cur.fetchone()
+            """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            async with conn.transaction():
+                await cur.execute(con_primero, (tarea_id,))
+                tarea = await cur.fetchone()
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate != "42703":
+                raise
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(sin_primero, (tarea_id,))
+            tarea = await cur.fetchone()
     if tarea is None:
         return None
+    tarea.setdefault("primero_id", None)
+    tarea.setdefault("primero_titulo", None)
+    tarea.setdefault("primero_estado", None)
+    tarea["primero_esperando"] = (
+        tarea.get("primero_id") is not None
+        and tarea.get("primero_estado") == ESTADO_PENDIENTE)
     return {"tarea": tarea, "comentarios": await comentarios_de_tarea(tarea_id)}
+
+
+async def tareas_para_elegir_primero(excluir_id: int) -> list[dict]:
+    """Las tareas vivas que se le pueden ofrecer como «Primero:» a
+    `excluir_id`, para el `<select>` de la pantalla de una tarea (encargo 6).
+
+    VIVAS Y NO ELLA MISMA -- `id <> excluir_id` es la MISMA comprobación de
+    autorreferencia que hace `_primero_que_vale`, acá para no ofrecer en el
+    desplegable una opción que la puerta va a rechazar al guardar. Van
+    TODOS los estados, no solo 'pendiente': una tarea que ya está hecha
+    también puede ser la «Primero:» de otra (esperar a algo que ya se hizo
+    es un caso raro pero no un error, y desde el panel se puede elegir tal
+    cual como quedó).
+
+    NO SE FILTRAN LOS CÍRCULOS ACÁ. Ofrecer solo las que "seguro no formarían
+    un círculo" exigiría recorrer la cadena de cada candidata en cada
+    pintado de esta pantalla -- el mismo cálculo que `acciones/crud.py::
+    _primero_que_vale` ya hace UNA vez, al guardar (no en la base: ver su
+    docstring para el porqué). Elegir una que formaría un círculo se
+    rechaza ahí, con su mensaje; duplicar el cálculo acá sería la misma
+    pregunta respondida dos veces por dos caminos que se pueden separar.
+
+    NO NECESITA TOLERAR `primero_id` AUSENTE: a diferencia de
+    `tareas_por_grupo`, esta consulta no lee esa columna -- solo `id`,
+    `titulo` y `estado`, que existen desde siempre. Si la migración de este
+    encargo no se aplicó todavía, el `<select>` se puede llenar igual; lo
+    que fallaría es GUARDAR una elección, y eso ya lo cubre `editar()` con
+    su propio mensaje (ver el docstring de `_primero_que_vale`).
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, titulo, estado FROM tareas "
+            " WHERE borrado_en IS NULL AND id <> %s "
+            " ORDER BY titulo", (excluir_id,))
+        return list(await cur.fetchall())
 
 
 async def comentar_tarea(tarea_id: int, autor_chat_id: int,

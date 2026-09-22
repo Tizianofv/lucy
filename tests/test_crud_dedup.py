@@ -137,18 +137,24 @@ class _Transaccion:
 
 
 class FakeConn:
-    def __init__(self, sin_columna_area: bool = False, areas=None):
+    def __init__(self, sin_columna_area: bool = False, areas=None,
+                sin_columna_primero: bool = False):
         self.tareas: list[dict] = []
         self.eventos: list[dict] = []
         self.logs: list[dict] = []
         self._ids = {"tareas": 0, "eventos": 0}
         self._logid = 1000
         self.sql: list[tuple[str, tuple]] = []  # todo lo ejecutado, para espiar
-        # Simula que `tareas.area` todavía no existe (la migración del
-        # encargo 4 no se aplicó): el INSERT de 10 parámetros (con área)
-        # revienta con 42703 y `crear_desde_interpretacion` tiene que caer al
-        # de 9 (sin área).
+        # Simula que `tareas.area` (Y `tareas.primero_id`, encargo 6 -- las
+        # dos migraciones sin aplicar) todavía no existen: el INSERT de 11 o
+        # de 10 parámetros (con área y/o con «Primero:») revienta con 42703 y
+        # `crear_desde_interpretacion` tiene que caer, en cascada, hasta el
+        # de 9 (sin ninguna de las dos).
         self.sin_columna_area = sin_columna_area
+        # Simula que SOLO `tareas.primero_id` no existe todavía (encargo 4
+        # aplicado, encargo 6 no): el INSERT de 11 parámetros revienta, pero
+        # el de 10 (con área, sin «Primero:») tiene que entrar.
+        self.sin_columna_primero = sin_columna_primero
         # Lo que `db.areas()` devuelve -- la puerta `_area_que_vale` valida
         # contra esto. Vacía por omisión: como si la migración no se hubiera
         # aplicado, igual que `sin_columna_area`. Los dos SIEMPRE van juntos
@@ -217,23 +223,30 @@ class FakeConn:
             return _Cur((hits[-1]["id"],) if hits else None)
 
         if s.startswith("INSERT INTO tareas"):
+            # Cascada de 3 niveles (encargo 6): 11 parámetros (área Y
+            # «Primero:»), 10 (área sola), 9 (ninguna). `sin_columna_area`
+            # tumba las dos de más (>9); `sin_columna_primero` tumba SOLO
+            # la de 11.
             if self.sin_columna_area and len(p) > 9:
+                raise _ErrorSQL("42703")
+            if self.sin_columna_primero and len(p) > 10:
                 raise _ErrorSQL("42703")
             self._ids["tareas"] += 1
             rid = self._ids["tareas"]
             _bandeja, titulo, _detalle, vence = p[0], p[1], p[2], p[3]
-            # El responsable viaja en la posición 8 (encargo 2) y el área en
-            # la 9 (encargo 4, SOLO en la versión `con_area` -- la de
-            # `sin_area`, a la que se cae si la columna no existe, tiene 9
-            # parámetros y no 10). Por índice y no por desempaquetado fijo,
-            # así que agregar otra columna al final no le rompe la lectura a
-            # nadie más.
+            # El responsable viaja en la posición 8 (encargo 2), el área en
+            # la 9 (encargo 4, en `con_area_y_primero` y `con_area_sin_
+            # primero`) y «Primero:» en la 10 (encargo 6, SOLO en `con_area_
+            # y_primero`, 11 parámetros). Por índice y no por desempaquetado
+            # fijo, así que agregar otra columna al final no le rompe la
+            # lectura a nadie más.
             responsable = p[8] if len(p) > 8 else None
             area = p[9] if len(p) > 9 else None
+            primero_id = p[10] if len(p) > 10 else None
             self.tareas.append({"id": rid, "titulo": titulo, "vence_en": vence,
                                 "estado": "pendiente", "borrado_en": None,
                                 "responsable_chat_id": responsable,
-                                "area": area})
+                                "area": area, "primero_id": primero_id})
             return _Cur((rid,))
 
         if s.startswith("INSERT INTO eventos"):
@@ -623,12 +636,13 @@ async def test_sin_pedir_area_se_crea_igual_con_proyecto():
 
 
 async def test_sin_pedir_area_se_crea_igual_si_la_columna_no_existe():
-    """La migración del encargo 4 puede no haber corrido todavía. Sin
-    "area" pedida no hay nada que validar (la puerta ni llama a
-    `db.areas()`), así que el INSERT con área (10 parámetros, área en NULL)
-    revienta con 42703 igual -- porque la COLUMNA no existe, aunque el valor
-    sea NULL -- y el código cae al INSERT de 9 -- sin área -- en vez de
-    fallar la creación entera."""
+    """Las migraciones de los encargos 4 y 6 pueden no haber corrido
+    todavía. Sin "area" ni "primero_id" pedidos no hay nada que validar (las
+    puertas ni llaman a la base para eso), así que el INSERT de 11
+    parámetros y el de 10 revientan con 42703 igual -- porque las COLUMNAS no
+    existen, aunque los valores sean NULL -- y el código cae en cascada
+    hasta el de 9 -- sin ninguna de las dos -- en vez de fallar la creación
+    entera."""
     _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
     conn = FakeConn(sin_columna_area=True)
     _instalar(conn)
@@ -638,11 +652,37 @@ async def test_sin_pedir_area_se_crea_igual_si_la_columna_no_existe():
 
     assert tabla == "tareas"
     assert len(conn.tareas) == 1, (
-        "con la columna ausente, la tarea tiene que crearse igual")
+        "con las columnas ausentes, la tarea tiene que crearse igual")
     assert conn.tareas[0]["area"] is None
+    assert conn.tareas[0]["primero_id"] is None
+    insert_tareas = [s for s, _ in conn.sql if s.startswith("INSERT INTO tareas")]
+    assert len(insert_tareas) == 3, (
+        f"tenía que intentar con área+primero (y fallar), con área sola (y "
+        f"fallar) y por último sin ninguna de las dos: {insert_tareas}")
+
+
+async def test_sin_pedir_primero_se_crea_igual_si_solo_esa_columna_no_existe():
+    """El encargo 4 (área) puede estar aplicado y el 6 («Primero:») no --
+    son dos migraciones independientes. El INSERT de 11 parámetros revienta
+    (SQLSTATE 42703 por `primero_id`), y el código cae UNA sola vez, al de
+    10 -- con área, sin «Primero:» -- sin llegar al de 9."""
+    _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
+    conn = FakeConn(sin_columna_primero=True,
+                    areas=[{"clave": "CDS", "color": "#1"}])
+    _instalar(conn)
+
+    tabla, rid, _log = await crud.crear_desde_interpretacion(
+        1, {"clasificacion": "tarea", "titulo": "área sí, primero no",
+            "area": "CDS"})
+
+    assert tabla == "tareas"
+    assert conn.tareas[0]["area"] == "CDS", (
+        "el área SÍ existe: tiene que guardarse")
+    assert conn.tareas[0]["primero_id"] is None
     insert_tareas = [s for s, _ in conn.sql if s.startswith("INSERT INTO tareas")]
     assert len(insert_tareas) == 2, (
-        f"tenía que intentar con área (y fallar) y después sin área: "
+        f"tenía que intentar con las dos columnas (y fallar SOLO por "
+        f"primero_id) y caer una vez, no más, al INSERT con área: "
         f"{insert_tareas}")
 
 

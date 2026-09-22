@@ -3707,9 +3707,21 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # archivo de `testpaths`, EXENTO por rol. Los VIGILADOS siguen en 40: el
     # trabajo tocó `db/db.py`, `acciones/crud.py`, `web/app.py` y
     # `cerebro/agente.py`, los cuatro ya vigilados de antes.
-    assert medido == {"en disco": 79, "exentos": 39, "vigilados": 40}, (
+    #
+    # 22-sep-2026, encargo 6 («Primero:»): 79 → 80 en disco y 39 → 40
+    # EXENTOS por `tests/test_primero.py` (la puerta `_primero_que_vale`,
+    # sin círculos, el panel gris que se enciende solo, el despertador
+    # callado). Es un archivo de `testpaths`, EXENTO por rol. Los VIGILADOS
+    # siguen en 40: el trabajo tocó `db/db.py`, `acciones/crud.py`,
+    # `web/app.py`, `cerebro/agente.py`, `cerebro/consultar.py` y
+    # `cerebro/despertador.py` — los cuatro primeros ya vigilados de antes,
+    # y los dos de `cerebro/` no importan ni usan `config` directamente (no
+    # se les mide eso: `_archivos_vigilados` los cuenta por su rol, no por
+    # si usan `config`), así que ya estaban en la lista de producción desde
+    # antes de este encargo.
+    assert medido == {"en disco": 80, "exentos": 40, "vigilados": 40}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "22-sep-2026 era {'en disco': 79, 'exentos': 39, 'vigilados': 40}. La "
+        "22-sep-2026 era {'en disco': 80, 'exentos': 40, 'vigilados': 40}. La "
         "aserción de fondo —cero archivos alcanzan la lista cruda— YA CORRIÓ "
         "arriba y quedó verde, así que esto NO es una fuga. Si los vigilados "
         "bajaron, algo se está saltando de más y «cero falsos positivos» dejó "

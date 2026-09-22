@@ -105,6 +105,25 @@ class _Cur:
         return self
 
 
+class _Transaccion:
+    """El SAVEPOINT de mentira que usa `despertador.revisar` desde el
+    encargo 6 (`NOT EXISTS ... t.primero_id`), para poder caer a la
+    consulta de antes si la columna todavía no existe. Acá nunca falla
+    -- `FakeConn` nunca lanza 42703 -- pero el `async with
+    conn.transaction():` del código real necesita el método para no
+    reventar con AttributeError antes de ejecutar nada. `__aexit__`
+    devuelve `False`: no se traga la excepción, igual que el real."""
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *e):
+        return False
+
+
 class FakeConn:
     """Registra los SQL emitidos. `filas` es lo que devuelve el SELECT grande.
 
@@ -131,6 +150,9 @@ class FakeConn:
     def cursor(self, row_factory=None):
         filas, self._servidas = ([] if self._servidas else self._filas), True
         return _CursorConFilas(self, filas)
+
+    def transaction(self):
+        return _Transaccion(self)
 
 
 class _CursorConFilas(_Cur):

@@ -88,7 +88,7 @@ HERRAMIENTAS DISPONIBLES:
           "recurrencia": "", "anticipos_min": [0], "detalle": "",
           "duracion_min": 0, "lugar": "", "persona": "", "proyecto": "",
           "monto": 0, "moneda": "DOP", "referencia": "", "contraparte": "",
-          "responsable_chat_id": "", "area": ""}
+          "responsable_chat_id": "", "area": "", "primero_id": 0}
   Crea la fila real. Personas y proyectos se enlazan solos por nombre.
   PROYECTOS que ya existen, para que "dentro del proyecto X" los reconozca
   en vez de crear uno nuevo parecido: {PROYECTOS}. Si "X" se parece a uno de
@@ -138,6 +138,19 @@ HERRAMIENTAS DISPONIBLES:
    · "2 horas antes y a la hora" → [120, 0]
   Sobre algo que YA existe, "recordámelo también 1h antes" NO es crear otra:
   es editar {"anticipos_min": [60, 0]} sobre esa tarea/cita (incluí siempre 0).
+  "PRIMERO:" (tareas, opcional): "primero_id" es el ID de OTRA tarea que
+  tiene que estar HECHA antes que ésta — "anotá X, pero primero: Y" o
+  "X depende de Y". Vos NO adivinás el ID: consultá para encontrarlo (por
+  título, es la forma normal de nombrar una tarea) y mandalo como número.
+  Si Tiziano nombra una tarea que no encontrás, o hay varias con un título
+  parecido, preguntá cuál es antes de crear — no inventes el ID. Sin
+  "Primero:" = no mandes el campo (o 0/""), que es el estado normal de casi
+  todas. Una tarea que espera a otra NO SUENA hasta que la de antes se
+  marque hecha (Tiziano: "calladita hasta que toque") y el panel la pinta
+  gris con "→ Primero: <la de antes>" — se "enciende" sola cuando esa se
+  cierra. Si el número que mandás no es una tarea viva, o formaría un
+  círculo (X espera a Y y Y ya esperaba, directa o indirectamente, a X),
+  `crear` lo rechaza entero y el motivo te dice por qué.
 
 · editar  {"tabla": "tareas|eventos|notas|movimientos|personas|proyectos",
            "id": N, "cambios": {"columna": "valor", ...}}
@@ -167,6 +180,13 @@ HERRAMIENTAS DISPONIBLES:
   "area": null la deja sin área. Si la clave que mandás no es una de las
   declaradas Y la tarea (o el proyecto) queda sin proyecto que la tape,
   se rechaza, y el motivo dice cuáles hay.
+
+  "PRIMERO:" DE UNA TAREA: en "cambios" va {"primero_id": N} con el ID de
+  la otra tarea (consultá para encontrarlo si Tiziano la nombra por
+  título). {"primero_id": null} le quita el "Primero:" — deja de esperar y,
+  si tenía fecha, empieza a poder sonar de nuevo. No podés ponerle a una
+  tarea su propio ID, ni armar una cadena que se muerda la cola (X espera a
+  Y y Y ya esperaba a X); si lo pedís, `editar` lo rechaza con el motivo.
 
   EL CÓDIGO M-####. El panel muestra cada movimiento con un código —M-0086— que
   es su id: M-0086 es movimientos.id = 86. Cuando Tiziano lo nombre ("el M-0086

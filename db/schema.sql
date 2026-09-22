@@ -186,6 +186,12 @@ CREATE TABLE tareas (
                                                    --   es "sin área todavía", y se ve con su
                                                    --   etiqueta gris, no se esconde.
   borrado_en      TIMESTAMPTZ,
+  -- «Primero:» (encargo 6, 22-sep-2026): qué otra tarea tiene que estar
+  -- HECHA antes que ésta. NULL = no espera a nadie, que es el estado normal
+  -- de casi todas. Sin ON DELETE: no hay DELETE real sobre `tareas` (soft-
+  -- delete), así que no hace falta decidir un comportamiento de borrado en
+  -- cascada que nunca se va a disparar.
+  primero_id      BIGINT REFERENCES tareas(id),
 
   -- «Una tarea dentro de un proyecto nunca tiene un área propia distinta»
   -- (decisión de Tiziano: el área sale del proyecto, nadie la elige aparte).
@@ -195,8 +201,39 @@ CREATE TABLE tareas (
   -- cualquier otra cosa que hable con esta base. Mismo nombre que la
   -- migración 2026-09-22_areas.sql, para que una base armada desde este
   -- archivo y una migrada terminen con la restricción UNA sola vez.
-  CONSTRAINT tareas_area_no_con_proyecto CHECK (proyecto_id IS NULL OR area IS NULL)
+  CONSTRAINT tareas_area_no_con_proyecto CHECK (proyecto_id IS NULL OR area IS NULL),
+
+  -- Una tarea no puede ser su propia «Primero:». Esto SÍ lo puede decidir un
+  -- CHECK de una sola fila (compara dos columnas de la MISMA fila). Mismo
+  -- nombre en schema.sql y en la migración, para que una base armada desde
+  -- este archivo y una migrada terminen con la restricción UNA sola vez.
+  CONSTRAINT tareas_primero_no_a_si_misma CHECK (primero_id IS NULL OR primero_id <> id)
 );
+
+-- Para `cerebro/despertador.py::revisar` y `db.tareas_por_grupo`, que hacen
+-- un LEFT JOIN de `tareas` contra sí misma por `primero_id`. Parcial: solo
+-- indexa las filas que de verdad esperan a otra, que van a ser pocas.
+CREATE INDEX IF NOT EXISTS idx_tareas_primero_id ON tareas(primero_id)
+  WHERE primero_id IS NOT NULL;
+
+-- SIN CÍRCULOS (A espera a B, B espera a A, o una cadena más larga que
+-- vuelve sobre sí misma): ESTO NO LO IMPIDE LA BASE, a propósito. Un CHECK
+-- de una sola fila no puede ver un círculo entre VARIAS filas, y la forma
+-- que SÍ podría -- un disparador -- está prohibida en este repo:
+-- `tests/test_fechas_del_panel.py::
+-- test_ningun_sql_del_repo_crea_disparadores_ni_reglas_leido_como_texto`
+-- rechaza cualquier `CREATE TRIGGER` en `db/schema.sql` o en una migración,
+-- justamente porque lo que un disparador hiciera SOLO no pasa por
+-- `db.pool` y ningún doble de este repo lo puede ver.
+--
+-- Así que los círculos se cortan en `acciones/crud.py::_primero_que_vale`
+-- -- LA ÚNICA puerta, para crear y para editar -- recorriendo la cadena
+-- ANTES de escribir (ver su docstring para el porqué completo y el límite
+-- exacto: qué pasa si la cadena se recompone por `crud.deshacer()`, que no
+-- pasa por esta puerta).
+--
+-- NO MIRA EL TEXTO DE NINGUNA TAREA: solo compara `id` contra `id`, nunca
+-- `titulo` ni `detalle`.
 
 -- Lo que las personas de la casa le comentan a una tarea desde el panel
 -- (13-sep-2026). Aparte de `tareas.detalle` a propósito: aquél es un solo texto

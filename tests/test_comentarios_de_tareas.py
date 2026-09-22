@@ -615,10 +615,17 @@ def test_la_pantalla_de_la_tarea_dice_el_NOMBRE_y_no_el_numero():
     async def _sin_areas():
         return []
 
+    # Y `db.tareas_para_elegir_primero()` (encargo 6, para el <select> de
+    # «Primero:»), también en CADA llamada. Se stubea vacía por el mismo
+    # motivo: esta prueba mide los comentarios, no «Primero:».
+    async def _sin_candidatos(excluir_id):
+        return []
+
     with _LaCasa():
         r = _llamar(lambda: panel.tarea_detalle(
             _peticion("GET", "/tareas/5"), 5, comentado=1),
-            tarea_con_comentarios=_datos, areas=_sin_areas)
+            tarea_con_comentarios=_datos, areas=_sin_areas,
+            tareas_para_elegir_primero=_sin_candidatos)
         html = r.body.decode()
         assert r.status_code == 200
         assert "Mengano" in html and "sin nombre" in html

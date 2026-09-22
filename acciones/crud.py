@@ -300,6 +300,23 @@ async def crear_desde_interpretacion(
     else:
         area_tarea = None
 
+    # «PRIMERO:», SOLO PARA TAREAS (encargo 6), por la MISMA puerta que usa
+    # `editar()` — `_primero_que_vale`, y no una copia del criterio. A esta
+    # altura la tarea todavía no tiene id (nace más abajo), así que no hay
+    # nada que comparar contra "sí misma" ni ninguna cadena que recorrer: ese
+    # caso solo puede pasar al EDITAR, nunca al crear -- una tarea recién
+    # creada no puede ser parte de un círculo que ya exista, porque nada
+    # podía apuntar a un id que todavía no existía. `_primero_que_vale`
+    # recibe `tarea_id=None` (el default) y se salta el recorrido -- ver su
+    # docstring.
+    if clas == "tarea":
+        try:
+            primero_tarea = await _primero_que_vale(r.get("primero_id"))
+        except ValueError as e:
+            raise ValueError(f"No creé la tarea: {e}.") from e
+    else:
+        primero_tarea = None
+
     async with db.pool.connection() as conn:
         if clas == "tarea":
             tabla = "tareas"
@@ -373,44 +390,67 @@ async def crear_desde_interpretacion(
                             "reasigné — si hay que cambiarla, decímelo "
                             "explícito.")
                 return tabla, ya[0], log_id
-            # DOS FORMAS DEL INSERT (encargo 4), igual que
-            # `db.crear_tarea_desde_el_panel`: `con_area` trae la columna
-            # `area`, y si `tareas.area` todavía no existe (la migración no
-            # se aplicó: SQLSTATE 42703) se cae a `sin_area` -- la de
-            # siempre -- dentro de un SAVEPOINT para que el fallo no deje
-            # abortada la transacción completa (que también tiene que
-            # escribir `log_acciones` después). Lucy puede seguir creando
-            # tareas ANTES de que la sala aplique la migración.
+            # TRES FORMAS DEL INSERT (encargo 6 suma la tercera a las dos que
+            # ya traía el encargo 4), igual que `db.crear_tarea_desde_el_
+            # panel`: `con_area_y_primero` trae las dos columnas nuevas de
+            # los dos últimos encargos; si `tareas.primero_id` todavía no
+            # existe (SQLSTATE 42703) se cae a `con_area_sin_primero` -- la
+            # de antes de este encargo --, y si TAMPOCO existe `tareas.area`
+            # (encargo 4 sin aplicar todavía, aunque su código ya esté
+            # desplegado) se cae otra vez a `sin_area_ni_primero` -- la de
+            # siempre. Cada intento va en su PROPIO SAVEPOINT para que el
+            # fallo no deje abortada la transacción completa (que también
+            # tiene que escribir `log_acciones` después). Lucy puede seguir
+            # creando tareas ANTES de que la sala aplique NINGUNA de las dos
+            # migraciones, y da igual el orden en que las aplique.
             params_base = (
                 bandeja_id, titulo, detalle, cuando,
                 str(r.get("recurrencia") or "").strip() or None,
                 proyecto_id, persona_id, _anticipos(r.get("anticipos_min")),
                 responsable_chat_id)
-            con_area = """
+            con_area_y_primero = """
+                INSERT INTO tareas
+                  (bandeja_id, titulo, detalle, vence_en, recurrencia,
+                   proyecto_id, persona_id, anticipos_min,
+                   responsable_chat_id, area, primero_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                """
+            con_area_sin_primero = """
                 INSERT INTO tareas
                   (bandeja_id, titulo, detalle, vence_en, recurrencia,
                    proyecto_id, persona_id, anticipos_min,
                    responsable_chat_id, area)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                 """
-            sin_area = """
+            sin_area_ni_primero = """
                 INSERT INTO tareas
                   (bandeja_id, titulo, detalle, vence_en, recurrencia,
                    proyecto_id, persona_id, anticipos_min, responsable_chat_id)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
                 """
+
+            def _es_columna_ausente(e: Exception) -> bool:
+                try:
+                    return e.sqlstate == "42703"
+                except AttributeError:
+                    return False
+
             try:
                 async with conn.transaction():
                     cur = await conn.execute(
-                        con_area, params_base + (area_tarea,))
+                        con_area_y_primero,
+                        params_base + (area_tarea, primero_tarea))
             except Exception as e:
-                try:
-                    sqlstate = e.sqlstate
-                except AttributeError:
-                    raise e from None
-                if sqlstate != "42703":
+                if not _es_columna_ausente(e):
                     raise
-                cur = await conn.execute(sin_area, params_base)
+                try:
+                    async with conn.transaction():
+                        cur = await conn.execute(
+                            con_area_sin_primero, params_base + (area_tarea,))
+                except Exception as e2:
+                    if not _es_columna_ausente(e2):
+                        raise
+                    cur = await conn.execute(sin_area_ni_primero, params_base)
 
         elif clas == "cita":
             tabla = "eventos"
@@ -748,6 +788,112 @@ async def _area_que_vale(valor, *, tabla: str, proyecto_id=None):
     return valor
 
 
+# Techo de eslabones que recorre `_primero_que_vale` para descartar un
+# círculo. Una cadena real de «Primero:» tiene unas pocas tareas: si algún
+# día hay más de 200 encadenadas, es casi seguro un círculo que el propio
+# recorrido no pudo cerrar por otro motivo (o un dato roto), y cortar ahí
+# evita una función que no termina. 200 ronda de sobra las 91 tareas vivas
+# que hay hoy en producción (medido el 22-sep-2026 contra el conteo del
+# levantamiento de este encargo).
+PRIMERO_TOPE_CADENA = 200
+
+
+async def _primero_que_vale(valor, *, tarea_id: int | None = None) -> int | None:
+    """El id que va a quedar en `tareas.primero_id`, o ValueError explicando
+    por qué no (encargo 6). LA ÚNICA función que decide esto: la usan
+    `crear_desde_interpretacion` y `editar` -- mismo patrón que
+    `_area_que_vale` para el área, y por el mismo motivo: dos criterios que
+    hoy coincidan empiezan a separarse el primer día que alguien toque uno
+    solo. El panel llega acá TAMBIÉN, porque su ruta (`web/app.py::
+    cambiar_primero_de_tarea`) llama a `editar()` igual que Telegram.
+
+    `tarea_id` es el id de la tarea que se está editando (None al crear,
+    porque esa tarea todavía no tiene id). Se usa para DOS comprobaciones:
+    que la tarea no se apunte a sí misma (que ADEMÁS impone la base, con
+    `tareas_primero_no_a_si_misma` -- está acá TAMBIÉN para dar un mensaje
+    legible antes de escribir, en vez del texto crudo de psycopg), y que la
+    cadena resultante no forme un CÍRCULO.
+
+    POR QUÉ EL CÍRCULO SE CORTA ACÁ Y NO EN LA BASE, con la cicatriz puesta:
+    la forma que SÍ vería un círculo de un solo golpe -- un disparador que
+    recorra la cadena antes de cada escritura -- está PROHIBIDA en este
+    repo: `tests/test_fechas_del_panel.py::
+    test_ningun_sql_del_repo_crea_disparadores_ni_reglas_leido_como_texto`
+    rechaza cualquier `CREATE TRIGGER` en `db/schema.sql` o en una
+    migración, porque lo que un disparador hiciera SOLO no pasa por
+    `db.pool` y ningún doble de este repo lo puede ver -- exactamente lo que
+    ya le pasa a `comentarios_tarea` (ver «LOS COMENTARIOS DE UNA TAREA» en
+    `db/db.py`). Así que esta función RECORRE la cadena de la tarea
+    candidata (su `primero_id`, el de ésa, y así) ANTES de escribir: si en
+    algún eslabón aparece `tarea_id`, cerrar este pedido formaría un círculo
+    y se rechaza.
+
+    EL LÍMITE EXACTO, dicho con la verdad y no tapado: esta puerta protege
+    `crear_desde_interpretacion` y `editar()` -- Telegram y el panel, los dos
+    caminos por los que una persona o Lucy PIDEN un «Primero:» nuevo. NO
+    protege a `crud.deshacer()`: esa función arma su UPDATE directo con
+    `jsonb_populate_record` y no pasa por ninguna puerta de Python (ver su
+    docstring) -- es la MISMA situación que ya tiene `area` hoy, que tampoco
+    está en `PUERTAS` y que `deshacer()` tampoco valida. Lo que SÍ sigue
+    protegido ahí es la autorreferencia (la base la rechaza sea cual sea el
+    camino); un círculo más largo reconstruido por un `deshacer()` muy
+    específico -- deshacer una edición vieja que en su momento no formaba
+    círculo pero la cadena cambió después -- no lo ve nadie. Es un caso
+    extremo (hace falta una cadena que cambió entre la edición original y su
+    deshacer) y no se cerró en esta vuelta.
+
+    `valor` None o vacío = SIN «Primero:», y no pasa por la puerta -- es el
+    estado normal de casi todas las tareas.
+    """
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        return None
+    try:
+        primero_id = int(str(valor).strip())
+    except (TypeError, ValueError):
+        raise ValueError(f"'{valor}' no es el número de una tarea")
+    if tarea_id is not None and primero_id == tarea_id:
+        raise ValueError("una tarea no puede ser su propia «Primero:»")
+
+    async with db.pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT id, primero_id FROM tareas WHERE id = %s AND borrado_en IS NULL",
+            (primero_id,))
+        candidata = await cur.fetchone()
+        if candidata is None:
+            raise ValueError(
+                f"no encontré la tarea #{primero_id} (o está en la papelera)")
+
+        # EL RECORRIDO: solo hace falta si esto es una EDICIÓN (`tarea_id` no
+        # es None) -- una tarea recién creada no puede ser parte de ningún
+        # círculo que ya exista, porque nada podía apuntar a un id que
+        # todavía no existía.
+        if tarea_id is not None:
+            actual = candidata[1]  # el primero_id DE LA CANDIDATA
+            vistos = {primero_id}
+            pasos = 0
+            while actual is not None and pasos < PRIMERO_TOPE_CADENA:
+                if actual == tarea_id:
+                    raise ValueError(
+                        "Primero: formaría un círculo -- esa tarea, directa "
+                        "o indirectamente, ya está esperando a ésta")
+                if actual in vistos:
+                    # Un círculo que YA existía, ajeno a este pedido (por
+                    # ejemplo, restaurado por un `deshacer()` -- ver el
+                    # límite en el docstring de arriba). No es ESTA
+                    # escritura la que lo forma, así que no se rechaza acá;
+                    # cortar el recorrido evita darle vueltas para siempre a
+                    # un círculo que no le pertenece a este pedido.
+                    break
+                vistos.add(actual)
+                cur2 = await conn.execute(
+                    "SELECT primero_id FROM tareas WHERE id = %s", (actual,))
+                fila2 = await cur2.fetchone()
+                actual = fila2[0] if fila2 else None
+                pasos += 1
+
+    return primero_id
+
+
 PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale}}
 
 
@@ -912,6 +1058,27 @@ async def editar(
             try:
                 campos["area"] = await _area_que_vale(
                     campos["area"], tabla="proyectos")
+            except ValueError as e:
+                raise ValueError(f"No cambié nada: {e}.") from e
+
+        # «PRIMERO:» (encargo 6), en TAREAS, por la MISMA puerta que usa
+        # `crear_desde_interpretacion` -- `_primero_que_vale`, ni una
+        # validación aparte. SI LA COLUMNA TODAVÍA NO EXISTE (la migración de
+        # este encargo no se aplicó), `desconocidas` -- más arriba, contra el
+        # `SELECT *` que ya se leyó -- ya cortó la edición ANTES de llegar
+        # acá, con un motivo claro ("Esa tabla no tiene: primero_id"): no
+        # hace falta ningún SAVEPOINT de tolerancia acá, al revés que en
+        # `crear_desde_interpretacion` (que arma el INSERT con una lista fija
+        # de columnas y no puede preguntarle a una fila que todavía no
+        # existe). `tarea_id=registro_id` es lo que deja que la puerta
+        # rechace "esta tarea es su propia Primero:" Y recorra la cadena
+        # para rechazar un círculo más largo -- las dos comprobaciones que
+        # solo tienen sentido cuando ya existe un id que comparar (ver el
+        # docstring de `_primero_que_vale`).
+        if tabla == "tareas" and "primero_id" in campos:
+            try:
+                campos["primero_id"] = await _primero_que_vale(
+                    campos["primero_id"], tarea_id=registro_id)
             except ValueError as e:
                 raise ValueError(f"No cambié nada: {e}.") from e
 

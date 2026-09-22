@@ -231,14 +231,61 @@ async def revisar(bot) -> int:
     y si pide un aviso sobre una cita de Google, editarle anticipos_min la
     vuelve a encender.
     """
-    async with db.pool.connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(
-            # Traemos cada fila cuando entra en la ventana de SU campanada más
-            # lejana y todavía le falta al menos una por sonar. `@>` es
-            # "contiene": NOT (avisos_enviados @> anticipos_min) = aún no
-            # salieron todas las de esa fila.
+    # «CALLADITA HASTA QUE TOQUE» (encargo 6, decisión de Tiziano): una tarea
+    # con fecha que todavía espera a otra («Primero:») no suena. El
+    # `NOT EXISTS` de abajo es la MISMA pregunta que hace `db.tareas_por_
+    # grupo` para "espera" -- ¿tiene `primero_id` puesto y la tarea de antes
+    # SIGUE viva y pendiente? -- pero acá se resuelve DENTRO del SQL en vez
+    # de en Python, porque lo que hace falta es no traer la fila (para no
+    # marcarla como avisada), no solo pintarla distinto. Solo aplica a
+    # `tareas`: un evento no tiene «Primero:» (la columna es de `tareas`).
+    #
+    # QUÉ PASA CON SU AVISO CUANDO LA ANTERIOR SE COMPLETA DESPUÉS DE LA
+    # HORA (lo que pide declarar el encargo): nada especial -- es la
+    # consecuencia de que esta fila simplemente deja de estar excluida en
+    # la PRÓXIMA vuelta de `revisar()`. Si la de antes se marca hecha
+    # todavía DENTRO de los `GRACIA_MIN` (120 minutos) desde que venció
+    # ÉSTA, suena tarde con el mismo texto que cualquier aviso atrasado
+    # ("Ojo, esto venció a las..."). Si pasaron más de `GRACIA_MIN`, la
+    # ventana `vence_en >= now() - make_interval(mins => %s)` la deja
+    # afuera para siempre y NO avisa -- el mismo silencio que ya le pasa
+    # hoy a cualquier fila vieja si Lucy estuvo caída un rato largo; esto no
+    # le agrega ni le quita nada a esa regla, solo la deja actuar sobre una
+    # fila que hasta ahora estaba escondida.
+    con_primero = """
+            SELECT 'tareas' AS tabla, id, titulo, vence_en AS cuando,
+                   avisos_enviados, anticipos_min
+              FROM tareas t
+             WHERE estado = 'pendiente' AND borrado_en IS NULL
+               AND vence_en IS NOT NULL
+               AND cardinality(anticipos_min) > 0
+               AND vence_en <= now() + make_interval(
+                     mins => (SELECT COALESCE(max(m), 0) FROM unnest(anticipos_min) m))
+               AND vence_en >= now() - make_interval(mins => %s)
+               AND NOT (avisos_enviados @> anticipos_min)
+               AND NOT EXISTS (
+                     SELECT 1 FROM tareas ant
+                      WHERE ant.id = t.primero_id
+                        AND ant.borrado_en IS NULL
+                        AND ant.estado = 'pendiente')
+            UNION ALL
+            SELECT 'eventos', id, titulo, inicia_en,
+                   avisos_enviados, anticipos_min
+              FROM eventos
+             WHERE borrado_en IS NULL
+               AND cardinality(anticipos_min) > 0
+               AND inicia_en <= now() + make_interval(
+                     mins => (SELECT COALESCE(max(m), 0) FROM unnest(anticipos_min) m))
+               AND inicia_en >= now() - make_interval(mins => %s)
+               AND NOT (avisos_enviados @> anticipos_min)
+             ORDER BY cuando
             """
+    # SI LA COLUMNA `primero_id` TODAVÍA NO EXISTE (la migración de este
+    # encargo no se aplicó: SQLSTATE 42703), esto cae a la consulta de ANTES
+    # -- sin el `NOT EXISTS` -- con un SAVEPOINT, mismo patrón que
+    # `db.tareas_por_grupo`. El despertador puede seguir avisando ANTES de
+    # que la sala aplique la migración.
+    sin_primero = """
             SELECT 'tareas' AS tabla, id, titulo, vence_en AS cuando,
                    avisos_enviados, anticipos_min
               FROM tareas
@@ -260,10 +307,23 @@ async def revisar(bot) -> int:
                AND inicia_en >= now() - make_interval(mins => %s)
                AND NOT (avisos_enviados @> anticipos_min)
              ORDER BY cuando
-            """,
-            (GRACIA_MIN, GRACIA_MIN),
-        )
-        filas = await cur.fetchall()
+            """
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            async with conn.transaction():
+                await cur.execute(con_primero, (GRACIA_MIN, GRACIA_MIN))
+                filas = await cur.fetchall()
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate != "42703":
+                raise
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(sin_primero, (GRACIA_MIN, GRACIA_MIN))
+            filas = await cur.fetchall()
 
     avisos = 0
     for f in filas:
@@ -608,6 +668,11 @@ async def _briefing() -> int:
         "que se están cayendo: tareas pospuestas 2 o más veces "
         "(pospuesta_veces) o pendientes sin fecha desde hace más de 7 días — "
         "decile cuánto llevan rodando, sin regañar. "
+        "OJO CON «PRIMERO:» (primero_id): una tarea que todavía espera a "
+        "otra que sigue pendiente NO va en 'vence hoy' ni en 'atrasadas' ni "
+        "en 'por dónde empezar' — no se puede empezar todavía. Si la que "
+        "esperaba a otra hoy vencida está libre porque la de antes ya está "
+        "hecha, sí entra normal. "
         "Y AL CIERRE, lo más útil de todo: POR DÓNDE EMPEZAR. Elegí las 2 o 3 "
         "cosas del día que de verdad importan y decí en qué orden encararlas, "
         "con una razón corta cada una. Cruzá urgencia (vence hoy, atrasado, "
