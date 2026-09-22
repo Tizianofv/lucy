@@ -603,8 +603,15 @@ def test_el_area_se_ve_en_la_pantalla_con_su_color_y_sin_area_se_ve_gris():
     assert "con area" in html and "sin area" in html
     assert "background:#2b6cb0" in html, (
         "la etiqueta de CDS no salió con su color")
-    assert "sin área" in html, (
-        "la tarea sin área no muestra su propia etiqueta")
+    # EL <span> EXACTO, no solo el texto "sin área": ese texto TAMBIÉN
+    # aparece en un comentario CSS de base.html (explicando la clase
+    # `.etiqueta-area-vacia`), así que un simple `in html` pasa aunque la
+    # etiqueta de la fila esté escondida -- medido mutando: quitar el
+    # `<span>` de la fila y dejar solo el comentario de base.html seguía
+    # dando esta prueba en VERDE hasta que se puso este assert.
+    assert '<span class="etiqueta-area etiqueta-area-vacia">sin área</span>' \
+        in html, ("la tarea sin área no muestra su propia etiqueta -- o está "
+                  "escondida")
 
 
 # ── De punta a punta: se escribe y SE VE ─────────────────────────────────
