@@ -68,15 +68,31 @@ DÓNDE TERMINA ESTA FRONTERA (para que un hermano nuevo no se la salte sin
 que se note): toda función que decide A QUIÉN LE LLEGA algo o QUIÉN PUEDE
 quedar asignado a partir de un nombre o un chat escrito por Tiziano tiene
 que pasar por `personas_del_panel()` (o por una de las de arriba, que ya
-pasan). Lo que se dejó AFUERA a propósito, y por qué: `acciones.botones.
-_quien`, `cerebro.despertador._nombre_de` (línea 543) y `captura.correo`
-(línea 886) -- los tres leen `NOMBRES_POR_CHAT.get(chat, …)` para ARMAR UN
-TEXTO sobre un chat que ya se sabe autorizado por otra vía (viene de una
-fila de `tareas`/`eventos`/`correo_reportado`, no de un nombre escrito a
-mano); no deciden quién recibe nada, así que no son hermanos de esta
-frontera. Medido con `grep -n "NOMBRES_POR_CHAT" -r` sobre el repo el
-22-sep-2026: son los únicos usos fuera de los cuatro de la lista y de la
-sola LECTURA de `config._leer_nombres`/`personas_del_panel` mismas.
+pasan). Los demás usos reales de `NOMBRES_POR_CHAT` fuera de `config.py` y
+de `tests/` -- lista completa, medida con `grep -rn "NOMBRES_POR_CHAT"
+--include='*.py' .` sobre el árbol real el 22-sep-2026, corregida tras un
+NO PASA del testigo que encontró cuatro que la primera versión de este
+párrafo no nombraba -- son:
+
+  · ARMAN TEXTO sobre un chat que ya se sabe autorizado por otra vía (viene
+    de una fila de `tareas`/`eventos`/`correo_reportado`, no de un nombre
+    escrito a mano ahora): `acciones/botones.py:143` (`_quien`),
+    `cerebro/despertador.py:543` (`_quien_y_filtro`), `captura/correo.py:886`,
+    `cerebro/agente.py:763` (`_con_nombres`), `web/app.py:735` y
+    `web/app.py:1246` (contexto de las plantillas `tareas.html`/tarea con
+    comentarios) y `acciones/crud.py:392` (el mensaje de error de quién ya
+    tiene una tarea). ARMAR TEXTO no es decidir quién recibe algo, así que
+    ninguno es hermano de esta frontera.
+  · RESUELVE NOMBRE→CHAT ANTES DE LA PUERTA, dejándole la decisión de
+    acceso a ella: `acciones/crud.py:737` (`_chat_del_nombre`), que busca
+    en TODO `NOMBRES_POR_CHAT` a propósito (ver su docstring) y cuyo
+    resultado pasa siempre por `_responsable_que_vale`/
+    `config.puede_ser_responsable` antes de escribirse -- la fila de
+    `puede_ser_responsable` de la lista de arriba, no un hermano aparte.
+
+Esta enumeración es del 22-sep-2026 sobre el código que existía ese día:
+no promete seguir completa si alguien agrega un uso nuevo de
+`NOMBRES_POR_CHAT` sin correr el mismo grep.
 
 Correr:  python3 -m pytest tests/test_citas_google.py -q
 """
