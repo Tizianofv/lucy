@@ -43,6 +43,41 @@ verdad): eso está fuera del alcance de una prueba hermética; se prueba que
 el dueño se resuelve UNA vez por calendario llamando a `_dueno_chat_de`
 directo.
 
+LOS HERMANOS -- "resuelve un nombre o un chat a una persona, para decidir
+quién recibe/puede algo" (NO PASA del testigo, 22-sep-2026): TODOS tienen
+que exigir "nombre en NOMBRES_POR_CHAT" Y "acceso en CHAT_IDS_PERMITIDOS"
+-- las dos condiciones de `personas_del_panel()` -- y no solo una:
+
+  · `config.dueno_de_calendario` -- ESTE archivo,
+    `test_alguien_con_nombre_pero_sin_acceso_no_es_dueno` y
+    `test_dueno_chat_de_persona_sin_acceso_avisa_y_queda_sin_dueno`.
+  · `config.chats_de_copia` -- YA cubierto en
+    `tests/test_copia_a_rosi.py::test_copiarle_a_alguien_sin_acceso_no_copia_a_nadie`.
+  · `config.puede_ser_responsable` / `acciones.crud._responsable_que_vale`
+    -- YA cubierto en `tests/test_responsable.py::
+    test_el_nombre_de_quien_NO_entra_al_panel_lo_rechaza_LA_PUERTA`.
+  · `acciones.crud._duenos_que_valen` -- NO tiene prueba propia de esta
+    frontera porque no hace falta: valida CADA elemento llamando a
+    `_responsable_que_vale` (ver su docstring, "la MISMA puerta que ya
+    valida el responsable de una tarea, no una copia del criterio"), así
+    que hereda la cobertura de la fila de arriba. Verificado leyendo
+    `acciones/crud.py:806` (`chat = _responsable_que_vale(item)`), no de
+    memoria.
+
+DÓNDE TERMINA ESTA FRONTERA (para que un hermano nuevo no se la salte sin
+que se note): toda función que decide A QUIÉN LE LLEGA algo o QUIÉN PUEDE
+quedar asignado a partir de un nombre o un chat escrito por Tiziano tiene
+que pasar por `personas_del_panel()` (o por una de las de arriba, que ya
+pasan). Lo que se dejó AFUERA a propósito, y por qué: `acciones.botones.
+_quien`, `cerebro.despertador._nombre_de` (línea 543) y `captura.correo`
+(línea 886) -- los tres leen `NOMBRES_POR_CHAT.get(chat, …)` para ARMAR UN
+TEXTO sobre un chat que ya se sabe autorizado por otra vía (viene de una
+fila de `tareas`/`eventos`/`correo_reportado`, no de un nombre escrito a
+mano); no deciden quién recibe nada, así que no son hermanos de esta
+frontera. Medido con `grep -n "NOMBRES_POR_CHAT" -r` sobre el repo el
+22-sep-2026: son los únicos usos fuera de los cuatro de la lista y de la
+sola LECTURA de `config._leer_nombres`/`personas_del_panel` mismas.
+
 Correr:  python3 -m pytest tests/test_citas_google.py -q
 """
 from __future__ import annotations
@@ -98,9 +133,32 @@ GAMMA = 3003
 
 
 def _con_gente(nombres: dict[int, str]):
+    """OJO: acá `CHAT_IDS_PERMITIDOS` es SIEMPRE `tuple(nombres)` -- las
+    MISMAS claves que `NOMBRES_POR_CHAT` -- a propósito, para las pruebas
+    de la puerta cuando el acceso no es lo que se está probando. Esto NO
+    sirve para probar la frontera "tiene nombre pero no tiene acceso": para
+    esa, `_con_acceso_separado` de abajo, que es la que la deja EXISTIR."""
     permitidos_orig = config.CHAT_IDS_PERMITIDOS
     nombres_orig = config.NOMBRES_POR_CHAT
     config.CHAT_IDS_PERMITIDOS = tuple(nombres)
+    config.NOMBRES_POR_CHAT = dict(nombres)
+
+    def _restaurar():
+        config.CHAT_IDS_PERMITIDOS = permitidos_orig
+        config.NOMBRES_POR_CHAT = nombres_orig
+
+    return _restaurar
+
+
+def _con_acceso_separado(nombres: dict[int, str], permitidos: tuple[int, ...]):
+    """Como `_con_gente`, pero `CHAT_IDS_PERMITIDOS` se pasa APARTE: deja
+    existir a alguien que tiene nombre en `NOMBRES_POR_CHAT` y NO está en
+    `permitidos` -- la frontera que `personas_del_panel()` existe para
+    trazar (NO PASA del testigo, 22-sep-2026: con las dos tuplas siempre
+    iguales, esa frontera no se puede ni pedir)."""
+    permitidos_orig = config.CHAT_IDS_PERMITIDOS
+    nombres_orig = config.NOMBRES_POR_CHAT
+    config.CHAT_IDS_PERMITIDOS = tuple(permitidos)
     config.NOMBRES_POR_CHAT = dict(nombres)
 
     def _restaurar():
@@ -142,6 +200,29 @@ def test_un_nombre_que_no_resuelve_da_none():
         restaurar()
 
 
+def test_alguien_con_nombre_pero_sin_acceso_no_es_dueno():
+    """LA FRONTERA (hallazgo del testigo, 22-sep-2026): "Beta" SÍ tiene
+    nombre en `NOMBRES_POR_CHAT`, pero NO está en `CHAT_IDS_PERMITIDOS` --
+    perdió el acceso, o nunca lo tuvo. `personas_del_panel()` exige las DOS
+    cosas (tener nombre Y poder entrar), y `dueno_de_calendario` tiene que
+    heredar esa exigencia -- exactamente el mismo ataque que ya prueba
+    `chats_de_copia` en `tests/test_copia_a_rosi.py::
+    test_copiarle_a_alguien_sin_acceso_no_copia_a_nadie` y que ya prueba
+    `puede_ser_responsable` en `tests/test_responsable.py::
+    test_el_nombre_de_quien_NO_entra_al_panel_lo_rechaza_LA_PUERTA`. Sin
+    esta prueba, nada distinguía "resuelve por personas_del_panel()" de
+    "resuelve leyendo NOMBRES_POR_CHAT directo" (los dos daban el mismo
+    resultado con `_con_gente`, que arma `CHAT_IDS_PERMITIDOS` con las
+    MISMAS claves que `NOMBRES_POR_CHAT`); acá se usa
+    `_con_acceso_separado` a propósito para que las dos tuplas difieran."""
+    restaurar = _con_acceso_separado({DUENO: "Alfa", BETA: "Beta"},
+                                      permitidos=(DUENO,))  # Beta NO entra
+    try:
+        assert config.dueno_de_calendario("Beta") is None
+    finally:
+        restaurar()
+
+
 # ---------------------------------------------------------------------------
 # 2) calendario._dueno_chat_de: resuelve, y avisa si el nombre no resuelve.
 # ---------------------------------------------------------------------------
@@ -176,6 +257,23 @@ def test_dueno_chat_de_nombre_que_no_resuelve_avisa_y_queda_sin_dueno(caplog):
         assert resultado is None
         assert any(r.levelno == logging.WARNING for r in caplog.records), (
             "un nombre que no resuelve tiene que dejar un aviso en el registro")
+    finally:
+        restaurar()
+
+
+def test_dueno_chat_de_persona_sin_acceso_avisa_y_queda_sin_dueno(caplog):
+    """La MISMA frontera de `test_alguien_con_nombre_pero_sin_acceso_no_es_
+    dueno`, pero a través de `_dueno_chat_de` (lo que `sincronizar()` llama
+    de verdad): "Beta" tiene nombre pero no acceso -- la cita queda sin
+    dueño y con su aviso, igual que un typo."""
+    restaurar = _con_acceso_separado({DUENO: "Alfa", BETA: "Beta"},
+                                      permitidos=(DUENO,))
+    try:
+        cal = {"id": "cal-x", "nombre": "Calendario de Beta", "dueno": "Beta"}
+        with caplog.at_level(logging.WARNING, logger="lucy.calendario"):
+            resultado = calendario._dueno_chat_de(cal)
+        assert resultado is None
+        assert any(r.levelno == logging.WARNING for r in caplog.records)
     finally:
         restaurar()
 
