@@ -3799,10 +3799,23 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `cerebro/calendario.py` y `config.py`, los dos ya vigilados de antes.
     # Este encargo no agregó ninguna migración (la columna `duenos_chat_id`
     # ya existía desde el encargo 1+2).
-    assert medido == {"en disco": 88, "exentos": 48, "vigilados": 40}, (
+    #
+    # 22-sep-2026, rama `trabajo/alerta-911` (encargo "alerta 911 directo a
+    # los dos"): 88 → 89 en disco y 48 → 49 EXENTOS por
+    # `tests/test_alerta_911_a_los_dos.py` (`captura.correo.vigilar_911`
+    # mandándole a cada persona de `personas_del_panel()`, el candado por
+    # destino con `db.correos_ya_reportados`/`marcar_correo_reportado`
+    # reales contra SQLite, y de punta a punta con `cerebro.interpretar.
+    # _procesar`/`copia_dueno` reales que la copia general no duplique el
+    # aviso). Es un archivo de `testpaths`, EXENTO por rol. Los VIGILADOS
+    # siguen en 40: el trabajo tocó `captura/correo.py` y `cerebro/
+    # interpretar.py`, los dos ya vigilados de antes. No hizo falta
+    # migración (la columna `destino_chat_id` de `correo_reportado` ya
+    # existía desde el encargo 3, "Rosi independiente").
+    assert medido == {"en disco": 89, "exentos": 49, "vigilados": 40}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "22-sep-2026 (rama citas-google) era {'en disco': 88, "
-        "'exentos': 48, 'vigilados': 40}. La aserción de fondo —cero "
+        "22-sep-2026 (rama alerta-911) era {'en disco': 89, "
+        "'exentos': 49, 'vigilados': 40}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

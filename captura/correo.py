@@ -121,6 +121,15 @@ NIVELES_CON_EXTRACTO = ("911", "accion", "dudoso")
 # `tests/test_reporte_una_vez_al_dia.py` ata las dos puntas.
 MARCA_ENCARGO = "Reporte de correo de la mañana."
 
+# La MARCA de la alerta 911 (encargo "alerta 911 directo a los dos",
+# 22-sep-2026): distinta de `MARCA_ENCARGO` porque es un encargo aparte, con
+# su propio candado por (cuenta, uid, destino) en vez del candado diario por
+# destino. `cerebro/interpretar.py::_es_encargo_propio_del_dueno` la busca
+# para apagar la copia general en la fila del dueño -- si el aviso ya se le
+# manda directo a cada quien, copiárselo además a Rosi por la copia general
+# se lo mandaría dos veces mientras esa copia siga encendida.
+MARCA_911 = "🚨 ALERTA DE INFRAESTRUCTURA por correo."
+
 # Hasta dónde mira hacia atrás el reporte. Lo eligió Tiziano el 26-jul: 7 días.
 # Lo anterior queda como pasado — en la cuenta del estudio hay ~2.900 sin leer
 # acumulados, y arrastrarlos sería empezar la relación con una deuda imposible.
@@ -1080,14 +1089,60 @@ async def vigilar_911(bot) -> int:
     solo para los que hay que contar. Como esto corre cada pocos minutos las 24
     horas, es además MÁS barato que antes: lo normal es cero sospechosos y ni
     un cuerpo bajado.
+
+    A QUIÉN (encargo "alerta 911 directo a los dos", 22-sep-2026, decisión de
+    Tiziano textual: «A los dos»): a CADA UNO de `config.personas_del_panel()`
+    -- no una lista tecleada, la MISMA fuente que ya usa `_destinatarios_de_
+    tareas`/el recordatorio de citas sin dueño -- directo, cada quien con su
+    propio encargo en la bandeja y su propio candado de "ya se le avisó"
+    (`db.correos_ya_reportados`/`marcar_correo_reportado`, ahora POR DESTINO,
+    mismo mecanismo que ya usa `reporte_diario`). Si esa lista viniera vacía
+    (`NOMBRES_POR_CHAT` mal puesta), el último resguardo es el dueño solo --
+    el MISMO idioma que ya usa `despertador._destinatarios_de_tareas` y el
+    recordatorio de citas sin dueño, para que una 911 NUNCA se quede sin
+    avisarle a nadie.
+
+    QUE NO LE LLEGUE DOS VECES A NADIE mientras la copia general
+    (`COPIAS_DEL_DUENO`) siga encendida: el encargo que le toca al dueño lleva
+    `MARCA_911`, que `cerebro.interpretar._es_encargo_propio_del_dueno`
+    reconoce para apagar esa copia en su turno (mismo mecanismo que ya usa
+    `MARCA_ENCARGO` para el reporte de correo).
+
+    QUE AVISARLE A UNO NO LE ROBE EL AVISO AL OTRO: el candado es POR
+    (cuenta, uid, destino) -- un correo que ya se le avisó a Tiziano puede
+    seguir sin avisársele a Rosi, y al revés (mismo candado que ya prueba
+    `tests/test_correo_directo_a_los_dos.py` para el reporte diario).
+
+    DOS COSAS QUE ESTE ENCARGO DEJA COMO ESTABAN, DICHO ACÁ A PROPÓSITO
+    (medido el 22-sep-2026, sin resolverlas por mi cuenta -- se las llevo a
+    la sala):
+      · `cuentas_visibles` (abajo) sigue siendo `config.cuentas_de_correo(
+        "mostrar")`: TODOS los buzones con algún destino, sin filtrar por
+        `destinos_del_reporte(cuenta)` como sí hace `reporte_diario`
+        (`captura/correo.py`, la variable `por_destino` de esa función). Hoy
+        el buzón del dueño (el mixto, personal + estudio) informa SOLO a él
+        (comentario de `reporte_diario`, "el buzón del dueño (el mixto) va
+        SOLO a él"); si ese buzón alguna vez disparara un 911 (un remitente
+        de `REMITENTES_INFRA` escribiéndole ahí), con este cambio el aviso
+        -asunto y 400 caracteres del cuerpo incluidos- le llegaría también a
+        Rosi, sin pasar por `reporte_a`. Es lo mismo que ya prohíbe
+        `cerebro/interpretar.py:158-160` para el reporte diario ("que ninguna
+        línea del buzón personal pueda llegarle por ningún camino").
+      · El texto del encargo (abajo, "Avisale YA... si hay algo que ÉL pueda
+        hacer") sigue escrito para UN solo lector fijo -- no dice el nombre
+        de a quién le toca, a diferencia de `_encargo()` (línea ~886, que sí
+        arma un "quien" por destino) o `_quien_y_filtro` de `despertador.py`.
+        Con dos destinos, el mismo texto sale igual para Tiziano y para Rosi.
     """
-    # "mostrar": el aviso lleva remitente, asunto y 400 caracteres del cuerpo
-    # al chat del dueño, así que es enseñar correo como cualquier otro camino.
-    # Un buzón con `reporte_a: 0` no se vigila: no se le puede contar a Tiziano
-    # lo que ahí llegue, ni siquiera si viene de Railway.
+    # "mostrar": el aviso lleva remitente, asunto y 400 caracteres del cuerpo,
+    # así que es enseñar correo como cualquier otro camino. Un buzón con
+    # `reporte_a: 0` no se vigila: no se le puede contar a nadie lo que ahí
+    # llegue, ni siquiera si viene de Railway.
     cuentas_visibles = config.cuentas_de_correo("mostrar")
     if not cuentas_visibles:
         return 0
+    destinatarios = (tuple(c for c, _ in config.personas_del_panel())
+                     or (config.CHAT_ID_DUENO,))
     avisados = 0
     for cuenta in cuentas_visibles:
         try:
@@ -1101,16 +1156,24 @@ async def vigilar_911(bot) -> int:
         sospechosos = [c for c in cabeceras if _huele_a_911(c)]
         if not sospechosos:
             continue
-        ya = await db.correos_ya_reportados(
-            cuenta["user"], [c["uid"] for c in sospechosos])
-        nuevos = [c for c in sospechosos if c["uid"] not in ya]
-        if not nuevos:
+        uids = [c["uid"] for c in sospechosos]
+        # Un candado por destino: que a Tiziano ya se le avisara no le puede
+        # robar a Rosi la oportunidad de que se le avise a ella, y al revés.
+        ya_por_destino = {
+            destino: await db.correos_ya_reportados(cuenta["user"], uids,
+                                                     destino=destino)
+            for destino in destinatarios
+        }
+        faltan_a_alguien = [c for c in sospechosos
+                            if any(c["uid"] not in ya_por_destino[d]
+                                   for d in destinatarios)]
+        if not faltan_a_alguien:
             continue
         # Recién acá se baja el cuerpo, y solo de estos: el extracto es lo que
         # deja que el aviso diga qué pasó y no solo que pasó algo.
         try:
             con_cuerpo = await asyncio.to_thread(
-                _traer_sync, cuenta, [c["uid"] for c in nuevos])
+                _traer_sync, cuenta, [c["uid"] for c in faltan_a_alguien])
         except Exception:
             log.warning("Vigilancia 911: no pude bajar el cuerpo en %s; aviso "
                         "con lo que tengo.", cuenta.get("user", "?"),
@@ -1120,27 +1183,32 @@ async def vigilar_911(bot) -> int:
         # sin extracto. Callar una alerta de infraestructura porque falló el
         # segundo fetch sería cambiar un aviso incompleto por ninguno.
         extractos = {c["uid"]: c.get("snippet", "") for c in con_cuerpo}
-        for c in nuevos:
+        for c in faltan_a_alguien:
             snippet = extractos.get(c["uid"], "")
             texto = (f"🚨 {c['from']}\n{c['subject']}\n\n{snippet[:400]}")
-            bandeja_id = await db.guardar_en_bandeja(
-                tipo_entrada="sistema",
-                contenido_raw=(
-                    "ALERTA DE INFRAESTRUCTURA por correo (esto sí interrumpe, "
-                    "es la única clase de correo urgente que definió Tiziano). "
-                    f"Llegó esto:\n\n{texto}\n\n"
-                    "Avisale YA, corto y claro: qué servicio, qué pasó, y si "
-                    "hay algo que él pueda hacer. Si no es grave de verdad, "
-                    "decíselo igual en una línea — pero no lo dejes pasar."),
-                chat_id=config.CHAT_ID_DUENO,
-                origen="correo",
-            )
-            await db.marcar_correo_reportado(
-                cuenta["user"], c["uid"], nivel="911", ambito="laboral",
-                area="infraestructura", asunto=c["subject"],
-                bandeja_id=bandeja_id)
-            avisados += 1
-            log.info("911 de correo: %s — %s", c["from"][:40], c["subject"][:60])
+            for destino in destinatarios:
+                if c["uid"] in ya_por_destino[destino]:
+                    continue
+                bandeja_id = await db.guardar_en_bandeja(
+                    tipo_entrada="sistema",
+                    contenido_raw=(
+                        f"{MARCA_911} (esto sí interrumpe, es la única clase "
+                        "de correo urgente que definió Tiziano). "
+                        f"Llegó esto:\n\n{texto}\n\n"
+                        "Avisale YA, corto y claro: qué servicio, qué pasó, y "
+                        "si hay algo que él pueda hacer. Si no es grave de "
+                        "verdad, decíselo igual en una línea — pero no lo "
+                        "dejes pasar."),
+                    chat_id=destino,
+                    origen="correo",
+                )
+                await db.marcar_correo_reportado(
+                    cuenta["user"], c["uid"], destino=destino, nivel="911",
+                    ambito="laboral", area="infraestructura",
+                    asunto=c["subject"], bandeja_id=bandeja_id)
+                avisados += 1
+                log.info("911 de correo: %s — %s", c["from"][:40],
+                          c["subject"][:60])
     return avisados
 
 

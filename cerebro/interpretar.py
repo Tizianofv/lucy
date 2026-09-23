@@ -148,7 +148,7 @@ def _es_encargo_propio_del_dueno(fila: dict) -> bool:
     ya recibe por su cuenta sería mandarle dos veces lo mismo -- o, en el
     caso del correo, contenido que no es suyo)?
 
-    Hoy son TRES los que se reparten por persona:
+    Hoy son CUATRO los que se reparten por persona:
       · el briefing matinal y el plan semanal (encargo 1) -- origen
         'despertador', marca `despertador.MARCA_BRIEFING`/`MARCA_SEMANAL`.
       · el reporte de correo de la mañana (encargo 3) -- origen 'correo',
@@ -156,12 +156,17 @@ def _es_encargo_propio_del_dueno(fila: dict) -> bool:
         SUS DOS buzones (el mixto y el del estudio) sin cambiar en nada;
         lo que cambia es que YA NO hace falta copiárselo a Rosi, porque el
         buzón del estudio ahora le llega a ella directo, sin el suyo.
+      · la alerta 911 de correo (encargo "alerta 911 directo a los dos",
+        22-sep-2026) -- origen 'correo', marca `captura.correo.MARCA_911`.
+        `captura.correo.vigilar_911` ya le manda un encargo directo a CADA
+        persona de `config.personas_del_panel()`; copiarle además al dueño
+        por la copia general se lo mandaría dos veces a quien ya lo tiene.
 
     Lo que todavía NO tiene camino propio (recordatorios de citas, canario
-    bancario, 911, aviso de respaldo) sigue yendo por la copia general --
-    por eso la comprobación es textual contra marcas puntuales, no "todo lo
-    que venga de estos módulos". CORREGIDO 22-sep-2026: esta lista decía
-    también "recordatorios de tareas del dueño", y ya no es cierto -- el
+    bancario, aviso de respaldo) sigue yendo por la copia general -- por eso
+    la comprobación es textual contra marcas puntuales, no "todo lo que
+    venga de estos módulos". CORREGIDO 22-sep-2026: esta lista decía también
+    "recordatorios de tareas del dueño", y ya no es cierto -- el
     recordatorio de una tarea del dueño se apaga en
     `despertador._avisar` con `sin_copia=(f["tabla"] == "tareas")`, un
     mecanismo APARTE de esta función (no pasa por acá: `_avisar` manda
@@ -175,7 +180,8 @@ def _es_encargo_propio_del_dueno(fila: dict) -> bool:
         return (crudo.startswith(despertador.MARCA_BRIEFING)
                 or crudo.startswith(despertador.MARCA_SEMANAL))
     if origen == "correo":
-        return crudo.startswith(correo.MARCA_ENCARGO)
+        return (crudo.startswith(correo.MARCA_ENCARGO)
+                or crudo.startswith(correo.MARCA_911))
     return False
 
 
