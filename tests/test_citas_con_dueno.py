@@ -554,24 +554,32 @@ def test_editar_sin_la_migracion_falla_por_columna_ausente():
 # ---------------------------------------------------------------------------
 # 3) La frontera: quién más escribe `eventos`, y si pasa por la puerta.
 # ---------------------------------------------------------------------------
-def test_solo_dos_caminos_escriben_eventos_y_solo_uno_por_la_puerta():
+def test_solo_dos_caminos_escriben_eventos_y_solo_uno_por_la_puerta_de_crud():
     """Medido el 22-sep-2026 sobre este commit: `grep -c "INSERT INTO
     eventos"` en `acciones/crud.py` da 2 -- las DOS formas del MISMO sitio
     (`crear_desde_interpretacion`, rama `cita`): `con_duenos` y
     `sin_duenos`, la caída de compatibilidad sin la migración (ver el
     docstring de la migración). `cerebro/calendario.py` da 1 (`_guardar`,
     el espejo de Google). Ningún otro archivo de producción escribe
-    `eventos`."""
+    `eventos`.
+
+    CORREGIDO (encargo 4, "Google → dueño por calendario", 22-sep-2026):
+    hasta ese encargo, `cerebro/calendario.py` NO nombraba `duenos_chat_id`
+    -- ponerle dueño automático por calendario era, literalmente, ese
+    encargo, que todavía no existía. Ahora sí lo nombra, por SU PROPIA
+    puerta (`config.dueno_de_calendario`, resuelto por el NOMBRE del
+    calendario en `CALENDARIOS` -- ver `tests/test_citas_google.py`), no
+    por `acciones.crud.PUERTAS`/`_duenos_que_valen` (esa sigue siendo SOLO
+    para lo que se pide por Telegram: crear/editar una cita a mano)."""
     import pathlib
     raiz = pathlib.Path(_ROOT)
     crud_txt = (raiz / "acciones" / "crud.py").read_text(encoding="utf-8")
     calendario_txt = (raiz / "cerebro" / "calendario.py").read_text(encoding="utf-8")
     assert crud_txt.count("INSERT INTO eventos") == 2
     assert calendario_txt.count("INSERT INTO eventos") == 1
-    # Y el de Google NO nombra duenos_chat_id -- no pasa por la puerta, a
-    # propósito: ponerle dueño automático por calendario es el encargo 4,
-    # que este encargo no incluye.
-    assert "duenos_chat_id" not in calendario_txt
+    assert "duenos_chat_id" in calendario_txt, (
+        "desde el encargo 4, el espejo de Google SÍ escribe duenos_chat_id "
+        "-- por su propia puerta, ver tests/test_citas_google.py")
 
 
 if __name__ == "__main__":

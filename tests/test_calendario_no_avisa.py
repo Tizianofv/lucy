@@ -244,6 +244,7 @@ async def test_evento_de_google_entra_sin_campanadas():
         {"id": "ev-1", "summary": "Ensayo Dony",
          "start": {"dateTime": "2026-08-20T21:00:00-04:00"},
          "end": {"dateTime": "2026-08-20T23:00:00-04:00"}},
+        None,
     )
     s, _ = _sql_que_empieza(conn, "INSERT INTO eventos")
     # La lista vacía es "ninguna campanada": el despertador la saltea sola.
@@ -264,6 +265,7 @@ async def test_el_resync_no_pisa_un_recordatorio_pedido_a_mano():
         {"id": "cal-x", "nombre": "CDS Sala P"},
         {"id": "ev-1", "summary": "Ensayo Dony",
          "start": {"dateTime": "2026-08-20T21:00:00-04:00"}},
+        None,
     )
     s, _ = _sql_que_empieza(conn, "INSERT INTO eventos")
     do_update = s.split("DO UPDATE SET", 1)[1]

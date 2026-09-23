@@ -35,7 +35,7 @@ from urllib.parse import quote
 import httpx
 
 import db.db as db
-from config import GOOGLE_SA_KEY, TZ
+from config import GOOGLE_SA_KEY, TZ, dueno_de_calendario
 
 log = logging.getLogger("lucy.calendario")
 
@@ -46,27 +46,39 @@ API = "https://www.googleapis.com/calendar/v3"
 # por ID a propósito (ver el docstring): Google no los autodescubre para una
 # cuenta de servicio. `ambito` distingue su mundo personal del estudio, para
 # que el agente sepa de dónde viene cada cita.
+#
+# `dueno` (encargo 4, "Google → dueño por calendario", 22-sep-2026): de
+# quién son las citas que salen de ESTE calendario, sin adivinar nada --
+# decisión de Tiziano, textual, tras ver esta MISMA lista: «Si esta bien
+# vamos a usar esos y despues ajustamos». Es un NOMBRE, el mismo que usa
+# `COPIAS_DEL_DUENO` (`config.py`, variable `NOMBRES_POR_CHAT`) -- nunca un
+# chat_id: este archivo es público. `None` = sin dueño (las citas del
+# estudio que son de la casa entera, no de una persona en particular).
+#
+# «DESPUES AJUSTAMOS»: cambiar de quién es un calendario es cambiar ESTA
+# línea, un solo sitio -- `sincronizar()` la lee en cada pasada, no hay
+# nada tecleado por duplicado en ningún otro archivo.
 CALENDARIOS = [
     {"id": "tizianofv@gmail.com",
-     "nombre": "Tiziano (personal)", "ambito": "personal"},
+     "nombre": "Tiziano (personal)", "ambito": "personal", "dueno": "Tiziano"},
     {"id": "caribbeandreamstudios@gmail.com",
-     "nombre": "CDS (principal)", "ambito": "estudio"},
+     "nombre": "CDS (principal)", "ambito": "estudio", "dueno": None},
     {"id": "3244683b95cf9e097bad11c306a0cddacf9307a46fbe510b1993f3d61080bc29@group.calendar.google.com",
-     "nombre": "Bloqueos CDS", "ambito": "estudio"},
+     "nombre": "Bloqueos CDS", "ambito": "estudio", "dueno": None},
     {"id": "c4a8e661ac3d6db4e1c6c7a583f04d21f85c1d5db2aab2458b99396b9dca6d5b@group.calendar.google.com",
-     "nombre": "Rosilis", "ambito": "estudio"},
+     "nombre": "Rosilis", "ambito": "estudio", "dueno": "Rosi"},
     {"id": "dbpn9pdc8qgc675gnlqlmeg1d0@group.calendar.google.com",
-     "nombre": "Calendario Tiziano (estudio)", "ambito": "estudio"},
+     "nombre": "Calendario Tiziano (estudio)", "ambito": "estudio", "dueno": "Tiziano"},
     {"id": "460c6e48147b09eaa2cd81d5f75725420a502cada46bcdea3cadda661595b27b@group.calendar.google.com",
-     "nombre": "CDS GRABACIONES", "ambito": "estudio"},
+     "nombre": "CDS GRABACIONES", "ambito": "estudio", "dueno": None},
     {"id": "onauqbbgkqkd4gp1l7dl58rh9k@group.calendar.google.com",
-     "nombre": "CDS Sala P", "ambito": "estudio"},
+     "nombre": "CDS Sala P", "ambito": "estudio", "dueno": None},
     {"id": "c6f02a737eae3212f6f5299184286777cec4f6f78137418c24c21d9e80fcd6da@group.calendar.google.com",
-     "nombre": "CDS Sala R", "ambito": "estudio"},
+     "nombre": "CDS Sala R", "ambito": "estudio", "dueno": None},
     {"id": "cd12e934b0d7b88dfc06539cde755ee3efcb6bc4000e4bad776f674451284569@group.calendar.google.com",
-     "nombre": "Sala K", "ambito": "estudio"},
+     "nombre": "Sala K", "ambito": "estudio", "dueno": None},
     {"id": "66e0c93e0fbe5bc633632c863ed6750abdd98161ae4ee8a728c94f3224821e02@group.calendar.google.com",
-     "nombre": "Pasantías", "ambito": "estudio"},
+     "nombre": "Pasantías", "ambito": "estudio", "dueno": None},
 ]
 
 # Ventana de sincronización: desde ayer (para no perder algo que empezó y aún
@@ -150,7 +162,7 @@ async def _eventos_de(client: httpx.AsyncClient, token: str,
         params["pageToken"] = siguiente
 
 
-async def _guardar(cal: dict, ev: dict) -> None:
+async def _guardar(cal: dict, ev: dict, dueno_chat: int | None) -> None:
     """Espeja un evento de Google en `eventos` (upsert por gcal_id).
 
     Un evento cancelado en Google se archiva acá (soft-delete): la agenda de
@@ -165,7 +177,7 @@ async def _guardar(cal: dict, ev: dict) -> None:
     Lucy sigue VIENDO estos eventos igual que siempre (briefing, plan semanal,
     choques, consultas): lo que se apagó es que hable ella sola de ellos.
 
-    Dos detalles que NO son accidentes:
+    Tres detalles que NO son accidentes:
     · El default de la columna sigue siendo '{0}' y las citas NATIVAS de Lucy
       —las que Tiziano le pide por Telegram, gcal_id NULL— lo conservan. El
       silencio se decide por el ORIGEN del evento, no por la maquinaria: los
@@ -175,6 +187,19 @@ async def _guardar(cal: dict, ev: dict) -> None:
       elección tiene que SOBREVIVIR al próximo sync (que corre cada pocos
       minutos). Ponerlo en el UPDATE le borraría el recordatorio que pidió, en
       silencio y a los minutos — el peor error posible de este cambio.
+    · `duenos_chat_id` (encargo 4, 22-sep-2026), MISMO PRINCIPIO que
+      `anticipos_min` pero con una condición: si alguien YA le puso un dueño a
+      esta cita a mano por Telegram (`editar`), este sync NO SE LO PISA. La
+      forma de saberlo, sin una columna nueva ni un "quién la tocó": el DO
+      UPDATE solo aplica el dueño del calendario CUANDO la fila sigue en el
+      estado de siempre (`duenos_chat_id = '{}'`, el default con el que nace
+      toda cita) -- si ya tiene CUALQUIER valor (puesto por una persona, o
+      por un sync anterior), se deja como está. LA FRONTERA, dicha: si una
+      persona vacía el dueño de una cita A PROPÓSITO (`editar` con
+      `duenos_chat_id: null`), la fila vuelve a verse igual que "recién
+      llegada" y el PRÓXIMO sync le reaplica el dueño del calendario -- no
+      hay forma de distinguir "nunca se tocó" de "se vació a propósito" sin
+      una columna aparte que este encargo no agrega.
     """
     gcal_id = ev["id"]
     inicia = _parse_dt(ev.get("start"))
@@ -190,21 +215,45 @@ async def _guardar(cal: dict, ev: dict) -> None:
     titulo = (ev.get("summary") or "(sin título)").strip()
     termina = _parse_dt(ev.get("end"))
     lugar = ev.get("location")
+    duenos = [dueno_chat] if dueno_chat is not None else []
 
     async with db.pool.connection() as conn:
         await conn.execute(
             """
             INSERT INTO eventos
               (titulo, inicia_en, termina_en, lugar,
-               gcal_id, gcal_cal_id, gcal_calendar, anticipos_min)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, '{}')
+               gcal_id, gcal_cal_id, gcal_calendar, anticipos_min,
+               duenos_chat_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, '{}', %s)
             ON CONFLICT (gcal_cal_id, gcal_id) WHERE gcal_id IS NOT NULL
             DO UPDATE SET
               titulo = EXCLUDED.titulo, inicia_en = EXCLUDED.inicia_en,
               termina_en = EXCLUDED.termina_en, lugar = EXCLUDED.lugar,
-              gcal_calendar = EXCLUDED.gcal_calendar, borrado_en = NULL
+              gcal_calendar = EXCLUDED.gcal_calendar, borrado_en = NULL,
+              duenos_chat_id = CASE WHEN eventos.duenos_chat_id = '{}'
+                                     THEN EXCLUDED.duenos_chat_id
+                                     ELSE eventos.duenos_chat_id END
             """,
-            (titulo, inicia, termina, lugar, gcal_id, cal["id"], cal["nombre"]))
+            (titulo, inicia, termina, lugar, gcal_id, cal["id"], cal["nombre"],
+             duenos))
+
+
+def _dueno_chat_de(cal: dict) -> int | None:
+    """El chat de la persona que este calendario declara como dueña, o
+    `None` -- sin nombre puesto (las citas de la casa entera), o si el
+    nombre puesto NO resuelve contra `personas_del_panel()` (typo, o la
+    persona perdió el acceso). En ese segundo caso se deja un aviso en el
+    registro: la cita queda SIN DUEÑO, nunca con uno inventado."""
+    nombre = cal.get("dueno")
+    if not nombre:
+        return None
+    chat = dueno_de_calendario(nombre)
+    if chat is None:
+        log.warning(
+            "El calendario '%s' declara dueño '%s', que no resuelve contra "
+            "quién puede entrar al panel (NOMBRES_POR_CHAT/CHAT_IDS_CASA); "
+            "sus citas quedan SIN DUEÑO.", cal["nombre"], nombre)
+    return chat
 
 
 async def sincronizar() -> dict:
@@ -212,6 +261,12 @@ async def sincronizar() -> dict:
 
     Rama lateral del bucle: si un calendario falla, se salta y sigue con los
     otros. Un calendario caído no puede llevarse puesta la agenda entera.
+
+    EL DUEÑO SE RESUELVE UNA VEZ POR CALENDARIO, no una vez por evento: es
+    la MISMA persona para todos los eventos de ESTE calendario en esta
+    pasada, así que resolverlo por evento repetiría la misma consulta (y,
+    si el nombre no resolviera, el mismo aviso en el registro) tantas veces
+    como eventos tenga el calendario en la ventana.
     """
     if not GOOGLE_SA_KEY:
         return {}
@@ -220,9 +275,10 @@ async def sincronizar() -> dict:
     async with httpx.AsyncClient(timeout=30) as client:
         for cal in CALENDARIOS:
             try:
+                dueno_chat = _dueno_chat_de(cal)
                 eventos = await _eventos_de(client, token, cal["id"])
                 for ev in eventos:
-                    await _guardar(cal, ev)
+                    await _guardar(cal, ev, dueno_chat)
                 resumen[cal["nombre"]] = len(eventos)
             except Exception:
                 log.warning("No pude sincronizar '%s'.", cal["nombre"],

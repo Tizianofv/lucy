@@ -3787,10 +3787,22 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # Es un archivo de `testpaths`, EXENTO por rol. Los VIGILADOS siguen en
     # 40: el trabajo tocó solo `cerebro/despertador.py`, ya vigilado de
     # antes. Este encargo no agregó ninguna migración.
-    assert medido == {"en disco": 87, "exentos": 47, "vigilados": 40}, (
+    #
+    # 22-sep-2026, rama `trabajo/citas-google` (encargo 4 del mismo
+    # diseño: las citas de Google toman dueño por el calendario de donde
+    # vienen): 87 → 88 en disco y 47 → 48 EXENTOS por
+    # `tests/test_citas_google.py` (`config.dueno_de_calendario`, el aviso
+    # cuando un nombre no resuelve, y `cerebro/calendario._guardar` con SQL
+    # real de INSERT/ON CONFLICT DO UPDATE contra SQLite, probando que un
+    # resync no pisa un dueño puesto a mano). Es un archivo de `testpaths`,
+    # EXENTO por rol. Los VIGILADOS siguen en 40: el trabajo tocó
+    # `cerebro/calendario.py` y `config.py`, los dos ya vigilados de antes.
+    # Este encargo no agregó ninguna migración (la columna `duenos_chat_id`
+    # ya existía desde el encargo 1+2).
+    assert medido == {"en disco": 88, "exentos": 48, "vigilados": 40}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "22-sep-2026 (rama citas-avisos) era {'en disco': 87, "
-        "'exentos': 47, 'vigilados': 40}. La aserción de fondo —cero "
+        "22-sep-2026 (rama citas-google) era {'en disco': 88, "
+        "'exentos': 48, 'vigilados': 40}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

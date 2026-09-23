@@ -210,6 +210,26 @@ def chats_de_copia() -> tuple[int, ...]:
     return resueltos
 
 
+def dueno_de_calendario(nombre: str | None) -> int | None:
+    """El chat de la persona que ese NOMBRE identifica, buscado en
+    `personas_del_panel()` -- la MISMA fuente que ya usa `chats_de_copia()`,
+    no una lista aparte. `None` si `nombre` es falsy (sin dueño puesto) o si
+    no resuelve contra quién puede entrar al panel.
+
+    Vive acá, junto a `chats_de_copia`, por lo mismo que aquella: quien la
+    llama (`cerebro/calendario.py`, encargo "Google → dueño por calendario",
+    22-sep-2026) declara el dueño de un calendario por NOMBRE, nunca por
+    chat_id -- ese archivo es público. Es una función aparte y no una
+    reutilización de `chats_de_copia` porque resuelve UN nombre, no una
+    lista: `chats_de_copia` decide "COPIAS_DEL_DUENO" y este encargo no lo
+    toca.
+    """
+    if not nombre:
+        return None
+    por_nombre = {n: c for c, n in personas_del_panel()}
+    return por_nombre.get(nombre)
+
+
 def chat_escrito(texto):
     """El chat que dice ese TEXTO, o None si ese texto no es un chat.
 
