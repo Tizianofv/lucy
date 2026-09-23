@@ -51,12 +51,13 @@ patrón ya establecido en `tests/test_citas_google.py` para no repetir el
 NO PASA del 22-sep-2026 (una prueba que arme las dos tuplas siempre iguales
 no puede ver a alguien con nombre pero sin acceso).
 
-DOS COSAS QUE ESTE ENCARGO NO RESUELVE Y QUE VAN EN EL REPORTE, NO ACÁ
-(archivo y línea, ver el reporte): que `cuentas_de_correo("mostrar")` no
-filtra por `destinos_del_reporte(cuenta)` como sí hace `reporte_diario`, y
-que el texto del encargo no personaliza "él" por destinatario. Ninguna
-prueba de este archivo depende de esas dos cosas ni las tapa: se miden
-tal como están hoy.
+QUE `cuentas_de_correo("mostrar")` no filtre por `destinos_del_reporte(
+cuenta)` como sí hace `reporte_diario` es DECISIÓN de Tiziano, textual,
+22-sep-2026 («Si el correo urgente llega a tu buzón personal, ¿también le
+avisamos a Rosi?» → «A los dos siempre»), no un hueco: ver el docstring de
+`vigilar_911`. Lo que sí era un hueco técnico -- el texto fijo con "él" sin
+personalizar por destino -- se corrigió en la misma vuelta: ver
+`test_el_texto_se_personaliza_por_destino` y `_quien_911` más abajo.
 
 Correr:  python3 -m pytest tests/test_alerta_911_a_los_dos.py -q
 """
@@ -436,6 +437,59 @@ def test_el_encargo_del_dueno_lleva_la_marca_911():
         del_dueno = [f for f in bandeja.filas if f["chat_id"] == DUENO]
         assert len(del_dueno) == 1
         assert del_dueno[0]["contenido_raw"].startswith(correo.MARCA_911)
+    finally:
+        restaurar()
+        con.close()
+
+
+def test_el_texto_se_personaliza_por_destino():
+    """El texto no puede ser el MISMO para los dos: "Avisale a Tiziano..."
+    para el dueño (SIEMPRE "Tiziano", sin pasar por NOMBRES_POR_CHAT -- acá
+    el dueño está cargado como "Alfa" para comprobar justo eso) y "Avisale
+    a Beta..." para Beta (que SÍ sale de esa variable) -- mismo criterio
+    que `_encargo()`. Corregido tras el pedido de la sala del 22-sep-2026:
+    antes el texto decía "él" fijo para cualquier destino."""
+    restaurar = _con_gente({DUENO: "Alfa", BETA: "Beta"})
+    con = _instalar_sqlite()
+    bandeja = _BandejaFalsa()
+    db.guardar_en_bandeja = bandeja.guardar_en_bandeja
+    db.listar_preferencias = bandeja.listar_preferencias
+    correo.clasificar = _clasificar_no_usado
+    _montar_imap([(1, ALERTA)])
+    try:
+        _correr(correo.vigilar_911(None))
+        del_dueno = next(f for f in bandeja.filas if f["chat_id"] == DUENO)
+        del_beta = next(f for f in bandeja.filas if f["chat_id"] == BETA)
+        assert "Avisale a Tiziano" in del_dueno["contenido_raw"]
+        assert "Alfa" not in del_dueno["contenido_raw"], (
+            "el dueño se nombra SIEMPRE Tiziano, nunca lo que diga "
+            "NOMBRES_POR_CHAT (mismo criterio que _encargo())")
+        assert "Avisale a Beta" in del_beta["contenido_raw"]
+        assert del_dueno["contenido_raw"] != del_beta["contenido_raw"]
+    finally:
+        restaurar()
+        con.close()
+
+
+def test_un_destino_sin_nombre_puesto_no_revienta_el_texto():
+    """`_quien_911` cae a "quien va a leer esto" -- mismo resguardo que
+    `_encargo()` -- si `NOMBRES_POR_CHAT` no tiene a ese destino cargado."""
+    restaurar = _con_gente({DUENO: "Alfa"})
+    config.CHAT_IDS_PERMITIDOS = (DUENO, BETA)  # Beta entra, pero SIN nombre
+    con = _instalar_sqlite()
+    bandeja = _BandejaFalsa()
+    db.guardar_en_bandeja = bandeja.guardar_en_bandeja
+    db.listar_preferencias = bandeja.listar_preferencias
+    correo.clasificar = _clasificar_no_usado
+    _montar_imap([(1, ALERTA)])
+    try:
+        _correr(correo.vigilar_911(None))
+        # personas_del_panel() exige nombre Y acceso -- Beta sin nombre no
+        # entra a destinatarios, así que solo hay fila para el dueño. Esta
+        # prueba mide que _quien_911 no revienta si algún día se lo llama
+        # con un chat sin nombre (llamada directa, no vía vigilar_911).
+        assert correo._quien_911(BETA) == "quien va a leer esto"
+        assert bandeja.filas and "Avisale a Tiziano" in bandeja.filas[0]["contenido_raw"]
     finally:
         restaurar()
         con.close()

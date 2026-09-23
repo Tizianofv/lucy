@@ -1069,6 +1069,19 @@ def _huele_a_911(cand: dict) -> bool:
     return any(p in asunto for p in ASUNTOS_911)
 
 
+def _quien_911(destino: int) -> str:
+    """Cómo se llama ESE destino, para el pronombre del encargo 911.
+
+    MISMO criterio que `_encargo()` (línea ~886) y que
+    `despertador._quien_y_filtro`: el dueño es "Tiziano" siempre, sin pasar
+    por `NOMBRES_POR_CHAT` (así no depende de que esa variable lo tenga
+    cargado); cualquier otro destino sale de ahí, la MISMA fuente que ya usa
+    el panel -- no una copia con su propio criterio.
+    """
+    return ("Tiziano" if destino == config.CHAT_ID_DUENO
+            else config.NOMBRES_POR_CHAT.get(destino, "quien va a leer esto"))
+
+
 async def vigilar_911(bot) -> int:
     """Cada pocos minutos, 24 h: ¿se rompió algo de la infraestructura?
 
@@ -1113,26 +1126,23 @@ async def vigilar_911(bot) -> int:
     seguir sin avisársele a Rosi, y al revés (mismo candado que ya prueba
     `tests/test_correo_directo_a_los_dos.py` para el reporte diario).
 
-    DOS COSAS QUE ESTE ENCARGO DEJA COMO ESTABAN, DICHO ACÁ A PROPÓSITO
-    (medido el 22-sep-2026, sin resolverlas por mi cuenta -- se las llevo a
-    la sala):
-      · `cuentas_visibles` (abajo) sigue siendo `config.cuentas_de_correo(
-        "mostrar")`: TODOS los buzones con algún destino, sin filtrar por
-        `destinos_del_reporte(cuenta)` como sí hace `reporte_diario`
-        (`captura/correo.py`, la variable `por_destino` de esa función). Hoy
-        el buzón del dueño (el mixto, personal + estudio) informa SOLO a él
-        (comentario de `reporte_diario`, "el buzón del dueño (el mixto) va
-        SOLO a él"); si ese buzón alguna vez disparara un 911 (un remitente
-        de `REMITENTES_INFRA` escribiéndole ahí), con este cambio el aviso
-        -asunto y 400 caracteres del cuerpo incluidos- le llegaría también a
-        Rosi, sin pasar por `reporte_a`. Es lo mismo que ya prohíbe
-        `cerebro/interpretar.py:158-160` para el reporte diario ("que ninguna
-        línea del buzón personal pueda llegarle por ningún camino").
-      · El texto del encargo (abajo, "Avisale YA... si hay algo que ÉL pueda
-        hacer") sigue escrito para UN solo lector fijo -- no dice el nombre
-        de a quién le toca, a diferencia de `_encargo()` (línea ~886, que sí
-        arma un "quien" por destino) o `_quien_y_filtro` de `despertador.py`.
-        Con dos destinos, el mismo texto sale igual para Tiziano y para Rosi.
+    `cuentas_visibles` (abajo) es A PROPÓSITO `config.cuentas_de_correo(
+    "mostrar")` -- TODOS los buzones con algún destino, SIN filtrar por
+    `destinos_del_reporte(cuenta)` como sí hace `reporte_diario`. Decisión
+    de Tiziano, textual, a la pregunta «Si el correo urgente llega a tu
+    buzón personal, ¿también le avisamos a Rosi?» (22-sep-2026): «A los dos
+    siempre». O sea, a propósito la 911 NO hereda el reparto por buzón del
+    reporte diario (donde "el buzón del dueño, el mixto, va SOLO a él"):
+    para esta alerta puntual, cualquier buzón vigilado que dispare un 911
+    avisa a los dos, sin excepción de buzón.
+
+    EL TEXTO SE PERSONALIZA POR DESTINO, mismo criterio que `_encargo()`
+    (línea ~886) y que `despertador._quien_y_filtro`: "él" no puede ser fijo
+    cuando hay más de un lector. `_quien_911(destino)`, abajo, arma el
+    "quien"/pronombre igual que esas dos -- el dueño es "Tiziano" siempre
+    (sin pasar por `NOMBRES_POR_CHAT`, mismo motivo que `_encargo`); para
+    cualquier otro destino sale de esa variable, la MISMA fuente que ya usa
+    el panel.
     """
     # "mostrar": el aviso lleva remitente, asunto y 400 caracteres del cuerpo,
     # así que es enseñar correo como cualquier otro camino. Un buzón con
@@ -1189,16 +1199,17 @@ async def vigilar_911(bot) -> int:
             for destino in destinatarios:
                 if c["uid"] in ya_por_destino[destino]:
                     continue
+                quien = _quien_911(destino)
                 bandeja_id = await db.guardar_en_bandeja(
                     tipo_entrada="sistema",
                     contenido_raw=(
                         f"{MARCA_911} (esto sí interrumpe, es la única clase "
                         "de correo urgente que definió Tiziano). "
                         f"Llegó esto:\n\n{texto}\n\n"
-                        "Avisale YA, corto y claro: qué servicio, qué pasó, y "
-                        "si hay algo que él pueda hacer. Si no es grave de "
-                        "verdad, decíselo igual en una línea — pero no lo "
-                        "dejes pasar."),
+                        f"Avisale a {quien} YA, corto y claro: qué servicio, "
+                        f"qué pasó, y si hay algo que {quien} pueda hacer. Si "
+                        "no es grave de verdad, decíselo igual en una línea "
+                        "— pero no lo dejes pasar."),
                     chat_id=destino,
                     origen="correo",
                 )

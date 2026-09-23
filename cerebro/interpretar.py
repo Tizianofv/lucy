@@ -162,15 +162,20 @@ def _es_encargo_propio_del_dueno(fila: dict) -> bool:
         persona de `config.personas_del_panel()`; copiarle además al dueño
         por la copia general se lo mandaría dos veces a quien ya lo tiene.
 
-    Lo que todavía NO tiene camino propio (recordatorios de citas, canario
-    bancario, aviso de respaldo) sigue yendo por la copia general -- por eso
-    la comprobación es textual contra marcas puntuales, no "todo lo que
-    venga de estos módulos". CORREGIDO 22-sep-2026: esta lista decía también
-    "recordatorios de tareas del dueño", y ya no es cierto -- el
-    recordatorio de una tarea del dueño se apaga en
-    `despertador._avisar` con `sin_copia=(f["tabla"] == "tareas")`, un
-    mecanismo APARTE de esta función (no pasa por acá: `_avisar` manda
-    directo por Telegram, sin pasar por la bandeja ni por `_procesar`).
+    Lo que todavía NO tiene camino propio (canario bancario, aviso de
+    respaldo, la conversación en sí -- ver la lista completa, medida el
+    22-sep-2026, en el reporte del encargo "alerta 911 directo a los dos")
+    sigue yendo por la copia general -- por eso la comprobación es textual
+    contra marcas puntuales, no "todo lo que venga de estos módulos".
+    CORREGIDO 22-sep-2026, dos veces el mismo día: esta lista decía
+    "recordatorios de tareas del dueño" (ya no es cierto -- se apaga en
+    `despertador._avisar` con `sin_copia=(f["tabla"] == "tareas")`) y
+    después "recordatorios de citas" (tampoco: el mismo `_avisar` ahora
+    recibe `sin_copia=True` SIEMPRE para tareas Y citas, sin depender de la
+    tabla -- ver el comentario de esa llamada en `despertador.py`,
+    "encargo 3, 22-sep-2026"). Ninguna de las dos pasa por acá: `_avisar`
+    manda directo por Telegram, sin pasar por la bandeja ni por
+    `_procesar`.
     """
     if fila.get("chat_id") != config.CHAT_ID_DUENO:
         return False
