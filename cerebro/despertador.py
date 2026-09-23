@@ -270,15 +270,17 @@ async def revisar(bot) -> int:
     # hoy a cualquier fila vieja si Lucy estuvo caída un rato largo; esto no
     # le agrega ni le quita nada a esa regla, solo la deja actuar sobre una
     # fila que hasta ahora estaba escondida.
-    # `responsable_chat_id` viaja en las DOS ramas del UNION -- NULL en
-    # `eventos` a propósito, porque esa tabla no tiene la columna
-    # (`db/schema.sql:313-336`, medido el 22-sep-2026: el `CREATE TABLE
-    # eventos` no trae nada parecido). Una cita no tiene dueño: sigue
-    # avisándole a Tiziano, sin excepción, porque no hay dato que diga de
-    # quién es.
+    # `responsable_chat_id` (tareas) y `duenos_chat_id` (eventos) viajan en
+    # las DOS ramas del UNION, cada una NULL para la tabla que no la tiene
+    # -- mismo patrón que ya usa `responsable_chat_id` desde el encargo 2.
+    # `duenos_chat_id` es un ARRAY (`db/schema.sql`, "Que las citas tengan
+    # dueño", 22-sep-2026: una cita puede ser de Tiziano, de Rosi, de los
+    # dos, o de nadie -- nunca de "un" responsable como una tarea), así que
+    # el hueco del lado de `tareas` es `NULL::BIGINT[]`, no `NULL::BIGINT`.
     con_primero = """
             SELECT 'tareas' AS tabla, id, titulo, vence_en AS cuando,
-                   avisos_enviados, anticipos_min, t.responsable_chat_id
+                   avisos_enviados, anticipos_min, t.responsable_chat_id,
+                   NULL::BIGINT[] AS duenos_chat_id
               FROM tareas t
              WHERE estado = 'pendiente' AND borrado_en IS NULL
                AND vence_en IS NOT NULL
@@ -294,7 +296,8 @@ async def revisar(bot) -> int:
                         AND ant.estado = 'pendiente')
             UNION ALL
             SELECT 'eventos', id, titulo, inicia_en,
-                   avisos_enviados, anticipos_min, NULL::BIGINT
+                   avisos_enviados, anticipos_min, NULL::BIGINT,
+                   duenos_chat_id
               FROM eventos
              WHERE borrado_en IS NULL
                AND cardinality(anticipos_min) > 0
@@ -304,14 +307,17 @@ async def revisar(bot) -> int:
                AND NOT (avisos_enviados @> anticipos_min)
              ORDER BY cuando
             """
-    # SI LA COLUMNA `primero_id` TODAVÍA NO EXISTE (la migración de este
+    # SI LA COLUMNA `primero_id` TODAVÍA NO EXISTE (la migración de ESE
     # encargo no se aplicó: SQLSTATE 42703), esto cae a la consulta de ANTES
     # -- sin el `NOT EXISTS` -- con un SAVEPOINT, mismo patrón que
     # `db.tareas_por_grupo`. El despertador puede seguir avisando ANTES de
-    # que la sala aplique la migración.
+    # que la sala aplique esa migración. `duenos_chat_id` ya está aplicada
+    # en producción (medido el 22-sep-2026: 418 eventos, 0 con dueño) y no
+    # necesita su propia caída -- este encargo no agrega ninguna migración.
     sin_primero = """
             SELECT 'tareas' AS tabla, id, titulo, vence_en AS cuando,
-                   avisos_enviados, anticipos_min, responsable_chat_id
+                   avisos_enviados, anticipos_min, responsable_chat_id,
+                   NULL::BIGINT[] AS duenos_chat_id
               FROM tareas
              WHERE estado = 'pendiente' AND borrado_en IS NULL
                AND vence_en IS NOT NULL
@@ -322,7 +328,8 @@ async def revisar(bot) -> int:
                AND NOT (avisos_enviados @> anticipos_min)
             UNION ALL
             SELECT 'eventos', id, titulo, inicia_en,
-                   avisos_enviados, anticipos_min, NULL::BIGINT
+                   avisos_enviados, anticipos_min, NULL::BIGINT,
+                   duenos_chat_id
               FROM eventos
              WHERE borrado_en IS NULL
                AND cardinality(anticipos_min) > 0
@@ -377,30 +384,56 @@ async def revisar(bot) -> int:
             # "en -40 min" sería ridículo; la honestidad suena distinto:
             texto = f"⏰ Ojo, esto venció a las {hora}: {f['titulo']}"
 
-        # A QUIÉN (encargo 2, 22-sep-2026): el responsable de la TAREA, si
-        # tiene uno puesto y sigue siendo alguien con acceso -- MISMA puerta
-        # que `_destinatarios_de_tareas` (`config.puede_ser_responsable`),
-        # para que un chat_id viejo sin acceso no reciba nada. Sin
-        # responsable, o si es una CITA (`responsable_chat_id` siempre NULL,
-        # no hay dato de quién es), al dueño -- como siempre.
-        responsable = f.get("responsable_chat_id")
-        if responsable is not None and config.puede_ser_responsable(responsable):
-            destino = responsable
+        # A QUIÉN (encargo 3, 22-sep-2026 -- "recordatorios de citas por
+        # dueño"): TAREAS, sin cambio -- el responsable, si tiene uno puesto
+        # y sigue siendo alguien con acceso (`config.puede_ser_responsable`,
+        # la MISMA puerta que `_destinatarios_de_tareas`); si no, el dueño.
+        # CITAS: con dueño(s) puestos -- filtrados por la misma puerta, por
+        # si alguno perdió el acceso -- le avisa a CADA UNO, directo, y a
+        # NADIE más (decisión de Tiziano). Sin dueño (o si a todos los que
+        # tenía puestos ya no se les puede avisar), «A los dos» (decisión
+        # 5): TODOS los que devuelva `config.personas_del_panel()` -- no una
+        # lista tecleada, la misma fuente que ya deriva quién puede ser
+        # responsable de una tarea. Y si ESA lista viniera vacía (una
+        # variable de entorno mal puesta, medido que pasa en esta misma
+        # suite hermética cuando un archivo no configura `NOMBRES_POR_
+        # CHAT`), el último resguardo es el dueño -- un recordatorio de
+        # cita NUNCA se queda sin avisarle a nadie.
+        if f["tabla"] == "tareas":
+            responsable = f.get("responsable_chat_id")
+            if responsable is not None and config.puede_ser_responsable(responsable):
+                destinos = (responsable,)
+            else:
+                destinos = (config.CHAT_ID_DUENO,)
         else:
-            destino = config.CHAT_ID_DUENO
-        # `sin_copia` SOLO para tareas (NO PASA del testigo sobre `921abdd`:
-        # el flag salía incondicional y apagaba también la copia de los
-        # recordatorios de CITAS, que el diseño de este encargo deja
-        # explícitamente "sin cambio"). Una cita no tiene responsable propio
-        # -- Tiziano decidió el 22-sep-2026 que lo va a tener ("Que las
-        # citas tengan dueño"), pero en un encargo APARTE (responsable en
-        # `eventos`, igual que en tareas) que todavía no existe. Hasta que
-        # exista, el recordatorio de una cita es indistinguible del que
-        # había ANTES de este encargo: le llega al dueño Y se sigue
-        # copiando a Rosi igual que hoy -- por eso NO lleva `sin_copia`. El
-        # de una TAREA con responsable sí es nuevo (antes no existía ese
-        # camino), así que sí lo lleva: es lo único que este encargo agrega.
-        await _avisar(bot, texto, destino, sin_copia=(f["tabla"] == "tareas"))
+            duenos_validos = tuple(
+                c for c in (f.get("duenos_chat_id") or ())
+                if config.puede_ser_responsable(c))
+            destinos = (duenos_validos
+                        or tuple(c for c, _ in config.personas_del_panel())
+                        or (config.CHAT_ID_DUENO,))
+
+        # `sin_copia=True` SIEMPRE (ya no depende de la tabla): cada
+        # destinatario recibe SU PROPIO envío directo -- sea el único dueño
+        # de una tarea, uno de los dueños de una cita, o uno de "los dos"
+        # cuando la cita no tiene dueño -- así que copiárselo ADEMÁS a
+        # quien diga `COPIAS_DEL_DUENO` sería, en el mejor caso, mandarle
+        # dos veces lo mismo y, en el caso de una cita CON dueño que no es
+        # el destinatario de la copia, contenido que no le corresponde
+        # ("y a nadie más", decisión de Tiziano).
+        #
+        # EL CANDADO DE "YA SE AVISÓ" (`avisos_enviados`) SIGUE SIENDO POR
+        # FILA, no por destinatario, A PROPÓSITO -- y no hace falta que sea
+        # de otra forma: TODOS los destinatarios de esta fila se mandan
+        # ACÁ, en el mismo paso, antes de marcar la campanada. Avisarle a
+        # uno no puede "robarle" el aviso a otro porque ningún destinatario
+        # se procesa en una pasada aparte -- al revés de `correo_reportado`
+        # (que sí necesitó una clave por destino), donde Tiziano y Rosi
+        # podían recibir SU reporte en llamadas de `reporte_diario()`
+        # DISTINTAS, en momentos distintos. Acá, una campanada que se
+        # marca es una campanada que YA se mandó a todos sus destinatarios.
+        for destino in destinos:
+            await _avisar(bot, texto, destino, sin_copia=True)
 
         nuevos = sorted(enviados | {m for m in anticipos if faltan <= m})
         async with db.pool.connection() as conn:
@@ -410,12 +443,13 @@ async def revisar(bot) -> int:
             )
             await crud._registrar(
                 conn, accion="avisar", tabla=f["tabla"], registro_id=f["id"],
-                motivo=f"Recordatorio enviado: {f['titulo']} ({hora}, "
-                       f"faltaban {faltan} min)",
+                motivo=f"Recordatorio enviado a {len(destinos)} "
+                       f"destinatario{'s' if len(destinos) != 1 else ''}: "
+                       f"{f['titulo']} ({hora}, faltaban {faltan} min)",
             )
         avisos += 1
-        log.info("Aviso enviado: %s#%s (%s, faltan %s)",
-                 f["tabla"], f["id"], f["titulo"], faltan)
+        log.info("Aviso enviado: %s#%s (%s, faltan %s, %s destinatario(s))",
+                 f["tabla"], f["id"], f["titulo"], faltan, len(destinos))
 
     avisos += await _briefing()
     avisos += await _semanal()

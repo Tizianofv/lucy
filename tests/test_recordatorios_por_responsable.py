@@ -11,12 +11,24 @@ cambio de ningún tipo, ni en a quién le llegan ni en si se copian.
 CORREGIDO tras el NO PASA del testigo sobre `921abdd`: la primera versión
 de este encargo apagaba la copia (`sin_copia=True`) para TODO recordatorio
 que terminara yendo al dueño, tareas y citas por igual -- eso apagaba
-también la copia de las citas, que el diseño deja "sin cambio". Tiziano no
-tomó esa decisión: lo que sí decidió (22-sep-2026, textual: "Que las citas
-tengan dueño") es que `eventos` va a tener su propio responsable, pero en
-OTRO encargo, que todavía no existe. Hasta que exista, `sin_copia` se pasa
-SOLO para recordatorios de TAREAS (`f["tabla"] == "tareas"`) -- nunca para
-citas.
+también la copia de las citas, que el diseño de ESTE encargo (el 2) dejaba
+"sin cambio" a propósito, porque `eventos` todavía no tenía su propio
+dueño.
+
+CORREGIDO OTRA VEZ (22-sep-2026, encargo 3, "recordatorios de citas por
+dueño"): ese "sin cambio" era del encargo 2, no una promesa para siempre.
+`eventos.duenos_chat_id` ya existe (encargos 1+2 del diseño
+"lucy-citas-con-dueno"), así que el recordatorio de una cita YA NO va
+siempre al dueño ni se copia -- va a sus dueños (o, sin dueño, a
+`personas_del_panel()` entera) y `sin_copia` es `True` para TODA fila,
+tareas y citas por igual. Las dos pruebas de citas que este archivo tenía
+(`test_una_cita_siempre_le_llega_al_dueno_aunque_haya_responsables`,
+`test_el_recordatorio_de_una_cita_SI_se_copia_sin_cambio`) probaban
+exactamente lo que el encargo 3 cambió a propósito: se QUITAN de acá (no se
+dejan en rojo, no se les pone un `skip`) y su sucesora vive en
+`tests/test_citas_avisos_por_dueno.py`, con SQL real y sus propios
+hermanos. Lo que este archivo sigue probando -- el ruteo de TAREAS -- no
+cambió: `f["tabla"] == "tareas"` sigue siendo el mismo camino de siempre.
 
 HERMANOS, A PROPÓSITO NI TIZIANO NI ROSI -- Beta y Gamma, igual que
 `tests/test_briefing_por_persona.py`, para probar que el ruteo sale de
@@ -302,44 +314,37 @@ def test_responsable_sin_acceso_cae_al_dueno():
         restaurar_gente()
 
 
-def test_el_sql_de_eventos_nunca_declara_un_responsable_real():
+def test_el_sql_de_eventos_declara_null_bigint_fijo_para_responsable():
     """Comprobación ESTRUCTURAL, sobre el texto de `revisar()`: las DOS
     ramas de `eventos` (con y sin `primero_id`) tienen que traer un
-    `NULL::BIGINT` fijo para `responsable_chat_id` -- si algún día alguien
-    intenta ponerle un valor real (por ejemplo, reusar `id`), esta prueba
-    lo dice sin necesitar Postgres."""
+    `NULL::BIGINT` fijo para `responsable_chat_id` -- `eventos` no tiene esa
+    columna (tiene `duenos_chat_id`, un array, para eso ver `tests/
+    test_citas_avisos_por_dueno.py`) -- si algún día alguien intenta
+    ponerle un valor real ahí (por ejemplo, reusar `id`), esta prueba lo
+    dice sin necesitar Postgres.
+
+    Se busca la forma EXACTA `NULL::BIGINT,` (con la coma del SELECT
+    detrás) para no contar, de paso, las apariciones de `NULL::BIGINT[]`
+    (el array de `duenos_chat_id` del lado de `tareas`) ni las que
+    aparezcan sueltas en un comentario."""
     import inspect
     fuente = inspect.getsource(despertador.revisar)
-    apariciones = fuente.count("NULL::BIGINT")
+    apariciones = fuente.count("NULL::BIGINT,")
     assert apariciones == 2, (
-        f"esperaba 2 apariciones de NULL::BIGINT (una por rama de eventos, "
-        f"con y sin primero_id), hay {apariciones}")
-
-
-def test_una_cita_siempre_le_llega_al_dueno_aunque_haya_responsables():
-    """Los eventos no tienen `responsable_chat_id` -- la columna ni existe
-    en `eventos` -- así que la fila llega con NULL sin importar quién más
-    tenga tareas asignadas ese día."""
-    conn = FakeConn([_fila("eventos", 5, "Dentista", AHORA, None)])
-    _instalar(conn)
-    restaurar_gente = _con_gente()
-    bot = _BotFalso()
-    try:
-        _correr(despertador.revisar(bot))
-        assert bot.enviados[0]["chat_id"] == DUENO
-    finally:
-        restaurar_gente()
+        f"esperaba 2 apariciones de 'NULL::BIGINT,' (una por rama de "
+        f"eventos, con y sin primero_id), hay {apariciones}")
 
 
 # ---------------------------------------------------------------------------
-# 2) La copia: el recordatorio del dueño de una TAREA no se copia; el de una
-#    CITA SÍ, sin cambio -- ésta es la pareja que faltaba (NO PASA del
-#    testigo sobre `921abdd`): antes `sin_copia=True` salía para las dos por
-#    igual, y una cita al dueño dejaba de copiarse a Rosi sin que el diseño
-#    lo pidiera. Las citas todavía no tienen responsable propio (eso es
-#    "Que las citas tengan dueño", un encargo aparte que Tiziano pidió el
-#    22-sep-2026 y que todavía no existe): hasta que exista, su recordatorio
-#    es indistinguible de como era ANTES de este encargo entero.
+# 2) La copia: el recordatorio del dueño de una TAREA no se copia.
+#
+# LA PAREJA QUE ESTE ARCHIVO YA NO TIENE: "el recordatorio de una cita SÍ
+# se copia, sin cambio" -- era la comprobación del NO PASA sobre `921abdd`,
+# válida MIENTRAS `eventos` no tenía dueño propio. El encargo 3
+# ("recordatorios de citas por dueño", 22-sep-2026) cambió esa regla a
+# propósito: TODA fila, tareas y citas, se manda con `sin_copia=True`
+# ahora. Esa prueba se picó de acá y vive, actualizada, en
+# `tests/test_citas_avisos_por_dueno.py`.
 # ---------------------------------------------------------------------------
 def test_el_recordatorio_de_una_tarea_del_dueno_no_se_copia():
     conn = FakeConn([_fila("tareas", 6, "Pagar la luz", AHORA, None)])
@@ -350,25 +355,6 @@ def test_el_recordatorio_de_una_tarea_del_dueno_no_se_copia():
         _correr(despertador.revisar(bot))
         assert bot.enviados[0]["chat_id"] == DUENO
         assert bot.enviados[0]["sin_copia"] is True
-    finally:
-        restaurar_gente()
-
-
-def test_el_recordatorio_de_una_cita_SI_se_copia_sin_cambio():
-    """La pareja exacta de la prueba de arriba: mismo destino (el dueño),
-    misma forma de fila, pero `tabla == "eventos"` -- y acá `sin_copia`
-    TIENE que ser False, porque una cita todavía no tiene responsable
-    propio y el diseño no toca su copia."""
-    conn = FakeConn([_fila("eventos", 9, "Dentista", AHORA, None)])
-    _instalar(conn)
-    restaurar_gente = _con_gente()
-    bot = _BotFalso()
-    try:
-        _correr(despertador.revisar(bot))
-        assert bot.enviados[0]["chat_id"] == DUENO
-        assert bot.enviados[0]["sin_copia"] is False, (
-            "el recordatorio de una cita al dueño tiene que seguir "
-            "copiándose a Rosi, sin cambio")
     finally:
         restaurar_gente()
 

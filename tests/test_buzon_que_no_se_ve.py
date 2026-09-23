@@ -3779,10 +3779,18 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `cerebro/agente.py` y `cerebro/interpretar.py` (solo texto, un
     # docstring), los tres ya vigilados de antes. La migración nueva
     # (`db/migrations/2026-09-22_citas_con_dueno.sql`) no es un `.py`.
-    assert medido == {"en disco": 86, "exentos": 46, "vigilados": 40}, (
+    #
+    # 22-sep-2026, rama `trabajo/citas-avisos` (encargo 3 del mismo
+    # diseño): 86 → 87 en disco y 46 → 47 EXENTOS por `tests/test_citas_
+    # avisos_por_dueno.py` (recordatorios de citas por dueño: directo a
+    # cada dueño, sin copiarse; sin dueño, a personas_del_panel() entera).
+    # Es un archivo de `testpaths`, EXENTO por rol. Los VIGILADOS siguen en
+    # 40: el trabajo tocó solo `cerebro/despertador.py`, ya vigilado de
+    # antes. Este encargo no agregó ninguna migración.
+    assert medido == {"en disco": 87, "exentos": 47, "vigilados": 40}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "22-sep-2026 (rama citas-dueno) era {'en disco': 86, "
-        "'exentos': 46, 'vigilados': 40}. La aserción de fondo —cero "
+        "22-sep-2026 (rama citas-avisos) era {'en disco': 87, "
+        "'exentos': 47, 'vigilados': 40}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "
