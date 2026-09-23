@@ -392,6 +392,70 @@ def test_una_cita_cancelada_se_archiva_con_el_dueno_intacto():
     assert json.loads(fila["duenos_chat_id"]) == [BETA]
 
 
+# ---------------------------------------------------------------------------
+# 5) `sincronizar()` resuelve el dueño UNA vez por calendario, no por evento.
+# ---------------------------------------------------------------------------
+def test_sincronizar_resuelve_el_dueno_una_vez_por_calendario(monkeypatch):
+    """Dos calendarios, con 3 y 2 eventos de Google respectivamente: si
+    `_dueno_chat_de` se llamara por evento saldría 5 veces; si se llama por
+    calendario (lo que pide el diseño, y lo que dice el docstring de
+    `sincronizar`) salen 2 -- una por calendario, sin importar cuántos
+    eventos tenga cada uno."""
+    restaurar = _con_gente({DUENO: "Alfa", BETA: "Beta"})
+    llamadas = []
+    original = calendario._dueno_chat_de
+
+    def _contado(cal):
+        llamadas.append(cal["nombre"])
+        return original(cal)
+
+    cals_falsos = [
+        {"id": "c1", "nombre": "Cal Uno", "dueno": "Beta"},
+        {"id": "c2", "nombre": "Cal Dos", "dueno": None},
+    ]
+    eventos_por_cal = {"c1": [_ev("e1"), _ev("e2"), _ev("e3")],
+                        "c2": [_ev("e4"), _ev("e5")]}
+    guardados = []
+
+    async def _guardar_falso(cal, ev, dueno_chat):
+        guardados.append((cal["id"], ev["id"], dueno_chat))
+
+    async def _eventos_de_falso(client, token, cal_id):
+        return eventos_por_cal[cal_id]
+
+    async def _token_falso():
+        return "tok"
+
+    class _ClienteFalso:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(calendario, "CALENDARIOS", cals_falsos)
+    monkeypatch.setattr(calendario, "_dueno_chat_de", _contado)
+    monkeypatch.setattr(calendario, "_guardar", _guardar_falso)
+    monkeypatch.setattr(calendario, "_eventos_de", _eventos_de_falso)
+    monkeypatch.setattr(calendario, "_token", _token_falso)
+    monkeypatch.setattr(calendario, "GOOGLE_SA_KEY", "x")
+    monkeypatch.setattr(calendario.httpx, "AsyncClient", _ClienteFalso)
+    try:
+        _correr(calendario.sincronizar())
+        assert llamadas == ["Cal Uno", "Cal Dos"], (
+            f"_dueno_chat_de se llamó {len(llamadas)} veces ({llamadas}); "
+            "tiene que ser exactamente una por calendario (2), no una por "
+            "evento (5)")
+        assert len(guardados) == 5, "los 5 eventos se siguen guardando igual"
+        assert all(d == BETA for (c, e, d) in guardados if c == "c1")
+        assert all(d is None for (c, e, d) in guardados if c == "c2")
+    finally:
+        restaurar()
+
+
 if __name__ == "__main__":
     import pytest as _pytest
     sys.exit(_pytest.main([__file__, "-q"]))
