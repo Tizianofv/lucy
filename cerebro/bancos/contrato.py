@@ -269,6 +269,26 @@ _MESES_ES = {
 }
 
 
+def _hora_24h(hora: int, ampm: str) -> int:
+    """Hora + marca am/pm → hora 24h, tolerando el 24h-con-PM que manda a
+    veces Banreservas ("15:08 PM": ya está en 24 horas, y además dice PM).
+
+    Sin esto, `hora=15` con "p" pasaba a 27 y `datetime()` reventaba con
+    ValueError en vez de con ErrorDeParseo — así fue como el 24-sep-2026 un
+    correo de Banreservas paró la ingesta entera (ver
+    disenos/lucy-banreservas-hora/INVESTIGACION.md en la sala). Si la hora ya
+    viene en 13..23, "PM" no suma nada: ya es de tarde. `hora==12` (mediodía)
+    tampoco suma, como antes. Las otras dos ramas de acá arriba —hora sin
+    am/pm y "AM" con hora de tarde— no las toca esto: quedan igual que
+    estaban, a propósito.
+    """
+    if ampm.lower() == "p" and hora < 12:
+        return hora + 12
+    if ampm.lower() == "a" and hora == 12:
+        return 0
+    return hora
+
+
 def normalizar_fecha(texto: str) -> datetime:
     """Fecha del banco → datetime local. Acepta los formatos vistos hasta hoy.
 
@@ -293,10 +313,7 @@ def normalizar_fecha(texto: str) -> datetime:
             yyyy = f"20{yyyy}"
         hora = int(hh) if hh else 0
         if ampm:
-            if ampm.lower() == "p" and hora != 12:
-                hora += 12
-            elif ampm.lower() == "a" and hora == 12:
-                hora = 0
+            hora = _hora_24h(hora, ampm)
         return datetime(int(yyyy), int(mm), int(dd), hora,
                         int(mi or 0), int(ss or 0))
 
@@ -315,10 +332,7 @@ def normalizar_fecha(texto: str) -> datetime:
             if _sin_acentos(nombre).startswith(mes_txt[:3]):
                 hora = int(hh) if hh else 0
                 if ampm:
-                    if ampm == "p" and hora != 12:
-                        hora += 12
-                    elif ampm == "a" and hora == 12:
-                        hora = 0
+                    hora = _hora_24h(hora, ampm)
                 return datetime(int(yyyy), num, int(dd), hora, int(mi or 0))
 
     raise ErrorDeParseo(f"no reconozco la fecha {crudo!r}")

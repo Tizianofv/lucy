@@ -56,7 +56,7 @@ from email.utils import parsedate_to_datetime
 import cerebro.bancos as bancos
 import config
 import db.db as db
-from cerebro.bancos.contrato import CorreoCrudo, ErrorDeParseo
+from cerebro.bancos.contrato import CorreoCrudo
 from cerebro.bancos.categorias import CLAVES, Categorizador
 from cerebro.bancos.propios import Propios
 
@@ -157,7 +157,9 @@ class Resumen:
       · `producidos` — de esos, cuántos dieron al menos un movimiento. Un
                        duplicado cuenta: prueba que el parser corrió, calculó
                        la huella y coincidió con una que ya estaba.
-      · `reventados` — de esos, cuántos levantaron ErrorDeParseo.
+      · `reventados` — de esos, cuántos reventaron al parsear (ErrorDeParseo
+                       o cualquier otra excepción: ver el `except` en
+                       `revisar()`).
       · `sin_ruta`   — correos suyos que no calzaron con ningún parser.
       · `rechazados` — movimientos que el parser SÍ produjo y la base no
                        aceptó. Es distinto de `reventados`: acá el correo se
@@ -463,7 +465,18 @@ async def revisar() -> Resumen:
 
             try:
                 movs = parser(crudo)
-            except ErrorDeParseo as e:
+            except Exception as e:
+                # ErrorDeParseo es lo esperado —un correo que el parser no
+                # sabe leer—, pero no es lo ÚNICO que puede reventar acá: el
+                # 24-sep-2026 un ValueError de datetime() (hora "27", de
+                # "15:08 PM") se salió de este try, tiró abajo la pasada
+                # entera y el cursor no avanzó, así que el mismo correo volvía
+                # a reventar cada 15 minutos para siempre (ver
+                # disenos/lucy-banreservas-hora/INVESTIGACION.md en la sala).
+                # Cualquier excepción de ESTE correo se trata igual que un
+                # ErrorDeParseo: se salta, sigue con el siguiente correo y con
+                # el siguiente buzón, y el canario (abajo) avisa por
+                # Telegram — no en silencio.
                 res.reventados[rem] = res.reventados.get(rem, 0) + 1
                 res.fallos.append(Fallo(
                     rem, f"{user}#{crudo.uid} [{crudo.asunto[:40]}]: {e}"))

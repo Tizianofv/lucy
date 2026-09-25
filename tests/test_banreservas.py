@@ -90,6 +90,18 @@ def test_comercio_no_se_come_la_fecha():
     assert "Fecha" not in m.contraparte and "2026" not in m.contraparte
 
 
+def test_hora_24h_con_pm_no_revienta():
+    """El 24-sep-2026 Banreservas empezó a mandar la hora en 24h Y con "PM"
+    ("15:08 PM"), y eso tumbaba la ingesta entera con un ValueError de
+    datetime() en vez de un ErrorDeParseo (INVESTIGACION.md en la sala IA
+    CDS). Pasa por el parser REAL de Banreservas, con un correo fabricado
+    igual que los de arriba."""
+    consumo_15pm = CONSUMO.replace("17/04/2026 10:28 AM", "24/09/2026 15:08 PM")
+    m = parsear(_correo(consumo_15pm))[0]
+    assert m.fecha == datetime(2026, 9, 24, 15, 8)
+    assert m.monto == Decimal("254.90") and m.moneda == "DOP"
+
+
 def test_nomina_es_ingreso_no_gasto():
     """El fallo más caro posible acá: un pago de nómina contado como gasto de
     tarjeta invierte el signo de RD$12,267.85."""

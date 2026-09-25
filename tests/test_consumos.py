@@ -417,6 +417,148 @@ def test_el_canario_avisa_una_vez_por_dia():
     assert len(reg.orden) == 1 and reg.orden[0] == "bandeja:banco"
 
 
+# ── Un parser que revienta con algo que NO es ErrorDeParseo ──────────────
+#
+# disenos/lucy-banreservas-hora/INVESTIGACION.md (sala IA CDS): el 24-sep-2026
+# un ValueError de datetime() —no un ErrorDeParseo— se salió del único except
+# que `revisar()` atrapaba, tumbó la pasada entera, y el cursor no se guardó:
+# el mismo correo volvía a reventar cada 15 minutos, sin fin, y sin avisar.
+# Aprobado por Tiziano: que Lucy salte ese correo, siga con los demás y avise
+# por Telegram (el canario que ya existe: `avisar_si_hay_bancos_mudos`,
+# Señal A / `res.reventados`).
+
+import email.message  # noqa: E402
+
+from cerebro.bancos.banreservas import ASUNTO as _BNR_ASUNTO  # noqa: E402
+from cerebro.bancos.banreservas import REMITENTE as _BNR_REMITENTE  # noqa: E402
+from cerebro.bancos.banreservas import parsear as _bnr_parsear  # noqa: E402
+
+_BNR_CONSUMO = (
+    "Notificación de Consumo Su tarjeta VISA PLATINUM ••8110 presenta un "
+    "consumo. Monto: DOP {monto} Estado: APROBADO Comercio: {comercio} "
+    "Fecha de transacción: 24/09/2026 10:28 AM Número de aprobación: 299209 "
+    "Recibido por los valores indicados")
+
+
+def _bnr_eml(uid: int, comercio: str) -> bytes:
+    """Un correo de Banreservas fabricado, con el MISMO remitente y asunto
+    reales, para pasar de verdad por `buscar_parser` en `revisar()`."""
+    m = email.message.EmailMessage()
+    m["From"] = _BNR_REMITENTE
+    m["Subject"] = _BNR_ASUNTO
+    m["Date"] = "Thu, 24 Sep 2026 10:28:00 -0400"
+    m.set_content(_BNR_CONSUMO.format(monto=f"{100 + uid}.00", comercio=comercio))
+    return m.as_bytes()
+
+
+def test_un_error_que_no_es_errordeparseo_no_tumba_la_pasada():
+    """El camino de producción de verdad: `revisar()` con un parser envuelto
+    que, para UN correo concreto, revienta con TypeError (no ErrorDeParseo).
+    Dos buzones, y en cada uno un correo malo en el medio de dos buenos —el
+    mismo montaje que INVESTIGACION.md usó para reproducir el bug real."""
+    import cerebro.bancos as B
+
+    correos = [
+        (10, _bnr_eml(10, "BUENO DIEZ")),
+        (11, _bnr_eml(11, "MALO ONCE")),      # este revienta
+        (12, _bnr_eml(12, "BUENO DOCE")),
+        (13, _bnr_eml(13, "BUENO TRECE")),
+    ]
+    reg = _montar(correos)
+    config.CORREO_CUENTAS = [
+        {"user": "buzon.a@gmail.com", "pass": "x"},
+        {"user": "buzon.b@gmail.com", "pass": "x"},
+    ]
+
+    original = B.buscar_parser
+
+    def _envuelto(rem, asunto):
+        p = original(rem, asunto)
+        if p is None:
+            return None
+        if p is not _bnr_parsear:
+            return p
+
+        def _a_veces_revienta(correo):
+            if correo.uid == "11":
+                raise TypeError("boom: esto NO es un ErrorDeParseo")
+            return p(correo)
+        return _a_veces_revienta
+
+    consumos.bancos.buscar_parser = _envuelto
+    try:
+        res = _correr(consumos.revisar())
+    finally:
+        consumos.bancos.buscar_parser = original
+
+    # El correo malo se contó como reventado, con SU remitente y SU error —
+    # y no como una excepción que se lleva puesta la pasada entera.
+    assert res.reventados.get(_BNR_REMITENTE, 0) == 2, (
+        "esperaba un reventado por cada buzón (2), salió "
+        f"{res.reventados}")
+    assert any("boom: esto NO es un ErrorDeParseo" in str(f) for f in res.fallos), (
+        res.fallos)
+
+    # El correo SIGUIENTE (12) y el buzón SIGUIENTE (buzon.b) SÍ se
+    # procesaron: no se paró en el 11.
+    assert res.extraidos >= 3, (
+        f"solo {res.extraidos} movimientos: el correo 12 o el buzón b no se "
+        "procesaron")
+
+    # El cursor avanza hasta el último correo cosechado (13) EN LOS DOS
+    # buzones, no se queda pegado en el correo malo.
+    for user in ("buzon.a@gmail.com", "buzon.b@gmail.com"):
+        assert reg.estado[user]["ultimo_uid"] == 13, (
+            f"{user}: el cursor quedó en {reg.estado[user]['ultimo_uid']}, "
+            "no avanzó hasta el último correo cosechado")
+
+    # Y el canario que YA existe (Señal A) avisa por ese remitente: es el
+    # camino real hacia Telegram, no uno nuevo.
+    consumos._ultimo_aviso.clear()
+    avisados = _correr(consumos.avisar_si_hay_bancos_mudos(res))
+    assert avisados >= 1
+    assert any("boom: esto NO es un ErrorDeParseo" in c for c in reg.contenidos), (
+        "el aviso no llevó el error concreto del correo que reventó")
+
+
+def test_un_error_que_no_es_errordeparseo_no_se_reintenta_para_siempre():
+    """Con el cursor ya avanzado más allá del correo malo, la PRÓXIMA pasada
+    no vuelve a verlo — si se reintentara en bucle, serían avisos cada ~15
+    minutos para siempre, que es exactamente lo que pasó en producción."""
+    import cerebro.bancos as B
+
+    correos = [(10, _bnr_eml(10, "BUENO DIEZ")), (11, _bnr_eml(11, "MALO ONCE"))]
+    reg = _montar(correos)
+    original = B.buscar_parser
+
+    def _envuelto(rem, asunto):
+        p = original(rem, asunto)
+        if p is None or p is not _bnr_parsear:
+            return p
+
+        def _a_veces_revienta(correo):
+            if correo.uid == "11":
+                raise TypeError("boom otra vez")
+            return p(correo)
+        return _a_veces_revienta
+
+    consumos.bancos.buscar_parser = _envuelto
+    try:
+        res1 = _correr(consumos.revisar())
+        assert res1.reventados.get(_BNR_REMITENTE, 0) == 1
+
+        # Segunda pasada: el mismo IMAP falso sirve los mismos correos, pero
+        # el cursor guardado (11) ya los deja todos por debajo de `desde_uid`.
+        res2 = _correr(consumos.revisar())
+    finally:
+        consumos.bancos.buscar_parser = original
+
+    assert res2.vistos == 0, (
+        f"la segunda pasada volvió a ver {res2.vistos} correo(s): el correo "
+        "malo se está reintentando en bucle")
+    assert res2.reventados.get(_BNR_REMITENTE, 0) == 0
+
+
 def test_el_canario_callado_cuando_todo_va_bien():
     """Un canario que avisa sin motivo se aprende a ignorar."""
     _montar([])

@@ -18,6 +18,7 @@ Correr:  python3 tests/test_contrato_bancos.py
 from __future__ import annotations
 
 import os
+import pathlib
 import sys
 from datetime import datetime
 from decimal import Decimal
@@ -131,6 +132,81 @@ def test_fecha_sin_hora_y_en_letras():
 def test_fecha_irreconocible_revienta():
     assert _revienta(normalizar_fecha, "ayer")
     assert _revienta(normalizar_fecha, "Fecha")     # la fila de cabecera
+
+
+# ── Hora de 24h Y con PM ("15:08 PM") — 24-sep-2026 ────────────────────────
+#
+# disenos/lucy-banreservas-hora/INVESTIGACION.md (sala IA CDS): desde el
+# 24-sep-2026 ~15:08 Banreservas manda la hora en 24h Y le pega "PM" igual
+# ("15:08 PM"). Antes esto hacía hora=15+12=27 y `datetime()` reventaba con
+# ValueError (no ErrorDeParseo), tumbando la pasada entera. Aprobado por
+# Tiziano: entenderlo como las 3:08 p.m.
+
+def test_fecha_24h_con_pm_no_revienta():
+    """El caso exacto que tumbó la ingesta el 24-sep: antes daba
+    'ValueError: hour must be in 0..23'."""
+    assert normalizar_fecha("24/09/2026 15:08 PM") == datetime(2026, 9, 24, 15, 8)
+    assert normalizar_fecha("24/09/2026 13:08 PM") == datetime(2026, 9, 24, 13, 8)
+    assert normalizar_fecha("24/09/2026 23:59 PM") == datetime(2026, 9, 24, 23, 59)
+    assert normalizar_fecha("24/09/2026 15:08 p.m.") == datetime(2026, 9, 24, 15, 8)
+    assert normalizar_fecha("24/09/2026 15:08:22 PM") == datetime(2026, 9, 24, 15, 8, 22)
+
+
+def test_fecha_24h_con_pm_en_formato_de_letras():
+    """La segunda rama de normalizar_fecha ('16 DE ABRIL DEL 2026 - 12:30
+    P. M.', usada por los comprobantes de sucursal de Banreservas) tenía el
+    mismo cálculo de hora y el mismo riesgo; se arregla con el mismo cambio."""
+    assert (normalizar_fecha("24 de septiembre del 2026 - 15:08 p. m.")
+            == datetime(2026, 9, 24, 15, 8))
+
+
+def test_fecha_12h_normal_no_cambia():
+    """El arreglo de la hora 24h+PM no puede tocar el caso normal de 12h que
+    ya funcionaba: sigue sumando 12 cuando la hora SÍ viene en 12h."""
+    assert normalizar_fecha("24/09/2026 03:08 PM") == datetime(2026, 9, 24, 15, 8)
+    assert normalizar_fecha("24/09/2026 12:30 PM") == datetime(2026, 9, 24, 12, 30)
+    assert normalizar_fecha("24/09/2026 11:08 PM") == datetime(2026, 9, 24, 23, 8)
+    assert normalizar_fecha("01/01/2026 12:00 am").hour == 0
+
+
+def test_fecha_fuera_de_alcance_no_se_toco():
+    """Dos casos que la investigación marcó fuera de alcance a propósito
+    (van a la cola, no se arreglan acá): hora sin AM/PM que queda en 00:00, y
+    '15:08 AM' aceptado tal cual como las 15:08. Si esto cambiara, el arreglo
+    de (1) se habría metido donde no debía."""
+    assert normalizar_fecha("24/09/2026 15:08").hour == 0
+    assert normalizar_fecha("24/09/2026 15:08 AM").hour == 15
+
+
+def test_normalizar_fecha_es_la_unica_puerta_de_los_bancos():
+    """`normalizar_fecha` es compartida: el arreglo de la hora 24h+PM vive en
+    un solo lugar (contrato.py) y por eso alcanza a TODOS los bancos que la
+    usan, no a uno solo. La lista de "quién la usa" sale de grep sobre el
+    código real, no de memoria — y tiene que haber más de un banco, o esta
+    prueba no estaría vigilando nada."""
+    import re
+    import subprocess
+
+    raiz = pathlib.Path(__file__).parent.parent / "cerebro" / "bancos"
+    salida = subprocess.run(
+        ["grep", "-rl", "--include=*.py", "normalizar_fecha", str(raiz)],
+        capture_output=True, text=True, check=True).stdout
+    archivos = {pathlib.Path(p).name for p in salida.splitlines()}
+    archivos.discard("contrato.py")           # la dueña de la función, no una usuaria
+    archivos.discard("__init__.py")           # solo reexporta
+
+    assert len(archivos) >= 4, (
+        f"esperaba varios bancos usando normalizar_fecha, encontré {archivos}")
+
+    # Cada usuaria la IMPORTA de contrato (no define una copia local): así el
+    # arreglo de un solo lugar les llega a todas.
+    for nombre in archivos:
+        texto = (raiz / nombre).read_text()
+        assert re.search(r"normalizar_fecha\s*,?\s*\)?\s*$", texto, re.M) or \
+               "normalizar_fecha" in texto, nombre
+        assert re.search(r"^\s*def\s+normalizar_fecha\b", texto, re.M) is None, (
+            f"{nombre} define su PROPIO normalizar_fecha: el arreglo de "
+            "contrato.py no le llegaría")
 
 
 # ── Estado ───────────────────────────────────────────────────────────────
