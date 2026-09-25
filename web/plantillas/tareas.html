@@ -43,6 +43,16 @@
 <p class="vacio">Fecha cambiada en {{ movidas }}
   tarea{{ 's' if movidas > 1 }}.</p>
 {% endif %}
+{% if derivadas %}
+{# La tarea derivada (25-sep-2026), aparte de «Cerradas» por la misma
+   regla del comentario de arriba: son dos números distintos que viajan en
+   el mismo envío. Con los IDS -- diseño aprobado, mockup del punto 6:
+   «Tareas nuevas que salen de otra: 1 (#512)» -- porque sin ellos habría
+   que buscarlas a ojo en la lista de abajo. #}
+<p class="aviso ok">Tarea{{ 's' if derivadas > 1 }} nueva{{ 's' if derivadas > 1 }}
+  que sale{{ 'n' if derivadas > 1 }} de otra: {{ derivadas }}
+  {%- if derivadas_ids %} (#{{ derivadas_ids.replace(',', ', #') }}){% endif %}.</p>
+{% endif %}
 
 {# LO QUE FALTA PARA PODER ASIGNAR SE DICE, y se dice acá arriba aunque hoy
    esté vacío. Los nombres no salen de ninguna tabla —en esta base no hay
@@ -112,7 +122,8 @@ aviso de Telegram que ya sonó.</p>
          una casilla que parece hacer algo y no lo hace miente. #}
       <input type="checkbox" name="hecha_{{ t.id }}" value="1"
              {% if t.estado == hecha %}checked disabled
-             title="ya está hecha"{% endif %}>
+             title="ya está hecha"
+             {% else %}data-abre="derivada-{{ t.id }}"{% endif %}>
     </td>
     {# El título lleva a la pantalla de la tarea, donde se leen y se escriben
        los comentarios. Es un ENLACE y no un formulario: esta lista tiene uno
@@ -146,6 +157,27 @@ aviso de Telegram que ya sonó.</p>
       {%- if t.primero_esperando %}
       <br><span class="suave">→ Primero:
         <a class="suave" href="/tareas/{{ t.primero_id }}">{{ t.primero_titulo }}</a></span>
+      {%- endif %}
+      {#- LA TAREA DERIVADA (25-sep-2026). AL REVÉS de «Primero:»: acá no hay
+         nada que "esperar" -- la relación se pinta SIEMPRE que exista,
+         calculada por `db.tareas_por_grupo` con `db.derivaciones()` (nunca
+         guardada como "hijos"). Esta fila es una HIJA si `deriva_de_id`
+         está puesto -- `deriva_de_titulo` puede faltar si la madre quedó
+         fuera de las TOPE_TAREAS filas traídas; se pinta igual, sin
+         enlace, en vez de esconder que la relación existe. #}
+      {%- if t.deriva_de_id %}
+      <br><span class="suave">↳ Sale de:
+        {%- if t.deriva_de_titulo %}
+        <a class="suave" href="/tareas/{{ t.deriva_de_id }}">{{ t.deriva_de_titulo }}</a>
+        {%- else %} una tarea que ya no se ve acá{% endif %}</span>
+      {%- endif %}
+      {#- Esta fila es una MADRE si tiene una o más hijas -- Tiziano: «pueden
+         ser varias» -- así que se listan TODAS, no solo la primera. #}
+      {%- if t.siguio %}
+      <br><span class="suave">→ Siguió:
+        {%- for s in t.siguio %}
+        <a class="suave" href="/tareas/{{ s.id }}">{{ s.titulo }}</a>{% if not loop.last %},{% endif %}
+        {%- endfor %}</span>
       {%- endif %}
     </td>
     {# LA ETIQUETA DE ÁREA (encargo 4), en la MISMA lista, siempre visible: sin
@@ -241,6 +273,79 @@ aviso de Telegram que ya sonó.</p>
     </td>
     <td class="suave">{{ t.estado }}</td>
   </tr>
+  {% if t.estado == pendiente %}
+  {#- EL RENGLÓN «¿SALE ALGO NUEVO DE ÉSTA?» (25-sep-2026), pegado debajo de
+     la fila que se puede marcar hecha -- SOLO en las pendientes: las ya
+     hechas tienen la casilla deshabilitada, así que no hay de dónde
+     dispararlo. Va DENTRO del mismo formulario único de la pantalla (no un
+     formulario propio: ver `web/app.py::crear_tarea` para por qué eso rompe
+     el test del formulario único) -- son más campos, igual que ya lo son
+     `vence_<id>` y `resp_<id>`.
+
+     ESCONDIDO CON `hidden` NATIVO, no con una clase: sin JS el renglón no
+     aparece nunca y la pantalla funciona exactamente como hoy -- marcar la
+     casilla cierra la tarea sin crear nada, que es lo que YA hacía antes de
+     este encargo. El `<script>` de más abajo es el único que le quita el
+     `hidden`, al cambiar la casilla de arriba.
+
+     `max_derivadas` renglones YA PINTADOS Y OCULTOS -- no uno que el JS
+     clone -- porque Tiziano pidió que se pudieran crear VARIAS de una
+     tarea. Solo el primero se ve al marcar la casilla; el botón «+ otra»
+     descubre los siguientes, uno por vez. Un renglón que se queda vacío no
+     manda nada (`web/app.py::_derivadas_pedidas` lo salta), así que no
+     cuesta nada tenerlos todos en el DOM. #}
+  <tr class="fila-derivada" id="derivada-{{ t.id }}" hidden>
+    <td colspan="6">
+      <p class="suave" style="margin:.2rem 0">¿Sale alguna tarea nueva de
+        ésta?</p>
+      {% for n in range(1, max_derivadas + 1) %}
+      <div class="renglon" {% if n > 1 %}hidden{% endif %}
+           data-renglon="{{ n }}">
+        <input type="text" name="deriva_titulo_{{ t.id }}_{{ n }}"
+               maxlength="{{ largo_titulo }}"
+               placeholder="Título de la tarea nueva" aria-label="Título">
+        {#- VENCE, día y hora -- D9 del diseño: la hora decide cuándo suena
+           el aviso, la misma regla que ya rige `vence_<id>` en esta misma
+           pantalla. Vacía a propósito (P2 del diseño, aprobado): a
+           diferencia del área y el responsable, la fecha NO se copia de la
+           tarea que se cierra. #}
+        <input type="datetime-local" name="deriva_vence_{{ t.id }}_{{ n }}"
+               min="{{ piso_fecha }}T00:00" aria-label="Vence">
+        {#- ÁREA: copiada de la tarea que se cierra y editable (P2/P3 del
+           diseño, aprobados) -- PERO si la tarea tiene PROYECTO, no se
+           ofrece: la nueva va al mismo proyecto (P3) y ahí el área sale del
+           proyecto, no se elige -- la misma restricción de la base que ya
+           rige en toda esta tabla (`tareas_area_no_con_proyecto`). #}
+        {% if not t.proyecto_id %}
+        <select name="deriva_area_{{ t.id }}_{{ n }}" aria-label="Área">
+          <option value="">sin área</option>
+          {% for a in areas %}
+          <option value="{{ a.clave }}"
+            {%- if t.area == a.clave %} selected{% endif %}>{{ a.clave }}</option>
+          {% endfor %}
+        </select>
+        {% else %}
+        <span class="suave">Proyecto: {{ t.proyecto_nombre }}</span>
+        {% endif %}
+        {#- RESPONSABLE: copiado de la tarea que se cierra y editable (P2 del
+           diseño, aprobado), mismas opciones que `resp_<id>` acá arriba. #}
+        <select name="deriva_resp_{{ t.id }}_{{ n }}" aria-label="Responsable">
+          <option value=""
+            {%- if t.responsable_chat_id is none %} selected{% endif %}>sin responsable</option>
+          {% for chat, nombre in personas %}
+          <option value="{{ chat }}"
+            {%- if t.responsable_chat_id == chat %} selected{% endif %}>{{ nombre }}</option>
+          {% endfor %}
+        </select>
+        {% if n == 1 and max_derivadas > 1 %}
+        <button type="button" class="mas"
+                data-mas-de="derivada-{{ t.id }}">+ otra</button>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </td>
+  </tr>
+  {% endif %}
   {% endfor %}
   </table></div>
   {% endfor %}
@@ -263,6 +368,41 @@ aviso de Telegram que ya sonó.</p>
   }
   f.addEventListener('change', contar);
   contar();
+})();
+{# LA TAREA DERIVADA (25-sep-2026): mostrar/esconder el renglón de captura,
+   nada más -- lo que se guarda lo decide el servidor
+   (`web/app.py::_derivadas_pedidas`), y esto solo existe para que la
+   persona no tenga que escribir en un campo que no ve. Sin JS el renglón
+   se queda `hidden` para siempre y la pantalla funciona como antes de este
+   encargo: marcar la casilla cierra la tarea sin crear nada. #}
+(function () {
+  var f = document.querySelector('form[action="/tareas"]');
+  if (!f) return;
+  f.addEventListener('change', function (e) {
+    var abre = e.target && e.target.dataset && e.target.dataset.abre;
+    if (!abre) return;
+    var fila = document.getElementById(abre);
+    if (!fila) return;
+    fila.hidden = !e.target.checked;
+    if (e.target.checked) {
+      var t = fila.querySelector('input[type=text]');
+      if (t) t.focus();
+    }
+  });
+  f.addEventListener('click', function (e) {
+    var abre = e.target && e.target.dataset && e.target.dataset.masDe;
+    if (!abre) return;
+    var fila = document.getElementById(abre);
+    if (!fila) return;
+    var siguiente = fila.querySelector('.renglon[hidden]');
+    if (!siguiente) return;
+    siguiente.hidden = false;
+    var t = siguiente.querySelector('input[type=text]');
+    if (t) t.focus();
+    // Cuando ya no queda ningún renglón más que abrir, el botón "+ otra"
+    // (que vive en el primer renglón) no tiene más nada que hacer.
+    if (!fila.querySelector('.renglon[hidden]')) e.target.hidden = true;
+  });
 })();
 </script>
 {% endif %}

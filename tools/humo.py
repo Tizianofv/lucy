@@ -33,6 +33,26 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import db.db as db  # noqa: E402
 
 
+async def _derivaciones_sin_tolerancia():
+    """El mismo SELECT que `db.derivaciones()`, pero SIN su tolerancia a
+    SQLSTATE 42703 (columna ausente).
+
+    `db.derivaciones()` TRAGA ese error a propósito -- es la tolerancia de
+    migración que hace que el panel siga andando mientras la sala no haya
+    corrido `db/migrations/2026-09-25_deriva_de.sql` -- así que llamarla acá
+    tal cual no serviría de nada: saldría en VERDE tanto con la migración
+    aplicada como sin ella, exactamente el defecto que este archivo existe
+    para agarrar (ver la cabecera). Por eso este archivo corre el mismo
+    texto DIRECTO, sin ningún `try` alrededor.
+    """
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=db.dict_row)
+        await cur.execute(
+            "SELECT id, deriva_de_id FROM tareas "
+            "WHERE deriva_de_id IS NOT NULL AND borrado_en IS NULL")
+        return await cur.fetchall()
+
+
 async def main() -> int:
     if not os.environ.get("DATABASE_URL", "").strip():
         print("Falta DATABASE_URL.", file=sys.stderr)
@@ -100,6 +120,18 @@ async def main() -> int:
         # igual. Es una LECTURA (tarea 0, que no existe); las escrituras
         # (comentar_tarea, borrar_comentario) no se prueban acá.
         ("comentarios_de_tarea", lambda: db.comentarios_de_tarea(0)),
+        # La tarea derivada (25-sep-2026): `tareas_por_grupo` de arriba TOLERA
+        # que `deriva_de_id` no exista todavía (cae a la consulta sin ella,
+        # SQLSTATE 42703) -- así que si la migración no se aplicó, esa línea
+        # sigue en VERDE y no dice nada. Y `db.derivaciones()` TAMBIÉN tolera
+        # la columna ausente (devuelve `{}`), así que llamarla tal cual acá
+        # tampoco serviría. Ésta es la que sí lo dice: `_derivaciones_sin_
+        # tolerancia`, el mismo SELECT, SIN el `try`. Si revienta acá con
+        # «column tareas.deriva_de_id does not exist», falta correr
+        # db/migrations/2026-09-25_deriva_de.sql. Es una LECTURA; la escritura
+        # (`cerrar_y_derivar`) no se prueba acá, porque humo.py no escribe en
+        # producción.
+        ("derivaciones (sin tolerancia)", _derivaciones_sin_tolerancia),
     ]
 
     rojas = []

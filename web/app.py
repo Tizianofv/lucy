@@ -661,7 +661,8 @@ async def papelera(request: Request, restaurado: int = 0):
 
 @app.get("/tareas", response_class=HTMLResponse)
 async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
-                 asignadas: int = 0, movidas: int = 0):
+                 asignadas: int = 0, movidas: int = 0, derivadas: int = 0,
+                 derivadas_ids: str = ""):
     """El panel de tareas: lo que hay que hacer, para las dos personas.
 
     UNA SOLA LISTA PARA LOS DOS, por decisión de Tiziano —"está bien que Rosi
@@ -721,10 +722,13 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
         return _fuera(request)
     datos = await db.tareas_por_grupo()
     grupos = [g for g in datos["grupos"] if g["clave"] != "historial"]
+    areas = await db.areas()
     return plantillas.TemplateResponse(
         request, "tareas.html",
         {"grupos": grupos, "hay_mas": datos["hay_mas"],
          "guardadas": guardadas, "asignadas": asignadas, "movidas": movidas,
+         "derivadas": derivadas, "derivadas_ids": derivadas_ids,
+         "max_derivadas": MAX_DERIVADAS, "largo_titulo": LARGO_TITULO,
          "tope": db.TOPE_TAREAS, "hecha": db.ESTADO_HECHA, "creada": creada,
          # La fecha solo se puede mover en las PENDIENTES, y la regla vive en
          # `db.mover_vence`. Se le pasa el mismo valor a la plantilla para que
@@ -735,9 +739,14 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
          "nombres": config.NOMBRES_POR_CHAT,
          "sin_nombre": config.chats_sin_nombre(),
          "mal_escritos": config.NOMBRES_MAL_ESCRITOS,
+         # Para el <select> de área del renglón «¿sale algo nuevo de ésta?»
+         # (tarea derivada, 25-sep-2026) -- las mismas opciones que ofrece
+         # `/tareas/nueva`, y NO se ofrece si la fila tiene proyecto (P3 del
+         # diseño: el área de la hija sale del proyecto, no se elige).
+         "areas": areas,
          # {clave: color}, para pintar la etiqueta de cada fila sin que la
          # plantilla tenga que adivinar un color por su cuenta.
-         "colores_area": {a["clave"]: a["color"] for a in await db.areas()}})
+         "colores_area": {a["clave"]: a["color"] for a in areas}})
 
 
 @app.get("/tareas/historial", response_class=HTMLResponse)
@@ -935,6 +944,74 @@ def _responsable_pedido(crudo: str):
     return (True, chat) if config.puede_ser_responsable(chat) else (False, None)
 
 
+# Cuántas tareas nuevas se pueden escribir de una vez al marcar UNA sola
+# hecha («tarea derivada», 25-sep-2026: Tiziano, en el panel /tareas, pidió
+# que al marcar una tarea hecha se pueda escribir ahí mismo la que sale de
+# ella -- y luego, revisando el diseño, que "pueden ser varias"). No dijo un
+# número. Éste es un TECHO DE PANTALLA, igual que `TOPE_TAREAS` en `db.db`:
+# existe para que el formulario no crezca sin límite, no es una regla de
+# negocio. Si tres se queda corto, se pide y se sube -- un renglón de más no
+# cuesta nada mientras esté vacío (ver `_derivadas_pedidas`).
+MAX_DERIVADAS = 3
+
+
+def _derivadas_pedidas(formulario, tid: int, claves_area_validas: set[str]):
+    """Los renglones «¿sale algo nuevo de ésta?» de la tarea `tid`, leídos
+    del MISMO envío que trae `hecha_<tid>`. Devuelve `(vale, [derivadas])`,
+    con cada derivada ya lista para `db.cerrar_y_derivar`:
+    `{"titulo", "vence_en", "area", "responsable_chat_id"}`.
+
+    LOS ÍNDICES VAN DE 1 A `MAX_DERIVADAS`, SIN HUECOS QUE ADIVINAR: la
+    plantilla pinta siempre los `MAX_DERIVADAS` renglones de cada fila
+    pendiente (ocultos con `hidden`; el JS solo les quita el atributo), así
+    que no hace falta un campo aparte que diga "cuántos renglones se
+    usaron" -- un renglón vacío es sencillamente "acá no sale nada", igual
+    que `deriva_titulo_<tid>_<n>` ausente del todo (formulario armado a
+    mano, por ejemplo).
+
+    SI ALGÚN RENGLÓN CON TÍTULO TIENE UN CAMPO QUE NO VALE, la función
+    entera devuelve `(False, [])` -- ni un renglón se crea, aunque los otros
+    tres estuvieran bien. Es la decisión D6 del diseño aprobado
+    (disenos/lucy-tarea-derivada/DISENO.md): "si la nueva no vale, la vieja
+    tampoco se cierra" -- cerrar tres de cuatro y callarse cuál falló sería
+    peor que no cerrar ninguna, porque lo escrito en el renglón malo se
+    pierde igual al recargar.
+
+    LAS PIEZAS DE VALIDACIÓN SON LAS QUE YA EXISTEN, ninguna nueva: título
+    1-`LARGO_TITULO` como `crear_tarea`; `_vence_con_hora_valido` como el
+    resto de esta ruta -- CON hora, no como `/tareas/nueva` (decisión D9 del
+    diseño: la hora decide cuándo suena el aviso, la misma que ya rige
+    `vence_<id>` acá arriba); el área contra `claves_area_validas` -- lo que
+    el `<select>` ofreció es lo único que se acepta, igual que `crear_tarea`;
+    el responsable con `_responsable_pedido`, que ya pasa por
+    `config.puede_ser_responsable`.
+    """
+    derivadas: list[dict] = []
+    for n in range(1, MAX_DERIVADAS + 1):
+        titulo = str(formulario.get(f"deriva_titulo_{tid}_{n}", "")).strip()
+        if not titulo:
+            # Renglón vacío: no sale nada nuevo en este puesto. No es un
+            # error, es la respuesta normal para la enorme mayoría de las
+            # tareas que se cierran sin dejar nada atrás.
+            continue
+        if len(titulo) > LARGO_TITULO:
+            return False, []
+        vale, vence_en = _vence_con_hora_valido(
+            str(formulario.get(f"deriva_vence_{tid}_{n}", "")))
+        if not vale:
+            return False, []
+        area = str(formulario.get(f"deriva_area_{tid}_{n}", "")).strip() or None
+        if area is not None and area not in claves_area_validas:
+            return False, []
+        vale, resp = _responsable_pedido(
+            str(formulario.get(f"deriva_resp_{tid}_{n}", "")))
+        if not vale:
+            return False, []
+        derivadas.append({"titulo": titulo, "vence_en": vence_en,
+                          "area": area, "responsable_chat_id": resp})
+    return True, derivadas
+
+
 @app.post("/tareas")
 async def guardar_tareas(request: Request):
     """Cerrar VARIAS tareas de una vez y cambiarles el responsable.
@@ -996,12 +1073,31 @@ async def guardar_tareas(request: Request):
     guardan. En el orden contrario, la tarea ya estaría hecha cuando llegara la
     fecha, `db.mover_vence` la rechazaría (solo mueve pendientes) y el cambio
     que la persona escribió se perdería.
+
+    LA TAREA DERIVADA (25-sep-2026) VIAJA EN EL MISMO ENVÍO TAMBIÉN, por el
+    mismo motivo que el responsable y la fecha: Tiziano pidió «escribir la
+    nueva y luego darle a guardar», y ES el mismo botón -- los campos
+    `deriva_titulo_<tid>_<n>` (y sus hermanos `_vence_`, `_area_`, `_resp_`)
+    son más entradas DENTRO del `<form>` único, igual que `vence_<id>` y
+    `resp_<id>` ya lo son. `_derivadas_pedidas` los valida ANTES de escribir
+    nada; si algo no vale, ni la madre se cierra ni ninguna hija se crea
+    (D6). El servidor SOLO mira esos campos si en el MISMO envío viene
+    `hecha_<tid>` -- no depende de que el JS haya escondido bien el
+    renglón: una tarea con título derivado pero SIN la casilla marcada no
+    crea nada, es exactamente el mismo criterio que ya sigue el resto de
+    esta ruta con `prev_`.
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
 
     formulario = await request.form()
     hechas, asignadas, movidas, ignoradas = 0, 0, 0, 0
+    hijas_creadas: list[int] = []
+    # Se pide UNA sola vez, no una por tarea: `db.areas()` ya tolera la
+    # migración del área sin aplicar (devuelve `[]`), y con `[]` ningún
+    # renglón derivado puede llevar área -- el mismo estado en el que se ve
+    # la pantalla hoy si esa migración no corrió.
+    claves_area_validas = {a["clave"] for a in await db.areas()}
 
     for campo in formulario:
         if not campo.startswith("vence_"):
@@ -1024,6 +1120,7 @@ async def guardar_tareas(request: Request):
         else:
             ignoradas += 1
 
+    chat = _sesion(request)
     for campo in formulario:
         if not campo.startswith("hecha_"):
             continue
@@ -1036,10 +1133,21 @@ async def guardar_tareas(request: Request):
         if previa == db.ESTADO_HECHA:
             # Ya estaba hecha cuando se pintó: no hay nada que cambiar.
             continue
-        if await db.marcar_tarea_hecha(tid):
-            hechas += 1
-        else:
+        vale, derivadas = _derivadas_pedidas(formulario, tid, claves_area_validas)
+        if not vale:
+            # D6 del diseño: la nueva no vale, así que la vieja TAMPOCO se
+            # cierra. Lo escrito se pierde al recargar igual, y dejar la
+            # vieja abierta es la señal visible de que hay que repetirlo.
             ignoradas += 1
+            continue
+        resultado = await db.cerrar_y_derivar(chat, tid, derivadas)
+        if resultado is None:
+            ignoradas += 1
+            continue
+        cerrada, hijas = resultado
+        if cerrada:
+            hechas += 1
+        hijas_creadas.extend(hijas)
 
     for campo in formulario:
         if not campo.startswith("resp_"):
@@ -1053,11 +1161,11 @@ async def guardar_tareas(request: Request):
         if pedido == str(formulario.get(f"prev_resp_{tid}", "")).strip():
             # Nadie tocó este desplegable: dice lo mismo que cuando se pintó.
             continue
-        vale, chat = _responsable_pedido(pedido)
+        vale, chat_resp = _responsable_pedido(pedido)
         if not vale:
             ignoradas += 1
             continue
-        if await db.asignar_responsable(tid, chat):
+        if await db.asignar_responsable(tid, chat_resp):
             asignadas += 1
         else:
             ignoradas += 1
@@ -1075,8 +1183,13 @@ async def guardar_tareas(request: Request):
                     "existe, está en la papelera, ya estaba así, no está "
                     "pendiente, la fecha no se entendió, o el responsable "
                     "pedido no entra al panel", ignoradas)
+    # `derivadas_ids` en la URL -- no solo la cuenta -- porque el aviso del
+    # diseño aprobado ("Tareas nuevas que salen de otra: 1 (#512)") nombra
+    # el número: sin esto, la persona tendría que buscarla en la lista.
+    ids_derivadas = ",".join(str(i) for i in hijas_creadas)
     return RedirectResponse(
-        f"/tareas?guardadas={hechas}&asignadas={asignadas}&movidas={movidas}",
+        f"/tareas?guardadas={hechas}&asignadas={asignadas}&movidas={movidas}"
+        f"&derivadas={len(hijas_creadas)}&derivadas_ids={ids_derivadas}",
         status_code=303)
 
 

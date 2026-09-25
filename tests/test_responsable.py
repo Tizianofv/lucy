@@ -1411,19 +1411,26 @@ def _guardar(campos: dict, con_sesion: bool = True):
 
     Devuelve (respuesta, cerradas, asignaciones). Los espías se ponen sobre el
     módulo `db` y el `conftest.py` los devuelve a su sitio al terminar.
+
+    ESPÍA `db.cerrar_y_derivar`, no `db.marcar_tarea_hecha`, desde el encargo
+    «tarea derivada» (25-sep-2026): ver el mismo cambio, con el mismo porqué,
+    en `tests/test_panel_tareas.py::_guardar`. Y hace falta un `db.pool` que
+    conteste algo: `guardar_tareas` ahora llama a `db.areas()` de verdad
+    antes del bucle, para validar el área de cualquier renglón derivado.
     """
     cerradas: list = []
     asignaciones: list = []
 
-    async def _cerrar(tid):
+    async def _cerrar(chat, tid, derivadas):
         cerradas.append(tid)
-        return True
+        return True, []
 
     async def _asignar_espia(tid, chat):
         asignaciones.append((tid, chat))
         return True
 
-    db.marcar_tarea_hecha = _cerrar
+    db.pool = _Pool(_Conn([]))
+    db.cerrar_y_derivar = _cerrar
     db.asignar_responsable = _asignar_espia
     bucle = asyncio.new_event_loop()
     try:

@@ -152,7 +152,13 @@ class _Cursor:
         update = re.fullmatch(r"UPDATE tareas SET (.+?) WHERE id = %s(?: RETURNING \*)?",
                               s, re.I)
         if verbo == "SELECT":
-            if "FROM tareas" in s:
+            if s.startswith("SELECT clave, color FROM areas"):
+                # `db.areas()`: `guardar_tareas` la llama una vez, desde el
+                # encargo «tarea derivada» (25-sep-2026), para validar el
+                # área de cualquier renglón derivado -- ninguna prueba de
+                # este archivo usa esos renglones, así que `[]` alcanza.
+                self._filas = []
+            elif "FROM tareas" in s:
                 tid = params[0]
                 fila = b.tareas.get(tid)
                 if fila is not None and fila.get("borrado_en") is None:
@@ -196,6 +202,19 @@ class _Cursor:
         return self._filas
 
 
+class _SavepointDeMentira:
+    """`db.areas()` (llamada nueva desde el encargo «tarea derivada»,
+    25-sep-2026) abre un `async with conn.transaction():` para poder
+    tolerar la tabla `areas` ausente -- acá nunca falla, solo hace falta
+    para que no reviente con `AttributeError` antes de ejecutar nada."""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *e):
+        return False
+
+
 class _Base:
     def __init__(self, *filas):
         self.tareas = {f["id"]: dict(f) for f in filas}
@@ -207,6 +226,9 @@ class _Base:
 
     async def execute(self, sql, params=None):
         return await _Cursor(self).execute(sql, params)
+
+    def transaction(self):
+        return _SavepointDeMentira()
 
 
 class _CM:
@@ -654,25 +676,36 @@ def _post(campos: dict, con_sesion: bool = True, chat: int = DUENO):
 
 def _guardar(campos, con_sesion=True):
     """Manda el formulario con las escrituras ESPIADAS, en el orden en que
-    llegan. Devuelve (respuesta, [(qué, id, valor)])."""
+    llegan. Devuelve (respuesta, [(qué, id, valor)]).
+
+    ESPÍA `db.cerrar_y_derivar`, no `db.marcar_tarea_hecha`, desde el
+    encargo «tarea derivada» (25-sep-2026): ver el mismo cambio, con el
+    mismo porqué, en `tests/test_panel_tareas.py::_guardar`. Y hace falta
+    `db.pool` con algo que responda -- `guardar_tareas` ahora llama a
+    `db.areas()` de verdad antes del bucle; `_Base`/`_Cursor` de este
+    archivo ya saben contestar `SELECT clave, color FROM areas` con `[]`.
+    """
     llamadas: list = []
 
     async def _mover(tid, vence):
         llamadas.append(("mover", tid, vence))
         return True
 
-    async def _hecha(tid):
+    async def _hecha(chat, tid, derivadas):
         llamadas.append(("hecha", tid, None))
-        return True
+        return True, []
 
-    guardados = db.mover_vence, db.marcar_tarea_hecha
-    db.mover_vence, db.marcar_tarea_hecha = _mover, _hecha
+    guardado_pool = db.pool
+    guardados = db.mover_vence, db.cerrar_y_derivar
+    db.pool = _Pool(_Base())
+    db.mover_vence, db.cerrar_y_derivar = _mover, _hecha
     bucle = asyncio.new_event_loop()
     try:
         r = bucle.run_until_complete(panel.guardar_tareas(_post(campos, con_sesion)))
     finally:
         bucle.close()
-        db.mover_vence, db.marcar_tarea_hecha = guardados
+        db.pool = guardado_pool
+        db.mover_vence, db.cerrar_y_derivar = guardados
     return r, llamadas
 
 

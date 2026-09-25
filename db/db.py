@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 from datetime import date, datetime, timezone
@@ -30,6 +31,18 @@ import db.sin_preparadas  # noqa: F401
 # puede quedar con una tarea pendiente, y tiene que ser la misma para la ruta
 # del panel y para la escritura de acá. Dos copias del criterio se separan.
 from config import CHAT_ID_DUENO, DATABASE_URL, TZ, puede_ser_responsable
+
+# HALLAZGO LATERAL (25-sep-2026, mientras se escribía `cerrar_y_derivar`):
+# este módulo ya llamaba `log.warning(...)` en dos sitios de
+# `poner_categoria` (líneas de más abajo) sin que `log` estuviera definido en
+# ningún lado del archivo -- un NameError agazapado en un `except`/rama de
+# validación que ninguna prueba de este repo ejercita hasta el final. Se
+# arregla acá, con el mismo patrón que ya usan `web/app.py`
+# (`logging.getLogger("lucy.panel")`) y `cerebro/agente.py`
+# (`logging.getLogger("lucy.agente")`), porque `cerrar_y_derivar` (nueva,
+# más abajo) también necesita loguear su propia tolerancia de columna
+# ausente y no tiene sentido repetir el mismo bug a propósito.
+log = logging.getLogger("lucy.db")
 
 
 class MovimientoRechazado(Exception):
@@ -2218,6 +2231,51 @@ async def proyectos_con_tareas() -> list[dict]:
     return proyectos
 
 
+async def derivaciones() -> dict[int, int]:
+    """`{hija_id: madre_id}` de las tareas VIVAS que salen de otra.
+
+    UNA LECTURA APARTE, no un cuarto nivel en la cascada de tolerancia de
+    `tareas_por_grupo` (que ya tiene tres, por área y por «Primero:»): sumar
+    una columna más ahí habría significado una cascada de OCHO consultas
+    combinadas en vez de tres (documento de diseño, disenos/lucy-tarea-
+    derivada/DISENO.md §3.4). Acá alcanza con un SELECT tonto y una sola
+    tolerancia — mismo patrón que `conteo_pasos` con la tabla `micro_pasos`
+    ausente, pero por COLUMNA ausente (42703, undefined_column) en vez de
+    TABLA ausente (42P01, undefined_table): si la migración de este encargo
+    no se aplicó todavía, `tareas.deriva_de_id` no existe y esto devuelve
+    `{}` — ninguna tarea "sale de" otra, que es como se veían todas hasta
+    ayer.
+
+    `borrado_en IS NULL`: una tarea derivada que se mandó a la papelera no
+    "sale de" nada a los ojos de la pantalla — no hay nada que enlazar con
+    una fila que ya no se pinta. Y al revés, si la MADRE se borra, la hija
+    sigue mostrando de dónde salió (`tareas_por_grupo` no filtra por eso al
+    resolver el título: si la madre no está entre las filas traídas, el
+    enlace sale sin título en vez de romper la pantalla).
+
+    `tareas_por_grupo` la llama UNA vez y le cuelga a cada fila
+    `deriva_de_titulo` (para la hija: «↳ Sale de: …») y `siguio` (para la
+    madre: «→ Siguió: …», puede ser más de una — Tiziano pidió que se
+    pudieran crear varias por cada tarea que se cierra).
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(
+                "SELECT id, deriva_de_id FROM tareas "
+                "WHERE deriva_de_id IS NOT NULL AND borrado_en IS NULL")
+            filas = await cur.fetchall()
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate == "42703":
+                return {}
+            raise
+    return {f["id"]: f["deriva_de_id"] for f in filas}
+
+
 async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -> dict:
     """Las tareas vivas, repartidas en los grupos del panel.
 
@@ -2377,6 +2435,24 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
     # (devuelve `{}`), así que acá no hace falta ningún SAVEPOINT más.
     conteo = await conteo_pasos([f["id"] for f in filas])
 
+    # «SALE DE» / «SIGUIÓ» (tarea derivada, 25-sep-2026): igual que el «2 de
+    # 5» de arriba, una consulta APARTE en vez de sumar un cuarto JOIN a una
+    # cascada que ya tiene tres niveles -- ver el docstring de
+    # `derivaciones()`. Los TÍTULOS salen de las propias `filas` que esta
+    # función ya trajo (hasta TOPE_TAREAS, sin filtrar por fecha ni estado:
+    # una madre cerrada hace tiempo sigue viniendo en el grupo "Historial"),
+    # así que no hace falta una tercera consulta para resolverlos -- el mismo
+    # motivo por el que esta función no se une con `bandeja` desde el
+    # 10-sep-2026. Si la madre o la hija quedaron FUERA de esas
+    # TOPE_TAREAS=500 filas (la misma frontera que ya declara `hay_mas`), el
+    # enlace se pinta sin título en vez de romper la pantalla.
+    hijas_de = await derivaciones()  # {hija_id: madre_id}
+    titulo_de = {f["id"]: f["titulo"] for f in filas}
+    siguio_de: dict[int, list[dict]] = {}
+    for hija_id, madre_id in hijas_de.items():
+        siguio_de.setdefault(madre_id, []).append(
+            {"id": hija_id, "titulo": titulo_de.get(hija_id)})
+
     hoy = hoy or hoy_rd()
     por_clave: dict = {}
     for f in filas:
@@ -2416,6 +2492,18 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
         f["primero_esperando"] = (
             f.get("primero_id") is not None
             and f.get("primero_estado") == ESTADO_PENDIENTE)
+        # «Sale de»: esta fila es una HIJA. `deriva_de_titulo` puede ser
+        # `None` con `deriva_de_id` puesto -- la madre existe pero quedó
+        # fuera de las `filas` traídas (frontera de arriba); la plantilla
+        # decide qué pintar en ese caso.
+        madre_id = hijas_de.get(f["id"])
+        f["deriva_de_id"] = madre_id
+        f["deriva_de_titulo"] = titulo_de.get(madre_id) if madre_id else None
+        # «Siguió»: esta fila es una MADRE, y puede tener VARIAS hijas
+        # (Tiziano: "pueden ser varias"). Solo las que sí resolvieron
+        # título -- una hija fuera de la frontera no se pinta muda.
+        f["siguio"] = [s for s in siguio_de.get(f["id"], [])
+                       if s["titulo"] is not None]
         clave = grupo_de_tarea(f.get("estado"), f.get("vence_en"), hoy,
                                f.get("completado_en"))
         por_clave.setdefault(clave, []).append(f)
@@ -3287,3 +3375,196 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
             (fila["id"],
              json.dumps(fila, default=str, ensure_ascii=False), bandeja_id))
         return fila["id"]
+
+
+async def cerrar_y_derivar(
+    chat_id: int, madre_id: int, derivadas: list[dict],
+) -> tuple[bool, list[int]] | None:
+    """Cierra UNA tarea y, en la MISMA transacción, crea las que salen de
+    ella al marcarla hecha desde el panel. Devuelve `(se_cerro, [ids de las
+    hijas])`, o `None` si la madre no existe o está en la papelera -- ahí no
+    hay de dónde derivar nada.
+
+    Pedido de Tiziano, textual: «cuando yo seleccione el recuadro para
+    marcar como hecha una tarea aparezca un cuadro donde pueda crear una
+    tarea nueva, porque muchas veces una tarea hecha da como resultado una
+    tarea nueva que se deriva de la completada». Diseño aprobado en
+    disenos/lucy-tarea-derivada/DISENO.md.
+
+    `derivadas` es una lista (Tiziano: pueden ser VARIAS por cada tarea que
+    se cierra), cada una `{"titulo": str, "vence_en": datetime | None,
+    "area": str | None, "responsable_chat_id": int | None}`. El título, la
+    fecha y el área YA LLEGAN VALIDADOS por quien llama
+    (`web/app.py::guardar_tareas`, con las mismas piezas que
+    `crear_tarea_desde_el_panel`: título 1-200, `_vence_con_hora_valido`,
+    área contra `db.areas()`) y esta función no los vuelve a mirar, mismo
+    motivo por el que `crear_tarea_desde_el_panel` no revalida `titulo`.
+
+    EL RESPONSABLE ES LA EXCEPCIÓN, Y SE REVALIDA ACÁ CONTRA
+    `config.puede_ser_responsable` -- LA MISMA PUERTA que ya pasa
+    `_responsable_pedido` en la ruta, pero repetida a propósito: es la regla
+    de `tests/test_responsable.py::
+    test_toda_escritura_de_la_columna_pasa_por_la_misma_puerta`, que censa
+    TODO sitio del repo cuyo SQL nombra `responsable_chat_id` y exige que
+    ESE MISMO sitio nombre la puerta -- no que algo, en algún lugar antes en
+    la cadena de llamadas, ya la haya nombrado. La razón de fondo es la
+    misma que la de `asignar_responsable`: la validación de un formulario
+    protege al formulario, no a la tabla, y un tercer camino que aparezca
+    mañana (otra pantalla, un script) que llame a `cerrar_y_derivar` sin
+    pasar por `guardar_tareas` se encuentra la puerta acá también, no un
+    agujero.
+
+    UNA SOLA TRANSACCIÓN: el bloque de conexión ES la transacción (mismo
+    patrón que `crear_tarea_desde_el_panel` y `a_la_papelera`) -- cerrar la
+    madre y crear las hijas son "un solo gesto" (Tiziano: "escribir la nueva
+    tarea y luego darle a guardar"), y tienen que ser un solo gesto en la
+    base: o entran todas, o ninguna. Si algo revienta a mitad de la lista
+    de `derivadas`, la excepción sube y NADA de esta llamada queda escrito
+    -- ni la madre cerrada ni las hijas que sí habían entrado antes del
+    error, porque no hay commit hasta que el bloque `async with` termina
+    limpio.
+
+    SI LA MADRE YA ESTABA HECHA (otra persona la cerró antes de que este
+    envío llegara), NO SE REESCRIBE -- mismo criterio que `marcar_tarea_
+    hecha`, con el mismo motivo: una huella de una edición que no pasó es
+    basura permanente en la tabla que ES el deshacer. Pero las hijas SÍ se
+    crean igual (decisión D7 del diseño): la vieja ya está como él quería,
+    y tirar lo que escribió no gana nada.
+
+    CADA HIJA SIGUE EL PROYECTO DE LA MADRE (decisión aprobada por Tiziano,
+    P3 del diseño: "si la hecha es de un proyecto, la nueva va al mismo
+    proyecto"). Si la madre tiene `proyecto_id`, la hija nace con el MISMO
+    `proyecto_id` y su `area` se pone en `None` sin mirar lo que traiga
+    `derivadas[i]["area"]` -- no porque se desconfíe de quien llama, sino
+    porque así el caso "proyecto + área propia" queda IRREPRESENTABLE acá
+    también, la misma garantía que ya impone `tareas_area_no_con_proyecto`
+    sobre cualquier otra escritura de esta tabla.
+
+    `deriva_de_id` TOLERA LA MIGRACIÓN SIN APLICAR, mismo patrón que el área
+    en `crear_tarea_desde_el_panel`: si la columna no existe todavía
+    (SQLSTATE 42703, undefined_column), la hija se crea IGUAL, sin el
+    enlace -- perder el enlace es mejor que perder la tarea que alguien
+    acaba de escribir. Cada INSERT va en su propio SAVEPOINT
+    (`conn.transaction()` anidado) para que el error de una hija no aborte
+    las que ya entraron antes en la misma transacción.
+
+    QUIÉN LAS ANOTÓ es `chat_id` -- la sesión de quien guardó el formulario
+    (`web/app.py::guardar_tareas`), no la madre ni su `bandeja_id`: es la
+    misma persona escribiendo un renglón más, igual que
+    `crear_tarea_desde_el_panel`.
+
+    SIN GUARDA DE DUPLICADOS, mismos motivos que `crear_tarea_desde_el_panel`
+    (decisión D10 del diseño): es una persona escribiendo a mano, no el
+    agente repitiéndose.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, titulo, estado, vence_en, completado_en, "
+            "bandeja_id, proyecto_id FROM tareas "
+            "WHERE id = %s AND borrado_en IS NULL",
+            (madre_id,))
+        madre = await cur.fetchone()
+        if madre is None:
+            # No existe, o está en la papelera: no hay de dónde derivar.
+            return None
+
+        cerrada = False
+        if madre.get("estado") != ESTADO_HECHA:
+            await conn.execute(
+                "UPDATE tareas SET estado = %s, completado_en = now() "
+                "WHERE id = %s", (ESTADO_HECHA, madre_id))
+            await conn.execute(
+                """
+                INSERT INTO log_acciones
+                  (actor, accion, tabla, registro_id, antes, despues, motivo,
+                   bandeja_id)
+                VALUES ('panel', 'editar', 'tareas', %s, %s, %s,
+                        'marcada hecha desde el panel de tareas', %s)
+                """,
+                (madre_id,
+                 json.dumps(madre, default=str, ensure_ascii=False),
+                 json.dumps({"estado": ESTADO_HECHA}, ensure_ascii=False),
+                 madre.get("bandeja_id")))
+            cerrada = True
+
+        proyecto_id = madre.get("proyecto_id")
+
+        con_deriva = """
+            INSERT INTO tareas
+              (bandeja_id, titulo, vence_en, anticipos_min, area,
+               proyecto_id, responsable_chat_id, deriva_de_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING *
+            """
+        sin_deriva = """
+            INSERT INTO tareas
+              (bandeja_id, titulo, vence_en, anticipos_min, area,
+               proyecto_id, responsable_chat_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING *
+            """
+
+        hijas: list[int] = []
+        for d in derivadas:
+            resp = d.get("responsable_chat_id")
+            if resp is not None and not puede_ser_responsable(resp):
+                # No debería pasar nunca -- la ruta ya lo filtró con la
+                # misma puerta -- pero si pasa, no se escribe NADA de este
+                # renglón ni de los que vengan después: la excepción sube y
+                # aborta la transacción entera (ver el docstring: "o entran
+                # todas, o ninguna").
+                raise ValueError(
+                    f"responsable inválido en una tarea derivada: {resp}")
+            area = None if proyecto_id is not None else d.get("area")
+
+            await cur.execute(
+                """
+                INSERT INTO bandeja
+                  (origen, tipo_entrada, chat_id, estado, procesado_en)
+                VALUES ('panel', 'panel', %s, 'procesado', now())
+                RETURNING id
+                """,
+                (chat_id,))
+            bandeja_id = (await cur.fetchone())["id"]
+
+            try:
+                async with conn.transaction():
+                    await cur.execute(
+                        con_deriva,
+                        (bandeja_id, d["titulo"], d.get("vence_en"),
+                         SIN_ANTICIPOS, area, proyecto_id,
+                         d.get("responsable_chat_id"), madre_id))
+                    fila = await cur.fetchone()
+            except Exception as e:
+                try:
+                    sqlstate = e.sqlstate
+                except AttributeError:
+                    raise e from None
+                if sqlstate != "42703":
+                    raise
+                log.warning(
+                    "cerrar_y_derivar: falta tareas.deriva_de_id (falta la "
+                    "migracion) -- se creo la tarea derivada de #%s SIN el "
+                    "enlace", madre_id)
+                await cur.execute(
+                    sin_deriva,
+                    (bandeja_id, d["titulo"], d.get("vence_en"),
+                     SIN_ANTICIPOS, area, proyecto_id,
+                     d.get("responsable_chat_id")))
+                fila = await cur.fetchone()
+
+            await conn.execute(
+                """
+                INSERT INTO log_acciones
+                  (actor, accion, tabla, registro_id, antes, despues, motivo,
+                   bandeja_id)
+                VALUES ('panel', 'crear', 'tareas', %s, NULL, %s,
+                        'tarea derivada desde el panel de tareas', %s)
+                """,
+                (fila["id"],
+                 json.dumps(fila, default=str, ensure_ascii=False),
+                 bandeja_id))
+            hijas.append(fila["id"])
+
+    return cerrada, hijas

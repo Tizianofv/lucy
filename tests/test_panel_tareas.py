@@ -792,16 +792,41 @@ def test_las_columnas_de_la_consulta_existen_en_el_esquema():
         assert not faltan, f"{tabla}: columnas que el esquema no declara: {faltan}"
 
 
+def test_las_columnas_de_derivaciones_existen_en_el_esquema():
+    """`db.derivaciones()` (tarea derivada, 25-sep-2026) no usa alias -- es
+    un SELECT tonto sobre una sola tabla -- así que no le hace falta la
+    vuelta de `por_alias` de la prueba de arriba; alcanza con sacar las
+    columnas de después del SELECT contra `db/schema.sql`, con el mismo
+    principio: ninguna de las dos listas se teclea acá."""
+    import re
+    sql = _sql_de(db.derivaciones)
+    m = re.search(r"SELECT\s+([a-z_, ]+?)\s+FROM\s+tareas\b", sql)
+    assert m, f"no se encontró un SELECT ... FROM tareas reconocible: {sql}"
+    nombres = {c.strip() for c in m.group(1).split(",")}
+    declaradas = set(db.columnas_declaradas()["tareas"])
+    faltan = nombres - declaradas
+    assert not faltan, f"tareas: columnas que el esquema no declara: {faltan}"
+
+
 def test_la_escritura_solo_toca_columnas_declaradas():
     import inspect
     import re
-    fuente = inspect.getsource(db.marcar_tarea_hecha)
     declaradas = set(db.columnas_declaradas()["tareas"])
-    escritas = set(re.findall(r"SET ([a-z_]+) =", fuente))
-    escritas |= set(re.findall(r"([a-z_]+) = now\(\)", fuente))
-    assert escritas, "no se encontró ninguna columna escrita"
-    assert escritas <= declaradas, (
-        f"escribe columnas que el esquema no declara: {escritas - declaradas}")
+    for fn in (db.marcar_tarea_hecha, db.cerrar_y_derivar):
+        fuente = inspect.getsource(fn)
+        escritas = set(re.findall(r"SET ([a-z_]+)\s*=", fuente))
+        escritas |= set(re.findall(r"([a-z_]+) = now\(\)", fuente))
+        # `cerrar_y_derivar` (tarea derivada, 25-sep-2026) además ESCRIBE con
+        # un INSERT INTO tareas (col1, col2, ...) y no solo con un UPDATE ...
+        # SET -- los dos INSERT de la función, `con_deriva` y `sin_deriva`
+        # (la caída por columna ausente), se sacan de la misma fuente y sin
+        # ningún nombre tecleado acá.
+        for m in re.finditer(r"INSERT INTO tareas\s*\(([^)]*)\)", fuente):
+            escritas |= {c.strip() for c in m.group(1).split(",")}
+        assert escritas, f"no se encontró ninguna columna escrita en {fn.__name__}"
+        faltan = escritas - declaradas
+        assert not faltan, (
+            f"{fn.__name__} escribe columnas que el esquema no declara: {faltan}")
 
 
 # ── La escritura ─────────────────────────────────────────────────────────
@@ -830,17 +855,39 @@ def _post(campos: dict, con_sesion: bool = True):
 
 
 def _guardar(campos: dict, con_sesion: bool = True):
-    """Manda el formulario con la escritura ESPIADA. Devuelve (respuesta, ids)."""
+    """Manda el formulario con el CIERRE espiado. Devuelve (respuesta, ids).
+
+    ESPÍA `db.cerrar_y_derivar` y no `db.marcar_tarea_hecha` desde el encargo
+    «tarea derivada» (25-sep-2026): `guardar_tareas` ya no llama a la
+    segunda -- el diseño aprobado (disenos/lucy-tarea-derivada/DISENO.md
+    §3.3) la reemplaza por la primera SIEMPRE, con o sin renglones de
+    derivada, porque `cerrar_y_derivar` con una lista vacía hace exactamente
+    lo que `marcar_tarea_hecha` hacía sola. Las pruebas de ESTE archivo que
+    usan `_guardar` siguen preguntando lo mismo que preguntaban -- «¿qué
+    filas se tocaron?»-- y no necesitan una base de verdad para eso; la
+    escritura de verdad (huellas, `deriva_de_id`, transacción única) la
+    prueba `tests/test_tarea_derivada.py` contra una base de mentira que SÍ
+    ejecuta `cerrar_y_derivar` real.
+
+    `db.areas()` SÍ corre de verdad acá (no está espiada): `guardar_tareas`
+    la llama una vez, antes del bucle, para validar el área de cualquier
+    renglón derivado -- así que hace falta un `db.pool` que responda, aunque
+    sea con `[]` áreas. Se usa la MISMA `_Conn`/`_Pool` de este archivo, que
+    ya sabe contestar `SELECT clave, color FROM areas`.
+    """
     import web.app as panel
 
     marcadas: list = []
 
-    async def _espia(tid):
+    async def _espia(chat, tid, derivadas):
         marcadas.append(tid)
-        return True
+        return True, []
 
-    guardado = db.marcar_tarea_hecha
-    db.marcar_tarea_hecha = _espia
+    conn = _Conn([])
+    guardado_pool = db.pool
+    guardado_fn = db.cerrar_y_derivar
+    db.pool = _Pool(conn)
+    db.cerrar_y_derivar = _espia
     try:
         bucle = asyncio.new_event_loop()
         try:
@@ -849,7 +896,8 @@ def _guardar(campos: dict, con_sesion: bool = True):
         finally:
             bucle.close()
     finally:
-        db.marcar_tarea_hecha = guardado
+        db.pool = guardado_pool
+        db.cerrar_y_derivar = guardado_fn
     return r, marcadas
 
 

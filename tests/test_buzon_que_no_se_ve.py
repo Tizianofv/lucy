@@ -3812,10 +3812,19 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # interpretar.py`, los dos ya vigilados de antes. No hizo falta
     # migración (la columna `destino_chat_id` de `correo_reportado` ya
     # existía desde el encargo 3, "Rosi independiente").
-    assert medido == {"en disco": 89, "exentos": 49, "vigilados": 40}, (
+    #
+    # 25-sep-2026, rama `claude/vibrant-feynman-5hnnhb` (tarea derivada: al
+    # marcar una tarea hecha en /tareas, se puede escribir ahí mismo la que
+    # sale de ella): 89 → 90 en disco y 49 → 50 EXENTOS por
+    # `tests/test_tarea_derivada.py`. Es un archivo de `testpaths`, EXENTO
+    # por rol. Los VIGILADOS siguen en 40: el trabajo tocó `web/app.py`,
+    # `db/db.py` y `acciones/crud.py` (los tres ya vigilados de antes) y
+    # ningún archivo de correo. La migración nueva
+    # (`db/migrations/2026-09-25_deriva_de.sql`) no es un `.py`.
+    assert medido == {"en disco": 90, "exentos": 50, "vigilados": 40}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "22-sep-2026 (rama alerta-911) era {'en disco': 89, "
-        "'exentos': 49, 'vigilados': 40}. La aserción de fondo —cero "
+        "25-sep-2026 (rama tarea-derivada) era {'en disco': 90, "
+        "'exentos': 50, 'vigilados': 40}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

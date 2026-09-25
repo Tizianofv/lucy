@@ -664,7 +664,17 @@ async def olvidar_preferencia(bandeja_id: int, pref_id: int) -> int | None:
 # trazabilidad (bandeja_id, creado_en) o la identidad de la fila (id). Es lista
 # NEGRA y no blanca a propósito — todo lo demás es editable sin que haya que
 # venir a autorizarlo campo por campo cada vez que Lucy aprenda algo nuevo.
-NO_EDITABLES = {"id", "bandeja_id", "creado_en", "borrado_en"}
+#
+# `deriva_de_id` (tarea derivada, 25-sep-2026) se suma acá y no por otro
+# motivo: no rompe trazabilidad ni identidad, es una decisión de la sala
+# —disenos/lucy-tarea-derivada/DISENO.md, pregunta T1— de que el agente de
+# Telegram no pueda escribirla a través de `editar` mientras no se diseñe con
+# qué guarda (círculos, vocabulario, qué pasa si la tarea que se nombra ya
+# tiene otra madre). La escribe SOLO `db.cerrar_y_derivar`, que no pasa por
+# acá. Crearla vacía tampoco: no está entre las columnas que arma
+# `crear_desde_interpretacion`, así que el agente no tiene NINGÚN camino para
+# ponerla, ni al crear ni al editar.
+NO_EDITABLES = {"id", "bandeja_id", "creado_en", "borrado_en", "deriva_de_id"}
 
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}([T ]|$)")
 

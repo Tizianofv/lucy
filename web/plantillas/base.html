@@ -56,6 +56,18 @@
      `db.tareas_por_grupo`), esto solo pinta lo que esa función ya calculó. */
   .fila-espera{color:var(--suave);padding-left:1rem}
   .fila-espera a{color:var(--suave)}
+  /* La tarea derivada (25-sep-2026): el renglón «¿sale algo nuevo de
+     ésta?» va pegado debajo de la fila que se marca hecha, corrido un poco
+     a la derecha -- misma idea que `.fila-espera`, otra dirección (acá no
+     es una fila EXISTENTE que se atenúa, es una que TODAVÍA no existe). Se
+     esconde con el atributo `hidden` nativo y no con esta clase: sin JS,
+     `hidden` sigue ocultando el renglón y la pantalla funciona como hoy. */
+  .fila-derivada td{padding-left:1.6rem;border-top:0}
+  .fila-derivada .renglon{display:flex;gap:.4rem;flex-wrap:wrap;
+    align-items:center;margin:.3rem 0}
+  .fila-derivada input[type=text]{flex:1 1 12rem}
+  .fila-derivada .mas{background:transparent;color:var(--acento);
+    border:1px dashed var(--linea);font-size:.85rem;padding:.3rem .6rem}
 </style></head><body>
 <!-- Este menú es la lista de pantallas del panel, y es la ÚNICA. De acá la lee
      `web/menu.py` y la inyecta en el prompt de Lucy, así que una pantalla que

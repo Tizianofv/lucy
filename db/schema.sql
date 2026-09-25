@@ -208,6 +208,20 @@ CREATE TABLE tareas (
   -- cascada que nunca se va a disparar.
   primero_id      BIGINT REFERENCES tareas(id),
 
+  -- «Sale de» (tarea derivada, 25-sep-2026): de qué tarea nace ésta, al
+  -- marcarse hecha la de antes desde el panel. NULL = no sale de ninguna
+  -- (casi todas). AL REVÉS de `primero_id` -- ahí A ESPERA a que B se
+  -- marque hecha; acá B (la nueva) SE CREA cuando A se marca hecha, y no
+  -- hay espera ni aviso apagado de por medio. Por eso es una columna nueva
+  -- y no una reutilización de `primero_id`: una tarea recurrente vuelve a
+  -- `pendiente` sola (`cerebro/despertador.py`), y con `primero_id` la hija
+  -- quedaría «esperando» y sin avisos para siempre.
+  -- LA RELACIÓN SE CALCULA AL PINTAR, no se guarda «hijos»: mismo criterio
+  -- que "atrasada" y «Primero:» (ver `db.derivaciones` y
+  -- `db.tareas_por_grupo`). Sin ON DELETE por lo mismo que `primero_id`: no
+  -- hay DELETE real sobre `tareas` (soft-delete).
+  deriva_de_id    BIGINT REFERENCES tareas(id),
+
   -- «Una tarea dentro de un proyecto nunca tiene un área propia distinta»
   -- (decisión de Tiziano: el área sale del proyecto, nadie la elige aparte).
   -- El caso queda IRREPRESENTABLE, no validado en cada escritura: con
@@ -222,7 +236,11 @@ CREATE TABLE tareas (
   -- CHECK de una sola fila (compara dos columnas de la MISMA fila). Mismo
   -- nombre en schema.sql y en la migración, para que una base armada desde
   -- este archivo y una migrada terminen con la restricción UNA sola vez.
-  CONSTRAINT tareas_primero_no_a_si_misma CHECK (primero_id IS NULL OR primero_id <> id)
+  CONSTRAINT tareas_primero_no_a_si_misma CHECK (primero_id IS NULL OR primero_id <> id),
+
+  -- Una tarea no puede «salir de» sí misma. Mismo patrón que la de arriba,
+  -- mismo nombre en schema.sql y en la migración.
+  CONSTRAINT tareas_deriva_no_de_si_misma CHECK (deriva_de_id IS NULL OR deriva_de_id <> id)
 );
 
 -- Para `cerebro/despertador.py::revisar` y `db.tareas_por_grupo`, que hacen
@@ -230,6 +248,11 @@ CREATE TABLE tareas (
 -- indexa las filas que de verdad esperan a otra, que van a ser pocas.
 CREATE INDEX IF NOT EXISTS idx_tareas_primero_id ON tareas(primero_id)
   WHERE primero_id IS NOT NULL;
+
+-- Para `db.derivaciones`, que trae todas las filas con `deriva_de_id` no
+-- nulo. Parcial por el mismo motivo que el de `primero_id`: van a ser pocas.
+CREATE INDEX IF NOT EXISTS idx_tareas_deriva_de_id ON tareas(deriva_de_id)
+  WHERE deriva_de_id IS NOT NULL;
 
 -- SIN CÍRCULOS (A espera a B, B espera a A, o una cadena más larga que
 -- vuelve sobre sí misma): ESTO NO LO IMPIDE LA BASE, a propósito. Un CHECK
