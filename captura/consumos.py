@@ -413,12 +413,6 @@ async def revisar() -> Resumen:
             log.warning("No pude cosechar %s.", user, exc_info=True)
             continue
 
-        # El latido se marca acá y no al final: lo que prueba que la
-        # maquinaria funciona es haber podido ABRIR el buzón y buscar, no que
-        # haya venido algo. Un día sin movimientos es normal; un día sin poder
-        # mirar, no.
-        _ultima_cosecha = datetime.now()
-
         # Si el buzón se renumeró, el cursor guardado no puede seguir mandando:
         # se le dice a la base que lo reemplace en vez de quedarse con el mayor.
         renumerado = bool(uidv_previa and uidv_previa != uidvalidity)
@@ -516,6 +510,17 @@ async def revisar() -> Resumen:
 
         await db.guardar_estado_consumos(user, uidvalidity, tope, desde_fecha,
                                          reiniciar=renumerado)
+
+        # El latido se marca ACÁ, al final, y no al abrir el buzón: abrir y
+        # buscar no prueba que la pasada haya terminado. El 24-sep-2026 un
+        # ValueError se colaba entre "se pudo abrir" y "se guardó el cursor",
+        # y con el latido marcado al abrir esa alarma nunca se habría
+        # disparado (INVESTIGACION.md, sala IA CDS) — medía si el buzón
+        # respondía, no si el PARSEO avanzaba. Llegar hasta acá, después de
+        # `guardar_estado_consumos`, es la prueba de que la pasada de ESTE
+        # buzón terminó de verdad. Un día sin movimientos nuevos SÍ llega
+        # hasta acá y SÍ cuenta como pasada buena — sigue siendo normal.
+        _ultima_cosecha = datetime.now()
 
     log.info("Ingesta: %s vistos, %s movimientos, %s duplicados, %s fallos.",
              res.vistos, res.extraidos, res.duplicados, len(res.fallos))

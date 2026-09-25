@@ -19,7 +19,7 @@ import os
 import pathlib
 import sys
 import types
-from datetime import date
+from datetime import date, datetime, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -609,6 +609,65 @@ def test_un_mensaje_no_puede_quedarse_en_procesando_para_siempre():
     assert "rescatar_procesando" in bucle, (
         "el rescate solo corre al arrancar: un huérfano sin reinicio posterior "
         "se queda atascado para siempre")
+
+
+# ── El latido mide que la pasada TERMINÓ, no que el buzón abrió ──────────
+#
+# NO PASA del testigo sobre 90093e1: `_ultima_cosecha` se marcaba al ABRIR el
+# buzón (antes del `for correo_bytes in correos`), así que durante el
+# incidente real —IMAP abría bien, el ValueError salía después, al parsear—
+# el latido nunca se habría disparado, ni antes ni después de ese commit.
+# Ahora se marca DESPUÉS de `guardar_estado_consumos`: solo cuenta una pasada
+# que terminó de guardar su cursor.
+
+async def _revienta_al_guardar_en_bandeja(**kw):
+    raise RuntimeError("se cayó la conexión a la base (simulado)")
+
+
+def test_algo_revienta_tras_abrir_el_buzon_no_marca_el_latido():
+    """El buzón se abre bien (IMAP responde) pero algo revienta DESPUÉS de
+    abrir y ANTES de guardar el cursor —acá, `guardar_en_bandeja`, que no
+    tiene ningún try/except alrededor en `revisar()`—. El latido NO se marca,
+    y pasadas las LATIDO_HORAS, `avisar_si_no_hay_latido` avisa por
+    Telegram."""
+    correos = [(10, _bnr_eml(10, "BUENO DIEZ"))]
+    reg = _montar(correos)
+    consumos._ultima_cosecha = None
+    consumos._arranque = datetime.now() - timedelta(hours=consumos.LATIDO_HORAS + 1)
+    db.guardar_en_bandeja = _revienta_al_guardar_en_bandeja
+
+    reventó = False
+    try:
+        _correr(consumos.revisar())
+    except RuntimeError:
+        reventó = True
+    finally:
+        db.guardar_en_bandeja = reg.guardar_en_bandeja   # se repone para el aviso
+    assert reventó, "revisar() no reventó: la simulación no se activó"
+
+    assert consumos._ultima_cosecha is None, (
+        "marcó el latido aunque la pasada no llegó a guardar el cursor — "
+        "exactamente el hueco que dejó pasar el incidente del 24-sep")
+    assert "rosilisr04@gmail.com" not in reg.estado, (
+        "guardó el cursor aunque la pasada reventó antes de terminar")
+    assert _correr(consumos.avisar_si_no_hay_latido()) == 1, (
+        "con el latido sin marcar y pasadas las LATIDO_HORAS, tenía que avisar")
+    assert "no consigo revisar ningún buzón" in reg.contenidos[-1]
+
+
+def test_pasada_completa_sin_correos_nuevos_si_marca_el_latido():
+    """Un buzón sin correos nuevos que TERMINA su pasada (llega a guardar el
+    cursor) sí cuenta como buena: un día sin gastos es normal, y el latido no
+    puede gritar por eso."""
+    reg = _montar([])                 # ningún correo nuevo en el buzón falso
+    consumos._ultima_cosecha = None
+    consumos._arranque = datetime.now() - timedelta(hours=99)
+
+    _correr(consumos.revisar())
+
+    assert consumos._ultima_cosecha is not None, (
+        "una pasada que terminó sin correos nuevos tiene que marcar el latido")
+    assert _correr(consumos.avisar_si_no_hay_latido()) == 0
 
 
 if __name__ == "__main__":
