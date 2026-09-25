@@ -634,6 +634,7 @@ def test_algo_revienta_tras_abrir_el_buzon_no_marca_el_latido():
     reg = _montar(correos)
     consumos._ultima_cosecha = None
     consumos._arranque = datetime.now() - timedelta(hours=consumos.LATIDO_HORAS + 1)
+    consumos._ultimo_aviso.clear()
     db.guardar_en_bandeja = _revienta_al_guardar_en_bandeja
 
     reventó = False
@@ -650,6 +651,41 @@ def test_algo_revienta_tras_abrir_el_buzon_no_marca_el_latido():
         "exactamente el hueco que dejó pasar el incidente del 24-sep")
     assert "rosilisr04@gmail.com" not in reg.estado, (
         "guardó el cursor aunque la pasada reventó antes de terminar")
+    assert _correr(consumos.avisar_si_no_hay_latido()) == 1, (
+        "con el latido sin marcar y pasadas las LATIDO_HORAS, tenía que avisar")
+    assert "no consigo revisar ningún buzón" in reg.contenidos[-1]
+
+
+async def _revienta_al_guardar_estado_consumos(*a, **kw):
+    raise RuntimeError("se cayó la conexión a la base justo al guardar el cursor")
+
+
+def test_falla_justo_al_guardar_el_cursor_no_marca_el_latido():
+    """Segundo NO PASA sobre c254b06: los dos tests anteriores solo prueban un
+    fallo ANTES de `guardar_estado_consumos` (en `guardar_en_bandeja`), y no
+    fijan que el ORDEN entre esa llamada y `_ultima_cosecha = datetime.now()`
+    importe. Este hace fallar `guardar_estado_consumos` — la línea de la que
+    depende el orden — y comprueba que el latido sigue sin marcarse."""
+    correos = [(10, _bnr_eml(10, "BUENO DIEZ"))]
+    reg = _montar(correos)
+    consumos._ultima_cosecha = None
+    consumos._arranque = datetime.now() - timedelta(hours=consumos.LATIDO_HORAS + 1)
+    consumos._ultimo_aviso.clear()
+    db.guardar_estado_consumos = _revienta_al_guardar_estado_consumos
+
+    reventó = False
+    try:
+        _correr(consumos.revisar())
+    except RuntimeError:
+        reventó = True
+    finally:
+        db.guardar_estado_consumos = reg.guardar_estado_consumos
+    assert reventó, "revisar() no reventó: la simulación no se activó"
+
+    assert consumos._ultima_cosecha is None, (
+        "marcó el latido aunque falló justo al guardar el cursor")
+    assert "rosilisr04@gmail.com" not in reg.estado, (
+        "guardó el cursor pese a que la simulación lo hacía fallar")
     assert _correr(consumos.avisar_si_no_hay_latido()) == 1, (
         "con el latido sin marcar y pasadas las LATIDO_HORAS, tenía que avisar")
     assert "no consigo revisar ningún buzón" in reg.contenidos[-1]
