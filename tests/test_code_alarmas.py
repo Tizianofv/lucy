@@ -586,3 +586,110 @@ def test_la_consulta_de_atrasadas_excluye_tomadas_y_marcadas():
     assert "tomada_en IS NULL" in fuente
     assert "NOT EXISTS" in fuente
     assert "aviso_atraso_code" in fuente
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# `db.tareas_tecnicas_atrasadas`: el SELECT real (SQL de verdad, SQLite) --
+# el doble hermético `_CurAtraso` decide qué filas "hay" mirando un
+# atributo de Python (`self._conn.atrasadas`), sin ejecutar el WHERE; así
+# que no es sensible a una mutación del NOT EXISTS, de `tomada_en IS NULL`
+# ni del umbral de horas. Esto SÍ corre el texto tal cual sale del código.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _extraer_sql_atrasadas() -> str:
+    arbol = ast.parse(
+        textwrap.dedent(inspect.getsource(db.tareas_tecnicas_atrasadas)))
+    for nodo in ast.walk(arbol):
+        if (isinstance(nodo, ast.Assign) and len(nodo.targets) == 1
+                and isinstance(nodo.targets[0], ast.Name)
+                and nodo.targets[0].id == "consulta"
+                and isinstance(nodo.value, ast.Constant)
+                and isinstance(nodo.value.value, str)):
+            return nodo.value.value
+    raise AssertionError("no encontré 'consulta' en tareas_tecnicas_atrasadas")
+
+
+def _corre_atrasadas_sqlite(filas: list[dict], marcas: list[int], umbral_horas: int = 6):
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE tareas (id INTEGER PRIMARY KEY, titulo TEXT, "
+        "clave_tecnica TEXT, estado TEXT, borrado_en TEXT, tomada_en TEXT, "
+        "ultima_alarma_en TEXT, creado_en TEXT)")
+    conn.execute(
+        "CREATE TABLE log_acciones (tabla TEXT, registro_id INTEGER, accion TEXT)")
+    for f in filas:
+        conn.execute(
+            "INSERT INTO tareas (id, titulo, clave_tecnica, estado, borrado_en, "
+            "tomada_en, ultima_alarma_en, creado_en) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (f["id"], f.get("titulo", f"tarea {f['id']}"), f["clave_tecnica"],
+             f.get("estado", db.ESTADO_PENDIENTE), f.get("borrado_en"),
+             f.get("tomada_en"), f.get("ultima_alarma_en"), f.get("creado_en")))
+    for tarea_id in marcas:
+        conn.execute(
+            "INSERT INTO log_acciones (tabla, registro_id, accion) "
+            "VALUES ('tareas', ?, 'aviso_atraso_code')", (tarea_id,))
+    conn.commit()
+
+    # Traducción MÍNIMA para que corra en SQLite: `now() - make_interval(hours
+    # => %s)` -> `datetime('now', '-' || ? || ' hours')` (mismo umbral, misma
+    # posición del parámetro) y el resto de `%s` -> `?`. El resto del texto
+    # -- el WHERE, el NOT EXISTS -- es EL MISMO que ejecuta producción.
+    sql = _extraer_sql_atrasadas()
+    assert "now() - make_interval(hours => %s)" in sql
+    sql = sql.replace(
+        "now() - make_interval(hours => %s)",
+        "datetime('now', '-' || ? || ' hours')")
+    sql = sql.replace("%s", "?")
+    cur = conn.execute(sql, (db.ESTADO_PENDIENTE, umbral_horas))
+    salida = [dict(r) for r in cur.fetchall()]
+    conn.close()
+    return salida
+
+
+def _hace(horas: float) -> str:
+    return (datetime.now(timezone.utc) - timedelta(hours=horas)).strftime(
+        "%Y-%m-%d %H:%M:%S")
+
+
+def test_atrasadas_sql_real_trae_la_vieja_sin_tomar_ni_marcar():
+    filas = _corre_atrasadas_sqlite(
+        [{"id": 1, "clave_tecnica": "backup", "creado_en": _hace(7)}], marcas=[])
+    assert [f["id"] for f in filas] == [1]
+
+
+def test_atrasadas_sql_real_NO_trae_una_reciente():
+    filas = _corre_atrasadas_sqlite(
+        [{"id": 1, "clave_tecnica": "backup", "creado_en": _hace(1)}], marcas=[])
+    assert filas == []
+
+
+def test_atrasadas_sql_real_NO_trae_una_tomada():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE (condición 4): si la sala ya la tomó,
+    no se avisa -- corrido contra SQL de verdad."""
+    filas = _corre_atrasadas_sqlite(
+        [{"id": 1, "clave_tecnica": "backup", "creado_en": _hace(7),
+          "tomada_en": _hace(1)}], marcas=[])
+    assert filas == []
+
+
+def test_atrasadas_sql_real_NO_avisa_dos_veces_la_misma_tarea():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE (condición 4): una tarea ya marcada en
+    `log_acciones` (el aviso sobrevive un redespliegue porque queda en la
+    base, no en memoria) no vuelve a salir -- corrido contra SQL de
+    verdad."""
+    filas = _corre_atrasadas_sqlite(
+        [{"id": 1, "clave_tecnica": "backup", "creado_en": _hace(7)}], marcas=[1])
+    assert filas == []
+
+
+def test_atrasadas_sql_real_usa_la_ultima_alarma_no_la_creacion():
+    """Una tarea creada hace mucho pero con una recaída reciente (la última
+    alarma actualiza `ultima_alarma_en`, §B.2) NO cuenta el reloj desde su
+    creación."""
+    filas = _corre_atrasadas_sqlite(
+        [{"id": 1, "clave_tecnica": "backup", "creado_en": _hace(30),
+          "ultima_alarma_en": _hace(1)}], marcas=[])
+    assert filas == []
