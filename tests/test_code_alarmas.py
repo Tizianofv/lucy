@@ -589,44 +589,40 @@ def test_canario_reventado_cae_a_la_bandeja_si_la_tarea_no_se_pudo_crear():
     assert avisos_bandeja[0]["chat_id"] == config.CHAT_ID_DUENO
 
 
-def _senales_del_canario() -> list[tuple[str, str]]:
-    """Saca del código REAL de `avisar_si_hay_bancos_mudos` cada señal que
-    hoy convierte en alerta: para cada `for rem in res.remitentes_X():` se
-    busca la llamada a `_alertar(f"canario:{rem}:SUFIJO", ...)` dentro de su
-    cuerpo y se extrae el SUFIJO literal. Ninguna señal está tecleada a
-    mano: si mañana se agrega una cuarta, esta lista la ve sola (Regla 18 --
-    faltaba una prueba de comportamiento para B y C, hallazgo 2 del testigo
-    sobre 00eb9e6).
+def _generadores_del_canario() -> list[str]:
+    """Saca del código REAL de `avisar_si_hay_bancos_mudos` CUÁLES señales
+    existen hoy: cada `for rem in res.remitentes_X():` de su cuerpo. Esto es
+    lo único que se deriva del código que se está probando -- CUÁNTAS
+    pruebas parametrizar y para qué generador, no CONTRA QUÉ VALOR
+    comparar (eso es `_SUFIJO_ESPERADO_POR_GENERADOR`, fijo, más abajo).
 
-    Devuelve [(nombre_del_generador, sufijo_de_clave), ...] -- hoy
-    [("remitentes_reventados", "reventado"), ("remitentes_mudos", "sin_ruta"),
-     ("remitentes_rechazados", "rechazado")].
+    Derivar el sufijo esperado del MISMO código que la mutación cambia es
+    circular y no puede fallar nunca -- lo midió la mutación 10 de este
+    encargo: mutar el sufijo real de la señal B daba "3 passed" porque el
+    oráculo leía el sufijo YA mutado y se comparaba contra sí mismo. Por
+    eso el sufijo esperado abajo es un valor fijo, independiente del
+    archivo que la mutación toca.
     """
     arbol = ast.parse(textwrap.dedent(inspect.getsource(consumos.avisar_si_hay_bancos_mudos)))
     fn = arbol.body[0]
-    salida = []
-    for nodo in ast.walk(fn):
-        if not (isinstance(nodo, ast.For) and isinstance(nodo.iter, ast.Call)
-                and isinstance(nodo.iter.func, ast.Attribute)
-                and nodo.iter.func.attr.startswith("remitentes_")):
-            continue
-        generador = nodo.iter.func.attr
-        for sub in ast.walk(nodo):
-            if not (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
-                    and sub.func.id == "_alertar"):
-                continue
-            primer_arg = sub.args[0]
-            assert isinstance(primer_arg, ast.JoinedStr), (
-                f"la clave de {generador} no es un f-string: no puedo leer el sufijo")
-            ultima_pieza = primer_arg.values[-1]
-            assert isinstance(ultima_pieza, ast.Constant), (
-                f"la clave de {generador} no termina en texto literal")
-            sufijo = ultima_pieza.value.lstrip(":")
-            salida.append((generador, sufijo))
-            break
-    assert len(salida) >= 3, f"esperaba al menos 3 señales, salieron {salida}"
-    return salida
+    generadores = [
+        nodo.iter.func.attr for nodo in ast.walk(fn)
+        if isinstance(nodo, ast.For) and isinstance(nodo.iter, ast.Call)
+        and isinstance(nodo.iter.func, ast.Attribute)
+        and nodo.iter.func.attr.startswith("remitentes_")]
+    assert len(generadores) >= 3, f"esperaba al menos 3 señales, salieron {generadores}"
+    return generadores
 
+
+# EL ORÁCULO, FIJO A PROPÓSITO (ver el docstring de arriba): el sufijo de
+# clave que cada señal tiene que armar hoy. Si `avisar_si_hay_bancos_mudos`
+# cambiara el sufijo de una señal existente, esto NO cambia solo -- y por
+# eso la prueba de abajo sí se pone roja (mutación 10).
+_SUFIJO_ESPERADO_POR_GENERADOR = {
+    "remitentes_reventados": "reventado",
+    "remitentes_mudos": "sin_ruta",
+    "remitentes_rechazados": "rechazado",
+}
 
 _CAMPO_POR_GENERADOR = {
     "remitentes_reventados": "reventados",
@@ -643,10 +639,14 @@ def _resumen_para_senal(generador: str, remitente: str, n: int = 1) -> "consumos
     return _fila_resumen(**kwargs)
 
 
-@pytest.mark.parametrize("generador,sufijo", _senales_del_canario())
-def test_cada_senal_del_canario_crea_tarea_de_code(generador, sufijo):
+@pytest.mark.parametrize("generador", _generadores_del_canario())
+def test_cada_senal_del_canario_crea_tarea_de_code(generador):
     """Una por señal, camino real, de punta a punta -- las tres tienen que
-    llamar a la puerta con la MISMA clave que arma la producción."""
+    llamar a la puerta con la MISMA clave que arma la producción HOY (el
+    sufijo esperado es fijo -- `_SUFIJO_ESPERADO_POR_GENERADOR` -- para que
+    un cambio en el sufijo real ponga esto en rojo en vez de mirarse al
+    espejo)."""
+    sufijo = _SUFIJO_ESPERADO_POR_GENERADOR[generador]
     remitente = "banco-de-prueba"
     clave_esperada = f"canario:{remitente}:{sufijo}"
     llamadas = []
@@ -675,11 +675,12 @@ def test_cada_senal_del_canario_crea_tarea_de_code(generador, sufijo):
     assert avisos_bandeja == [], f"la señal {sufijo} avisó por la bandeja en vez de crear la tarea"
 
 
-@pytest.mark.parametrize("generador,sufijo", _senales_del_canario())
-def test_cada_senal_del_canario_cae_a_la_bandeja_si_la_tarea_no_se_pudo_crear(generador, sufijo):
+@pytest.mark.parametrize("generador", _generadores_del_canario())
+def test_cada_senal_del_canario_cae_a_la_bandeja_si_la_tarea_no_se_pudo_crear(generador):
     """GARANTÍA PEDIDA EXPLÍCITAMENTE: nunca se pierde el aviso, para
     NINGUNA de las tres señales -- no solo para la A (reventado), que era
     la única cubierta antes de este arreglo."""
+    sufijo = _SUFIJO_ESPERADO_POR_GENERADOR[generador]
     remitente = "banco-de-prueba-2"
     avisos_bandeja = []
 
