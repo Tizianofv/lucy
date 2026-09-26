@@ -2286,8 +2286,19 @@ async def derivaciones() -> dict[int, int]:
 
 
 async def tomadas_de(ids: list[int]) -> dict[int, object]:
-    """`{tarea_id: tomada_en}` de las que la sala ya empezó a trabajar,
-    entre las `ids` que se le pasan (26-sep-2026, §D, parte 3).
+    """`{tarea_id: tomada_en}` de las que la sala ya empezó a trabajar Y
+    SIGUE SIENDO SU RESPONSABLE, entre las `ids` que se le pasan
+    (26-sep-2026, §D, parte 3).
+
+    `AND responsable_chat_id = CHAT_ID_CODE`, hallazgo del testigo sobre la
+    vuelta anterior: `asignar_responsable` no borra `tomada_en` cuando la
+    tarea se REASIGNA a otra persona (ni tiene por qué -- es la puerta
+    genérica de CUALQUIER responsable, tocarla para que sepa de "Code" y
+    "tomada" acoplaría una función compartida a este encargo). Filtrar acá,
+    en la ÚNICA función que decide qué sale "en curso", hace que el caso NO
+    EXISTA en vez de manejarlo: una tarea reasignada a un humano simplemente
+    no tiene fila en el resultado, así que ninguna plantilla necesita
+    preguntarse "¿pero sigue siendo de Code?" -- ya viene resuelto.
 
     UNA LECTURA APARTE, no un cuarto nivel en la cascada de tolerancia de
     `tareas_por_grupo` (que ya tiene tres, por área y por «Primero:») --
@@ -2306,7 +2317,8 @@ async def tomadas_de(ids: list[int]) -> dict[int, object]:
         try:
             await cur.execute(
                 "SELECT id, tomada_en FROM tareas "
-                "WHERE id = ANY(%s) AND tomada_en IS NOT NULL", (ids,))
+                "WHERE id = ANY(%s) AND tomada_en IS NOT NULL "
+                "AND responsable_chat_id = %s", (ids, CHAT_ID_CODE))
             filas = await cur.fetchall()
         except Exception as e:
             try:
@@ -2694,6 +2706,49 @@ async def tareas_de_code_pendientes() -> list[dict]:
     return filas
 
 
+def _solo_columnas_reales(tabla: str, fila: dict) -> dict:
+    """`fila` recortada a SOLO las claves que `tabla` declara de verdad en
+    `db/schema.sql` (vía `columnas_declaradas()`, la MISMA fuente que ya usa
+    `columnas_que_faltan()`/`cerebro/consultar.py` -- nunca una lista
+    tecleada de "lo que sobra").
+
+    EXISTE PORQUE `log_acciones.antes` alimenta `acciones.crud.deshacer()`,
+    que arma `columnas = [c for c in antes if c not in NO_EDITABLES y no
+    tiene puerta que lo impida]` y después
+    `UPDATE {tabla} SET {c} = r.{c} FROM jsonb_populate_record(...)` con
+    CADA clave que sobrevive ese filtro (`acciones/crud.py:1636-1643`). Una
+    clave de `antes` que no sea una columna real de la tabla -- un alias de
+    JOIN, un cálculo -- revienta ese `UPDATE` con
+    `column "..." does not exist`, porque `NO_EDITABLES`/`PUERTAS` no la
+    conocen y no tienen por qué: no son "la lista de columnas seguras", son
+    "las columnas con una regla especial".
+
+    HALLAZGO DEL TESTIGO sobre `cerrar_tarea_de_la_sala`/`tomar_tarea_de_
+    la_sala` (26-sep-2026): las dos arman su `antes` con
+    `COALESCE(t.area, p.area) AS area_efectiva`, que no es una columna de
+    `tareas` -- `deshacer()` sobre esa huella intentaba
+    `UPDATE tareas SET area_efectiva = r.area_efectiva ...` y reventaba.
+    `deshacer()` es alcanzable desde Telegram sin restricción de `actor`
+    (`cerebro/agente.py`), así que una huella de `actor='sala'` no está a
+    salvo solo porque la sala no la vaya a deshacer ella misma.
+
+    AUDITORÍA DE HERMANOS (26-sep-2026): de las 20 escrituras a
+    `log_acciones` que hay en `db/db.py`/`acciones/crud.py`, las ÚNICAS DOS
+    que arman `antes` a partir de un SELECT con una unión de tablas son
+    `cerrar_tarea_de_la_sala` y `tomar_tarea_de_la_sala` -- las demás usan
+    `SELECT *` (todas columnas reales por definición) o listan columnas
+    reales a mano, sin alias (`marcar_tarea_hecha`, `asignar_responsable`,
+    `mover_vence`, `cerrar_y_derivar`, `convertir_tarea_en_proyecto`, entre
+    otras). Los demás sitios de este archivo que unen tablas
+    (`tareas_por_grupo`, `tarea_con_comentarios`, `tareas_de_code_pendientes`,
+    `choques_de_evento`, `correos_por_marcar_leidos`,
+    `proyectos_con_tareas`) son de SOLO LECTURA: ninguno escribe
+    `log_acciones`.
+    """
+    columnas = set(columnas_declaradas().get(tabla, ()))
+    return {k: v for k, v in fila.items() if k in columnas}
+
+
 async def cerrar_tarea_de_la_sala(tarea_id: int) -> bool:
     """Cierra UNA tarea TÉCNICA de Code. Devuelve si de verdad cerró algo.
 
@@ -2764,7 +2819,9 @@ async def cerrar_tarea_de_la_sala(tarea_id: int) -> bool:
             VALUES ('sala', 'editar', 'tareas', %s, %s, %s,
                     'tarea técnica cerrada por la sala de control (Code)', %s)
             """,
-            (tarea_id, json.dumps(antes, default=str, ensure_ascii=False),
+            (tarea_id,
+             json.dumps(_solo_columnas_reales("tareas", antes), default=str,
+                        ensure_ascii=False),
              json.dumps({"estado": ESTADO_HECHA}, ensure_ascii=False),
              antes.get("bandeja_id")))
         return True
@@ -2846,7 +2903,9 @@ async def tomar_tarea_de_la_sala(tarea_id: int) -> bool | None:
             VALUES ('sala', 'editar', 'tareas', %s, %s, %s,
                     'tarea técnica tomada por la sala de control (Code)', %s)
             """,
-            (tarea_id, json.dumps(antes, default=str, ensure_ascii=False),
+            (tarea_id,
+             json.dumps(_solo_columnas_reales("tareas", antes), default=str,
+                        ensure_ascii=False),
              json.dumps({"tomada_en": "now"}, ensure_ascii=False),
              antes.get("bandeja_id")))
         return True

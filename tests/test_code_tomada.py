@@ -61,6 +61,7 @@ import db.db as db  # noqa: E402
 import web.app as panel  # noqa: E402
 import web.api_code as api_code  # noqa: E402
 import web.auth as auth  # noqa: E402
+import acciones.crud as crud  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 UTC = timezone.utc
@@ -449,9 +450,15 @@ class _CurPanel:
         if s.startswith("SELECT t.id, t.titulo, t.estado, t.vence_en, t.creado_en"):
             self._filas = list(self._conn.tareas)
         elif s.startswith("SELECT id, tomada_en FROM tareas"):
+            # Mismo filtro que la SQL real (26-sep-2026, hallazgo del
+            # testigo sobre 3b1b6dc): solo cuenta si TODAVÍA es de Code --
+            # una tarea reasignada a otra persona no sale acá aunque
+            # `tomada_en` le haya quedado puesto.
             self._filas = [
                 {"id": f["id"], "tomada_en": f["tomada_en"]}
-                for f in self._conn.tareas if f.get("tomada_en")]
+                for f in self._conn.tareas
+                if f.get("tomada_en")
+                and f.get("responsable_chat_id") == config.CHAT_ID_CODE]
         else:
             self._filas = []
         return self
@@ -513,6 +520,67 @@ def _fila_panel(id_, titulo, tomada_en=None, responsable=None):
             "tomada_en": tomada_en}
 
 
+class _CurDetalle:
+    def __init__(self, conn):
+        self._conn = conn
+        self._filas: list = []
+
+    async def execute(self, sql, params=None):
+        s = " ".join(sql.split())
+        if s.startswith("SELECT t.id, t.titulo, t.detalle, t.estado, t.vence_en"):
+            self._filas = [dict(self._conn.tarea)]
+        elif s.startswith("SELECT id, tarea_id, autor_chat_id"):
+            self._filas = []
+        elif s.startswith("SELECT id, texto, hecho, orden FROM micro_pasos"):
+            self._filas = []
+        elif s.startswith("SELECT id, tomada_en FROM tareas"):
+            t = self._conn.tarea
+            self._filas = (
+                [{"id": t["id"], "tomada_en": t["tomada_en"]}]
+                if t.get("tomada_en")
+                and t.get("responsable_chat_id") == config.CHAT_ID_CODE
+                else [])
+        else:
+            self._filas = []
+        return self
+
+    async def fetchall(self):
+        return self._filas
+
+    async def fetchone(self):
+        return self._filas[0] if self._filas else None
+
+
+class _ConnDetalle:
+    def __init__(self, tarea):
+        self.tarea = tarea
+
+    def cursor(self, row_factory=None):
+        return _CurDetalle(self)
+
+    def transaction(self):
+        return _TransaccionPanel(self)
+
+    async def execute(self, sql, params=None):
+        return await _CurDetalle(self).execute(sql, params)
+
+
+class _PoolDetalle:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def connection(self):
+        conn = self._conn
+
+        class _CM:
+            async def __aenter__(self):
+                return conn
+
+            async def __aexit__(self, *e):
+                return False
+        return _CM()
+
+
 def test_el_panel_pinta_en_curso_cuando_hay_tomada_en():
     guardado = db.pool
     db.pool = _PoolPanel(_ConnPanel([
@@ -539,6 +607,77 @@ def test_el_panel_no_pinta_en_curso_sin_tomada_en():
         db.pool = guardado
     assert r.status_code == 200
     assert "en curso desde" not in r.body.decode()
+
+
+def test_el_panel_no_pinta_en_curso_en_una_tarea_ya_hecha_y_reciente():
+    """Hallazgo del testigo sobre `3b1b6dc`: `cerrar_tarea_de_la_sala`
+    nunca borra `tomada_en` -- queda escrito para siempre. Una tarea
+    cerrada HOY cae en el grupo 'otros' (`db.grupo_de_tarea`, DIAS_
+    HISTORIAL días antes de irse a 'historial'), que se pinta en /tareas
+    con el MISMO bloque de fila que 'en curso'. Si el guardia
+    `t.estado == pendiente` de `web/plantillas/tareas.html` se rompiera,
+    esto se vería "en curso" estando ya hecha."""
+    guardado = db.pool
+    ahora = datetime.now(UTC)
+    fila = _fila_panel(1, "Ya la cerré",
+                       tomada_en=datetime(2026, 9, 20, 9, 0, tzinfo=UTC),
+                       responsable=config.CHAT_ID_CODE)
+    fila["estado"] = "hecha"
+    fila["completado_en"] = ahora  # cerrada AHORA MISMO: cae en 'otros'
+    db.pool = _PoolPanel(_ConnPanel([fila]))
+    try:
+        r = _correr(panel.tareas(_pedir()))
+    finally:
+        db.pool = guardado
+    assert r.status_code == 200
+    html = r.body.decode()
+    assert "Ya la cerré" in html, (
+        "la tarea no aparece en /tareas -- revisar el fixture, no la garantía")
+    assert "en curso desde" not in html, (
+        "¡una tarea YA HECHA se pintó como 'en curso'!")
+
+
+def test_tarea_detalle_no_pinta_en_curso_en_una_tarea_ya_hecha_y_reciente():
+    """Misma garantía que arriba, para `/tareas/{id}` (`tarea_detalle.html`,
+    que tiene su PROPIO guardia `tarea.estado == pendiente`)."""
+    guardado = db.pool
+    fila = _fila_panel(1, "Ya la cerré",
+                       tomada_en=datetime(2026, 9, 20, 9, 0, tzinfo=UTC),
+                       responsable=config.CHAT_ID_CODE)
+    fila["estado"] = "hecha"
+    db.pool = _PoolDetalle(_ConnDetalle(fila))
+    try:
+        r = _correr(panel.tarea_detalle(_pedir("/tareas/1"), 1))
+    finally:
+        db.pool = guardado
+    assert r.status_code == 200
+    html = r.body.decode()
+    assert "Ya la cerré" in html
+    assert "en curso desde" not in html, (
+        "¡el detalle de una tarea YA HECHA se pintó como 'en curso'!")
+
+
+def test_el_panel_no_pinta_en_curso_si_la_tarea_se_reasigno():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE (hallazgo 3 del testigo sobre
+    `3b1b6dc`): `asignar_responsable` no borra `tomada_en` al reasignar --
+    `db.tomadas_de` (§D) hace que el caso NO EXISTA filtrando por
+    `responsable_chat_id = CHAT_ID_CODE`: una tarea reasignada a un humano
+    no sale "en curso" aunque `tomada_en` le haya quedado puesto."""
+    guardado = db.pool
+    OTRA_PERSONA = 700400001
+    db.pool = _PoolPanel(_ConnPanel([
+        _fila_panel(1, "Reasignada a Rosi",
+                    tomada_en=datetime(2026, 9, 20, 9, 0, tzinfo=UTC),
+                    responsable=OTRA_PERSONA)]))
+    try:
+        r = _correr(panel.tareas(_pedir()))
+    finally:
+        db.pool = guardado
+    assert r.status_code == 200
+    html = r.body.decode()
+    assert "Reasignada a Rosi" in html
+    assert "en curso desde" not in html, (
+        "¡una tarea reasignada a otra persona se pintó como 'en curso'!")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -690,3 +829,171 @@ def test_listar_sin_la_columna_no_revienta():
     finally:
         db.pool = guardado
         restaurar()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# GARANTÍA PEDIDA EXPLÍCITAMENTE (hallazgo 2 del testigo sobre `3b1b6dc`):
+# `deshacer()` no revienta sobre una huella de `actor='sala'` de cerrar o de
+# tomar -- el `antes` que esas dos funciones guardan tiene SOLO columnas
+# reales de `tareas`, nunca un alias de JOIN (`area_efectiva`).
+# ═══════════════════════════════════════════════════════════════════════
+
+def _capturar_antes_guardado(coro_factory, elegible):
+    """Corre la función REAL (`cerrar_tarea_de_la_sala`/`tomar_tarea_de_la_
+    sala`) contra una conexión de mentira, y devuelve el `dict` exacto que
+    esa función pasó a `json.dumps(...)` para `log_acciones.antes` -- no lo
+    que la propia consulta trajo, sino lo que sobrevivió al filtro. Así la
+    prueba de `deshacer()` corre sobre el dato REAL que hoy se escribe, no
+    sobre uno armado a mano en la prueba."""
+    conn = _ConnTomar(elegible=elegible)
+    guardado = db.pool
+    db.pool = _PoolTomar(conn)
+    try:
+        ok = _correr(coro_factory())
+    finally:
+        db.pool = guardado
+    assert ok is True
+    inserts = [(s, p) for s, p in conn.sql
+              if s.upper().startswith("INSERT INTO LOG_ACCIONES")]
+    assert len(inserts) == 1
+    _, params = inserts[0]
+    antes_json = params[1]
+    return json.loads(antes_json)
+
+
+def test_el_antes_que_guarda_cerrar_tiene_solo_columnas_reales_de_tareas():
+    fila = {"id": 5, "titulo": "Arreglar el canario", "estado": "pendiente",
+            "vence_en": None, "completado_en": None, "bandeja_id": 905,
+            "responsable_chat_id": config.CHAT_ID_CODE,
+            "area_efectiva": db.AREA_TECNICA}
+    antes = _capturar_antes_guardado(
+        lambda: db.cerrar_tarea_de_la_sala(5), fila)
+    columnas_reales = set(db.columnas_declaradas()["tareas"])
+    sobrantes = set(antes) - columnas_reales
+    assert not sobrantes, (
+        f"log_acciones.antes de cerrar_tarea_de_la_sala trae columnas que "
+        f"'tareas' no tiene: {sobrantes} -- deshacer() reventaría")
+    assert "area_efectiva" not in antes
+
+
+def test_el_antes_que_guarda_tomar_tiene_solo_columnas_reales_de_tareas():
+    fila = {"id": 5, "titulo": "Arreglar el canario", "estado": "pendiente",
+            "vence_en": None, "bandeja_id": 905,
+            "responsable_chat_id": config.CHAT_ID_CODE, "tomada_en": None,
+            "area_efectiva": db.AREA_TECNICA}
+    antes = _capturar_antes_guardado(
+        lambda: db.tomar_tarea_de_la_sala(5), fila)
+    columnas_reales = set(db.columnas_declaradas()["tareas"])
+    sobrantes = set(antes) - columnas_reales
+    assert not sobrantes, (
+        f"log_acciones.antes de tomar_tarea_de_la_sala trae columnas que "
+        f"'tareas' no tiene: {sobrantes} -- deshacer() reventaría")
+    assert "area_efectiva" not in antes
+
+
+class _CurDeshacer:
+    def __init__(self, conn):
+        self._conn = conn
+        self._filas: list = []
+
+    async def execute(self, sql, params=None):
+        s = " ".join(sql.split())
+        self._conn.sql.append((s, params))
+        if s.startswith("SELECT accion, tabla, registro_id, antes, despues"):
+            self._filas = [self._conn.huella]
+        elif s.upper().startswith("INSERT INTO LOG_ACCIONES"):
+            self._filas = [(999,)]
+        else:
+            self._filas = []
+        return self
+
+    async def fetchone(self):
+        return self._filas[0] if self._filas else None
+
+    async def fetchall(self):
+        return self._filas
+
+
+class _ConnDeshacer:
+    def __init__(self, huella):
+        self.huella = huella
+        self.sql: list = []
+
+    def cursor(self, row_factory=None):
+        return _CurDeshacer(self)
+
+    async def execute(self, sql, params=None):
+        return await _CurDeshacer(self).execute(sql, params)
+
+
+class _PoolDeshacer:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def connection(self):
+        conn = self._conn
+
+        class _CM:
+            async def __aenter__(self):
+                return conn
+
+            async def __aexit__(self, *e):
+                return False
+        return _CM()
+
+
+def _deshacer_sobre_huella(antes: dict, despues: dict):
+    """Corre `crud.deshacer()` DE VERDAD (no se llama a mano al SQL que
+    generaría) sobre una huella `actor='sala', tabla='tareas', accion=
+    'editar'` con el `antes`/`despues` dados. Devuelve el texto del UPDATE
+    que `deshacer()` de verdad ejecutó."""
+    huella = {"accion": "editar", "tabla": "tareas", "registro_id": 5,
+             "antes": antes, "despues": despues}
+    conn = _ConnDeshacer(huella)
+    guardado = db.pool
+    db.pool = _PoolDeshacer(conn)
+    try:
+        que = _correr(crud.deshacer(1))
+    finally:
+        db.pool = guardado
+    updates = [s for s, _ in conn.sql if s.upper().startswith("UPDATE TAREAS")]
+    assert len(updates) == 1, f"deshacer() no generó un UPDATE: {conn.sql}"
+    return que, updates[0]
+
+
+def test_deshacer_sobre_una_huella_de_cerrar_no_revienta():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE: `deshacer()` real, sobre la huella
+    real que `cerrar_tarea_de_la_sala` deja (ya filtrada), no intenta tocar
+    `area_efectiva` -- que no es una columna de `tareas` y reventaría contra
+    Postgres de verdad (`column "area_efectiva" does not exist`)."""
+    fila = {"id": 5, "titulo": "Arreglar el canario", "estado": "pendiente",
+            "vence_en": None, "completado_en": None, "bandeja_id": 905,
+            "responsable_chat_id": config.CHAT_ID_CODE,
+            "area_efectiva": db.AREA_TECNICA}
+    antes = _capturar_antes_guardado(lambda: db.cerrar_tarea_de_la_sala(5), fila)
+    que, sql_update = _deshacer_sobre_huella(antes, {"estado": db.ESTADO_HECHA})
+    assert "area_efectiva" not in sql_update.lower()
+    assert que == "el cambio"
+
+
+def test_deshacer_sobre_una_huella_de_tomar_no_revienta():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE: misma garantía, para la huella de
+    `tomar_tarea_de_la_sala`."""
+    fila = {"id": 5, "titulo": "Arreglar el canario", "estado": "pendiente",
+            "vence_en": None, "bandeja_id": 905,
+            "responsable_chat_id": config.CHAT_ID_CODE, "tomada_en": None,
+            "area_efectiva": db.AREA_TECNICA}
+    antes = _capturar_antes_guardado(lambda: db.tomar_tarea_de_la_sala(5), fila)
+    que, sql_update = _deshacer_sobre_huella(antes, {"tomada_en": "now"})
+    assert "area_efectiva" not in sql_update.lower()
+    assert que == "el cambio"
+
+
+def test_solo_columnas_reales_filtra_por_tabla_de_verdad():
+    """Unidad de `db._solo_columnas_reales`: usa `columnas_declaradas()`,
+    no una lista tecleada -- se prueba con una tabla real (`tareas`) y una
+    fila con una clave inventada."""
+    fila = {"id": 1, "titulo": "x", "area_efectiva": "🛠️ Técnico",
+            "un_alias_cualquiera": 42}
+    filtrada = db._solo_columnas_reales("tareas", fila)
+    assert filtrada == {"id": 1, "titulo": "x"}
