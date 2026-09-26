@@ -201,6 +201,80 @@ def test_una_falla_que_vuelve_tras_cerrarse_abre_una_nueva():
     assert "estado = %s" in selects[0][0]
 
 
+def _extraer_sql_dedupe_alerta() -> str:
+    """Saca del código de `crear_o_reusar_alerta_tecnica` el SELECT del
+    dedupe, tal cual lo va a ejecutar Postgres -- no una copia tecleada a
+    mano (Regla 18: una lista/consulta tecleada se separa de la realidad)."""
+    arbol = ast.parse(
+        textwrap.dedent(inspect.getsource(db.crear_o_reusar_alerta_tecnica)))
+    for nodo in ast.walk(arbol):
+        if (isinstance(nodo, ast.Call)
+                and isinstance(nodo.func, ast.Attribute)
+                and nodo.func.attr == "execute"
+                and nodo.args
+                and isinstance(nodo.args[0], ast.Constant)
+                and isinstance(nodo.args[0].value, str)
+                and "clave_tecnica = %s" in nodo.args[0].value):
+            return nodo.args[0].value
+    raise AssertionError(
+        "no encontré el SELECT del dedupe en crear_o_reusar_alerta_tecnica")
+
+
+def _corre_dedupe_sqlite(filas: list[dict], clave: str):
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE tareas (id INTEGER PRIMARY KEY, detalle TEXT, "
+        "clave_tecnica TEXT, estado TEXT, borrado_en TEXT)")
+    for f in filas:
+        conn.execute(
+            "INSERT INTO tareas (id, detalle, clave_tecnica, estado, borrado_en) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (f["id"], f.get("detalle", ""), f["clave_tecnica"], f["estado"],
+             f.get("borrado_en")))
+    conn.commit()
+    sql = _extraer_sql_dedupe_alerta().replace("%s", "?")
+    cur = conn.execute(sql, (clave, db.ESTADO_PENDIENTE))
+    fila = cur.fetchone()
+    conn.close()
+    return dict(fila) if fila else None
+
+
+def test_dedupe_sql_real_trae_la_pendiente_con_la_misma_clave():
+    fila = _corre_dedupe_sqlite(
+        [{"id": 1, "clave_tecnica": "backup", "estado": db.ESTADO_PENDIENTE}],
+        clave="backup")
+    assert fila is not None and fila["id"] == 1
+
+
+def test_dedupe_sql_real_NO_reusa_una_tarea_cerrada():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE, corrida contra SQL de verdad (SQLite
+    con el mismo texto): una falla que vuelve DESPUÉS de que la tarea se
+    cerró abre una NUEVA -- el SELECT no puede traer una `estado <> 'pendiente'`
+    aunque la clave coincida."""
+    fila = _corre_dedupe_sqlite(
+        [{"id": 1, "clave_tecnica": "backup", "estado": "hecha"}],
+        clave="backup")
+    assert fila is None
+
+
+def test_dedupe_sql_real_NO_trae_una_borrada():
+    fila = _corre_dedupe_sqlite(
+        [{"id": 1, "clave_tecnica": "backup", "estado": db.ESTADO_PENDIENTE,
+          "borrado_en": "2026-09-01"}],
+        clave="backup")
+    assert fila is None
+
+
+def test_dedupe_sql_real_NO_trae_otra_clave():
+    fila = _corre_dedupe_sqlite(
+        [{"id": 1, "clave_tecnica": "canario:mudo:sin_ruta", "estado": db.ESTADO_PENDIENTE}],
+        clave="backup")
+    assert fila is None
+
+
 def test_sin_la_migracion_devuelve_none_y_no_revienta(caplog):
     """GARANTÍA PEDIDA EXPLÍCITAMENTE (condición 1): sin las columnas de
     esta parte, nada revienta -- devuelve `None` para que quien llama caiga
