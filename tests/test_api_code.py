@@ -317,6 +317,50 @@ def test_cada_ruta_exige_especificamente_su_propio_permiso():
         db.pool = guardado
 
 
+def test_cada_ruta_de_la_puerta_declara_un_permiso_distinto_de_las_demas():
+    """Hueco dejado dicho en la mutación 4 de la vuelta anterior (parte 3,
+    26-sep-2026): si DOS rutas exigieran el MISMO permiso por error --
+    `/tomar` con `"tareas:cerrar"` en vez de `"tareas:tomar"`, por
+    ejemplo --, la prueba de arriba (`test_cada_ruta_exige_
+    especificamente_su_propio_permiso`) no lo notaba: como compara "todos
+    los permisos MENOS el mío", y `/tomar` y `/cerrar` compartirían el
+    mismo permiso, quitarle ESE permiso a una clave la deja sin acceso a
+    NINGUNA de las dos rutas por igual -- 403 en las dos, prueba en verde,
+    aunque la ruta esté mal.
+
+    EL DISEÑO (§C.4) DICE «cada ruta declara SU permiso» -- no "un permiso
+    de una lista compartida" -- así que la garantía real es que la función
+    `permiso -> ruta` sea INYECTIVA: ningún permiso sirve para más de una
+    ruta. Si algún día el diseño decide que dos rutas SÍ compartan permiso
+    a propósito, esa lista tiene que nombrarse acá, explícita y mínima
+    (`_PERMISOS_COMPARTIDOS_A_PROPOSITO`, vacía hoy) -- no colarse sin que
+    esta prueba lo note.
+
+    LAS RUTAS SALEN DE `api_code.rutas_registradas(panel.app)`, igual que
+    la prueba de arriba: el día que haya una ruta nueva, entra sola.
+    """
+    _PERMISOS_COMPARTIDOS_A_PROPOSITO: set[str] = set()
+
+    rutas = api_code.rutas_registradas(panel.app)
+    assert rutas, "no se encontró ninguna ruta -- la prueba no vigilaría nada"
+    assert all(permiso is not None for _, _, permiso in rutas), (
+        f"alguna ruta no tiene permiso etiquetado: {rutas}")
+
+    rutas_por_permiso: dict[str, list[tuple[str, str]]] = {}
+    for metodo, path, permiso in rutas:
+        rutas_por_permiso.setdefault(permiso, []).append((metodo, path))
+
+    compartidos_no_declarados = {
+        permiso: destinos
+        for permiso, destinos in rutas_por_permiso.items()
+        if len(destinos) > 1 and permiso not in _PERMISOS_COMPARTIDOS_A_PROPOSITO}
+    assert not compartidos_no_declarados, (
+        "dos o más rutas exigen el MISMO permiso sin que esté declarado a "
+        f"propósito: {compartidos_no_declarados}. Si es un error, arreglá "
+        "la ruta; si es a propósito, sumá el permiso a "
+        "_PERMISOS_COMPARTIDOS_A_PROPOSITO con el porqué")
+
+
 def test_no_existe_ruta_de_alertas():
     """«Mejor ausente que a medias»: `POST /api/code/alertas` es de una
     parte futura del diseño (§B, crear/reusar alerta técnica) y no se
