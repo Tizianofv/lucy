@@ -179,6 +179,16 @@ aviso de Telegram que ya sonó.</p>
         <a class="suave" href="/tareas/{{ s.id }}">{{ s.titulo }}</a>{% if not loop.last %},{% endif %}
         {%- endfor %}</span>
       {%- endif %}
+      {#- «TOMADA» (26-sep-2026, §D, parte 3): la sala de control EMPEZÓ
+         esta tarea técnica. Solo se pinta mientras sigue `pendiente` -- una
+         vez cerrada (`estado='hecha'`), «en curso» dejaría de ser cierto, y
+         esta fila ni siquiera se ve acá (el Historial es otra pantalla).
+         `t.tomada_en` sale de `db.tomadas_de`/`db.tareas_por_grupo`; con la
+         migración sin aplicar viene en `None` para TODAS las filas -- el
+         panel sigue andando, solo que sin esta línea. #}
+      {%- if t.tomada_en and t.estado == pendiente %}
+      <br><span class="suave">🔧 en curso desde {{ t.tomada_en|hora_rd }}</span>
+      {%- endif %}
     </td>
     {# LA ETIQUETA DE ÁREA (encargo 4), en la MISMA lista, siempre visible: sin
        área se ve GRIS con su propio texto, nunca escondida. El color sale de

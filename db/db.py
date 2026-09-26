@@ -2285,6 +2285,40 @@ async def derivaciones() -> dict[int, int]:
     return {f["id"]: f["deriva_de_id"] for f in filas}
 
 
+async def tomadas_de(ids: list[int]) -> dict[int, object]:
+    """`{tarea_id: tomada_en}` de las que la sala ya empezó a trabajar,
+    entre las `ids` que se le pasan (26-sep-2026, §D, parte 3).
+
+    UNA LECTURA APARTE, no un cuarto nivel en la cascada de tolerancia de
+    `tareas_por_grupo` (que ya tiene tres, por área y por «Primero:») --
+    mismo motivo, mismo patrón, que `derivaciones()` con `deriva_de_id`: un
+    SELECT tonto y una sola tolerancia por columna ausente (42703). Si la
+    migración `2026-09-26_tomada_en.sql` no se aplicó todavía, esto
+    devuelve `{}` y ninguna tarea sale "en curso" -- que es como se veían
+    todas hasta ahora.
+
+    Con `ids` vacía no hace falta ni preguntarle a la base.
+    """
+    if not ids:
+        return {}
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(
+                "SELECT id, tomada_en FROM tareas "
+                "WHERE id = ANY(%s) AND tomada_en IS NOT NULL", (ids,))
+            filas = await cur.fetchall()
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate == "42703":
+                return {}
+            raise
+    return {f["id"]: f["tomada_en"] for f in filas}
+
+
 async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -> dict:
     """Las tareas vivas, repartidas en los grupos del panel.
 
@@ -2457,6 +2491,14 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
     # enlace se pinta sin título en vez de romper la pantalla.
     hijas_de = await derivaciones()  # {hija_id: madre_id}
     titulo_de = {f["id"]: f["titulo"] for f in filas}
+
+    # «TOMADA» (26-sep-2026, §D, parte 3): mismo patrón que `hijas_de` arriba
+    # -- una consulta aparte, en lote, después de tener la lista final de
+    # filas. Cada fila que la sala ya tomó lleva su `tomada_en`; el resto,
+    # `None`.
+    tomada_en_de = await tomadas_de([f["id"] for f in filas])
+    for f in filas:
+        f["tomada_en"] = tomada_en_de.get(f["id"])
     siguio_de: dict[int, list[dict]] = {}
     for hija_id, madre_id in hijas_de.items():
         siguio_de.setdefault(madre_id, []).append(
@@ -2598,8 +2640,26 @@ async def tareas_de_code_pendientes() -> list[dict]:
     `primero_id` viaja tal cual -- decidir si una tarea que todavía espera a
     otra debería ofrecérsele a la sala es un refinamiento que el diseño deja
     fuera a propósito (§6 del documento).
+
+    `tomada_en` (26-sep-2026, §D, parte 3): cuándo la sala EMPEZÓ esta tarea
+    (`db.tomar_tarea_de_la_sala`), para que la lista -- y el panel -- puedan
+    decir «en curso» en vez de solo «pendiente». SI LA COLUMNA TODAVÍA NO
+    EXISTE (SQLSTATE 42703, mismo patrón que `tarea_con_comentarios` con
+    `primero_id`), esto cae -- con un SAVEPOINT -- a la consulta de ANTES de
+    esta parte: la lista sigue sirviendo, cada fila con `tomada_en: None`.
     """
-    consulta = """
+    con_tomada = """
+        SELECT t.id, t.titulo, t.detalle, t.vence_en, t.creado_en,
+               t.primero_id, t.tomada_en, p.nombre AS proyecto
+          FROM tareas t
+          LEFT JOIN proyectos p ON p.id = t.proyecto_id
+         WHERE t.borrado_en IS NULL
+           AND t.estado = %s
+           AND t.responsable_chat_id = %s
+           AND COALESCE(t.area, p.area) = %s
+         ORDER BY t.vence_en NULLS LAST, t.id
+        """
+    sin_tomada = """
         SELECT t.id, t.titulo, t.detalle, t.vence_en, t.creado_en,
                t.primero_id, p.nombre AS proyecto
           FROM tareas t
@@ -2612,8 +2672,26 @@ async def tareas_de_code_pendientes() -> list[dict]:
         """
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(consulta, (ESTADO_PENDIENTE, CHAT_ID_CODE, AREA_TECNICA))
-        return list(await cur.fetchall())
+        try:
+            async with conn.transaction():
+                await cur.execute(
+                    con_tomada, (ESTADO_PENDIENTE, CHAT_ID_CODE, AREA_TECNICA))
+                filas = await cur.fetchall()
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate != "42703":
+                raise
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(
+                sin_tomada, (ESTADO_PENDIENTE, CHAT_ID_CODE, AREA_TECNICA))
+            filas = await cur.fetchall()
+    filas = list(filas)
+    for f in filas:
+        f.setdefault("tomada_en", None)
+    return filas
 
 
 async def cerrar_tarea_de_la_sala(tarea_id: int) -> bool:
@@ -2688,6 +2766,88 @@ async def cerrar_tarea_de_la_sala(tarea_id: int) -> bool:
             """,
             (tarea_id, json.dumps(antes, default=str, ensure_ascii=False),
              json.dumps({"estado": ESTADO_HECHA}, ensure_ascii=False),
+             antes.get("bandeja_id")))
+        return True
+
+
+async def tomar_tarea_de_la_sala(tarea_id: int) -> bool | None:
+    """La sala marca que EMPEZÓ a trabajar la tarea `tarea_id` (§D, parte 3
+    del plan de construcción, 26-sep-2026). Devuelve:
+
+      · `True`  — la tomó de verdad recién ahora.
+      · `False` — no se tocó nada: no existe, está borrada, no está
+        `pendiente`, no es de Code, no es Técnica, o YA ESTABA tomada.
+      · `None`  — la columna `tareas.tomada_en` TODAVÍA NO EXISTE
+        (`db/migrations/2026-09-26_tomada_en.sql` sin aplicar). Es un
+        tercer valor A PROPÓSITO, distinto de `False`: acá no hay un
+        "tomar sin poder guardar cuándo" que tenga sentido -- a diferencia
+        de una tarea derivada sin `deriva_de_id`, no existe una escritura
+        parcial razonable -- así que se distingue de un rechazo por valor
+        para que quien llama (la ruta HTTP) pueda contestar un error CLARO
+        y registrado en vez de un 500 mudo o, peor, un 409 que mienta
+        diciendo "no es de Code" cuando en realidad SÍ lo es.
+
+    LA GUARDA VIVE EN EL `WHERE`, MISMO PATRÓN que `cerrar_tarea_de_la_
+    sala`: `consulta_elegible` solo trae la fila si su área EFECTIVA es
+    `AREA_TECNICA`, su `responsable_chat_id` es `CHAT_ID_CODE`, su `estado`
+    es `pendiente`, Y `tomada_en` sigue en `NULL`. TOMARLA DOS VECES es
+    un no-op seguro: la segunda llamada no encuentra la fila (ya no cumple
+    `tomada_en IS NULL`) y devuelve `False` SIN pisar la hora que puso la
+    primera -- la condición está en el `WHERE`, no en un `if` después de
+    leer el valor viejo.
+
+    EL RASTRO: `actor='sala'`, igual que al cerrar, con su propio motivo.
+    """
+    consulta_elegible = """
+            SELECT t.id, t.titulo, t.estado, t.vence_en, t.bandeja_id,
+                   t.responsable_chat_id, t.tomada_en,
+                   COALESCE(t.area, p.area) AS area_efectiva
+              FROM tareas t LEFT JOIN proyectos p ON p.id = t.proyecto_id
+             WHERE t.id = %s
+               AND t.borrado_en IS NULL
+               AND t.estado = %s
+               AND t.responsable_chat_id = %s
+               AND COALESCE(t.area, p.area) = %s
+               AND t.tomada_en IS NULL
+            """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            async with conn.transaction():
+                await cur.execute(
+                    consulta_elegible,
+                    (tarea_id, ESTADO_PENDIENTE, CHAT_ID_CODE, AREA_TECNICA))
+                antes = await cur.fetchone()
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate != "42703":
+                raise
+            log.warning(
+                "tomar_tarea_de_la_sala: falta tareas.tomada_en (falta la "
+                "migracion db/migrations/2026-09-26_tomada_en.sql) -- no se "
+                "puede tomar la tarea #%s", tarea_id)
+            return None
+        if antes is None:
+            # No existe, borrada, no pendiente, no es de Code, no es
+            # Técnica, o ya estaba tomada -- la consulta ya descartó los
+            # seis casos.
+            return False
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "UPDATE tareas SET tomada_en = now() WHERE id = %s", (tarea_id,))
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo,
+               bandeja_id)
+            VALUES ('sala', 'editar', 'tareas', %s, %s, %s,
+                    'tarea técnica tomada por la sala de control (Code)', %s)
+            """,
+            (tarea_id, json.dumps(antes, default=str, ensure_ascii=False),
+             json.dumps({"tomada_en": "now"}, ensure_ascii=False),
              antes.get("bandeja_id")))
         return True
 
@@ -2990,6 +3150,10 @@ async def tarea_con_comentarios(tarea_id: int) -> dict | None:
     tarea["primero_esperando"] = (
         tarea.get("primero_id") is not None
         and tarea.get("primero_estado") == ESTADO_PENDIENTE)
+    # «TOMADA» (26-sep-2026, §D, parte 3): mismo patrón que `derivaciones`/
+    # `tomadas_de` en `tareas_por_grupo` -- una consulta aparte, tolerante a
+    # la columna ausente, en vez de un cuarto nivel de cascada acá.
+    tarea["tomada_en"] = (await tomadas_de([tarea_id])).get(tarea_id)
     # LOS MICRO-PASOS (encargo 7): `pasos_de_tarea` ya tolera la tabla
     # ausente por su cuenta (devuelve `[]`), así que no hace falta otro
     # SAVEPOINT acá -- es una consulta APARTE, no un tercer JOIN.

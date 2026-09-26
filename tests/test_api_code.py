@@ -94,7 +94,7 @@ NATALIA_CLAVE = "clave-de-prueba-natalia-no-es-real-0987654321"
 def _con_sala_y_natalia():
     return _con_claves(
         {SALA_CLAVE: "sala_mac", NATALIA_CLAVE: "natalia"},
-        {"sala_mac": frozenset({"tareas:listar", "tareas:cerrar"}),
+        {"sala_mac": frozenset({"tareas:listar", "tareas:cerrar", "tareas:tomar"}),
          "natalia": frozenset({"alertas:crear"})})
 
 
@@ -165,6 +165,21 @@ class _CurFake:
         return self._filas
 
 
+class _TransaccionFake:
+    """El SAVEPOINT de mentira que usan `db.tareas_de_code_pendientes` y
+    `db.tomar_tarea_de_la_sala` para tolerar `tareas.tomada_en` ausente
+    (§D, parte 3) -- acá nunca falla, solo hace falta para que
+    `async with conn.transaction():` no reviente antes de ejecutar nada."""
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *e):
+        return False
+
+
 class _ConnFake:
     def __init__(self, listar_filas=None, elegible=None):
         self.listar_filas = listar_filas or []
@@ -176,6 +191,9 @@ class _ConnFake:
 
     async def execute(self, sql, params=None):
         return await _CurFake(self).execute(sql, params)
+
+    def transaction(self):
+        return _TransaccionFake(self)
 
 
 class _PoolFake:
@@ -210,18 +228,24 @@ def test_clave_de_sala_puede_listar_y_cerrar():
         r1 = CLIENTE.get("/api/code/tareas",
                          headers={"Authorization": f"Bearer {SALA_CLAVE}"})
         assert r1.status_code == 200
-        assert r1.json() == {"tareas": [{"id": 5, "titulo": "Arreglar el canario"}]}
+        assert r1.json() == {"tareas": [
+            {"id": 5, "titulo": "Arreglar el canario", "tomada_en": None}]}
 
         r2 = CLIENTE.post("/api/code/tareas/5/cerrar",
                           headers={"Authorization": f"Bearer {SALA_CLAVE}"})
         assert r2.status_code == 200
         assert r2.json() == {"cerrada": True}
+
+        r3 = CLIENTE.post("/api/code/tareas/5/tomar",
+                          headers={"Authorization": f"Bearer {SALA_CLAVE}"})
+        assert r3.status_code == 200
+        assert r3.json() == {"tomada": True}
     finally:
         db.pool = guardado
         restaurar()
 
 
-def test_clave_de_natalia_no_puede_listar_ni_cerrar():
+def test_clave_de_natalia_no_puede_listar_ni_cerrar_ni_tomar():
     """GARANTÍA PEDIDA EXPLÍCITAMENTE. Natalia solo tiene "alertas:crear" --
     una ruta que en esta parte ni siquiera existe -- así que hoy no puede
     hacer NADA en esta puerta salvo recibir 403."""
@@ -237,6 +261,10 @@ def test_clave_de_natalia_no_puede_listar_ni_cerrar():
         r2 = CLIENTE.post("/api/code/tareas/5/cerrar",
                           headers={"Authorization": f"Bearer {NATALIA_CLAVE}"})
         assert r2.status_code == 403
+
+        r3 = CLIENTE.post("/api/code/tareas/5/tomar",
+                          headers={"Authorization": f"Bearer {NATALIA_CLAVE}"})
+        assert r3.status_code == 403
     finally:
         db.pool = guardado
         restaurar()
@@ -289,19 +317,18 @@ def test_cada_ruta_exige_especificamente_su_propio_permiso():
         db.pool = guardado
 
 
-def test_no_existe_ruta_de_tomar_ni_de_alertas():
-    """«Mejor ausente que a medias»: estas rutas son de partes futuras del
-    diseño y no se construyen todavía, aunque el permiso `alertas:crear` ya
-    esté reservado en el formato de `PERMISOS_API_CODE`."""
+def test_no_existe_ruta_de_alertas():
+    """«Mejor ausente que a medias»: `POST /api/code/alertas` es de una
+    parte futura del diseño (§B, crear/reusar alerta técnica) y no se
+    construye todavía, aunque el permiso `alertas:crear` ya esté reservado
+    en el formato de `PERMISOS_API_CODE`. `/tareas/{id}/tomar` SÍ existe
+    desde esta parte (§D, parte 3) -- se prueba aparte, no acá."""
     restaurar = _con_sala_y_natalia()
     _limpiar_contadores_de_abuso()
     try:
-        r1 = CLIENTE.post("/api/code/tareas/5/tomar",
-                          headers={"Authorization": f"Bearer {SALA_CLAVE}"})
-        assert r1.status_code == 404
-        r2 = CLIENTE.post("/api/code/alertas",
-                          headers={"Authorization": f"Bearer {NATALIA_CLAVE}"})
-        assert r2.status_code == 404
+        r = CLIENTE.post("/api/code/alertas",
+                         headers={"Authorization": f"Bearer {NATALIA_CLAVE}"})
+        assert r.status_code == 404
     finally:
         restaurar()
 

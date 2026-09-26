@@ -221,13 +221,13 @@ def nombres_con_code() -> dict[int, str]:
 # — un `:` DENTRO del permiso (`tareas:listar`) es parte del nombre, así que
 # el separador entre `quien` y su lista es `=`, no `:`:
 #
-#     PERMISOS_API_CODE="sala_mac=tareas:listar+tareas:cerrar, sala_nube=tareas:listar+tareas:cerrar, natalia=alertas:crear"
+#     PERMISOS_API_CODE="sala_mac=tareas:listar+tareas:cerrar+tareas:tomar, sala_nube=tareas:listar+tareas:cerrar+tareas:tomar, natalia=alertas:crear"
 #
-# Los permisos que YA EXISTEN en el código, hoy (parte 2 del plan): sólo
-# `tareas:listar` y `tareas:cerrar` tienen una ruta que los pida
-# (`web/api_code.py`). `alertas:crear` y `tareas:tomar` son NOMBRES ya
-# reservados para partes futuras del mismo diseño (§D, crear/reusar
-# alerta técnica) — declararlos acá no abre ninguna ruta que no exista.
+# Los permisos que YA EXISTEN en el código, hoy (parte 3 del plan): `tareas:
+# listar`, `tareas:cerrar` y `tareas:tomar` tienen una ruta que los pida
+# (`web/api_code.py`). `alertas:crear` es un NOMBRE ya reservado para una
+# parte futura del mismo diseño (§B, crear/reusar alerta técnica) —
+# declararlo acá no abre ninguna ruta que no exista.
 #
 # CERRADO POR DEFECTO, en dos niveles independientes:
 #   · Si `CLAVES_API_CODE` no está puesta (o no tiene ninguna pieza legible),

@@ -3845,10 +3845,21 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `tests/test_panel.py` (censo de rutas protegidas, actualizado para
     # aceptar `Depends(requiere(` además de `puede_entrar`) ya estaban
     # vigilados de antes. No hizo falta ninguna migración.
-    assert medido == {"en disco": 93, "exentos": 52, "vigilados": 41}, (
+    #
+    # 26-sep-2026, rama `trabajo/code-tomada` (§D, parte 3 del plan de
+    # construcción — la marca «tomada»): 93 → 94 en disco, 52 → 53 EXENTOS
+    # por `tests/test_code_tomada.py` (SQL real contra SQLite para la
+    # guarda de `tomar_tarea_de_la_sala`, la app FastAPI real para la ruta,
+    # y el panel real para la etiqueta «en curso»). VIGILADOS sin cambio en
+    # 41: el trabajo tocó `db/db.py` (tomar_tarea_de_la_sala, tomadas_de,
+    # tareas_de_code_pendientes con tomada_en), `web/api_code.py` (ruta
+    # /tomar) y `config.py` (comentario de PERMISOS_API_CODE), los tres ya
+    # vigilados de antes. La migración nueva
+    # (`db/migrations/2026-09-26_tomada_en.sql`) no es un `.py`.
+    assert medido == {"en disco": 94, "exentos": 53, "vigilados": 41}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "26-sep-2026 (rama code-puerta) era {'en disco': 93, "
-        "'exentos': 52, 'vigilados': 41}. La aserción de fondo —cero "
+        "26-sep-2026 (rama code-tomada) era {'en disco': 94, "
+        "'exentos': 53, 'vigilados': 41}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

@@ -222,6 +222,20 @@ CREATE TABLE tareas (
   -- hay DELETE real sobre `tareas` (soft-delete).
   deriva_de_id    BIGINT REFERENCES tareas(id),
 
+  -- «Tomada» (26-sep-2026, diseño «Code como responsable», §D — parte 3 del
+  -- plan de construcción). Cuándo la sala de control EMPEZÓ a trabajar una
+  -- tarea técnica suya, ANTES de cerrarla (`db.cerrar_tarea_de_la_sala`,
+  -- §4). NULL = todavía no la tomó nadie, que es el estado normal de toda
+  -- tarea que nace. NO es un `estado` nuevo -- la tarea sigue `pendiente`
+  -- mientras se trabaja, y pasa a `hecha` solo al cerrarse -- es ORTOGONAL,
+  -- mismo patrón incremental que `area`/`primero_id`/`deriva_de_id`: una
+  -- columna nullable que no rompe nada de lo que ya lee `tareas`.
+  -- LA PONE SOLO `db.tomar_tarea_de_la_sala`, con la misma guarda embebida
+  -- en el SQL que `cerrar_tarea_de_la_sala` (Técnico + Code + pendiente +
+  -- no tomada todavía): tomar una tarea que no es de Code, o tomarla dos
+  -- veces, no escribe nada.
+  tomada_en       TIMESTAMPTZ,
+
   -- «Una tarea dentro de un proyecto nunca tiene un área propia distinta»
   -- (decisión de Tiziano: el área sale del proyecto, nadie la elige aparte).
   -- El caso queda IRREPRESENTABLE, no validado en cada escritura: con

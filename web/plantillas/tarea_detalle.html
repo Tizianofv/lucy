@@ -13,6 +13,8 @@
   · {{ tarea.estado }}
   {%- if tarea.responsable_chat_id is not none %}
   · Responsable: {{ nombres.get(tarea.responsable_chat_id, 'sin nombre') }}{% endif %}
+  {%- if tarea.tomada_en and tarea.estado == pendiente %}
+  · 🔧 en curso desde {{ tarea.tomada_en|hora_rd }}{% endif %}
 </p>
 
 {% if area_guardada %}<p class="aviso ok">Área guardada.</p>{% endif %}

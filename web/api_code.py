@@ -200,6 +200,37 @@ async def cerrar_tarea(
     return {"cerrada": True}
 
 
+@router.post("/tareas/{tid}/tomar")
+async def tomar_tarea(
+    tid: int, quien: str = Depends(requiere("tareas:tomar"))
+) -> dict:
+    """Marca que la sala EMPEZÓ a trabajar la tarea `tid` (§D, parte 3). La
+    guarda de valor (Técnico + Code + pendiente + no tomada todavía) NO se
+    repite acá: vive en el `WHERE` de `db.tomar_tarea_de_la_sala`.
+
+    TRES RESPUESTAS, porque `db.tomar_tarea_de_la_sala` distingue TRES
+    casos (ver su docstring): `True` -> 200; `False` -> 409 (no es
+    elegible, o ya estaba tomada); `None` -> 503, un error CLARO y
+    registrado ("falta la migración"), nunca un 500 mudo ni un 409 que
+    mienta diciendo que la tarea no es de Code cuando sí lo es.
+    """
+    ok = await db.tomar_tarea_de_la_sala(tid)
+    if ok is None:
+        log.error(
+            "puerta de Code: /tareas/%s/tomar sin tareas.tomada_en -- "
+            "falta aplicar db/migrations/2026-09-26_tomada_en.sql", tid)
+        raise HTTPException(
+            status_code=503,
+            detail="no se puede tomar todavía: falta una migración de la "
+                   "base (tareas.tomada_en). Avisale a la sala/Tiziano.")
+    if not ok:
+        raise HTTPException(
+            status_code=409,
+            detail="no se tomó: no existe, no está pendiente, no es una "
+                   "tarea Técnica de Code, o ya estaba tomada")
+    return {"tomada": True}
+
+
 def rutas_registradas(app) -> list[tuple[str, str, str]]:
     """(método, ruta completa, permiso que exige) de cada ruta de esta
     puerta, sacado de lo que FastAPI REALMENTE registró en `app.routes` --
