@@ -826,14 +826,53 @@ class _BotMudo:
                              "no devuelve filas en esta prueba")
 
 
+# `revisar()` no es solo la consulta grande: al final también llama a
+# `_briefing()`, `_semanal()` y `_reprogramar_recurrentes()` (encargos
+# aparte, con su propio reloj -- `BRIEFING_DESDE/HASTA`, `SEMANAL_*`). Esta
+# suite no vigila esos encargos (tienen su propia: `test_briefing_por_
+# persona.py`), así que hay que correr `revisar()` en un momento en que
+# NINGUNO de los tres decide actuar -- si no, `_ConnDespertador` (que solo
+# entiende la consulta grande y `log_acciones`) recibe un INSERT INTO
+# `bandeja` que no sabe servir y la prueba revienta con
+# `TypeError: 'NoneType' object is not subscriptable` en `db.guardar_en_
+# bandeja` -- eso, y no el SQL que esta prueba sí vigila, es lo que fallaba
+# (comprobado corriendo la suite sin fijar el reloj: falla entre las 7:00 y
+# las 11:59 hora de Santo Domingo, pasa el resto del día -- depende de la
+# hora real de la máquina, no del código que se quiere probar). Se fija un
+# miércoles a las 3pm: fuera de la ventana del briefing (7-12), fuera de la
+# del plan semanal (domingo 20-21) y de su rescate (lunes 6-9). Mismo patrón
+# que `tests/test_briefing_por_persona.py::_montar` (`_Reloj(datetime)` con
+# `now()` fijo), aplicado acá porque esta prueba SÍ necesita que `_briefing`
+# y `_semanal` decidan "todavía no toca" y salgan por su propio `return 0`.
+_MOMENTO_NEUTRO = datetime(2026, 9, 23, 15, 0, tzinfo=config.TZ)  # miércoles
+
+
+class _RelojFijo(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return _MOMENTO_NEUTRO
+
+
+def _fijar_reloj(despertador):
+    anterior = despertador.datetime
+    despertador.datetime = _RelojFijo
+    return anterior
+
+
+def _soltar_reloj(despertador, anterior):
+    despertador.datetime = anterior
+
+
 def test_el_despertador_excluye_lo_que_espera_en_su_propia_consulta():
     from cerebro import despertador
 
     conn = _ConnDespertador()
     guardado = _instalar(conn)
+    reloj = _fijar_reloj(despertador)
     try:
         _correr(despertador.revisar(_BotMudo()))
     finally:
+        _soltar_reloj(despertador, reloj)
         _restaurar(guardado)
     grandes = [s for s in conn.sql if s.startswith("SELECT 'tareas' AS tabla")]
     assert grandes, "no se ejecutó la consulta grande de avisos"
@@ -853,9 +892,11 @@ def test_el_despertador_tolera_la_columna_primero_id_ausente():
 
     conn = _ConnDespertador(sin_columna_primero=True)
     guardado = _instalar(conn)
+    reloj = _fijar_reloj(despertador)
     try:
         avisos = _correr(despertador.revisar(_BotMudo()))
     finally:
+        _soltar_reloj(despertador, reloj)
         _restaurar(guardado)
     assert avisos == 0, "sin filas que avisar, tiene que devolver 0 y no reventar"
     grandes = [s for s in conn.sql if s.startswith("SELECT 'tareas' AS tabla")]
