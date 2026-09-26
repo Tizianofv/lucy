@@ -236,6 +236,35 @@ CREATE TABLE tareas (
   -- veces, no escribe nada.
   tomada_en       TIMESTAMPTZ,
 
+  -- ALARMAS TÉCNICAS (26-sep-2026, diseño «Code como responsable», §B —
+  -- parte 4 del plan de construcción). Las tareas que Lucy misma crea para
+  -- la sala de control cuando detecta un problema técnico (el respaldo, el
+  -- canario de bancos, el latido de la cosecha de correo) llevan estas dos
+  -- columnas puestas; una tarea normal (dictada por Telegram o por el
+  -- panel) las deja en NULL siempre.
+  --
+  -- `clave_tecnica` identifica DE QUÉ PROBLEMA se trata -- "backup",
+  -- "latido_cosecha", o "canario:<remitente>:<señal>" -- una clave estable
+  -- que arma el propio código de la alarma, nunca texto libre inventado por
+  -- una IA. Es la puerta del dedupe: `db.crear_o_reusar_alerta_tecnica`
+  -- busca una tarea PENDIENTE con la MISMA clave antes de crear una nueva
+  -- -- así la misma falla, vista cada ~15 minutos, reusa una sola fila en
+  -- vez de abrir noventa y pico tareas por día. Si la tarea vieja ya se
+  -- cerró, una clave repetida abre una NUEVA -- es un problema distinto en
+  -- el tiempo, no el mismo sin resolver.
+  clave_tecnica   TEXT,
+
+  -- Cuándo se vio ESTA falla por última vez, mientras la tarea sigue
+  -- abierta. Nace igual a `creado_en`; `crear_o_reusar_alerta_tecnica` la
+  -- actualiza cada vez que la misma `clave_tecnica` vuelve a dispararse. Es
+  -- el reloj del aviso de las 6 horas (`cerebro/despertador.py::revisar_
+  -- alertas_tecnicas_sin_tomar`): si la sala no la TOMA (`tomada_en`, §D)
+  -- en las 6 horas siguientes a la última vez que la falla ocurrió de
+  -- verdad, Tiziano se entera -- contando desde la última señal real, no
+  -- desde que la tarea nació, para que un problema que sigue pasando no se
+  -- "venza" antes de tiempo mientras la sala todavía no lo mira.
+  ultima_alarma_en TIMESTAMPTZ,
+
   -- «Una tarea dentro de un proyecto nunca tiene un área propia distinta»
   -- (decisión de Tiziano: el área sale del proyecto, nadie la elige aparte).
   -- El caso queda IRREPRESENTABLE, no validado en cada escritura: con
@@ -267,6 +296,12 @@ CREATE INDEX IF NOT EXISTS idx_tareas_primero_id ON tareas(primero_id)
 -- nulo. Parcial por el mismo motivo que el de `primero_id`: van a ser pocas.
 CREATE INDEX IF NOT EXISTS idx_tareas_deriva_de_id ON tareas(deriva_de_id)
   WHERE deriva_de_id IS NOT NULL;
+
+-- Para `db.crear_o_reusar_alerta_tecnica`, que busca por `clave_tecnica`
+-- entre las PENDIENTES en cada alarma (~cada 15 minutos). Parcial: solo las
+-- tareas técnicas la tienen puesta, que van a ser pocas frente al total.
+CREATE INDEX IF NOT EXISTS idx_tareas_clave_tecnica ON tareas(clave_tecnica)
+  WHERE clave_tecnica IS NOT NULL;
 
 -- SIN CÍRCULOS (A espera a B, B espera a A, o una cadena más larga que
 -- vuelve sobre sí misma): ESTO NO LO IMPIDE LA BASE, a propósito. Un CHECK

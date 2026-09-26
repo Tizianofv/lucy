@@ -2911,6 +2911,160 @@ async def tomar_tarea_de_la_sala(tarea_id: int) -> bool | None:
         return True
 
 
+async def crear_o_reusar_alerta_tecnica(clave: str, titulo: str, detalle: str) -> int | None:
+    """Convierte una alarma técnica de Lucy en una tarea de Code -- o, si ya
+    hay una abierta para el MISMO problema, le agrega esta ocurrencia en vez
+    de crear otra (§B, parte 4 del plan de construcción, 26-sep-2026).
+
+    Devuelve el `id` de la tarea (nueva o reusada), o `None` si las columnas
+    `clave_tecnica`/`ultima_alarma_en` todavía no existen (la migración
+    `2026-09-26_alertas_tecnicas.sql` sin aplicar, SQLSTATE 42703). `None`
+    es un tercer valor A PROPÓSITO, igual que en `tomar_tarea_de_la_sala`:
+    no hay una "alerta a medias" razonable sin poder guardar la clave del
+    dedupe, así que quien llama tiene que enterarse y avisar a Tiziano como
+    antes -- no ignorar el problema.
+
+    SIN DUPLICADOS, DECIDIDO CONTRA LA BASE: se busca una tarea PENDIENTE
+    con la MISMA `clave_tecnica` (no un diccionario en memoria, que se
+    pierde en cada redespliegue -- el defecto que tenía el canario hasta
+    ahora). Si existe, se le AGREGA esta ocurrencia al `detalle` (con
+    `||`, nunca reescribiendo lo que ya había) y se actualiza
+    `ultima_alarma_en`; no se toca `log_acciones` de nuevo -- la tarea ya
+    tiene su huella de creación, y esto es la MISMA tarea, no una edición
+    que alguien pidió. Si NO existe -- porque es la primera vez, o porque
+    la anterior con esa clave ya se CERRÓ (`estado <> 'pendiente'`, así que
+    el SELECT no la encuentra) -- nace una tarea nueva: Técnica, de Code,
+    con la clave puesta, y su propia huella en `log_acciones` (`actor=
+    'lucy'`, porque es Lucy quien la crea sola, sin que nadie se lo pida
+    en ese momento).
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(
+                "SELECT id, detalle FROM tareas "
+                "WHERE clave_tecnica = %s AND estado = %s AND borrado_en IS NULL",
+                (clave, ESTADO_PENDIENTE))
+            existente = await cur.fetchone()
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate != "42703":
+                raise
+            log.warning(
+                "crear_o_reusar_alerta_tecnica: faltan tareas.clave_tecnica/"
+                "ultima_alarma_en (falta la migracion db/migrations/"
+                "2026-09-26_alertas_tecnicas.sql) -- clave=%s", clave)
+            return None
+
+        if existente is not None:
+            ahora = f"\n\n— Volvió a pasar ({datetime.now(timezone.utc):%d/%m %H:%M} UTC): {detalle}"
+            await conn.execute(
+                "UPDATE tareas SET detalle = COALESCE(detalle, '') || %s, "
+                "ultima_alarma_en = now() WHERE id = %s",
+                (ahora, existente["id"]))
+            return existente["id"]
+
+        # LA MISMA PUERTA que cualquier otro escritor de `responsable_chat_id`
+        # (`tests/test_responsable.py::
+        # test_toda_escritura_de_la_columna_pasa_por_la_misma_puerta`, que
+        # censa TODO `execute` del repo que nombre la columna): acá el valor
+        # es SIEMPRE `CHAT_ID_CODE`, nunca algo que alguien pidió, pero la
+        # regla es "toda escritura pasa por la puerta", no "toda escritura
+        # que reciba un valor de afuera" -- así que si algún día
+        # `puede_ser_responsable` dejara de aceptar a Code, esto avisa en
+        # vez de seguir escribiendo un responsable que la puerta ya rechaza.
+        if not puede_ser_responsable(CHAT_ID_CODE):
+            raise ValueError(
+                "CHAT_ID_CODE ya no pasa por puede_ser_responsable -- no "
+                "debería pasar nunca, revisar config.puede_ser_responsable")
+        await cur.execute(
+            """
+            INSERT INTO tareas
+              (titulo, detalle, area, responsable_chat_id, clave_tecnica,
+               ultima_alarma_en)
+            VALUES (%s, %s, %s, %s, %s, now())
+            RETURNING id
+            """,
+            (titulo, detalle, AREA_TECNICA, CHAT_ID_CODE, clave))
+        fila = await cur.fetchone()
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, despues, motivo)
+            VALUES ('lucy', 'crear', 'tareas', %s, %s,
+                    'alarma técnica convertida en tarea de Code')
+            """,
+            (fila["id"],
+             json.dumps({"clave_tecnica": clave, "titulo": titulo},
+                       ensure_ascii=False)))
+        return fila["id"]
+
+
+async def tareas_tecnicas_atrasadas(umbral_horas: int = 6) -> list[dict]:
+    """Las tareas técnicas de Code que llevan más de `umbral_horas` sin que
+    la sala las TOME (`tomada_en`, §D) desde la última vez que la falla
+    ocurrió de verdad -- y a las que TODAVÍA no se les avisó a Tiziano de
+    ese atraso (§B.3, parte 4).
+
+    EL AVISO YA MANDADO SE MARCA EN `log_acciones`
+    (`marcar_aviso_atraso_code`), no en memoria: sobrevive un redespliegue
+    sin duplicar -- la MISMA fila de `log_acciones` sigue estando después de
+    reiniciar el proceso -- y sin perderse -- no depende de que el proceso
+    seguido sea el mismo que detectó el atraso la primera vez.
+
+    SIN LA MIGRACIÓN (`clave_tecnica`/`ultima_alarma_en`/`tomada_en`
+    ausentes, SQLSTATE 42703), devuelve `[]`: nada que revisar todavía,
+    nunca revienta.
+    """
+    consulta = """
+        SELECT t.id, t.titulo, t.clave_tecnica
+          FROM tareas t
+         WHERE t.clave_tecnica IS NOT NULL
+           AND t.borrado_en IS NULL
+           AND t.estado = %s
+           AND t.tomada_en IS NULL
+           AND COALESCE(t.ultima_alarma_en, t.creado_en)
+                 < now() - make_interval(hours => %s)
+           AND NOT EXISTS (
+                 SELECT 1 FROM log_acciones la
+                  WHERE la.tabla = 'tareas' AND la.registro_id = t.id
+                    AND la.accion = 'aviso_atraso_code')
+         ORDER BY t.id
+        """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(consulta, (ESTADO_PENDIENTE, int(umbral_horas)))
+            return list(await cur.fetchall())
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate != "42703":
+                raise
+            return []
+
+
+async def marcar_aviso_atraso_code(tarea_id: int) -> None:
+    """Deja constancia en `log_acciones` de que YA se le avisó a Tiziano
+    que esta tarea técnica de Code lleva atraso (§B.3). Es la marca que lee
+    `tareas_tecnicas_atrasadas` para no volver a avisar -- persistida en la
+    base, no en memoria, para que sobreviva un redespliegue.
+    """
+    async with pool.connection() as conn:
+        await conn.execute(
+            """
+            INSERT INTO log_acciones (actor, accion, tabla, registro_id, motivo)
+            VALUES ('lucy', 'aviso_atraso_code', 'tareas', %s,
+                    'avisado a Tiziano: la sala no tomó esta tarea técnica a tiempo')
+            """,
+            (tarea_id,))
+
+
 async def asignar_responsable(tarea_id: int, chat_id: int | None) -> bool:
     """Pone (o quita) quién tiene pendiente UNA tarea. Devuelve si cambió algo.
 

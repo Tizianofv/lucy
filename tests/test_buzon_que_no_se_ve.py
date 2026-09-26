@@ -3856,10 +3856,25 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # /tomar) y `config.py` (comentario de PERMISOS_API_CODE), los tres ya
     # vigilados de antes. La migración nueva
     # (`db/migrations/2026-09-26_tomada_en.sql`) no es un `.py`.
-    assert medido == {"en disco": 94, "exentos": 53, "vigilados": 41}, (
+    #
+    # 26-sep-2026, rama `trabajo/code-alarmas` (§B, parte 4 del plan de
+    # construcción — las alarmas técnicas pasan a Code): 94 → 95 en disco,
+    # 53 → 54 EXENTOS por `tests/test_code_alarmas.py` (SQL real contra
+    # dobles de conexión para el dedupe de `crear_o_reusar_alerta_tecnica`
+    # y para el aviso de 6 horas, y las cinco alarmas de punta a punta,
+    # primario y de respaldo). VIGILADOS sin cambio en 41: el trabajo tocó
+    # `db/db.py` (crear_o_reusar_alerta_tecnica, tareas_tecnicas_atrasadas,
+    # marcar_aviso_atraso_code), `cerebro/despertador.py` (revisar_backup
+    # reescrita, revisar_alertas_tecnicas_sin_tomar nueva),
+    # `cerebro/interpretar.py` (la agenda la llama cada ~10 min) y
+    # `captura/consumos.py` (las tres señales del canario y el latido,
+    # más el ayudante `_alertar`), los cuatro ya vigilados de antes. La
+    # migración nueva (`db/migrations/2026-09-26_alertas_tecnicas.sql`) no
+    # es un `.py`.
+    assert medido == {"en disco": 95, "exentos": 54, "vigilados": 41}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "26-sep-2026 (rama code-tomada) era {'en disco': 94, "
-        "'exentos': 53, 'vigilados': 41}. La aserción de fondo —cero "
+        "26-sep-2026 (rama code-alarmas) era {'en disco': 95, "
+        "'exentos': 54, 'vigilados': 41}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

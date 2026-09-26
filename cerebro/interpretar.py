@@ -349,6 +349,16 @@ async def bucle(bot) -> None:
             except Exception:
                 log.warning("No pude revisar el estado del respaldo; sigo igual.",
                             exc_info=True)
+        # Las alarmas técnicas convertidas en tareas de Code (§B, parte 4,
+        # 26-sep-2026): mismo ~10 min que el respaldo -- el umbral es de 6
+        # horas, así que sobra margen para notar el atraso sin que revisarlo
+        # cada rato cueste nada (dos SELECT chicos).
+        if vuelta % 120 == 0:
+            try:
+                await despertador.revisar_alertas_tecnicas_sin_tomar(bot)
+            except Exception:
+                log.warning("No pude revisar las alertas técnicas sin tomar; "
+                            "sigo igual.", exc_info=True)
         # El calendario se jala cada ~5 min (60 vueltas): las sesiones del
         # estudio no cambian cada segundo, y consultar 10 calendarios más
         # seguido gastaría cuota sin ganar frescura útil.

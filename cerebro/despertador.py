@@ -192,26 +192,96 @@ def _texto_backup(ultimo_backup, ahora) -> str:
 
 
 async def revisar_backup(bot) -> int:
-    """Avisa por Telegram si hace más de 48h que no hay respaldo. Devuelve 1 si avisó.
+    """Convierte en tarea de Code —o actualiza la que ya esté abierta— si
+    hace más de 48h que no hay respaldo (§B, parte 4, 26-sep-2026). Devuelve
+    1 si avisó de alguna forma.
 
-    Es barato —dos SELECT chicos— así que puede correr seguido sin costar nada;
-    quien decide la frecuencia real del MENSAJE es BACKUP_REAVISO_H, no cada
-    cuánto se llame a esta función.
+    Es barato —dos SELECT chicos— así que puede correr seguido sin costar
+    nada: quien decide si hay ALGO que decir es `BACKUP_MAX_H` (48h desde el
+    último respaldo), y el "sin duplicados" ya no depende de cada cuánto se
+    llame a esta función ni de `BACKUP_REAVISO_H` -- lo decide `db.crear_o_
+    reusar_alerta_tecnica` contra la base, por `clave_tecnica`.
 
-    No se aplaza por la tarifa doble de DeepSeek: esto no gasta IA (es un texto
-    fijo, no pasa por el agente) y además es de la clase de avisos que no se
-    difieren, igual que la vigilancia 911. Ahorrar centavos posponiendo la noticia
-    de que no hay respaldo sería el peor negocio posible.
+    NADA FALLA CALLADO EN LA TRANSICIÓN: si la tarea de Code no se pudo
+    crear (falta la migración, o la escritura falló por cualquier otro
+    motivo), esto cae al camino de ANTES de esta parte -- Telegram directo,
+    con `BACKUP_REAVISO_H` como throttle, igual que siempre.
     """
     ahora = datetime.now(timezone.utc)
     ultimo = await db.ultimo_backup()
     hecho_en = ultimo["hecho_en"] if ultimo else None
+    if hecho_en is not None and ahora - hecho_en < timedelta(hours=BACKUP_MAX_H):
+        return 0  # el respaldo está al día: no hay nada que avisar
+
+    texto = _texto_backup(hecho_en, ahora)
+    try:
+        tid = await db.crear_o_reusar_alerta_tecnica(
+            "backup", "Respaldo de la base atrasado", texto)
+    except Exception:
+        tid = None
+        log.exception("crear_o_reusar_alerta_tecnica falló para 'backup'")
+    if tid is not None:
+        log.warning("Alarma de respaldo (desde %s) -> tarea de Code #%s.",
+                    hecho_en or "nunca", tid)
+        return 1
+
+    # Sin la migración, o la escritura falló: camino de ANTES de esta parte,
+    # con su propio throttle de BACKUP_REAVISO_H para no repetirlo sin parar.
     if not _hay_que_avisar(hecho_en, await db.ultimo_aviso_de_backup(), ahora):
         return 0
-
-    await _avisar(bot, _texto_backup(hecho_en, ahora))
-    log.warning("Avisé que no hay respaldo desde %s.", hecho_en or "nunca")
+    await _avisar(bot, texto)
+    log.warning("Avisé que no hay respaldo desde %s (sin Code).",
+               hecho_en or "nunca")
     return 1
+
+
+# Decidido por Tiziano, 26-sep-2026: si la sala no TOMA una tarea técnica
+# (`tomada_en`, §D) en las 6 horas siguientes a la última vez que la falla
+# ocurrió de verdad (`ultima_alarma_en`), Tiziano se entera -- como antes de
+# esta parte, pero por una tarea sin tomar en vez de un aviso directo.
+UMBRAL_ATRASO_ALERTA_TECNICA_H = 6
+
+
+async def revisar_alertas_tecnicas_sin_tomar(bot) -> int:
+    """Le avisa a Tiziano de cada tarea técnica de Code que lleva más de
+    `UMBRAL_ATRASO_ALERTA_TECNICA_H` horas sin que la sala la tome (§B.3,
+    parte 4 del plan de construcción, 26-sep-2026).
+
+    UNA SOLA VEZ POR TAREA, DECIDIDO CONTRA LA BASE: `db.tareas_tecnicas_
+    atrasadas` ya excluye las que tienen una marca de `log_acciones` puesta
+    por `db.marcar_aviso_atraso_code` -- no un diccionario en memoria, que
+    se perdería en cada redespliegue (el MISMO defecto que tenía el canario
+    de bancos antes de esta parte, en `captura/consumos.py::_ultimo_aviso`).
+    Por eso el orden acá importa: se marca DESPUÉS de mandar el aviso, para
+    que un fallo de Telegram a mitad de camino dé lugar a un reintento en la
+    próxima vuelta en vez de una marca que dice "avisado" sin haberlo hecho.
+
+    NO AVISA SI LA SALA YA LA TOMÓ (`tomada_en` puesto) O SI YA SE CERRÓ
+    (`estado <> 'pendiente'`): las dos condiciones ya viven en el `WHERE` de
+    `db.tareas_tecnicas_atrasadas`, no acá -- mismo principio que las
+    guardas de `cerrar_tarea_de_la_sala`/`tomar_tarea_de_la_sala`, la base
+    decide mirando la fila real, no un `if` sobre un valor leído antes.
+
+    SIN LA MIGRACIÓN de esta parte (`clave_tecnica`/`ultima_alarma_en`)
+    aplicada, `tareas_tecnicas_atrasadas` devuelve `[]` y esto no hace nada
+    -- nunca revienta.
+    """
+    atrasadas = await db.tareas_tecnicas_atrasadas(UMBRAL_ATRASO_ALERTA_TECNICA_H)
+    avisadas = 0
+    for fila in atrasadas:
+        texto = (
+            f"🔧 La sala no ha tomado esta tarea técnica en "
+            f"{UMBRAL_ATRASO_ALERTA_TECNICA_H} horas: «{fila['titulo']}» "
+            f"(tarea #{fila['id']}, clave «{fila['clave_tecnica']}»). "
+            "Corré la revisión de la sala o mirala vos."
+        )
+        await _avisar(bot, texto)
+        await db.marcar_aviso_atraso_code(fila["id"])
+        avisadas += 1
+        log.warning(
+            "Alerta técnica #%s (%s) sin tomar hace más de %sh -- avisado.",
+            fila["id"], fila["clave_tecnica"], UMBRAL_ATRASO_ALERTA_TECNICA_H)
+    return avisadas
 
 
 def _campanadas(anticipos, enviados, faltan: int) -> set[int]:

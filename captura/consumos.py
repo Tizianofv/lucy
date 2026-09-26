@@ -552,10 +552,49 @@ def _no_adivines(sintoma: str) -> str:
 _SIGUE_EN_GMAIL = ("Los correos siguen en Gmail, sin marcar y sin borrar.")
 
 
-async def avisar_si_hay_bancos_mudos(res: Resumen) -> int:
-    """El canario. Deja un encargo por cada señal que se encendió.
+async def _alertar(clave: str, titulo: str, detalle_code: str,
+                   detalle_fallback: str, marca_fallback: tuple, hoy) -> bool:
+    """UNA PUERTA para las cuatro alarmas de este archivo (§B, parte 4,
+    26-sep-2026): intenta convertir la señal en una tarea de Code
+    (`db.crear_o_reusar_alerta_tecnica`, que dedupea contra la BASE por
+    `clave` -- no en memoria, así que sobrevive un redespliegue y no abre
+    una fila por cada pasada de ~15 minutos). Devuelve si avisó de alguna
+    forma.
 
-    Tres señales, y son distintas — por eso son tres avisos y no uno:
+    NADA FALLA CALLADO, TAMBIÉN EN LA TRANSICIÓN: si la migración de esta
+    parte no está aplicada, o si la escritura falla por cualquier otro
+    motivo, cae al camino de ANTES de esta parte -- la bandeja, con
+    `chat_id=config.CHAT_ID_DUENO`, con el mismo throttle de una vez al día
+    que ya tenía (`_ultimo_aviso`, en memoria: es el camino de RESPALDO, no
+    el principal, así que perder el throttle en un redespliegue no abre más
+    de un aviso de más por remitente y por día).
+    """
+    try:
+        tid = await db.crear_o_reusar_alerta_tecnica(clave, titulo, detalle_code)
+    except Exception:
+        tid = None
+        log.exception("crear_o_reusar_alerta_tecnica falló para %s", clave)
+    if tid is not None:
+        log.warning("Canario/latido: %s -> tarea de Code #%s.", clave, tid)
+        return True
+
+    if _ultimo_aviso.get(marca_fallback) == hoy:
+        return False
+    await db.guardar_en_bandeja(
+        tipo_entrada="sistema", contenido_raw=detalle_fallback,
+        chat_id=config.CHAT_ID_DUENO, origen="banco")
+    _ultimo_aviso[marca_fallback] = hoy
+    log.warning("Canario/latido: %s -> bandeja (sin Code, camino de antes).",
+               clave)
+    return True
+
+
+async def avisar_si_hay_bancos_mudos(res: Resumen) -> int:
+    """El canario. Convierte cada señal encendida en una tarea de Code —o
+    la actualiza si ya había una abierta para el MISMO remitente y la MISMA
+    señal (`db.crear_o_reusar_alerta_tecnica`).
+
+    Tres señales, y son distintas — por eso son tres alarmas y no una:
 
       A · `reventados > 0` — un parser calzó con el correo y no pudo leerlo.
           Avisa SIEMPRE, para cualquier remitente. Antes esta señal estaba
@@ -571,7 +610,8 @@ async def avisar_si_hay_bancos_mudos(res: Resumen) -> int:
           ErrorDeParseo y el remitente enrutó, así que ni A ni B la ven. Sin
           este aviso el movimiento no está en la base y nada lo dice.
 
-    Un aviso por remitente, por señal y por día. Devuelve cuántos avisos dejó.
+    Devuelve cuántas señales avisó (de alguna forma: tarea de Code, o
+    bandeja si la tarea no se pudo crear).
 
     Esta función NO dice que no se perdió nada, porque no es verdad: el correo
     sin parser se descarta. Ver el INVARIANTE 1 arriba.
@@ -580,83 +620,79 @@ async def avisar_si_hay_bancos_mudos(res: Resumen) -> int:
     avisados = 0
 
     for rem in res.remitentes_reventados():
-        if _ultimo_aviso.get((rem, "reventado")) == hoy:
-            continue
         n = res.reventados.get(rem, 0)
         ok = res.producidos.get(rem, 0)
         error = res.error_de(rem)
-        await db.guardar_en_bandeja(
-            tipo_entrada="sistema",
-            contenido_raw=(
-                f"AVISO: {n} correo(s) de {rem} calzaron con su parser y no se "
-                "pudieron leer en esta revisión"
-                + (f" (otros {ok} sí produjeron movimiento)." if ok else ".")
-                + "\n\n"
-                + (f"El error fue: {error}\n\n" if error
-                   else "No tengo el texto del error de ESTE remitente; el "
-                        "detalle está en los logs.\n\n")
-                + "Decíselo a Tiziano en una línea, sin alarmar: esos "
-                "movimientos NO están entrando a la base hasta que se arregle "
-                "el parser. El cuerpo de esos correos sí quedó guardado en la "
-                "bandeja de Lucy —se guarda antes de parsear—, pero no sus "
-                f"adjuntos. {_SIGUE_EN_GMAIL}\n\n"
-                + _no_adivines("un correo calzó con su parser y el parser no "
-                               "pudo leerlo")),
-            chat_id=config.CHAT_ID_DUENO, origen="banco")
-        _ultimo_aviso[(rem, "reventado")] = hoy
-        avisados += 1
+        detalle_code = (
+            f"{n} correo(s) de {rem} calzaron con su parser y no se pudieron "
+            "leer en esta revisión"
+            + (f" (otros {ok} sí produjeron movimiento)." if ok else ".")
+            + "\n\n"
+            + (f"El error fue: {error}\n\n" if error
+               else "No tengo el texto del error de ESTE remitente; el "
+                    "detalle está en los logs.\n\n")
+            + "Esos movimientos NO están entrando a la base hasta que se "
+            "arregle el parser. El cuerpo de esos correos sí quedó guardado "
+            "en la bandeja de Lucy —se guarda antes de parsear—, pero no sus "
+            f"adjuntos. {_SIGUE_EN_GMAIL}\n\n"
+            + _no_adivines("un correo calzó con su parser y el parser no "
+                           "pudo leerlo"))
+        detalle_fallback = (
+            "AVISO: " + detalle_code.replace(
+                "Esos movimientos", "Decíselo a Tiziano en una línea, sin "
+                "alarmar: esos movimientos"))
+        if await _alertar(f"canario:{rem}:reventado",
+                          f"Canario: {rem} reventó al parsear", detalle_code,
+                          detalle_fallback, (rem, "reventado"), hoy):
+            avisados += 1
         log.warning("Canario: %s reventó en %s correos (%s con movimiento).",
                     rem, n, ok)
 
     for rem in res.remitentes_mudos():
-        if _ultimo_aviso.get((rem, "sin_ruta")) == hoy:
-            continue
         n = res.sin_ruta.get(rem, 0)
-        await db.guardar_en_bandeja(
-            tipo_entrada="sistema",
-            contenido_raw=(
-                f"AVISO: dejé de entender los correos de {rem}. Llegaron {n} "
-                "correos suyos en esta revisión y ninguno calzó con un parser: "
-                "no salió ni un movimiento.\n\n"
-                "Decíselo a Tiziano en una línea, sin alarmar: sus movimientos "
-                "NO están entrando a la base hasta que se arregle. Y decile la "
-                "verdad de lo que pasó con esos correos: se descartaron. "
-                f"{_SIGUE_EN_GMAIL} Lucy no guardó copia del cuerpo ni de los "
-                "adjuntos, así que cuando esto se arregle hay que ir a "
-                "buscarlos al buzón.\n\n"
-                "Es importante que lo sepa: un sistema de gastos que se queda "
-                "callado parece decir que no gastó nada.\n\n"
-                + _no_adivines("llegaron correos y no salió ningún "
-                               "movimiento")),
-            chat_id=config.CHAT_ID_DUENO, origen="banco")
-        _ultimo_aviso[(rem, "sin_ruta")] = hoy
-        avisados += 1
+        detalle_code = (
+            f"Dejé de entender los correos de {rem}. Llegaron {n} correos "
+            "suyos en esta revisión y ninguno calzó con un parser: no salió "
+            "ni un movimiento.\n\n"
+            "Sus movimientos NO están entrando a la base hasta que se "
+            f"arregle. Los correos se descartaron. {_SIGUE_EN_GMAIL} Lucy no "
+            "guardó copia del cuerpo ni de los adjuntos, así que cuando esto "
+            "se arregle hay que ir a buscarlos al buzón.\n\n"
+            + _no_adivines("llegaron correos y no salió ningún movimiento"))
+        detalle_fallback = (
+            "AVISO: " + detalle_code.replace(
+                "Sus movimientos", "Decíselo a Tiziano en una línea, sin "
+                "alarmar: sus movimientos"))
+        if await _alertar(f"canario:{rem}:sin_ruta", f"Canario: {rem} mudo",
+                          detalle_code, detalle_fallback, (rem, "sin_ruta"), hoy):
+            avisados += 1
         log.warning("Canario: %s mudo (%s correos, ninguno enrutado).", rem, n)
 
     for rem in res.remitentes_rechazados():
-        if _ultimo_aviso.get((rem, "rechazado")) == hoy:
-            continue
         n = res.rechazados.get(rem, 0)
         error = res.error_de(rem)
-        await db.guardar_en_bandeja(
-            tipo_entrada="sistema",
-            contenido_raw=(
-                f"AVISO: {n} movimiento(s) de {rem} se leyeron bien y la base "
-                "NO los aceptó en esta revisión.\n\n"
-                + (f"El error fue: {error}\n\n" if error
-                   else "No tengo el texto del error de ESTE remitente; el "
-                        "detalle está en los logs.\n\n")
-                + "Decíselo a Tiziano en una línea, sin alarmar: esos "
-                "movimientos NO están en la base y no van a entrar solos — el "
-                "correo ya se dio por revisado, así que la próxima pasada no "
-                "vuelve a intentarlo. El cuerpo de esos correos sí quedó "
-                "guardado en la bandeja de Lucy —se guarda antes de parsear—, "
-                f"pero no sus adjuntos. {_SIGUE_EN_GMAIL}\n\n"
-                + _no_adivines("el parser leyó el correo y la base rechazó la "
-                               "fila")),
-            chat_id=config.CHAT_ID_DUENO, origen="banco")
-        _ultimo_aviso[(rem, "rechazado")] = hoy
-        avisados += 1
+        detalle_code = (
+            f"{n} movimiento(s) de {rem} se leyeron bien y la base NO los "
+            "aceptó en esta revisión.\n\n"
+            + (f"El error fue: {error}\n\n" if error
+               else "No tengo el texto del error de ESTE remitente; el "
+                    "detalle está en los logs.\n\n")
+            + "Esos movimientos NO están en la base y no van a entrar solos "
+            "— el correo ya se dio por revisado, así que la próxima pasada "
+            "no vuelve a intentarlo. El cuerpo de esos correos sí quedó "
+            "guardado en la bandeja de Lucy —se guarda antes de parsear—, "
+            f"pero no sus adjuntos. {_SIGUE_EN_GMAIL}\n\n"
+            + _no_adivines("el parser leyó el correo y la base rechazó la "
+                           "fila"))
+        detalle_fallback = (
+            "AVISO: " + detalle_code.replace(
+                "Esos movimientos", "Decíselo a Tiziano en una línea, sin "
+                "alarmar: esos movimientos"))
+        if await _alertar(f"canario:{rem}:rechazado",
+                          f"Canario: la base rechazó movimientos de {rem}",
+                          detalle_code, detalle_fallback,
+                          (rem, "rechazado"), hoy):
+            avisados += 1
         log.warning("Canario: la base rechazó %s movimiento(s) de %s.", n, rem)
 
     return avisados
@@ -681,25 +717,24 @@ async def avisar_si_no_hay_latido() -> int:
     if silencio <= timedelta(hours=LATIDO_HORAS):
         return 0
     hoy = datetime.now().date()
-    if _ultimo_aviso.get(("__latido__", "cosecha")) == hoy:
-        return 0
     horas = int(silencio.total_seconds() // 3600)
     nunca = _ultima_cosecha is None
-    await db.guardar_en_bandeja(
-        tipo_entrada="sistema",
-        contenido_raw=(
-            f"AVISO: hace {horas} horas que no consigo revisar ningún buzón "
-            "en busca de movimientos"
-            + (" — desde que Lucy arrancó, ni una sola vez." if nunca else ".")
-            + f" La revisión corre cada ~15 minutos, así que son unas "
-            f"{horas * 4} pasadas seguidas sin poder cosechar.\n\n"
-            "Decíselo a Tiziano en una línea, sin alarmar: mientras esto dure, "
-            "el panel y el resumen de gastos están al día solo hasta esa hora. "
-            "Un cero de estos días significa 'no miré', no 'no gastaste'. "
-            f"{_SIGUE_EN_GMAIL}\n\n"
-            + _no_adivines("hace horas que ninguna revisión de buzón "
-                           "termina bien")),
-        chat_id=config.CHAT_ID_DUENO, origen="banco")
-    _ultimo_aviso[("__latido__", "cosecha")] = hoy
+    detalle_code = (
+        f"Hace {horas} horas que no consigo revisar ningún buzón en busca de "
+        "movimientos"
+        + (" — desde que Lucy arrancó, ni una sola vez." if nunca else ".")
+        + f" La revisión corre cada ~15 minutos, así que son unas "
+        f"{horas * 4} pasadas seguidas sin poder cosechar.\n\n"
+        "Mientras esto dure, el panel y el resumen de gastos están al día "
+        "solo hasta esa hora. Un cero de estos días significa 'no miré', no "
+        f"'no gastaste'. {_SIGUE_EN_GMAIL}\n\n"
+        + _no_adivines("hace horas que ninguna revisión de buzón termina bien"))
+    detalle_fallback = (
+        "AVISO: " + detalle_code.replace(
+            "Mientras esto dure", "Decíselo a Tiziano en una línea, sin "
+            "alarmar: mientras esto dure"))
+    avisado = await _alertar(
+        "latido_cosecha", "Latido de la cosecha de correo caído",
+        detalle_code, detalle_fallback, ("__latido__", "cosecha"), hoy)
     log.warning("Latido: %s horas sin cosechar (nunca=%s).", horas, nunca)
-    return 1
+    return 1 if avisado else 0
