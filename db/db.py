@@ -30,7 +30,8 @@ import db.sin_preparadas  # noqa: F401
 # `puede_ser_responsable` viene de config por lo mismo: es LA puerta de quién
 # puede quedar con una tarea pendiente, y tiene que ser la misma para la ruta
 # del panel y para la escritura de acá. Dos copias del criterio se separan.
-from config import CHAT_ID_DUENO, DATABASE_URL, TZ, puede_ser_responsable
+from config import (CHAT_ID_CODE, CHAT_ID_DUENO, DATABASE_URL, TZ,
+                    puede_ser_responsable)
 
 # HALLAZGO LATERAL (25-sep-2026, mientras se escribía `cerrar_y_derivar`):
 # este módulo ya llamaba `log.warning(...)` en dos sitios de
@@ -1993,6 +1994,14 @@ async def poner_categoria(movimiento_id: int, categoria: str) -> None:
 ESTADO_PENDIENTE = "pendiente"
 ESTADO_HECHA = "hecha"
 
+# La clave de `areas` que identifica una tarea TÉCNICA (`db/migrations/
+# 2026-09-22_areas.sql`). No hay ninguna otra constante de Python para esto
+# en todo el repo -- las áreas se comparan como el string que son, igual que
+# `areas.clave` en la base -- así que ésta es la primera, y nace acá porque
+# `cerrar_tarea_de_la_sala` (26-sep-2026, §4) es el primer sitio que necesita
+# nombrarla en vez de solo pintarla.
+AREA_TECNICA = "🛠️ Técnico"
+
 # El orden en que se pintan los grupos, y su título. Es una decisión de
 # presentación y vive acá, pegada al criterio que produce las claves, para que
 # no se puedan separar.
@@ -2568,6 +2577,82 @@ async def marcar_tarea_hecha(tarea_id: int) -> bool:
                bandeja_id)
             VALUES ('panel', 'editar', 'tareas', %s, %s, %s,
                     'marcada hecha desde el panel de tareas', %s)
+            """,
+            (tarea_id, json.dumps(antes, default=str, ensure_ascii=False),
+             json.dumps({"estado": ESTADO_HECHA}, ensure_ascii=False),
+             antes.get("bandeja_id")))
+        return True
+
+
+async def cerrar_tarea_de_la_sala(tarea_id: int) -> bool:
+    """Cierra UNA tarea TÉCNICA de Code. Devuelve si de verdad cerró algo.
+
+    Diseño aprobado por Tiziano, 26-sep-2026 (§4, «Code como responsable»):
+    la sala de control puede marcar como hecha una tarea suya, por esta MISMA
+    puerta -- nunca un `UPDATE` suelto desde afuera. La puerta HTTP que la
+    sala usa de verdad (§C del diseño) todavía no existe -- es otra parte del
+    plan de construcción -- así que hoy esto se llama directo, en proceso,
+    con el mismo patrón que ya prueba el resto de este archivo.
+
+    LA GUARDA VIVE EN EL `WHERE` DE LA CONSULTA, NO EN UN `if` DESPUÉS: el
+    `SELECT` de abajo (`consulta_elegible`, nombrada así para que
+    `tests/test_code_responsable.py` la extraiga del árbol de sintaxis y la
+    corra tal cual contra datos reales) solo trae la fila si SU área EFECTIVA
+    -- la propia si la tarea está suelta, la del proyecto si tiene uno,
+    `COALESCE(t.area, p.area)`, mismo criterio que ya usa el panel para
+    pintar la etiqueta -- es `AREA_TECNICA` Y su `responsable_chat_id` es
+    `CHAT_ID_CODE` Y no está ya `hecha` Y no está borrada. Si esa consulta no
+    trae nada -- no existe, está en la papelera, ya estaba hecha, no es de
+    Code, o no es Técnica -- esta función no escribe nada y devuelve `False`,
+    sea cual sea la intención de quien la llamó: el `id` nunca decide solo,
+    decide la fila que la base tiene HOY.
+
+    EL RASTRO ES DISTINGUIBLE: `actor='sala'` (no 'panel' ni 'lucy' -- los
+    dos que ya existen) y un `motivo` que nombra a Code explícitamente. Nadie
+    más en este archivo escribe `actor='sala'` hoy: es la primera vez que
+    alguien que no es una persona con sesión de panel ni el propio modelo de
+    Telegram cierra una tarea.
+
+    QUÉ NO HACE, a propósito: no revisa `recurrencia` -- eso lo resuelve
+    `cerebro/despertador.py::_reprogramar_recurrentes`, que barre por ESTADO
+    y no por quién cerró, igual que documenta `marcar_tarea_hecha` arriba --
+    y no crea tareas derivadas: eso es `cerrar_y_derivar`, una pantalla del
+    panel con campos que acá no existen. «La sala SOLO cierra» es la
+    instrucción de Tiziano, textual, y esta función no hace nada más que
+    eso.
+    """
+    consulta_elegible = """
+            SELECT t.id, t.titulo, t.estado, t.vence_en, t.completado_en,
+                   t.bandeja_id, t.responsable_chat_id,
+                   COALESCE(t.area, p.area) AS area_efectiva
+              FROM tareas t LEFT JOIN proyectos p ON p.id = t.proyecto_id
+             WHERE t.id = %s
+               AND t.borrado_en IS NULL
+               AND t.estado <> %s
+               AND t.responsable_chat_id = %s
+               AND COALESCE(t.area, p.area) = %s
+            """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            consulta_elegible,
+            (tarea_id, ESTADO_HECHA, CHAT_ID_CODE, AREA_TECNICA))
+        antes = await cur.fetchone()
+        if antes is None:
+            # No existe, está en la papelera, ya estaba hecha, no es de Code,
+            # o no es Técnica -- la consulta de arriba ya descartó los cinco
+            # casos, así que acá no hace falta volver a preguntar nada.
+            return False
+        await conn.execute(
+            "UPDATE tareas SET estado = %s, completado_en = now() WHERE id = %s",
+            (ESTADO_HECHA, tarea_id))
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo,
+               bandeja_id)
+            VALUES ('sala', 'editar', 'tareas', %s, %s, %s,
+                    'tarea técnica cerrada por la sala de control (Code)', %s)
             """,
             (tarea_id, json.dumps(antes, default=str, ensure_ascii=False),
              json.dumps({"estado": ESTADO_HECHA}, ensure_ascii=False),

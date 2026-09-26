@@ -161,6 +161,45 @@ def personas_del_panel() -> tuple[tuple[int, str], ...]:
                  if c in NOMBRES_POR_CHAT)
 
 
+# ── «CODE», LA SALA DE CONTROL ───────────────────────────────────────────────
+#
+# Diseño aprobado por Tiziano, 26-sep-2026 (disenos/lucy-code/DISENO.md, §1):
+# la sala de control (Claude Code, en la Mac de Tiziano) puede quedar como
+# responsable de una tarea, igual que Rosi, para las tareas TÉCNICAS que se
+# trabajan con ella. «Code» NO es un chat de Telegram: no tiene con quién
+# hablarle, y NO puede entrar al panel (no hay enlace mágico que mandarle).
+#
+# `CHAT_ID_CODE` es un valor RESERVADO, no un chat real. Negativo a propósito:
+# un chat privado de Telegram (una persona, nunca un grupo) es SIEMPRE
+# positivo, así que ningún chat_id real de una persona de la casa puede
+# chocar con esto, hoy ni en el futuro. No hace falta ninguna tabla ni FK
+# para reservarlo: `tareas.responsable_chat_id` ya es un `BIGINT` sin FK
+# (`db/schema.sql:181-192`), y esto es un valor de aplicación, no de esquema
+# — por eso esta parte no trae ninguna migración.
+CHAT_ID_CODE = -1
+
+# El único lugar donde el texto «Code» se teclea en todo el repo. Todo lo
+# demás lee ESTA constante — nunca compara contra el string "Code" por su
+# cuenta (la misma razón por la que los nombres de personas salen de
+# `NOMBRES_POR_CHAT` y no de una copia: dos sitios que dicen lo mismo de dos
+# formas son dos sitios que un día van a decir cosas distintas).
+NOMBRE_CODE = "Code"
+
+
+def nombres_con_code() -> dict[int, str]:
+    """`NOMBRES_POR_CHAT` más «Code» — para pintar o para resolver un nombre,
+    en cualquier sitio que necesite las dos cosas a la vez.
+
+    NO se mete a Code en `NOMBRES_POR_CHAT` ni en `personas_del_panel()`:
+    esas dos siguen significando exactamente lo que significaban (quién
+    ENTRA al panel y cómo se llama), y Code no entra. Este merge es la única
+    forma de que el panel pinte «Code» en vez de «sin nombre» y de que
+    Telegram resuelva «Code» como nombre sin tocar el significado de las
+    otras dos.
+    """
+    return {**NOMBRES_POR_CHAT, CHAT_ID_CODE: NOMBRE_CODE}
+
+
 # ── COPIA AL DUEÑO ────────────────────────────────────────────────────────
 #
 # Decisión de Tiziano, 21-sep-2026: «lo que me llega a mí también le llega a
@@ -287,8 +326,40 @@ def puede_ser_responsable(chat_id) -> bool:
     Que la respuesta se derive de `personas_del_panel()` y no de una lista
     propia es lo que impide que las dos se separen: si mañana alguien deja de
     poder entrar al panel, deja de poder ser responsable el mismo día.
+
+    LA ÚNICA EXCEPCIÓN, y por qué es una comparación y no una lista: `Code`
+    (`CHAT_ID_CODE`) puede quedar como responsable sin estar en
+    `personas_del_panel()`, porque nunca «entra al panel» — no tiene chat de
+    Telegram con el que abrir un enlace. Agregarlo a `personas_del_panel()`
+    para que pasara esta puerta habría mentido sobre lo que esa función
+    contesta (`web.auth.puede_entrar` la usa para eso mismo). Esta puerta
+    sigue siendo LA única que decide «puede ser responsable»: lo que NO
+    decide es «se le puede escribir por Telegram» — para eso está
+    `puede_recibir_telegram`, más abajo, que es DISTINTA a propósito.
     """
-    return any(c == chat_id for c, _ in personas_del_panel())
+    return chat_id == CHAT_ID_CODE or any(c == chat_id for c, _ in personas_del_panel())
+
+
+def puede_recibir_telegram(chat_id) -> bool:
+    """¿Se le puede mandar un mensaje de Telegram a este chat_id?
+
+    NO es lo mismo que `puede_ser_responsable`. Esa puerta decide si un valor
+    puede QUEDAR ASIGNADO a una tarea; ésta decide si, dado que ya quedó
+    asignado, Lucy le puede escribir. Para toda persona real de la casa las
+    dos preguntas tienen la misma respuesta, y por eso hasta hoy había una
+    sola función — pero `CHAT_ID_CODE` puede ser responsable (arriba) y NO
+    tiene Telegram: intentar `bot.send_message(CHAT_ID_CODE, ...)` le
+    respondería a Lucy que ese chat no existe.
+
+    LA LLAMAN los sitios de `cerebro/despertador.py` que arman a QUIÉN
+    mandarle un aviso a partir de un `responsable_chat_id` guardado
+    (`revisar`, para el recordatorio de una tarea puntual, y
+    `_destinatarios_de_tareas`, para a quién armarle su propio briefing o
+    plan semanal) — NUNCA `acciones/crud.py` ni `db.asignar_responsable`, que
+    siguen preguntándole a `puede_ser_responsable`: ésos deciden si algo
+    puede QUEDAR, no si se le puede escribir.
+    """
+    return chat_id != CHAT_ID_CODE and puede_ser_responsable(chat_id)
 
 
 def chats_sin_nombre() -> int:

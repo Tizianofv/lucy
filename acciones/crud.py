@@ -725,11 +725,15 @@ def _clave_de_nombre(texto: str) -> str:
 def _chat_del_nombre(texto: str):
     """(chat, None) si ese nombre es de UNA persona; (None, motivo) si no.
 
-    La lista sale de `config.NOMBRES_POR_CHAT` en cada llamada, no de nada
+    La lista sale de `config.nombres_con_code()` en cada llamada, no de nada
     tecleado: la tercera persona que Tiziano agregue a la variable se encuentra
-    sin tocar código. Se busca entre TODOS los que tienen nombre, también los
-    que no entran al panel, a propósito: a esos no los rechaza esta función sino
-    la puerta, y así hay una sola que decide.
+    sin tocar código, y «Code» (la sala de control) es lo mismo que un nombre
+    más ahí — el único sitio que la conoce es `config.CHAT_ID_CODE`, no un
+    string aparte copiado acá (26-sep-2026, diseño «Code como responsable»).
+    Se busca entre TODOS los que tienen nombre, también los que no entran al
+    panel, a propósito: a esos no los rechaza esta función sino la puerta
+    (`config.puede_ser_responsable`, que SÍ deja pasar a Code aunque nunca
+    entre al panel), y así hay una sola que decide.
 
     LO QUE NO SE ADIVINA, y por qué:
       · Un apodo o un pedazo de nombre («la flaca», «Ros»). La variable no
@@ -744,7 +748,7 @@ def _chat_del_nombre(texto: str):
         o se le asigna la tarea a la otra persona sin que nadie lo note.
     """
     clave = _clave_de_nombre(texto)
-    chats = [chat for chat, nombre in config.NOMBRES_POR_CHAT.items()
+    chats = [chat for chat, nombre in config.nombres_con_code().items()
              if _clave_de_nombre(nombre) == clave]
     if len(chats) == 1:
         return chats[0], None

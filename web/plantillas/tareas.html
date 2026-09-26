@@ -264,6 +264,10 @@ aviso de Telegram que ya sonó.</p>
         <option value="{{ chat }}"
           {%- if t.responsable_chat_id == chat %} selected{% endif %}>{{ nombre }}</option>
         {% endfor %}
+        {# «Code» (26-sep-2026, §2): opción FIJA aparte, no sale de `personas`
+           (esa recorre a quién puede ENTRAR al panel, y Code no entra). #}
+        <option value="{{ chat_id_code }}"
+          {%- if t.responsable_chat_id == chat_id_code %} selected{% endif %}>{{ nombre_code }}</option>
         {% if t.responsable_chat_id is not none
               and t.responsable_chat_id not in asignables %}
         <option value="{{ t.responsable_chat_id }}" selected>
@@ -336,6 +340,8 @@ aviso de Telegram que ya sonó.</p>
           <option value="{{ chat }}"
             {%- if t.responsable_chat_id == chat %} selected{% endif %}>{{ nombre }}</option>
           {% endfor %}
+          <option value="{{ chat_id_code }}"
+            {%- if t.responsable_chat_id == chat_id_code %} selected{% endif %}>{{ nombre_code }}</option>
         </select>
         {% if n == 1 and max_derivadas > 1 %}
         <button type="button" class="mas"

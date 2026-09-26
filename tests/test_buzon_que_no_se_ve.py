@@ -3821,10 +3821,23 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `db/db.py` y `acciones/crud.py` (los tres ya vigilados de antes) y
     # ningún archivo de correo. La migración nueva
     # (`db/migrations/2026-09-25_deriva_de.sql`) no es un `.py`.
-    assert medido == {"en disco": 90, "exentos": 50, "vigilados": 40}, (
+    #
+    # 26-sep-2026, rama `trabajo/code-base` (§1+§2+§4 del diseño «Code como
+    # responsable»): 90 → 91 en disco y 50 → 51 EXENTOS por
+    # `tests/test_code_responsable.py` (CHAT_ID_CODE/NOMBRE_CODE, la
+    # separación puede_ser_responsable/puede_recibir_telegram, la resolución
+    # del nombre por Telegram, el prompt, el desplegable del panel, y
+    # `db.cerrar_tarea_de_la_sala` con su guarda en el SQL, corrida contra
+    # SQLite real). Es un archivo de `testpaths`, EXENTO por rol. Los
+    # VIGILADOS siguen en 40: el trabajo tocó `config.py`, `acciones/
+    # crud.py`, `cerebro/agente.py`, `cerebro/despertador.py`, `db/db.py` y
+    # `web/app.py`, los seis ya vigilados de antes. No hizo falta ninguna
+    # migración: `CHAT_ID_CODE` es un valor de aplicación (un `BIGINT`
+    # reservado, sin FK), no de esquema.
+    assert medido == {"en disco": 91, "exentos": 51, "vigilados": 40}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "25-sep-2026 (rama tarea-derivada) era {'en disco': 90, "
-        "'exentos': 50, 'vigilados': 40}. La aserción de fondo —cero "
+        "26-sep-2026 (rama code-base) era {'en disco': 91, "
+        "'exentos': 51, 'vigilados': 40}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

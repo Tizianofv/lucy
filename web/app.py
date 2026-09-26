@@ -735,8 +735,16 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
          # la pantalla no ofrezca el campo donde la escritura lo rechazaría.
          "pendiente": db.ESTADO_PENDIENTE, "piso_fecha": PISO_FECHA.isoformat(),
          "personas": config.personas_del_panel(),
-         "asignables": [c for c, _ in config.personas_del_panel()],
-         "nombres": config.NOMBRES_POR_CHAT,
+         "asignables": [c for c, _ in config.personas_del_panel()]
+                       + [config.CHAT_ID_CODE],
+         "nombres": config.nombres_con_code(),
+         # «Code» (26-sep-2026, diseño «Code como responsable», §2): NO se
+         # mete en `personas` -- ese desplegable recorre
+         # `config.personas_del_panel()`, que significa específicamente
+         # «puede entrar al panel», y Code nunca entra (no tiene chat de
+         # Telegram). Se ofrece como una opción FIJA aparte, en la plantilla.
+         "chat_id_code": config.CHAT_ID_CODE,
+         "nombre_code": config.NOMBRE_CODE,
          "sin_nombre": config.chats_sin_nombre(),
          "mal_escritos": config.NOMBRES_MAL_ESCRITOS,
          # Para el <select> de área del renglón «¿sale algo nuevo de ésta?»
@@ -1356,7 +1364,12 @@ async def tarea_detalle(request: Request, tid: int, error: str = "",
     datos = await db.tarea_con_comentarios(tid)
     areas = await db.areas()
     contexto = {"tarea": None, "comentarios": [], "pasos": [],
-                "nombres": config.NOMBRES_POR_CHAT, "error": error,
+                # `nombres_con_code()` y no `NOMBRES_POR_CHAT` a secas: esta
+                # misma pantalla pinta el RESPONSABLE de la tarea (línea 15 de
+                # la plantilla), que sí puede ser Code (§1/§2, 26-sep-2026);
+                # los autores de comentario (línea 194) nunca son Code -- Code
+                # no comenta -- así que ahí el merge no cambia nada.
+                "nombres": config.nombres_con_code(), "error": error,
                 "comentado": comentado, "borrado": borrado,
                 "area_guardada": area_guardada,
                 "primero_guardado": primero_guardado,

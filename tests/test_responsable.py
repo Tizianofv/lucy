@@ -357,13 +357,18 @@ def test_sin_la_variable_no_hay_NADIE_a_quien_asignar():
     Acá se vacía la variable entera dejando a las dos personas con acceso. Si
     quedara una sola lista escrita en cualquier parte del camino —config, la
     ruta o la plantilla—, alguien seguiría apareciendo en el desplegable. Tiene
-    que no quedar nadie, y el panel tiene que DECIRLO en vez de callarse: sin
-    nombres no se puede asignar, y un desplegable vacío sin explicación deja a
-    Tiziano buscando qué se rompió.
+    que no quedar ninguna PERSONA, y el panel tiene que DECIRLO en vez de
+    callarse: sin nombres no se le puede asignar a nadie de la casa, y un
+    desplegable sin personas y sin explicación deja a Tiziano buscando qué se
+    rompió.
 
-    Y no se inventa ni se miente: no hay ningún nombre que enseñar y el número
-    de chat Tiziano lo descartó, así que lo único honesto es no ofrecer a
-    nadie y decir por qué.
+    DESDE EL 26-SEP-2026 (§2, «Code como responsable») el desplegable YA NO
+    queda vacío del todo: «Code» sigue ahí, porque no depende de
+    NOMBRES_POR_CHAT — es justo lo que este mismo trabajo cambió a propósito.
+    Lo que sigue sin inventarse ni mentirse es la parte de las PERSONAS: no
+    hay ningún nombre de la casa que enseñar y el número de chat Tiziano lo
+    descartó, así que lo único honesto ahí es no ofrecer a nadie y decir por
+    qué.
     """
     _con_gente({}, permitidos=(DUENO, OTRA))
     assert config.personas_del_panel() == (), (
@@ -375,14 +380,19 @@ def test_sin_la_variable_no_hay_NADIE_a_quien_asignar():
 
     html = _pintar([_fila(1, titulo="afinar el piano")])
     assert "afinar el piano" in html, "la tarea desapareció por falta de nombres"
-    # La ÚNICA opción del desplegable es «sin responsable»: se cuentan las que
-    # hay, no se busca un nombre que habría que teclear acá para buscarlo.
+    # Las ÚNICAS opciones del desplegable son «sin responsable» y «Code»: se
+    # cuentan las que hay, no se busca un nombre que habría que teclear acá
+    # para buscarlo. «Code» (26-sep-2026, §2) es una opción FIJA que no sale
+    # de NOMBRES_POR_CHAT -- por eso sigue estando aunque la variable esté
+    # vacía, y por eso el conteo pasó de 1 a 2 sin que este archivo tuviera
+    # que ver nada nuevo de Code para saberlo.
     fila = html[html.index('name="resp_1"'):]
     fila = fila[:fila.index("</select>")]
-    assert fila.count("<option") == 1, (
-        f"el desplegable ofrece {fila.count('<option')} personas y la variable "
-        "no declara ninguna")
+    assert fila.count("<option") == 2, (
+        f"el desplegable ofrece {fila.count('<option')} opciones y la variable "
+        "no declara ninguna persona (solo Code debería sumar a «sin responsable»)")
     assert "sin responsable" in fila
+    assert config.NOMBRE_CODE in fila
     assert "NOMBRES_POR_CHAT" in html, (
         "el panel se calla que no puede asignar nada, y no hay forma de saber "
         "por qué el desplegable está vacío")
@@ -1066,7 +1076,11 @@ def test_editar_no_escribe_un_responsable_que_no_vale_y_dice_por_que():
     nombre, sacado de la misma casa que usa la puerta— y nunca el número.
     """
     _con_gente(LA_CASA)
-    for valor in (AJENO, str(AJENO), "cualquier cosa", True, 1.5, -1, 0):
+    # -2 y no -1: desde el 26-sep-2026 -1 es `config.CHAT_ID_CODE`, un chat
+    # RESERVADO que esta misma puerta SÍ tiene que aceptar (ver
+    # `test_code_puede_quedar_como_responsable_sin_estar_en_la_casa` más
+    # abajo) — usarlo acá como ejemplo de "no vale" describiría mal la puerta.
+    for valor in (AJENO, str(AJENO), "cualquier cosa", True, 1.5, -2, 0):
         base, error = _sonda_editar(crud.editar, valor)
         assert isinstance(error, ValueError), f"editar aceptó {valor!r}"
         assert not _escribio_algo(base), (
@@ -1286,7 +1300,11 @@ def test_la_pantalla_no_enseña_ningun_numero_de_chat_como_texto():
             assert not re.search(r"\d", texto), (
                 f"el desplegable enseña un número donde se lee un nombre: "
                 f"{texto!r}")
-    assert set(_opciones(html)) == {"sin responsable"} | set(LA_CASA.values()), (
+    # + `NOMBRE_CODE`: desde el 26-sep-2026 (§2) el desplegable SIEMPRE trae a
+    # Code además de la casa — no es un dígito, así que no rompe la regla de
+    # arriba, y por eso se suma acá en vez de pasar la prueba por casualidad.
+    assert set(_opciones(html)) == (
+        {"sin responsable", config.NOMBRE_CODE} | set(LA_CASA.values())), (
         f"el desplegable no ofrece la casa: {_opciones(html)}")
 
 
@@ -1486,7 +1504,11 @@ def test_un_responsable_que_no_entra_al_panel_no_se_escribe():
     """La ruta rechaza antes de llamar a la base. Y con cualquier basura
     también: un `resp_` con texto, o con el número de alguien que no entra."""
     _con_gente(LA_CASA)
-    for valor in (str(AJENO), "cualquier cosa", "0", "-1"):
+    # "-2" y no "-1": desde el 26-sep-2026 "-1" es `config.CHAT_ID_CODE`, que
+    # el PANEL (a diferencia de Telegram) no ofrece por texto libre -- pero
+    # sigue siendo un chat que SÍ vale, así que no sirve como ejemplo de
+    # basura que no entra al panel.
+    for valor in (str(AJENO), "cualquier cosa", "0", "-2"):
         r, _, asignadas = _guardar({"prev_resp_1": "", "resp_1": valor})
         assert r.status_code == 303, f"reventó la pantalla con {valor!r}"
         assert asignadas == [], (

@@ -386,29 +386,37 @@ async def revisar(bot) -> int:
 
         # A QUIÉN (encargo 3, 22-sep-2026 -- "recordatorios de citas por
         # dueño"): TAREAS, sin cambio -- el responsable, si tiene uno puesto
-        # y sigue siendo alguien con acceso (`config.puede_ser_responsable`,
-        # la MISMA puerta que `_destinatarios_de_tareas`); si no, el dueño.
-        # CITAS: con dueño(s) puestos -- filtrados por la misma puerta, por
-        # si alguno perdió el acceso -- le avisa a CADA UNO, directo, y a
-        # NADIE más (decisión de Tiziano). Sin dueño (o si a todos los que
-        # tenía puestos ya no se les puede avisar), «A los dos» (decisión
-        # 5): TODOS los que devuelva `config.personas_del_panel()` -- no una
-        # lista tecleada, la misma fuente que ya deriva quién puede ser
-        # responsable de una tarea. Y si ESA lista viniera vacía (una
-        # variable de entorno mal puesta, medido que pasa en esta misma
-        # suite hermética cuando un archivo no configura `NOMBRES_POR_
-        # CHAT`), el último resguardo es el dueño -- un recordatorio de
-        # cita NUNCA se queda sin avisarle a nadie.
+        # y se le puede escribir por Telegram (`config.puede_recibir_
+        # telegram`); si no, el dueño. CITAS: con dueño(s) puestos --
+        # filtrados por lo mismo, por si alguno perdió el acceso -- le avisa
+        # a CADA UNO, directo, y a NADIE más (decisión de Tiziano). Sin
+        # dueño (o si a todos los que tenía puestos ya no se les puede
+        # avisar), «A los dos» (decisión 5): TODOS los que devuelva
+        # `config.personas_del_panel()` -- no una lista tecleada, la misma
+        # fuente que ya deriva quién puede ser responsable de una tarea. Y
+        # si ESA lista viniera vacía (una variable de entorno mal puesta,
+        # medido que pasa en esta misma suite hermética cuando un archivo no
+        # configura `NOMBRES_POR_CHAT`), el último resguardo es el dueño --
+        # un recordatorio de cita NUNCA se queda sin avisarle a nadie.
+        #
+        # `puede_recibir_telegram` y NO `puede_ser_responsable` (26-sep-2026,
+        # §1, «Code como responsable»): un responsable/dueño puede ser
+        # `CHAT_ID_CODE` desde este cambio, y ESE valor no tiene Telegram --
+        # intentar `bot.send_message` ahí le respondería a Lucy que el chat
+        # no existe. Las dos preguntas ("¿puede quedar asignado?" vs. "¿se le
+        # puede escribir?") están separadas justo para que un envío como
+        # éste nunca las confunda; ver el docstring de la función en
+        # `config.py` para el porqué completo.
         if f["tabla"] == "tareas":
             responsable = f.get("responsable_chat_id")
-            if responsable is not None and config.puede_ser_responsable(responsable):
+            if responsable is not None and config.puede_recibir_telegram(responsable):
                 destinos = (responsable,)
             else:
                 destinos = (config.CHAT_ID_DUENO,)
         else:
             duenos_validos = tuple(
                 c for c in (f.get("duenos_chat_id") or ())
-                if config.puede_ser_responsable(c))
+                if config.puede_recibir_telegram(c))
             destinos = (duenos_validos
                         or tuple(c for c, _ in config.personas_del_panel())
                         or (config.CHAT_ID_DUENO,))
@@ -504,9 +512,17 @@ async def _destinatarios_de_tareas() -> tuple[int, ...]:
     responsable le salen a él mientras nadie las asigne). Además, cada quien
     tenga AL MENOS UNA tarea pendiente con `responsable_chat_id` puesto --
     sacado de la base en cada llamada, no de una lista tecleada, y filtrado
-    por `config.puede_ser_responsable` (LA MISMA puerta que decide quién
-    puede QUEDAR asignado -- `db.asignar_responsable`, `crud.py::
-    _por_las_puertas`) para que un chat_id viejo sin acceso no reciba nada.
+    por `config.puede_recibir_telegram` para que un chat_id viejo sin acceso
+    no reciba nada.
+
+    `puede_recibir_telegram` y NO `puede_ser_responsable` (26-sep-2026, §1,
+    «Code como responsable»): `CHAT_ID_CODE` SÍ puede quedar como
+    `responsable_chat_id` desde este cambio, pero no tiene Telegram -- así
+    que un briefing armado para él nunca se manda, y sus tareas simplemente
+    no le arman un briefing a nadie (ni al dueño: la tarea SÍ tiene
+    responsable, solo que ese responsable no recibe Telegram). Es la MISMA
+    separación que ya usa `revisar`, más arriba en este archivo, para el
+    aviso puntual de una tarea.
 
     El dueño va primero y el resto en orden de chat_id: no importa CUÁL es
     el orden mientras sea el mismo en cada llamada, para que dos vueltas
@@ -522,7 +538,7 @@ async def _destinatarios_de_tareas() -> tuple[int, ...]:
             """
         )
         filas = await cur.fetchall()
-    asignados = {f[0] for f in filas if config.puede_ser_responsable(f[0])}
+    asignados = {f[0] for f in filas if config.puede_recibir_telegram(f[0])}
     asignados.discard(config.CHAT_ID_DUENO)
     return (config.CHAT_ID_DUENO,) + tuple(sorted(asignados))
 

@@ -101,7 +101,7 @@ HERRAMIENTAS DISPONIBLES:
   lista.
   RESPONSABLE (solo tareas, opcional): "crea X para Rosi" = mandalo YA en
   esta misma llamada, con el NOMBRE tal como está en esta lista, y nunca un
-  número: {PERSONAS_DEL_PANEL}. Sin responsable = no mandes el campo (o "").
+  número: {PERSONAS_Y_CODE}. Sin responsable = no mandes el campo (o "").
   Es la MISMA regla que al editar (ver más abajo): si el nombre no está en la
   lista, o es un apodo y no está claro de quién, preguntá antes de crear en
   vez de adivinar; si el nombre no vale, `crear` lo rechaza entero —no crea la
@@ -169,7 +169,7 @@ HERRAMIENTAS DISPONIBLES:
 
   RESPONSABLE DE UNA TAREA (quién la tiene pendiente): en "cambios" va
   {"responsable_chat_id": "<nombre>"} con el NOMBRE de la persona, tal como
-  está en esta lista, y nunca un número: {PERSONAS_DEL_PANEL}.
+  está en esta lista, y nunca un número: {PERSONAS_Y_CODE}.
   Sin responsable = null. Si el nombre pedido no está en la lista, o es un
   apodo y no está claro de quién, se pregunta antes de editar; si editar lo
   rechaza, el motivo trae a quién sí se le puede asignar.
@@ -594,6 +594,18 @@ def herramientas_del_prompt(areas: list[dict] | None = None,
     personas = (", ".join(f'"{n}"' for n in nombres) if nombres else
                 "(hoy nadie: falta NOMBRES_POR_CHAT, así que no se le puede "
                 "asignar a nadie)")
+    # RESPONSABLE DE TAREA es la ÚNICA de las dos listas que suma a «Code»
+    # (26-sep-2026, diseño «Code como responsable», §1): un DUEÑO DE CITA
+    # sigue siendo solo gente de la casa -- Code no atiende citas, así que
+    # esta lista NO se reutiliza para `{PERSONAS_DEL_PANEL}` (dueños de
+    # cita), aunque las dos empiecen del mismo `config.personas_del_panel()`.
+    # «Code» NO depende de `NOMBRES_POR_CHAT` -- sigue disponible aunque esa
+    # variable esté vacía, así que la lista nunca queda realmente sin nadie,
+    # pero el mensaje sigue diciendo la verdad sobre las PERSONAS.
+    personas_y_code = (
+        ", ".join(f'"{n}"' for n in (nombres + [config.NOMBRE_CODE])) if nombres
+        else f'"{config.NOMBRE_CODE}" (nadie más: falta NOMBRES_POR_CHAT para '
+             "sumar personas)")
     claves_area = [a["clave"] for a in (areas or [])]
     areas_txt = (", ".join(f'"{c}"' for c in claves_area) if claves_area else
                 "(hoy ninguna declarada: no le pongas área a nada, y si "
@@ -614,6 +626,7 @@ def herramientas_del_prompt(areas: list[dict] | None = None,
         "{CATEGORIAS}", ", ".join(f'"{c}"' for c in CATEGORIAS)
     ).replace("{PANTALLAS_DEL_PANEL}", pantallas
     ).replace("{PERSONAS_DEL_PANEL}", personas
+    ).replace("{PERSONAS_Y_CODE}", personas_y_code
     ).replace("{AREAS}", areas_txt
     ).replace("{PROYECTOS}", proyectos_txt)
 
