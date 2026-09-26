@@ -162,6 +162,14 @@ def requiere(permiso: str):
                 "puerta de Code: %s pidió %s sin tener ese permiso", quien, permiso)
             raise HTTPException(status_code=403, detail="clave inválida")
         return quien
+    # Etiqueta la dependencia con el permiso que exige, en un atributo
+    # REAL del objeto -- no en el texto fuente. Es lo que le permite a
+    # `tests/test_panel.py::test_todas_las_rutas_estan_protegidas` (y a
+    # `tests/test_api_code.py`) preguntarle a `app.routes` qué exige CADA
+    # ruta de verdad, en vez de buscar el literal `"Depends(requiere("` en
+    # el código -- un comentario con ese mismo texto, sin el `Depends` real,
+    # pasaba esa prueba igual (hallazgo del testigo sobre `b07de3f`).
+    _dependencia.permiso = permiso
     return _dependencia
 
 
@@ -190,3 +198,31 @@ async def cerrar_tarea(
             detail="no se cerró: no existe, ya está hecha, o no es una "
                    "tarea Técnica de Code")
     return {"cerrada": True}
+
+
+def rutas_registradas(app) -> list[tuple[str, str, str]]:
+    """(método, ruta completa, permiso que exige) de cada ruta de esta
+    puerta, sacado de lo que FastAPI REALMENTE registró en `app.routes` --
+    nunca una lista tecleada aparte, que se desincroniza el día que se
+    agregue o se saque una ruta y nadie se acuerde de venir a actualizarla.
+
+    Solo cuenta una ruta si alguna de sus dependencias tiene el atributo
+    `permiso` (lo pone `requiere()`, arriba) -- así una ruta futura de este
+    mismo router que por algún motivo NO pase por `requiere()` sale con
+    permiso `None` y una prueba que la exija puede notarlo, en vez de que
+    esta función la calle.
+    """
+    salida: list[tuple[str, str, str | None]] = []
+    for ruta in app.routes:
+        if not getattr(ruta, "path", "").startswith(router.prefix):
+            continue
+        dependant = getattr(ruta, "dependant", None)
+        permiso = None
+        if dependant is not None:
+            for dep in dependant.dependencies:
+                if hasattr(dep.call, "permiso"):
+                    permiso = dep.call.permiso
+        metodos = sorted((ruta.methods or set()) - {"HEAD"})
+        for metodo in metodos:
+            salida.append((metodo, ruta.path, permiso))
+    return salida

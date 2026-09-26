@@ -5556,13 +5556,24 @@ def test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_cuesta_hoy():
         "el sitio se reescribe con el nombre a la vista, o el límite se "
         "renegocia con Tiziano, pero no se afloja la aserción")
 
-    assert cuantos == 12, (
+    # 26-sep-2026, rama `trabajo/code-puerta` (vuelta del testigo sobre
+    # `b07de3f`, arreglo de sus dos hallazgos): 12 → 15. Los 3 nuevos son
+    # `web/api_code.py::rutas_registradas` -- `getattr(ruta, "path", "")`
+    # (línea 217), `getattr(ruta, "dependant", None)` (línea 219) y
+    # `hasattr(dep.call, "permiso")` (línea 223, cuenta igual: es el mismo
+    # patrón nombre-por-string). Los tres nombres son literales enumerables
+    # ("path", "dependant", "permiso") -- la aserción de "opacos" de arriba
+    # ya lo comprobó y quedó verde. `rutas_registradas` existe justamente
+    # para que las pruebas de protección de rutas pregunten qué exige CADA
+    # ruta mirando lo que FastAPI registró de verdad, no un literal de texto
+    # en el código fuente (el hallazgo del testigo).
+    assert cuantos == 15, (
         f"{_MARCA_CONTADOR}los archivos vigilados tienen {cuantos} llamadas a "
-        "getattr y el 22-sep-2026 eran 12. La aserción de fondo —ninguna de esas "
-        "llamadas pide un nombre que no se pueda enumerar— YA CORRIÓ arriba y "
-        "quedó verde, así que esto NO es una fuga: es el precio del límite, que "
-        "se movió. Hay que volver a mirar cuánto cuesta antes de darlo por "
-        "gratis, y actualizar el número")
+        "getattr y el 26-sep-2026 (rama code-puerta) eran 15. La aserción de "
+        "fondo —ninguna de esas llamadas pide un nombre que no se pueda "
+        "enumerar— YA CORRIÓ arriba y quedó verde, así que esto NO es una "
+        "fuga: es el precio del límite, que se movió. Hay que volver a mirar "
+        "cuánto cuesta antes de darlo por gratis, y actualizar el número")
 
 
 def test_los_objetos_peligrosos_salen_de_un_barrido_o_estan_declarados():

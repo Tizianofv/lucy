@@ -104,22 +104,49 @@ def test_todas_las_rutas_estan_protegidas():
 
     DOS FORMAS DE ESTAR PROTEGIDA, desde el 26-sep-2026 (§C, la puerta de las
     tareas de Code): `puede_entrar` — la cookie de sesión del panel humano,
-    para una persona con chat de Telegram — o `Depends(requiere(` — la clave
-    de `web/api_code.py`, para un programa (la sala, Natalia) sin chat ni
-    navegador. Las dos son autenticación real, comprobada aparte por
-    `tests/test_api_code.py`; esta prueba solo exige que TODA ruta declare
-    una de las dos, nunca ninguna."""
-    import inspect
+    para una persona con chat de Telegram — o la dependencia real de
+    `web/api_code.py::requiere(...)`, para un programa (la sala, Natalia)
+    sin chat ni navegador.
+
+    LAS RUTAS DE `/api/code/*` SE COMPRUEBAN MIRANDO LO QUE FASTAPI REGISTRÓ
+    (`ruta.dependant.dependencies`, vía `api_code.rutas_registradas`), NO el
+    texto fuente de la función — hallazgo del testigo sobre `b07de3f`: un
+    comentario con el literal `"Depends(requiere("`, sin el `Depends` real,
+    pasaba la versión vieja de esta prueba igual (mutación m6 de esa
+    vuelta). `rutas_registradas` exige además que el permiso encontrado no
+    sea `None` -- una ruta que pase por `requiere()` pero sin que la
+    dependencia quede etiquetada (ver `requiere`, que pone el atributo
+    `.permiso`) también cuenta como sin guardia.
+
+    LAS RUTAS DEL PANEL HUMANO siguen con la búsqueda de texto
+    (`"puede_entrar" in fuente`) — el MISMO patrón que la Regla 18 marca
+    como "puerta única detectada por un literal", pero cambiarlo pide
+    inspeccionar el CUERPO de cada función (no una dependencia declarada en
+    la firma, que es lo que hace `/api/code/*`), y eso no es un cambio
+    simple ni seguro de hacer de paso: QUEDA EN LA COLA."""
     import web.app as panel
+    import web.api_code as api_code
     sin_guardia = []
+
+    permiso_por_ruta_api_code = {
+        (metodo, path): permiso
+        for metodo, path, permiso in api_code.rutas_registradas(panel.app)}
+
     for ruta in panel.app.routes:
         fn = getattr(ruta, "endpoint", None)
         nombre = getattr(fn, "__name__", "")
+        path = getattr(ruta, "path", "?")
         if not fn or nombre == "entrar":       # la puerta valida aparte
             continue
+        if path.startswith(api_code.router.prefix):
+            for metodo in sorted((getattr(ruta, "methods", None) or set()) - {"HEAD"}):
+                if permiso_por_ruta_api_code.get((metodo, path)) is None:
+                    sin_guardia.append(f"{path} ({nombre}, {metodo})")
+            continue
+        import inspect
         fuente = inspect.getsource(fn)
-        if "puede_entrar" not in fuente and "Depends(requiere(" not in fuente:
-            sin_guardia.append(f"{getattr(ruta,'path','?')} ({nombre})")
+        if "puede_entrar" not in fuente:
+            sin_guardia.append(f"{path} ({nombre})")
     assert not sin_guardia, f"rutas sin comprobar sesión: {sin_guardia}"
 
 

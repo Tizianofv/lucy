@@ -242,6 +242,53 @@ def test_clave_de_natalia_no_puede_listar_ni_cerrar():
         restaurar()
 
 
+def test_cada_ruta_exige_especificamente_su_propio_permiso():
+    """Hallazgo del testigo sobre `b07de3f`: ninguna prueba exigía que
+    `POST /tareas/{id}/cerrar` pidiera ESPECÍFICAMENTE `tareas:cerrar` y no
+    cualquier otro permiso -- todos los fixtures le daban a `sala_mac` los
+    dos permisos juntos, así que una mutación que cambiara el permiso
+    exigido por esa ruta a `"tareas:listar"` seguía en verde.
+
+    LAS RUTAS SALEN DE `api_code.rutas_registradas(panel.app)` -- lo que
+    FastAPI REALMENTE registró -- no de una lista tecleada acá: el día que
+    haya una tercera ruta, entra sola. Para CADA una, se arma una clave con
+    TODOS los permisos de la puerta MENOS el que esa ruta exige, y se
+    exige 403 -- la pareja exacta que pidió el testigo: una clave con solo
+    `tareas:listar` no puede cerrar, y viceversa."""
+    rutas = api_code.rutas_registradas(panel.app)
+    assert rutas, "no se encontró ninguna ruta -- la prueba no vigilaría nada"
+    assert all(permiso is not None for _, _, permiso in rutas), (
+        f"alguna ruta no tiene permiso etiquetado: {rutas}")
+    todos_los_permisos = {permiso for _, _, permiso in rutas}
+    assert len(todos_los_permisos) >= 2, (
+        "con un solo permiso en toda la puerta esta prueba no puede armar "
+        "una clave a la que 'le falte' el suyo sin quedarse sin ninguno")
+
+    guardado = db.pool
+    _limpiar_contadores_de_abuso()
+    try:
+        for metodo, path, permiso_de_esta_ruta in rutas:
+            permisos_sin_el_suyo = todos_los_permisos - {permiso_de_esta_ruta}
+            clave = f"clave-de-prueba-sin-{permiso_de_esta_ruta.replace(':', '_')}"
+            restaurar = _con_claves(
+                {clave: "quien_de_prueba"},
+                {"quien_de_prueba": permisos_sin_el_suyo})
+            db.pool = _con_pool_fake(listar_filas=[], elegible=None)
+            try:
+                r = CLIENTE.request(
+                    metodo, path.replace("{tid}", "1"),
+                    headers={"Authorization": f"Bearer {clave}"})
+                assert r.status_code == 403, (
+                    f"{metodo} {path} exige {permiso_de_esta_ruta!r}, pero "
+                    f"una clave con {sorted(permisos_sin_el_suyo)} (todos "
+                    "MENOS ese) recibió "
+                    f"{r.status_code} en vez de 403")
+            finally:
+                restaurar()
+    finally:
+        db.pool = guardado
+
+
 def test_no_existe_ruta_de_tomar_ni_de_alertas():
     """«Mejor ausente que a medias»: estas rutas son de partes futuras del
     diseño y no se construyen todavía, aunque el permiso `alertas:crear` ya
