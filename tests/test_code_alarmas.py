@@ -58,6 +58,8 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+import pytest  # noqa: E402
+
 import config  # noqa: E402
 import db.db as db  # noqa: E402
 import captura.consumos as consumos  # noqa: E402
@@ -275,6 +277,118 @@ def test_dedupe_sql_real_NO_trae_otra_clave():
     assert fila is None
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# `db.crear_o_reusar_alerta_tecnica` de PUNTA A PUNTA contra SQLite REAL --
+# no la SELECT sola (arriba) sino la función completa: INSERT/UPDATE/
+# RETURNING/`now()` corriendo de verdad, muchas veces seguidas. GARANTÍA
+# PEDIDA EXPLÍCITAMENTE por el testigo (hallazgo 3, NO PASA sobre 00eb9e6):
+# "sin duplicados: 96 corridas seguidas -> una sola fila, con 96 apariciones
+# de «Volvió a pasar» en el detalle" (96 = un despertador cada 15 min en 24h).
+# ═══════════════════════════════════════════════════════════════════════
+
+class _CurAlertaReal:
+    def __init__(self, con):
+        self._con = con
+        self._cur = None
+
+    async def execute(self, sql, params=None):
+        sql2 = sql.replace("%s", "?")
+        self._cur = self._con.execute(sql2, params or ())
+        return self
+
+    async def fetchone(self):
+        fila = self._cur.fetchone()
+        return dict(fila) if fila is not None else None
+
+    async def fetchall(self):
+        return [dict(f) for f in self._cur.fetchall()]
+
+
+class _ConnAlertaReal:
+    def __init__(self, con):
+        self._con = con
+
+    def cursor(self, row_factory=None):
+        return _CurAlertaReal(self._con)
+
+    async def execute(self, sql, params=None):
+        return await _CurAlertaReal(self._con).execute(sql, params)
+
+
+class _PoolAlertaReal:
+    def __init__(self, con):
+        self._conn = _ConnAlertaReal(con)
+
+    def connection(self):
+        conn = self._conn
+
+        class _CM:
+            async def __aenter__(self):
+                return conn
+
+            async def __aexit__(self, *e):
+                return False
+        return _CM()
+
+
+def _sqlite_para_alerta_real():
+    import sqlite3
+
+    con = sqlite3.connect(":memory:", isolation_level=None)  # autocommit
+    con.row_factory = sqlite3.Row
+    # `now()` no existe en SQLite -- se registra como función nativa, igual
+    # de determinista para esta prueba que Postgres (solo importa que
+    # AVANCE, no la hora exacta).
+    con.create_function("now", 0, lambda: datetime.now(timezone.utc).isoformat())
+    con.execute("""
+        CREATE TABLE tareas (
+          id INTEGER PRIMARY KEY, titulo TEXT, detalle TEXT, area TEXT,
+          responsable_chat_id INTEGER, estado TEXT DEFAULT 'pendiente',
+          borrado_en TEXT, clave_tecnica TEXT, ultima_alarma_en TEXT
+        )""")
+    con.execute("""
+        CREATE TABLE log_acciones (
+          id INTEGER PRIMARY KEY, actor TEXT, accion TEXT, tabla TEXT,
+          registro_id INTEGER, despues TEXT, motivo TEXT
+        )""")
+    con.commit()
+    return con
+
+
+def test_96_corridas_seguidas_una_sola_fila_con_96_ocurrencias():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE por el testigo, de punta a punta
+    contra SQL real: 96 llamadas seguidas con la MISMA clave (un
+    despertador cada 15 minutos durante 24h, la misma falla repitiéndose)
+    dejan UNA sola fila en `tareas`, y su `detalle` acumula 96 apariciones
+    de "Volvió a pasar" -- una por cada ocurrencia después de la primera
+    creación, sin perder ninguna y sin abrir una segunda fila."""
+    con = _sqlite_para_alerta_real()
+    guardado_pool = db.pool
+    db.pool = _PoolAlertaReal(con)
+    try:
+        ids = []
+        for i in range(96):
+            tid = _correr(db.crear_o_reusar_alerta_tecnica(
+                "canario:banco-real:reventado", "Canario: banco-real reventó",
+                f"ocurrencia número {i}"))
+            ids.append(tid)
+        filas = con.execute(
+            "SELECT id, detalle FROM tareas WHERE clave_tecnica = ?",
+            ("canario:banco-real:reventado",)).fetchall()
+        assert len(filas) == 1, (
+            f"esperaba UNA sola fila tras 96 corridas, salieron {len(filas)}")
+        assert len(set(ids)) == 1, (
+            f"las 96 corridas devolvieron ids distintos: {sorted(set(ids))}")
+        detalle = filas[0]["detalle"]
+        apariciones = detalle.count("Volvió a pasar")
+        assert apariciones == 95, (
+            f"esperaba 95 apariciones de 'Volvió a pasar' (96 corridas: la "
+            f"1a crea, las 95 siguientes reusan y agregan), salieron {apariciones}")
+    finally:
+        db.pool = guardado_pool
+        con.close()
+
+
 def test_sin_la_migracion_devuelve_none_y_no_revienta(caplog):
     """GARANTÍA PEDIDA EXPLÍCITAMENTE (condición 1): sin las columnas de
     esta parte, nada revienta -- devuelve `None` para que quien llama caiga
@@ -307,26 +421,48 @@ def test_la_puerta_del_responsable_se_consulta():
 
 def test_ningun_insert_de_tarea_tecnica_de_code_fuera_de_la_puerta():
     """GARANTÍA PEDIDA EXPLÍCITAMENTE (condición 3): toda alarma técnica
-    pasa por LA MISMA puerta -- se recorre `db/db.py` completo (el único
-    archivo que hoy escribe `tareas` con SQL propio) buscando cualquier
+    pasa por LA MISMA puerta -- se recorre TODO EL REPOSITORIO (no solo
+    `db/db.py`, que es lo que este censo entregaba antes de este arreglo:
+    hallazgo 4 del testigo sobre 00eb9e6, NO PASA) buscando cualquier
     `INSERT INTO tareas` que fije `responsable_chat_id` a `CHAT_ID_CODE` Y
-    un área -- fuera de la función `crear_o_reusar_alerta_tecnica`."""
-    fuente_modulo = inspect.getsource(db)
-    arbol = ast.parse(fuente_modulo)
+    un área -- fuera de la función `crear_o_reusar_alerta_tecnica`.
+
+    LA MISMA PUERTA de recorrido que ya usa el resto de la suite
+    (`tests/test_buzon_que_no_se_ve.py::_py_en_disco`, la única fuente de
+    "qué archivos hay en este repo": venvs, cachés y `norecursedirs`
+    quedan afuera solos, sin lista tecleada) -- no una segunda función que
+    camine el disco a su manera y se desalinee con esa el día que cambie.
+    Mismo patrón de exclusión de PRUEBAS que `tests/test_responsable.py::
+    _censo` (`barrido._testpaths`): sin esto, este mismo archivo se
+    denuncia a sí mismo por nombrar "INSERT INTO tareas"/"CHAT_ID_CODE" en
+    su propio texto (docstring y literales de comparación)."""
+    import test_buzon_que_no_se_ve as barrido
+
+    raiz = barrido.RAIZ
+    pruebas = [p.resolve() for p in barrido._testpaths(raiz)]
     ofensores = []
-    # `async def` es `ast.AsyncFunctionDef`, que NO hereda de `ast.FunctionDef`
-    # -- casi todas las funciones de este archivo son `async def`, así que
-    # mirar solo `ast.FunctionDef` deja el censo ciego a casi todo el
-    # archivo (defecto real encontrado en la mutación 7 de este mismo
-    # encargo: la mutación de prueba no se detectaba y el motivo era este).
-    for nodo in ast.walk(arbol):
-        if isinstance(nodo, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            fuente_fn = ast.get_source_segment(fuente_modulo, nodo) or ""
+    for py in barrido._py_en_disco(raiz):
+        real = py.resolve()
+        if any(c == real or c in real.parents for c in pruebas):
+            continue
+        try:
+            fuente_modulo = real.read_text(encoding="utf-8")
+            arbol = ast.parse(fuente_modulo, filename=str(real))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        for nodo in ast.walk(arbol):
+            # `async def` es `ast.AsyncFunctionDef`, que NO hereda de
+            # `ast.FunctionDef` -- mirar solo `ast.FunctionDef` deja el
+            # censo ciego a casi toda función de este repo (defecto real
+            # encontrado en la mutación 7 de este mismo encargo).
+            if not isinstance(nodo, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
             if nodo.name == "crear_o_reusar_alerta_tecnica":
                 continue
+            fuente_fn = ast.get_source_segment(fuente_modulo, nodo) or ""
             if ("INSERT INTO tareas" in fuente_fn
                     and "CHAT_ID_CODE" in fuente_fn):
-                ofensores.append(nodo.name)
+                ofensores.append(f"{real.relative_to(raiz)}::{nodo.name}")
     assert not ofensores, (
         f"estas funciones insertan tareas con CHAT_ID_CODE sin pasar por "
         f"crear_o_reusar_alerta_tecnica: {ofensores}")
@@ -450,6 +586,122 @@ def test_canario_reventado_cae_a_la_bandeja_si_la_tarea_no_se_pudo_crear():
         db.crear_o_reusar_alerta_tecnica, db.guardar_en_bandeja = g1, g2
     assert n == 1
     assert len(avisos_bandeja) == 1, "no cayó a la bandeja cuando la tarea no se pudo crear"
+    assert avisos_bandeja[0]["chat_id"] == config.CHAT_ID_DUENO
+
+
+def _senales_del_canario() -> list[tuple[str, str]]:
+    """Saca del código REAL de `avisar_si_hay_bancos_mudos` cada señal que
+    hoy convierte en alerta: para cada `for rem in res.remitentes_X():` se
+    busca la llamada a `_alertar(f"canario:{rem}:SUFIJO", ...)` dentro de su
+    cuerpo y se extrae el SUFIJO literal. Ninguna señal está tecleada a
+    mano: si mañana se agrega una cuarta, esta lista la ve sola (Regla 18 --
+    faltaba una prueba de comportamiento para B y C, hallazgo 2 del testigo
+    sobre 00eb9e6).
+
+    Devuelve [(nombre_del_generador, sufijo_de_clave), ...] -- hoy
+    [("remitentes_reventados", "reventado"), ("remitentes_mudos", "sin_ruta"),
+     ("remitentes_rechazados", "rechazado")].
+    """
+    arbol = ast.parse(textwrap.dedent(inspect.getsource(consumos.avisar_si_hay_bancos_mudos)))
+    fn = arbol.body[0]
+    salida = []
+    for nodo in ast.walk(fn):
+        if not (isinstance(nodo, ast.For) and isinstance(nodo.iter, ast.Call)
+                and isinstance(nodo.iter.func, ast.Attribute)
+                and nodo.iter.func.attr.startswith("remitentes_")):
+            continue
+        generador = nodo.iter.func.attr
+        for sub in ast.walk(nodo):
+            if not (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+                    and sub.func.id == "_alertar"):
+                continue
+            primer_arg = sub.args[0]
+            assert isinstance(primer_arg, ast.JoinedStr), (
+                f"la clave de {generador} no es un f-string: no puedo leer el sufijo")
+            ultima_pieza = primer_arg.values[-1]
+            assert isinstance(ultima_pieza, ast.Constant), (
+                f"la clave de {generador} no termina en texto literal")
+            sufijo = ultima_pieza.value.lstrip(":")
+            salida.append((generador, sufijo))
+            break
+    assert len(salida) >= 3, f"esperaba al menos 3 señales, salieron {salida}"
+    return salida
+
+
+_CAMPO_POR_GENERADOR = {
+    "remitentes_reventados": "reventados",
+    "remitentes_mudos": "sin_ruta",
+    "remitentes_rechazados": "rechazados",
+}
+
+
+def _resumen_para_senal(generador: str, remitente: str, n: int = 1) -> "consumos.Resumen":
+    campo = _CAMPO_POR_GENERADOR[generador]
+    kwargs = {campo: {remitente: n}}
+    if generador == "remitentes_mudos":
+        kwargs["enrutados"] = {remitente: 0}  # exige enrutados == 0, ver Resumen.remitentes_mudos
+    return _fila_resumen(**kwargs)
+
+
+@pytest.mark.parametrize("generador,sufijo", _senales_del_canario())
+def test_cada_senal_del_canario_crea_tarea_de_code(generador, sufijo):
+    """Una por señal, camino real, de punta a punta -- las tres tienen que
+    llamar a la puerta con la MISMA clave que arma la producción."""
+    remitente = "banco-de-prueba"
+    clave_esperada = f"canario:{remitente}:{sufijo}"
+    llamadas = []
+
+    async def _crear_o_reusar(clave, titulo, detalle):
+        llamadas.append(clave)
+        return 5
+
+    avisos_bandeja = []
+
+    async def _guardar_en_bandeja(**kw):
+        avisos_bandeja.append(kw)
+        return 1
+
+    g1, g2 = db.crear_o_reusar_alerta_tecnica, db.guardar_en_bandeja
+    db.crear_o_reusar_alerta_tecnica = _crear_o_reusar
+    db.guardar_en_bandeja = _guardar_en_bandeja
+    try:
+        res = _resumen_para_senal(generador, remitente)
+        n = _correr(consumos.avisar_si_hay_bancos_mudos(res))
+    finally:
+        db.crear_o_reusar_alerta_tecnica, db.guardar_en_bandeja = g1, g2
+    assert n == 1, f"la señal {sufijo} ({generador}) no avisó"
+    assert llamadas == [clave_esperada], (
+        f"la señal {sufijo} llamó a la puerta con {llamadas}, esperaba [{clave_esperada!r}]")
+    assert avisos_bandeja == [], f"la señal {sufijo} avisó por la bandeja en vez de crear la tarea"
+
+
+@pytest.mark.parametrize("generador,sufijo", _senales_del_canario())
+def test_cada_senal_del_canario_cae_a_la_bandeja_si_la_tarea_no_se_pudo_crear(generador, sufijo):
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE: nunca se pierde el aviso, para
+    NINGUNA de las tres señales -- no solo para la A (reventado), que era
+    la única cubierta antes de este arreglo."""
+    remitente = "banco-de-prueba-2"
+    avisos_bandeja = []
+
+    async def _crear_o_reusar_none(clave, titulo, detalle):
+        return None  # sin la migración, por ejemplo
+
+    async def _guardar_en_bandeja(**kw):
+        avisos_bandeja.append(kw)
+        return 1
+
+    consumos._ultimo_aviso.clear()
+    g1, g2 = db.crear_o_reusar_alerta_tecnica, db.guardar_en_bandeja
+    db.crear_o_reusar_alerta_tecnica = _crear_o_reusar_none
+    db.guardar_en_bandeja = _guardar_en_bandeja
+    try:
+        res = _resumen_para_senal(generador, remitente)
+        n = _correr(consumos.avisar_si_hay_bancos_mudos(res))
+    finally:
+        db.crear_o_reusar_alerta_tecnica, db.guardar_en_bandeja = g1, g2
+    assert n == 1, f"la señal {sufijo} ({generador}) no avisó de ninguna forma"
+    assert len(avisos_bandeja) == 1, (
+        f"la señal {sufijo} no cayó a la bandeja cuando la tarea no se pudo crear")
     assert avisos_bandeja[0]["chat_id"] == config.CHAT_ID_DUENO
 
 

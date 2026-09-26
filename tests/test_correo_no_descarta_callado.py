@@ -526,6 +526,37 @@ def test_un_solo_destino_sigue_atando_todo_a_su_unico_encargo():
     assert [m["bandeja_id"] for m in base.marcados] == [unico]
 
 
+# ---------------------------------------------------------------------------
+# Parte 4 (§B.4 del diseño): el reporte de correo sigue yendo directo a
+# Tiziano/Rosi por la bandeja, NO a Code. Prueba de COMPORTAMIENTO -- se
+# espía la PUERTA real (`db.crear_o_reusar_alerta_tecnica`) sobre el camino
+# de punta a punta de `reporte_diario` (hallazgo 1 del testigo, NO PASA
+# sobre 00eb9e6).
+# ---------------------------------------------------------------------------
+def test_el_reporte_diario_no_crea_tarea_de_code():
+    from datetime import datetime
+    llamadas_a_code = []
+
+    async def _crear_o_reusar_espia(clave, titulo, detalle):
+        llamadas_a_code.append(clave)
+        return 999
+
+    base = _montar([(1, _eml("Jorge <jorge@ejemplo.com>", "cotizacion del disco"))])
+    guardado_puerta = db.crear_o_reusar_alerta_tecnica
+    db.crear_o_reusar_alerta_tecnica = _crear_o_reusar_espia
+    config.CORREO_CUENTAS = [{"user": "tizianofv@gmail.com", "pass": "x"}]
+    correo.datetime = _Reloj(datetime(2026, 9, 2, 7, 10, tzinfo=config.TZ))
+    config.es_horario_caro_deepseek = lambda ahora: False
+    try:
+        assert _correr(correo.reporte_diario()) == 1
+        assert base.encargos and base.encargos[0]["chat_id"] == config.CHAT_ID_DUENO
+        assert llamadas_a_code == [], (
+            f"reporte_diario llamó a la puerta de Code con {llamadas_a_code}; "
+            "tiene que seguir yendo directo a Tiziano/Rosi por la bandeja")
+    finally:
+        db.crear_o_reusar_alerta_tecnica = guardado_puerta
+
+
 if __name__ == "__main__":
     fallidos = 0
     for nombre, fn in sorted(globals().items()):

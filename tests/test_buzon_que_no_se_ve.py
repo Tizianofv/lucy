@@ -3871,14 +3871,26 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # más el ayudante `_alertar`), los cuatro ya vigilados de antes. La
     # migración nueva (`db/migrations/2026-09-26_alertas_tecnicas.sql`) no
     # es un `.py`.
-    assert medido == {"en disco": 95, "exentos": 54, "vigilados": 41}, (
+    #
+    # Mismo día, arreglo del NO PASA del testigo sobre 00eb9e6 (hallazgos 1
+    # y 2: faltaban pruebas de COMPORTAMIENTO de que `_al_fallar`/la
+    # vigilancia 911/el reporte de correo siguen yendo a Tiziano/Rosi, y de
+    # las señales B y C del canario de punta a punta): 95 → 96 en disco,
+    # 54 → 55 EXENTOS por el archivo nuevo `tests/test_al_fallar_no_va_a_
+    # code.py`. `tests/test_alerta_911_a_los_dos.py` y `tests/test_correo_
+    # no_descarta_callado.py` ya estaban EXENTOS de antes (empiezan con
+    # `test_`), así que sumarles pruebas no mueve el contador. VIGILADOS
+    # sin cambio en 41: no se tocó ningún archivo de producción en esta
+    # vuelta, solo pruebas.
+    assert medido == {"en disco": 96, "exentos": 55, "vigilados": 41}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "26-sep-2026 (rama code-alarmas) era {'en disco': 95, "
-        "'exentos': 54, 'vigilados': 41}. La aserción de fondo —cero "
-        "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
-        "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
-        "está saltando de más y «cero falsos positivos» dejó de "
-        "significar lo que decía; si subieron, hay código nuevo que mirar")
+        "26-sep-2026 (rama code-alarmas, tras el arreglo del NO PASA) era "
+        "{'en disco': 96, 'exentos': 55, 'vigilados': 41}. La aserción de "
+        "fondo —cero archivos alcanzan la lista cruda— YA CORRIÓ arriba y "
+        "quedó verde, así que esto NO es una fuga. Si los vigilados "
+        "bajaron, algo se está saltando de más y «cero falsos positivos» "
+        "dejó de significar lo que decía; si subieron, hay código nuevo "
+        "que mirar")
 
 
 def test_la_guarda_no_rojea_a_quien_usa_config_como_se_debe():

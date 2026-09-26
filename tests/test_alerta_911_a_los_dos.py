@@ -589,5 +589,45 @@ def test_sin_la_marca_911_la_copia_general_si_duplicaria(puerta, monkeypatch):
         config._NOMBRES_DE_COPIA = ()
 
 
+# ---------------------------------------------------------------------------
+# Parte 4 (§B.4 del diseño): la 911 sigue yendo a Tiziano/Rosi, NO a Code.
+# Prueba de COMPORTAMIENTO (Regla 18: nada de censo de texto que se burla
+# con un alias o un hermano que delega) -- se espía la PUERTA real
+# (`db.crear_o_reusar_alerta_tecnica`) y se corre `vigilar_911` de punta a
+# punta; si algún día alguien la redirige por error hacia Code, esta prueba
+# se pone roja porque la puerta se llama, no porque el texto cambió.
+# ---------------------------------------------------------------------------
+def test_la_911_no_crea_tarea_de_code():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE por el testigo (hallazgo 1, NO PASA
+    sobre 00eb9e6): la vigilancia 911 sigue yendo directo a Tiziano/Rosi
+    (`db.guardar_en_bandeja`), nunca a la puerta de Code."""
+    llamadas_a_code = []
+
+    async def _crear_o_reusar_espia(clave, titulo, detalle):
+        llamadas_a_code.append(clave)
+        return 999  # si esto se llegara a llamar, ya perdimos la garantía
+
+    restaurar = _con_gente({DUENO: "Alfa", BETA: "Beta"})
+    con = _instalar_sqlite()
+    bandeja = _BandejaFalsa()
+    db.guardar_en_bandeja = bandeja.guardar_en_bandeja
+    db.listar_preferencias = bandeja.listar_preferencias
+    guardado_puerta = db.crear_o_reusar_alerta_tecnica
+    db.crear_o_reusar_alerta_tecnica = _crear_o_reusar_espia
+    correo.clasificar = _clasificar_no_usado
+    _montar_imap([(1, ALERTA)])
+    try:
+        avisados = _correr(correo.vigilar_911(None))
+        assert avisados == 2
+        assert llamadas_a_code == [], (
+            f"vigilar_911 llamó a la puerta de Code con {llamadas_a_code}; "
+            "tiene que seguir yendo directo a Tiziano/Rosi")
+        assert sorted(f["chat_id"] for f in bandeja.filas) == sorted([DUENO, BETA])
+    finally:
+        restaurar()
+        db.crear_o_reusar_alerta_tecnica = guardado_puerta
+        con.close()
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
