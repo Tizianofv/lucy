@@ -3834,10 +3834,21 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `web/app.py`, los seis ya vigilados de antes. No hizo falta ninguna
     # migración: `CHAT_ID_CODE` es un valor de aplicación (un `BIGINT`
     # reservado, sin FK), no de esquema.
-    assert medido == {"en disco": 91, "exentos": 51, "vigilados": 40}, (
+    #
+    # 26-sep-2026, rama `trabajo/code-puerta` (§C, parte 2 del plan de
+    # construcción — la puerta HTTP con clave, listar + cerrar): 91 → 93 en
+    # disco, 51 → 52 EXENTOS por `tests/test_api_code.py` (la app FastAPI
+    # real con `TestClient`, SQL de verdad vía dobles de `db.pool`), y
+    # 40 → 41 VIGILADOS por `web/api_code.py` (nuevo, la ruta HTTP en sí,
+    # con las claves/permisos de `config.py`). `config.py`, `db/db.py`
+    # (nueva `tareas_de_code_pendientes`), `web/app.py` (monta el router) y
+    # `tests/test_panel.py` (censo de rutas protegidas, actualizado para
+    # aceptar `Depends(requiere(` además de `puede_entrar`) ya estaban
+    # vigilados de antes. No hizo falta ninguna migración.
+    assert medido == {"en disco": 93, "exentos": 52, "vigilados": 41}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "26-sep-2026 (rama code-base) era {'en disco': 91, "
-        "'exentos': 51, 'vigilados': 40}. La aserción de fondo —cero "
+        "26-sep-2026 (rama code-puerta) era {'en disco': 93, "
+        "'exentos': 52, 'vigilados': 41}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

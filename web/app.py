@@ -54,10 +54,15 @@ import web.auth as auth
 from acciones import crud
 from cerebro.bancos.categorias import (CATEGORIAS, NO_SUMAN,
                                        categoria_permitida)
+from web.api_code import router as api_code_router
 
 log = logging.getLogger("lucy.panel")
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+# La puerta de las tareas de Code (26-sep-2026, §C): rutas aparte, con su
+# PROPIA autenticación por clave -- nunca la cookie `lucy_panel` de abajo.
+# Ver `web/api_code.py` para el porqué de vivir en el mismo proceso.
+app.include_router(api_code_router)
 plantillas = Jinja2Templates(directory="web/plantillas")
 
 COOKIE = "lucy_panel"

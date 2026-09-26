@@ -200,6 +200,108 @@ def nombres_con_code() -> dict[int, str]:
     return {**NOMBRES_POR_CHAT, CHAT_ID_CODE: NOMBRE_CODE}
 
 
+# ── LA PUERTA HTTP DE LAS TAREAS DE CODE ──────────────────────────────────
+#
+# Diseño aprobado por Tiziano, 26-sep-2026 (disenos/lucy-code/DISENO.md, §C):
+# reemplaza que la sala lea/escriba la base de Lucy directo con
+# `railway run -s Postgres`. La sala (desde esta Mac o desde la nube) y
+# Natalia hablan con Lucy por HTTP, con una clave — nunca con la base.
+#
+# EL REPO ES PÚBLICO. Las claves NUNCA viven acá: solo en las variables de
+# Railway `CLAVES_API_CODE` y `PERMISOS_API_CODE`, que la SALA pone después,
+# con permiso de Tiziano — este archivo no las pone ni las adivina.
+#
+# `CLAVES_API_CODE`, mismo patrón que `NOMBRES_POR_CHAT` (pares separados
+# por coma o punto y coma), pero con los dos lados AL REVÉS: acá lo que
+# LLEGA en cada pedido es la clave, así que se busca por clave.
+#
+#     CLAVES_API_CODE="sala_mac:<clave-larga-1>, sala_nube:<clave-larga-2>, natalia:<clave-larga-3>"
+#
+# `PERMISOS_API_CODE`, un `quien` por pieza, con sus permisos unidos por `+`
+# — un `:` DENTRO del permiso (`tareas:listar`) es parte del nombre, así que
+# el separador entre `quien` y su lista es `=`, no `:`:
+#
+#     PERMISOS_API_CODE="sala_mac=tareas:listar+tareas:cerrar, sala_nube=tareas:listar+tareas:cerrar, natalia=alertas:crear"
+#
+# Los permisos que YA EXISTEN en el código, hoy (parte 2 del plan): sólo
+# `tareas:listar` y `tareas:cerrar` tienen una ruta que los pida
+# (`web/api_code.py`). `alertas:crear` y `tareas:tomar` son NOMBRES ya
+# reservados para partes futuras del mismo diseño (§D, crear/reusar
+# alerta técnica) — declararlos acá no abre ninguna ruta que no exista.
+#
+# CERRADO POR DEFECTO, en dos niveles independientes:
+#   · Si `CLAVES_API_CODE` no está puesta (o no tiene ninguna pieza legible),
+#     `CLAVES_API_CODE` queda `{}`: NINGUNA clave resuelve a nadie, así que
+#     TODO pedido es 401. No hace falta ningún caso especial en la puerta
+#     para esto — es la misma rama que un pedido con una clave inventada.
+#   · Si un `quien` SÍ tiene una clave válida pero no aparece en
+#     `PERMISOS_API_CODE` (o `PERMISOS_API_CODE` tampoco está puesta), sus
+#     permisos son el conjunto vacío: pasa la autenticación y falla en la
+#     autorización (403), nunca al revés.
+#
+# UNA CLAVE QUE DOS `quien` RECLAMAN es AMBIGUA Y PELIGROSA -- no se
+# adivina cuál es la buena (elegir "la primera" dejaría a quien tenga la
+# clave real actuando como el otro sin que nadie lo note): las dos entradas
+# se DESCARTAN, no se deja pasar ninguna. Es la misma decisión que ya toma
+# `acciones.crud._chat_del_nombre` con dos personas del mismo nombre — un
+# error de configuración se vuelve "nadie entra con esa clave", nunca
+# "adivino cuál".
+def _leer_claves_api_code(crudo: str) -> tuple[dict[str, str], int]:
+    """{clave: quien} y cuántas entradas no se entendieron o quedaron
+    descartadas por ambiguas."""
+    piezas: list[tuple[str, str]] = []
+    malos = 0
+    for pieza in crudo.replace(";", ",").split(","):
+        pieza = pieza.strip()
+        if not pieza:
+            continue
+        quien, sep, clave = pieza.partition(":")
+        quien, clave = quien.strip(), clave.strip()
+        if not sep or not quien or not clave:
+            malos += 1
+            continue
+        piezas.append((quien, clave))
+    por_clave: dict[str, set[str]] = {}
+    for quien, clave in piezas:
+        por_clave.setdefault(clave, set()).add(quien)
+    claves: dict[str, str] = {}
+    for clave, quienes in por_clave.items():
+        if len(quienes) > 1:
+            malos += len(quienes)
+            continue
+        claves[clave] = next(iter(quienes))
+    return claves, malos
+
+
+def _leer_permisos_api_code(crudo: str) -> tuple[dict[str, frozenset[str]], int]:
+    """{quien: {permisos}} y cuántas entradas no se entendieron.
+
+    Si el mismo `quien` aparece en dos piezas, sus permisos se UNEN — no es
+    el caso ambiguo de `_leer_claves_api_code` (ahí dos DUEÑOS distintos de
+    la misma clave es un choque; acá es la misma persona con más de una
+    línea, y sumar es la lectura obvia)."""
+    permisos: dict[str, frozenset[str]] = {}
+    malos = 0
+    for pieza in crudo.replace(";", ",").split(","):
+        pieza = pieza.strip()
+        if not pieza:
+            continue
+        quien, sep, lista = pieza.partition("=")
+        quien, lista = quien.strip(), lista.strip()
+        items = tuple(p.strip() for p in lista.split("+") if p.strip())
+        if not sep or not quien or not items:
+            malos += 1
+            continue
+        permisos[quien] = permisos.get(quien, frozenset()) | frozenset(items)
+    return permisos, malos
+
+
+CLAVES_API_CODE, CLAVES_API_CODE_MAL_ESCRITAS = _leer_claves_api_code(
+    os.environ.get("CLAVES_API_CODE", ""))
+PERMISOS_API_CODE, PERMISOS_API_CODE_MAL_ESCRITOS = _leer_permisos_api_code(
+    os.environ.get("PERMISOS_API_CODE", ""))
+
+
 # ── COPIA AL DUEÑO ────────────────────────────────────────────────────────
 #
 # Decisión de Tiziano, 21-sep-2026: «lo que me llega a mí también le llega a

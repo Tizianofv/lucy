@@ -2584,6 +2584,38 @@ async def marcar_tarea_hecha(tarea_id: int) -> bool:
         return True
 
 
+async def tareas_de_code_pendientes() -> list[dict]:
+    """Las tareas TÉCNICAS pendientes de Code. Es la consulta de solo
+    lectura que expone `GET /api/code/tareas` (§C.4/§3 del diseño «Code
+    como responsable», 26-sep-2026, parte 2 del plan de construcción).
+
+    LA GUARDA DE VALOR VIVE EN EL `WHERE`, igual que `cerrar_tarea_de_la_
+    sala` (parte 1): `responsable_chat_id = CHAT_ID_CODE` y área EFECTIVA
+    (`COALESCE(t.area, p.area)`, mismo criterio que ya usa el panel) igual
+    a `AREA_TECNICA`. Ninguna tarea que no cumpla las dos condiciones sale
+    de acá, así que la ruta HTTP no tiene que volver a filtrar nada.
+
+    `primero_id` viaja tal cual -- decidir si una tarea que todavía espera a
+    otra debería ofrecérsele a la sala es un refinamiento que el diseño deja
+    fuera a propósito (§6 del documento).
+    """
+    consulta = """
+        SELECT t.id, t.titulo, t.detalle, t.vence_en, t.creado_en,
+               t.primero_id, p.nombre AS proyecto
+          FROM tareas t
+          LEFT JOIN proyectos p ON p.id = t.proyecto_id
+         WHERE t.borrado_en IS NULL
+           AND t.estado = %s
+           AND t.responsable_chat_id = %s
+           AND COALESCE(t.area, p.area) = %s
+         ORDER BY t.vence_en NULLS LAST, t.id
+        """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(consulta, (ESTADO_PENDIENTE, CHAT_ID_CODE, AREA_TECNICA))
+        return list(await cur.fetchall())
+
+
 async def cerrar_tarea_de_la_sala(tarea_id: int) -> bool:
     """Cierra UNA tarea TÉCNICA de Code. Devuelve si de verdad cerró algo.
 

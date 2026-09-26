@@ -100,7 +100,15 @@ def test_la_sesion_dura_mas_que_el_enlace():
 def test_todas_las_rutas_estan_protegidas():
     """Cada ruta nueva es una puerta nueva. Este test recorre la app y falla si
     alguna no comprueba la sesión — sin él, añadir una pantalla y olvidarse del
-    guardarraíl no rompería nada visible."""
+    guardarraíl no rompería nada visible.
+
+    DOS FORMAS DE ESTAR PROTEGIDA, desde el 26-sep-2026 (§C, la puerta de las
+    tareas de Code): `puede_entrar` — la cookie de sesión del panel humano,
+    para una persona con chat de Telegram — o `Depends(requiere(` — la clave
+    de `web/api_code.py`, para un programa (la sala, Natalia) sin chat ni
+    navegador. Las dos son autenticación real, comprobada aparte por
+    `tests/test_api_code.py`; esta prueba solo exige que TODA ruta declare
+    una de las dos, nunca ninguna."""
     import inspect
     import web.app as panel
     sin_guardia = []
@@ -110,7 +118,7 @@ def test_todas_las_rutas_estan_protegidas():
         if not fn or nombre == "entrar":       # la puerta valida aparte
             continue
         fuente = inspect.getsource(fn)
-        if "puede_entrar" not in fuente:
+        if "puede_entrar" not in fuente and "Depends(requiere(" not in fuente:
             sin_guardia.append(f"{getattr(ruta,'path','?')} ({nombre})")
     assert not sin_guardia, f"rutas sin comprobar sesión: {sin_guardia}"
 
