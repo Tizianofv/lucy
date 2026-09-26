@@ -997,3 +997,69 @@ def test_solo_columnas_reales_filtra_por_tabla_de_verdad():
             "un_alias_cualquiera": 42}
     filtrada = db._solo_columnas_reales("tareas", fila)
     assert filtrada == {"id": 1, "titulo": "x"}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# `db.tomadas_de`: el SQL REAL, corrido contra SQLite (no el doble que
+# duplica el filtro en Python de las pruebas de arriba) -- para que una
+# mutación del WHERE de verdad se note.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _extraer_sql_tomadas_de() -> str:
+    arbol = ast.parse(textwrap.dedent(inspect.getsource(db.tomadas_de)))
+    for nodo in ast.walk(arbol):
+        if (isinstance(nodo, ast.Call)
+                and isinstance(nodo.func, ast.Attribute)
+                and nodo.func.attr == "execute"
+                and nodo.args
+                and isinstance(nodo.args[0], ast.Constant)
+                and isinstance(nodo.args[0].value, str)
+                and "tomada_en" in nodo.args[0].value):
+            return nodo.args[0].value
+    raise AssertionError("no encontré el SELECT de tomadas_de en el código")
+
+
+def _corre_tomadas_de_sqlite(filas: list[dict], id_pedido: int):
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE tareas (id INTEGER PRIMARY KEY, tomada_en TEXT, "
+        "responsable_chat_id INTEGER)")
+    for f in filas:
+        conn.execute(
+            "INSERT INTO tareas (id, tomada_en, responsable_chat_id) "
+            "VALUES (?, ?, ?)",
+            (f["id"], f.get("tomada_en"), f.get("responsable_chat_id")))
+    conn.commit()
+
+    # Traducción MÍNIMA para que corra en SQLite: `id = ANY(%s)` -> `id = ?`
+    # (esta prueba pide un solo id a la vez) y `%s` -> `?`. El resto del
+    # texto -- lo que de verdad importa, `AND responsable_chat_id = ?` -- es
+    # EL MISMO que ejecuta producción, sin tocar.
+    sql = _extraer_sql_tomadas_de()
+    sql = sql.replace("id = ANY(%s)", "id = ?").replace("%s", "?")
+    cur = conn.execute(sql, (id_pedido, db.CHAT_ID_CODE))
+    salida = {row["id"]: row["tomada_en"] for row in cur.fetchall()}
+    conn.close()
+    return salida
+
+
+def test_tomadas_de_sql_real_trae_la_que_sigue_siendo_de_code():
+    salida = _corre_tomadas_de_sqlite(
+        [{"id": 1, "tomada_en": "2026-09-20T09:00:00", "responsable_chat_id": db.CHAT_ID_CODE}],
+        id_pedido=1)
+    assert salida == {1: "2026-09-20T09:00:00"}
+
+
+def test_tomadas_de_sql_real_NO_trae_una_reasignada():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE (hallazgo 3), corrida contra SQL de
+    verdad: una tarea con `tomada_en` puesto pero YA REASIGNADA a otra
+    persona no sale."""
+    OTRA_PERSONA = 700400002
+    salida = _corre_tomadas_de_sqlite(
+        [{"id": 1, "tomada_en": "2026-09-20T09:00:00",
+          "responsable_chat_id": OTRA_PERSONA}],
+        id_pedido=1)
+    assert salida == {}
