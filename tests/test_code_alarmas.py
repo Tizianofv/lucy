@@ -311,11 +311,17 @@ def test_ningun_insert_de_tarea_tecnica_de_code_fuera_de_la_puerta():
     archivo que hoy escribe `tareas` con SQL propio) buscando cualquier
     `INSERT INTO tareas` que fije `responsable_chat_id` a `CHAT_ID_CODE` Y
     un área -- fuera de la función `crear_o_reusar_alerta_tecnica`."""
-    arbol = ast.parse(inspect.getsource(db))
+    fuente_modulo = inspect.getsource(db)
+    arbol = ast.parse(fuente_modulo)
     ofensores = []
+    # `async def` es `ast.AsyncFunctionDef`, que NO hereda de `ast.FunctionDef`
+    # -- casi todas las funciones de este archivo son `async def`, así que
+    # mirar solo `ast.FunctionDef` deja el censo ciego a casi todo el
+    # archivo (defecto real encontrado en la mutación 7 de este mismo
+    # encargo: la mutación de prueba no se detectaba y el motivo era este).
     for nodo in ast.walk(arbol):
-        if isinstance(nodo, ast.FunctionDef):
-            fuente_fn = ast.get_source_segment(inspect.getsource(db), nodo) or ""
+        if isinstance(nodo, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            fuente_fn = ast.get_source_segment(fuente_modulo, nodo) or ""
             if nodo.name == "crear_o_reusar_alerta_tecnica":
                 continue
             if ("INSERT INTO tareas" in fuente_fn
