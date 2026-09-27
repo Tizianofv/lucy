@@ -460,8 +460,29 @@ def _tiene_reintento_en_handler(handler: ast.ExceptHandler) -> bool:
         for n in ast.walk(handler))
 
 
-def _atrapa_42703(nodo_try: ast.Try) -> bool:
-    return "42703" in ast.dump(nodo_try)
+def _ayudantes_42703_del_archivo(arbol_modulo: ast.Module) -> set[str]:
+    """Nombres de funciones (de nivel de módulo O anidadas, como
+    `_columna_ausente(e)`/`_es_columna_ausente(e)`) cuyo propio cuerpo
+    menciona el literal `"42703"` -- hallazgo del testigo sobre `1c4acf0`:
+    `db.tareas_por_grupo` decide por un HELPER así, no por el literal
+    dentro del propio `try`, y el censo anterior no lo veía."""
+    nombres = set()
+    for funcion in ast.walk(arbol_modulo):
+        if not isinstance(funcion, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if "42703" in ast.dump(funcion):
+            nombres.add(funcion.name)
+    return nombres
+
+
+def _atrapa_42703(nodo_try: ast.Try, ayudantes: set[str]) -> bool:
+    """El propio `try` nombra el literal, O alguno de sus manejadores
+    llama a un ayudante que lo hace (`_columna_ausente(e)` y similares)."""
+    if "42703" in ast.dump(nodo_try):
+        return True
+    llamadas = {n.func.id for h in nodo_try.handlers for n in ast.walk(h)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    return bool(llamadas & ayudantes)
 
 
 def _primer_intento_tiene_savepoint(nodo_try: ast.Try) -> bool:
@@ -499,13 +520,14 @@ def _censo_de_reintentos_tras_42703() -> dict[str, bool]:
         except (SyntaxError, UnicodeDecodeError):
             continue
         rel = real.relative_to(raiz).as_posix()
+        ayudantes = _ayudantes_42703_del_archivo(arbol)
         for funcion in ast.walk(arbol):
             if not isinstance(funcion, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             for nodo in ast.walk(funcion):
                 if not isinstance(nodo, ast.Try):
                     continue
-                if not _atrapa_42703(nodo):
+                if not _atrapa_42703(nodo, ayudantes):
                     continue
                 if not any(_tiene_reintento_en_handler(h) for h in nodo.handlers):
                     continue
@@ -526,6 +548,145 @@ def test_todo_reintento_tras_42703_tiene_savepoint():
         f"envolver el intento en un SAVEPOINT (`async with conn."
         f"transaction():`) -- revientan con 25P02 contra Postgres real, "
         f"aunque una prueba con SQLite no lo vea: {sin_savepoint}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CAMINO FELIZ, SIN COMMIT PREMATURO (hallazgo del testigo sobre `1c4acf0`,
+# NO PASA): para cada escritor censado que tiene un `conn.transaction():`
+# seguido de OTRA escritura en la MISMA conexión, se corre el camino feliz
+# (todo sale bien a la primera, CON la migración aplicada) contra el doble
+# fiel -- que distingue transacción OUTER de SAVEPOINT con la MISMA regla
+# que psycopg real -- y se exige que la última escritura de la acción
+# ocurra ANTES de cualquier COMMIT/ROLLBACK. Si el `conn.transaction():`
+# resulta ser la transacción OUTER (nada corrió antes en esa conexión),
+# salir sin excepción comitea de una, y la escritura siguiente queda en
+# otra transacción -- exactamente lo que le pasó a `guardar_preferencia`.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _sin_commit_antes_de_la_ultima_escritura(eventos: list[str]) -> None:
+    idx_cierre = doble.indice_del_primer(eventos, "COMMIT", "ROLLBACK",
+                                         "COMMIT (cierre del pool.connection())")
+    idx_ultimo_exec = None
+    for i, ev in enumerate(eventos):
+        if ev.startswith("EXEC"):
+            idx_ultimo_exec = i
+    assert idx_ultimo_exec is not None, f"no se ejecutó ninguna sentencia: {eventos}"
+    assert idx_cierre is not None, (
+        f"la conexión nunca cerró su transacción -- se quedaría colgada: {eventos}")
+    assert idx_cierre >= idx_ultimo_exec, (
+        f"la transacción se cerró (COMMIT/ROLLBACK) ANTES de la última "
+        f"escritura de la acción -- quedó partida en dos transacciones "
+        f"separadas: {eventos}")
+
+
+def test_guardar_preferencia_camino_feliz_no_comitea_antes_de_tiempo():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE por el testigo sobre `1c4acf0`: la
+    preferencia y su huella en `log_acciones` se comitean JUNTAS."""
+    conexion = doble.ConexionPostgresFiel([
+        ("INSERT INTO PREFERENCIAS (TEXTO, CONTEXTO, BANDEJA_ID)", (7,)),
+        ("INSERT INTO LOG_ACCIONES", None),
+    ])
+    guardado_pool = db.pool
+    guardado_registrar = crud._registrar
+
+    async def _registrar_que_escribe(conn, **kw):
+        await conn.execute("INSERT INTO log_acciones (via _registrar) "
+                           "VALUES (%s)", (1,))
+        return 99
+
+    db.pool = doble.PoolPostgresFiel(conexion)
+    crud._registrar = _registrar_que_escribe
+    try:
+        pid, log_id = _correr(crud.guardar_preferencia(55, "x"))
+    finally:
+        db.pool = guardado_pool
+        crud._registrar = guardado_registrar
+    assert pid == 7 and log_id == 99
+    _sin_commit_antes_de_la_ultima_escritura(conexion.eventos)
+
+
+def test_crud_perfil_persona_camino_feliz_no_comitea_antes_de_tiempo():
+    conexion = doble.ConexionPostgresFiel([
+        ("SELECT * FROM PERSONAS", None),
+        ("INSERT INTO PERSONAS (NOMBRE, ALIAS, RELACION, NOTAS, BANDEJA_ID)", (8,)),
+        ("INSERT INTO LOG_ACCIONES", None),
+    ])
+    guardado_pool = db.pool
+    guardado_registrar = crud._registrar
+
+    async def _registrar_que_escribe(conn, **kw):
+        await conn.execute("INSERT INTO log_acciones (via _registrar) "
+                           "VALUES (%s)", (1,))
+        return 99
+
+    db.pool = doble.PoolPostgresFiel(conexion)
+    crud._registrar = _registrar_que_escribe
+    try:
+        resultado, log_id = _correr(crud.perfil("persona", "Fer", bandeja_id=99))
+    finally:
+        db.pool = guardado_pool
+        crud._registrar = guardado_registrar
+    assert "Fer" in resultado and log_id == 99
+    _sin_commit_antes_de_la_ultima_escritura(conexion.eventos)
+
+
+def test_buscar_o_crear_persona_camino_feliz_no_comitea_antes_de_tiempo():
+    """`personas` NO lleva huella en `log_acciones` (documentado en `db.
+    _buscar_o_crear`) -- una sola escritura, así que no hay una SEGUNDA
+    acción con la que quedar partida. Se corre igual, "de los 3 de esta
+    parte", para dejar la garantía medida y no solo asumida."""
+    conexion = doble.ConexionPostgresFiel([
+        ("SELECT ID FROM PERSONAS", None),
+        ("INSERT INTO PERSONAS (NOMBRE, BANDEJA_ID)", {"id": 9}),
+    ])
+    guardado = db.pool
+    db.pool = doble.PoolPostgresFiel(conexion)
+    try:
+        pid = _correr(db.buscar_o_crear_persona("Gus", bandeja_id=1))
+    finally:
+        db.pool = guardado
+    assert pid == 9
+    _sin_commit_antes_de_la_ultima_escritura(conexion.eventos)
+
+
+def test_crear_tarea_desde_el_panel_camino_feliz_no_comitea_antes_de_tiempo():
+    conexion = doble.ConexionPostgresFiel([
+        ("INSERT INTO BANDEJA", {"id": 10}),
+        ("INSERT INTO TAREAS (BANDEJA_ID, TITULO, VENCE_EN, ANTICIPOS_MIN, AREA)",
+         {"id": 5, "titulo": "x"}),
+        ("INSERT INTO LOG_ACCIONES", None),
+    ])
+    guardado = db.pool
+    db.pool = doble.PoolPostgresFiel(conexion)
+    try:
+        tid = _correr(db.crear_tarea_desde_el_panel(1, "titulo", None, None))
+    finally:
+        db.pool = guardado
+    assert tid == 5
+    _sin_commit_antes_de_la_ultima_escritura(conexion.eventos)
+
+
+def test_cerrar_y_derivar_camino_feliz_no_comitea_antes_de_tiempo():
+    conexion = doble.ConexionPostgresFiel([
+        ("SELECT ID, TITULO, ESTADO, VENCE_EN, COMPLETADO_EN", {
+            "id": 1, "titulo": "madre", "estado": "pendiente", "vence_en": None,
+            "completado_en": None, "bandeja_id": None, "proyecto_id": None}),
+        ("UPDATE TAREAS SET ESTADO", None),
+        ("INSERT INTO LOG_ACCIONES", None),
+        ("INSERT INTO BANDEJA", {"id": 20}),
+        ("INSERT INTO TAREAS (BANDEJA_ID, TITULO, VENCE_EN, ANTICIPOS_MIN, "
+         "AREA, PROYECTO_ID, RESPONSABLE_CHAT_ID, DERIVA_DE_ID)",
+         {"id": 30, "titulo": "hija"}),
+    ])
+    guardado = db.pool
+    db.pool = doble.PoolPostgresFiel(conexion)
+    try:
+        resultado = _correr(db.cerrar_y_derivar(
+            1, 1, [{"titulo": "hija", "vence_en": None}]))
+    finally:
+        db.pool = guardado
+    assert resultado is not None
+    _sin_commit_antes_de_la_ultima_escritura(conexion.eventos)
 
 
 if __name__ == "__main__":

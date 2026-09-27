@@ -630,39 +630,52 @@ async def guardar_preferencia(
         # lectura de la parte A -- esta función ya recibía `bandeja_id`
         # como parámetro, solo lo usaba para el log, no para la fila.
         #
-        # CON UN SAVEPOINT (`async with conn.transaction():`) alrededor del
-        # intento que puede fallar: hallazgo del testigo sobre `cbc2726`,
-        # NO PASA -- sin esto, el INSERT que revienta con SQLSTATE 42703
-        # deja la transacción ABORTADA en Postgres real (autocommit=False),
-        # y el segundo INSERT del "except" reventaría con 25P02 en vez de
-        # crear la preferencia. El SAVEPOINT revierte solo esa parte al
-        # fallar, dejando la conexión sana para el INSERT de compatibilidad.
-        try:
-            async with conn.transaction():
-                cur = await conn.execute(
-                    "INSERT INTO preferencias (texto, contexto, bandeja_id) "
-                    "VALUES (%s, %s, %s) RETURNING id",
-                    (texto.strip(), (contexto or "").strip() or None, bandeja_id),
-                )
-        except Exception as e:
+        # UNA TRANSACCIÓN EXPLÍCITA ALREDEDOR DE TODO EL CUERPO -- INSERT Y
+        # `_registrar` -- con el intento que puede fallar como SAVEPOINT
+        # ANIDADO adentro. Hallazgo del testigo sobre `1c4acf0`, NO PASA:
+        # la primera versión de este arreglo ponía el `async with conn.
+        # transaction():` SOLO alrededor del INSERT, y como es la PRIMERA
+        # sentencia de transacción sobre una conexión recién salida del
+        # pool (`IDLE`), psycopg la trata como la transacción OUTER --
+        # salir sin excepción (camino feliz, CON la migración aplicada)
+        # hacía un `COMMIT` de verdad ahí mismo, ANTES de que `_registrar`
+        # escribiera `log_acciones`: la preferencia y su huella dejaban de
+        # ser atómicas (podía sellarse la una sin la otra si el proceso
+        # moría entre medio). Con la transacción explícita de AFUERA, el
+        # `async with conn.transaction():` de adentro deja de ser "outer"
+        # (la conexión ya está `INTRANS`) y se vuelve un SAVEPOINT de
+        # verdad: absorbe el 42703 sin comprometer nada, y el COMMIT real
+        # queda para el final, después de `_registrar`. Mismo criterio que
+        # ya usan `perfil()`/`db.buscar_o_crear_persona`, donde el SELECT
+        # de búsqueda -- anterior al intento que puede fallar -- ya pone la
+        # conexión en `INTRANS` antes de llegar a su `conn.transaction()`.
+        async with conn.transaction():
             try:
-                sqlstate = e.sqlstate
-            except AttributeError:
-                raise e from None
-            if sqlstate != "42703":
-                raise
-            # SIN LA MIGRACIÓN: cae al INSERT de antes.
-            cur = await conn.execute(
-                "INSERT INTO preferencias (texto, contexto) VALUES (%s, %s) "
-                "RETURNING id",
-                (texto.strip(), (contexto or "").strip() or None),
+                async with conn.transaction():
+                    cur = await conn.execute(
+                        "INSERT INTO preferencias (texto, contexto, bandeja_id) "
+                        "VALUES (%s, %s, %s) RETURNING id",
+                        (texto.strip(), (contexto or "").strip() or None, bandeja_id),
+                    )
+            except Exception as e:
+                try:
+                    sqlstate = e.sqlstate
+                except AttributeError:
+                    raise e from None
+                if sqlstate != "42703":
+                    raise
+                # SIN LA MIGRACIÓN: cae al INSERT de antes.
+                cur = await conn.execute(
+                    "INSERT INTO preferencias (texto, contexto) VALUES (%s, %s) "
+                    "RETURNING id",
+                    (texto.strip(), (contexto or "").strip() or None),
+                )
+            pid = (await cur.fetchone())[0]
+            log_id = await _registrar(
+                conn, accion="crear", tabla="preferencias", registro_id=pid,
+                despues={"texto": texto, "contexto": contexto},
+                motivo=f"Preferencia aprendida: {texto}", bandeja_id=bandeja_id,
             )
-        pid = (await cur.fetchone())[0]
-        log_id = await _registrar(
-            conn, accion="crear", tabla="preferencias", registro_id=pid,
-            despues={"texto": texto, "contexto": contexto},
-            motivo=f"Preferencia aprendida: {texto}", bandeja_id=bandeja_id,
-        )
     return pid, log_id
 
 
