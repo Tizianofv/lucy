@@ -39,6 +39,7 @@ import asyncio
 import inspect
 import json
 import os
+import re
 import sqlite3
 import sys
 import textwrap
@@ -218,14 +219,14 @@ def test_bandeja_trae_solo_lo_de_tiziano():
     """GARANTÍA PEDIDA EXPLÍCITAMENTE: una fila de Rosi, de un chat
     desconocido, o sin chat_id (origen de sistema) nunca sale."""
     con = _sqlite_de_dueno()
-    con.execute("INSERT INTO bandeja (id, chat_id, contenido_raw) VALUES "
-                "(1, ?, 'de tiziano')", (DUENO,))
-    con.execute("INSERT INTO bandeja (id, chat_id, contenido_raw) VALUES "
-                "(2, ?, 'de rosi')", (ROSI,))
-    con.execute("INSERT INTO bandeja (id, chat_id, contenido_raw) VALUES "
-                "(3, ?, 'de un desconocido')", (DESCONOCIDO,))
-    con.execute("INSERT INTO bandeja (id, chat_id, contenido_raw) VALUES "
-                "(4, NULL, 'sin chat_id, origen de sistema')")
+    con.execute("INSERT INTO bandeja (id, chat_id, origen, contenido_raw) "
+                "VALUES (1, ?, 'telegram', 'de tiziano')", (DUENO,))
+    con.execute("INSERT INTO bandeja (id, chat_id, origen, contenido_raw) "
+                "VALUES (2, ?, 'telegram', 'de rosi')", (ROSI,))
+    con.execute("INSERT INTO bandeja (id, chat_id, origen, contenido_raw) "
+                "VALUES (3, ?, 'telegram', 'de un desconocido')", (DESCONOCIDO,))
+    con.execute("INSERT INTO bandeja (id, chat_id, origen, contenido_raw) "
+                "VALUES (4, NULL, 'telegram', 'sin chat_id, origen de sistema')")
     guardado = _instalar(con)
     try:
         filas = _correr(lectura.leer_bandeja_de_dueno())
@@ -233,6 +234,41 @@ def test_bandeja_trae_solo_lo_de_tiziano():
         _restaurar(guardado)
         con.close()
     assert [f["id"] for f in filas] == [1]
+
+
+def test_bandeja_origen_no_confiable_no_sale():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE por la sala (27-sep-2026): un correo
+    bancario (`origen='banco'`) con `chat_id=CHAT_ID_DUENO` -- el valor que
+    `captura/consumos.py` pone SIEMPRE, sea de quien sea el buzón -- no
+    sale, aunque el `chat_id` diga que sí."""
+    con = _sqlite_de_dueno()
+    con.execute("INSERT INTO bandeja (id, chat_id, origen, contenido_raw) "
+                "VALUES (1, ?, 'banco', 'correo del banco de quien sea')",
+                (DUENO,))
+    guardado = _instalar(con)
+    try:
+        filas = _correr(lectura.leer_bandeja_de_dueno())
+    finally:
+        _restaurar(guardado)
+        con.close()
+    assert filas == []
+
+
+def test_bandeja_origen_desconocido_no_sale():
+    """ENTRADA INVENTADA: un origen que nadie clasificó todavía (ni
+    confiable ni no-confiable) cae del lado ESTRICTO -- no sale. Ausencia
+    de clasificación se trata como "no confiable", nunca como "sí"."""
+    con = _sqlite_de_dueno()
+    con.execute("INSERT INTO bandeja (id, chat_id, origen, contenido_raw) "
+                "VALUES (1, ?, 'un-origen-que-nadie-clasifico-todavia', 'x')",
+                (DUENO,))
+    guardado = _instalar(con)
+    try:
+        filas = _correr(lectura.leer_bandeja_de_dueno())
+    finally:
+        _restaurar(guardado)
+        con.close()
+    assert filas == []
 
 
 def test_bandeja_usa_transaccion_de_solo_lectura():
@@ -261,15 +297,24 @@ def test_bandeja_usa_transaccion_de_solo_lectura():
 # ═══════════════════════════════════════════════════════════════════════
 
 def _con_bandejas(con):
-    con.execute("INSERT INTO bandeja (id, chat_id) VALUES (10, ?)", (DUENO,))
-    con.execute("INSERT INTO bandeja (id, chat_id) VALUES (20, ?)", (ROSI,))
-    con.execute("INSERT INTO bandeja (id, chat_id) VALUES (30, ?)", (DESCONOCIDO,))
+    con.execute("INSERT INTO bandeja (id, chat_id, origen) VALUES "
+                "(10, ?, 'telegram')", (DUENO,))
+    con.execute("INSERT INTO bandeja (id, chat_id, origen) VALUES "
+                "(20, ?, 'telegram')", (ROSI,))
+    con.execute("INSERT INTO bandeja (id, chat_id, origen) VALUES "
+                "(30, ?, 'telegram')", (DESCONOCIDO,))
+    # De origen NO confiable, pero con chat_id=DUENO -- el caso exacto que
+    # `captura/consumos.py` produce para el correo bancario de CUALQUIER
+    # buzón: una nota que colgara de esta fila tampoco puede salir.
+    con.execute("INSERT INTO bandeja (id, chat_id, origen) VALUES "
+                "(40, ?, 'banco')", (DUENO,))
 
 
 def test_notas_trae_solo_lo_de_tiziano():
     """GARANTÍA PEDIDA EXPLÍCITAMENTE: una nota de Rosi, de un chat
-    desconocido, o SIN `bandeja_id` (no hay forma de probar de quién es)
-    nunca sale."""
+    desconocido, SIN `bandeja_id` (no hay forma de probar de quién es), o
+    de una bandeja de origen NO confiable (mismo `chat_id` del dueño, pero
+    puesto por default sobre contenido que no escribió él) nunca sale."""
     con = _sqlite_de_dueno()
     _con_bandejas(con)
     con.execute("INSERT INTO notas (id, bandeja_id, contenido) VALUES "
@@ -280,6 +325,8 @@ def test_notas_trae_solo_lo_de_tiziano():
                 "(3, 30, 'de un desconocido')")
     con.execute("INSERT INTO notas (id, bandeja_id, contenido) VALUES "
                 "(4, NULL, 'sin bandeja_id')")
+    con.execute("INSERT INTO notas (id, bandeja_id, contenido) VALUES "
+                "(5, 40, 'de origen banco, con chat_id del dueno')")
     guardado = _instalar(con)
     try:
         filas = _correr(lectura.leer_notas_de_dueno())
@@ -419,6 +466,87 @@ def test_condicion_de_dueno_cubre_las_tablas_con_lectura():
 def test_condicion_de_dueno_rechaza_tabla_desconocida():
     with pytest.raises(ValueError):
         lectura._condicion_de_dueno("personas")  # personas: parte E, no acá
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CENSO DE ORÍGENES DE `bandeja`: recorre el AST del repositorio ENTERO
+# (excepto pruebas) buscando cada escritor real de `bandeja` -- llamadas a
+# `guardar_en_bandeja`/`registrar_aviso` y los INSERT literales de
+# `crear_tarea_desde_el_panel`/`cerrar_y_derivar` -- y extrae el `origen`
+# que cada uno pone. Hallazgo de la sala, 27-sep-2026: `bandeja.chat_id`
+# solo no alcanza, porque `captura/consumos.py` lo pone al chat del dueño
+# SIEMPRE, sea cual sea el correo bancario. Ningún origen queda sin
+# clasificar: uno nuevo (o uno que dejó de existir) pone esto en rojo.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _origenes_reales_de_bandeja() -> dict[str, list[str]]:
+    """(origen -> [archivo:línea, ...]) de cada escritor REAL de `bandeja`
+    en el repositorio, sacado del AST -- no de una lista tecleada."""
+    import test_buzon_que_no_se_ve as barrido
+
+    raiz = barrido.RAIZ
+    pruebas = [p.resolve() for p in barrido._testpaths(raiz)]
+    default_registrar_aviso = inspect.signature(
+        db.registrar_aviso).parameters["origen"].default
+    hallazgos: dict[str, list[str]] = {}
+
+    def _anota(origen, rel, lineno):
+        if isinstance(origen, str):
+            hallazgos.setdefault(origen, []).append(f"{rel}:{lineno}")
+
+    for py in barrido._py_en_disco(raiz):
+        real = py.resolve()
+        if any(c == real or c in real.parents for c in pruebas):
+            continue
+        try:
+            fuente = real.read_text(encoding="utf-8")
+            arbol = ast.parse(fuente, filename=str(real))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        rel = real.relative_to(raiz).as_posix()
+        for nodo in ast.walk(arbol):
+            if isinstance(nodo, ast.Call):
+                nombre = (nodo.func.id if isinstance(nodo.func, ast.Name)
+                          else nodo.func.attr if isinstance(nodo.func, ast.Attribute)
+                          else None)
+                if nombre in ("guardar_en_bandeja", "registrar_aviso"):
+                    kw = {k.arg: k.value for k in nodo.keywords}
+                    valor = kw.get("origen")
+                    if valor is not None and isinstance(valor, ast.Constant):
+                        _anota(valor.value, rel, nodo.lineno)
+                    elif valor is None:
+                        # sin `origen=`: el default de la función que se
+                        # está llamando (cada una tiene el suyo).
+                        default = ("telegram" if nombre == "guardar_en_bandeja"
+                                   else default_registrar_aviso)
+                        _anota(default, rel, nodo.lineno)
+                elif nombre in ("execute", "executemany"):
+                    sql = nodo.args[0] if nodo.args else None
+                    if (isinstance(sql, ast.Constant)
+                            and isinstance(sql.value, str)
+                            and "INSERT INTO bandeja" in sql.value):
+                        m = re.search(r"VALUES\s*\(\s*'([a-z_]+)'", sql.value)
+                        if m:
+                            _anota(m.group(1), rel, nodo.lineno)
+    return hallazgos
+
+
+def test_el_censo_de_origenes_no_tiene_un_escritor_nuevo_sin_clasificar():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE por la sala: si aparece un escritor
+    de `bandeja` con un `origen` que nadie clasificó (ni confiable ni no
+    confiable), esto se pone rojo -- no se cuela silencioso a ninguno de
+    los dos cubos."""
+    hallados = set(_origenes_reales_de_bandeja())
+    clasificados = (set(lectura._ORIGENES_CONFIABLES_DE_BANDEJA)
+                     | set(lectura._ORIGENES_NO_CONFIABLES_DE_BANDEJA))
+    assert hallados, (
+        "el censo no encontró ni un escritor de bandeja: se quedó ciego, "
+        "no es que no haya ninguno")
+    assert hallados == clasificados, (
+        f"orígenes encontrados en el código real: {sorted(hallados)}; "
+        f"clasificados en db/lectura_dueno.py: {sorted(clasificados)}. "
+        f"Sin clasificar: {sorted(hallados - clasificados)}. "
+        f"Clasificados que ya no existen: {sorted(clasificados - hallados)}")
 
 
 if __name__ == "__main__":

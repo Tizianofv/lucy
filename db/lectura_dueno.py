@@ -25,10 +25,20 @@ función que la tome prestada.
 `config.CHAT_ID_DUENO`, SIEMPRE POR LA MISMA PUERTA (`_condicion_de_dueno`,
 abajo) -- las lecturas la llaman, ninguna arma su propio criterio:
 
-  · `bandeja.chat_id` -- la columna existe en la fila misma.
+  · `bandeja.chat_id` -- la columna existe en la fila misma, PERO no
+    alcanza sola: `captura/consumos.py` deja `chat_id=CHAT_ID_DUENO` en
+    CUALQUIER correo bancario, sea del buzón que sea (incluido el de
+    Rosi) -- medido contra producción, 27-sep-2026 (hallazgo de la sala).
+    Por eso se exige TAMBIÉN `origen` en la lista de orígenes CONFIABLES
+    (`_ORIGENES_CONFIABLES_DE_BANDEJA`, censada abajo desde el código
+    real): un `chat_id` que dice la verdad es el que puso quien de verdad
+    mandó o recibió esa fila (Telegram, un aviso del despertador/correo/
+    panel/copia al dueño), no el que alguien puso por default sobre
+    contenido que no escribió esa persona.
   · `notas` no tiene chat_id propio: se decide por la `bandeja` que la
-    originó (`bandeja_id`). Una fila sin `bandeja_id` NO tiene forma de
-    probar de quién es, así que NUNCA sale -- ver el docstring de
+    originó (`bandeja_id`), con el MISMO filtro de `chat_id` + `origen`
+    confiable. Una fila sin `bandeja_id` NO tiene forma de probar de
+    quién es, así que NUNCA sale -- ver el docstring de
     `_condicion_de_dueno`.
   · `eventos.duenos_chat_id` es un ARRAY (puede tener a Tiziano, a Rosi, a
     los dos, o estar vacío -- "sin dueño", el estado de casi toda cita
@@ -72,6 +82,47 @@ from db.db import pool
 LIMITE_POR_OMISION = 50
 LIMITE_MAXIMO = 500
 
+# CENSO DE ESCRITORES DE `bandeja`, hecho a mano contra el código real
+# (27-sep-2026, hallazgo de la sala: `bandeja.chat_id` solo no alcanza).
+# Cada escritor de `bandeja` del repo (`db.guardar_en_bandeja`, `db.
+# registrar_aviso`, y los dos INSERT literales de `crear_tarea_desde_el_
+# panel`/`cerrar_y_derivar`) tiene que estar clasificado en UNO de los dos
+# conjuntos de abajo. `tests/test_lectura_dueno.py::
+# test_el_censo_de_origenes_no_tiene_un_escritor_nuevo_sin_clasificar`
+# recorre el AST del repo entero y exige que el conjunto de orígenes que
+# encuentra sea EXACTAMENTE la unión de los dos -- ni uno de más (un
+# escritor nuevo sin clasificar) ni uno de menos (uno de estos ya no
+# existe). Tabla completa, con archivo:línea, en el reporte de esta parte.
+#
+#   CONFIABLES (el chat_id de la fila es de verdad quien la originó, o el
+#   destinatario real al que Lucy se la dirigió):
+#     "telegram"     -- captura/telegram.py:25 (default de guardar_en_
+#                        bandeja): chat_id = msg.chat_id, el remitente real.
+#     "despertador"  -- cerebro/despertador.py:128,594,854 (llamadas a
+#                        registrar_aviso/guardar_en_bandeja): chat_id =
+#                        destino, el destinatario real del aviso.
+#     "correo"       -- captura/correo.py:1203,1370: chat_id = destino,
+#                        el destinatario real del aviso de correo/911.
+#     "panel"        -- db/db.py:3657 (crear_tarea_desde_el_panel),
+#                        db/db.py:3861 (cerrar_y_derivar): chat_id = la
+#                        sesión autenticada del panel (`web/app.py`), no
+#                        un valor por default.
+#     "copia_dueno"  -- cerebro/copia_dueno.py:174: chat_id = destino, el
+#                        chat al que Lucy copió el mensaje de verdad.
+#
+#   NO CONFIABLES (el chat_id NO dice quién originó el contenido):
+#     "banco"        -- captura/consumos.py:455,588,615,641,688: SIEMPRE
+#                        chat_id=config.CHAT_ID_DUENO, sea cual sea el buzón
+#                        de origen (incluido el de Rosi) -- medido contra
+#                        producción, hallazgo de la sala 27-sep-2026.
+#
+#   Tabla exacta, sacada corriendo `tests/test_lectura_dueno.py::
+#   _origenes_reales_de_bandeja()` sobre este mismo commit -- no tecleada
+#   de memoria.
+_ORIGENES_CONFIABLES_DE_BANDEJA = (
+    "telegram", "despertador", "correo", "panel", "copia_dueno")
+_ORIGENES_NO_CONFIABLES_DE_BANDEJA = ("banco",)
+
 
 def _condicion_de_dueno(tabla: str) -> str:
     """LA ÚNICA PUERTA: el fragmento SQL que decide "esta fila es de
@@ -88,9 +139,12 @@ def _condicion_de_dueno(tabla: str) -> str:
     motivo en vez de recibir un WHERE que promete más de lo que cumple.
     """
     if tabla == "bandeja":
-        return "chat_id = %s"
+        origenes = ", ".join(f"'{o}'" for o in _ORIGENES_CONFIABLES_DE_BANDEJA)
+        return f"chat_id = %s AND origen IN ({origenes})"
     if tabla == "notas":
-        return "bandeja_id IN (SELECT id FROM bandeja WHERE chat_id = %s)"
+        origenes = ", ".join(f"'{o}'" for o in _ORIGENES_CONFIABLES_DE_BANDEJA)
+        return (f"bandeja_id IN (SELECT id FROM bandeja WHERE chat_id = %s "
+                f"AND origen IN ({origenes}))")
     if tabla == "eventos":
         # DISEÑO APROBADO (`DISENO.md` §A.2): array vacío = de la casa,
         # sale; con dueños puestos, sale solo si incluye a CHAT_ID_DUENO.

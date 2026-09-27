@@ -4,6 +4,12 @@ fuera por ser de otro. `movimientos` no tiene lectura (ver `db/lectura_
 dueno.py`): se sigue contando el total, rotulado "no se lee: sin dueño
 confiable", para que la cifra no desaparezca del reporte de la sala.
 
+`bandeja` muestra ADEMÁS cuántas filas con `chat_id=CHAT_ID_DUENO` quedan
+FUERA por tener un `origen` no confiable (hallazgo de la sala, 27-sep-2026:
+`captura/consumos.py` pone `chat_id=CHAT_ID_DUENO` en TODO correo
+bancario, sea de qué buzón sea) -- esas filas parecen "de Tiziano" mirando
+solo el `chat_id`, y no lo son.
+
 SOLO CONTEOS, NUNCA CONTENIDO: no imprime `contenido_raw`, `contraparte`,
 `titulo` ni ningún otro texto de una fila -- solo números. El repo es
 PÚBLICO y este script puede correr pegado en una terminal compartida.
@@ -73,6 +79,17 @@ def main() -> int:
                 ).fetchone()[0]
                 de_otro = total - de_dueno
                 print(f"{tabla:<12} {total:>8} {de_dueno:>12} {de_otro:>10}")
+
+                if tabla == "bandeja":
+                    con_ese_chat_id = conn.execute(
+                        f"SELECT count(*) FROM {tabla} WHERE chat_id = %s{borrado}",
+                        (CHAT_ID_DUENO,)
+                    ).fetchone()[0]
+                    fuera_por_origen = con_ese_chat_id - de_dueno
+                    print(f"             (de los {de_otro} \"de otro\": "
+                          f"{fuera_por_origen} en realidad tenían "
+                          "chat_id=CHAT_ID_DUENO, pero quedaron fuera por "
+                          "un origen NO confiable -- ver db/lectura_dueno.py)")
     return 0
 
 
