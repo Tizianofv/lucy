@@ -111,12 +111,25 @@ def _es_miembro(arreglo_json, valor):
     return 1 if valor in json.loads(arreglo_json) else 0
 
 
+class _ErrorSQL(Exception):
+    """Un error con `.sqlstate`, como los que lanza psycopg de verdad --
+    SQLite no tiene el concepto, así que el arnés lo simula A PROPÓSITO
+    cuando `sin_columnas=True` (columna que la migración de §E todavía no
+    aplicó)."""
+    def __init__(self, sqlstate: str):
+        self.sqlstate = sqlstate
+        super().__init__(f"columna ausente, sqlstate={sqlstate}")
+
+
 class _CurLectura:
-    def __init__(self, con):
+    def __init__(self, con, sin_columnas=False):
         self._con = con
         self._cur = None
+        self._sin_columnas = sin_columnas
 
     async def execute(self, sql, params=None):
+        if self._sin_columnas and "bandeja_id" in sql:
+            raise _ErrorSQL("42703")
         self._cur = self._con.execute(_traducir(sql), params or ())
         return self
 
@@ -129,18 +142,19 @@ class _CurLectura:
 
 
 class _ConnLectura:
-    def __init__(self, con, comandos):
+    def __init__(self, con, comandos, sin_columnas=False):
         self._con = con
         self.comandos = comandos
+        self._sin_columnas = sin_columnas
 
     def cursor(self, row_factory=None):
-        return _CurLectura(self._con)
+        return _CurLectura(self._con, self._sin_columnas)
 
     async def execute(self, sql, params=None):
         self.comandos.append(sql.strip())
         if sql.strip().upper() == "SET TRANSACTION READ ONLY":
             return None
-        return await _CurLectura(self._con).execute(sql, params)
+        return await _CurLectura(self._con, self._sin_columnas).execute(sql, params)
 
     def transaction(self):
         class _Tx:
@@ -153,9 +167,9 @@ class _ConnLectura:
 
 
 class _PoolLectura:
-    def __init__(self, con):
+    def __init__(self, con, sin_columnas=False):
         self.comandos: list[str] = []
-        self._conn = _ConnLectura(con, self.comandos)
+        self._conn = _ConnLectura(con, self.comandos, sin_columnas)
 
     def connection(self):
         conn = self._conn
@@ -198,12 +212,22 @@ def _sqlite_de_dueno():
           proyecto_id INTEGER, notas TEXT, borrado_en TEXT,
           duenos_chat_id TEXT
         )""")
+    con.execute("""
+        CREATE TABLE personas (
+          id INTEGER PRIMARY KEY, creado_en TEXT, nombre TEXT, alias TEXT,
+          relacion TEXT, notas TEXT, borrado_en TEXT, bandeja_id INTEGER
+        )""")
+    con.execute("""
+        CREATE TABLE preferencias (
+          id INTEGER PRIMARY KEY, creado_en TEXT, texto TEXT,
+          contexto TEXT, borrado_en TEXT, bandeja_id INTEGER
+        )""")
     return con
 
 
-def _instalar(con):
+def _instalar(con, sin_columnas=False):
     guardado = lectura.pool
-    lectura.pool = _PoolLectura(con)
+    lectura.pool = _PoolLectura(con, sin_columnas)
     return guardado
 
 
@@ -431,6 +455,115 @@ def test_eventos_no_trae_borrados():
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# §E -- personas y preferencias: MISMO criterio que notas -- sin chat_id
+# propio, se deciden por la `bandeja_id` que las originó (migración
+# 2026-09-27_dueno_personas_preferencias.sql).
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_personas_trae_solo_lo_de_tiziano():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE: una persona de Rosi, de un chat
+    desconocido, sin `bandeja_id`, o de una bandeja de origen NO confiable
+    nunca sale."""
+    con = _sqlite_de_dueno()
+    _con_bandejas(con)
+    con.execute("INSERT INTO personas (id, bandeja_id, nombre) VALUES "
+                "(1, 10, 'de tiziano')")
+    con.execute("INSERT INTO personas (id, bandeja_id, nombre) VALUES "
+                "(2, 20, 'de rosi')")
+    con.execute("INSERT INTO personas (id, bandeja_id, nombre) VALUES "
+                "(3, 30, 'de un desconocido')")
+    con.execute("INSERT INTO personas (id, bandeja_id, nombre) VALUES "
+                "(4, NULL, 'sin bandeja_id')")
+    con.execute("INSERT INTO personas (id, bandeja_id, nombre) VALUES "
+                "(5, 40, 'de origen banco, con chat_id del dueno')")
+    guardado = _instalar(con)
+    try:
+        filas = _correr(lectura.leer_personas_de_dueno())
+    finally:
+        _restaurar(guardado)
+        con.close()
+    assert [f["id"] for f in filas] == [1]
+
+
+def test_personas_no_trae_borradas():
+    con = _sqlite_de_dueno()
+    _con_bandejas(con)
+    con.execute("INSERT INTO personas (id, bandeja_id, nombre, borrado_en) "
+                "VALUES (1, 10, 'borrada', '2026-01-01')")
+    guardado = _instalar(con)
+    try:
+        filas = _correr(lectura.leer_personas_de_dueno())
+    finally:
+        _restaurar(guardado)
+        con.close()
+    assert filas == []
+
+
+def test_personas_sin_la_migracion_devuelve_vacio_y_no_revienta():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE (condición 5): publicado sin la
+    migración de §E, `bandeja_id` todavía no existe en `personas` -- la
+    lectura devuelve `[]`, nunca revienta."""
+    con = _sqlite_de_dueno()
+    con.execute("INSERT INTO personas (id, nombre) VALUES (1, 'x')")
+    guardado = _instalar(con, sin_columnas=True)
+    try:
+        filas = _correr(lectura.leer_personas_de_dueno())
+    finally:
+        _restaurar(guardado)
+        con.close()
+    assert filas == []
+
+
+def test_preferencias_trae_solo_lo_de_tiziano():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE: mismo patrón que personas."""
+    con = _sqlite_de_dueno()
+    _con_bandejas(con)
+    con.execute("INSERT INTO preferencias (id, bandeja_id, texto) VALUES "
+                "(1, 10, 'de tiziano')")
+    con.execute("INSERT INTO preferencias (id, bandeja_id, texto) VALUES "
+                "(2, 20, 'de rosi')")
+    con.execute("INSERT INTO preferencias (id, bandeja_id, texto) VALUES "
+                "(3, 30, 'de un desconocido')")
+    con.execute("INSERT INTO preferencias (id, bandeja_id, texto) VALUES "
+                "(4, NULL, 'sin bandeja_id')")
+    con.execute("INSERT INTO preferencias (id, bandeja_id, texto) VALUES "
+                "(5, 40, 'de origen banco, con chat_id del dueno')")
+    guardado = _instalar(con)
+    try:
+        filas = _correr(lectura.leer_preferencias_de_dueno())
+    finally:
+        _restaurar(guardado)
+        con.close()
+    assert [f["id"] for f in filas] == [1]
+
+
+def test_preferencias_no_trae_borradas():
+    con = _sqlite_de_dueno()
+    _con_bandejas(con)
+    con.execute("INSERT INTO preferencias (id, bandeja_id, texto, borrado_en) "
+                "VALUES (1, 10, 'borrada', '2026-01-01')")
+    guardado = _instalar(con)
+    try:
+        filas = _correr(lectura.leer_preferencias_de_dueno())
+    finally:
+        _restaurar(guardado)
+        con.close()
+    assert filas == []
+
+
+def test_preferencias_sin_la_migracion_devuelve_vacio_y_no_revienta():
+    con = _sqlite_de_dueno()
+    con.execute("INSERT INTO preferencias (id, texto) VALUES (1, 'x')")
+    guardado = _instalar(con, sin_columnas=True)
+    try:
+        filas = _correr(lectura.leer_preferencias_de_dueno())
+    finally:
+        _restaurar(guardado)
+        con.close()
+    assert filas == []
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # HERMANOS: las lecturas usan LA MISMA puerta -- se saca de lo real
 # recorriendo el AST del módulo, no de memoria.
 # ═══════════════════════════════════════════════════════════════════════
@@ -446,7 +579,8 @@ def _llama_a(funcion, nombre: str) -> bool:
 
 def test_las_lecturas_pasan_por_leer_de_dueno():
     for fn in (lectura.leer_bandeja_de_dueno, lectura.leer_notas_de_dueno,
-               lectura.leer_eventos_de_dueno):
+               lectura.leer_eventos_de_dueno, lectura.leer_personas_de_dueno,
+               lectura.leer_preferencias_de_dueno):
         assert _llama_a(fn, "_leer_de_dueno"), (
             f"{fn.__name__} no pasa por _leer_de_dueno -- arma su propio "
             "criterio de dueño")
@@ -459,13 +593,13 @@ def test_leer_de_dueno_pasa_por_la_puerta_de_condicion():
 
 
 def test_condicion_de_dueno_cubre_las_tablas_con_lectura():
-    for tabla in ("bandeja", "notas", "eventos"):
+    for tabla in ("bandeja", "notas", "eventos", "personas", "preferencias"):
         assert lectura._condicion_de_dueno(tabla)  # no revienta, y no es ""
 
 
 def test_condicion_de_dueno_rechaza_tabla_desconocida():
     with pytest.raises(ValueError):
-        lectura._condicion_de_dueno("personas")  # personas: parte E, no acá
+        lectura._condicion_de_dueno("comentarios_tarea")  # no tiene puerta
 
 
 # ═══════════════════════════════════════════════════════════════════════

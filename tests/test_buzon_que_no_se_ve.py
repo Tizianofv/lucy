@@ -3866,10 +3866,20 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `tools/contar_lectura_de_dueno.py` (el guion de una vez para la
     # sala: cuenta contra producción, nunca contenido). Ninguna migración:
     # no se tocó el esquema.
-    assert medido == {"en disco": 97, "exentos": 54, "vigilados": 43}, (
+    #
+    # 27-sep-2026, rama `trabajo/code-duenos` (§E, parte E del plan de
+    # construcción — marca de dueño en personas/preferencias): 97 → 99 en
+    # disco, 54 → 55 EXENTOS por `tests/test_duenos.py` (nuevo: los tres
+    # escritores reales guardando bandeja_id, con su censo de hermanos).
+    # 43 → 44 VIGILADOS por `tools/rellenar_duenos.py` (nuevo: el guion de
+    # relleno de una vez para la sala). `db/db.py`, `acciones/crud.py` y
+    # `db/lectura_dueno.py` ya estaban vigilados de antes. La migración
+    # nueva (`db/migrations/2026-09-27_dueno_personas_preferencias.sql`)
+    # no es un `.py`.
+    assert medido == {"en disco": 99, "exentos": 55, "vigilados": 44}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "27-sep-2026 (rama code-lectura) era {'en disco': 97, "
-        "'exentos': 54, 'vigilados': 43}. La aserción de fondo —cero "
+        "27-sep-2026 (rama code-duenos) era {'en disco': 99, "
+        "'exentos': 55, 'vigilados': 44}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

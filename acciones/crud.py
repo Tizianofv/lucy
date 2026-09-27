@@ -281,7 +281,8 @@ async def crear_desde_interpretacion(
     # Personas y proyectos se resuelven fuera de la transacción a propósito:
     # crear una persona de más es inofensivo y reutilizable, mientras que
     # meterlo adentro alargaría la transacción de la entidad sin ganar nada.
-    persona_id = await db.buscar_o_crear_persona(str(r.get("persona") or ""))
+    persona_id = await db.buscar_o_crear_persona(
+        str(r.get("persona") or ""), bandeja_id=bandeja_id)
     proyecto_id = await db.buscar_o_crear_proyecto(
         str(r.get("proyecto") or ""), bandeja_id=bandeja_id)
 
@@ -625,10 +626,28 @@ async def guardar_preferencia(
     igual que a una tarea: soft-delete por borrado_en. Sin trato especial.
     """
     async with db.pool.connection() as conn:
-        cur = await conn.execute(
-            "INSERT INTO preferencias (texto, contexto) VALUES (%s, %s) RETURNING id",
-            (texto.strip(), (contexto or "").strip() or None),
-        )
+        # `bandeja_id` (§E, 27-sep-2026): la marca de dueño que usa la
+        # lectura de la parte A -- esta función ya recibía `bandeja_id`
+        # como parámetro, solo lo usaba para el log, no para la fila.
+        try:
+            cur = await conn.execute(
+                "INSERT INTO preferencias (texto, contexto, bandeja_id) "
+                "VALUES (%s, %s, %s) RETURNING id",
+                (texto.strip(), (contexto or "").strip() or None, bandeja_id),
+            )
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate != "42703":
+                raise
+            # SIN LA MIGRACIÓN: cae al INSERT de antes.
+            cur = await conn.execute(
+                "INSERT INTO preferencias (texto, contexto) VALUES (%s, %s) "
+                "RETURNING id",
+                (texto.strip(), (contexto or "").strip() or None),
+            )
         pid = (await cur.fetchone())[0]
         log_id = await _registrar(
             conn, accion="crear", tabla="preferencias", registro_id=pid,
@@ -1445,12 +1464,32 @@ async def perfil(
         # ── No existía: nace con lo que se sepa hoy ──────────────────────
         if fila is None:
             if tabla == "personas":
-                cur = await conn.execute(
-                    """INSERT INTO personas (nombre, alias, relacion, notas)
-                       VALUES (%s, %s, %s, %s) RETURNING id""",
-                    (nombre, [a.strip() for a in (alias or []) if a.strip()],
-                     (relacion or "").strip() or None, linea),
-                )
+                # `bandeja_id` (§E, 27-sep-2026): la misma marca de dueño
+                # que usa `db.buscar_o_crear_persona` -- acá SÍ hay de dónde
+                # sacarla: `bandeja_id` es el parámetro de esta función, la
+                # bandeja del mensaje de Telegram que disparó el perfil.
+                try:
+                    cur = await conn.execute(
+                        """INSERT INTO personas
+                             (nombre, alias, relacion, notas, bandeja_id)
+                           VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+                        (nombre, [a.strip() for a in (alias or []) if a.strip()],
+                         (relacion or "").strip() or None, linea, bandeja_id),
+                    )
+                except Exception as e:
+                    try:
+                        sqlstate = e.sqlstate
+                    except AttributeError:
+                        raise e from None
+                    if sqlstate != "42703":
+                        raise
+                    # SIN LA MIGRACIÓN: cae al INSERT de antes.
+                    cur = await conn.execute(
+                        """INSERT INTO personas (nombre, alias, relacion, notas)
+                           VALUES (%s, %s, %s, %s) RETURNING id""",
+                        (nombre, [a.strip() for a in (alias or []) if a.strip()],
+                         (relacion or "").strip() or None, linea),
+                    )
             else:
                 cur = await conn.execute(
                     """INSERT INTO proyectos (nombre, descripcion)

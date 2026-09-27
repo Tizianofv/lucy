@@ -314,7 +314,7 @@ def _instalar(conn):
     """Deja a crud.py hablando con la conexión de mentira."""
     db.pool = FakePool(conn)
 
-    async def _cero_persona(_):
+    async def _cero_persona(_, bandeja_id=None):
         return None
 
     async def _cero_proyecto(_, bandeja_id=None):
@@ -592,7 +592,7 @@ async def test_el_area_se_ignora_en_silencio_si_la_tarea_tiene_proyecto():
     _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
     conn = FakeConn(areas=[{"clave": "CDS", "color": "#1"}])
 
-    async def _cero_persona(_):
+    async def _cero_persona(_, bandeja_id=None):
         return None
 
     async def _con_proyecto_77(_, bandeja_id=None):
@@ -617,7 +617,7 @@ async def test_sin_pedir_area_se_crea_igual_con_proyecto():
     _con_gente({DUENO: "Tiziano", ROSI: "Rosi"})
     conn = FakeConn(areas=[{"clave": "CDS", "color": "#1"}])
 
-    async def _cero_persona(_):
+    async def _cero_persona(_, bandeja_id=None):
         return None
 
     async def _con_proyecto_77(_, bandeja_id=None):

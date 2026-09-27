@@ -1130,9 +1130,36 @@ async def _buscar_o_crear(tabla: str, nombre: str, *,
         if fila:
             return fila["id"]
 
-        await cur.execute(
-            f"INSERT INTO {tabla} (nombre) VALUES (%s) RETURNING *", (nombre,)
-        )
+        if tabla == "personas":
+            # `bandeja_id` (§E, 27-sep-2026): la puerta de dueño de la parte
+            # A decide "esto es de Tiziano" por la bandeja que originó la
+            # fila -- INSERT literal, no el `{tabla}` genérico de arriba,
+            # para que el censo de `tests/test_duenos.py` la encuentre por
+            # el AST sin tener que reconstruir un f-string.
+            try:
+                await cur.execute(
+                    "INSERT INTO personas (nombre, bandeja_id) VALUES (%s, %s) "
+                    "RETURNING *",
+                    (nombre, bandeja_id),
+                )
+            except Exception as e:
+                try:
+                    sqlstate = e.sqlstate
+                except AttributeError:
+                    raise e from None
+                if sqlstate != "42703":
+                    raise
+                # SIN LA MIGRACIÓN (§E sin aplicar): cae al INSERT de antes,
+                # sin bandeja_id -- no revienta, la persona se crea igual.
+                cur = conn.cursor(row_factory=dict_row)
+                await cur.execute(
+                    "INSERT INTO personas (nombre) VALUES (%s) RETURNING *",
+                    (nombre,),
+                )
+        else:
+            await cur.execute(
+                f"INSERT INTO {tabla} (nombre) VALUES (%s) RETURNING *", (nombre,)
+            )
         nueva = await cur.fetchone()
         if tabla == "proyectos":
             await conn.execute(
@@ -1149,8 +1176,9 @@ async def _buscar_o_crear(tabla: str, nombre: str, *,
         return nueva["id"]
 
 
-async def buscar_o_crear_persona(nombre: str) -> int | None:
-    return await _buscar_o_crear("personas", nombre)
+async def buscar_o_crear_persona(nombre: str, *,
+                                 bandeja_id: int | None = None) -> int | None:
+    return await _buscar_o_crear("personas", nombre, bandeja_id=bandeja_id)
 
 
 async def buscar_o_crear_proyecto(nombre: str, *,

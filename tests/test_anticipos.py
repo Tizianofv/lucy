@@ -162,7 +162,7 @@ class FakePool:
 def _instalar(conn):
     db.pool = FakePool(conn)
 
-    async def _cero(_):
+    async def _cero(_, bandeja_id=None):
         return None
 
     async def _cero_proyecto(_, bandeja_id=None):

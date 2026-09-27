@@ -1,13 +1,19 @@
-"""Lectura de SOLO lo de Tiziano en `bandeja`, `notas` y `eventos`
-(§A.1-A.3 del plan de construcción "Code como responsable de tareas
-técnicas", parte A, 27-sep-2026). `movimientos` queda FUERA por ahora --
-ver más abajo por qué.
+"""Lectura de SOLO lo de Tiziano en `bandeja`, `notas`, `eventos`,
+`personas` y `preferencias` (§A.1-A.3 y §E del plan de construcción "Code
+como responsable de tareas técnicas", partes A y E, 27-sep-2026).
+`movimientos` queda FUERA por ahora -- ver más abajo por qué.
 
-QUÉ ES ESTO Y QUÉ NO ES: tres funciones de lectura para que Code (el
-agente de la sala de control) pueda consultar los datos de Tiziano sin
-tocar los de Rosi ni los de nadie más. NO expone ruta HTTP -- eso no está
-aprobado (ver el reporte de esta parte). `personas` y `preferencias`
-quedan FUERA a propósito: van en la parte E.
+QUÉ ES ESTO Y QUÉ NO ES: funciones de lectura para que Code (el agente de
+la sala de control) pueda consultar los datos de Tiziano sin tocar los de
+Rosi ni los de nadie más. NO expone ruta HTTP -- eso no está aprobado (ver
+el reporte de esta parte).
+
+`personas`/`preferencias` (§E, agregado 27-sep-2026): mismo criterio que
+`notas` -- ninguna de las dos tiene un `chat_id` propio, así que se
+deciden por la `bandeja_id` que las originó (migración `2026-09-27_dueno_
+personas_preferencias.sql`). SIN la migración aplicada (SQLSTATE 42703,
+columna todavía no existe), `_leer_de_dueno` devuelve `[]` para estas dos
+tablas en vez de reventar -- ver el docstring de `_leer_de_dueno`.
 
 UNA SOLA TRANSACCIÓN DE SOLO LECTURA por llamada: `SET TRANSACTION READ
 ONLY`, dentro de una transacción explícita. Ese literal exacto es a
@@ -141,7 +147,7 @@ def _condicion_de_dueno(tabla: str) -> str:
     if tabla == "bandeja":
         origenes = ", ".join(f"'{o}'" for o in _ORIGENES_CONFIABLES_DE_BANDEJA)
         return f"chat_id = %s AND origen IN ({origenes})"
-    if tabla == "notas":
+    if tabla in ("notas", "personas", "preferencias"):
         origenes = ", ".join(f"'{o}'" for o in _ORIGENES_CONFIABLES_DE_BANDEJA)
         return (f"bandeja_id IN (SELECT id FROM bandeja WHERE chat_id = %s "
                 f"AND origen IN ({origenes}))")
@@ -169,22 +175,39 @@ def _limite(limite: int) -> int:
 
 async def _leer_de_dueno(tabla: str, columnas: str, extra_where: str,
                          orden: str, limite: int) -> list[dict]:
-    """Lo que las cuatro funciones públicas de abajo tienen en común: abrir
-    una transacción de SOLO LECTURA, armar el WHERE con `_condicion_de_dueno`
+    """Lo que las funciones públicas de abajo tienen en común: abrir una
+    transacción de SOLO LECTURA, armar el WHERE con `_condicion_de_dueno`
     y devolver filas como diccionarios. Cada función pública sigue siendo
     su propia función nombrada (no una sola genérica parametrizada por
-    fuera) para que el censo de "las cuatro llaman a la puerta" recorra
-    código de verdad, no una fábrica.
+    fuera) para que el censo de "todas llaman a la puerta" recorra código
+    de verdad, no una fábrica.
+
+    SIN LA MIGRACIÓN DE `personas`/`preferencias` (§E, `bandeja_id`
+    todavía no existe, SQLSTATE 42703): devuelve `[]` en vez de reventar,
+    mismo patrón que el resto de la base (`tareas.tomada_en`,
+    `correo_reportado.destino_chat_id`). `bandeja`/`notas`/`eventos` no
+    tienen esta migración pendiente -- para ellas esto nunca se dispara,
+    y si algún día tuvieran una columna sin aplicar, el mismo resguardo
+    las protege igual.
     """
     condicion = _condicion_de_dueno(tabla)
     where = condicion if not extra_where else f"{extra_where} AND {condicion}"
     sql = f"SELECT {columnas} FROM {tabla} WHERE {where} ORDER BY {orden} LIMIT %s"
     async with pool.connection() as conn:
-        async with conn.transaction():
-            await conn.execute("SET TRANSACTION READ ONLY")
-            cur = conn.cursor(row_factory=dict_row)
-            await cur.execute(sql, (CHAT_ID_DUENO, _limite(limite)))
-            return list(await cur.fetchall())
+        try:
+            async with conn.transaction():
+                await conn.execute("SET TRANSACTION READ ONLY")
+                cur = conn.cursor(row_factory=dict_row)
+                await cur.execute(sql, (CHAT_ID_DUENO, _limite(limite)))
+                return list(await cur.fetchall())
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate != "42703":
+                raise
+            return []
 
 
 async def leer_bandeja_de_dueno(limite: int = LIMITE_POR_OMISION) -> list[dict]:
@@ -222,4 +245,28 @@ async def leer_eventos_de_dueno(limite: int = LIMITE_POR_OMISION) -> list[dict]:
         "proyecto_id, notas",
         extra_where="borrado_en IS NULL",
         orden="inicia_en DESC",
+        limite=limite)
+
+
+async def leer_personas_de_dueno(limite: int = LIMITE_POR_OMISION) -> list[dict]:
+    """Las personas del perfil vivo de Tiziano, no borradas (§E). Una
+    persona sin `bandeja_id` (todo lo de antes de esta parte, o cualquier
+    escritor que todavía no la ponga) no sale -- ausencia de dueño se
+    trata como "no es de Tiziano"."""
+    return await _leer_de_dueno(
+        "personas",
+        "id, creado_en, nombre, alias, relacion, notas",
+        extra_where="borrado_en IS NULL",
+        orden="creado_en DESC",
+        limite=limite)
+
+
+async def leer_preferencias_de_dueno(limite: int = LIMITE_POR_OMISION) -> list[dict]:
+    """Las preferencias de Tiziano, no borradas (§E). Mismo criterio que
+    `leer_personas_de_dueno`: sin `bandeja_id`, no sale."""
+    return await _leer_de_dueno(
+        "preferencias",
+        "id, creado_en, texto, contexto",
+        extra_where="borrado_en IS NULL",
+        orden="creado_en DESC",
         limite=limite)

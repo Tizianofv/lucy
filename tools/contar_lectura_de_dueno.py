@@ -21,7 +21,7 @@ async de la app).
 Para la sala, desde `/Users/controlroom/Documents/IA CDS/lucy`:
 
     railway run -s Postgres -- python3 \\
-      "/Users/controlroom/Documents/IA CDS/lucy-trabajos/code-lectura/tools/contar_lectura_de_dueno.py"
+      "/Users/controlroom/Documents/IA CDS/lucy-trabajos/code-duenos/tools/contar_lectura_de_dueno.py"
 
 (usa `DATABASE_URL`/`DATABASE_PUBLIC_URL` que Railway inyecta; si el
 entorno ya trae `DATABASE_URL` puesta a mano, sirve igual con
@@ -44,9 +44,10 @@ from config import CHAT_ID_DUENO  # noqa: E402
 from db.lectura_dueno import _condicion_de_dueno  # noqa: E402
 
 # (tabla, filtro adicional adentro del WHERE adicional a `borrado_en`)
-_TABLAS = ("bandeja", "notas", "movimientos", "eventos")
+_TABLAS = ("bandeja", "notas", "movimientos", "eventos", "personas",
+          "preferencias")
 _TIENE_BORRADO_EN = {"bandeja": False, "notas": True, "movimientos": True,
-                     "eventos": True}
+                     "eventos": True, "personas": True, "preferencias": True}
 
 
 def main() -> int:
@@ -57,39 +58,61 @@ def main() -> int:
         return 2
 
     with psycopg.connect(url) as conn:
-        with conn.transaction():
-            conn.execute("SET TRANSACTION READ ONLY")
-            print(f"{'tabla':<12} {'total':>8} {'de Tiziano':>12} {'de otro':>10}")
-            print("-" * 46)
-            for tabla in _TABLAS:
-                borrado = " AND borrado_en IS NULL" if _TIENE_BORRADO_EN[tabla] else ""
-                total = conn.execute(
-                    f"SELECT count(*) FROM {tabla} WHERE true{borrado}"
-                ).fetchone()[0]
+        print(f"{'tabla':<12} {'total':>8} {'de Tiziano':>12} {'de otro':>10}")
+        print("-" * 46)
+        for tabla in _TABLAS:
+            # Una transacción POR TABLA: si una (personas/preferencias sin
+            # la migración de §E) revienta con SQLSTATE 42703, esa
+            # transacción se aborta y se hace ROLLBACK antes de pasar a la
+            # siguiente -- una transacción envenenada no puede correr más
+            # consultas hasta terminar, así que las tablas de después se
+            # perderían si compartieran la misma.
+            try:
+                with conn.transaction():
+                    conn.execute("SET TRANSACTION READ ONLY")
+                    borrado = (" AND borrado_en IS NULL"
+                              if _TIENE_BORRADO_EN[tabla] else "")
+                    total = conn.execute(
+                        f"SELECT count(*) FROM {tabla} WHERE true{borrado}"
+                    ).fetchone()[0]
 
-                try:
-                    condicion = _condicion_de_dueno(tabla)
-                except ValueError:
-                    print(f"{tabla:<12} {total:>8}   no se lee: sin dueño confiable")
-                    continue
+                    try:
+                        condicion = _condicion_de_dueno(tabla)
+                    except ValueError:
+                        print(f"{tabla:<12} {total:>8}   no se lee: sin "
+                              "dueño confiable")
+                        continue
 
-                de_dueno = conn.execute(
-                    f"SELECT count(*) FROM {tabla} WHERE {condicion}{borrado}",
-                    (CHAT_ID_DUENO,)
-                ).fetchone()[0]
-                de_otro = total - de_dueno
-                print(f"{tabla:<12} {total:>8} {de_dueno:>12} {de_otro:>10}")
-
-                if tabla == "bandeja":
-                    con_ese_chat_id = conn.execute(
-                        f"SELECT count(*) FROM {tabla} WHERE chat_id = %s{borrado}",
+                    de_dueno = conn.execute(
+                        f"SELECT count(*) FROM {tabla} WHERE {condicion}{borrado}",
                         (CHAT_ID_DUENO,)
                     ).fetchone()[0]
-                    fuera_por_origen = con_ese_chat_id - de_dueno
-                    print(f"             (de los {de_otro} \"de otro\": "
-                          f"{fuera_por_origen} en realidad tenían "
-                          "chat_id=CHAT_ID_DUENO, pero quedaron fuera por "
-                          "un origen NO confiable -- ver db/lectura_dueno.py)")
+                    de_otro = total - de_dueno
+                    print(f"{tabla:<12} {total:>8} {de_dueno:>12} {de_otro:>10}")
+
+                    if tabla == "bandeja":
+                        con_ese_chat_id = conn.execute(
+                            f"SELECT count(*) FROM {tabla} WHERE chat_id = %s{borrado}",
+                            (CHAT_ID_DUENO,)
+                        ).fetchone()[0]
+                        fuera_por_origen = con_ese_chat_id - de_dueno
+                        print(f"             (de los {de_otro} \"de otro\": "
+                              f"{fuera_por_origen} en realidad tenían "
+                              "chat_id=CHAT_ID_DUENO, pero quedaron fuera "
+                              "por un origen NO confiable -- ver db/"
+                              "lectura_dueno.py)")
+            except Exception as e:
+                try:
+                    sqlstate = e.sqlstate
+                except AttributeError:
+                    raise
+                if sqlstate != "42703":
+                    raise
+                total = conn.execute(
+                    f"SELECT count(*) FROM {tabla} WHERE true"
+                ).fetchone()[0]
+                print(f"{tabla:<12} {total:>8}   sin la migración de §E "
+                      "todavía (bandeja_id no existe)")
     return 0
 
 
