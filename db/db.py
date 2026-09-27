@@ -1136,12 +1136,25 @@ async def _buscar_o_crear(tabla: str, nombre: str, *,
             # fila -- INSERT literal, no el `{tabla}` genérico de arriba,
             # para que el censo de `tests/test_duenos.py` la encuentre por
             # el AST sin tener que reconstruir un f-string.
+            #
+            # CON UN SAVEPOINT (`async with conn.transaction():`), igual que
+            # `tareas_de_code_pendientes`/`tomar_tarea_de_la_sala`: SIN esto,
+            # el primer INSERT que revienta con SQLSTATE 42703 deja la
+            # transacción ABORTADA en Postgres real (autocommit=False, sin
+            # savepoint de por medio) -- el segundo INSERT del "except"
+            # correría en la MISMA transacción envenenada y reventaría con
+            # 25P02 ("current transaction is aborted"), no con la persona
+            # creada. Hallazgo del testigo sobre `cbc2726`, NO PASA: la
+            # primera versión de este arreglo pasaba las pruebas SQLite
+            # (que no modelan el aborto de la conexión) pero reventaba
+            # contra el comportamiento real de Postgres.
             try:
-                await cur.execute(
-                    "INSERT INTO personas (nombre, bandeja_id) VALUES (%s, %s) "
-                    "RETURNING *",
-                    (nombre, bandeja_id),
-                )
+                async with conn.transaction():
+                    await cur.execute(
+                        "INSERT INTO personas (nombre, bandeja_id) VALUES (%s, %s) "
+                        "RETURNING *",
+                        (nombre, bandeja_id),
+                    )
             except Exception as e:
                 try:
                     sqlstate = e.sqlstate
@@ -1151,6 +1164,8 @@ async def _buscar_o_crear(tabla: str, nombre: str, *,
                     raise
                 # SIN LA MIGRACIÓN (§E sin aplicar): cae al INSERT de antes,
                 # sin bandeja_id -- no revienta, la persona se crea igual.
+                # El SAVEPOINT de arriba ya revirtió: esta conexión sigue
+                # sana.
                 cur = conn.cursor(row_factory=dict_row)
                 await cur.execute(
                     "INSERT INTO personas (nombre) VALUES (%s) RETURNING *",

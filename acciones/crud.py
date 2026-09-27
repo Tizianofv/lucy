@@ -629,12 +629,21 @@ async def guardar_preferencia(
         # `bandeja_id` (§E, 27-sep-2026): la marca de dueño que usa la
         # lectura de la parte A -- esta función ya recibía `bandeja_id`
         # como parámetro, solo lo usaba para el log, no para la fila.
+        #
+        # CON UN SAVEPOINT (`async with conn.transaction():`) alrededor del
+        # intento que puede fallar: hallazgo del testigo sobre `cbc2726`,
+        # NO PASA -- sin esto, el INSERT que revienta con SQLSTATE 42703
+        # deja la transacción ABORTADA en Postgres real (autocommit=False),
+        # y el segundo INSERT del "except" reventaría con 25P02 en vez de
+        # crear la preferencia. El SAVEPOINT revierte solo esa parte al
+        # fallar, dejando la conexión sana para el INSERT de compatibilidad.
         try:
-            cur = await conn.execute(
-                "INSERT INTO preferencias (texto, contexto, bandeja_id) "
-                "VALUES (%s, %s, %s) RETURNING id",
-                (texto.strip(), (contexto or "").strip() or None, bandeja_id),
-            )
+            async with conn.transaction():
+                cur = await conn.execute(
+                    "INSERT INTO preferencias (texto, contexto, bandeja_id) "
+                    "VALUES (%s, %s, %s) RETURNING id",
+                    (texto.strip(), (contexto or "").strip() or None, bandeja_id),
+                )
         except Exception as e:
             try:
                 sqlstate = e.sqlstate
@@ -1468,14 +1477,21 @@ async def perfil(
                 # que usa `db.buscar_o_crear_persona` -- acá SÍ hay de dónde
                 # sacarla: `bandeja_id` es el parámetro de esta función, la
                 # bandeja del mensaje de Telegram que disparó el perfil.
+                #
+                # CON UN SAVEPOINT alrededor del intento que puede fallar:
+                # hallazgo del testigo sobre `cbc2726`, NO PASA -- sin esto,
+                # el INSERT que revienta con SQLSTATE 42703 deja la
+                # transacción ABORTADA en Postgres real, y el INSERT de
+                # compatibilidad de abajo reventaría con 25P02.
                 try:
-                    cur = await conn.execute(
-                        """INSERT INTO personas
-                             (nombre, alias, relacion, notas, bandeja_id)
-                           VALUES (%s, %s, %s, %s, %s) RETURNING id""",
-                        (nombre, [a.strip() for a in (alias or []) if a.strip()],
-                         (relacion or "").strip() or None, linea, bandeja_id),
-                    )
+                    async with conn.transaction():
+                        cur = await conn.execute(
+                            """INSERT INTO personas
+                                 (nombre, alias, relacion, notas, bandeja_id)
+                               VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+                            (nombre, [a.strip() for a in (alias or []) if a.strip()],
+                             (relacion or "").strip() or None, linea, bandeja_id),
+                        )
                 except Exception as e:
                     try:
                         sqlstate = e.sqlstate

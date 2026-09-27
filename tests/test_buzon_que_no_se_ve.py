@@ -3876,10 +3876,19 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `db/lectura_dueno.py` ya estaban vigilados de antes. La migración
     # nueva (`db/migrations/2026-09-27_dueno_personas_preferencias.sql`)
     # no es un `.py`.
-    assert medido == {"en disco": 99, "exentos": 55, "vigilados": 44}, (
+    #
+    # 27-sep-2026, mismo día, arreglo del NO PASA del testigo sobre
+    # `cbc2726` (transacción abortada contra Postgres real): 99 → 100 en
+    # disco, 55 → 56 EXENTOS por `tests/_doble_postgres.py` (nuevo: el
+    # doble fiel compartido de la conexión Postgres, que modela la
+    # transacción abortada -- vive bajo `tests/`, así que es EXENTO por
+    # rol aunque su nombre no empiece con `test_`). VIGILADOS sin cambio
+    # en 44: se tocaron `db/db.py`, `acciones/crud.py`, ya vigilados de
+    # antes.
+    assert medido == {"en disco": 100, "exentos": 56, "vigilados": 44}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "27-sep-2026 (rama code-duenos) era {'en disco': 99, "
-        "'exentos': 55, 'vigilados': 44}. La aserción de fondo —cero "
+        "27-sep-2026 (rama code-duenos) era {'en disco': 100, "
+        "'exentos': 56, 'vigilados': 44}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

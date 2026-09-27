@@ -64,6 +64,7 @@ import config  # noqa: E402
 import db.db as db  # noqa: E402
 import acciones.crud as crud  # noqa: E402
 import db.lectura_dueno as lectura  # noqa: E402
+import _doble_postgres as doble  # noqa: E402
 
 DUENO = config.CHAT_ID_DUENO
 
@@ -246,18 +247,27 @@ def test_buscar_o_crear_persona_sin_bandeja_id_queda_sin_dueno():
 
 
 def test_buscar_o_crear_persona_sin_la_migracion_no_revienta():
-    """GARANTÍA PEDIDA EXPLÍCITAMENTE (condición 5): publicado sin la
-    migración de §E, la columna no existe -- cae al INSERT de antes, la
-    persona se crea igual."""
-    con = _sqlite_duenos(con_bandeja_id_en_personas=False)
-    guardado = _instalar_db(con, sin_columnas=True)
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE (condición 5), CONTRA EL DOBLE FIEL
+    de Postgres (hallazgo del testigo sobre `cbc2726`, NO PASA: el doble
+    SQLite de antes no modelaba que la conexión queda ABORTADA tras el
+    primer error, así que no podía ver que el segundo INSERT reventaba con
+    25P02 contra Postgres real): publicado sin la migración de §E, la
+    columna no existe -- cae al INSERT de antes, la persona se crea
+    igual, y la conexión queda SANA (con el SAVEPOINT)."""
+    conexion = doble.ConexionPostgresFiel([
+        ("SELECT ID FROM PERSONAS", None),
+        ("INSERT INTO PERSONAS (NOMBRE, BANDEJA_ID)", "FALLA_42703"),
+        ("INSERT INTO PERSONAS (NOMBRE) VALUES", {"id": 42}),
+    ])
+    guardado = db.pool
+    db.pool = doble.PoolPostgresFiel(conexion)
     try:
         pid = _correr(db.buscar_o_crear_persona("Carla", bandeja_id=77))
     finally:
-        _restaurar_db(guardado)
-    fila = con.execute("SELECT nombre FROM personas WHERE id = ?", (pid,)).fetchone()
-    con.close()
-    assert fila["nombre"] == "Carla"
+        db.pool = guardado
+    assert pid == 42
+    assert conexion.abortada is False, (
+        "la conexión quedó abortada -- el SAVEPOINT no la recuperó")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -279,15 +289,31 @@ def test_crud_perfil_persona_nueva_guarda_bandeja_id():
 
 
 def test_crud_perfil_persona_sin_la_migracion_no_revienta():
-    con = _sqlite_duenos(con_bandeja_id_en_personas=False)
-    guardado = _instalar_db(con, sin_columnas=True)
+    """CONTRA EL DOBLE FIEL de Postgres -- ver el docstring de
+    `test_buscar_o_crear_persona_sin_la_migracion_no_revienta`."""
+    conexion = doble.ConexionPostgresFiel([
+        ("SELECT * FROM PERSONAS", None),
+        ("INSERT INTO PERSONAS (NOMBRE, ALIAS, RELACION, NOTAS, BANDEJA_ID)",
+         "FALLA_42703"),
+        ("INSERT INTO PERSONAS (NOMBRE, ALIAS, RELACION, NOTAS) VALUES", (42,)),
+    ])
+    guardado_pool = db.pool
+    guardado_registrar = crud._registrar
+
+    async def _registrar_falso(*a, **k):
+        return 99
+
+    db.pool = doble.PoolPostgresFiel(conexion)
+    crud._registrar = _registrar_falso
     try:
         resultado, _log_id = _correr(crud.perfil(
             "persona", "Elsa", bandeja_id=99))
     finally:
-        _restaurar_db(guardado)
-    con.close()
+        db.pool = guardado_pool
+        crud._registrar = guardado_registrar
     assert "Elsa" in resultado
+    assert conexion.abortada is False, (
+        "la conexión quedó abortada -- el SAVEPOINT no la recuperó")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -309,15 +335,28 @@ def test_guardar_preferencia_guarda_bandeja_id():
 
 
 def test_guardar_preferencia_sin_la_migracion_no_revienta():
-    con = _sqlite_duenos(con_bandeja_id_en_personas=False)
-    guardado = _instalar_db(con, sin_columnas=True)
+    """CONTRA EL DOBLE FIEL de Postgres -- ver el docstring de
+    `test_buscar_o_crear_persona_sin_la_migracion_no_revienta`."""
+    conexion = doble.ConexionPostgresFiel([
+        ("INSERT INTO PREFERENCIAS (TEXTO, CONTEXTO, BANDEJA_ID)", "FALLA_42703"),
+        ("INSERT INTO PREFERENCIAS (TEXTO, CONTEXTO) VALUES", (77,)),
+    ])
+    guardado_pool = db.pool
+    guardado_registrar = crud._registrar
+
+    async def _registrar_falso(*a, **k):
+        return 99
+
+    db.pool = doble.PoolPostgresFiel(conexion)
+    crud._registrar = _registrar_falso
     try:
         pid, _log_id = _correr(crud.guardar_preferencia(55, "x"))
     finally:
-        _restaurar_db(guardado)
-    fila = con.execute("SELECT texto FROM preferencias WHERE id = ?", (pid,)).fetchone()
-    con.close()
-    assert fila["texto"] == "x"
+        db.pool = guardado_pool
+        crud._registrar = guardado_registrar
+    assert pid == 77
+    assert conexion.abortada is False, (
+        "la conexión quedó abortada -- el SAVEPOINT no la recuperó")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -398,6 +437,95 @@ def test_todo_insert_de_preferencias_pone_bandeja_id_en_alguna_rama():
     assert not sin_bandeja_id, (
         f"estas funciones escriben preferencias sin poner bandeja_id en "
         f"NINGUNA rama: {sin_bandeja_id}")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# CENSO ESTRUCTURAL (hallazgo del testigo sobre `cbc2726`, NO PASA,
+# 27-sep-2026): TODO reintento de una sentencia distinta tras capturar
+# SQLSTATE 42703, en la MISMA función, tiene que envolver el intento que
+# puede fallar en un SAVEPOINT (`async with conn.transaction():`) -- sin
+# eso, Postgres real deja la transacción ABORTADA y el reintento revienta
+# con 25P02. Esto recorre el AST del repositorio ENTERO (menos pruebas):
+# no hace falta una lista tecleada de "qué funciones mirar", ni tampoco
+# mantener a mano cuáles pruebas cubren cuáles sitios -- si el patrón
+# aparece sin savepoint en CUALQUIER archivo, esto se pone rojo solo.
+# ═══════════════════════════════════════════════════════════════════════
+
+def _tiene_reintento_en_handler(handler: ast.ExceptHandler) -> bool:
+    """¿El manejador de la excepción ejecuta OTRA sentencia (no solo
+    relanza, loguea o hace `return`)?"""
+    return any(
+        isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+        and n.func.attr in ("execute", "executemany")
+        for n in ast.walk(handler))
+
+
+def _atrapa_42703(nodo_try: ast.Try) -> bool:
+    return "42703" in ast.dump(nodo_try)
+
+
+def _primer_intento_tiene_savepoint(nodo_try: ast.Try) -> bool:
+    """¿El CUERPO del `try` (el intento que puede fallar) está envuelto en
+    un `with .transaction():`, sea `async with` (psycopg async, la mayoría
+    del repo) o `with` liso (psycopg SÍNCRONO, como los guiones sueltos de
+    `tools/`)? Mira los nodos de primer nivel del cuerpo del try -- que es
+    donde vive ese `with` en todos los sitios reales del repo."""
+    for n in nodo_try.body:
+        if isinstance(n, (ast.AsyncWith, ast.With)) and any(
+                isinstance(item.context_expr, ast.Call)
+                and isinstance(item.context_expr.func, ast.Attribute)
+                and item.context_expr.func.attr == "transaction"
+                for item in n.items):
+            return True
+    return False
+
+
+def _censo_de_reintentos_tras_42703() -> dict[str, bool]:
+    """(archivo::función) -> tiene_savepoint, para cada función del
+    repositorio (menos pruebas) que reintenta otra sentencia tras
+    capturar SQLSTATE 42703."""
+    import test_buzon_que_no_se_ve as barrido
+
+    raiz = barrido.RAIZ
+    pruebas = [p.resolve() for p in barrido._testpaths(raiz)]
+    resultado: dict[str, bool] = {}
+    for py in barrido._py_en_disco(raiz):
+        real = py.resolve()
+        if any(c == real or c in real.parents for c in pruebas):
+            continue
+        try:
+            fuente = real.read_text(encoding="utf-8")
+            arbol = ast.parse(fuente, filename=str(real))
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        rel = real.relative_to(raiz).as_posix()
+        for funcion in ast.walk(arbol):
+            if not isinstance(funcion, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for nodo in ast.walk(funcion):
+                if not isinstance(nodo, ast.Try):
+                    continue
+                if not _atrapa_42703(nodo):
+                    continue
+                if not any(_tiene_reintento_en_handler(h) for h in nodo.handlers):
+                    continue
+                clave = f"{rel}::{funcion.name}:{nodo.lineno}"
+                resultado[clave] = _primer_intento_tiene_savepoint(nodo)
+    return resultado
+
+
+def test_todo_reintento_tras_42703_tiene_savepoint():
+    censo = _censo_de_reintentos_tras_42703()
+    assert censo, (
+        "el censo no encontró ningún reintento tras SQLSTATE 42703 en todo "
+        "el repositorio: se quedó ciego (hay varios, empezando por "
+        "db._buscar_o_crear y crud.guardar_preferencia)")
+    sin_savepoint = sorted(sitio for sitio, tiene in censo.items() if not tiene)
+    assert not sin_savepoint, (
+        f"estos sitios reintentan otra sentencia tras SQLSTATE 42703 SIN "
+        f"envolver el intento en un SAVEPOINT (`async with conn."
+        f"transaction():`) -- revientan con 25P02 contra Postgres real, "
+        f"aunque una prueba con SQLite no lo vea: {sin_savepoint}")
 
 
 if __name__ == "__main__":
