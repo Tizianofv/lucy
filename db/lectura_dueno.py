@@ -1,0 +1,148 @@
+"""Lectura de SOLO lo de Tiziano en `bandeja`, `notas`, `movimientos` y
+`eventos` (§A.1-A.3 del plan de construcción "Code como responsable de
+tareas técnicas", parte A, 27-sep-2026).
+
+QUÉ ES ESTO Y QUÉ NO ES: cuatro funciones de lectura para que Code (el
+agente de la sala de control) pueda consultar los datos de Tiziano sin
+tocar los de Rosi ni los de nadie más. NO expone ruta HTTP -- eso no está
+aprobado (ver el reporte de esta parte). `personas` y `preferencias`
+quedan FUERA a propósito: van en la parte E.
+
+UNA SOLA TRANSACCIÓN DE SOLO LECTURA por llamada: `SET TRANSACTION READ
+ONLY`, dentro de una transacción explícita. Ese literal exacto es a
+propósito el MISMO que ya reconoce `tests/test_responsable.py::
+_ejecuta_solo_lectura` (el censo de escritores de `tareas.responsable_
+chat_id`): sin él, el censo clasifica a `_leer_de_dueno` como "escritor
+genérico" -- arma su SELECT con SQL dinámico -- y pide una sonda para una
+función que nunca escribe nada. `SET TRANSACTION` (a diferencia de `SET
+default_transaction_read_only`) es transaccional por definición del
+estándar SQL: revierte solo al terminar la transacción, así que la
+conexión FÍSICA del pool nunca se queda en solo lectura para la próxima
+función que la tome prestada.
+
+"DE TIZIANO" SE DECIDE POR UN VALOR EN LA FILA, SIEMPRE CONTRA
+`config.CHAT_ID_DUENO`, SIEMPRE POR LA MISMA PUERTA (`_condicion_de_dueno`,
+abajo) -- las cuatro lecturas la llaman, ninguna arma su propio criterio:
+
+  · `bandeja.chat_id` -- la columna existe en la fila misma.
+  · `notas`/`movimientos` no tienen chat_id propio: se decide por la
+    `bandeja` que los originó (`bandeja_id`). Una fila sin `bandeja_id` NO
+    tiene forma de probar de quién es, así que NUNCA sale -- ver el
+    docstring de `_condicion_de_dueno`.
+  · `eventos.duenos_chat_id` es un ARRAY (puede tener a Tiziano, a Rosi, a
+    los dos, o estar vacío -- "sin dueño", el estado de casi toda cita
+    sincronizada de Google, ver `db/schema.sql`). Para ESTA lectura un
+    array vacío NO cuenta como "de Tiziano": es exactamente lo contrario
+    de lo que hace `despertador._destinatarios_de_tareas` (que trata el
+    array vacío como "de todos", para no dejar un recordatorio sin avisar
+    a nadie) -- acá la pregunta es otra ("¿esto es SUYO?", no "¿a quién le
+    aviso?"), así que la respuesta correcta es otra.
+
+UNA FILA "SIN DUEÑO" NUNCA SALE, en las cuatro: ni una nota/movimiento sin
+`bandeja_id`, ni un evento con `duenos_chat_id = '{}'`. Ausencia de prueba
+de propiedad se trata como "no es de Tiziano", nunca como "sí lo es".
+"""
+from __future__ import annotations
+
+from psycopg.rows import dict_row
+
+from config import CHAT_ID_DUENO
+from db.db import pool
+
+LIMITE_POR_OMISION = 50
+LIMITE_MAXIMO = 500
+
+
+def _condicion_de_dueno(tabla: str) -> str:
+    """LA ÚNICA PUERTA: el fragmento SQL que decide "esta fila es de
+    Tiziano" para `tabla`. Toma UN parámetro posicional (`CHAT_ID_DUENO`).
+
+    Las cuatro lecturas de este archivo llaman a ESTA función -- ninguna
+    escribe su propio `WHERE chat_id = ...` a mano. Una prueba (`tests/
+    test_lectura_dueno.py::test_las_cuatro_lecturas_usan_la_misma_puerta`)
+    lo exige recorriendo el AST de las cuatro funciones reales.
+    """
+    if tabla == "bandeja":
+        return "chat_id = %s"
+    if tabla in ("notas", "movimientos"):
+        return "bandeja_id IN (SELECT id FROM bandeja WHERE chat_id = %s)"
+    if tabla == "eventos":
+        return "%s = ANY(duenos_chat_id)"
+    raise ValueError(f"tabla sin puerta de dueño definida: {tabla!r}")
+
+
+def _limite(limite: int) -> int:
+    """Nunca 0, nunca negativo, nunca más de `LIMITE_MAXIMO` -- una lectura
+    para Code no puede convertirse por accidente (o por un valor mal
+    puesto) en un volcado completo de la tabla."""
+    return max(1, min(int(limite), LIMITE_MAXIMO))
+
+
+async def _leer_de_dueno(tabla: str, columnas: str, extra_where: str,
+                         orden: str, limite: int) -> list[dict]:
+    """Lo que las cuatro funciones públicas de abajo tienen en común: abrir
+    una transacción de SOLO LECTURA, armar el WHERE con `_condicion_de_dueno`
+    y devolver filas como diccionarios. Cada función pública sigue siendo
+    su propia función nombrada (no una sola genérica parametrizada por
+    fuera) para que el censo de "las cuatro llaman a la puerta" recorra
+    código de verdad, no una fábrica.
+    """
+    condicion = _condicion_de_dueno(tabla)
+    where = condicion if not extra_where else f"{extra_where} AND {condicion}"
+    sql = f"SELECT {columnas} FROM {tabla} WHERE {where} ORDER BY {orden} LIMIT %s"
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            await conn.execute("SET TRANSACTION READ ONLY")
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(sql, (CHAT_ID_DUENO, _limite(limite)))
+            return list(await cur.fetchall())
+
+
+async def leer_bandeja_de_dueno(limite: int = LIMITE_POR_OMISION) -> list[dict]:
+    """Los últimos mensajes de Tiziano en la bandeja (§A.1). Sin `embedding`
+    (vector, no sirve fuera de Postgres) ni `interpretacion` completa (JSON
+    grande); lo justo para que Code sepa qué pasó y cuándo."""
+    return await _leer_de_dueno(
+        "bandeja",
+        "id, creado_en, origen, tipo_entrada, contenido_raw, "
+        "clasificacion, estado",
+        extra_where="",
+        orden="creado_en DESC",
+        limite=limite)
+
+
+async def leer_notas_de_dueno(limite: int = LIMITE_POR_OMISION) -> list[dict]:
+    """Las notas/ideas de Tiziano, no borradas (§A.2)."""
+    return await _leer_de_dueno(
+        "notas",
+        "id, creado_en, contenido, etiquetas, proyecto_id, persona_id",
+        extra_where="borrado_en IS NULL",
+        orden="creado_en DESC",
+        limite=limite)
+
+
+async def leer_movimientos_de_dueno(limite: int = LIMITE_POR_OMISION) -> list[dict]:
+    """Los movimientos de dinero de Tiziano, no borrados (§A.2). Los de
+    Rosi (mismo pipeline bancario, mismo `bandeja_id`, otro `chat_id` en la
+    bandeja que los originó) no salen."""
+    return await _leer_de_dueno(
+        "movimientos",
+        "id, fecha, tipo, monto, moneda, contraparte, categoria, "
+        "referencia, estado",
+        extra_where="borrado_en IS NULL",
+        orden="fecha DESC, id DESC",
+        limite=limite)
+
+
+async def leer_eventos_de_dueno(limite: int = LIMITE_POR_OMISION) -> list[dict]:
+    """Las citas de Tiziano, no borradas (§A.3): las suyas y las que
+    comparte con Rosi (`duenos_chat_id` con los dos). Una cita SOLO de
+    Rosi, o sin dueño puesto todavía, no sale -- ver el docstring del
+    módulo."""
+    return await _leer_de_dueno(
+        "eventos",
+        "id, titulo, inicia_en, termina_en, lugar, persona_id, "
+        "proyecto_id, notas",
+        extra_where="borrado_en IS NULL",
+        orden="inicia_en DESC",
+        limite=limite)

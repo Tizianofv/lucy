@@ -3856,10 +3856,18 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # /tomar) y `config.py` (comentario de PERMISOS_API_CODE), los tres ya
     # vigilados de antes. La migración nueva
     # (`db/migrations/2026-09-26_tomada_en.sql`) no es un `.py`.
-    assert medido == {"en disco": 94, "exentos": 53, "vigilados": 41}, (
+    #
+    # 27-sep-2026, rama `trabajo/code-lectura` (§A, parte A del plan de
+    # construcción — lectura de solo lo de Tiziano en bandeja/notas/
+    # movimientos/eventos, para Code): 94 → 96 en disco, 53 → 54 EXENTOS
+    # por `tests/test_lectura_dueno.py` (SQL real contra SQLite para las
+    # cuatro lecturas), 41 → 42 VIGILADOS por `db/lectura_dueno.py`
+    # (nuevo: las cuatro funciones y su única puerta de dueño). Ninguna
+    # migración: no se tocó el esquema.
+    assert medido == {"en disco": 96, "exentos": 54, "vigilados": 42}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "26-sep-2026 (rama code-tomada) era {'en disco': 94, "
-        "'exentos': 53, 'vigilados': 41}. La aserción de fondo —cero "
+        "27-sep-2026 (rama code-lectura) era {'en disco': 96, "
+        "'exentos': 54, 'vigilados': 42}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "
