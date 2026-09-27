@@ -1,24 +1,34 @@
 # -*- coding: utf-8 -*-
-"""Lectura de SOLO lo de Tiziano en `bandeja`, `notas`, `movimientos` y
-`eventos` (§A.1-A.3, parte A del plan de construcción "Code como
-responsable de tareas técnicas", 27-sep-2026, `db/lectura_dueno.py`).
+"""Lectura de SOLO lo de Tiziano en `bandeja`, `notas` y `eventos`
+(§A.1-A.3, parte A del plan de construcción "Code como responsable de
+tareas técnicas", 27-sep-2026, `db/lectura_dueno.py`). `movimientos` NO
+tiene lectura -- ver `db/lectura_dueno.py` por qué (hallazgo de la sala,
+27-sep-2026, contra producción: `bandeja.chat_id` no distingue el buzón
+de origen, así que un movimiento de Rosi sale marcado como de Tiziano).
 
-Parte A, y SOLO esa: cuatro funciones de lectura, de solo lectura de
-verdad (`SET TRANSACTION READ ONLY`, dentro de una
-transacción), que deciden "de Tiziano" por LA MISMA puerta
-(`_condicion_de_dueno`). `personas`/`preferencias` NO están acá (van en la
-parte E). Sin ruta HTTP: eso no está aprobado.
+Parte A, y SOLO esa: funciones de lectura, de solo lectura de verdad
+(`SET TRANSACTION READ ONLY`, dentro de una transacción), que deciden "de
+Tiziano" por LA MISMA puerta (`_condicion_de_dueno`). `personas`/
+`preferencias` NO están acá (van en la parte E). Sin ruta HTTP: eso no
+está aprobado.
+
+EVENTOS, corregido 27-sep-2026 (la sala encontró que la primera versión
+se apartaba del diseño aprobado, `DISENO.md` §A.1/§A.2): un array
+`duenos_chat_id` VACÍO es "de la casa" y SALE (mismo criterio que
+`despertador._destinatarios_de_tareas`); con dueños puestos, sale solo si
+incluye a `CHAT_ID_DUENO`.
 
 NINGÚN chat_id ni clave de este archivo es real (regla del repo: es
 PÚBLICO).
 
-CÓMO SE PRUEBA: SQL de verdad. Las cuatro funciones corren tal cual contra
+CÓMO SE PRUEBA: SQL de verdad. Las funciones corren tal cual contra
 un `db.pool` que es SQLite de verdad (mismo patrón de
 `tests/test_code_alarmas.py::_sqlite_para_alerta_real` -- `%s` -> `?`, y
-`%s = ANY(duenos_chat_id)` traducido a una función SQLite registrada,
-porque SQLite no tiene arrays). Ninguna prueba reimplementa el filtro en
-Python: si `_condicion_de_dueno` cambiara su SQL, estas pruebas lo
-ejecutarían tal cual sale, no una copia.
+`%s = ANY(duenos_chat_id)`/`duenos_chat_id = '{}'` traducidos a una
+función SQLite registrada y a un literal JSON, porque SQLite no tiene
+arrays). Ninguna prueba reimplementa el filtro en Python: si
+`_condicion_de_dueno` cambiara su SQL, estas pruebas lo ejecutarían tal
+cual sale, no una copia.
 
 Correr:  python3 -m pytest tests/test_lectura_dueno.py -q
 """
@@ -87,6 +97,10 @@ def _correr(coro):
 
 def _traducir(sql: str) -> str:
     sql2 = sql.replace("%s = ANY(duenos_chat_id)", "es_miembro(duenos_chat_id, ?)")
+    # Postgres representa el array vacío como '{}'; el arnés SQLite lo
+    # guarda como JSON ('[]'). Mismo patrón que el reemplazo de arriba:
+    # se traduce el LITERAL, no se reimplementa la condición.
+    sql2 = sql2.replace("duenos_chat_id = '{}'", "duenos_chat_id = '[]'")
     return sql2.replace("%s", "?")
 
 
@@ -242,8 +256,8 @@ def test_bandeja_usa_transaccion_de_solo_lectura():
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# §A.2 -- notas y movimientos: SIN chat_id propio, se decide por la
-# `bandeja` que los originó.
+# §A.2 -- notas: SIN chat_id propio, se decide por la `bandeja` que la
+# originó.
 # ═══════════════════════════════════════════════════════════════════════
 
 def _con_bandejas(con):
@@ -289,52 +303,33 @@ def test_notas_no_trae_borradas():
     assert filas == []
 
 
-def test_movimientos_trae_solo_lo_de_tiziano():
-    """GARANTÍA PEDIDA EXPLÍCITAMENTE: mismo patrón que notas -- un
-    movimiento de Rosi (mismo pipeline bancario, otra bandeja) no sale."""
-    con = _sqlite_de_dueno()
-    _con_bandejas(con)
-    con.execute("INSERT INTO movimientos (id, bandeja_id, fecha, monto) "
-                "VALUES (1, 10, '2026-09-01', '100.00')")
-    con.execute("INSERT INTO movimientos (id, bandeja_id, fecha, monto) "
-                "VALUES (2, 20, '2026-09-02', '200.00')")
-    con.execute("INSERT INTO movimientos (id, bandeja_id, fecha, monto) "
-                "VALUES (3, 30, '2026-09-03', '300.00')")
-    con.execute("INSERT INTO movimientos (id, bandeja_id, fecha, monto) "
-                "VALUES (4, NULL, '2026-09-04', '400.00')")
-    guardado = _instalar(con)
-    try:
-        filas = _correr(lectura.leer_movimientos_de_dueno())
-    finally:
-        _restaurar(guardado)
-        con.close()
-    assert [f["id"] for f in filas] == [1]
-
-
-def test_movimientos_no_trae_borrados():
-    con = _sqlite_de_dueno()
-    _con_bandejas(con)
-    con.execute("INSERT INTO movimientos (id, bandeja_id, fecha, monto, "
-                "borrado_en) VALUES (1, 10, '2026-09-01', '5.00', '2026-09-05')")
-    guardado = _instalar(con)
-    try:
-        filas = _correr(lectura.leer_movimientos_de_dueno())
-    finally:
-        _restaurar(guardado)
-        con.close()
-    assert filas == []
+def test_movimientos_no_tiene_lectura_en_esta_parte():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE por la sala (27-sep-2026): sacar
+    `leer_movimientos_de_dueno` de la parte A -- medido contra producción,
+    `bandeja.chat_id` no distingue el buzón de origen (`captura/
+    consumos.py` guarda TODO correo bancario con `chat_id=CHAT_ID_DUENO`,
+    incluido el de Rosi), así que no hay dato confiable para decidir de
+    quién es un movimiento."""
+    assert not hasattr(lectura, "leer_movimientos_de_dueno"), (
+        "leer_movimientos_de_dueno sigue existiendo -- se acordó sacarla "
+        "de la parte A hasta que haya un dato confiable de buzón de origen")
+    with pytest.raises(ValueError):
+        lectura._condicion_de_dueno("movimientos")
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# §A.3 -- eventos: `duenos_chat_id` es un ARRAY; vacío = "sin dueño" y NO
-# cuenta como de Tiziano (al revés que `despertador._destinatarios_de_
-# tareas`, que trata el array vacío como "de todos" para avisar).
+# §A.3 -- eventos: `duenos_chat_id` es un ARRAY. DISEÑO APROBADO
+# (`DISENO.md` §A.1/§A.2): un array VACÍO es "de la casa" y SALE -- mismo
+# criterio que `despertador._destinatarios_de_tareas`. Con dueños puestos,
+# sale solo si incluye a Tiziano.
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_eventos_trae_las_suyas_y_las_compartidas_con_rosi():
-    """GARANTÍA PEDIDA EXPLÍCITAMENTE: una cita SOLO de Rosi, o SIN dueño
-    (`duenos_chat_id = []`, el estado normal de casi toda cita sincronizada
-    de Google), nunca sale. Una compartida (Tiziano Y Rosi) SÍ sale."""
+def test_eventos_trae_las_suyas_las_compartidas_y_las_de_la_casa():
+    """GARANTÍA PEDIDA EXPLÍCITAMENTE (corregida 27-sep-2026 tras el
+    hallazgo de la sala contra producción -- la primera versión excluía el
+    array vacío, apartándose del diseño aprobado): una cita SOLO de Rosi
+    no sale; una de Tiziano, una compartida (Tiziano Y Rosi), y una SIN
+    dueño puesto (`duenos_chat_id = []`, "de la casa") SÍ salen."""
     con = _sqlite_de_dueno()
     con.execute("INSERT INTO eventos (id, titulo, inicia_en, duenos_chat_id) "
                 "VALUES (1, 'de tiziano', '2026-09-01', ?)",
@@ -346,17 +341,32 @@ def test_eventos_trae_las_suyas_y_las_compartidas_con_rosi():
                 "VALUES (3, 'compartida', '2026-09-03', ?)",
                 (json.dumps([DUENO, ROSI]),))
     con.execute("INSERT INTO eventos (id, titulo, inicia_en, duenos_chat_id) "
-                "VALUES (4, 'sin dueno', '2026-09-04', ?)",
+                "VALUES (4, 'de la casa', '2026-09-04', ?)",
                 (json.dumps([]),))
-    con.execute("INSERT INTO eventos (id, titulo, inicia_en, duenos_chat_id) "
-                "VALUES (5, 'sin dueno de verdad', '2026-09-05', NULL)")
     guardado = _instalar(con)
     try:
         filas = _correr(lectura.leer_eventos_de_dueno())
     finally:
         _restaurar(guardado)
         con.close()
-    assert sorted(f["id"] for f in filas) == [1, 3]
+    assert sorted(f["id"] for f in filas) == [1, 3, 4]
+
+
+def test_eventos_solo_de_rosi_no_sale():
+    """LA PAREJA del test anterior, mirado al revés: un array CON dueños
+    puestos que NO incluye a Tiziano no cuenta, aunque el array no esté
+    vacío -- si la mutación borrara el `%s = ANY(...)` entero (dejando
+    solo "array vacío = sale"), esta prueba lo vería."""
+    con = _sqlite_de_dueno()
+    con.execute("INSERT INTO eventos (id, titulo, inicia_en, duenos_chat_id) "
+                "VALUES (1, 'de rosi', '2026-09-01', ?)", (json.dumps([ROSI]),))
+    guardado = _instalar(con)
+    try:
+        filas = _correr(lectura.leer_eventos_de_dueno())
+    finally:
+        _restaurar(guardado)
+        con.close()
+    assert filas == []
 
 
 def test_eventos_no_trae_borrados():
@@ -374,7 +384,7 @@ def test_eventos_no_trae_borrados():
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# HERMANOS: las cuatro lecturas usan LA MISMA puerta -- se saca de lo real
+# HERMANOS: las lecturas usan LA MISMA puerta -- se saca de lo real
 # recorriendo el AST del módulo, no de memoria.
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -387,9 +397,9 @@ def _llama_a(funcion, nombre: str) -> bool:
                for n in ast.walk(arbol))
 
 
-def test_las_cuatro_lecturas_pasan_por_leer_de_dueno():
+def test_las_lecturas_pasan_por_leer_de_dueno():
     for fn in (lectura.leer_bandeja_de_dueno, lectura.leer_notas_de_dueno,
-               lectura.leer_movimientos_de_dueno, lectura.leer_eventos_de_dueno):
+               lectura.leer_eventos_de_dueno):
         assert _llama_a(fn, "_leer_de_dueno"), (
             f"{fn.__name__} no pasa por _leer_de_dueno -- arma su propio "
             "criterio de dueño")
@@ -401,8 +411,8 @@ def test_leer_de_dueno_pasa_por_la_puerta_de_condicion():
         "dejó de ser la única fuente del filtro de dueño")
 
 
-def test_condicion_de_dueno_cubre_las_cuatro_tablas():
-    for tabla in ("bandeja", "notas", "movimientos", "eventos"):
+def test_condicion_de_dueno_cubre_las_tablas_con_lectura():
+    for tabla in ("bandeja", "notas", "eventos"):
         assert lectura._condicion_de_dueno(tabla)  # no revienta, y no es ""
 
 

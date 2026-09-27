@@ -1,8 +1,9 @@
-"""Lectura de SOLO lo de Tiziano en `bandeja`, `notas`, `movimientos` y
-`eventos` (§A.1-A.3 del plan de construcción "Code como responsable de
-tareas técnicas", parte A, 27-sep-2026).
+"""Lectura de SOLO lo de Tiziano en `bandeja`, `notas` y `eventos`
+(§A.1-A.3 del plan de construcción "Code como responsable de tareas
+técnicas", parte A, 27-sep-2026). `movimientos` queda FUERA por ahora --
+ver más abajo por qué.
 
-QUÉ ES ESTO Y QUÉ NO ES: cuatro funciones de lectura para que Code (el
+QUÉ ES ESTO Y QUÉ NO ES: tres funciones de lectura para que Code (el
 agente de la sala de control) pueda consultar los datos de Tiziano sin
 tocar los de Rosi ni los de nadie más. NO expone ruta HTTP -- eso no está
 aprobado (ver el reporte de esta parte). `personas` y `preferencias`
@@ -22,25 +23,44 @@ función que la tome prestada.
 
 "DE TIZIANO" SE DECIDE POR UN VALOR EN LA FILA, SIEMPRE CONTRA
 `config.CHAT_ID_DUENO`, SIEMPRE POR LA MISMA PUERTA (`_condicion_de_dueno`,
-abajo) -- las cuatro lecturas la llaman, ninguna arma su propio criterio:
+abajo) -- las lecturas la llaman, ninguna arma su propio criterio:
 
   · `bandeja.chat_id` -- la columna existe en la fila misma.
-  · `notas`/`movimientos` no tienen chat_id propio: se decide por la
-    `bandeja` que los originó (`bandeja_id`). Una fila sin `bandeja_id` NO
-    tiene forma de probar de quién es, así que NUNCA sale -- ver el
-    docstring de `_condicion_de_dueno`.
+  · `notas` no tiene chat_id propio: se decide por la `bandeja` que la
+    originó (`bandeja_id`). Una fila sin `bandeja_id` NO tiene forma de
+    probar de quién es, así que NUNCA sale -- ver el docstring de
+    `_condicion_de_dueno`.
   · `eventos.duenos_chat_id` es un ARRAY (puede tener a Tiziano, a Rosi, a
     los dos, o estar vacío -- "sin dueño", el estado de casi toda cita
-    sincronizada de Google, ver `db/schema.sql`). Para ESTA lectura un
-    array vacío NO cuenta como "de Tiziano": es exactamente lo contrario
-    de lo que hace `despertador._destinatarios_de_tareas` (que trata el
-    array vacío como "de todos", para no dejar un recordatorio sin avisar
-    a nadie) -- acá la pregunta es otra ("¿esto es SUYO?", no "¿a quién le
-    aviso?"), así que la respuesta correcta es otra.
+    sincronizada de Google, ver `db/schema.sql`). SEGÚN EL DISEÑO APROBADO
+    (`DISENO.md` §A.1/§A.2), un array VACÍO sí sale: es "de la casa",
+    compartida por defecto -- MISMO criterio que
+    `despertador._destinatarios_de_tareas` (que trata el array vacío como
+    "de todos"). Un array CON dueños puestos sale solo si incluye a
+    `CHAT_ID_DUENO`: una cita puesta explícitamente SOLO a nombre de Rosi
+    no es de Tiziano, aunque viva en la misma base.
+    (27-sep-2026: la primera versión de esta lectura excluía el array
+    vacío -- medido contra producción con `tools/contar_lectura_de_dueno.py`:
+    125 eventos totales, 11 "de Tiziano", 114 "de otro" -- que no era lo
+    que el diseño aprobado pedía. Corregido para que el array vacío
+    cuente, como dice `DISENO.md`.)
 
-UNA FILA "SIN DUEÑO" NUNCA SALE, en las cuatro: ni una nota/movimiento sin
-`bandeja_id`, ni un evento con `duenos_chat_id = '{}'`. Ausencia de prueba
-de propiedad se trata como "no es de Tiziano", nunca como "sí lo es".
+UNA NOTA O MOVIMIENTO SIN `bandeja_id` NUNCA SALE: no hay forma de probar
+de quién es, y ausencia de prueba se trata como "no es de Tiziano", nunca
+como "sí lo es". Un EVENTO es la excepción declarada arriba: su "sin
+dueño" (array vacío) SÍ cuenta, porque el diseño lo define así, no porque
+se relaje la regla general.
+
+`movimientos` NO tiene lectura en esta parte (ver `_condicion_de_dueno`
+más abajo): medido contra producción con `tools/contar_lectura_de_dueno.py`
+antes de este arreglo, el filtro por `bandeja.chat_id` no distinguía nada
+-- 223 movimientos totales, 220 "de Tiziano", 3 "de otro" -- porque
+`captura/consumos.py:455` guarda TODO correo bancario (de cualquier
+buzón, incluido el de Rosi, ver `config.py` sobre "barrer") con
+`chat_id=config.CHAT_ID_DUENO` en la `bandeja` que lo origina. La fila no
+tiene ningún dato que diga de qué buzón salió, así que no hay manera
+honesta de separar los movimientos de Rosi de los de Tiziano con lo que
+existe hoy.
 """
 from __future__ import annotations
 
@@ -57,17 +77,32 @@ def _condicion_de_dueno(tabla: str) -> str:
     """LA ÚNICA PUERTA: el fragmento SQL que decide "esta fila es de
     Tiziano" para `tabla`. Toma UN parámetro posicional (`CHAT_ID_DUENO`).
 
-    Las cuatro lecturas de este archivo llaman a ESTA función -- ninguna
-    escribe su propio `WHERE chat_id = ...` a mano. Una prueba (`tests/
-    test_lectura_dueno.py::test_las_cuatro_lecturas_usan_la_misma_puerta`)
-    lo exige recorriendo el AST de las cuatro funciones reales.
+    Las lecturas de este archivo llaman a ESTA función -- ninguna escribe
+    su propio `WHERE chat_id = ...` a mano. Una prueba (`tests/
+    test_lectura_dueno.py::test_las_lecturas_pasan_por_leer_de_dueno`) lo
+    exige recorriendo el AST de las funciones reales.
+
+    `movimientos` NO tiene puerta A PROPÓSITO -- no hay lectura de
+    movimientos en esta parte, ver el docstring del módulo. Pedirla acá
+    revienta con `ValueError`, para que quien la necesite se entere del
+    motivo en vez de recibir un WHERE que promete más de lo que cumple.
     """
     if tabla == "bandeja":
         return "chat_id = %s"
-    if tabla in ("notas", "movimientos"):
+    if tabla == "notas":
         return "bandeja_id IN (SELECT id FROM bandeja WHERE chat_id = %s)"
     if tabla == "eventos":
-        return "%s = ANY(duenos_chat_id)"
+        # DISEÑO APROBADO (`DISENO.md` §A.2): array vacío = de la casa,
+        # sale; con dueños puestos, sale solo si incluye a CHAT_ID_DUENO.
+        return "(duenos_chat_id = '{}' OR %s = ANY(duenos_chat_id))"
+    if tabla == "movimientos":
+        raise ValueError(
+            "movimientos no tiene lectura en la parte A: bandeja.chat_id "
+            "no distingue el buzón de origen (captura/consumos.py guarda "
+            "TODO correo bancario con chat_id=CHAT_ID_DUENO, incluido el "
+            "de Rosi) -- no hay dato confiable para decidir de quién es "
+            "un movimiento. Hace falta guardar el buzón de origen en la "
+            "fila antes de poder ofrecer esta lectura.")
     raise ValueError(f"tabla sin puerta de dueño definida: {tabla!r}")
 
 
@@ -121,24 +156,12 @@ async def leer_notas_de_dueno(limite: int = LIMITE_POR_OMISION) -> list[dict]:
         limite=limite)
 
 
-async def leer_movimientos_de_dueno(limite: int = LIMITE_POR_OMISION) -> list[dict]:
-    """Los movimientos de dinero de Tiziano, no borrados (§A.2). Los de
-    Rosi (mismo pipeline bancario, mismo `bandeja_id`, otro `chat_id` en la
-    bandeja que los originó) no salen."""
-    return await _leer_de_dueno(
-        "movimientos",
-        "id, fecha, tipo, monto, moneda, contraparte, categoria, "
-        "referencia, estado",
-        extra_where="borrado_en IS NULL",
-        orden="fecha DESC, id DESC",
-        limite=limite)
-
-
 async def leer_eventos_de_dueno(limite: int = LIMITE_POR_OMISION) -> list[dict]:
-    """Las citas de Tiziano, no borradas (§A.3): las suyas y las que
-    comparte con Rosi (`duenos_chat_id` con los dos). Una cita SOLO de
-    Rosi, o sin dueño puesto todavía, no sale -- ver el docstring del
-    módulo."""
+    """Las citas de Tiziano, no borradas (§A.3): las suyas, las que
+    comparte con Rosi, y las de la casa (`duenos_chat_id` vacío, el estado
+    normal de casi toda cita sincronizada de Google). Una cita puesta
+    EXPLÍCITAMENTE solo a nombre de Rosi no sale -- ver el docstring del
+    módulo y `DISENO.md` §A.1/§A.2."""
     return await _leer_de_dueno(
         "eventos",
         "id, titulo, inicia_en, termina_en, lugar, persona_id, "

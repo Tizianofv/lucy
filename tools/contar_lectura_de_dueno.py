@@ -1,6 +1,8 @@
 """Cuenta, contra la base REAL, cuántas filas trae cada lectura de la
 parte A (`db/lectura_dueno.py`, §A.1-A.3, 27-sep-2026) y cuántas deja
-fuera por ser de otro.
+fuera por ser de otro. `movimientos` no tiene lectura (ver `db/lectura_
+dueno.py`): se sigue contando el total, rotulado "no se lee: sin dueño
+confiable", para que la cifra no desaparezca del reporte de la sala.
 
 SOLO CONTEOS, NUNCA CONTENIDO: no imprime `contenido_raw`, `contraparte`,
 `titulo` ni ningún otro texto de una fila -- solo números. El repo es
@@ -55,11 +57,16 @@ def main() -> int:
             print("-" * 46)
             for tabla in _TABLAS:
                 borrado = " AND borrado_en IS NULL" if _TIENE_BORRADO_EN[tabla] else ""
-                condicion = _condicion_de_dueno(tabla)
-
                 total = conn.execute(
                     f"SELECT count(*) FROM {tabla} WHERE true{borrado}"
                 ).fetchone()[0]
+
+                try:
+                    condicion = _condicion_de_dueno(tabla)
+                except ValueError:
+                    print(f"{tabla:<12} {total:>8}   no se lee: sin dueño confiable")
+                    continue
+
                 de_dueno = conn.execute(
                     f"SELECT count(*) FROM {tabla} WHERE {condicion}{borrado}",
                     (CHAT_ID_DUENO,)
