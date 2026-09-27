@@ -3859,15 +3859,17 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     #
     # 27-sep-2026, rama `trabajo/code-lectura` (§A, parte A del plan de
     # construcción — lectura de solo lo de Tiziano en bandeja/notas/
-    # movimientos/eventos, para Code): 94 → 96 en disco, 53 → 54 EXENTOS
+    # movimientos/eventos, para Code): 94 → 97 en disco, 53 → 54 EXENTOS
     # por `tests/test_lectura_dueno.py` (SQL real contra SQLite para las
-    # cuatro lecturas), 41 → 42 VIGILADOS por `db/lectura_dueno.py`
-    # (nuevo: las cuatro funciones y su única puerta de dueño). Ninguna
-    # migración: no se tocó el esquema.
-    assert medido == {"en disco": 96, "exentos": 54, "vigilados": 42}, (
+    # cuatro lecturas), 41 → 43 VIGILADOS por `db/lectura_dueno.py`
+    # (las cuatro funciones y su única puerta de dueño) y
+    # `tools/contar_lectura_de_dueno.py` (el guion de una vez para la
+    # sala: cuenta contra producción, nunca contenido). Ninguna migración:
+    # no se tocó el esquema.
+    assert medido == {"en disco": 97, "exentos": 54, "vigilados": 43}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "27-sep-2026 (rama code-lectura) era {'en disco': 96, "
-        "'exentos': 54, 'vigilados': 42}. La aserción de fondo —cero "
+        "27-sep-2026 (rama code-lectura) era {'en disco': 97, "
+        "'exentos': 54, 'vigilados': 43}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "
