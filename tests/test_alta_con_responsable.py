@@ -401,6 +401,188 @@ def test_el_alta_sigue_teniendo_un_solo_formulario():
     assert open(ruta, encoding="utf-8").read().count("<form") == 1
 
 
+# ── LA OPCIÓN CORRECTA ES LA ÚNICA MARCADA, en los tres desplegables ─────
+#
+# Hallazgo del testigo sobre a4fd282: al pasar la fila de la tabla y el renglón
+# derivado a la lista única, la lógica de `selected` quedó sin vigilar. Si una
+# persona o Code deja de salir marcada, el navegador manda la PRIMERA opción
+# («sin responsable»), `prev_resp_<id>` dice otra cosa y el siguiente «Guardar
+# los cambios» le borra el responsable a cada tarea. Estas pruebas leen la
+# pantalla como la lee un navegador (una opción marcada; sin ninguna, la
+# primera) y cierran el ciclo: pintar → enviar tal cual → leer la base.
+
+from html.parser import HTMLParser  # noqa: E402
+
+
+class _Formulario(HTMLParser):
+    """Los campos que un navegador enviaría al tocar «Guardar» sin cambiar
+    nada. `campos`: {nombre: valor} tal como viajaría; `marcadas`: {nombre de
+    select: [valores con `selected` escrito en el HTML]}."""
+
+    def __init__(self):
+        super().__init__()
+        self.campos, self.marcadas, self.opciones = {}, {}, {}
+        self._select = None
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "input":
+            tipo = a.get("type", "text")
+            if tipo in ("checkbox", "radio", "submit", "button") or "disabled" in a:
+                return
+            if a.get("name"):
+                self.campos[a["name"]] = a.get("value", "")
+        elif tag == "select":
+            self._select = a.get("name")
+            self.opciones[self._select] = []
+            self.marcadas[self._select] = []
+        elif tag == "option" and self._select is not None:
+            self.opciones[self._select].append(a.get("value", ""))
+            if "selected" in a:
+                self.marcadas[self._select].append(a.get("value", ""))
+
+    def handle_endtag(self, tag):
+        if tag == "select":
+            n = self._select
+            # Lo que manda un navegador: la marcada, o la primera si ninguna.
+            self.campos[n] = (self.marcadas[n][0] if self.marcadas[n]
+                              else self.opciones[n][0])
+            self._select = None
+
+
+def _leer(html):
+    f = _Formulario()
+    f.feed(html)
+    return f
+
+
+class _CursorE(base._Cursor):
+    """La base de mentira del alta, más lo que necesita `db.asignar_responsable`
+    (leer la fila y escribir el responsable) para que guardar de verdad se lea
+    de vuelta desde la base."""
+
+    async def execute(self, sql, params=None):
+        s = " ".join(sql.split())
+        c = self._conn
+        if s.startswith("SELECT id, titulo, estado, vence_en, responsable_chat_id"):
+            c.sql.append((s, params))
+            self._filas = [dict(t) for t in c.tareas
+                           if t["id"] == params[0] and not t.get("borrado_en")]
+            return self
+        if s.startswith("UPDATE tareas SET responsable_chat_id"):
+            c.sql.append((s, params))
+            for t in c.tareas:
+                if t["id"] == params[1]:
+                    t["responsable_chat_id"] = params[0]
+            self._filas = []
+            return self
+        return await super().execute(sql, params)
+
+
+class _ConnE(base._Conn):
+    def cursor(self, row_factory=None):
+        return _CursorE(self)
+
+    async def execute(self, sql, params=None):
+        return await _CursorE(self).execute(sql, params)
+
+
+EXPULSADO = 700000555      # ya no entra al panel y no tiene nombre
+JUBILADA = 700000556       # ya no entra al panel pero SÍ tiene nombre
+
+
+def _fila(id, resp, estado="pendiente"):
+    return {"id": id, "titulo": f"tarea {id}", "estado": estado,
+            "vence_en": None,
+            "creado_en": datetime(2026, 9, 9, tzinfo=timezone.utc),
+            "bandeja_id": 500 + id, "responsable_chat_id": resp,
+            "completado_en": (datetime.now(timezone.utc)
+                              if estado == "hecha" else None),
+            "borrado_en": None}
+
+
+def _mundo():
+    """Una tarea por cada clase de responsable posible, hoy y mañana."""
+    _casa({DUENO: "Zutana", OTRA: "Mengano", JUBILADA: "Jubilada"},
+          permitidos=(DUENO, OTRA))
+    filas = [_fila(1, DUENO), _fila(2, OTRA), _fila(3, config.CHAT_ID_CODE),
+             _fila(4, None), _fila(5, EXPULSADO), _fila(6, JUBILADA),
+             _fila(7, OTRA, "hecha")]
+    return _ConnE(tareas=filas, areas=AREAS)
+
+
+def _pantalla(conn):
+    return base._con_base(conn, lambda: panel.tareas(
+        base._get("/tareas"))).body.decode()
+
+
+def test_la_opcion_correcta_es_la_unica_marcada_en_la_fila_y_en_el_renglon():
+    conn = _mundo()
+    f = _leer(_pantalla(conn))
+    esperado = {1: str(DUENO), 2: str(OTRA), 3: str(config.CHAT_ID_CODE),
+                4: "", 5: str(EXPULSADO), 6: str(JUBILADA), 7: str(OTRA)}
+    for tid, valor in esperado.items():
+        assert f.marcadas[f"resp_{tid}"] == [valor], (
+            f"fila {tid}: marcadas {f.marcadas[f'resp_{tid}']}, esperaba "
+            f"{[valor]}")
+    # El renglón derivado (solo en las pendientes) copia el responsable de la
+    # madre. Quien ya no se puede asignar no se copia: sin marca, que es lo
+    # que hace hoy la pantalla, y el navegador manda «sin responsable».
+    for tid in (1, 2, 3, 4):
+        for n in range(1, panel.MAX_DERIVADAS + 1):
+            assert f.marcadas[f"deriva_resp_{tid}_{n}"] == [esperado[tid]], (
+                f"renglón {tid}/{n}: {f.marcadas[f'deriva_resp_{tid}_{n}']}")
+    for tid in (5, 6):
+        assert f.marcadas[f"deriva_resp_{tid}_1"] == []
+    assert "deriva_resp_7_1" not in f.marcadas, "una hecha no lleva renglón"
+
+
+def test_el_alta_preescogida_marca_solo_la_correcta():
+    _mundo()
+    for parametro, valor in (("Zutana", str(DUENO)), ("Mengano", str(OTRA)),
+                             ("Code", str(config.CHAT_ID_CODE)),
+                             ("_sin", ""), ("", "")):
+        marcadas = _leer(_pintar_alta(responsable=parametro)).marcadas
+        assert marcadas["responsable"] == [valor], (
+            f"?responsable={parametro!r}: {marcadas['responsable']}")
+
+
+def test_guardar_sin_tocar_nada_no_cambia_ningun_responsable_de_punta_a_punta():
+    """Pinta la pantalla, manda el formulario tal como un navegador lo mandaría
+    sin que nadie toque nada, y lee la base: ningún responsable cambió y no se
+    escribió ninguna huella de cambio de responsable."""
+    conn = _mundo()
+    antes = {t["id"]: t["responsable_chat_id"] for t in conn.tareas}
+    f = _leer(_pantalla(conn))
+    assert f.campos["resp_1"] == str(DUENO), "el formulario no manda a Zutana"
+    assert all(f"prev_resp_{i}" in f.campos for i in antes), (
+        "falta el valor previo de alguna fila")
+    r = base._con_base(conn, lambda: panel.guardar_tareas(
+        base._post(dict(f.campos))))
+    assert r.status_code == 303
+    assert "asignadas=0" in r.headers["location"], r.headers["location"]
+    despues = {t["id"]: t["responsable_chat_id"] for t in conn.tareas}
+    assert despues == antes, f"guardar sin tocar cambió: {antes} → {despues}"
+    assert not [q for q, _ in conn.sql if q.startswith("UPDATE tareas")], (
+        "escribió una tarea sin que nadie tocara nada")
+    assert conn.log == [], "dejó una huella sin que nadie cambiara nada"
+
+
+def test_cambiar_un_desplegable_si_se_guarda_de_punta_a_punta():
+    """El contrapeso de la anterior: la prueba de «no cambia nada» no se cumple
+    por no escribir jamás. Tocar UNA fila cambia esa y solo esa."""
+    conn = _mundo()
+    f = _leer(_pantalla(conn))
+    campos = dict(f.campos)
+    campos["resp_4"] = str(OTRA)              # la que estaba sin responsable
+    campos["resp_1"] = ""                     # y a Zutana se la quitamos
+    antes = {t["id"]: t["responsable_chat_id"] for t in conn.tareas}
+    r = base._con_base(conn, lambda: panel.guardar_tareas(base._post(campos)))
+    assert "asignadas=2" in r.headers["location"], r.headers["location"]
+    despues = {t["id"]: t["responsable_chat_id"] for t in conn.tareas}
+    assert despues == {**antes, 4: OTRA, 1: None}, despues
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q"]))
