@@ -268,16 +268,17 @@ aviso de Telegram que ya sonó.</p>
       <input type="hidden" name="prev_resp_{{ t.id }}"
              value="{{ t.responsable_chat_id if t.responsable_chat_id is not none }}">
       <select name="resp_{{ t.id }}">
-        <option value=""
-          {%- if t.responsable_chat_id is none %} selected{% endif %}>sin responsable</option>
-        {% for chat, nombre in personas %}
-        <option value="{{ chat }}"
-          {%- if t.responsable_chat_id == chat %} selected{% endif %}>{{ nombre }}</option>
+        {# LAS OPCIONES SALEN DE `opciones_responsable` (`config.opciones_de_
+           responsable`), la MISMA lista que pinta el alta de /tareas/nueva y
+           el renglón derivado de más abajo: «sin responsable», las personas
+           que entran al panel y Code (26-sep-2026, §2: Code no entra al panel
+           pero sí puede ser responsable). El valor es el chat como texto. #}
+        {% for valor, etiqueta in opciones_responsable %}
+        <option value="{{ valor }}"
+          {%- if (t.responsable_chat_id is none and valor == '')
+                 or (t.responsable_chat_id is not none
+                     and valor == t.responsable_chat_id|string) %} selected{% endif %}>{{ etiqueta }}</option>
         {% endfor %}
-        {# «Code» (26-sep-2026, §2): opción FIJA aparte, no sale de `personas`
-           (esa recorre a quién puede ENTRAR al panel, y Code no entra). #}
-        <option value="{{ chat_id_code }}"
-          {%- if t.responsable_chat_id == chat_id_code %} selected{% endif %}>{{ nombre_code }}</option>
         {% if t.responsable_chat_id is not none
               and t.responsable_chat_id not in asignables %}
         <option value="{{ t.responsable_chat_id }}" selected>
@@ -344,14 +345,12 @@ aviso de Telegram que ya sonó.</p>
         {#- RESPONSABLE: copiado de la tarea que se cierra y editable (P2 del
            diseño, aprobado), mismas opciones que `resp_<id>` acá arriba. #}
         <select name="deriva_resp_{{ t.id }}_{{ n }}" aria-label="Responsable">
-          <option value=""
-            {%- if t.responsable_chat_id is none %} selected{% endif %}>sin responsable</option>
-          {% for chat, nombre in personas %}
-          <option value="{{ chat }}"
-            {%- if t.responsable_chat_id == chat %} selected{% endif %}>{{ nombre }}</option>
+          {% for valor, etiqueta in opciones_responsable %}
+          <option value="{{ valor }}"
+            {%- if (t.responsable_chat_id is none and valor == '')
+                   or (t.responsable_chat_id is not none
+                       and valor == t.responsable_chat_id|string) %} selected{% endif %}>{{ etiqueta }}</option>
           {% endfor %}
-          <option value="{{ chat_id_code }}"
-            {%- if t.responsable_chat_id == chat_id_code %} selected{% endif %}>{{ nombre_code }}</option>
         </select>
         {% if n == 1 and max_derivadas > 1 %}
         <button type="button" class="mas"

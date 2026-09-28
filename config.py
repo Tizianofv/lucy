@@ -200,6 +200,23 @@ def nombres_con_code() -> dict[int, str]:
     return {**NOMBRES_POR_CHAT, CHAT_ID_CODE: NOMBRE_CODE}
 
 
+def opciones_de_responsable() -> tuple[tuple[str, str], ...]:
+    """Las opciones de CUALQUIER desplegable de responsable del panel:
+    `((valor, etiqueta), …)`, con «sin responsable» primero (valor `""`), luego
+    cada persona de `personas_del_panel()` en su orden y por último Code.
+
+    UNA SOLA LISTA PARA TODOS LOS SITIOS que pintan ese desplegable (la fila de
+    la tabla de `/tareas`, el renglón de la tarea derivada y el alta de
+    `/tareas/nueva`), para que no se separen: son los mismos valores que
+    acepta `puede_ser_responsable`, sacados de ahí y no copiados. El valor es
+    el chat como texto (lo que viaja en el formulario) y nunca se pinta como
+    etiqueta.
+    """
+    return ((("", "sin responsable"),)
+            + tuple((str(c), n) for c, n in personas_del_panel())
+            + ((str(CHAT_ID_CODE), NOMBRE_CODE),))
+
+
 # ── LA PUERTA HTTP DE LAS TAREAS DE CODE ──────────────────────────────────
 #
 # Diseño aprobado por Tiziano, 26-sep-2026 (disenos/lucy-code/DISENO.md, §C):

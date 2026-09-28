@@ -3885,10 +3885,16 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # rol aunque su nombre no empiece con `test_`). VIGILADOS sin cambio
     # en 44: se tocaron `db/db.py`, `acciones/crud.py`, ya vigilados de
     # antes.
-    assert medido == {"en disco": 100, "exentos": 56, "vigilados": 44}, (
+    #
+    # 28-sep-2026, rama `trabajo/responsable-146` (tarea 146, responsable al
+    # crear una tarea a mano): 100 → 101 en disco, 56 → 57 EXENTOS por
+    # `tests/test_alta_con_responsable.py` (nuevo). VIGILADOS sin cambio en
+    # 44: se tocaron `config.py`, `db/db.py` y `web/app.py`, ya vigilados de
+    # antes.
+    assert medido == {"en disco": 101, "exentos": 57, "vigilados": 44}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "27-sep-2026 (rama code-duenos) era {'en disco': 100, "
-        "'exentos': 56, 'vigilados': 44}. La aserción de fondo —cero "
+        "28-sep-2026 (rama responsable-146) era {'en disco': 101, "
+        "'exentos': 57, 'vigilados': 44}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

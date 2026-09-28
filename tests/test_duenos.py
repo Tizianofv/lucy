@@ -652,7 +652,8 @@ def test_buscar_o_crear_persona_camino_feliz_no_comitea_antes_de_tiempo():
 def test_crear_tarea_desde_el_panel_camino_feliz_no_comitea_antes_de_tiempo():
     conexion = doble.ConexionPostgresFiel([
         ("INSERT INTO BANDEJA", {"id": 10}),
-        ("INSERT INTO TAREAS (BANDEJA_ID, TITULO, VENCE_EN, ANTICIPOS_MIN, AREA)",
+        ("INSERT INTO TAREAS (BANDEJA_ID, TITULO, VENCE_EN, ANTICIPOS_MIN, AREA, "
+         "RESPONSABLE_CHAT_ID)",
          {"id": 5, "titulo": "x"}),
         ("INSERT INTO LOG_ACCIONES", None),
     ])

@@ -3607,7 +3607,8 @@ SIN_ANTICIPOS: list[int] = []
 
 async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
                                      vence_en: datetime | None,
-                                     area: str | None = None) -> int:
+                                     area: str | None = None,
+                                     responsable_chat_id: int | None = None) -> int:
     """Una tarea escrita a mano en el panel. La cuarta escritura del panel.
 
     QUIÉN LA ANOTÓ NO SE PUEDE MENTIR, y por eso esta función escribe DOS filas
@@ -3622,7 +3623,8 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
     y Tiziano la sacó —«nno es relevante quien la anoto»—. Lo que se ve hoy en
     esa columna es el RESPONSABLE (`tareas.responsable_chat_id`), que es otra
     pregunta: quién la tiene pendiente, no quién la escribió. Una tarea recién
-    escrita a mano nace SIN responsable, como todas.
+    escrita a mano nace SIN responsable salvo que quien la escribe elija uno en
+    el formulario (`responsable_chat_id`, tarea 146 de Tiziano, 28-sep-2026).
 
     O sea que lo que esta fila de `bandeja` sostiene ya no es una columna de la
     pantalla: es la trazabilidad de la fila —de dónde salió— y el `bandeja_id`
@@ -3634,7 +3636,23 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
     `registrar_aviso` mete las del despertador con `origen='despertador'`. Ésta
     es la misma idea con `origen='panel'`. Cero DDL de esta función: la única
     columna que este panel tuvo que agregarle a `tareas` es
-    `responsable_chat_id`, y no la escribe acá — una tarea nace sin responsable.
+    `responsable_chat_id`, que esta función escribe solo si se le pasa uno.
+
+    EL RESPONSABLE (tarea 146): `responsable_chat_id=None` es lo normal y no
+    pasa por ninguna puerta. Si viene un valor, se revalida ACÁ con
+    `config.puede_ser_responsable` --la MISMA puerta que ya pasó la ruta--, antes
+    de abrir la conexión y lanzando `ValueError` (mismo trato que
+    `cerrar_y_derivar`): la validación de un formulario protege al formulario,
+    no a la tabla, y `tests/test_responsable.py` censa que todo sitio que
+    inserte la columna nombre la puerta.
+
+    Y SI EL RESPONSABLE ES CODE, EL ÁREA SE PONE SOLA EN `AREA_TECNICA`, sin mirar
+    la que se haya pedido (decisión de Tiziano, 28-sep-2026): la API de la sala
+    solo ve lo que es de Code Y del área técnica (`tareas_de_code_pendientes`),
+    así que una tarea de Code con otra área nacería invisible para ella. Vive
+    acá, en el escritor, y no en la ruta: cualquier camino que llegue a esta
+    función recibe la misma regla. Quien llama tiene que haber comprobado que
+    esa área existe en `areas()` (la ruta lo hace), porque la FK lo exige.
 
     LA FILA DE BANDEJA VA MUDA, y eso es deliberado. `contenido_raw`,
     `transcripcion` y `respuesta_lucy` quedan NULOS, así que las dos consultas
@@ -3695,6 +3713,12 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
     La acción se registra como 'crear' porque es lo que `deshacer()` sabe
     revertir: su rama de 'crear' hace `SET borrado_en = now()`.
     """
+    if responsable_chat_id is not None:
+        if not puede_ser_responsable(responsable_chat_id):
+            raise ValueError("ese chat no puede ser responsable de una tarea")
+        if responsable_chat_id == CHAT_ID_CODE:
+            area = AREA_TECNICA
+
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
@@ -3717,20 +3741,23 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
         # ella al reintentar.
         con_area = """
             INSERT INTO tareas
-              (bandeja_id, titulo, vence_en, anticipos_min, area)
-            VALUES (%s, %s, %s, %s, %s)
+              (bandeja_id, titulo, vence_en, anticipos_min, area,
+               responsable_chat_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING *
             """
         sin_area = """
             INSERT INTO tareas
-              (bandeja_id, titulo, vence_en, anticipos_min)
-            VALUES (%s, %s, %s, %s)
+              (bandeja_id, titulo, vence_en, anticipos_min,
+               responsable_chat_id)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING *
             """
         try:
             async with conn.transaction():
                 await cur.execute(
-                    con_area, (bandeja_id, titulo, vence_en, SIN_ANTICIPOS, area))
+                    con_area, (bandeja_id, titulo, vence_en, SIN_ANTICIPOS, area,
+                               responsable_chat_id))
                 # RETURNING * y no una fila reconstruida a mano: `despues` tiene
                 # que ser lo que de verdad quedó guardado —con el id, el
                 # creado_en y los defaults que puso Postgres—, no lo que
@@ -3744,7 +3771,8 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
             if sqlstate != "42703":
                 raise
             await cur.execute(
-                sin_area, (bandeja_id, titulo, vence_en, SIN_ANTICIPOS))
+                sin_area, (bandeja_id, titulo, vence_en, SIN_ANTICIPOS,
+                           responsable_chat_id))
             fila = await cur.fetchone()
 
         await conn.execute(

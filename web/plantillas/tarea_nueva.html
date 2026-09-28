@@ -16,6 +16,9 @@ tiene día, o escribe una desde el {{ piso_fecha }} en adelante.</p>
 {% elif error == 'area' %}
 <p class="aviso">Esa área ya no está en la lista. Elige una de las de abajo, o
 déjala en «Sin área».</p>
+{% elif error == 'responsable' %}
+<p class="aviso">Ese responsable no vale. Elige uno de la lista, o déjalo en
+«Sin responsable».</p>
 {% endif %}
 
 {# UN SOLO formulario, igual que en el resto del panel. Sin JavaScript: si el
@@ -52,6 +55,24 @@ déjala en «Sin área».</p>
     </select>
     <br><span class="suave">Opcional. Una tarea sin área se ve igual, con una
     etiqueta gris.</span>
+  </p>
+  <p>
+    <label for="responsable">Responsable</label><br>
+    <select id="responsable" name="responsable">
+      {# La lista sale de `config.opciones_de_responsable()`, la MISMA que
+         pinta cada fila de /tareas: «sin responsable», las personas que entran
+         al panel y Code. Ninguna está escrita acá. El valor es el chat y lo que
+         se lee es el nombre. Viene escogido el que dice `?responsable=` (desde
+         una vista filtrada de /tareas) y, si no dice ninguno, «sin
+         responsable». #}
+      {% for valor, etiqueta in opciones_responsable %}
+      <option value="{{ valor }}"
+        {%- if valor == responsable_elegido %} selected{% endif %}>{{ etiqueta }}</option>
+      {% endfor %}
+    </select>
+    <br><span class="suave">Opcional. Si escoges {{ nombre_code }}, el área
+    queda en «{{ area_tecnica }}» sola, sin mirar la que hayas elegido arriba:
+    es la única que ve la sala de control.</span>
   </p>
   <div class="barra">
     <button>Guardar la tarea</button>

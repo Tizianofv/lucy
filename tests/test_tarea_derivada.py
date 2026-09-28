@@ -763,6 +763,15 @@ def test_de_punta_a_punta_la_pantalla_pinta_sale_de_y_siguio():
     """Se manda el formulario y DESPUÉS se pinta /tareas con la MISMA base,
     igual que test_tarea_a_mano.py::_crear_y_pintar."""
     conn = _Conn([_fila(1, titulo="lavar el carro")])
+    # EL «HOY» DE ESTA PRUEBA ES EL DÍA DE SU RELOJ, NO EL DEL CALENDARIO DE
+    # QUIEN LA CORRE. La base de mentira estampa `completado_en` con
+    # `conn.reloj` (un 25-sep-2026 fijo); el panel esconde en «Historial» lo
+    # cerrado hace `db.DIAS_HISTORIAL` días o más contando desde `db.hoy_rd()`.
+    # Con el reloj real, desde el 28-sep-2026 la madre recién cerrada caía en
+    # Historial y la pantalla no pintaba «→ Siguió». Se fija `hoy_rd` al día del
+    # reloj de la prueba: sigue siendo «cerrada hoy» sin importar cuándo corra.
+    # (El conftest devuelve `db.hoy_rd` a su sitio al terminar la prueba.)
+    db.hoy_rd = lambda: conn.reloj.astimezone(config.TZ).date()
     r = _con_base(conn, lambda: panel.guardar_tareas(_post({
         "prev_1": "pendiente", "hecha_1": "1",
         "deriva_titulo_1_1": "encerar el carro",

@@ -740,6 +740,7 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
          # la pantalla no ofrezca el campo donde la escritura lo rechazaría.
          "pendiente": db.ESTADO_PENDIENTE, "piso_fecha": PISO_FECHA.isoformat(),
          "personas": config.personas_del_panel(),
+         "opciones_responsable": config.opciones_de_responsable(),
          "asignables": [c for c, _ in config.personas_del_panel()]
                        + [config.CHAT_ID_CODE],
          "nombres": config.nombres_con_code(),
@@ -955,6 +956,38 @@ def _responsable_pedido(crudo: str):
     if chat is None:
         return False, None
     return (True, chat) if config.puede_ser_responsable(chat) else (False, None)
+
+
+# Las claves de la URL que NO son un nombre: «sin responsable» y el cubo de
+# los que ya no se pueden asignar y no tienen nombre. Son las MISMAS que va a
+# usar el filtro de la lista (tarea 145); el alta solo las reconoce para no
+# tomarlas por un nombre.
+RESP_SIN = "_sin"
+RESP_OTROS = "_otros"
+
+
+def _responsable_de_la_url(crudo: str):
+    """El chat que dice `?responsable=<nombre>`, o None si no dice ninguno.
+
+    Para PREESCOGER el desplegable del alta (tarea 146, punto 7 de Tiziano:
+    desde una vista filtrada, «+ Agregar tarea» llega con ese responsable).
+    Nunca el chat en la URL: el nombre, tal como está en `config` (las
+    mayúsculas y las tildes no distinguen: la misma lectura que Telegram,
+    `crud._chat_del_nombre`, que además se niega si el nombre es de dos
+    personas). Solo PRESELECCIONA: quien crea puede cambiarlo, y lo que se
+    guarda lo vuelve a decidir `_responsable_pedido` con el valor del
+    desplegable. Y aun aquí se pasa por `config.puede_ser_responsable`: un
+    nombre que resuelve a alguien que ya no puede serlo no se preselecciona.
+    Todo lo demás —vacío, `_sin`, `_otros`, un nombre que no es de nadie o de
+    varios— es «sin responsable», que es como se abre siempre.
+    """
+    crudo = (crudo or "").strip()
+    if not crudo or crudo in (RESP_SIN, RESP_OTROS):
+        return None
+    chat, _motivo = crud._chat_del_nombre(crudo)
+    if chat is None or not config.puede_ser_responsable(chat):
+        return None
+    return chat
 
 
 # Cuántas tareas nuevas se pueden escribir de una vez al marcar UNA sola
@@ -1207,7 +1240,8 @@ async def guardar_tareas(request: Request):
 
 
 @app.get("/tareas/nueva", response_class=HTMLResponse)
-async def tarea_nueva(request: Request, error: str = ""):
+async def tarea_nueva(request: Request, error: str = "",
+                      responsable: str = ""):
     """El formulario para escribir una tarea a mano.
 
     POR QUÉ ES UNA PANTALLA APARTE Y NO UN SEGUNDO FORMULARIO EN /tareas, que
@@ -1237,17 +1271,28 @@ async def tarea_nueva(request: Request, error: str = ""):
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
+    preescogido = _responsable_de_la_url(responsable)
     return plantillas.TemplateResponse(
         request, "tarea_nueva.html",
         {"error": error, "piso_fecha": PISO_FECHA.isoformat(),
-         "largo_titulo": LARGO_TITULO, "areas": await db.areas()})
+         "largo_titulo": LARGO_TITULO, "areas": await db.areas(),
+         # El desplegable de responsable sale de `config.opciones_de_
+         # responsable`, la MISMA lista que pinta la tabla de /tareas. El
+         # preescogido es un chat (o None = «sin responsable») y se compara
+         # como texto, que es lo que viaja en el formulario.
+         "opciones_responsable": config.opciones_de_responsable(),
+         "responsable_elegido": "" if preescogido is None else str(preescogido),
+         "chat_id_code": config.CHAT_ID_CODE,
+         "nombre_code": config.NOMBRE_CODE,
+         "area_tecnica": db.AREA_TECNICA})
 
 
 @app.post("/tareas/nueva")
 async def crear_tarea(request: Request):
     """Escribir una tarea a mano. La cuarta escritura del panel.
 
-    TRES CAMPOS: título, cuándo vence, y —desde el encargo 4— área. La tabla
+    CUATRO CAMPOS: título, cuándo vence, área (desde el encargo 4) y
+    responsable (tarea 146, 28-sep-2026; vacío = sin responsable). La tabla
     tiene prioridad, recurrencia, proyecto, persona y anticipos, y ninguno de
     ésos entra acá — no se pidieron, y `prioridad` está vacía en las 91 filas
     de producción. Un campo que nadie llenó es una decisión inventada
@@ -1305,7 +1350,21 @@ async def crear_tarea(request: Request):
         if area not in claves_validas:
             return _vuelta("area")
 
-    tid = await db.crear_tarea_desde_el_panel(chat, titulo, vence_en, area)
+    # EL RESPONSABLE (tarea 146): por la MISMA puerta que el desplegable de la
+    # tabla. Vacío = sin responsable, válido. Si es Code, el área pasa a ser
+    # `db.AREA_TECNICA` --lo hace `db.crear_tarea_desde_el_panel`, que es quien
+    # escribe--, pero esa área tiene que existir en `db.areas()` o la FK
+    # reventaría en un 500: se rechaza como cualquier otra área que no existe.
+    vale, responsable = _responsable_pedido(
+        str(formulario.get("responsable", "")))
+    if not vale:
+        return _vuelta("responsable")
+    if responsable == config.CHAT_ID_CODE:
+        if db.AREA_TECNICA not in {a["clave"] for a in await db.areas()}:
+            return _vuelta("area")
+
+    tid = await db.crear_tarea_desde_el_panel(
+        chat, titulo, vence_en, area, responsable)
     # Se vuelve A LA LISTA y no al formulario: la tarea recién escrita tiene
     # que VERSE en su grupo. Un "guardado" que no muestra lo guardado obliga a
     # confiar, y este panel existe para no tener que confiar.
