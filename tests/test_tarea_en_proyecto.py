@@ -798,9 +798,9 @@ def test_la_ruta_dice_cual_no_se_cerro_aunque_otras_si():
     estados = {f["id"]: f["estado"] for f in m.filas()}
     assert estados == {mala: "pendiente", b1: "hecha", b2: "hecha"}
     html = _tareas_pantalla(m, guardadas=2, sin_cerrar=q["sin_cerrar"][0])
-    assert f"No se cerró la tarea #{mala}" in html
-    assert "su proyecto está cerrado" in html and "tampoco se creó" in html
-    assert "Sigue pendiente" in html
+    assert f"La tarea #{mala} sigue pendiente y su proyecto está cerrado" in html
+    assert "tampoco se creó" not in html and "escribiste" not in html, (
+        "afirma lo que la base no confirmó: que había una derivada pedida")
 
 
 def _mundo_de_sin_cerrar():
@@ -824,25 +824,26 @@ def _mundo_de_sin_cerrar():
 
 def test_la_pantalla_pluraliza_y_solo_afirma_lo_que_la_base_confirma():
     m = _mundo_de_sin_cerrar()
-    assert "No se cerraron las tareas #3, #9" in _tareas_pantalla(m, sin_cerrar="3,9")
-    assert "Siguen pendientes" in _tareas_pantalla(m, sin_cerrar="3,9")
-    assert "No se cerró la tarea #3:" in _tareas_pantalla(m, sin_cerrar="3")
+    assert "Las tareas #3, #9 siguen pendientes y sus proyectos están cerrados" in \
+        _tareas_pantalla(m, sin_cerrar="3,9")
+    assert "La tarea #3 sigue pendiente y su proyecto está cerrado" in \
+        _tareas_pantalla(m, sin_cerrar="3")
     # Lo que la base NO confirma no se afirma: no existe, activo, hecha,
     # papelera, proyecto archivado.
     for crudo in ("999", "0", "20", "21", "22", "23", "20,21,22,23,999"):
-        assert "No se cerr" not in _tareas_pantalla(m, sin_cerrar=crudo), crudo
+        assert "pendiente" not in _tareas_pantalla(m, sin_cerrar=crudo), crudo
     # Mezcla: solo sale el que vale.
     html = _tareas_pantalla(m, sin_cerrar="999,3,20")
-    assert "No se cerró la tarea #3:" in html and "#999" not in html and "#20" not in html
+    assert "La tarea #3 sigue pendiente" in html and "#999" not in html and "#20" not in html
     # Sin repetidos.
-    assert "No se cerró la tarea #3:" in _tareas_pantalla(m, sin_cerrar="3,3,3")
+    assert "La tarea #3 sigue pendiente" in _tareas_pantalla(m, sin_cerrar="3,3,3")
 
 
 def test_la_pantalla_no_pinta_lo_que_no_es_una_lista_de_ids_ascii():
     m = _mundo_de_sin_cerrar()
     for basura in ("", "x", "1;2", "<b>3</b>", "3,", ",3", "3,,9", "-3", "3e0",
                    "9" * 30, "٣", "٣,٩", "３", "3 ,9", " 3"):
-        assert "No se cerr" not in _tareas_pantalla(m, sin_cerrar=basura), repr(basura)
+        assert "pendiente" not in _tareas_pantalla(m, sin_cerrar=basura), repr(basura)
 
 
 def test_la_pantalla_pone_tope_a_cuantos_ids_mira():
@@ -1157,8 +1158,12 @@ def test_el_no_de_negocio_baja_a_warning_sin_traceback(caplog):
 
 
 def test_los_no_de_negocio_de_crud_son_de_su_clase_y_un_valueerror_suelto_no():
-    """El botón enseña `crud.NoDeNegocio` (y el nombre de proyecto que no vale).
-    Cada «No creé…» que lanza `crear_desde_interpretacion` es de esa clase."""
+    """AYUDA, NO GARANTÍA. Busca en el AST el literal `ValueError` lanzado dentro
+    de `crear_desde_interpretacion`. NO VE un alias (`_VE = ValueError`), una
+    clase creada al vuelo, ni un `raise` dentro de un ayudante que la función
+    llame: es una regla detectada por un literal de texto. La garantía de verdad
+    es de COMPORTAMIENTO y está en las pruebas de abajo que aprietan el botón real
+    con cada «no» de `crear_desde_interpretacion`."""
     fuente = inspect.getsource(crud.crear_desde_interpretacion)
     arbol = ast.parse(textwrap.dedent(fuente))
     planos = [n for n in ast.walk(arbol) if isinstance(n, ast.Raise)
@@ -1168,6 +1173,144 @@ def test_los_no_de_negocio_de_crud_son_de_su_clase_y_un_valueerror_suelto_no():
         f"crear_desde_interpretacion lanza ValueError sueltos: "
         f"{[n.lineno for n in planos]}")
     assert issubclass(crud.NoDeNegocio, ValueError)
+
+
+# ── LA GARANTÍA, POR COMPORTAMIENTO: cada «no» de crear, por el botón real ──
+
+def _con_eventos(m, con_duenos=True):
+    """La tabla `eventos` (solo lo que `crear` cita necesita). Sin
+    `duenos_chat_id` es la base con la migración de «citas con dueño» sin aplicar."""
+    duenos = ", duenos_chat_id" if con_duenos else ""
+    m.con.execute(
+        "CREATE TABLE eventos (id INTEGER PRIMARY KEY, bandeja_id, titulo, "
+        "inicia_en, termina_en, lugar, persona_id, proyecto_id, notas, "
+        f"anticipos_min, borrado_en{duenos})")
+
+
+def _boton_con_no(caplog, m, interpretacion):
+    import logging
+    with caplog.at_level(logging.WARNING, logger="lucy.botones"):
+        q, alertas, estados = _apretar_guardar(m, interpretacion)
+    regs = [r for r in caplog.records if r.name == "lucy.botones"]
+    return q, alertas, estados, regs
+
+
+def _casos_de_no():
+    """(nombre, cómo armar el mundo, interpretación, trozo del motivo que se
+    tiene que ver). Uno por cada `raise NoDeNegocio` de
+    `crud.crear_desde_interpretacion`, más el nombre de proyecto."""
+    def base_(m):
+        return m
+
+    def cerrado(m):
+        m.proyecto("Cerrado", estado="cerrado")
+        return m
+
+    def duplicado_de_otro(m):
+        m.con.execute("INSERT INTO tareas (titulo, responsable_chat_id, estado) "
+                      "VALUES ('Llamar al banco', ?, 'pendiente')", (OTRA,))
+        return m
+
+    def sin_columna_de_duenos(m):
+        _con_eventos(m, con_duenos=False)
+        return m
+
+    def con_eventos(m):
+        _con_eventos(m)
+        return m
+
+    cita = {"clasificacion": "cita", "titulo": "reunión",
+            "cuando": "2030-01-01T10:00:00"}
+    return [
+        ("clasificacion_que_no_crea_nada", base_,
+         {"clasificacion": "otra", "titulo": "x"}, "no crea ninguna entidad"),
+        ("responsable_que_no_vale", base_,
+         {"clasificacion": "tarea", "titulo": "x", "responsable_chat_id": "nadie"},
+         "No creé la tarea"),
+        ("area_que_no_vale", base_,
+         {"clasificacion": "tarea", "titulo": "x", "area": "Marketing"},
+         "No creé la tarea"),
+        ("primero_que_no_existe", base_,
+         {"clasificacion": "tarea", "titulo": "x", "primero_id": 9999},
+         "No creé la tarea"),
+        ("proyecto_cerrado", cerrado,
+         {"clasificacion": "tarea", "titulo": "x", "proyecto": "cerrado"},
+         "ese proyecto está cerrado"),
+        ("nombre_de_proyecto_demasiado_largo", base_,
+         {"clasificacion": "tarea", "titulo": "x", "proyecto": "p" * 201},
+         "200 caracteres"),
+        ("tarea_que_ya_existia_de_otro", duplicado_de_otro,
+         {"clasificacion": "tarea", "titulo": "Llamar al banco",
+          "responsable_chat_id": "Zutana"}, "ya existía"),
+        ("dueno_de_cita_que_no_vale", con_eventos,
+         {**cita, "duenos_chat_id": "nadie"}, "No creé la cita"),
+        ("cita_con_dueno_sin_la_migracion", sin_columna_de_duenos,
+         {**cita, "duenos_chat_id": "Zutana"}, "migración"),
+    ]
+
+
+def test_el_boton_real_dice_el_motivo_de_cada_no_de_crear_a_nivel_warning(caplog):
+    import logging
+    for nombre, armar, interpretacion, trozo in _casos_de_no():
+        caplog.clear()
+        A._casa()
+        m = armar(Mundo())
+        q, alertas, estados, regs = _boton_con_no(caplog, m, interpretacion)
+        assert alertas and trozo in alertas[-1], (nombre, alertas)
+        assert "No pude guardarlo" not in alertas[-1], (
+            f"{nombre}: dio el aviso genérico en vez del motivo")
+        assert estados[-1] == "esperando_confirmacion", nombre
+        assert regs and all(r.levelno == logging.WARNING and not r.exc_info
+                            for r in regs), (nombre, regs)
+        assert "Guardado" not in q.editado.get("texto", ""), nombre
+        assert m.n_tareas() == (1 if nombre == "tarea_que_ya_existia_de_otro" else 0), nombre
+
+
+def test_los_casos_de_no_cubren_cada_raise_de_no_de_negocio_de_crear():
+    """Cada `raise NoDeNegocio(...)` de `crear_desde_interpretacion` (contados en
+    el AST) tiene al menos un caso arriba. No prueba QUÉ raise dispara cada caso
+    (eso lo hace el comportamiento de la prueba de arriba); solo evita que un
+    `raise` nuevo quede sin caso."""
+    arbol = ast.parse(textwrap.dedent(inspect.getsource(crud.crear_desde_interpretacion)))
+    raises = [n for n in ast.walk(arbol) if isinstance(n, ast.Raise)
+              and isinstance(n.exc, ast.Call) and isinstance(n.exc.func, ast.Name)
+              and n.exc.func.id == "NoDeNegocio"]
+    # Los 4 «No creé la tarea: {e}» de responsable, área, «Primero:» y proyecto,
+    # el «ya existía», la clasificación, el dueño de cita y la migración de citas.
+    assert len(raises) == 8, (
+        f"cambió el número de `raise NoDeNegocio` ({len(raises)}): agrega su "
+        f"caso a `_casos_de_no`")
+    assert len(_casos_de_no()) >= len(raises)
+
+
+def test_un_motivo_largo_recorta_el_motivo_y_no_la_promesa():
+    A._casa()
+    m = Mundo()
+    m.proyecto("Activo")
+
+    async def _cerrado_con_motivo_largo(pid):
+        raise db.ProyectoNoAdmiteTareas("cerrado", "x" * 400)
+    guardado = db.proyecto_para_tareas
+    db.proyecto_para_tareas = _cerrado_con_motivo_largo
+    try:
+        _, alertas, _ = _apretar_guardar(m, {"clasificacion": "tarea", "titulo": "x",
+                                             "proyecto": "activo"})
+    finally:
+        db.proyecto_para_tareas = guardado
+    aviso = alertas[-1]
+    assert len(aviso) <= 190, len(aviso)
+    assert aviso.endswith("vuelve a tocar ✅."), "se cortó la promesa"
+    assert "…" in aviso and aviso.startswith("No creé la tarea"), aviso
+    # Sin promesa: el motivo largo se recorta a 190 también.
+    async def _no_existe_largo(pid):
+        raise db.ProyectoNoAdmiteTareas("no_existe", "y" * 400)
+    db.proyecto_para_tareas = _no_existe_largo
+    try:
+        _, alertas, _ = _apretar_guardar(m, {"clasificacion": "tarea", "titulo": "x",
+                                             "proyecto": "activo"})
+    finally:
+        db.proyecto_para_tareas = guardado
+    assert len(alertas[-1]) <= 190 and alertas[-1].endswith("…")
 
 
 if __name__ == "__main__":

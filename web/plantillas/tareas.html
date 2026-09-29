@@ -50,13 +50,16 @@ muestro todas.</p>
 <p class="aviso ok">Tarea creada (#{{ creada }}). Está en su grupo, más abajo.</p>
 {% endif %}
 {% if sin_cerrar %}
-{# Una derivada pedida en una tarea de un proyecto CERRADO: no se cerró la tarea
-   ni se creó la nueva (el proyecto ya no recibe tareas). Se dice CUÁL, porque el
-   «Cerradas N» de abajo solo cuenta las que sí. #}
-<p class="aviso">No se {{ 'cerró la tarea' if sin_cerrar|length == 1 else 'cerraron las tareas' }}
-{% for i in sin_cerrar %}<a href="/tareas/{{ i }}">#{{ i }}</a>{{ ', ' if not loop.last }}{% endfor %}:
-su proyecto está cerrado y no se le agregan tareas, así que tampoco se creó la
-tarea nueva que escribiste. Sigue{{ 'n' if sin_cerrar|length > 1 }} pendiente{{ 's' if sin_cerrar|length > 1 }}.</p>
+{# Una derivada pedida en una tarea de un proyecto CERRADO no se acepta. Se dice
+   CUÁL sigue pendiente, porque el «Cerradas N» de abajo solo cuenta las que sí.
+   LA FRASE DICE SOLO LO QUE LA BASE CONFIRMÓ (`db.tareas_sin_cerrar_por_
+   proyecto_cerrado`): que la tarea sigue pendiente y que su proyecto está
+   cerrado. Que hubiera una derivada pedida en ese envío no se comprueba, así que
+   no se afirma. #}
+<p class="aviso">{{ 'La tarea' if sin_cerrar|length == 1 else 'Las tareas' }}
+{% for i in sin_cerrar %}<a href="/tareas/{{ i }}">#{{ i }}</a>{{ ', ' if not loop.last }}{% endfor %}
+{{ 'sigue pendiente y su proyecto está cerrado: no se le agregan' if sin_cerrar|length == 1 else 'siguen pendientes y sus proyectos están cerrados: no se les agregan' }}
+tareas nuevas.</p>
 {% endif %}
 {% if guardadas %}
 {# El aviso existe por lo mismo que en /sin-clasificar: sin él, el éxito y el

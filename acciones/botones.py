@@ -348,7 +348,13 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                   "vuelve a tocar ✅."
                   if isinstance(causa, db.ProyectoNoAdmiteTareas)
                   and causa.clave == "cerrado" else "")
-        await q.answer(f"{e}{cierre}"[:190], show_alert=True)
+        # El aviso de Telegram se corta a 190 caracteres. Lo que se recorta es
+        # el MOTIVO (con «…»), nunca la promesa del final: una promesa cortada
+        # por la mitad diría algo distinto de lo que es verdad.
+        motivo_texto = str(e)
+        if len(motivo_texto) + len(cierre) > 190:
+            motivo_texto = motivo_texto[:max(190 - len(cierre) - 1, 0)] + "…"
+        await q.answer(f"{motivo_texto}{cierre}"[:190], show_alert=True)
         return
     except Exception:
         await db.cambiar_estado(bandeja_id, "esperando_confirmacion")
