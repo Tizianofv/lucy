@@ -640,6 +640,17 @@ def test_el_escritor_por_su_cuenta_deja_area_nula_con_proyecto_pida_lo_que_pida(
             pid, None, resp), (area, resp)
 
 
+def test_el_escritor_revalida_el_primero_por_su_cuenta():
+    m, pid = _uno()
+    borrada = m.tarea("borrada", borrada=True)
+    antes = m.n_tareas()
+    for primero in (borrada, 9999):
+        e = N._rechazo(m, lambda: db.crear_tarea_desde_el_panel(
+            DUENO, "x", None, proyecto_id=pid, primero_id=primero))
+        assert isinstance(e, ValueError), primero
+    assert m.n_tareas() == antes and m.n_bandeja() == 0
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q"]))
