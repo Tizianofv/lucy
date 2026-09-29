@@ -75,7 +75,13 @@ class _Cur:
         conv = [p.isoformat() if isinstance(p, datetime)
                 else json.dumps(p) if isinstance(p, list) else p
                 for p in (params or ())]
-        self._cur = self._b.con.execute(s, conv)
+        try:
+            self._cur = self._b.con.execute(s, conv)
+        except sqlite3.OperationalError as e:
+            # Lo que Postgres diría de una columna que no existe.
+            if "no column named" in str(e):
+                e.sqlstate = "42703"
+            raise
         return self
 
     def _emular_deshacer(self, sql, params):

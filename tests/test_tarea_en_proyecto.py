@@ -602,6 +602,32 @@ def test_convertir_una_tarea_no_agrega_tareas_a_ningun_proyecto():
     assert m.n_tareas() == antes
 
 
+def test_el_insert_de_respaldo_sin_columna_area_tambien_guarda_todo():
+    """Si `tareas.area` no existe (migración sin aplicar, SQLSTATE 42703) el
+    escritor cae al segundo INSERT: tiene que llevar también el proyecto, el
+    «Primero:», el detalle y la persona (sqlite: la tabla sin `area`)."""
+    A._casa()
+    m = Mundo()
+    m.con.executescript("""
+        DROP TABLE tareas;
+        CREATE TABLE tareas (
+          id INTEGER PRIMARY KEY, bandeja_id, creado_en DEFAULT CURRENT_TIMESTAMP,
+          titulo TEXT NOT NULL, detalle, vence_en, proyecto_id, persona_id,
+          responsable_chat_id INTEGER, estado TEXT NOT NULL DEFAULT 'pendiente',
+          anticipos_min, borrado_en, primero_id);
+    """)
+    pid = m.proyecto("P", area="CDS")
+    ana = m.persona("Ana")
+    otra = m.tarea("otra")
+    tid = N._correr(m, lambda: db.crear_tarea_desde_el_panel(
+        DUENO, "x", None, None, OTRA, proyecto_id=pid, primero_id=otra,
+        detalle="d", persona_id=ana))
+    fila = m.filas()[-1]
+    assert (fila["id"], fila["proyecto_id"], fila["primero_id"], fila["detalle"],
+            fila["persona_id"], fila["responsable_chat_id"]) == (
+        tid, pid, otra, "d", ana, OTRA)
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q"]))
