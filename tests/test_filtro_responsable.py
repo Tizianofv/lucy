@@ -274,6 +274,77 @@ def test_guardar_con_filtro_cambia_solo_lo_que_se_toco():
     assert despues == {**antes, 2: DUENO}, despues
 
 
+# ── Los botones no cambian con el filtro; solo cambia cuál está activo ───
+
+def test_con_cualquier_filtro_los_botones_y_sus_conteos_son_los_de_todas():
+    """Hallazgo del testigo sobre ed0fb79: si los botones se calcularan sobre las
+    filas YA filtradas, en la vista de una persona las demás dirían (0), «Todas»
+    contaría solo las suyas y «Otros» o el que ya no entra desaparecerían. Para
+    cada vista, mismos botones, mismas etiquetas, mismos `n`, mismas claves, y
+    solo cambia cuál está activo."""
+    conn = A._mundo()
+    todas = _botones(_pintar(conn))
+    assert [b[1] for b in todas if b[3]] == ["Todas"]
+    etiquetas = [b[1] for b in todas]
+    assert "Otros" in etiquetas and any("ya no se le puede asignar" in e
+                                        for e in etiquetas), (
+        "el mundo de la prueba no trae los botones difíciles")
+    for clave, ids in ESPERADO.items():
+        vista = _botones(_pintar(conn, clave))
+        assert [b[1] for b in vista] == etiquetas, f"{clave!r}: otras etiquetas"
+        assert [b[2] for b in vista] == [b[2] for b in todas], (
+            f"{clave!r}: los conteos cambiaron con el filtro: "
+            f"{[(b[1], b[2]) for b in vista]}")
+        activos = [i for i, b in enumerate(vista) if b[3]]
+        assert len(activos) == 1, f"{clave!r}: activos {activos}"
+        # Las claves de los que son enlaces no cambian (el activo no es enlace).
+        assert [b[0] for i, b in enumerate(vista) if i != activos[0]] == [
+            b[0] for i, b in enumerate(todas) if i != activos[0]], (
+            f"{clave!r}: cambiaron las claves de los enlaces")
+        if clave:
+            assert vista[activos[0]][2] == len(ids), (
+                f"{clave!r}: el botón activo no cuenta lo que se ve")
+
+
+# ── Un nombre con caracteres que rompen una URL ──────────────────────────
+
+NOMBRE_RARO = "Ána Ñ&Co+#1 x"
+
+
+def _consulta(href):
+    """El valor de `responsable` tal como lo decodifica el servidor al llegar
+    la petición (Starlette usa `parse_qs`: `+` sería un espacio, `%2B` un +)."""
+    from urllib.parse import parse_qs
+    q = href.split("?", 1)[1]
+    return parse_qs(q)["responsable"][0]
+
+
+def test_un_nombre_con_caracteres_especiales_llega_a_su_vista_por_los_tres_caminos():
+    A._casa({DUENO: "Zutana", OTRA: NOMBRE_RARO})
+    conn = base._Conn(tareas=[A._fila(1, OTRA), A._fila(2, DUENO)], areas=A.AREAS)
+    html = _pintar(conn)
+    # 1. El botón.
+    href = next(h for h in re.findall(r'href="(/tareas\?responsable=[^"]*)"', html)
+                if _consulta(h).replace(" ", "") != "" and "Co" in unquote(h))
+    assert _consulta(href) == NOMBRE_RARO, f"el botón dice otro nombre: {href}"
+    vista = _pintar(conn, _consulta(href))
+    assert _ids(vista) == [1], "el botón no lleva a la vista de esa persona"
+    from html import unescape
+    assert [unescape(b[1]) for b in _botones(vista) if b[3]] == [NOMBRE_RARO]
+    assert "Ñ&Co" not in vista, "el nombre salió sin escapar en el HTML"
+    # 2. «+ Agregar tarea» desde esa vista.
+    agregar = re.search(r'href="(/tareas/nueva\?responsable=[^"]*)"', vista).group(1)
+    assert _consulta(agregar) == NOMBRE_RARO
+    assert A._leer(A._pintar_alta(responsable=_consulta(agregar))).marcadas[
+        "responsable"] == [str(OTRA)]
+    # 3. El redirect de guardar.
+    campos = dict(A._leer(vista).campos)
+    loc = _guardar(conn, campos).headers["location"]
+    assert "responsable=" in loc
+    assert _consulta(loc) == NOMBRE_RARO, f"el redirect deformó el nombre: {loc}"
+    assert _ids(_pintar(conn, _consulta(loc))) == [1]
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q"]))
