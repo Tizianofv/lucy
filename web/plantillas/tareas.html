@@ -17,9 +17,32 @@
    (`web/menu.py`), y esta pantalla no cambia lo que Lucy sabe. Sigue estando
    a un clic, igual que /tareas/nueva. #}
 <div class="barra">
-  <a href="/tareas/nueva">+ Agregar tarea</a>
+  {# Desde una vista filtrada, «+ Agregar tarea» llega con ese responsable ya
+     escogido (`/tareas/nueva?responsable=<nombre>`, que el alta revalida). #}
+  <a href="/tareas/nueva{% if filtro %}?responsable={{ filtro|urlencode }}{% endif %}">+ Agregar tarea</a>
   <a href="/tareas/historial">Historial</a>
 </div>
+
+{# LA CLASIFICACIÓN POR RESPONSABLE (tarea 145): botones que son ENLACES y no un
+   formulario, porque esta pantalla tiene UN solo formulario a propósito (tres
+   pruebas lo fijan). Salen de `botones`, que la ruta deriva de quién entra al
+   panel, de Code y de las filas reales: ningún nombre está escrito acá. La
+   clave del enlace es el NOMBRE, nunca el chat. #}
+<p class="barra" id="por-responsable">
+  {% for b in botones %}
+  {% if b.activo %}<strong aria-current="page">{{ b.etiqueta }} ({{ b.n }})</strong>
+  {% else %}<a href="/tareas{% if b.clave %}?responsable={{ b.clave|urlencode }}{% endif %}">{{ b.etiqueta }} ({{ b.n }})</a>
+  {% endif %}
+  {% endfor %}
+</p>
+{% if filtro_aviso %}
+<p class="aviso">No encontré a «{{ filtro_pedido }}» entre los responsables: te
+muestro todas.</p>
+{% endif %}
+{% if filtro %}
+<p class="suave">Viendo: <strong>{{ filtro_etiqueta }}</strong> —
+{{ mostradas }} de {{ total_visibles }}. <a href="/tareas">Ver todas</a></p>
+{% endif %}
 
 {% if creada %}
 {# Se nombra el id de lo que se creó, no un «listo». La tarea está pintada más
@@ -82,7 +105,11 @@ primeras. Nada se perdió, pero no está todo a la vista.</p>
 {% endif %}
 
 {% if not grupos %}
+{% if total_visibles %}
+<p class="vacio">No hay tareas en esta vista.</p>
+{% else %}
 <p class="vacio">No hay ninguna tarea. 👌</p>
+{% endif %}
 {% else %}
 <p class="suave">Una sola lista para los dos. «Atrasada» es por DÍA, no por
 hora: lo que vence hoy más temprano todavía es de hoy.</p>
@@ -97,6 +124,9 @@ aviso de Telegram que ya sonó.</p>
    lo demás que estuviera marcado sin enviar. Marcar diez y guardar una vez es
    la diferencia entre un panel que se usa y uno que no. #}
 <form method="post" action="/tareas">
+  {# El filtro que se está viendo, YA validado por el servidor al pintar, para
+     que guardar vuelva a la misma vista. El servidor lo vuelve a validar. #}
+  <input type="hidden" name="filtro" value="{{ filtro }}">
   <div class="barra">
     <button>Guardar los cambios</button>
     <span class="suave" id="cuenta"></span>

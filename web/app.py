@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import logging
 import re
+from urllib.parse import quote
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -667,7 +668,7 @@ async def papelera(request: Request, restaurado: int = 0):
 @app.get("/tareas", response_class=HTMLResponse)
 async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
                  asignadas: int = 0, movidas: int = 0, derivadas: int = 0,
-                 derivadas_ids: str = ""):
+                 derivadas_ids: str = "", responsable: str = ""):
     """El panel de tareas: lo que hay que hacer, para las dos personas.
 
     UNA SOLA LISTA PARA LOS DOS, por decisión de Tiziano —"está bien que Rosi
@@ -727,10 +728,27 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
         return _fuera(request)
     datos = await db.tareas_por_grupo()
     grupos = [g for g in datos["grupos"] if g["clave"] != "historial"]
+    # EL FILTRO POR RESPONSABLE (tarea 145): se aplica DESPUÉS de repartir y de
+    # descartar el historial, sobre las filas que se iban a pintar, y no toca
+    # SQL. Sin `?responsable=` es exactamente la pantalla de siempre.
+    tipo, chat_f, clave_f, aviso_filtro = _filtro_pedido(responsable)
+    todas_las_filas = [f for g in grupos for f in g["filas"]]
+    botones = _botones_de_responsable(todas_las_filas, clave_f)
+    grupos = [dict(g, filas=[f for f in g["filas"]
+                             if _coincide(f.get("responsable_chat_id"),
+                                          tipo, chat_f)])
+              for g in grupos]
+    grupos = [g for g in grupos if g["filas"]]
+    mostradas = sum(len(g["filas"]) for g in grupos)
+    etiqueta_f = {"": "Todas", RESP_SIN: "Sin responsable",
+                  RESP_OTROS: "Otros"}.get(clave_f, clave_f)
     areas = await db.areas()
     return plantillas.TemplateResponse(
         request, "tareas.html",
         {"grupos": grupos, "hay_mas": datos["hay_mas"],
+         "botones": botones, "filtro": clave_f, "filtro_etiqueta": etiqueta_f,
+         "filtro_aviso": aviso_filtro, "filtro_pedido": (responsable or "").strip(),
+         "total_visibles": len(todas_las_filas), "mostradas": mostradas,
          "guardadas": guardadas, "asignadas": asignadas, "movidas": movidas,
          "derivadas": derivadas, "derivadas_ids": derivadas_ids,
          "max_derivadas": MAX_DERIVADAS, "largo_titulo": LARGO_TITULO,
@@ -990,6 +1008,87 @@ def _responsable_de_la_url(crudo: str):
     return chat
 
 
+def _filtro_pedido(crudo):
+    """Lee `?responsable=` de /tareas (tarea 145). Devuelve
+    `(tipo, chat, clave, aviso)`:
+
+      · `tipo`: "todas", "sin", "otros" o "chat".
+      · `chat`: solo con tipo "chat".
+      · `clave`: cómo se escribe ese filtro en la URL y en el campo oculto del
+        formulario, YA canónica: "" (todas), `RESP_SIN`, `RESP_OTROS` o el
+        NOMBRE tal como está en `config.nombres_con_code()`. Nunca un chat.
+      · `aviso`: True si se pidió un nombre que no es de nadie o es de varios.
+
+    QUIÉN ES UN NOMBRE NO SE DECIDE ACÁ: `crud._chat_del_nombre`, la misma
+    lectura que usa Telegram (ignora mayúsculas y tildes y se niega si el nombre
+    es de más de una persona). Un nombre desconocido o ambiguo NO da una lista
+    vacía: da «todas» y el aviso, para que un enlace viejo nunca deje la
+    pantalla en blanco sin explicar por qué. Es la ÚNICA puerta del filtro: el
+    campo oculto que viaja en el guardado la vuelve a pasar.
+    """
+    crudo = (crudo or "").strip()
+    if not crudo:
+        return "todas", None, "", False
+    if crudo == RESP_SIN:
+        return "sin", None, RESP_SIN, False
+    if crudo == RESP_OTROS:
+        return "otros", None, RESP_OTROS, False
+    chat, _motivo = crud._chat_del_nombre(crudo)
+    if chat is None:
+        return "todas", None, "", True
+    return "chat", chat, config.nombres_con_code()[chat], False
+
+
+def _coincide(resp, tipo, chat) -> bool:
+    """¿Una fila con este `responsable_chat_id` entra en ese filtro?
+
+    LAS TRES CLASES SON UNA PARTICIÓN, y por eso ninguna fila queda sin botón que
+    la muestre: sin responsable (`None`), con NOMBRE (persona, Code o alguien que
+    ya no entra pero conserva nombre) y, lo que queda, sin nombre («otros»).
+    """
+    if tipo == "todas":
+        return True
+    if tipo == "sin":
+        return resp is None
+    if tipo == "otros":
+        return resp is not None and resp not in config.nombres_con_code()
+    return resp == chat
+
+
+def _botones_de_responsable(filas, activa: str):
+    """Los botones de la lista, DERIVADOS de lo real: `[{clave, etiqueta, n,
+    activo}]`. Personas del panel y Code aunque hoy tengan 0, «Sin responsable»
+    siempre, alguien que ya no entra pero tiene tareas y nombre (con su nombre) y
+    «Otros» solo si hay alguna fila sin nombre. Ninguna persona está escrita
+    acá. `n` sale de las MISMAS filas que se pintan y del mismo `_coincide`."""
+    resp = [f.get("responsable_chat_id") for f in filas]
+    nombres = config.nombres_con_code()
+
+    def boton(clave, etiqueta, tipo, chat=None):
+        return {"clave": clave, "etiqueta": etiqueta,
+                "n": sum(1 for r in resp if _coincide(r, tipo, chat)),
+                "activo": clave == activa}
+
+    botones = [boton("", "Todas", "todas")]
+    vistos = set()
+    for chat, nombre in config.personas_del_panel():
+        botones.append(boton(nombre, nombre, "chat", chat))
+        vistos.add(chat)
+    botones.append(boton(config.NOMBRE_CODE, config.NOMBRE_CODE, "chat",
+                         config.CHAT_ID_CODE))
+    vistos.add(config.CHAT_ID_CODE)
+    botones.append(boton(RESP_SIN, "Sin responsable", "sin"))
+    for r in resp:
+        if r is not None and r not in vistos and r in nombres:
+            vistos.add(r)
+            botones.append(boton(
+                nombres[r], f"{nombres[r]} — ya no se le puede asignar",
+                "chat", r))
+    if any(r is not None and r not in nombres for r in resp):
+        botones.append(boton(RESP_OTROS, "Otros", "otros"))
+    return botones
+
+
 # Cuántas tareas nuevas se pueden escribir de una vez al marcar UNA sola
 # hecha («tarea derivada», 25-sep-2026: Tiziano, en el panel /tareas, pidió
 # que al marcar una tarea hecha se pueda escribir ahí mismo la que sale de
@@ -1233,9 +1332,15 @@ async def guardar_tareas(request: Request):
     # diseño aprobado ("Tareas nuevas que salen de otra: 1 (#512)") nombra
     # el número: sin esto, la persona tendría que buscarla en la lista.
     ids_derivadas = ",".join(str(i) for i in hijas_creadas)
+    # EL FILTRO SOBREVIVE AL GUARDADO (tarea 145), pero VUELVE A PASAR por la
+    # misma puerta que lo leyó al pintar (`_filtro_pedido`): lo que viaja en la
+    # URL es la clave CANÓNICA que sale de ahí, nunca el texto crudo del campo.
+    _, _, clave_filtro, _ = _filtro_pedido(str(formulario.get("filtro", "")))
+    filtro_url = f"&responsable={quote(clave_filtro, safe='')}" if clave_filtro else ""
     return RedirectResponse(
         f"/tareas?guardadas={hechas}&asignadas={asignadas}&movidas={movidas}"
-        f"&derivadas={len(hijas_creadas)}&derivadas_ids={ids_derivadas}",
+        f"&derivadas={len(hijas_creadas)}&derivadas_ids={ids_derivadas}"
+        f"{filtro_url}",
         status_code=303)
 
 
