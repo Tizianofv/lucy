@@ -925,6 +925,14 @@ async def _ejecutar_herramienta(
                 motivo=f"Orden de Tiziano (bandeja #{bandeja_id})")
             if despues is None:
                 return "ERROR: ese registro no existe o está archivado."
+            if log_id is None:
+                # `crud.editar` no escribió nada porque lo pedido ya era así
+                # (hoy: el nombre de un proyecto que ya se llama igual). Sin
+                # huella no hay «acción #N» que deshacer, y decir «editado»
+                # sería mentirle a Tiziano: se dice lo que pasó.
+                return ("SIN CAMBIOS: eso ya estaba así, no escribí nada y no "
+                        "hay acción que deshacer. Decíselo a Tiziano tal cual, "
+                        "no digas que lo editaste.")
             nombre_fila = _como_se_llama(despues)
             quien = (f"«{nombre_fila}»" if nombre_fila
                      else f"{tabla} #{int(args.get('id') or 0)}")

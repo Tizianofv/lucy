@@ -1114,13 +1114,16 @@ def nombre_de_proyecto_que_vale(valor) -> str:
     pide la base.
     """
     if valor is None or (isinstance(valor, str) and not valor.strip()):
-        raise NombreDeProyectoNoVale("vacio", "el nombre no puede quedar vacío")
+        raise NombreDeProyectoNoVale(
+            "vacio", "el nombre del proyecto no puede quedar vacío")
     if not isinstance(valor, str):
-        raise NombreDeProyectoNoVale("vacio", "el nombre de un proyecto es un texto")
+        raise NombreDeProyectoNoVale(
+            "vacio", "el nombre del proyecto tiene que ser un texto")
     limpio = valor.strip()
     if len(limpio) > LARGO_NOMBRE_PROYECTO:
         raise NombreDeProyectoNoVale(
-            "largo", f"el nombre no puede pasar de {LARGO_NOMBRE_PROYECTO} caracteres")
+            "largo",
+            f"el nombre del proyecto no puede pasar de {LARGO_NOMBRE_PROYECTO} caracteres")
     return limpio
 
 

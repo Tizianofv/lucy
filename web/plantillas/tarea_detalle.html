@@ -27,6 +27,14 @@
 {% elif error == 'convertir' %}
 <p class="aviso">No se convirtió en proyecto: o ya no está pendiente, o ya
 tiene proyecto.</p>
+{% elif error == 'convertir_repetido' %}
+<p class="aviso">No se convirtió en proyecto: ya hay otro proyecto con ese
+nombre (el título de la tarea). Cambia el título y vuelve a intentar.</p>
+{% elif error == 'convertir_largo' %}
+<p class="aviso">No se convirtió en proyecto: el título de la tarea es demasiado
+largo para ser el nombre de un proyecto.</p>
+{% elif error == 'convertir_vacio' %}
+<p class="aviso">No se convirtió en proyecto: la tarea no tiene título.</p>
 {% endif %}
 
 {# «PRIMERO:» (encargo 6). Si la tarea ESPERA a otra que sigue pendiente, se

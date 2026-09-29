@@ -1276,9 +1276,15 @@ async def editar(
         # MISMA consulta con la que Lucy busca proyectos, se rechaza sin
         # escribir. La propia fila no cuenta (cambiar solo las mayúsculas vale).
         if tabla == "proyectos" and "nombre" in campos:
-            if set(campos) == {"nombre"} and campos["nombre"] == antes["nombre"]:
-                return antes, None
-            if await db.proyecto_vivo_con_nombre(
+            if campos["nombre"] == antes["nombre"]:
+                # El nombre NO CAMBIA: ni se escribe ni se revisa, venga solo
+                # o junto con otros campos (una edición que reenvía el nombre
+                # con el estado no puede rechazarse por un duplicado que ya
+                # estaba). Si era lo único pedido, no hay nada que hacer.
+                del campos["nombre"]
+                if not campos:
+                    return antes, None
+            elif await db.proyecto_vivo_con_nombre(
                     cur, campos["nombre"], excluir_id=registro_id) is not None:
                 raise ValueError(
                     "No cambié nada: ya hay otro proyecto con ese nombre."

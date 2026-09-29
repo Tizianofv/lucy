@@ -47,7 +47,14 @@ import acciones.crud as crud  # noqa: E402
 import cerebro.agente as agente  # noqa: E402
 import web.app as panel  # noqa: E402
 
-LARGO = db.LARGO_NOMBRE_PROYECTO
+# EL 200 DEL DISEÑO, ESCRITO ACÁ A PROPÓSITO y no leído de `db`: si alguien
+# cambiara la constante del código, una prueba que la leyera se movería con
+# ella y seguiría en verde (hallazgo del testigo sobre 2cb3e6d).
+LARGO = 200
+
+
+def test_el_largo_maximo_es_el_200_del_diseno():
+    assert db.LARGO_NOMBRE_PROYECTO == 200
 
 
 # ── Una base sqlite que ejecuta el SQL del repo ──────────────────────────
@@ -555,6 +562,21 @@ def _censo_del_nombre() -> dict:
     return salida
 
 
+def _llamadas(nodo) -> set:
+    """Los nombres de las funciones que un nodo LLAMA (no los que solo
+    menciona): `f(...)` y `x.f(...)`. Una referencia suelta (`_ = f`) no cuenta.
+    FRONTERA DICHA: no ve si la llamada está en una rama que nunca corre
+    (`if False:`); eso lo miden las pruebas de comportamiento de este archivo."""
+    salida = set()
+    for n in ast.walk(nodo):
+        if isinstance(n, ast.Call):
+            if isinstance(n.func, ast.Name):
+                salida.add(n.func.id)
+            elif isinstance(n.func, ast.Attribute):
+                salida.add(n.func.attr)
+    return salida
+
+
 def test_todo_lo_que_escribe_el_nombre_pasa_por_la_puerta_y_la_funcion_unica():
     censo = _censo_del_nombre()
     assert censo["sitios"], "el censo no vio ni un execute: estaría verde sin mirar"
@@ -565,8 +587,10 @@ def test_todo_lo_que_escribe_el_nombre_pasa_por_la_puerta_y_la_funcion_unica():
         assert tr._id_de(fn) in legibles, (
             f"el censo no ve a {tr._id_de(fn)}: dejó de ver")
     sin_puerta = sorted(q for q, f in legibles.items()
-                        if _PUERTA not in tr._nombres_de_codigo(f))
-    assert not sin_puerta, f"escriben el nombre sin la puerta: {sin_puerta}"
+                        if _PUERTA not in _llamadas(f))
+    assert not sin_puerta, (
+        f"escriben el nombre sin LLAMAR a la puerta (nombrarla no basta): "
+        f"{sin_puerta}")
     # Los genéricos: los mismos que ya conoce `test_responsable` (editar y
     # deshacer). Uno nuevo se pone rojo acá hasta que se le dé sonda.
     genericos = set(censo["genericos"])
@@ -581,8 +605,13 @@ def test_todo_lo_que_escribe_el_nombre_pasa_por_la_puerta_y_la_funcion_unica():
                   tr._id_de(crud.editar): censo["genericos"][tr._id_de(crud.editar)],
                   tr._id_de(crud.deshacer): censo["genericos"][tr._id_de(crud.deshacer)]}
     sin_unica = sorted(q for q, f in escritores.items()
-                       if _UNICA not in tr._nombres_de_codigo(f))
-    assert not sin_unica, f"no usan {_UNICA}: {sin_unica}"
+                       if _UNICA not in _llamadas(f))
+    assert not sin_unica, f"no LLAMAN a {_UNICA}: {sin_unica}"
+    # Los genéricos llegan a la puerta por `crud._por_las_puertas`.
+    for fn in (crud.editar, crud.deshacer):
+        assert crud._por_las_puertas.__name__ in _llamadas(
+            censo["genericos"][tr._id_de(fn)]), (
+            f"{fn.__name__} no llama a _por_las_puertas")
 
 
 def test_la_puerta_de_crud_es_la_funcion_del_nombre_y_no_otra_copia():
@@ -599,6 +628,155 @@ def test_la_funcion_del_nombre_con_entradas_inventadas():
             assert e.clave in ("vacio", "largo")
         else:
             raise AssertionError(f"aceptó {malo!r}")
+
+
+# ── H3: el duplicado solo se revisa si el nombre CAMBIA ──────────────────
+
+def test_reenviar_el_mismo_nombre_con_otro_campo_no_se_rechaza_por_un_duplicado_viejo():
+    """Caso del testigo: «Dup» y «dup» ya estaban vivos (de antes de la regla).
+    Editar «Dup» pidiendo el nombre que ya tiene MÁS otro campo: el nombre no
+    cambia, así que ni se escribe ni se revisa; el otro campo sí se guarda."""
+    b = Base()
+    a = b.proyecto("Dup")
+    b.proyecto("dup")
+    despues, log_id = _correr(b, lambda: crud.editar(
+        "proyectos", a, {"nombre": "Dup", "estado": "pausado"}, motivo="x"))
+    assert log_id is not None, "rechazó o no escribió el otro campo"
+    assert b.updates() == ["UPDATE proyectos SET estado = %s WHERE id = %s"], (
+        f"tocó el nombre sin que cambiara: {b.updates()}")
+    assert b.con.execute("SELECT estado FROM proyectos WHERE id=?",
+                         (a,)).fetchone()[0] == "pausado"
+    assert b.nombre_de(a) == "Dup"
+
+
+def test_cambiar_el_nombre_a_un_duplicado_junto_con_otro_campo_si_se_rechaza():
+    b = Base()
+    a = b.proyecto("Uno")
+    b.proyecto("Otro")
+    e = _rechazo(b, lambda: crud.editar(
+        "proyectos", a, {"nombre": "otro", "estado": "pausado"}, motivo="x"))
+    assert isinstance(e, ValueError)
+    assert b.updates() == [] and b.nombre_de(a) == "Uno"
+    assert b.con.execute("SELECT estado FROM proyectos WHERE id=?",
+                         (a,)).fetchone()[0] == "activo", "escribió a medias"
+
+
+# ── H2: lo que le dice el agente de Telegram a Lucy ──────────────────────
+
+def _herramienta(b, nombre, args):
+    acciones: list = []
+    resultado = _correr(b, lambda: agente._ejecutar_herramienta(
+        nombre, args, 1, acciones))
+    return resultado, acciones
+
+
+def test_el_agente_no_dice_editado_cuando_no_se_escribio_nada():
+    b = Base()
+    p = b.proyecto("Casa")
+    r, acciones = _herramienta(b, "editar", {
+        "tabla": "proyectos", "id": p, "cambios": {"nombre": "Casa"}})
+    assert r.startswith("SIN CAMBIOS"), r
+    assert "#None" not in r and not r.startswith("OK"), r
+    assert acciones == [], "anotó una acción que no existe"
+    assert b.updates() == [] and b.huellas() == []
+
+
+def test_el_agente_si_confirma_una_edicion_que_de_verdad_escribio():
+    b = Base()
+    p = b.proyecto("Casa")
+    r, acciones = _herramienta(b, "editar", {
+        "tabla": "proyectos", "id": p, "cambios": {"nombre": "Casa nueva"}})
+    assert re.match(r"OK: editado \(acción #\d+, reversible\)\.", r), r
+    assert len(acciones) == 1 and acciones[0]["log_id"] > 0
+
+
+def test_ninguna_herramienta_del_agente_devuelve_accion_none():
+    """Las hermanas que arman «acción #{log_id}»: se corren las que pueden
+    terminar sin escribir. Ninguna puede decir «#None»."""
+    b = Base()
+    p = b.proyecto("Casa")
+    casos = [
+        ("editar", {"tabla": "proyectos", "id": p, "cambios": {"nombre": "Casa"}}),
+        ("editar", {"tabla": "proyectos", "id": 9999, "cambios": {"nombre": "X"}}),
+        ("archivar", {"tabla": "proyectos", "id": 9999}),
+        ("perfil", {"tipo": "proyecto", "nombre": "Casa"}),
+    ]
+    for herramienta, args in casos:
+        r, _ = _herramienta(b, herramienta, args)
+        assert "#None" not in r, f"{herramienta} {args}: {r}"
+
+
+# ── H1: convertir una tarea en proyecto dice su motivo REAL ──────────────
+
+def _convertir(b, tid):
+    return _correr(b, lambda: panel.convertir_en_proyecto(base._post({}, True), tid))
+
+
+def test_convertir_rechazado_por_el_nombre_dice_el_motivo_real_no_el_de_siempre():
+    casos = [("PROYECTO YA HECHO", "convertir_repetido"),
+             ("t" * (LARGO + 1), "convertir_largo")]
+    for titulo, clave in casos:
+        b = Base()
+        b.proyecto("Proyecto Ya Hecho")
+        b.con.execute("INSERT INTO tareas (id, titulo, bandeja_id) VALUES (7, ?, 1)",
+                      (titulo,))
+        r = _convertir(b, 7)
+        assert r.headers["location"] == f"/tareas/7?error={clave}", (
+            f"{clave}: {r.headers['location']}")
+    # Y lo que de verdad es «no califica» sigue con su clave de siempre.
+    b = Base()
+    b.con.execute("INSERT INTO tareas (id, titulo, estado, bandeja_id) "
+                  "VALUES (8, 'algo', 'hecha', 1)")
+    assert _convertir(b, 8).headers["location"] == "/tareas/8?error=convertir"
+
+
+def test_cada_motivo_que_la_puerta_puede_dar_tiene_su_mensaje_en_la_pantalla():
+    """Las claves de rechazo salen del CÓDIGO (las que pasa `db.py` a
+    `NombreDeProyectoNoVale`), no de una lista escrita acá; cada una tiene su
+    propio aviso en el detalle de la tarea, distinto del genérico."""
+    fuente = Path(base.RAIZ, "db", "db.py").read_text(encoding="utf-8")
+    claves = set()
+    for n in ast.walk(ast.parse(fuente)):
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                and n.func.id == "NombreDeProyectoNoVale"
+                and isinstance(n.args[0], ast.Constant)):
+            claves.add(n.args[0].value)
+    assert claves >= {"vacio", "largo", "repetido"}, claves
+    plantilla = Path(base.RAIZ, "web", "plantillas",
+                     "tarea_detalle.html").read_text(encoding="utf-8")
+    mensajes = {}
+    for clave in claves:
+        m = re.search(r"error == 'convertir_%s' %%\}\s*<p class=\"aviso\">(.*?)</p>"
+                      % clave, plantilla, re.S)
+        assert m, f"convertir_{clave} no tiene aviso en tarea_detalle.html"
+        mensajes[clave] = " ".join(m.group(1).split())
+    generico = re.search(r"error == 'convertir' %\}\s*<p class=\"aviso\">(.*?)</p>",
+                         plantilla, re.S).group(1)
+    assert len(set(mensajes.values())) == len(mensajes), "avisos repetidos"
+    assert " ".join(generico.split()) not in mensajes.values()
+    assert "ya hay otro proyecto" in mensajes["repetido"]
+
+
+# ── El mensaje dice que el problema es el NOMBRE DEL PROYECTO ────────────
+
+def test_todo_rechazo_del_nombre_dice_que_es_el_nombre_del_proyecto():
+    largo = "n" * (LARGO + 1)
+    b = Base()
+    b.proyecto("Casa")
+    p = b.proyecto("Otra")
+    mensajes = [
+        str(_rechazo(b, _editar(p, largo))),
+        str(_rechazo(b, _editar(p, ""))),
+        str(_rechazo(b, _editar(p, "casa"))),
+        str(_rechazo(b, lambda: db.buscar_o_crear_proyecto(largo))),
+        str(_rechazo(b, lambda: crud.perfil("proyecto", largo, nota="x"))),
+    ]
+    for m in mensajes:
+        assert "proyecto" in m.lower(), f"el mensaje no dice que es el proyecto: {m}"
+    # Por la herramienta de Telegram, tal como lo lee Lucy.
+    r, _ = _herramienta(b, "editar", {
+        "tabla": "proyectos", "id": p, "cambios": {"nombre": largo}})
+    assert r.startswith("ERROR") and "nombre del proyecto" in r, r
 
 
 if __name__ == "__main__":

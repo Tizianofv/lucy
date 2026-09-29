@@ -978,6 +978,14 @@ async def convertir_en_proyecto(request: Request, tid: int):
         return _fuera(request)
     try:
         resultado = await db.convertir_tarea_en_proyecto(tid)
+    except db.NombreDeProyectoNoVale as e:
+        # El título de la tarea no puede ser el nombre de un proyecto: el motivo
+        # REAL (repetido, vacío, largo) viaja como clave, no el «no califica»
+        # de abajo, que sería una causa falsa.
+        log.warning("Panel de tareas: no se convirtió #%s en proyecto (%s)",
+                    tid, e.clave)
+        return RedirectResponse(
+            f"/tareas/{tid}?error=convertir_{e.clave}", status_code=303)
     except ValueError as e:
         log.warning("Panel de tareas: no se convirtió #%s en proyecto: %s", tid, e)
         return RedirectResponse(f"/tareas/{tid}?error=convertir", status_code=303)
