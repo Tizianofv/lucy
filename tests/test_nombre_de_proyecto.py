@@ -984,9 +984,9 @@ def test_los_textos_que_lee_tiziano_no_usan_voseo():
     despertador y las marcas `MARCA_*`, que el candado compara por texto) quedan
     fuera a propósito: reescribirlas cambia cómo trabaja el modelo."""
     formas = re.compile(
-        r"\b(?:decíselo|Decíselo|Pedile|Pídele|tocá|mandámelo|probá|decímelo|"
-        r"buscalas|avisale|movés|decís|preguntáselo|elegí|respondé|usá|buscá|"
-        r"tenés|Elegí|Respondé|Buscá|Avisale)\b".replace("Pídele|", ""))
+        r"\b(?:decíselo|pedile|tocá|mandámelo|probá|decímelo|buscalas|avisale|"
+        r"movés|decís|preguntáselo|elegí|respondé|usá|buscá|tenés)\b",
+        re.IGNORECASE)
     for archivo in ("acciones/botones.py", "acciones/crud.py",
                     "cerebro/agente.py", "cerebro/despertador.py"):
         arbol = ast.parse(Path(base.RAIZ, archivo).read_text(encoding="utf-8"))
