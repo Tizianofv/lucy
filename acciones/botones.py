@@ -261,7 +261,11 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             else:
                 despues, log_id = await crud.editar(
                     plan["tabla"], registro_id, plan.get("cambios") or {}, motivo)
-                remate = ("✅ <b>Hecho</b>" if despues else "⚠️ Ya no estaba ahí")
+                # Sin huella (`log_id` None) `editar` no escribió nada porque ya
+                # estaba así: no se dice «Hecho» de algo que no se hizo.
+                remate = ("✅ <b>Hecho</b>" if log_id else
+                          "ℹ️ <b>Ya estaba así: no cambié nada</b>" if despues
+                          else "⚠️ Ya no estaba ahí")
         except Exception as e:
             await db.cambiar_estado(bandeja_id, "esperando_confirmacion")
             log.exception("Fallo aplicando la orden de #%s", bandeja_id)

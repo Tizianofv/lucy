@@ -673,8 +673,8 @@ async def _avisar_choques(evento_id: int) -> str:
 #     prompt de TODOS los mensajes futuros. Un solo correo dejaría una instrucción para
 #     siempre, y esa sobrevive a que alguien note el problema.
 # `crear` y `editar` siguen abiertas a propósito: el propio encargo de la mañana le pide
-# a Lucy que cree la tarea cuando el correo la pide claramente («Creale la tarea cuando
-# esté claro y decíselo»). Cerrarlas rompería lo que el reporte existe para hacer, y son
+# a Lucy que cree la tarea cuando el correo la pide claramente y que se lo diga.
+# Cerrarlas rompería lo que el reporte existe para hacer, y son
 # reversibles y VISIBLES — aparecen en el mensaje que él lee esa misma mañana.
 CANALES_DE_TIZIANO = ("texto", "audio", "foto")
 SOLO_A_MANO = ("archivar", "preferencia")
@@ -893,7 +893,7 @@ async def _ejecutar_herramienta(
         log.warning("#%s: %s BLOQUEADA — el turno vino de '%s', no de Tiziano",
                     bandeja_id, nombre, tipo_entrada)
         return (f"ERROR: no puedo usar '{nombre}' en un turno automático (este vino de "
-                f"'{tipo_entrada}', no de un mensaje suyo). Si hace falta, decíselo a "
+                f"'{tipo_entrada}', no de un mensaje suyo). Si hace falta, díselo a "
                 "Tiziano y que te lo pida él.")
     try:
         if nombre == "consultar":
@@ -931,7 +931,7 @@ async def _ejecutar_herramienta(
                 # huella no hay «acción #N» que deshacer, y decir «editado»
                 # sería mentirle a Tiziano: se dice lo que pasó.
                 return ("SIN CAMBIOS: eso ya estaba así, no escribí nada y no "
-                        "hay acción que deshacer. Decíselo a Tiziano tal cual, "
+                        "hay acción que deshacer. Díselo a Tiziano tal cual, "
                         "no digas que lo editaste.")
             nombre_fila = _como_se_llama(despues)
             quien = (f"«{nombre_fila}»" if nombre_fila
@@ -957,9 +957,16 @@ async def _ejecutar_herramienta(
             # diría a Tiziano que se guardó un área que no se guardó.
             columnas_que_pueden_diferir = (
                 set(con_puerta) | ({"area"} if tabla == "tareas" else set()))
+            #   Y SOLO SE CUENTA LO QUE DE VERDAD SE ESCRIBIÓ: `crud.editar`
+            # marca en su fila (`FilaEditada.escritas`) las columnas que tocó el
+            # UPDATE. Un nombre de proyecto que ya era ese, reenviado junto con
+            # otro campo, no se escribe, y el parte no puede decir que sí.
+            escritas = (despues.escritas if isinstance(despues, crud.FilaEditada)
+                        else None)
             escrito = {k: (despues.get(k) if k in columnas_que_pueden_diferir
                           else v)
-                       for k, v in cambios.items()}
+                       for k, v in cambios.items()
+                       if escritas is None or k in escritas}
             _anotar(acciones, log_id,
                     f"{quien} → {_resumen_cambios(escrito)}")
             resultado = f"OK: editado (acción #{log_id}, reversible)."
@@ -972,7 +979,7 @@ async def _ejecutar_herramienta(
         if nombre == "archivar":
             if not ARCHIVAR_HABILITADO:
                 return ("ERROR: Tiziano todavía no habilitó archivar/borrar. "
-                        "Decíselo: si él quiere, se enciende con una línea.")
+                        "Díselo: si él quiere, se enciende con una línea.")
             log_id = await crud.borrar(
                 str(args.get("tabla") or ""), int(args.get("id") or 0),
                 motivo=f"Orden de Tiziano (bandeja #{bandeja_id})")
@@ -1055,7 +1062,7 @@ async def _ejecutar_herramienta(
         if nombre == "buscar_lugar":
             cands = await viaje.buscar_lugares(str(args.get("texto") or ""))
             if not cands:
-                return ("No encontré ese lugar. Pedile más detalle (sector, "
+                return ("No encontré ese lugar. Pídele más detalle (sector, "
                         "avenida) o que comparta la ubicación.")
             return json.dumps(cands, ensure_ascii=False)
 

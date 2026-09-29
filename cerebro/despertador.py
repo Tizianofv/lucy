@@ -654,7 +654,7 @@ ENCARGO_SEMANAL = (
     "de tareas, y lo que reubicaste YA INTEGRADO como parte del plan — sin "
     "decir 'esto quedó de la semana pasada' ni rendirle cuentas del pasado. "
     "Tono de plan, no de informe. Si la semana está vacía de esas tareas, "
-    "decíselo en una línea y listo."
+    "díselo en una línea y listo."
 )
 
 

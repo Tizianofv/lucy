@@ -1183,6 +1183,13 @@ def _adaptar(v):
     return v
 
 
+class FilaEditada(dict):
+    """La fila que devuelve `editar`, con `escritas`: las columnas que el UPDATE
+    de verdad escribió (puede ser menos de las pedidas: un nombre que ya era ese
+    no se escribe). Es un `dict` más; quien no la mire la usa como siempre."""
+    escritas: frozenset = frozenset()
+
+
 async def editar(
     tabla: str, registro_id: int, cambios: dict, motivo: str,
     *, actor: str = "lucy",
@@ -1457,6 +1464,8 @@ async def editar(
         await db.aprender_categoria(
             normalizar_comercio(antes["contraparte"]), campos["categoria"])
 
+    despues = FilaEditada(despues)
+    despues.escritas = frozenset(campos)
     return despues, log_id
 
 

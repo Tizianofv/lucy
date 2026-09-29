@@ -690,9 +690,40 @@ def test_el_agente_si_confirma_una_edicion_que_de_verdad_escribio():
     assert len(acciones) == 1 and acciones[0]["log_id"] > 0
 
 
+def _herramientas_que_arman_accion() -> set:
+    """Las herramientas de `agente._ejecutar_herramienta` cuyo resultado dice
+    «acción #{...}»: SALEN DEL AST del código, no de una lista escrita acá."""
+    import inspect
+    import textwrap
+    arbol = ast.parse(textwrap.dedent(inspect.getsource(agente._ejecutar_herramienta)))
+    salida = set()
+    for n in ast.walk(arbol):
+        if (isinstance(n, ast.If) and isinstance(n.test, ast.Compare)
+                and isinstance(n.test.left, ast.Name) and n.test.left.id == "nombre"
+                and isinstance(n.test.comparators[0], ast.Constant)):
+            textos = [c.value for j in ast.walk(n) if isinstance(j, ast.JoinedStr)
+                      for c in j.values if isinstance(c, ast.Constant)]
+            if any("acción #" in t for t in textos):
+                salida.add(n.test.comparators[0].value)
+    return salida
+
+
+# Herramientas que dicen «acción #N» y que esta prueba NO corre, con la razón.
+# FRONTERA DICHA: una herramienta NUEVA con «acción #» que no esté ni probada
+# abajo ni declarada acá pone roja la prueba hasta que alguien decida cuál de
+# las dos cosas es.
+_SIN_CASO_PORQUE = {
+    "crear": "su log_id sale de `crud.crear_desde_interpretacion`, que siempre "
+             "escribe (o ya devolvió el de la fila existente): nunca None",
+    "preferencia": "`crud.guardar_preferencia` siempre escribe y devuelve su "
+                   "huella; la rama de olvidar ya devuelve ERROR si es None",
+}
+
+
 def test_ninguna_herramienta_del_agente_devuelve_accion_none():
-    """Las hermanas que arman «acción #{log_id}»: se corren las que pueden
-    terminar sin escribir. Ninguna puede decir «#None»."""
+    """Las herramientas que arman «acción #{log_id}» salen del código: cada una
+    o se corre acá con un caso que puede terminar sin escribir, o está declarada
+    con su razón. Ninguna respuesta puede decir «#None»."""
     b = Base()
     p = b.proyecto("Casa")
     casos = [
@@ -701,9 +732,43 @@ def test_ninguna_herramienta_del_agente_devuelve_accion_none():
         ("archivar", {"tabla": "proyectos", "id": 9999}),
         ("perfil", {"tipo": "proyecto", "nombre": "Casa"}),
     ]
+    probadas = {h for h, _ in casos}
+    reales = _herramientas_que_arman_accion()
+    assert reales, "el AST no encontró ninguna herramienta con «acción #»: dejó de ver"
+    sin_cubrir = reales - probadas - set(_SIN_CASO_PORQUE)
+    assert not sin_cubrir, (
+        f"herramientas con «acción #» sin caso ni razón declarada: "
+        f"{sorted(sin_cubrir)}")
     for herramienta, args in casos:
         r, _ = _herramienta(b, herramienta, args)
         assert "#None" not in r, f"{herramienta} {args}: {r}"
+
+
+def test_el_parte_de_lo_editado_no_cuenta_lo_que_no_se_escribio():
+    """Tiziano ve `«Casa» → estado=pausado`, no `nombre=Casa, estado=pausado`: el
+    nombre no cambió y no se escribió."""
+    b = Base()
+    p = b.proyecto("Casa")
+    r, acciones = _herramienta(b, "editar", {
+        "tabla": "proyectos", "id": p,
+        "cambios": {"nombre": "Casa", "estado": "pausado"}})
+    assert r.startswith("OK: editado"), r
+    que = acciones[0]["que"]
+    assert "estado" in que and "nombre" not in que, que
+    assert b.updates() == ["UPDATE proyectos SET estado = %s WHERE id = %s"]
+    # Y si el nombre SÍ cambia, se cuenta.
+    r, acciones = _herramienta(b, "editar", {
+        "tabla": "proyectos", "id": p, "cambios": {"nombre": "Casa 2"}})
+    assert "nombre" in acciones[0]["que"]
+
+
+def test_el_boton_de_confirmar_no_dice_hecho_si_editar_no_escribio():
+    import inspect
+    from acciones import botones
+    fuente = inspect.getsource(botones)
+    trozo = fuente[fuente.index("despues, log_id = await crud.editar("):][:900]
+    assert "log_id" in trozo.split("remate")[1].split("except")[0], (
+        "el «Hecho» del botón no mira el log_id real")
 
 
 # ── H1: convertir una tarea en proyecto dice su motivo REAL ──────────────
@@ -777,6 +842,64 @@ def test_todo_rechazo_del_nombre_dice_que_es_el_nombre_del_proyecto():
     r, _ = _herramienta(b, "editar", {
         "tabla": "proyectos", "id": p, "cambios": {"nombre": largo}})
     assert r.startswith("ERROR") and "nombre del proyecto" in r, r
+
+
+# ── H5: se USA lo que devuelve la puerta (espacios en los bordes) ────────
+
+def test_titulos_con_espacios_en_los_bordes_se_limpian_y_su_duplicado_se_detecta():
+    # Convertir una tarea cuyo título trae espacios: choca con «Casa» existente.
+    b = Base()
+    b.proyecto("Casa")
+    b.con.execute("INSERT INTO tareas (id, titulo, bandeja_id) VALUES (7, '  Casa ', 1)")
+    e = _rechazo(b, lambda: db.convertir_tarea_en_proyecto(7))
+    assert isinstance(e, db.NombreDeProyectoNoVale) and e.clave == "repetido", (
+        "convertir dejó pasar un duplicado con espacios")
+    assert b.nombres_vivos() == ["Casa"]
+    # Sin choque: el proyecto nace con el nombre LIMPIO.
+    b = Base()
+    b.con.execute("INSERT INTO tareas (id, titulo, bandeja_id) VALUES (7, '  Nuevo  ', 1)")
+    res = _correr(b, lambda: db.convertir_tarea_en_proyecto(7))
+    assert res["proyecto_nombre"] == "Nuevo"
+    assert b.nombres_vivos() == ["Nuevo"]
+    assert json.loads(b.con.execute(
+        "SELECT despues FROM log_acciones WHERE tabla='proyectos'").fetchone()[0]
+    )["nombre"] == "Nuevo"
+
+
+def test_lucy_y_el_perfil_encuentran_y_crean_con_el_nombre_limpio():
+    b = Base()
+    pid = b.proyecto("Casa")
+    assert _correr(b, lambda: db.buscar_o_crear_proyecto("  Casa ")) == pid
+    r = _correr(b, lambda: crud.perfil("proyecto", "  CASA ", nota="x"))
+    assert "actualizado" in r[0]
+    assert b.nombres_vivos() == ["Casa"], "creó un duplicado con espacios"
+    _correr(b, lambda: db.buscar_o_crear_proyecto("  Otro  "))
+    _correr(b, lambda: crud.perfil("proyecto", "   Tercero ", nota="x"))
+    assert b.nombres_vivos() == ["Casa", "Otro", "Tercero"], b.nombres_vivos()
+
+
+def test_renombrar_con_espacios_choca_con_el_duplicado_y_guarda_limpio():
+    b = Base()
+    pid = b.proyecto("Uno")
+    b.proyecto("Casa")
+    e = _rechazo(b, _editar(pid, "  CASA "))
+    assert isinstance(e, ValueError) and b.nombre_de(pid) == "Uno"
+    _correr(b, _editar(pid, "  Libre  "))
+    assert b.nombre_de(pid) == "Libre"
+
+
+def test_los_textos_que_lee_tiziano_no_usan_voseo():
+    """La casa habla de tú. FRONTERA DICHA: mira las formas que se corrigieron
+    (`decíselo`, `Pedile`) en los textos de `cerebro/agente.py` y
+    `cerebro/despertador.py`; no es un detector general de voseo, y el texto
+    del PROMPT de las herramientas (`HERRAMIENTAS`) queda fuera a propósito."""
+    formas = re.compile(r"\b(?:decíselo|Decíselo|Pedile)\b")
+    for archivo in ("cerebro/agente.py", "cerebro/despertador.py"):
+        arbol = ast.parse(Path(base.RAIZ, archivo).read_text(encoding="utf-8"))
+        for n in ast.walk(arbol):
+            if isinstance(n, ast.Constant) and isinstance(n.value, str):
+                m = formas.search(n.value)
+                assert not m, f"{archivo}:{n.lineno}: voseo «{m.group(0)}»"
 
 
 if __name__ == "__main__":
