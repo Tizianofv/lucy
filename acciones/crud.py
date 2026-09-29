@@ -1147,8 +1147,15 @@ async def crear_pasos(
     return creados
 
 
+# `proyectos.nombre` (pieza 1 del diseño «proyectos», 29-sep-2026): la parte de
+# la regla que no necesita la base --sin espacios de alrededor, no vacío, a lo
+# sumo `db.LARGO_NOMBRE_PROYECTO`-- es `db.nombre_de_proyecto_que_vale`, la misma
+# función que llaman los demás escritores del nombre. Que no haya OTRO proyecto
+# vivo con ese nombre pide la base y se mira en `editar` y en `deshacer`, con
+# `db.proyecto_vivo_con_nombre`: esta tabla de puertas es síncrona.
 PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale},
-          "eventos": {"duenos_chat_id": _duenos_que_valen}}
+          "eventos": {"duenos_chat_id": _duenos_que_valen},
+          "proyectos": {"nombre": db.nombre_de_proyecto_que_vale}}
 
 
 def _por_las_puertas(tabla: str, valores: dict) -> dict:
@@ -1260,6 +1267,23 @@ async def editar(
         # el `raise` de arriba, con un motivo claro -- no hace falta ningún
         # SAVEPOINT de tolerancia en `editar`: el `SELECT *` de más arriba ya
         # dice qué columnas existen de verdad.)
+
+        # EL NOMBRE DE UN PROYECTO (pieza 1 del diseño «proyectos»): la parte
+        # síncrona (vacío, largo, espacios) ya pasó por `PUERTAS` arriba; acá
+        # va la que pide la base. (1) Si lo único que se pide es el nombre que
+        # ya tiene, NO se escribe ni se deja huella: se devuelve la fila tal
+        # cual, sin log_id. (2) Si otro proyecto VIVO ya se llama así, por la
+        # MISMA consulta con la que Lucy busca proyectos, se rechaza sin
+        # escribir. La propia fila no cuenta (cambiar solo las mayúsculas vale).
+        if tabla == "proyectos" and "nombre" in campos:
+            if set(campos) == {"nombre"} and campos["nombre"] == antes["nombre"]:
+                return antes, None
+            if await db.proyecto_vivo_con_nombre(
+                    cur, campos["nombre"], excluir_id=registro_id) is not None:
+                raise ValueError(
+                    "No cambié nada: ya hay otro proyecto con ese nombre."
+                ) from db.NombreDeProyectoNoVale(
+                    "repetido", "ya hay otro proyecto con ese nombre")
 
         # EL ÁREA (encargo 4), en TAREAS y en PROYECTOS, por la MISMA puerta
         # que usa `crear_desde_interpretacion` — `_area_que_vale`, ni una
@@ -1476,12 +1500,13 @@ async def perfil(
                 (nombre, nombre),
             )
         else:
-            await cur.execute(
-                "SELECT * FROM proyectos "
-                "WHERE borrado_en IS NULL AND lower(nombre) = lower(%s) LIMIT 1",
-                (nombre,),
-            )
-        fila = await cur.fetchone()
+            # La MISMA consulta con la que se chequea un nombre repetido.
+            existente = await db.proyecto_vivo_con_nombre(cur, nombre)
+            if existente is not None:
+                await cur.execute(
+                    "SELECT * FROM proyectos WHERE id = %s", (existente,))
+        fila = await cur.fetchone() if (
+            tabla == "personas" or existente is not None) else None
 
         # ── No existía: nace con lo que se sepa hoy ──────────────────────
         if fila is None:
@@ -1520,6 +1545,8 @@ async def perfil(
                          (relacion or "").strip() or None, linea),
                     )
             else:
+                # Por la misma puerta que un renombre (largo, vacío).
+                nombre = db.nombre_de_proyecto_que_vale(nombre)
                 cur = await conn.execute(
                     """INSERT INTO proyectos (nombre, descripcion)
                        VALUES (%s, %s) RETURNING id""",
@@ -1681,6 +1708,26 @@ async def deshacer(log_id: int) -> str:
         if tabla not in TABLAS:
             raise ValueError(f"No sé deshacer cambios en {tabla}.")
 
+        # EL NOMBRE DE UN PROYECTO NO SE RESTAURA SALTÁNDOSE LA REGLA
+        # (pieza 1 del diseño «proyectos»). Deshacer una edición de nombre, o
+        # deshacer el borrado de un proyecto, devuelve un nombre por SQL
+        # genérico; si mientras tanto otro proyecto vivo tomó ese nombre, eso
+        # reintroduciría el duplicado. Se mira con la MISMA consulta que
+        # `editar`, antes de escribir. (Lo demás de `deshacer` sigue igual.)
+        if tabla == "proyectos" and huella["accion"] in ("editar", "borrar"):
+            antes_p = huella["antes"] or {}
+            despues_p = huella.get("despues") or {}
+            vuelve = antes_p.get("nombre") if antes_p.get("nombre") is not None \
+                else None
+            if huella["accion"] == "editar" and (
+                    "nombre" not in despues_p
+                    or despues_p["nombre"] == antes_p.get("nombre")):
+                vuelve = None   # esta edición no cambió el nombre: no se toca
+            if vuelve is not None and await db.proyecto_vivo_con_nombre(
+                    cur, vuelve, excluir_id=registro_id) is not None:
+                raise ValueError(
+                    "No lo deshice: ya hay otro proyecto vivo con ese nombre.")
+
         if huella["accion"] == "crear":
             await conn.execute(
                 f"UPDATE {tabla} SET borrado_en = now() "
@@ -1713,9 +1760,14 @@ async def deshacer(log_id: int) -> str:
             try:
                 _por_las_puertas(tabla, {c: antes[c] for c in columnas})
             except ValueError as e:
-                raise ValueError(
-                    f"No lo deshice: la tarea volvería a quien la tenía, y {e}."
-                ) from e
+                # El mensaje de antes hablaba de «la tarea» y de quién la tenía,
+                # y con una puerta de otra tabla (el nombre de un proyecto)
+                # mentía: cada tabla dice lo suyo.
+                if tabla == "tareas":
+                    raise ValueError(
+                        f"No lo deshice: la tarea volvería a quien la tenía, y {e}."
+                    ) from e
+                raise ValueError(f"No lo deshice: {e}.") from e
             asignaciones = ", ".join(f"{c} = r.{c}" for c in columnas)
             await conn.execute(
                 f"UPDATE {tabla} t SET {asignaciones} "

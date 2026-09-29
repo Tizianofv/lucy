@@ -10,6 +10,20 @@
 existe.</p>
 {% elif error == 'proyecto' %}
 <p class="aviso">Ese proyecto ya no está.</p>
+{% elif error == 'nombre_vacio' %}
+<p class="aviso">El nombre no puede quedar vacío.</p>
+{% elif error == 'nombre_largo' %}
+<p class="aviso">El nombre no puede pasar de {{ largo_nombre }} caracteres.</p>
+{% elif error == 'nombre_repetido' %}
+<p class="aviso">Ya hay otro proyecto con ese nombre. Cada proyecto se llama
+distinto.</p>
+{% elif error == 'nombre_igual' %}
+<p class="aviso">El nombre ya era ese: no cambió nada.</p>
+{% elif error == 'nombre_invalido' %}
+<p class="aviso">Ese nombre no se puede guardar.</p>
+{% endif %}
+{% if nombre_guardado %}
+<p class="aviso ok">Nombre guardado.</p>
 {% endif %}
 {% if creado %}
 <p class="aviso ok">Proyecto creado (#{{ creado }}). Está más abajo, con la
@@ -36,6 +50,17 @@ proyecto, con las hechas incluidas.</p>
     <span class="etiqueta-area etiqueta-area-vacia">sin área</span>
     {%- endif %}
   </h2>
+  {# EL NOMBRE SE EDITA ACÁ, un formulario por proyecto (esta pantalla no tiene
+     el formulario único de /tareas), y pasa por la MISMA puerta que Telegram
+     (`crud.editar` → `crud.PUERTAS["proyectos"]["nombre"]`; ver
+     `cambiar_nombre_de_proyecto` en web/app.py). #}
+  <form method="post" action="/proyectos/{{ p.id }}/nombre" class="barra">
+    <label for="nombre-{{ p.id }}" class="suave">Nombre:</label>
+    <input id="nombre-{{ p.id }}" name="nombre" type="text" required
+           maxlength="{{ largo_nombre }}" value="{{ p.nombre }}"
+           style="width:100%;max-width:26rem">
+    <button>Guardar</button>
+  </form>
   <p class="suave">
     Estado: {{ p.estado }}
     {%- if p.descripcion %} · {{ p.descripcion }}{% endif %}

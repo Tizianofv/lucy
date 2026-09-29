@@ -812,7 +812,7 @@ async def tareas_historial(request: Request):
 
 @app.get("/proyectos", response_class=HTMLResponse)
 async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
-                    error: str = ""):
+                    error: str = "", nombre_guardado: int = 0):
     """Cada proyecto vivo, con su área, su estado y sus tareas en orden
     (encargo 5, requisito 1).
 
@@ -829,6 +829,8 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
         {"proyectos": await db.proyectos_con_tareas(),
          "areas": await db.areas(), "error": error,
          "area_guardada": area_guardada, "creado": creado,
+         "nombre_guardado": nombre_guardado,
+         "largo_nombre": db.LARGO_NOMBRE_PROYECTO,
          "pendiente": db.ESTADO_PENDIENTE, "hecha": db.ESTADO_HECHA})
 
 
@@ -861,6 +863,48 @@ async def cambiar_area_de_proyecto(request: Request, pid: int):
     if despues is None:
         return RedirectResponse(f"/proyectos?error=proyecto", status_code=303)
     return RedirectResponse(f"/proyectos?area_guardada={pid}", status_code=303)
+
+
+@app.post("/proyectos/{pid}/nombre")
+async def cambiar_nombre_de_proyecto(request: Request, pid: int):
+    """Cambiar el NOMBRE de un proyecto (pedido de Tiziano, 29-sep-2026:
+    «poder editar los titulos de los proyectos»).
+
+    POR LA MISMA PUERTA que Telegram: `crud.editar("proyectos", ...)`, que llama
+    a `crud.PUERTAS["proyectos"]["nombre"]` (no vacío, largo, espacios) y
+    comprueba que no haya OTRO proyecto vivo con ese nombre con la misma
+    consulta que usa Lucy para buscarlos. Esta ruta no decide qué nombre vale:
+    solo traduce el formulario y el rechazo a algo que se pueda mostrar.
+
+    Si el nombre no cambió, `editar` no escribe ni deja huella y esta ruta lo
+    dice («sin cambios»), no dice «guardado». Un rechazo vuelve con una CLAVE
+    en la URL (`?error=nombre_vacio|nombre_largo|nombre_repetido`), y ni la URL
+    ni el log llevan el nombre pedido.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    nombre = str(formulario.get("nombre", ""))
+    try:
+        despues, log_id = await crud.editar(
+            "proyectos", pid, {"nombre": nombre},
+            motivo="Nombre cambiado desde el panel", actor="panel")
+    except ValueError as e:
+        causa = e.__cause__
+        clave = (causa.clave if isinstance(causa, db.NombreDeProyectoNoVale)
+                 else None)
+        log.warning("Panel de proyectos: nombre rechazado para #%s (%s)",
+                    pid, clave or "otro")
+        return RedirectResponse(
+            f"/proyectos?error=nombre_{clave or 'invalido'}"
+            f"#proyecto-{pid}", status_code=303)
+    if despues is None:
+        return RedirectResponse("/proyectos?error=proyecto", status_code=303)
+    if log_id is None:
+        return RedirectResponse(
+            f"/proyectos?error=nombre_igual#proyecto-{pid}", status_code=303)
+    return RedirectResponse(
+        f"/proyectos?nombre_guardado={pid}#proyecto-{pid}", status_code=303)
 
 
 @app.post("/tareas/{tid}/area")

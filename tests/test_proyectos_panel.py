@@ -85,6 +85,16 @@ class _CursorProyectos:
                 (dict(t) for t in self._conn.tareas
                  if t["id"] == tid and t.get("borrado_en") is None), None)
 
+        elif s.startswith("SELECT id FROM proyectos"):
+            # `db.proyecto_vivo_con_nombre` (chequeo de nombre repetido): lo que
+            # dice su SQL, a mano. (Su texto real se ejecuta de verdad, en
+            # sqlite, en `tests/test_nombre_de_proyecto.py`.)
+            nombre, excluir = p
+            self._fila = next(
+                ({"id": q["id"]} for q in self._conn.proyectos
+                 if q.get("borrado_en") is None and q["id"] != excluir
+                 and q["nombre"].lower() == nombre.lower()), None)
+
         elif s.startswith("INSERT INTO proyectos"):
             self._conn.sig_proyecto += 1
             nombre, descripcion, area = p

@@ -1079,6 +1079,79 @@ async def cambiar_estado(bandeja_id: int, estado: str, desde: str | None = None)
         return cur.rowcount > 0
 
 
+# ── EL NOMBRE DE UN PROYECTO (28/29-sep-2026, pieza 1 del diseño «proyectos») ──
+#
+# UNA SOLA PUERTA para «qué nombre vale», y UNA SOLA función para «¿ya hay uno
+# con ese nombre?», llamadas por TODO lo que escribe `proyectos.nombre`:
+# `crud.editar` (Telegram y panel, por `crud.PUERTAS`), `crud.deshacer`,
+# `crud.perfil`, `_buscar_o_crear` y `convertir_tarea_en_proyecto`. La lista de
+# escritores no está tecleada acá: la saca de lo real
+# `tests/test_nombre_de_proyecto.py`.
+#
+# Sin candado en la base (decisión de la sala: sin migración): un índice único
+# sería DDL en producción. La regla es de aplicación, y por eso el duplicado se
+# compara con LA MISMA consulta con la que Lucy busca un proyecto por su nombre.
+LARGO_NOMBRE_PROYECTO = 200
+
+
+class NombreDeProyectoNoVale(ValueError):
+    """Un nombre de proyecto que no puede quedar. `clave` dice por qué
+    (`vacio`, `largo`, `repetido`) para que una pantalla lo traduzca sin
+    adivinar por el texto del mensaje. El mensaje NUNCA repite el nombre pedido."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+def nombre_de_proyecto_que_vale(valor) -> str:
+    """El nombre limpio que va a quedar, o `NombreDeProyectoNoVale`.
+
+    LA PARTE QUE NO NECESITA LA BASE (por eso es la que entra en
+    `crud.PUERTAS`, que es síncrona): sin los espacios de alrededor, no vacío y
+    de a lo sumo `LARGO_NOMBRE_PROYECTO` caracteres. Que no haya OTRO proyecto
+    vivo con ese nombre se mira aparte, con `proyecto_vivo_con_nombre`, porque
+    pide la base.
+    """
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        raise NombreDeProyectoNoVale("vacio", "el nombre no puede quedar vacío")
+    if not isinstance(valor, str):
+        raise NombreDeProyectoNoVale("vacio", "el nombre de un proyecto es un texto")
+    limpio = valor.strip()
+    if len(limpio) > LARGO_NOMBRE_PROYECTO:
+        raise NombreDeProyectoNoVale(
+            "largo", f"el nombre no puede pasar de {LARGO_NOMBRE_PROYECTO} caracteres")
+    return limpio
+
+
+async def proyecto_vivo_con_nombre(cur, nombre: str, excluir_id: int | None = None):
+    """El id de un proyecto VIVO que se llama así, o None. LA comparación de
+    nombres de proyecto: la usan la búsqueda de Lucy (`_buscar_o_crear`,
+    `crud.perfil`) y todo chequeo de duplicados, para que no puedan separarse.
+
+    `lower(nombre) = lower(...)` y nada más (ignora mayúsculas, NO tildes: es lo
+    que hacía la búsqueda antes, y un chequeo con otro criterio dejaría pasar
+    nombres que la búsqueda ve iguales). `excluir_id` es la propia fila, para
+    poder cambiar solo las mayúsculas de sí mismo. Un proyecto borrado no
+    cuenta. `ORDER BY id`: si algún día hay dos, siempre gana el mismo (antes,
+    `LIMIT 1` sin orden dejaba la elección a Postgres).
+
+    `cur` es un cursor con `row_factory=dict_row`.
+    """
+    await cur.execute(
+        """
+        SELECT id FROM proyectos
+         WHERE borrado_en IS NULL
+           AND lower(nombre) = lower(%s)
+           AND id <> %s
+         ORDER BY id
+         LIMIT 1
+        """,
+        (nombre, excluir_id or 0))
+    fila = await cur.fetchone()
+    return fila["id"] if fila else None
+
+
 async def _buscar_o_crear(tabla: str, nombre: str, *,
                           bandeja_id: int | None = None) -> int | None:
     """Devuelve el id de la persona/proyecto con ese nombre; la crea si no está.
@@ -1115,20 +1188,27 @@ async def _buscar_o_crear(tabla: str, nombre: str, *,
 
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(
-            f"""
-            SELECT id FROM {tabla}
-             WHERE borrado_en IS NULL
-               AND (lower(nombre) = lower(%s)
-                    {"OR lower(%s) = ANY(SELECT lower(a) FROM unnest(alias) a)"
-                     if tabla == "personas" else ""})
-             LIMIT 1
-            """,
-            (nombre, nombre) if tabla == "personas" else (nombre,),
-        )
-        fila = await cur.fetchone()
-        if fila:
-            return fila["id"]
+        if tabla == "proyectos":
+            # La MISMA consulta que usa el chequeo de duplicados del nombre.
+            existente = await proyecto_vivo_con_nombre(cur, nombre)
+            if existente is not None:
+                return existente
+            # Va a CREARSE un proyecto: por la misma puerta que un renombre.
+            nombre = nombre_de_proyecto_que_vale(nombre)
+        else:
+            await cur.execute(
+                """
+                SELECT id FROM personas
+                 WHERE borrado_en IS NULL
+                   AND (lower(nombre) = lower(%s)
+                        OR lower(%s) = ANY(SELECT lower(a) FROM unnest(alias) a))
+                 LIMIT 1
+                """,
+                (nombre, nombre),
+            )
+            fila = await cur.fetchone()
+            if fila:
+                return fila["id"]
 
         if tabla == "personas":
             # `bandeja_id` (§E, 27-sep-2026): la puerta de dueño de la parte
@@ -1283,13 +1363,22 @@ async def convertir_tarea_en_proyecto(tarea_id: int) -> dict:
         if tarea.get("proyecto_id") is not None:
             raise ValueError("Esa tarea ya tiene proyecto: no se convierte.")
 
+        # El título de la tarea va a ser el NOMBRE de un proyecto: por la misma
+        # puerta que un renombre (no vacío, largo, y que no haya ya otro vivo
+        # con ese nombre: convertir dos tareas con el mismo título dejaba dos
+        # proyectos iguales).
+        nombre_proyecto = nombre_de_proyecto_que_vale(tarea["titulo"])
+        if await proyecto_vivo_con_nombre(cur, nombre_proyecto) is not None:
+            raise NombreDeProyectoNoVale(
+                "repetido", "Ya hay un proyecto con ese nombre: no se convierte.")
+
         await cur.execute(
             """
             INSERT INTO proyectos (nombre, descripcion, area)
             VALUES (%s, %s, %s)
             RETURNING *
             """,
-            (tarea["titulo"], tarea.get("detalle"), tarea.get("area")))
+            (nombre_proyecto, tarea.get("detalle"), tarea.get("area")))
         proyecto = await cur.fetchone()
 
         await cur.execute(
