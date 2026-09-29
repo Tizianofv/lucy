@@ -628,6 +628,18 @@ def test_el_insert_de_respaldo_sin_columna_area_tambien_guarda_todo():
         tid, pid, otra, "d", ana, OTRA)
 
 
+def test_el_escritor_por_su_cuenta_deja_area_nula_con_proyecto_pida_lo_que_pida():
+    """Llamado directo (sin la ruta), con un área pedida y aun con Code: el
+    CHECK de la base prohíbe «proyecto + área», así que el escritor guarda NULL."""
+    m, pid = _uno()
+    for area, resp in (("CDS", None), (TEC, None), ("CDS", CODE), (None, CODE)):
+        tid = N._correr(m, lambda: db.crear_tarea_desde_el_panel(
+            DUENO, "x", None, area, resp, proyecto_id=pid))
+        fila = [f for f in m.filas() if f["id"] == tid][0]
+        assert (fila["proyecto_id"], fila["area"], fila["responsable_chat_id"]) == (
+            pid, None, resp), (area, resp)
+
+
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q"]))
