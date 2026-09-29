@@ -277,7 +277,7 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _cerrar_tarjeta(q, remate)
         if log_id:
             await q.message.reply_text(
-                "Si me equivoqué, tocá acá.", reply_markup=teclado_deshacer(log_id))
+                "Si me equivoqué, toca aquí.", reply_markup=teclado_deshacer(log_id))
         log.info("Orden aplicada: %s %s#%s", plan.get("accion"),
                  plan.get("tabla"), registro_id)
         return
@@ -327,7 +327,7 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # cuando Tiziano complete el dato.
         await db.cambiar_estado(bandeja_id, "esperando_confirmacion")
         await q.answer(
-            f"Me falta {e} para poder guardarlo. Mandámelo y lo completo.",
+            f"Me falta {e} para poder guardarlo. Mándamelo y lo completo.",
             show_alert=True,
         )
         return
@@ -335,7 +335,7 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await db.cambiar_estado(bandeja_id, "esperando_confirmacion")
         log.exception("Fallo creando la entidad de #%s", bandeja_id)
         await q.answer(
-            "No pude guardarlo. Tu mensaje sigue a salvo; probá de nuevo.",
+            "No pude guardarlo. Tu mensaje sigue a salvo; prueba de nuevo.",
             show_alert=True,
         )
         return

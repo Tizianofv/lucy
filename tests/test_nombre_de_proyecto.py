@@ -692,7 +692,16 @@ def test_el_agente_si_confirma_una_edicion_que_de_verdad_escribio():
 
 def _herramientas_que_arman_accion() -> set:
     """Las herramientas de `agente._ejecutar_herramienta` cuyo resultado dice
-    «acción #{...}»: SALEN DEL AST del código, no de una lista escrita acá."""
+    «acción #»: SALEN DEL AST del código, no de una lista escrita acá.
+
+    LA FRONTERA, DICHA: se mira cada rama `if nombre == "<herramienta>"` y se
+    juntan TODOS los textos literales de esa rama (f-strings, `%`, `.format`,
+    concatenación de literales, partidos en varias piezas): si juntos dicen
+    «acción #», la herramienta cuenta. NO ve un resultado cuyo texto llegue de
+    una variable o de otra función (`resultado = otra_funcion()`), ni una rama
+    que no se escriba `if nombre == "<literal>"` (un `match`, un diccionario de
+    funciones, un `elif`: el `elif` sí, porque el AST lo trata como `If`).
+    """
     import inspect
     import textwrap
     arbol = ast.parse(textwrap.dedent(inspect.getsource(agente._ejecutar_herramienta)))
@@ -701,9 +710,9 @@ def _herramientas_que_arman_accion() -> set:
         if (isinstance(n, ast.If) and isinstance(n.test, ast.Compare)
                 and isinstance(n.test.left, ast.Name) and n.test.left.id == "nombre"
                 and isinstance(n.test.comparators[0], ast.Constant)):
-            textos = [c.value for j in ast.walk(n) if isinstance(j, ast.JoinedStr)
-                      for c in j.values if isinstance(c, ast.Constant)]
-            if any("acción #" in t for t in textos):
+            textos = "".join(c.value for c in ast.walk(ast.Module(body=n.body, type_ignores=[]))
+                             if isinstance(c, ast.Constant) and isinstance(c.value, str))
+            if "acción #" in textos:
                 salida.add(n.test.comparators[0].value)
     return salida
 
@@ -713,8 +722,6 @@ def _herramientas_que_arman_accion() -> set:
 # abajo ni declarada acá pone roja la prueba hasta que alguien decida cuál de
 # las dos cosas es.
 _SIN_CASO_PORQUE = {
-    "crear": "su log_id sale de `crud.crear_desde_interpretacion`, que siempre "
-             "escribe (o ya devolvió el de la fila existente): nunca None",
     "preferencia": "`crud.guardar_preferencia` siempre escribe y devuelve su "
                    "huella; la rama de olvidar ya devuelve ERROR si es None",
 }
@@ -731,6 +738,7 @@ def test_ninguna_herramienta_del_agente_devuelve_accion_none():
         ("editar", {"tabla": "proyectos", "id": 9999, "cambios": {"nombre": "X"}}),
         ("archivar", {"tabla": "proyectos", "id": 9999}),
         ("perfil", {"tipo": "proyecto", "nombre": "Casa"}),
+        ("crear", {"clasificacion": "tarea", "titulo": "ya existía"}),
     ]
     probadas = {h for h, _ in casos}
     reales = _herramientas_que_arman_accion()
@@ -740,8 +748,49 @@ def test_ninguna_herramienta_del_agente_devuelve_accion_none():
         f"herramientas con «acción #» sin caso ni razón declarada: "
         f"{sorted(sin_cubrir)}")
     for herramienta, args in casos:
-        r, _ = _herramienta(b, herramienta, args)
+        if herramienta == "crear":
+            r, _ = _crear_que_ya_existia(b)
+        else:
+            r, _ = _herramienta(b, herramienta, args)
         assert "#None" not in r, f"{herramienta} {args}: {r}"
+
+
+def _crear_que_ya_existia(b, log_id=None):
+    """`crear` cuando `crud` devuelve la fila que YA existía. El doble devuelve
+    lo que `crud._duplicado_pendiente` de verdad puede devolver (probado abajo):
+    un `log_id` vacío si esa fila no tiene huella de creación."""
+    async def _crear(bandeja_id, args, motivo=None):
+        return ("tareas", 41, log_id)
+    guardado = crud.crear_desde_interpretacion
+    crud.crear_desde_interpretacion = _crear
+    try:
+        return _herramienta(b, "crear", {"clasificacion": "tarea", "titulo": "x"})
+    finally:
+        crud.crear_desde_interpretacion = guardado
+
+
+def test_crud_puede_devolver_un_duplicado_sin_huella_de_creacion():
+    """LA PREMISA REAL de la razón que se había declarado falsa: si la fila que
+    ya existía no tiene huella `crear`, `_duplicado_pendiente` devuelve
+    `log_id=None` (SQL ejecutado de verdad en sqlite)."""
+    b = Base()
+    b.con.execute("ALTER TABLE tareas ADD COLUMN vence_en")
+    b.con.execute("INSERT INTO tareas (id, titulo, estado) VALUES (41, 'x', 'pendiente')")
+
+    async def f():
+        conn = _Conn(b)
+        return await crud._duplicado_pendiente(conn, "tareas", "x", None)
+    assert _correr(b, f) == (41, None)
+
+
+def test_crear_que_ya_existia_no_dice_creado_ni_accion_none():
+    b = Base()
+    r, acciones = _crear_que_ya_existia(b, log_id=None)
+    assert "#None" not in r and "ya existía" in r and "no creé otra" in r, r
+    assert acciones == [], "anotó una acción que no existe"
+    r, acciones = _crear_que_ya_existia(b, log_id=77)
+    assert re.match(r"OK: tareas#41 creado \(acción #77, reversible\)\.", r), r
+    assert len(acciones) == 1
 
 
 def test_el_parte_de_lo_editado_no_cuenta_lo_que_no_se_escribio():
@@ -762,13 +811,50 @@ def test_el_parte_de_lo_editado_no_cuenta_lo_que_no_se_escribio():
     assert "nombre" in acciones[0]["que"]
 
 
-def test_el_boton_de_confirmar_no_dice_hecho_si_editar_no_escribio():
-    import inspect
+def _apretar_confirmar(editar_devuelve):
+    """Aprieta ✅ en una orden de editar, corriendo `botones.al_pulsar` de
+    verdad, con `crud.editar` devolviendo lo que se le diga. Devuelve el texto
+    en que terminó la tarjeta y si ofreció el botón de deshacer."""
+    import test_botones_rosi as tb
     from acciones import botones
-    fuente = inspect.getsource(botones)
-    trozo = fuente[fuente.index("despues, log_id = await crud.editar("):][:900]
-    assert "log_id" in trozo.split("remate")[1].split("except")[0], (
-        "el «Hecho» del botón no mira el log_id real")
+
+    DUENO = config.CHAT_ID_DUENO
+    restaurar = tb._con_gente({DUENO: "Zutana"})
+    guardados = (crud.editar, db.cambiar_estado, db.obtener)
+
+    async def _editar(tabla, registro_id, cambios, motivo, **k):
+        return editar_devuelve
+
+    async def _estado(*a, **k):
+        return True
+
+    async def _obtener(bandeja_id):
+        return {"id": bandeja_id, "interpretacion": {"plan": {
+            "accion": "editar", "tabla": "proyectos",
+            "cambios": {"nombre": "Casa"}, "resumen": "renombrar"}}}
+
+    crud.editar, db.cambiar_estado, db.obtener = _editar, _estado, _obtener
+    try:
+        q = tb._Q("acc:5:9", DUENO)
+        tb._correr(botones.al_pulsar(tb._update(q), None))
+    finally:
+        crud.editar, db.cambiar_estado, db.obtener = guardados
+        restaurar()
+    return q.editado.get("texto", ""), q._reply_markup_enviado
+
+
+def test_el_boton_de_confirmar_dice_ya_estaba_asi_si_editar_no_escribio_y_hecho_si_si():
+    """CORRE el callback real (`botones.al_pulsar`). Sin huella (`editar` no
+    escribió nada porque ya estaba así) no puede decir «Hecho» ni ofrecer
+    deshacer; con huella real, dice «Hecho» y ofrece deshacer."""
+    texto, teclado = _apretar_confirmar(({"id": 9, "nombre": "Casa"}, None))
+    assert "Ya estaba así" in texto and "Hecho" not in texto, texto
+    assert teclado is None, "ofreció deshacer algo que no se escribió"
+    texto, teclado = _apretar_confirmar(({"id": 9, "nombre": "Casa"}, 314))
+    assert "Hecho" in texto and "Ya estaba así" not in texto, texto
+    assert teclado is not None, "no ofreció deshacer lo que sí se escribió"
+    texto, _ = _apretar_confirmar((None, None))
+    assert "Ya no estaba ahí" in texto, texto
 
 
 # ── H1: convertir una tarea en proyecto dice su motivo REAL ──────────────
@@ -889,15 +975,24 @@ def test_renombrar_con_espacios_choca_con_el_duplicado_y_guarda_limpio():
 
 
 def test_los_textos_que_lee_tiziano_no_usan_voseo():
-    """La casa habla de tú. FRONTERA DICHA: mira las formas que se corrigieron
-    (`decíselo`, `Pedile`) en los textos de `cerebro/agente.py` y
-    `cerebro/despertador.py`; no es un detector general de voseo, y el texto
-    del PROMPT de las herramientas (`HERRAMIENTAS`) queda fuera a propósito."""
-    formas = re.compile(r"\b(?:decíselo|Decíselo|Pedile)\b")
-    for archivo in ("cerebro/agente.py", "cerebro/despertador.py"):
+    """La casa habla de tú. FRONTERA DICHA, con números: mira las formas que
+    se corrigieron (la lista de abajo) en los textos CORTOS (menos de 300
+    caracteres, o sea mensajes a Tiziano, avisos y resultados de herramientas)
+    de `acciones/botones.py`, `acciones/crud.py`, `cerebro/agente.py` y
+    `cerebro/despertador.py`. NO es un detector general de voseo, y las
+    instrucciones LARGAS al modelo (el prompt `HERRAMIENTAS`, los encargos del
+    despertador y las marcas `MARCA_*`, que el candado compara por texto) quedan
+    fuera a propósito: reescribirlas cambia cómo trabaja el modelo."""
+    formas = re.compile(
+        r"\b(?:decíselo|Decíselo|Pedile|Pídele|tocá|mandámelo|probá|decímelo|"
+        r"buscalas|avisale|movés|decís|preguntáselo|elegí|respondé|usá|buscá|"
+        r"tenés|Elegí|Respondé|Buscá|Avisale)\b".replace("Pídele|", ""))
+    for archivo in ("acciones/botones.py", "acciones/crud.py",
+                    "cerebro/agente.py", "cerebro/despertador.py"):
         arbol = ast.parse(Path(base.RAIZ, archivo).read_text(encoding="utf-8"))
         for n in ast.walk(arbol):
-            if isinstance(n, ast.Constant) and isinstance(n.value, str):
+            if (isinstance(n, ast.Constant) and isinstance(n.value, str)
+                    and len(n.value) < 300):
                 m = formas.search(n.value)
                 assert not m, f"{archivo}:{n.lineno}: voseo «{m.group(0)}»"
 

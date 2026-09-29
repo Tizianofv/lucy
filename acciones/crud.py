@@ -396,7 +396,7 @@ async def crear_desde_interpretacion(
                         raise ValueError(
                             f"No creé la tarea: ya existía («{titulo}», "
                             f"#{ya[0]}) y la tiene {quien}. No la "
-                            "reasigné — si hay que cambiarla, decímelo "
+                            "reasigné — si hay que cambiarla, dímelo "
                             "explícito.")
                 return tabla, ya[0], log_id
             # TRES FORMAS DEL INSERT (encargo 6 suma la tercera a las dos que
@@ -583,7 +583,7 @@ async def crear_desde_interpretacion(
                     f"Ese movimiento ya está: el correo del banco lo registró "
                     f"como M-{fila_gemela[0]:04d} (mismo día, mismo monto). No "
                     "lo anoté otra vez. Si de verdad son dos gastos distintos, "
-                    "decímelo y lo agrego.")
+                    "dímelo y lo agrego.")
             # abs() a propósito: el monto se guarda siempre positivo y la
             # dirección la da `tipo`. Si el modelo devolviera -2300 para un
             # gasto, un monto negativo con tipo='gasto' sumaría al revés en
@@ -1630,7 +1630,7 @@ async def guardar_lugar(
 
     if lat is None or lon is None:
         raise ValueError(
-            "las coordenadas del lugar; buscalas con buscar_lugar y pasá "
+            "las coordenadas del lugar; búscalas con buscar_lugar y pasa "
             "lat/lon.")
 
     async with db.pool.connection() as conn:
