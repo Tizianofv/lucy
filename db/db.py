@@ -1177,6 +1177,16 @@ class ProyectoNoAdmiteTareas(ValueError):
         self.clave = clave
 
 
+class TareaNoValida(ValueError):
+    """`crear_tarea_desde_el_panel` rechazó un dato del alta (`clave`:
+    `responsable`, `persona` o `primero`, las mismas de la pantalla). La ruta ya
+    los miró; esto llega si cambiaron entre su chequeo y la escritura."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
 async def proyecto_admite_tareas(cur, proyecto_id) -> dict:
     """La fila `{id, nombre, area, estado}` del proyecto si se le pueden agregar
     tareas, o `ProyectoNoAdmiteTareas`. `cur` es un cursor con `dict_row`.
@@ -3911,7 +3921,8 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
     """
     if responsable_chat_id is not None:
         if not puede_ser_responsable(responsable_chat_id):
-            raise ValueError("ese chat no puede ser responsable de una tarea")
+            raise TareaNoValida(
+                "responsable", "ese chat no puede ser responsable de una tarea")
         if responsable_chat_id == CHAT_ID_CODE and proyecto_id is None:
             area = AREA_TECNICA
     if proyecto_id is not None:
@@ -3922,13 +3933,14 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
         if proyecto_id is not None:
             await proyecto_admite_tareas(cur, proyecto_id)
         if persona_id is not None and not await _persona_viva(cur, persona_id):
-            raise ValueError("esa persona no existe o está archivada")
+            raise TareaNoValida("persona", "esa persona no existe o está archivada")
         if primero_id is not None:
             await cur.execute(
                 "SELECT id FROM tareas WHERE id = %s AND borrado_en IS NULL",
                 (primero_id,))
             if await cur.fetchone() is None:
-                raise ValueError("esa tarea de «Primero:» no existe o está archivada")
+                raise TareaNoValida(
+                    "primero", "esa tarea de «Primero:» no existe o está archivada")
         await cur.execute(
             """
             INSERT INTO bandeja

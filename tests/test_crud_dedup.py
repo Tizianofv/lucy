@@ -738,6 +738,12 @@ class _CurEditarArea:
         if s.startswith("SELECT * FROM"):
             self._row = dict(self._conn.fila)
             return self
+        if s.startswith("SELECT id, nombre, area, estado FROM proyectos"):
+            # `db.proyecto_admite_tareas`: el proyecto al que se mueve existe y
+            # está activo (lo que suponían estas pruebas).
+            self._row = {"id": params[0], "nombre": "p", "area": None,
+                         "estado": "activo"}
+            return self
         raise AssertionError(f"SQL no modelado por _CurEditarArea: {s[:90]}")
 
     async def fetchone(self):
@@ -1034,13 +1040,24 @@ def test_todo_lo_que_toca_area_o_proyecto_id_en_crud_pasa_por_la_misma_puerta():
         if not (menciona_area or menciona_proyecto):
             continue
         vistas.append(nodo.name)
+        if nodo.name == "deshacer":
+            # `deshacer` nombra `proyecto_id` SOLO para volver a pasar por la
+            # puerta del proyecto cerrado (`db.proyecto_admite_tareas`) antes
+            # de devolver una tarea a un proyecto; el área la restaura del
+            # mismo `antes` de la huella, consistente con el CHECK. Lo que se
+            # exige de ella es esa puerta, no `_area_que_vale`.
+            assert "proyecto_admite_tareas(" in texto, (
+                "deshacer devuelve tareas a un proyecto sin la puerta del "
+                "proyecto cerrado")
+            continue
         if "_area_que_vale(" not in texto:
             culpables.append(nodo.name)
     assert vistas, ("no se encontró ninguna función que mencione 'area' ni "
                     "'proyecto_id' -- la prueba dejó de medir algo")
-    assert set(vistas) == {"crear_desde_interpretacion", "editar"}, (
+    esperadas = {"crear_desde_interpretacion", "editar", "deshacer"}
+    assert set(vistas) == esperadas, (
         f"aparecieron funciones nuevas que tocan 'area' o 'proyecto_id': "
-        f"{set(vistas) - {'crear_desde_interpretacion', 'editar'}}. Revisá "
+        f"{set(vistas) - esperadas}. Revisá "
         f"si pasan por _area_que_vale y agregalas a la lista esperada de "
         f"esta prueba.")
     assert not culpables, (

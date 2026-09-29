@@ -1344,6 +1344,27 @@ async def editar(
         # `proyecto_id` en una base donde la columna `area` todavía no
         # existe intentaría escribir una columna que no está, y reventaría
         # con 42703 por una tarea que ni siquiera tenía área que limpiar.
+        # MOVER UNA TAREA A UN PROYECTO ES «RECIBIR» una tarea (pieza 2 del diseño
+        # «proyectos»): por la MISMA puerta que el alta, las derivadas y
+        # Telegram al crear (`db.proyecto_admite_tareas`: existe, no está en la
+        # papelera, no está cerrado). Solo si de verdad CAMBIA de proyecto: una
+        # tarea que ya está en un proyecto cerrado puede seguir editándose. Sacarla
+        # de su proyecto (`None`) no es recibir. El id puede llegar como texto
+        # (el JSON del modelo).
+        if tabla == "tareas" and campos.get("proyecto_id") is not None:
+            try:
+                destino = int(str(campos["proyecto_id"]).strip())
+            except ValueError:
+                raise ValueError(
+                    "No cambié nada: el proyecto tiene que ser el número de "
+                    "un proyecto.") from None
+            if destino != antes.get("proyecto_id"):
+                try:
+                    await db.proyecto_admite_tareas(cur, destino)
+                except db.ProyectoNoAdmiteTareas as e:
+                    raise ValueError(f"No cambié nada: {e}.") from e
+            campos["proyecto_id"] = destino
+
         if tabla == "tareas" and ("area" in campos or "proyecto_id" in campos):
             area_pedida_explicita = "area" in campos
             proyecto_final = campos.get("proyecto_id", antes.get("proyecto_id"))
@@ -1793,6 +1814,19 @@ async def deshacer(log_id: int) -> str:
                         f"No lo deshice: la tarea volvería a quien la tenía, y {e}."
                     ) from e
                 raise ValueError(f"No lo deshice: {e}.") from e
+            # DESHACER TAMBIÉN «RECIBE»: si deshacer devolvería la tarea a un
+            # proyecto del que esta edición la sacó, ese proyecto tiene que
+            # admitirla hoy (puede haberse cerrado desde entonces). Solo si esta
+            # edición cambió el proyecto (compara `antes` con `despues` de la
+            # huella; una edición intermedia que la haya movido no se ve: límite
+            # dicho).
+            if (tabla == "tareas" and "proyecto_id" in columnas
+                    and antes.get("proyecto_id") is not None
+                    and antes.get("proyecto_id") != despues.get("proyecto_id")):
+                try:
+                    await db.proyecto_admite_tareas(cur, antes["proyecto_id"])
+                except db.ProyectoNoAdmiteTareas as e:
+                    raise ValueError(f"No lo deshice: {e}.") from e
             asignaciones = ", ".join(f"{c} = r.{c}" for c in columnas)
             await conn.execute(
                 f"UPDATE {tabla} t SET {asignaciones} "

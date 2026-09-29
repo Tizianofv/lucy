@@ -331,6 +331,19 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             show_alert=True,
         )
         return
+    except ValueError as e:
+        # `crud` dice «no» con un ValueError y un motivo (proyecto cerrado,
+        # responsable que no vale, nombre de proyecto…): ese motivo es lo que
+        # se le muestra. Reintentar SIN cambiar nada no sirve, y no se promete.
+        # La tarjeta queda abierta (la fila vuelve a `esperando_confirmacion`)
+        # por si el motivo se arregla, p. ej. si el proyecto se reabre.
+        await db.cambiar_estado(bandeja_id, "esperando_confirmacion")
+        log.warning("Rechazada la entidad de #%s: %s", bandeja_id, e)
+        cierre = (" La tarjeta sigue abierta: si el proyecto se reabre, "
+                  "vuelve a tocar ✅."
+                  if isinstance(e.__cause__, db.ProyectoNoAdmiteTareas) else "")
+        await q.answer(f"{e}{cierre}"[:190], show_alert=True)
+        return
     except Exception:
         await db.cambiar_estado(bandeja_id, "esperando_confirmacion")
         log.exception("Fallo creando la entidad de #%s", bandeja_id)

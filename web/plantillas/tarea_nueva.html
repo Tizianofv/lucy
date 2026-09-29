@@ -42,6 +42,9 @@ guardó nada.</p>
 nada.</p>
 {% elif error == 'persona' %}
 <p class="aviso">Esa persona no existe o está archivada: no se guardó nada.</p>
+{% elif error == 'rechazada' %}
+<p class="aviso">No se guardó nada: algo de lo que escribiste ya no vale. Revisa
+los datos y vuelve a intentarlo.</p>
 {% elif error == 'detalle' %}
 <p class="aviso">El detalle pasa de {{ largo_detalle }} caracteres: no se guardó
 nada.</p>

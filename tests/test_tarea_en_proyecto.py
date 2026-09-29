@@ -42,6 +42,7 @@ import test_buzon_que_no_se_ve as barrido  # noqa: E402
 import config  # noqa: E402
 import db.db as db  # noqa: E402
 import acciones.crud as crud  # noqa: E402
+import cerebro.agente as agente  # noqa: E402
 import web.app as panel  # noqa: E402
 
 DUENO, OTRA = A.DUENO, A.OTRA
@@ -474,7 +475,7 @@ def test_lo_creado_se_ve_en_el_proyecto_y_el_aviso_dice_lo_que_paso():
 # ── LOS HERMANOS: todo lo que crea tareas con proyecto ───────────────────
 
 _PUERTAS = {"proyecto_admite_tareas", "proyecto_para_tareas"}
-_INSERTA_CON_PROYECTO = re.compile(r"INSERT\s+INTO\s+tareas", re.I)
+_ESCRIBE_TAREAS = re.compile(r"(?:INSERT\s+INTO|UPDATE)\s+tareas\b", re.I)
 
 
 def _llamadas(nodo) -> set:
@@ -488,16 +489,34 @@ def _llamadas(nodo) -> set:
     return salida
 
 
-def test_todo_lo_que_crea_tareas_con_proyecto_llama_a_la_puerta_del_proyecto():
+def _esperadas(nodo) -> set:
+    """Los nombres de las funciones que un nodo LLAMA Y ESPERA (`await f(...)`).
+    Las puertas son corrutinas: llamarlas sin `await` no las corre (la corrutina
+    se descarta) y el «chequeo» no chequea nada."""
+    salida = set()
+    for n in ast.walk(nodo):
+        if isinstance(n, ast.Await) and isinstance(n.value, ast.Call):
+            f = n.value.func
+            if isinstance(f, ast.Name):
+                salida.add(f.id)
+            elif isinstance(f, ast.Attribute):
+                salida.add(f.attr)
+    return salida
+
+
+def test_todo_lo_que_crea_o_mueve_tareas_de_proyecto_espera_a_la_puerta_del_proyecto():
     """El censo mira todo `execute` del repo (misma frontera que el de
     `test_responsable.py`, cuyas piezas usa): SQL legible que hace
-    `INSERT INTO tareas` y nombra `proyecto_id`. Cada función encontrada tiene
-    que LLAMAR a la puerta (nombrarla no basta). FRONTERA: no ve una llamada en
-    una rama que nunca corre; eso lo miden las pruebas de comportamiento de
-    abajo, una por escritor."""
+    `INSERT INTO tareas` o `UPDATE tareas` y nombra `proyecto_id`, más los
+    escritores GENÉRICOS (`crud.editar` y `crud.deshacer`, que arman su UPDATE al
+    vuelo: mover una tarea a un proyecto es «recibirla»). Cada uno tiene que
+    LLAMAR a la puerta Y ESPERARLA (`await`): nombrarla o llamarla sin `await` no
+    la corre. FRONTERA: no ve una llamada en una rama que nunca corre; eso lo
+    miden las pruebas de comportamiento, una por escritor."""
     raiz = Path(base.RAIZ).resolve()
     pruebas = [p.resolve() for p in barrido._testpaths(raiz)]
     encontrados = {}
+    genericos = {}
     for py in barrido._py_en_disco(raiz):
         real = py.resolve()
         if any(c == real or c in real.parents for c in pruebas):
@@ -512,16 +531,23 @@ def test_todo_lo_que_crea_tareas_con_proyecto_llama_a_la_puerta_del_proyecto():
             piezas = tr._piezas(sql, tr._asignaciones(funcion), globales,
                                 tr._parametros(funcion))
             legible, texto = tr._legible(piezas)
-            if (legible and _INSERTA_CON_PROYECTO.search(texto)
-                    and re.search(r"\bproyecto_id\b", texto)):
+            if not legible:
+                if not tr._ejecuta_solo_lectura(funcion):
+                    genericos[f"{rel}::{funcion.name}"] = funcion
+            elif _ESCRIBE_TAREAS.search(texto) and re.search(r"\bproyecto_id\b", texto):
                 encontrados[f"{rel}::{funcion.name}"] = funcion
     for fn in (db.crear_tarea_desde_el_panel, db.cerrar_y_derivar,
                crud.crear_desde_interpretacion):
         assert tr._id_de(fn) in encontrados, (
             f"el censo no ve a {tr._id_de(fn)}: dejó de ver")
+    for fn in (crud.editar, crud.deshacer):
+        assert tr._id_de(fn) in genericos, f"el censo no ve al genérico {fn.__name__}"
+        encontrados[tr._id_de(fn)] = genericos[tr._id_de(fn)]
     sin_puerta = sorted(q for q, f in encontrados.items()
-                        if not (_PUERTAS & _llamadas(f)))
-    assert not sin_puerta, f"crean tareas con proyecto sin llamar a la puerta: {sin_puerta}"
+                        if not (_PUERTAS & _esperadas(f)))
+    assert not sin_puerta, (
+        f"escriben tareas con proyecto sin ESPERAR a la puerta (llamarla sin "
+        f"`await` no la corre): {sin_puerta}")
 
 
 def _mundo_con_madre(estado_proyecto):
@@ -649,6 +675,265 @@ def test_el_escritor_revalida_el_primero_por_su_cuenta():
             DUENO, "x", None, proyecto_id=pid, primero_id=primero))
         assert isinstance(e, ValueError), primero
     assert m.n_tareas() == antes and m.n_bandeja() == 0
+
+
+# ── 1. Mover una tarea a un proyecto es «recibirla» ──────────────────────
+
+def _mover(m, tid, destino):
+    return lambda: crud.editar("tareas", tid, {"proyecto_id": destino},
+                               motivo="prueba")
+
+
+def test_editar_no_mueve_una_tarea_a_un_proyecto_que_no_la_recibe():
+    m, pid = _uno()
+    cerrado = m.proyecto("Cerrado", estado="cerrado")
+    borrado = m.proyecto("Borrado", borrado=True)
+    t = m.tarea("suelta")
+    for destino in (cerrado, borrado, 9999, str(cerrado), "abc", True):
+        e = N._rechazo(m, _mover(m, t, destino))
+        assert isinstance(e, ValueError), f"movió a {destino!r}"
+        assert str(e).startswith("No cambié nada:"), str(e)
+        assert m.filas()[0]["proyecto_id"] is None, destino
+    assert not [q for q in m.sql if q.startswith("UPDATE tareas")]
+
+
+def test_editar_si_mueve_a_un_proyecto_activo_o_pausado_y_deja_sacarla():
+    m, pid = _uno()
+    pausado = m.proyecto("Pausado", estado="pausado")
+    t = m.tarea("suelta")
+    N._correr(m, _mover(m, t, str(pid)))               # el id como texto
+    assert m.filas()[0]["proyecto_id"] == pid and m.filas()[0]["area"] is None
+    N._correr(m, _mover(m, t, pausado))
+    assert m.filas()[0]["proyecto_id"] == pausado
+    N._correr(m, lambda: crud.editar("tareas", t, {"proyecto_id": None},
+                                     motivo="prueba"))
+    assert m.filas()[0]["proyecto_id"] is None
+
+
+def test_una_tarea_que_ya_esta_en_un_proyecto_cerrado_se_sigue_editando():
+    """No cambia de proyecto: no «recibe» nada. Ni siquiera reenviando su
+    proyecto actual junto con otro cambio."""
+    m, pid = _uno()
+    cerrado = m.proyecto("Cerrado", estado="cerrado")
+    t = m.tarea("ya estaba", proyecto=cerrado)
+    N._correr(m, lambda: crud.editar("tareas", t, {"titulo": "renombrada"},
+                                     motivo="prueba"))
+    N._correr(m, lambda: crud.editar(
+        "tareas", t, {"proyecto_id": cerrado, "titulo": "otra vez"},
+        motivo="prueba"))
+    assert m.filas()[0]["titulo"] == "otra vez"
+    assert m.filas()[0]["proyecto_id"] == cerrado
+
+
+def test_por_telegram_mover_a_un_proyecto_cerrado_dice_el_motivo():
+    m, pid = _uno()
+    cerrado = m.proyecto("Cerrado", estado="cerrado")
+    t = m.tarea("suelta")
+    r, acciones = N._correr(m, lambda: agente._ejecutar_herramienta(
+        "editar", {"tabla": "tareas", "id": t,
+                   "cambios": {"proyecto_id": cerrado}}, 1, [])), None
+    assert r.startswith("ERROR") and "cerrado" in r, r
+    assert m.filas()[0]["proyecto_id"] is None
+
+
+def test_deshacer_no_devuelve_una_tarea_a_un_proyecto_que_ya_se_cerro():
+    m, pid = _uno()
+    otro = m.proyecto("Otro")
+    t = m.tarea("de disco", proyecto=pid)
+    N._correr(m, _mover(m, t, otro))                   # se muda a «Otro»
+    log_id = N._ultimo_log(m)
+    m.con.execute("UPDATE proyectos SET estado = 'cerrado' WHERE id = ?", (pid,))
+    e = N._rechazo(m, N._deshacer(m, log_id))
+    assert isinstance(e, ValueError) and str(e).startswith("No lo deshice:")
+    assert "cerrado" in str(e)
+    assert m.filas()[0]["proyecto_id"] == otro, "la devolvió a un proyecto cerrado"
+    # Con el proyecto abierto, sí la devuelve.
+    m.con.execute("UPDATE proyectos SET estado = 'activo' WHERE id = ?", (pid,))
+    N._correr(m, N._deshacer(m, log_id))
+    assert m.filas()[0]["proyecto_id"] == pid
+
+
+# ── 2. La pantalla dice cuál derivada no se cerró ────────────────────────
+
+def _tareas_pantalla(**kw):
+    conn = base._Conn(areas=A.AREAS)
+    html = base._con_base(conn, lambda: panel.tareas(
+        base._get("/tareas"), **kw)).body.decode()
+    return " ".join(re.sub(r"<[^>]+>", "", html).split())   # solo el texto que se lee
+
+
+def test_la_ruta_dice_cual_no_se_cerro_aunque_otras_si():
+    A._casa()
+    m = Mundo()
+    cerrado = m.proyecto("Cerrado", estado="cerrado")
+    activo = m.proyecto("Activo")
+    mala = m.tarea("en cerrado", proyecto=cerrado)
+    b1 = m.tarea("libre uno")
+    b2 = m.tarea("libre dos")
+    r = N._correr(m, lambda: panel.guardar_tareas(base._post({
+        f"prev_{mala}": "pendiente", f"hecha_{mala}": "1",
+        f"deriva_titulo_{mala}_1": "hija",
+        f"prev_{b1}": "pendiente", f"hecha_{b1}": "1",
+        f"prev_{b2}": "pendiente", f"hecha_{b2}": "1"})))
+    q = parse_qs(urlparse(_destino(r)).query)
+    assert q["guardadas"] == ["2"] and q["sin_cerrar"] == [str(mala)], _destino(r)
+    estados = {f["id"]: f["estado"] for f in m.filas()}
+    assert estados == {mala: "pendiente", b1: "hecha", b2: "hecha"}
+    html = _tareas_pantalla(guardadas=2, sin_cerrar=q["sin_cerrar"][0])
+    assert f"No se cerró la tarea #{mala}" in html
+    assert "su proyecto está cerrado" in html and "tampoco se creó" in html
+    assert "Sigue pendiente" in html
+
+
+def test_la_pantalla_pluraliza_y_no_pinta_lo_que_no_es_una_lista_de_ids():
+    assert "No se cerraron las tareas #3, #9" in _tareas_pantalla(sin_cerrar="3,9")
+    assert "Siguen pendientes" in _tareas_pantalla(sin_cerrar="3,9")
+    for basura in ("", "x", "1;2", "<b>1</b>", "1,", ",1", "1,,2", "-1", "1e3",
+                   "9" * 30):
+        assert "No se cerr" not in _tareas_pantalla(sin_cerrar=basura), basura
+
+
+def test_sin_derivadas_rechazadas_no_hay_aviso_de_sin_cerrar():
+    A._casa()
+    m = Mundo()
+    t = m.tarea("libre")
+    r = N._correr(m, lambda: panel.guardar_tareas(base._post({
+        f"prev_{t}": "pendiente", f"hecha_{t}": "1"})))
+    assert "sin_cerrar" not in _destino(r)
+
+
+# ── 3. El botón de la tarjeta de Telegram dice el motivo real ────────────
+
+def _apretar_guardar(m, interpretacion):
+    import test_botones_rosi as tb
+    from acciones import botones
+    restaurar = tb._con_gente({DUENO: "Zutana"})
+    guardados = (db.cambiar_estado, db.obtener, db.pool)
+    estados = []
+
+    async def _estado(bandeja_id, nuevo, **k):
+        estados.append(nuevo)
+        return True
+
+    async def _obtener(bandeja_id):
+        return {"id": bandeja_id, "interpretacion": interpretacion}
+
+    db.cambiar_estado, db.obtener, db.pool = _estado, _obtener, m.pool()
+    try:
+        q = tb._Q("ok:5", DUENO)
+        tb._correr(botones.al_pulsar(tb._update(q), None))
+    finally:
+        db.cambiar_estado, db.obtener, db.pool = guardados
+        restaurar()
+    alertas = [a[0][0] for a in q.respuestas if a[0]]
+    return q, alertas, estados
+
+
+def test_el_boton_con_un_proyecto_cerrado_dice_el_motivo_y_no_promete_reintentar():
+    A._casa()
+    m = Mundo()
+    m.proyecto("Cerrado", estado="cerrado")
+    q, alertas, estados = _apretar_guardar(m, {
+        "clasificacion": "tarea", "titulo": "x", "proyecto": "cerrado"})
+    assert alertas, "no le dijo nada"
+    assert "cerrado" in alertas[-1] and "No creé la tarea" in alertas[-1], alertas
+    assert "prueba de nuevo" not in alertas[-1] and "probá" not in alertas[-1]
+    assert estados[-1] == "esperando_confirmacion", "cerró la tarjeta sin crear nada"
+    assert m.n_tareas() == 0
+    assert "Guardado" not in q.editado.get("texto", "")
+
+
+def test_el_boton_con_un_proyecto_activo_si_guarda():
+    A._casa()
+    m = Mundo()
+    m.proyecto("Activo", area="CDS")
+    q, alertas, estados = _apretar_guardar(m, {
+        "clasificacion": "tarea", "titulo": "x", "proyecto": "activo"})
+    assert "Guardado" in q.editado.get("texto", ""), (alertas, q.editado)
+    assert m.n_tareas() == 1
+
+
+def test_otro_no_de_crud_tambien_se_muestra_y_lo_inesperado_sigue_igual():
+    A._casa()
+    m = Mundo()
+    q, alertas, _ = _apretar_guardar(m, {
+        "clasificacion": "tarea", "titulo": "x", "responsable_chat_id": "nadie"})
+    assert alertas and "No creé la tarea" in alertas[-1], alertas
+    # Lo que NO es un «no» de crud (una excepción cualquiera) sigue con el
+    # aviso genérico.
+    from acciones import botones
+    import test_botones_rosi as tb
+    guardado = crud.crear_desde_interpretacion
+
+    async def _revienta(*a, **k):
+        raise RuntimeError("se cayó")
+    crud.crear_desde_interpretacion = _revienta
+    try:
+        q, alertas, _ = _apretar_guardar(m, {"clasificacion": "tarea", "titulo": "x"})
+    finally:
+        crud.crear_desde_interpretacion = guardado
+    assert "No pude guardarlo" in alertas[-1], alertas
+
+
+# ── 5. Carrera: el escritor rechaza lo que la ruta acababa de aceptar ────
+
+def _con_ruta_ciega(m, campos, parches):
+    """Corre `crear_tarea` con las puertas de la ruta reemplazadas para que
+    digan «sí»: lo que se prueba es el escritor rechazando por su cuenta."""
+    guardados = {(mod, k): getattr(mod, k) for (mod, k) in parches}
+    try:
+        for (mod, k), v in parches.items():
+            setattr(mod, k, v)
+        return _crear(m, campos)
+    finally:
+        for (mod, k), v in guardados.items():
+            setattr(mod, k, v)
+
+
+def test_carrera_persona_primero_y_responsable_vuelven_con_su_aviso_no_con_un_500():
+    m, pid = _uno()
+    borrada = m.persona("Vieja", borrada=True)
+    tarea_borrada = m.tarea("borrada", borrada=True)
+
+    async def _si(*a, **k):
+        return True
+
+    async def _primero(valor, **k):
+        return int(valor)
+    r = _con_ruta_ciega(m, {"titulo": "x", "proyecto": str(pid),
+                            "persona": str(borrada)}, {(db, "persona_viva"): _si})
+    assert _destino(r) == f"/tareas/nueva?proyecto={pid}&error=persona"
+    r = _con_ruta_ciega(m, {"titulo": "x", "proyecto": str(pid),
+                            "primero_id": str(tarea_borrada)},
+                        {(crud, "_primero_que_vale"): _primero})
+    assert _destino(r) == f"/tareas/nueva?proyecto={pid}&error=primero"
+    r = _con_ruta_ciega(m, {"titulo": "x", "proyecto": str(pid)},
+                        {(panel, "_responsable_pedido"): lambda c: (True, A.AJENO)})
+    assert _destino(r) == f"/tareas/nueva?proyecto={pid}&error=responsable"
+    assert m.n_tareas() == 1 and m.n_bandeja() == 0    # solo la «borrada» de arriba
+
+
+def test_carrera_del_proyecto_cerrado_en_medio_vuelve_con_su_aviso():
+    m, pid = _uno()
+    cerrado = m.proyecto("Cerrado", estado="cerrado")
+
+    async def _pasa(valor):
+        return {"id": valor, "nombre": "x", "area": None, "estado": "activo"}
+    r = _con_ruta_ciega(m, {"titulo": "x", "proyecto": str(cerrado)},
+                        {(db, "proyecto_para_tareas"): _pasa})
+    assert _destino(r) == "/tareas/nueva?error=proyecto_cerrado"
+    assert m.n_tareas() == 0
+
+
+def test_cualquier_otro_no_del_escritor_dice_que_no_se_guardo_nada():
+    m, pid = _uno()
+
+    async def _no(*a, **k):
+        raise ValueError("no")
+    r = _con_ruta_ciega(m, {"titulo": "x", "proyecto": str(pid)},
+                        {(db, "crear_tarea_desde_el_panel"): _no})
+    assert _destino(r) == f"/tareas/nueva?proyecto={pid}&error=rechazada"
+    assert "No se guardó nada" in _alta(m, proyecto=str(pid), error="rechazada")
 
 
 if __name__ == "__main__":

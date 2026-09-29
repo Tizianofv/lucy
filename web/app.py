@@ -668,7 +668,8 @@ async def papelera(request: Request, restaurado: int = 0):
 @app.get("/tareas", response_class=HTMLResponse)
 async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
                  asignadas: int = 0, movidas: int = 0, derivadas: int = 0,
-                 derivadas_ids: str = "", responsable: str = ""):
+                 derivadas_ids: str = "", responsable: str = "",
+                 sin_cerrar: str = ""):
     """El panel de tareas: lo que hay que hacer, para las dos personas.
 
     UNA SOLA LISTA PARA LOS DOS, por decisión de Tiziano —"está bien que Rosi
@@ -746,6 +747,8 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
     return plantillas.TemplateResponse(
         request, "tareas.html",
         {"grupos": grupos, "hay_mas": datos["hay_mas"],
+         "sin_cerrar": ([int(i) for i in sin_cerrar.split(",")]
+                        if re.fullmatch(r"\d{1,9}(,\d{1,9})*", sin_cerrar) else []),
          "botones": botones, "filtro": clave_f, "filtro_etiqueta": etiqueta_f,
          "filtro_aviso": aviso_filtro, "filtro_pedido": (responsable or "").strip(),
          "total_visibles": len(todas_las_filas), "mostradas": mostradas,
@@ -1294,6 +1297,7 @@ async def guardar_tareas(request: Request):
     formulario = await request.form()
     hechas, asignadas, movidas, ignoradas = 0, 0, 0, 0
     hijas_creadas: list[int] = []
+    sin_cerrar: list[int] = []
     # Se pide UNA sola vez, no una por tarea: `db.areas()` ya tolera la
     # migración del área sin aplicar (devuelve `[]`), y con `[]` ningún
     # renglón derivado puede llevar área -- el mismo estado en el que se ve
@@ -1346,10 +1350,12 @@ async def guardar_tareas(request: Request):
         except db.ProyectoNoAdmiteTareas as e:
             # El proyecto de esta tarea está cerrado y se pidió una derivada:
             # `cerrar_y_derivar` no cerró NADA (D6: si la nueva no vale, la
-            # vieja tampoco). Se cuenta como cambio sin efecto y se deja rastro.
+            # vieja tampoco). Se cuenta como cambio sin efecto, se deja rastro
+            # y se le DICE a quien guardó cuál no se cerró (`sin_cerrar`).
             log.warning("Panel de tareas: derivada rechazada, el proyecto no "
                         "admite tareas (%s)", e.clave)
             ignoradas += 1
+            sin_cerrar.append(tid)
             continue
         if resultado is None:
             ignoradas += 1
@@ -1405,7 +1411,8 @@ async def guardar_tareas(request: Request):
     return RedirectResponse(
         f"/tareas?guardadas={hechas}&asignadas={asignadas}&movidas={movidas}"
         f"&derivadas={len(hijas_creadas)}&derivadas_ids={ids_derivadas}"
-        f"{filtro_url}",
+        + (f"&sin_cerrar={','.join(str(i) for i in sin_cerrar)}" if sin_cerrar else "")
+        + f"{filtro_url}",
         status_code=303)
 
 
@@ -1616,6 +1623,15 @@ async def crear_tarea(request: Request):
         return RedirectResponse(
             "/tareas/nueva?error=proyecto" + ("_cerrado" if e.clave == "cerrado"
                                               else ""), status_code=303)
+    except db.TareaNoValida as e:
+        # El escritor rechazó el responsable, la persona o el «Primero:» que la
+        # ruta acababa de dar por buenos (cambiaron en medio): mismo aviso que
+        # si se hubiera rechazado antes, nunca un 500.
+        return _vuelta(e.clave)
+    except ValueError as e:
+        # Cualquier otro «no» del escritor: no se guardó nada y se dice.
+        log.warning("Panel de tareas: el escritor rechazó la tarea a mano: %s", e)
+        return _vuelta("rechazada")
     if proyecto_id is not None:
         # Al guardar se vuelve AL PROYECTO, y el aviso dice lo que pasó. Si es
         # de Code y la sala no la va a ver (su proyecto no es del área
