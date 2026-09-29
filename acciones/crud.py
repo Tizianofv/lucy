@@ -40,6 +40,14 @@ TABLAS = ("tareas", "eventos", "notas", "movimientos", "personas", "proyectos",
           "lugares", "preferencias", "micro_pasos")
 
 
+class NoDeNegocio(ValueError):
+    """Un «no» de una regla de negocio de `crud` al CREAR (responsable, área o
+    «Primero:» que no valen, proyecto cerrado, cita/tarea que ya existía…): un
+    motivo pensado para leerse. Es lo ÚNICO que el botón de la tarjeta de
+    Telegram enseña tal cual; cualquier otro `ValueError` es un fallo de
+    programación y sigue con su traceback y el aviso genérico."""
+
+
 class FaltanDatos(Exception):
     """No se puede crear la entidad porque falta un dato obligatorio.
 
@@ -249,7 +257,7 @@ async def crear_desde_interpretacion(
     if clas in ("gasto", "ingreso") and not r.get("monto"):
         raise FaltanDatos("el monto")
     if clas not in ("tarea", "cita", "nota", "idea", "gasto", "ingreso"):
-        raise ValueError(f"'{clas}' no crea ninguna entidad.")
+        raise NoDeNegocio(f"'{clas}' no crea ninguna entidad.")
 
     # EL RESPONSABLE, SOLO PARA TAREAS, por la MISMA puerta que usa `editar()`
     # para cambiarlo — `_por_las_puertas` con `PUERTAS["tareas"]`, y no una
@@ -276,7 +284,7 @@ async def crear_desde_interpretacion(
                 "tareas", {"responsable_chat_id": r.get("responsable_chat_id")}
             )["responsable_chat_id"]
         except ValueError as e:
-            raise ValueError(f"No creé la tarea: {e}.") from e
+            raise NoDeNegocio(f"No creé la tarea: {e}.") from e
 
     # Personas y proyectos se resuelven fuera de la transacción a propósito:
     # crear una persona de más es inofensivo y reutilizable, mientras que
@@ -294,7 +302,7 @@ async def crear_desde_interpretacion(
         try:
             await db.proyecto_para_tareas(proyecto_id)
         except db.ProyectoNoAdmiteTareas as e:
-            raise ValueError(f"No creé la tarea: {e}.") from e
+            raise NoDeNegocio(f"No creé la tarea: {e}.") from e
 
     # EL ÁREA, SOLO PARA TAREAS (encargo 4), por la MISMA puerta que usa
     # `editar()` para cambiarla — `_area_que_vale`, y no una copia del
@@ -315,7 +323,7 @@ async def crear_desde_interpretacion(
             area_tarea = await _area_que_vale(
                 r.get("area"), tabla="tareas", proyecto_id=proyecto_id)
         except ValueError as e:
-            raise ValueError(f"No creé la tarea: {e}.") from e
+            raise NoDeNegocio(f"No creé la tarea: {e}.") from e
     else:
         area_tarea = None
 
@@ -332,7 +340,7 @@ async def crear_desde_interpretacion(
         try:
             primero_tarea = await _primero_que_vale(r.get("primero_id"))
         except ValueError as e:
-            raise ValueError(f"No creé la tarea: {e}.") from e
+            raise NoDeNegocio(f"No creé la tarea: {e}.") from e
     else:
         primero_tarea = None
 
@@ -403,7 +411,7 @@ async def crear_desde_interpretacion(
                         nombres = config.NOMBRES_POR_CHAT
                         quien = nombres.get(
                             actual, "alguien que no tiene nombre puesto")
-                        raise ValueError(
+                        raise NoDeNegocio(
                             f"No creé la tarea: ya existía («{titulo}», "
                             f"#{ya[0]}) y la tiene {quien}. No la "
                             "reasigné — si hay que cambiarla, dímelo "
@@ -493,7 +501,7 @@ async def crear_desde_interpretacion(
                     "eventos", {"duenos_chat_id": r.get("duenos_chat_id")}
                 )["duenos_chat_id"]
             except ValueError as e:
-                raise ValueError(f"No creé la cita: {e}.") from e
+                raise NoDeNegocio(f"No creé la cita: {e}.") from e
 
             params_evento = (
                 bandeja_id, titulo, cuando, termina,
@@ -533,7 +541,7 @@ async def crear_desde_interpretacion(
                 if not _es_columna_ausente(e):
                     raise
                 if duenos_chat_id:
-                    raise ValueError(
+                    raise NoDeNegocio(
                         "No creé la cita: pediste dueño, pero la base "
                         "todavía no tiene esa columna (falta aplicar la "
                         "migración de \"las citas con dueño\").") from e
@@ -1727,6 +1735,31 @@ async def borrar(tabla: str, registro_id: int, motivo: str) -> int | None:
         )
 
 
+async def _recibir_al_deshacer(cur, tarea_id, quedara, reaparece=False):
+    """La puerta del proyecto para `deshacer` de una TAREA.
+
+    `quedara` es el proyecto que restauraría la huella; `reaparece` es el caso de
+    deshacer un borrado (la tarea vuelve a verse en el proyecto que ya tiene).
+    Solo pasa por la puerta si el resultado deja la tarea en un proyecto distinto
+    del actual, o si reaparece dentro de uno. Cerrado o archivado: «No lo
+    deshice: …», sin escribir."""
+    await cur.execute("SELECT proyecto_id FROM tareas WHERE id = %s", (tarea_id,))
+    fila = await cur.fetchone()
+    actual = fila["proyecto_id"] if fila else None
+    if reaparece:
+        destino = actual
+    else:
+        destino = quedara
+        if destino is None or destino == actual:
+            return
+    if destino is None:
+        return
+    try:
+        await db.proyecto_admite_tareas(cur, destino)
+    except db.ProyectoNoAdmiteTareas as e:
+        raise ValueError(f"No lo deshice: {e}.") from e
+
+
 async def deshacer(log_id: int) -> str:
     """Revierte una acción registrada. Devuelve una frase de qué se revirtió.
 
@@ -1781,6 +1814,10 @@ async def deshacer(log_id: int) -> str:
             que = "lo que había creado"
 
         elif huella["accion"] == "borrar":
+            # Restaurar una tarea archivada la hace REAPARECER dentro de su
+            # proyecto: también es «recibir».
+            if tabla == "tareas":
+                await _recibir_al_deshacer(cur, registro_id, None, reaparece=True)
             await conn.execute(
                 f"UPDATE {tabla} SET borrado_en = NULL WHERE id = %s", (registro_id,))
             que = "lo que había archivado"
@@ -1814,19 +1851,16 @@ async def deshacer(log_id: int) -> str:
                         f"No lo deshice: la tarea volvería a quien la tenía, y {e}."
                     ) from e
                 raise ValueError(f"No lo deshice: {e}.") from e
-            # DESHACER TAMBIÉN «RECIBE»: si deshacer devolvería la tarea a un
-            # proyecto del que esta edición la sacó, ese proyecto tiene que
-            # admitirla hoy (puede haberse cerrado desde entonces). Solo si esta
-            # edición cambió el proyecto (compara `antes` con `despues` de la
-            # huella; una edición intermedia que la haya movido no se ve: límite
-            # dicho).
-            if (tabla == "tareas" and "proyecto_id" in columnas
-                    and antes.get("proyecto_id") is not None
-                    and antes.get("proyecto_id") != despues.get("proyecto_id")):
-                try:
-                    await db.proyecto_admite_tareas(cur, antes["proyecto_id"])
-                except db.ProyectoNoAdmiteTareas as e:
-                    raise ValueError(f"No lo deshice: {e}.") from e
+            # DESHACER TAMBIÉN «RECIBE»: si el resultado deja la tarea en un
+            # proyecto DISTINTO del que tiene AHORA, ese proyecto tiene que
+            # admitirla hoy (puede haberse cerrado desde entonces). Se compara con
+            # el proyecto actual de la fila, no con lo que decía la huella: un
+            # deshacer viejo, después de que otra edición la movió, también entra
+            # por acá. Deshacer un cambio que NO la mueve (el proyecto que
+            # restaura es el mismo que ya tiene) sigue funcionando en un proyecto
+            # cerrado.
+            if tabla == "tareas" and "proyecto_id" in columnas:
+                await _recibir_al_deshacer(cur, registro_id, antes.get("proyecto_id"))
             asignaciones = ", ".join(f"{c} = r.{c}" for c in columnas)
             await conn.execute(
                 f"UPDATE {tabla} t SET {asignaciones} "

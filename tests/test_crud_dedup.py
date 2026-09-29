@@ -1040,21 +1040,25 @@ def test_todo_lo_que_toca_area_o_proyecto_id_en_crud_pasa_por_la_misma_puerta():
         if not (menciona_area or menciona_proyecto):
             continue
         vistas.append(nodo.name)
+        if nodo.name == "_recibir_al_deshacer":
+            assert "proyecto_admite_tareas(" in texto
+            continue
         if nodo.name == "deshacer":
             # `deshacer` nombra `proyecto_id` SOLO para volver a pasar por la
             # puerta del proyecto cerrado (`db.proyecto_admite_tareas`) antes
             # de devolver una tarea a un proyecto; el área la restaura del
             # mismo `antes` de la huella, consistente con el CHECK. Lo que se
             # exige de ella es esa puerta, no `_area_que_vale`.
-            assert "proyecto_admite_tareas(" in texto, (
+            assert "_recibir_al_deshacer(" in texto, (
                 "deshacer devuelve tareas a un proyecto sin la puerta del "
-                "proyecto cerrado")
+                "proyecto cerrado (`_recibir_al_deshacer`)")
             continue
         if "_area_que_vale(" not in texto:
             culpables.append(nodo.name)
     assert vistas, ("no se encontró ninguna función que mencione 'area' ni "
                     "'proyecto_id' -- la prueba dejó de medir algo")
-    esperadas = {"crear_desde_interpretacion", "editar", "deshacer"}
+    esperadas = {"crear_desde_interpretacion", "editar", "deshacer",
+                 "_recibir_al_deshacer"}
     assert set(vistas) == esperadas, (
         f"aparecieron funciones nuevas que tocan 'area' o 'proyecto_id': "
         f"{set(vistas) - esperadas}. Revisá "

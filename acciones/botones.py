@@ -331,17 +331,23 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             show_alert=True,
         )
         return
-    except ValueError as e:
-        # `crud` dice «no» con un ValueError y un motivo (proyecto cerrado,
-        # responsable que no vale, nombre de proyecto…): ese motivo es lo que
-        # se le muestra. Reintentar SIN cambiar nada no sirve, y no se promete.
-        # La tarjeta queda abierta (la fila vuelve a `esperando_confirmacion`)
-        # por si el motivo se arregla, p. ej. si el proyecto se reabre.
+    except (crud.NoDeNegocio, db.NombreDeProyectoNoVale) as e:
+        # `crud` dice «no» con un motivo pensado para leerse (`NoDeNegocio`:
+        # proyecto cerrado, responsable que no vale…, o el nombre de proyecto
+        # que no vale): ESE motivo es lo que se le muestra, y solo esos bajan
+        # a `warning`. Cualquier otro `ValueError` es un fallo de programación
+        # y cae abajo, con su traceback. Reintentar SIN cambiar nada no sirve,
+        # y no se promete. La tarjeta queda abierta (la fila vuelve a
+        # `esperando_confirmacion`).
         await db.cambiar_estado(bandeja_id, "esperando_confirmacion")
         log.warning("Rechazada la entidad de #%s: %s", bandeja_id, e)
+        # «Si el proyecto se reabre, vuelve a tocar» solo es verdad si el motivo
+        # ES que el proyecto está cerrado.
+        causa = e.__cause__
         cierre = (" La tarjeta sigue abierta: si el proyecto se reabre, "
                   "vuelve a tocar ✅."
-                  if isinstance(e.__cause__, db.ProyectoNoAdmiteTareas) else "")
+                  if isinstance(causa, db.ProyectoNoAdmiteTareas)
+                  and causa.clave == "cerrado" else "")
         await q.answer(f"{e}{cierre}"[:190], show_alert=True)
         return
     except Exception:

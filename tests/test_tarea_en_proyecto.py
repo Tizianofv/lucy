@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import inspect
+import textwrap
 import json
 import os
 import re
@@ -543,8 +545,15 @@ def test_todo_lo_que_crea_o_mueve_tareas_de_proyecto_espera_a_la_puerta_del_proy
     for fn in (crud.editar, crud.deshacer):
         assert tr._id_de(fn) in genericos, f"el censo no ve al genérico {fn.__name__}"
         encontrados[tr._id_de(fn)] = genericos[tr._id_de(fn)]
-    sin_puerta = sorted(q for q, f in encontrados.items()
-                        if not (_PUERTAS & _esperadas(f)))
+    # `deshacer` llega a la puerta por su ayudante `_recibir_al_deshacer`, que a
+    # su vez tiene que ESPERAR a la puerta (se exige abajo).
+    assert _PUERTAS & _esperadas(ast.parse(textwrap.dedent(
+        inspect.getsource(crud._recibir_al_deshacer)))), (
+        "`_recibir_al_deshacer` no espera a la puerta del proyecto")
+    sin_puerta = sorted(
+        q for q, f in encontrados.items()
+        if not ((_PUERTAS | ({"_recibir_al_deshacer"} if q.endswith("::deshacer")
+                             else set())) & _esperadas(f)))
     assert not sin_puerta, (
         f"escriben tareas con proyecto sin ESPERAR a la puerta (llamarla sin "
         f"`await` no la corre): {sin_puerta}")
@@ -755,10 +764,19 @@ def test_deshacer_no_devuelve_una_tarea_a_un_proyecto_que_ya_se_cerro():
 
 # ── 2. La pantalla dice cuál derivada no se cerró ────────────────────────
 
-def _tareas_pantalla(**kw):
-    conn = base._Conn(areas=A.AREAS)
-    html = base._con_base(conn, lambda: panel.tareas(
-        base._get("/tareas"), **kw)).body.decode()
+def _tareas_pantalla(m, **kw):
+    """`/tareas` con su plantilla; la base es la de `m` (sqlite) para el aviso de
+    `sin_cerrar`, que SÍ mira la base. Solo la lista de tareas de la pantalla se
+    reemplaza (su consulta es de Postgres) por una vacía."""
+    async def _vacia(*a, **k):
+        return {"grupos": [], "hay_mas": False}
+    guardado = db.tareas_por_grupo
+    db.tareas_por_grupo = _vacia
+    try:
+        html = N._correr(m, lambda: panel.tareas(base._get("/tareas"), **kw)
+                         ).body.decode()
+    finally:
+        db.tareas_por_grupo = guardado
     return " ".join(re.sub(r"<[^>]+>", "", html).split())   # solo el texto que se lee
 
 
@@ -779,18 +797,67 @@ def test_la_ruta_dice_cual_no_se_cerro_aunque_otras_si():
     assert q["guardadas"] == ["2"] and q["sin_cerrar"] == [str(mala)], _destino(r)
     estados = {f["id"]: f["estado"] for f in m.filas()}
     assert estados == {mala: "pendiente", b1: "hecha", b2: "hecha"}
-    html = _tareas_pantalla(guardadas=2, sin_cerrar=q["sin_cerrar"][0])
+    html = _tareas_pantalla(m, guardadas=2, sin_cerrar=q["sin_cerrar"][0])
     assert f"No se cerró la tarea #{mala}" in html
     assert "su proyecto está cerrado" in html and "tampoco se creó" in html
     assert "Sigue pendiente" in html
 
 
-def test_la_pantalla_pluraliza_y_no_pinta_lo_que_no_es_una_lista_de_ids():
-    assert "No se cerraron las tareas #3, #9" in _tareas_pantalla(sin_cerrar="3,9")
-    assert "Siguen pendientes" in _tareas_pantalla(sin_cerrar="3,9")
-    for basura in ("", "x", "1;2", "<b>1</b>", "1,", ",1", "1,,2", "-1", "1e3",
-                   "9" * 30):
-        assert "No se cerr" not in _tareas_pantalla(sin_cerrar=basura), basura
+def _mundo_de_sin_cerrar():
+    A._casa()
+    m = Mundo()
+    cerrado = m.proyecto("Cerrado", estado="cerrado")
+    activo = m.proyecto("Activo")
+    borrado = m.proyecto("Borrado", estado="cerrado", borrado=True)
+    for tid, kw in ((3, {"proyecto": cerrado}), (9, {"proyecto": cerrado}),
+                    (20, {"proyecto": activo}),                    # proyecto activo
+                    (21, {"proyecto": cerrado, "estado": "hecha"}),  # ya hecha
+                    (22, {"proyecto": cerrado, "borrada": True}),    # a la papelera
+                    (23, {"proyecto": borrado})):                  # proyecto archivado
+        m.con.execute(
+            "INSERT INTO tareas (id, titulo, proyecto_id, estado, borrado_en) "
+            "VALUES (?,?,?,?,?)",
+            (tid, f"t{tid}", kw["proyecto"], kw.get("estado", "pendiente"),
+             "2026-09-01" if kw.get("borrada") else None))
+    return m
+
+
+def test_la_pantalla_pluraliza_y_solo_afirma_lo_que_la_base_confirma():
+    m = _mundo_de_sin_cerrar()
+    assert "No se cerraron las tareas #3, #9" in _tareas_pantalla(m, sin_cerrar="3,9")
+    assert "Siguen pendientes" in _tareas_pantalla(m, sin_cerrar="3,9")
+    assert "No se cerró la tarea #3:" in _tareas_pantalla(m, sin_cerrar="3")
+    # Lo que la base NO confirma no se afirma: no existe, activo, hecha,
+    # papelera, proyecto archivado.
+    for crudo in ("999", "0", "20", "21", "22", "23", "20,21,22,23,999"):
+        assert "No se cerr" not in _tareas_pantalla(m, sin_cerrar=crudo), crudo
+    # Mezcla: solo sale el que vale.
+    html = _tareas_pantalla(m, sin_cerrar="999,3,20")
+    assert "No se cerró la tarea #3:" in html and "#999" not in html and "#20" not in html
+    # Sin repetidos.
+    assert "No se cerró la tarea #3:" in _tareas_pantalla(m, sin_cerrar="3,3,3")
+
+
+def test_la_pantalla_no_pinta_lo_que_no_es_una_lista_de_ids_ascii():
+    m = _mundo_de_sin_cerrar()
+    for basura in ("", "x", "1;2", "<b>3</b>", "3,", ",3", "3,,9", "-3", "3e0",
+                   "9" * 30, "٣", "٣,٩", "３", "3 ,9", " 3"):
+        assert "No se cerr" not in _tareas_pantalla(m, sin_cerrar=basura), repr(basura)
+
+
+def test_la_pantalla_pone_tope_a_cuantos_ids_mira():
+    A._casa()
+    m = Mundo()
+    cerrado = m.proyecto("Cerrado", estado="cerrado")
+    ids = list(range(100, 100 + db.TOPE_SIN_CERRAR + 5))
+    for i in ids:
+        m.con.execute("INSERT INTO tareas (id, titulo, proyecto_id) VALUES (?,?,?)",
+                      (i, f"t{i}", cerrado))
+    html = _tareas_pantalla(m, sin_cerrar=",".join(map(str, ids)))
+    assert f"#{ids[db.TOPE_SIN_CERRAR - 1]}" in html
+    assert f"#{ids[db.TOPE_SIN_CERRAR]}" not in html, "no puso tope"
+    assert N._correr(m, lambda: db.tareas_sin_cerrar_por_proyecto_cerrado(
+        ids)) == ids[:db.TOPE_SIN_CERRAR]
 
 
 def test_sin_derivadas_rechazadas_no_hay_aviso_de_sin_cerrar():
@@ -934,6 +1001,173 @@ def test_cualquier_otro_no_del_escritor_dice_que_no_se_guardo_nada():
                         {(db, "crear_tarea_desde_el_panel"): _no})
     assert _destino(r) == f"/tareas/nueva?proyecto={pid}&error=rechazada"
     assert "No se guardó nada" in _alta(m, proyecto=str(pid), error="rechazada")
+
+
+# ── Deshacer también «recibe»: restaurar por cualquier camino ────────────
+
+def _editar_tarea(m, tid, cambios):
+    N._correr(m, lambda: crud.editar("tareas", tid, cambios, motivo="prueba"))
+    return N._ultimo_log(m)
+
+
+def _proyecto_de(m, tid):
+    return [f for f in m.filas() if f["id"] == tid][0]["proyecto_id"]
+
+
+def test_deshacer_una_edicion_vieja_no_mete_la_tarea_en_un_proyecto_cerrado():
+    """Renombrar → mover a otro proyecto → cerrar el viejo → deshacer el
+    renombre: esa huella lleva el proyecto de ANTES; restaurarlo devolvería la
+    tarea al proyecto cerrado."""
+    m, viejo = _uno()
+    nuevo = m.proyecto("Nuevo")
+    t = m.tarea("original", proyecto=viejo)
+    log_renombre = _editar_tarea(m, t, {"titulo": "renombrada"})
+    _editar_tarea(m, t, {"proyecto_id": nuevo})
+    m.con.execute("UPDATE proyectos SET estado = 'cerrado' WHERE id = ?", (viejo,))
+    e = N._rechazo(m, N._deshacer(m, log_renombre))
+    assert isinstance(e, ValueError) and str(e).startswith("No lo deshice:"), e
+    assert "cerrado" in str(e)
+    assert _proyecto_de(m, t) == nuevo, "la devolvió a un proyecto cerrado"
+    assert [f for f in m.filas() if f["id"] == t][0]["titulo"] == "renombrada"
+    # Con el proyecto abierto de nuevo, sí.
+    m.con.execute("UPDATE proyectos SET estado = 'activo' WHERE id = ?", (viejo,))
+    N._correr(m, N._deshacer(m, log_renombre))
+    assert _proyecto_de(m, t) == viejo
+
+
+def test_deshacer_el_borrado_de_una_tarea_no_la_hace_reaparecer_en_un_proyecto_cerrado():
+    m, pid = _uno()
+    t = m.tarea("de disco", proyecto=pid)
+    log_borrado = N._correr(m, lambda: crud.borrar("tareas", t, "prueba"))
+    m.con.execute("UPDATE proyectos SET estado = 'cerrado' WHERE id = ?", (pid,))
+    e = N._rechazo(m, N._deshacer(m, log_borrado))
+    assert isinstance(e, ValueError) and "No lo deshice:" in str(e) and "cerrado" in str(e)
+    assert m.con.execute("SELECT borrado_en FROM tareas WHERE id=?",
+                         (t,)).fetchone()[0] is not None, "reapareció"
+    # Proyecto archivado: tampoco.
+    m.con.execute("UPDATE proyectos SET estado='activo', borrado_en='2026-09-01' "
+                  "WHERE id = ?", (pid,))
+    assert isinstance(N._rechazo(m, N._deshacer(m, log_borrado)), ValueError)
+    # Proyecto abierto: reaparece.
+    m.con.execute("UPDATE proyectos SET borrado_en = NULL WHERE id = ?", (pid,))
+    N._correr(m, N._deshacer(m, log_borrado))
+    assert m.con.execute("SELECT borrado_en FROM tareas WHERE id=?",
+                         (t,)).fetchone()[0] is None
+
+
+def test_deshacer_el_borrado_de_una_tarea_sin_proyecto_sigue_funcionando():
+    m, _ = _uno()
+    t = m.tarea("suelta")
+    log_borrado = N._correr(m, lambda: crud.borrar("tareas", t, "prueba"))
+    N._correr(m, N._deshacer(m, log_borrado))
+    assert m.con.execute("SELECT borrado_en FROM tareas WHERE id=?",
+                         (t,)).fetchone()[0] is None
+
+
+def test_deshacer_un_cambio_que_no_movio_la_tarea_funciona_en_un_proyecto_cerrado():
+    m, _ = _uno()
+    cerrado = m.proyecto("Cerrado", estado="cerrado")
+    t = m.tarea("original", proyecto=cerrado)
+    log_id = _editar_tarea(m, t, {"titulo": "cambiada"})
+    N._correr(m, N._deshacer(m, log_id))
+    fila = [f for f in m.filas() if f["id"] == t][0]
+    assert (fila["titulo"], fila["proyecto_id"]) == ("original", cerrado)
+
+
+def test_deshacer_un_movimiento_de_sin_proyecto_a_un_proyecto_vuelve_a_sin_proyecto():
+    m, pid = _uno()
+    t = m.tarea("suelta")
+    log_id = _editar_tarea(m, t, {"proyecto_id": pid})
+    assert _proyecto_de(m, t) == pid
+    # Aunque el proyecto ya se haya cerrado: sacar la tarea de ahí no es recibir.
+    m.con.execute("UPDATE proyectos SET estado = 'cerrado' WHERE id = ?", (pid,))
+    N._correr(m, N._deshacer(m, log_id))
+    assert _proyecto_de(m, t) is None
+
+
+def test_deshacer_un_movimiento_de_un_proyecto_a_otro_devuelve_si_el_de_antes_admite():
+    m, a = _uno()
+    b = m.proyecto("B")
+    t = m.tarea("x", proyecto=a)
+    log_id = _editar_tarea(m, t, {"proyecto_id": b})
+    N._correr(m, N._deshacer(m, log_id))
+    assert _proyecto_de(m, t) == a
+
+
+# ── El botón: la promesa solo cuando es verdad; solo el «no» de negocio baja de nivel ──
+
+def test_la_promesa_de_reabrir_solo_sale_si_el_motivo_es_que_esta_cerrado():
+    A._casa()
+    m = Mundo()
+    m.proyecto("Cerrado", estado="cerrado")
+    _, alertas, _ = _apretar_guardar(m, {"clasificacion": "tarea", "titulo": "x",
+                                         "proyecto": "cerrado"})
+    assert "vuelve a tocar" in alertas[-1], alertas
+    # Mismo callback, otro motivo del proyecto (ya no existe: carrera).
+    m2 = Mundo()
+    m2.proyecto("Activo")
+
+    async def _no_existe(pid):
+        raise db.ProyectoNoAdmiteTareas("no_existe", "ese proyecto no existe o ya no está")
+    guardado = db.proyecto_para_tareas
+    db.proyecto_para_tareas = _no_existe
+    try:
+        _, alertas, _ = _apretar_guardar(m2, {"clasificacion": "tarea", "titulo": "x",
+                                              "proyecto": "activo"})
+    finally:
+        db.proyecto_para_tareas = guardado
+    assert "No creé la tarea" in alertas[-1] and "vuelve a tocar" not in alertas[-1], alertas
+    # Y un «no» de otro tipo (responsable) tampoco promete nada de proyectos.
+    _, alertas, _ = _apretar_guardar(Mundo(), {"clasificacion": "tarea", "titulo": "x",
+                                               "responsable_chat_id": "nadie"})
+    assert "vuelve a tocar" not in alertas[-1]
+
+
+def test_un_valueerror_de_programacion_conserva_el_traceback_y_el_aviso_generico(caplog):
+    import logging
+    A._casa()
+    m = Mundo()
+    guardado = crud.crear_desde_interpretacion
+
+    async def _bug(*a, **k):
+        raise ValueError("un fallo de programación cualquiera")
+    crud.crear_desde_interpretacion = _bug
+    try:
+        with caplog.at_level(logging.WARNING, logger="lucy.botones"):
+            _, alertas, _ = _apretar_guardar(m, {"clasificacion": "tarea", "titulo": "x"})
+    finally:
+        crud.crear_desde_interpretacion = guardado
+    assert "No pude guardarlo" in alertas[-1], alertas
+    assert "programación" not in alertas[-1], "enseñó un ValueError que no es de negocio"
+    regs = [r for r in caplog.records if r.name == "lucy.botones"]
+    assert any(r.levelno == logging.ERROR and r.exc_info for r in regs), (
+        "perdió el traceback")
+
+
+def test_el_no_de_negocio_baja_a_warning_sin_traceback(caplog):
+    import logging
+    A._casa()
+    m = Mundo()
+    m.proyecto("Cerrado", estado="cerrado")
+    with caplog.at_level(logging.WARNING, logger="lucy.botones"):
+        _apretar_guardar(m, {"clasificacion": "tarea", "titulo": "x",
+                             "proyecto": "cerrado"})
+    regs = [r for r in caplog.records if r.name == "lucy.botones"]
+    assert regs and all(r.levelno == logging.WARNING and not r.exc_info for r in regs), regs
+
+
+def test_los_no_de_negocio_de_crud_son_de_su_clase_y_un_valueerror_suelto_no():
+    """El botón enseña `crud.NoDeNegocio` (y el nombre de proyecto que no vale).
+    Cada «No creé…» que lanza `crear_desde_interpretacion` es de esa clase."""
+    fuente = inspect.getsource(crud.crear_desde_interpretacion)
+    arbol = ast.parse(textwrap.dedent(fuente))
+    planos = [n for n in ast.walk(arbol) if isinstance(n, ast.Raise)
+              and isinstance(n.exc, ast.Call) and isinstance(n.exc.func, ast.Name)
+              and n.exc.func.id == "ValueError"]
+    assert not planos, (
+        f"crear_desde_interpretacion lanza ValueError sueltos: "
+        f"{[n.lineno for n in planos]}")
+    assert issubclass(crud.NoDeNegocio, ValueError)
 
 
 if __name__ == "__main__":

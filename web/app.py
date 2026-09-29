@@ -747,8 +747,12 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
     return plantillas.TemplateResponse(
         request, "tareas.html",
         {"grupos": grupos, "hay_mas": datos["hay_mas"],
-         "sin_cerrar": ([int(i) for i in sin_cerrar.split(",")]
-                        if re.fullmatch(r"\d{1,9}(,\d{1,9})*", sin_cerrar) else []),
+         # Lo que dice la URL NO se afirma sin mirar la base: solo los ids que
+         # existen, siguen pendientes y están en un proyecto cerrado. Solo
+         # dígitos ASCII (`\d` aceptaría otros alfabetos).
+         "sin_cerrar": await db.tareas_sin_cerrar_por_proyecto_cerrado(
+             [int(i) for i in sin_cerrar.split(",")]
+             if re.fullmatch(r"[0-9]{1,9}(,[0-9]{1,9})*", sin_cerrar) else []),
          "botones": botones, "filtro": clave_f, "filtro_etiqueta": etiqueta_f,
          "filtro_aviso": aviso_filtro, "filtro_pedido": (responsable or "").strip(),
          "total_visibles": len(todas_las_filas), "mostradas": mostradas,

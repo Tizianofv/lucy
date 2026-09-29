@@ -1225,6 +1225,36 @@ def sala_ve(responsable_chat_id, area_efectiva) -> bool:
     return responsable_chat_id == CHAT_ID_CODE and area_efectiva == AREA_TECNICA
 
 
+# Cuántos ids de `?sin_cerrar=` mira la pantalla como máximo.
+TOPE_SIN_CERRAR = 20
+
+
+async def tareas_sin_cerrar_por_proyecto_cerrado(ids) -> list[int]:
+    """De los `ids` que dice la URL de /tareas (`?sin_cerrar=`), los que de
+    verdad SIGUEN pendientes, viven y están en un proyecto CERRADO: los únicos de
+    los que la pantalla puede decir «no se cerró porque su proyecto está
+    cerrado». Sin repetidos, en orden, y como mucho `TOPE_SIN_CERRAR`. Una
+    consulta por id (SQL literal, sin armar el texto al vuelo): son pocos."""
+    limpios = list(dict.fromkeys(
+        i for i in ids if isinstance(i, int) and not isinstance(i, bool) and i > 0
+    ))[:TOPE_SIN_CERRAR]
+    salida = []
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        for i in limpios:
+            await cur.execute(
+                """
+                SELECT t.id FROM tareas t
+                  JOIN proyectos p ON p.id = t.proyecto_id
+                 WHERE t.id = %s AND t.borrado_en IS NULL AND t.estado = %s
+                   AND p.borrado_en IS NULL AND p.estado = %s
+                """,
+                (i, ESTADO_PENDIENTE, ESTADO_PROYECTO_CERRADO))
+            if await cur.fetchone() is not None:
+                salida.append(i)
+    return salida
+
+
 async def personas_vivas() -> list[dict]:
     """`[{id, nombre}]` de las personas no archivadas, para elegir «de quién
     trata» una tarea."""
