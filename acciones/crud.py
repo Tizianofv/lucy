@@ -286,6 +286,16 @@ async def crear_desde_interpretacion(
     proyecto_id = await db.buscar_o_crear_proyecto(
         str(r.get("proyecto") or ""), bandeja_id=bandeja_id)
 
+    # UN PROYECTO CERRADO NO RECIBE TAREAS (pieza 2 del diseño «proyectos»), por
+    # la MISMA puerta que el alta del panel y las derivadas. Se corta la
+    # creación entera y se dice por qué: no se crea la tarea «sin proyecto»
+    # como si no se hubiera pedido.
+    if clas == "tarea" and proyecto_id is not None:
+        try:
+            await db.proyecto_para_tareas(proyecto_id)
+        except db.ProyectoNoAdmiteTareas as e:
+            raise ValueError(f"No creé la tarea: {e}.") from e
+
     # EL ÁREA, SOLO PARA TAREAS (encargo 4), por la MISMA puerta que usa
     # `editar()` para cambiarla — `_area_que_vale`, y no una copia del
     # criterio (hallazgo del testigo sobre `e94b37a`: la primera versión de

@@ -103,17 +103,18 @@ class _Cursor:
             # Se distingue por las COLUMNAS DEL TEXTO del INSERT, no por
             # cuántos parámetros llegan.
             c.sig_tarea += 1
-            columnas = s.split("VALUES")[0]
-            if re.search(r"\barea\b", columnas):
-                (bandeja_id, titulo, vence_en, anticipos, area,
-                 responsable) = params
-            else:
-                bandeja_id, titulo, vence_en, anticipos, responsable = params
-                area = None
-            fila = {"id": c.sig_tarea, "bandeja_id": bandeja_id,
-                    "titulo": titulo, "vence_en": vence_en,
-                    "anticipos_min": anticipos, "area": area,
-                    "responsable_chat_id": responsable,
+            columnas = [x.strip() for x in re.search(
+                r"INSERT INTO tareas\s*\(([^)]*)\)", s).group(1).split(",")]
+            dado = dict(zip(columnas, params))
+            fila = {"id": c.sig_tarea, "bandeja_id": dado["bandeja_id"],
+                    "titulo": dado["titulo"], "vence_en": dado["vence_en"],
+                    "anticipos_min": dado["anticipos_min"],
+                    "area": dado.get("area"),
+                    "responsable_chat_id": dado["responsable_chat_id"],
+                    "proyecto_id": dado.get("proyecto_id"),
+                    "primero_id": dado.get("primero_id"),
+                    "detalle": dado.get("detalle"),
+                    "persona_id": dado.get("persona_id"),
                     "estado": "pendiente",
                     "creado_en": datetime(2026, 9, 9, 12, tzinfo=UTC),
                     "completado_en": None, "borrado_en": None}

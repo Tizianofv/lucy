@@ -1,7 +1,20 @@
 {% extends "base.html" %}{% set activo='tareas' %}
 {% block titulo %}Nueva tarea{% endblock %}
 {% block cuerpo %}
-<h1>Nueva tarea</h1>
+{# DENTRO DE UN PROYECTO (`/tareas/nueva?proyecto=<id>`, pieza 2 del diseño
+   «proyectos»): la MISMA pantalla, con el proyecto fijado y los campos de más.
+   Sin proyecto es la de siempre. `proyecto` llega SOLO si el proyecto existe,
+   no está en la papelera y no está cerrado. #}
+<h1>{% if proyecto %}Nueva tarea en «{{ proyecto.nombre }}»{% else %}Nueva tarea{% endif %}</h1>
+
+{% if motivo_proyecto == 'cerrado' %}
+<p class="aviso">Ese proyecto está cerrado y no se le agregan tareas. Esta
+pantalla se abrió SIN proyecto: lo que guardes aquí quedará como una tarea
+suelta.</p>
+{% elif motivo_proyecto == 'no_existe' %}
+<p class="aviso">Ese proyecto no existe o ya no está. Esta pantalla se abrió SIN
+proyecto: lo que guardes aquí quedará como una tarea suelta.</p>
+{% endif %}
 
 {# El motivo del rechazo se dice con palabras, no con un código. El servidor
    manda una clave por la URL —`?error=titulo`— y acá se traduce: quien la lee
@@ -19,11 +32,25 @@ déjala en «Sin área».</p>
 {% elif error == 'responsable' %}
 <p class="aviso">Ese responsable no vale. Elige uno de la lista, o déjalo en
 «Sin responsable».</p>
+{% elif error == 'proyecto' %}
+<p class="aviso">Ese proyecto no existe o ya no está: no se guardó nada.</p>
+{% elif error == 'proyecto_cerrado' %}
+<p class="aviso">Ese proyecto está cerrado: no se le agregan tareas y no se
+guardó nada.</p>
+{% elif error == 'primero' %}
+<p class="aviso">Esa tarea de «Primero:» no existe o ya no está: no se guardó
+nada.</p>
+{% elif error == 'persona' %}
+<p class="aviso">Esa persona no existe o está archivada: no se guardó nada.</p>
+{% elif error == 'detalle' %}
+<p class="aviso">El detalle pasa de {{ largo_detalle }} caracteres: no se guardó
+nada.</p>
 {% endif %}
 
 {# UN SOLO formulario, igual que en el resto del panel. Sin JavaScript: si el
    navegador no corre nada, esto sigue guardando. #}
 <form method="post" action="/tareas/nueva">
+  {% if proyecto %}<input type="hidden" name="proyecto" value="{{ proyecto.id }}">{% endif %}
   <p>
     <label for="titulo">Qué hay que hacer</label><br>
     <input id="titulo" name="titulo" type="text" required
@@ -41,6 +68,10 @@ déjala en «Sin área».</p>
     <br><span class="suave">Opcional. Vacío = «Sin fecha», que en esta pantalla
     tiene su propio grupo y se ve igual.</span>
   </p>
+  {% if proyecto %}
+  <p class="suave">Área: la tarea hereda la del proyecto
+  ({{ proyecto.area or 'el proyecto no tiene área' }}); aquí no se elige otra.</p>
+  {% else %}
   <p>
     <label for="area">Área</label><br>
     <select id="area" name="area">
@@ -56,6 +87,7 @@ déjala en «Sin área».</p>
     <br><span class="suave">Opcional. Una tarea sin área se ve igual, con una
     etiqueta gris.</span>
   </p>
+  {% endif %}
   <p>
     <label for="responsable">Responsable</label><br>
     <select id="responsable" name="responsable">
@@ -70,16 +102,59 @@ déjala en «Sin área».</p>
         {%- if valor == responsable_elegido %} selected{% endif %}>{{ etiqueta }}</option>
       {% endfor %}
     </select>
+    {% if proyecto %}
+    <br><span class="suave">Opcional.
+    {% if sala_no_la_ve %}Si escoges {{ nombre_code }}, la sala de control NO
+    verá esta tarea: solo ve las del área «{{ area_tecnica }}» y este proyecto
+    es de «{{ proyecto.area or 'ninguna área' }}». La tarea se guarda igual.
+    {% else %}El proyecto es del área «{{ area_tecnica }}»: si escoges
+    {{ nombre_code }}, la sala de control la verá.{% endif %}</span>
+    {% else %}
     <br><span class="suave">Opcional. Si escoges {{ nombre_code }}, el área
     queda en «{{ area_tecnica }}» sola, sin mirar la que hayas elegido arriba:
     es la única que ve la sala de control.</span>
+    {% endif %}
   </p>
+  {% if proyecto %}
+  <p>
+    <label for="primero_id">Primero</label><br>
+    <select id="primero_id" name="primero_id">
+      <option value="">Ninguna</option>
+      {% for t in primeros %}
+      <option value="{{ t.id }}">{{ t.titulo }} ({{ t.estado }})</option>
+      {% endfor %}
+    </select>
+    <br><span class="suave">Opcional. Otra tarea que hay que terminar antes que
+    ésta.</span>
+  </p>
+  <p>
+    <label for="persona">De quién trata</label><br>
+    <select id="persona" name="persona">
+      <option value="">Nadie</option>
+      {% for p in personas_lista %}
+      <option value="{{ p.id }}">{{ p.nombre }}</option>
+      {% endfor %}
+    </select>
+    <br><span class="suave">Opcional. Una persona que ya existe: aquí no se crean
+    personas.</span>
+  </p>
+  <p>
+    <label for="detalle">Detalle</label><br>
+    <textarea id="detalle" name="detalle" rows="4" maxlength="{{ largo_detalle }}"
+              style="width:100%;max-width:34rem"></textarea>
+    <br><span class="suave">Opcional. Hasta {{ largo_detalle }} caracteres.</span>
+  </p>
+  <p class="suave">Aquí no se ponen: prioridad, repetición ni avisos por Telegram
+  (la tarea nace sin aviso). Los pasos y los comentarios se agregan en la
+  pantalla de la tarea, después de guardarla. La tarea nace pendiente.</p>
+  {% endif %}
   <div class="barra">
     <button>Guardar la tarea</button>
-    <a href="/tareas" class="suave">Volver a la lista</a>
+    {% if proyecto %}<a href="/proyectos#proyecto-{{ proyecto.id }}" class="suave">Volver al proyecto</a>
+    {% else %}<a href="/tareas" class="suave">Volver a la lista</a>{% endif %}
   </div>
 </form>
 
-<p class="suave">Queda anotada a tu nombre —la lista dice quién anotó cada
-cosa— y no manda ningún aviso por Telegram: aquí se elige un día, no una hora.</p>
+<p class="suave">Queda anotada a tu nombre y no manda ningún aviso por Telegram:
+aquí se elige un día, no una hora.</p>
 {% endblock %}

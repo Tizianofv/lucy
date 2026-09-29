@@ -173,6 +173,16 @@ class _Cursor:
         elif s.startswith("SELECT clave, color FROM areas"):
             self._filas = list(c.areas)
 
+        elif s.startswith("SELECT id, nombre, area, estado FROM proyectos"):
+            # `db.proyecto_admite_tareas`: sin `proyectos` declarados, todo
+            # proyecto existe y está activo (lo que suponían estas pruebas).
+            pid = params[0]
+            if c.proyectos is None:
+                self._filas = [{"id": pid, "nombre": "p", "area": None,
+                                "estado": "activo"}]
+            elif pid in c.proyectos:
+                self._filas = [dict(c.proyectos[pid], id=pid)]
+
         elif s.startswith("SELECT id, deriva_de_id FROM tareas"):
             self._filas = [
                 {"id": t["id"], "deriva_de_id": t["deriva_de_id"]}
@@ -195,7 +205,8 @@ class _Cursor:
 
 class _Conn:
     def __init__(self, tareas=None, areas=None, sin_columna_deriva=False,
-                reloj=None):
+                reloj=None, proyectos=None):
+        self.proyectos = proyectos
         self.tareas = {t["id"]: dict(t) for t in (tareas or [])}
         self.areas = list(areas or [])
         self.bandeja: list = []

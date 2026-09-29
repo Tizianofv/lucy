@@ -243,7 +243,8 @@ def _sqlite(con_area: bool):
     columna_area = "area TEXT," if con_area else ""
     con.execute("CREATE TABLE tareas (id INTEGER PRIMARY KEY, bandeja_id, "
                 "titulo, vence_en, anticipos_min, " + columna_area +
-                "responsable_chat_id INTEGER, estado TEXT DEFAULT 'pendiente')")
+                "responsable_chat_id INTEGER, proyecto_id, primero_id, "
+                "detalle, persona_id, estado TEXT DEFAULT 'pendiente')")
     con.execute("CREATE TABLE log_acciones (id INTEGER PRIMARY KEY, actor, "
                 "accion, tabla, registro_id, antes, despues, motivo, "
                 "bandeja_id)")

@@ -199,6 +199,12 @@ class FakeConn:
         p = params or ()
         self.sql.append((s, p))
 
+        if s.startswith("SELECT id, nombre, area, estado FROM proyectos"):
+            # `db.proyecto_admite_tareas`: el proyecto que pide la prueba existe
+            # y está activo.
+            return _Cur({"id": p[0], "nombre": "p", "area": None,
+                         "estado": "activo"})
+
         if s.startswith("SELECT clave, color FROM areas"):
             return _Cur(filas=list(self.areas))
 

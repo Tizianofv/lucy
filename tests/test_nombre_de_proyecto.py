@@ -72,7 +72,8 @@ class _Cur:
             self._cur = emulado
             return self
         s = sql.replace("%s", "?").replace("now()", "CURRENT_TIMESTAMP")
-        conv = [p.isoformat() if isinstance(p, datetime) else p
+        conv = [p.isoformat() if isinstance(p, datetime)
+                else json.dumps(p) if isinstance(p, list) else p
                 for p in (params or ())]
         self._cur = self._b.con.execute(s, conv)
         return self

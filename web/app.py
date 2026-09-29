@@ -812,7 +812,8 @@ async def tareas_historial(request: Request):
 
 @app.get("/proyectos", response_class=HTMLResponse)
 async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
-                    error: str = "", nombre_guardado: int = 0):
+                    error: str = "", nombre_guardado: int = 0,
+                    tarea_creada: int = 0, sala_no: int = 0):
     """Cada proyecto vivo, con su área, su estado y sus tareas en orden
     (encargo 5, requisito 1).
 
@@ -830,6 +831,9 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
          "areas": await db.areas(), "error": error,
          "area_guardada": area_guardada, "creado": creado,
          "nombre_guardado": nombre_guardado,
+         "tarea_creada": tarea_creada, "sala_no": sala_no,
+         "nombre_code": config.NOMBRE_CODE, "area_tecnica": db.AREA_TECNICA,
+         "estado_cerrado": db.ESTADO_PROYECTO_CERRADO,
          "largo_nombre": db.LARGO_NOMBRE_PROYECTO,
          "pendiente": db.ESTADO_PENDIENTE, "hecha": db.ESTADO_HECHA})
 
@@ -1337,7 +1341,16 @@ async def guardar_tareas(request: Request):
             # vieja abierta es la señal visible de que hay que repetirlo.
             ignoradas += 1
             continue
-        resultado = await db.cerrar_y_derivar(chat, tid, derivadas)
+        try:
+            resultado = await db.cerrar_y_derivar(chat, tid, derivadas)
+        except db.ProyectoNoAdmiteTareas as e:
+            # El proyecto de esta tarea está cerrado y se pidió una derivada:
+            # `cerrar_y_derivar` no cerró NADA (D6: si la nueva no vale, la
+            # vieja tampoco). Se cuenta como cambio sin efecto y se deja rastro.
+            log.warning("Panel de tareas: derivada rechazada, el proyecto no "
+                        "admite tareas (%s)", e.clave)
+            ignoradas += 1
+            continue
         if resultado is None:
             ignoradas += 1
             continue
@@ -1398,7 +1411,7 @@ async def guardar_tareas(request: Request):
 
 @app.get("/tareas/nueva", response_class=HTMLResponse)
 async def tarea_nueva(request: Request, error: str = "",
-                      responsable: str = ""):
+                      responsable: str = "", proyecto: str = ""):
     """El formulario para escribir una tarea a mano.
 
     POR QUÉ ES UNA PANTALLA APARTE Y NO UN SEGUNDO FORMULARIO EN /tareas, que
@@ -1418,20 +1431,39 @@ async def tarea_nueva(request: Request, error: str = "",
     cuando la lista está vacía, que es justo cuando hace falta escribir la
     primera.
 
-    EL ÁREA (encargo 4) se puede elegir siempre en esta pantalla, sin
-    excepción: `/tareas/nueva` no tiene selector de proyecto —no se pidió, ver
-    el docstring de `crear_tarea`—, así que el caso que tendría que esconder
-    el selector («ya tiene proyecto, el área es la del proyecto») no existe
-    acá. `db.areas()` ya tolera que la tabla no exista (devuelve `[]`), así
+    EL ÁREA (encargo 4) se puede elegir en esta pantalla SALVO cuando se abre
+    dentro de un proyecto (`?proyecto=<id>`, pieza 2 del diseño «proyectos»):
+    ahí el selector no se pinta, porque la tarea hereda el área del proyecto.
+    Sin proyecto —lo normal—, el caso que tendría que esconder el selector no
+    existe. `db.areas()` ya tolera que la tabla no exista (devuelve `[]`), así
     que si la migración no se aplicó todavía el `<select>` sale vacío —solo
     queda «Sin área»— en vez de romper la pantalla.
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     preescogido = _responsable_de_la_url(responsable)
+    # DENTRO DE UN PROYECTO (pieza 2 del diseño «proyectos»): `?proyecto=<id>`,
+    # validado por LA puerta (`db.proyecto_para_tareas`). Si no vale (no existe,
+    # está en la papelera, está cerrado) la pantalla se abre SIN proyecto y lo
+    # DICE: nunca escribe en un proyecto que no se puede.
+    proyecto_fila, motivo_proyecto = None, ""
+    if proyecto.strip():
+        pid = _id_escrito(proyecto)
+        try:
+            if pid is None:
+                raise db.ProyectoNoAdmiteTareas("no_existe", "")
+            proyecto_fila = await db.proyecto_para_tareas(pid)
+        except db.ProyectoNoAdmiteTareas as e:
+            motivo_proyecto = e.clave
+    con_proyecto = proyecto_fila is not None
     return plantillas.TemplateResponse(
         request, "tarea_nueva.html",
-        {"error": error, "piso_fecha": PISO_FECHA.isoformat(),
+        {"proyecto": proyecto_fila, "motivo_proyecto": motivo_proyecto,
+         "sala_no_la_ve": (con_proyecto and proyecto_fila["area"] != db.AREA_TECNICA),
+         "primeros": await db.tareas_para_elegir_primero(0) if con_proyecto else [],
+         "personas_lista": await db.personas_vivas() if con_proyecto else [],
+         "largo_detalle": LARGO_DETALLE,
+         "error": error, "piso_fecha": PISO_FECHA.isoformat(),
          "largo_titulo": LARGO_TITULO, "areas": await db.areas(),
          # El desplegable de responsable sale de `config.opciones_de_
          # responsable`, la MISMA lista que pinta la tabla de /tareas. El
@@ -1449,7 +1481,9 @@ async def crear_tarea(request: Request):
     """Escribir una tarea a mano. La cuarta escritura del panel.
 
     CUATRO CAMPOS: título, cuándo vence, área (desde el encargo 4) y
-    responsable (tarea 146, 28-sep-2026; vacío = sin responsable). La tabla
+    responsable (tarea 146, 28-sep-2026; vacío = sin responsable). DENTRO DE UN
+    PROYECTO (campo oculto `proyecto`, pieza 2 del diseño «proyectos») suma
+    «Primero:», de quién trata y detalle, y el área no se elige. La tabla
     tiene prioridad, recurrencia, proyecto, persona y anticipos, y ninguno de
     ésos entra acá — no se pidieron, y `prioridad` está vacía en las 91 filas
     de producción. Un campo que nadie llenó es una decisión inventada
@@ -1486,9 +1520,32 @@ async def crear_tarea(request: Request):
 
     formulario = await request.form()
 
+    # EL PROYECTO (pieza 2 del diseño «proyectos»): un campo oculto con el id,
+    # validado por LA puerta (`db.proyecto_para_tareas`; el escritor la vuelve a
+    # pasar). Sin el campo, la tarea es suelta, como siempre.
+    proyecto_id = None
+    proyecto_fila = None
+    crudo_proyecto = str(formulario.get("proyecto", "")).strip()
+    en_proyecto = f"?proyecto={crudo_proyecto}&" if crudo_proyecto else "?"
+
     def _vuelta(clave: str):
         log.warning("Panel de tareas: tarea a mano rechazada por %s", clave)
-        return RedirectResponse(f"/tareas/nueva?error={clave}", status_code=303)
+        destino = (f"/tareas/nueva?proyecto={proyecto_id}&error={clave}"
+                   if proyecto_id is not None else f"/tareas/nueva?error={clave}")
+        return RedirectResponse(destino, status_code=303)
+
+    if crudo_proyecto:
+        proyecto_id = _id_escrito(crudo_proyecto)
+        try:
+            if proyecto_id is None:
+                raise db.ProyectoNoAdmiteTareas("no_existe", "")
+            proyecto_fila = await db.proyecto_para_tareas(proyecto_id)
+        except db.ProyectoNoAdmiteTareas as e:
+            log.warning("Panel de tareas: tarea a mano rechazada por proyecto (%s)",
+                        e.clave)
+            return RedirectResponse(
+                "/tareas/nueva?error=proyecto" + ("_cerrado" if e.clave == "cerrado"
+                                                  else ""), status_code=303)
 
     titulo = str(formulario.get("titulo", "")).strip()
     if not titulo or len(titulo) > LARGO_TITULO:
@@ -1502,7 +1559,11 @@ async def crear_tarea(request: Request):
         return _vuelta("fecha")
 
     area = str(formulario.get("area", "")).strip() or None
-    if area is not None:
+    if proyecto_id is not None:
+        # Con proyecto el área es la del proyecto: si llega una en el POST se
+        # IGNORA (la pantalla ni la ofrece) y el escritor guarda `area = NULL`.
+        area = None
+    elif area is not None:
         claves_validas = {a["clave"] for a in await db.areas()}
         if area not in claves_validas:
             return _vuelta("area")
@@ -1516,12 +1577,54 @@ async def crear_tarea(request: Request):
         str(formulario.get("responsable", "")))
     if not vale:
         return _vuelta("responsable")
-    if responsable == config.CHAT_ID_CODE:
+    if responsable == config.CHAT_ID_CODE and proyecto_id is None:
         if db.AREA_TECNICA not in {a["clave"] for a in await db.areas()}:
             return _vuelta("area")
 
-    tid = await db.crear_tarea_desde_el_panel(
-        chat, titulo, vence_en, area, responsable)
+    # «DE QUIÉN TRATA» (`persona_id`): una persona que YA existe, elegida de la
+    # lista. Esta pantalla no crea personas. Vacío = ninguna.
+    persona_id = None
+    crudo_persona = str(formulario.get("persona", "")).strip()
+    if crudo_persona:
+        persona_id = _id_escrito(crudo_persona)
+        if persona_id is None or not await db.persona_viva(persona_id):
+            return _vuelta("persona")
+
+    # «PRIMERO:» por LA puerta de siempre (`crud._primero_que_vale`): existe,
+    # no está en la papelera. Al crear no hay círculo posible.
+    primero_id = None
+    crudo_primero = str(formulario.get("primero_id", "")).strip()
+    if crudo_primero:
+        try:
+            primero_id = await crud._primero_que_vale(crudo_primero)
+        except ValueError:
+            return _vuelta("primero")
+
+    # EL DETALLE: texto opcional, con tope.
+    detalle = _detalle_valido(str(formulario.get("detalle", "")))
+    if detalle is False:
+        return _vuelta("detalle")
+
+    try:
+        tid = await db.crear_tarea_desde_el_panel(
+            chat, titulo, vence_en, area, responsable,
+            proyecto_id=proyecto_id, primero_id=primero_id, detalle=detalle,
+            persona_id=persona_id)
+    except db.ProyectoNoAdmiteTareas as e:
+        # El escritor volvió a mirar y el proyecto ya no vale (lo cerraron o lo
+        # archivaron mientras se escribía).
+        return RedirectResponse(
+            "/tareas/nueva?error=proyecto" + ("_cerrado" if e.clave == "cerrado"
+                                              else ""), status_code=303)
+    if proyecto_id is not None:
+        # Al guardar se vuelve AL PROYECTO, y el aviso dice lo que pasó. Si es
+        # de Code y la sala no la va a ver (su proyecto no es del área
+        # técnica), lo dice: ver `db.sala_ve`.
+        sala = ("&sala_no=1" if responsable == config.CHAT_ID_CODE and not
+                db.sala_ve(responsable, proyecto_fila["area"]) else "")
+        return RedirectResponse(
+            f"/proyectos?tarea_creada={tid}{sala}#proyecto-{proyecto_id}",
+            status_code=303)
     # Se vuelve A LA LISTA y no al formulario: la tarea recién escrita tiene
     # que VERSE en su grupo. Un "guardado" que no muestra lo guardado obliga a
     # confiar, y este panel existe para no tener que confiar.
@@ -1533,6 +1636,29 @@ async def crear_tarea(request: Request):
 # que después hay que pintar y mandarle al modelo. Es la misma idea que
 # LARGO_TITULO, con más holgura porque un comentario es para escribir más.
 LARGO_COMENTARIO = 2000
+
+# El detalle de una tarea (`tareas.detalle`, texto libre que Lucy escribe por
+# Telegram): mismo tope que un comentario, por la misma razón.
+LARGO_DETALLE = LARGO_COMENTARIO
+
+
+def _detalle_valido(crudo: str):
+    """El detalle a guardar (`None` si vino vacío) o `False` si se pasa del tope."""
+    limpio = (crudo or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not limpio:
+        return None
+    return False if len(limpio) > LARGO_DETALLE else limpio
+
+
+def _id_escrito(crudo: str):
+    """El id que dice ese texto, o None si no es exactamente un entero positivo
+    escrito de una sola manera (`str(int(t)) == t`), igual que `chat_escrito`."""
+    t = (crudo or "").strip()
+    try:
+        n = int(t)
+    except ValueError:
+        return None
+    return n if n > 0 and str(n) == t else None
 
 
 def _texto_de_comentario(crudo: str) -> str | None:

@@ -32,6 +32,14 @@ tarea que le dio origen ya archivada.</p>
 {% if area_guardada %}
 <p class="aviso ok">Área guardada.</p>
 {% endif %}
+{% if tarea_creada %}
+<p class="aviso ok">Tarea creada (#{{ tarea_creada }}). Está en la tabla de este
+proyecto.</p>
+{% if sala_no %}
+<p class="aviso">Es de {{ nombre_code }}, pero el proyecto no es del área
+«{{ area_tecnica }}»: la sala de control NO la verá.</p>
+{% endif %}
+{% endif %}
 
 {% if not proyectos %}
 <p class="vacio">No hay ningún proyecto todavía. Se crean desde una tarea, con
@@ -61,6 +69,15 @@ proyecto, con las hechas incluidas.</p>
            style="width:100%;max-width:26rem">
     <button>Guardar</button>
   </form>
+  {# AGREGAR TAREAS AL PROYECTO: un enlace a la pantalla de «Nueva tarea» con
+     este proyecto fijado. Un proyecto CERRADO no recibe tareas (por la misma
+     puerta que el alta, `db.proyecto_admite_tareas`): en vez del enlace se dice
+     por qué no hay. #}
+  {% if p.estado == estado_cerrado %}
+  <p class="suave">Proyecto cerrado: no se le agregan tareas.</p>
+  {% else %}
+  <p><a href="/tareas/nueva?proyecto={{ p.id }}">+ Agregar tarea a este proyecto</a></p>
+  {% endif %}
   <p class="suave">
     Estado: {{ p.estado }}
     {%- if p.descripcion %} · {{ p.descripcion }}{% endif %}
