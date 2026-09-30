@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import logging
 import re
+from urllib.parse import quote
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -667,7 +668,8 @@ async def papelera(request: Request, restaurado: int = 0):
 @app.get("/tareas", response_class=HTMLResponse)
 async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
                  asignadas: int = 0, movidas: int = 0, derivadas: int = 0,
-                 derivadas_ids: str = ""):
+                 derivadas_ids: str = "", responsable: str = "",
+                 sin_cerrar: str = ""):
     """El panel de tareas: lo que hay que hacer, para las dos personas.
 
     UNA SOLA LISTA PARA LOS DOS, por decisión de Tiziano —"está bien que Rosi
@@ -727,10 +729,33 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
         return _fuera(request)
     datos = await db.tareas_por_grupo()
     grupos = [g for g in datos["grupos"] if g["clave"] != "historial"]
+    # EL FILTRO POR RESPONSABLE (tarea 145): se aplica DESPUÉS de repartir y de
+    # descartar el historial, sobre las filas que se iban a pintar, y no toca
+    # SQL. Sin `?responsable=` es exactamente la pantalla de siempre.
+    tipo, chat_f, clave_f, aviso_filtro = _filtro_pedido(responsable)
+    todas_las_filas = [f for g in grupos for f in g["filas"]]
+    botones = _botones_de_responsable(todas_las_filas, clave_f)
+    grupos = [dict(g, filas=[f for f in g["filas"]
+                             if _coincide(f.get("responsable_chat_id"),
+                                          tipo, chat_f)])
+              for g in grupos]
+    grupos = [g for g in grupos if g["filas"]]
+    mostradas = sum(len(g["filas"]) for g in grupos)
+    etiqueta_f = {"": "Todas", RESP_SIN: "Sin responsable",
+                  RESP_OTROS: "Otros"}.get(clave_f, clave_f)
     areas = await db.areas()
     return plantillas.TemplateResponse(
         request, "tareas.html",
         {"grupos": grupos, "hay_mas": datos["hay_mas"],
+         # Lo que dice la URL NO se afirma sin mirar la base: solo los ids que
+         # existen, siguen pendientes y están en un proyecto cerrado. Solo
+         # dígitos ASCII (`\d` aceptaría otros alfabetos).
+         "sin_cerrar": await db.tareas_sin_cerrar_por_proyecto_cerrado(
+             [int(i) for i in sin_cerrar.split(",")]
+             if re.fullmatch(r"[0-9]{1,9}(,[0-9]{1,9})*", sin_cerrar) else []),
+         "botones": botones, "filtro": clave_f, "filtro_etiqueta": etiqueta_f,
+         "filtro_aviso": aviso_filtro, "filtro_pedido": (responsable or "").strip(),
+         "total_visibles": len(todas_las_filas), "mostradas": mostradas,
          "guardadas": guardadas, "asignadas": asignadas, "movidas": movidas,
          "derivadas": derivadas, "derivadas_ids": derivadas_ids,
          "max_derivadas": MAX_DERIVADAS, "largo_titulo": LARGO_TITULO,
@@ -740,6 +765,7 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
          # la pantalla no ofrezca el campo donde la escritura lo rechazaría.
          "pendiente": db.ESTADO_PENDIENTE, "piso_fecha": PISO_FECHA.isoformat(),
          "personas": config.personas_del_panel(),
+         "opciones_responsable": config.opciones_de_responsable(),
          "asignables": [c for c, _ in config.personas_del_panel()]
                        + [config.CHAT_ID_CODE],
          "nombres": config.nombres_con_code(),
@@ -793,7 +819,8 @@ async def tareas_historial(request: Request):
 
 @app.get("/proyectos", response_class=HTMLResponse)
 async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
-                    error: str = ""):
+                    error: str = "", nombre_guardado: int = 0,
+                    tarea_creada: int = 0, sala_no: int = 0):
     """Cada proyecto vivo, con su área, su estado y sus tareas en orden
     (encargo 5, requisito 1).
 
@@ -810,6 +837,11 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
         {"proyectos": await db.proyectos_con_tareas(),
          "areas": await db.areas(), "error": error,
          "area_guardada": area_guardada, "creado": creado,
+         "nombre_guardado": nombre_guardado,
+         "tarea_creada": tarea_creada, "sala_no": sala_no,
+         "nombre_code": config.NOMBRE_CODE, "area_tecnica": db.AREA_TECNICA,
+         "estado_cerrado": db.ESTADO_PROYECTO_CERRADO,
+         "largo_nombre": db.LARGO_NOMBRE_PROYECTO,
          "pendiente": db.ESTADO_PENDIENTE, "hecha": db.ESTADO_HECHA})
 
 
@@ -842,6 +874,48 @@ async def cambiar_area_de_proyecto(request: Request, pid: int):
     if despues is None:
         return RedirectResponse(f"/proyectos?error=proyecto", status_code=303)
     return RedirectResponse(f"/proyectos?area_guardada={pid}", status_code=303)
+
+
+@app.post("/proyectos/{pid}/nombre")
+async def cambiar_nombre_de_proyecto(request: Request, pid: int):
+    """Cambiar el NOMBRE de un proyecto (pedido de Tiziano, 29-sep-2026:
+    «poder editar los titulos de los proyectos»).
+
+    POR LA MISMA PUERTA que Telegram: `crud.editar("proyectos", ...)`, que llama
+    a `crud.PUERTAS["proyectos"]["nombre"]` (no vacío, largo, espacios) y
+    comprueba que no haya OTRO proyecto vivo con ese nombre con la misma
+    consulta que usa Lucy para buscarlos. Esta ruta no decide qué nombre vale:
+    solo traduce el formulario y el rechazo a algo que se pueda mostrar.
+
+    Si el nombre no cambió, `editar` no escribe ni deja huella y esta ruta lo
+    dice («sin cambios»), no dice «guardado». Un rechazo vuelve con una CLAVE
+    en la URL (`?error=nombre_vacio|nombre_largo|nombre_repetido`), y ni la URL
+    ni el log llevan el nombre pedido.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    nombre = str(formulario.get("nombre", ""))
+    try:
+        despues, log_id = await crud.editar(
+            "proyectos", pid, {"nombre": nombre},
+            motivo="Nombre cambiado desde el panel", actor="panel")
+    except ValueError as e:
+        causa = e.__cause__
+        clave = (causa.clave if isinstance(causa, db.NombreDeProyectoNoVale)
+                 else None)
+        log.warning("Panel de proyectos: nombre rechazado para #%s (%s)",
+                    pid, clave or "otro")
+        return RedirectResponse(
+            f"/proyectos?error=nombre_{clave or 'invalido'}"
+            f"#proyecto-{pid}", status_code=303)
+    if despues is None:
+        return RedirectResponse("/proyectos?error=proyecto", status_code=303)
+    if log_id is None:
+        return RedirectResponse(
+            f"/proyectos?error=nombre_igual#proyecto-{pid}", status_code=303)
+    return RedirectResponse(
+        f"/proyectos?nombre_guardado={pid}#proyecto-{pid}", status_code=303)
 
 
 @app.post("/tareas/{tid}/area")
@@ -915,6 +989,14 @@ async def convertir_en_proyecto(request: Request, tid: int):
         return _fuera(request)
     try:
         resultado = await db.convertir_tarea_en_proyecto(tid)
+    except db.NombreDeProyectoNoVale as e:
+        # El título de la tarea no puede ser el nombre de un proyecto: el motivo
+        # REAL (repetido, vacío, largo) viaja como clave, no el «no califica»
+        # de abajo, que sería una causa falsa.
+        log.warning("Panel de tareas: no se convirtió #%s en proyecto (%s)",
+                    tid, e.clave)
+        return RedirectResponse(
+            f"/tareas/{tid}?error=convertir_{e.clave}", status_code=303)
     except ValueError as e:
         log.warning("Panel de tareas: no se convirtió #%s en proyecto: %s", tid, e)
         return RedirectResponse(f"/tareas/{tid}?error=convertir", status_code=303)
@@ -955,6 +1037,119 @@ def _responsable_pedido(crudo: str):
     if chat is None:
         return False, None
     return (True, chat) if config.puede_ser_responsable(chat) else (False, None)
+
+
+# Las claves de la URL que NO son un nombre: «sin responsable» y el cubo de
+# los que ya no se pueden asignar y no tienen nombre. Son las MISMAS que va a
+# usar el filtro de la lista (tarea 145); el alta solo las reconoce para no
+# tomarlas por un nombre.
+RESP_SIN = "_sin"
+RESP_OTROS = "_otros"
+
+
+def _responsable_de_la_url(crudo: str):
+    """El chat que dice `?responsable=<nombre>`, o None si no dice ninguno.
+
+    Para PREESCOGER el desplegable del alta (tarea 146, punto 7 de Tiziano:
+    desde una vista filtrada, «+ Agregar tarea» llega con ese responsable).
+    Nunca el chat en la URL: el nombre, tal como está en `config` (las
+    mayúsculas y las tildes no distinguen: la misma lectura que Telegram,
+    `crud._chat_del_nombre`, que además se niega si el nombre es de dos
+    personas). Solo PRESELECCIONA: quien crea puede cambiarlo, y lo que se
+    guarda lo vuelve a decidir `_responsable_pedido` con el valor del
+    desplegable. Y aun aquí se pasa por `config.puede_ser_responsable`: un
+    nombre que resuelve a alguien que ya no puede serlo no se preselecciona.
+    Todo lo demás —vacío, `_sin`, `_otros`, un nombre que no es de nadie o de
+    varios— es «sin responsable», que es como se abre siempre.
+    """
+    crudo = (crudo or "").strip()
+    if not crudo or crudo in (RESP_SIN, RESP_OTROS):
+        return None
+    chat, _motivo = crud._chat_del_nombre(crudo)
+    if chat is None or not config.puede_ser_responsable(chat):
+        return None
+    return chat
+
+
+def _filtro_pedido(crudo):
+    """Lee `?responsable=` de /tareas (tarea 145). Devuelve
+    `(tipo, chat, clave, aviso)`:
+
+      · `tipo`: "todas", "sin", "otros" o "chat".
+      · `chat`: solo con tipo "chat".
+      · `clave`: cómo se escribe ese filtro en la URL y en el campo oculto del
+        formulario, YA canónica: "" (todas), `RESP_SIN`, `RESP_OTROS` o el
+        NOMBRE tal como está en `config.nombres_con_code()`. Nunca un chat.
+      · `aviso`: True si se pidió un nombre que no es de nadie o es de varios.
+
+    QUIÉN ES UN NOMBRE NO SE DECIDE ACÁ: `crud._chat_del_nombre`, la misma
+    lectura que usa Telegram (ignora mayúsculas y tildes y se niega si el nombre
+    es de más de una persona). Un nombre desconocido o ambiguo NO da una lista
+    vacía: da «todas» y el aviso, para que un enlace viejo nunca deje la
+    pantalla en blanco sin explicar por qué. Es la ÚNICA puerta del filtro: el
+    campo oculto que viaja en el guardado la vuelve a pasar.
+    """
+    crudo = (crudo or "").strip()
+    if not crudo:
+        return "todas", None, "", False
+    if crudo == RESP_SIN:
+        return "sin", None, RESP_SIN, False
+    if crudo == RESP_OTROS:
+        return "otros", None, RESP_OTROS, False
+    chat, _motivo = crud._chat_del_nombre(crudo)
+    if chat is None:
+        return "todas", None, "", True
+    return "chat", chat, config.nombres_con_code()[chat], False
+
+
+def _coincide(resp, tipo, chat) -> bool:
+    """¿Una fila con este `responsable_chat_id` entra en ese filtro?
+
+    LAS TRES CLASES SON UNA PARTICIÓN, y por eso ninguna fila queda sin botón que
+    la muestre: sin responsable (`None`), con NOMBRE (persona, Code o alguien que
+    ya no entra pero conserva nombre) y, lo que queda, sin nombre («otros»).
+    """
+    if tipo == "todas":
+        return True
+    if tipo == "sin":
+        return resp is None
+    if tipo == "otros":
+        return resp is not None and resp not in config.nombres_con_code()
+    return resp == chat
+
+
+def _botones_de_responsable(filas, activa: str):
+    """Los botones de la lista, DERIVADOS de lo real: `[{clave, etiqueta, n,
+    activo}]`. Personas del panel y Code aunque hoy tengan 0, «Sin responsable»
+    siempre, alguien que ya no entra pero tiene tareas y nombre (con su nombre) y
+    «Otros» solo si hay alguna fila sin nombre. Ninguna persona está escrita
+    acá. `n` sale de las MISMAS filas que se pintan y del mismo `_coincide`."""
+    resp = [f.get("responsable_chat_id") for f in filas]
+    nombres = config.nombres_con_code()
+
+    def boton(clave, etiqueta, tipo, chat=None):
+        return {"clave": clave, "etiqueta": etiqueta,
+                "n": sum(1 for r in resp if _coincide(r, tipo, chat)),
+                "activo": clave == activa}
+
+    botones = [boton("", "Todas", "todas")]
+    vistos = set()
+    for chat, nombre in config.personas_del_panel():
+        botones.append(boton(nombre, nombre, "chat", chat))
+        vistos.add(chat)
+    botones.append(boton(config.NOMBRE_CODE, config.NOMBRE_CODE, "chat",
+                         config.CHAT_ID_CODE))
+    vistos.add(config.CHAT_ID_CODE)
+    botones.append(boton(RESP_SIN, "Sin responsable", "sin"))
+    for r in resp:
+        if r is not None and r not in vistos and r in nombres:
+            vistos.add(r)
+            botones.append(boton(
+                nombres[r], f"{nombres[r]} — ya no se le puede asignar",
+                "chat", r))
+    if any(r is not None and r not in nombres for r in resp):
+        botones.append(boton(RESP_OTROS, "Otros", "otros"))
+    return botones
 
 
 # Cuántas tareas nuevas se pueden escribir de una vez al marcar UNA sola
@@ -1106,6 +1301,7 @@ async def guardar_tareas(request: Request):
     formulario = await request.form()
     hechas, asignadas, movidas, ignoradas = 0, 0, 0, 0
     hijas_creadas: list[int] = []
+    sin_cerrar: list[int] = []
     # Se pide UNA sola vez, no una por tarea: `db.areas()` ya tolera la
     # migración del área sin aplicar (devuelve `[]`), y con `[]` ningún
     # renglón derivado puede llevar área -- el mismo estado en el que se ve
@@ -1153,7 +1349,18 @@ async def guardar_tareas(request: Request):
             # vieja abierta es la señal visible de que hay que repetirlo.
             ignoradas += 1
             continue
-        resultado = await db.cerrar_y_derivar(chat, tid, derivadas)
+        try:
+            resultado = await db.cerrar_y_derivar(chat, tid, derivadas)
+        except db.ProyectoNoAdmiteTareas as e:
+            # El proyecto de esta tarea está cerrado y se pidió una derivada:
+            # `cerrar_y_derivar` no cerró NADA (D6: si la nueva no vale, la
+            # vieja tampoco). Se cuenta como cambio sin efecto, se deja rastro
+            # y se le DICE a quien guardó cuál no se cerró (`sin_cerrar`).
+            log.warning("Panel de tareas: derivada rechazada, el proyecto no "
+                        "admite tareas (%s)", e.clave)
+            ignoradas += 1
+            sin_cerrar.append(tid)
+            continue
         if resultado is None:
             ignoradas += 1
             continue
@@ -1200,14 +1407,22 @@ async def guardar_tareas(request: Request):
     # diseño aprobado ("Tareas nuevas que salen de otra: 1 (#512)") nombra
     # el número: sin esto, la persona tendría que buscarla en la lista.
     ids_derivadas = ",".join(str(i) for i in hijas_creadas)
+    # EL FILTRO SOBREVIVE AL GUARDADO (tarea 145), pero VUELVE A PASAR por la
+    # misma puerta que lo leyó al pintar (`_filtro_pedido`): lo que viaja en la
+    # URL es la clave CANÓNICA que sale de ahí, nunca el texto crudo del campo.
+    _, _, clave_filtro, _ = _filtro_pedido(str(formulario.get("filtro", "")))
+    filtro_url = f"&responsable={quote(clave_filtro, safe='')}" if clave_filtro else ""
     return RedirectResponse(
         f"/tareas?guardadas={hechas}&asignadas={asignadas}&movidas={movidas}"
-        f"&derivadas={len(hijas_creadas)}&derivadas_ids={ids_derivadas}",
+        f"&derivadas={len(hijas_creadas)}&derivadas_ids={ids_derivadas}"
+        + (f"&sin_cerrar={','.join(str(i) for i in sin_cerrar)}" if sin_cerrar else "")
+        + f"{filtro_url}",
         status_code=303)
 
 
 @app.get("/tareas/nueva", response_class=HTMLResponse)
-async def tarea_nueva(request: Request, error: str = ""):
+async def tarea_nueva(request: Request, error: str = "",
+                      responsable: str = "", proyecto: str = ""):
     """El formulario para escribir una tarea a mano.
 
     POR QUÉ ES UNA PANTALLA APARTE Y NO UN SEGUNDO FORMULARIO EN /tareas, que
@@ -1227,27 +1442,59 @@ async def tarea_nueva(request: Request, error: str = ""):
     cuando la lista está vacía, que es justo cuando hace falta escribir la
     primera.
 
-    EL ÁREA (encargo 4) se puede elegir siempre en esta pantalla, sin
-    excepción: `/tareas/nueva` no tiene selector de proyecto —no se pidió, ver
-    el docstring de `crear_tarea`—, así que el caso que tendría que esconder
-    el selector («ya tiene proyecto, el área es la del proyecto») no existe
-    acá. `db.areas()` ya tolera que la tabla no exista (devuelve `[]`), así
+    EL ÁREA (encargo 4) se puede elegir en esta pantalla SALVO cuando se abre
+    dentro de un proyecto (`?proyecto=<id>`, pieza 2 del diseño «proyectos»):
+    ahí el selector no se pinta, porque la tarea hereda el área del proyecto.
+    Sin proyecto —lo normal—, el caso que tendría que esconder el selector no
+    existe. `db.areas()` ya tolera que la tabla no exista (devuelve `[]`), así
     que si la migración no se aplicó todavía el `<select>` sale vacío —solo
     queda «Sin área»— en vez de romper la pantalla.
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
+    preescogido = _responsable_de_la_url(responsable)
+    # DENTRO DE UN PROYECTO (pieza 2 del diseño «proyectos»): `?proyecto=<id>`,
+    # validado por LA puerta (`db.proyecto_para_tareas`). Si no vale (no existe,
+    # está en la papelera, está cerrado) la pantalla se abre SIN proyecto y lo
+    # DICE: nunca escribe en un proyecto que no se puede.
+    proyecto_fila, motivo_proyecto = None, ""
+    if proyecto.strip():
+        pid = _id_escrito(proyecto)
+        try:
+            if pid is None:
+                raise db.ProyectoNoAdmiteTareas("no_existe", "")
+            proyecto_fila = await db.proyecto_para_tareas(pid)
+        except db.ProyectoNoAdmiteTareas as e:
+            motivo_proyecto = e.clave
+    con_proyecto = proyecto_fila is not None
     return plantillas.TemplateResponse(
         request, "tarea_nueva.html",
-        {"error": error, "piso_fecha": PISO_FECHA.isoformat(),
-         "largo_titulo": LARGO_TITULO, "areas": await db.areas()})
+        {"proyecto": proyecto_fila, "motivo_proyecto": motivo_proyecto,
+         "sala_no_la_ve": (con_proyecto and proyecto_fila["area"] != db.AREA_TECNICA),
+         "primeros": await db.tareas_para_elegir_primero(0) if con_proyecto else [],
+         "personas_lista": await db.personas_vivas() if con_proyecto else [],
+         "largo_detalle": LARGO_DETALLE,
+         "error": error, "piso_fecha": PISO_FECHA.isoformat(),
+         "largo_titulo": LARGO_TITULO, "areas": await db.areas(),
+         # El desplegable de responsable sale de `config.opciones_de_
+         # responsable`, la MISMA lista que pinta la tabla de /tareas. El
+         # preescogido es un chat (o None = «sin responsable») y se compara
+         # como texto, que es lo que viaja en el formulario.
+         "opciones_responsable": config.opciones_de_responsable(),
+         "responsable_elegido": "" if preescogido is None else str(preescogido),
+         "chat_id_code": config.CHAT_ID_CODE,
+         "nombre_code": config.NOMBRE_CODE,
+         "area_tecnica": db.AREA_TECNICA})
 
 
 @app.post("/tareas/nueva")
 async def crear_tarea(request: Request):
     """Escribir una tarea a mano. La cuarta escritura del panel.
 
-    TRES CAMPOS: título, cuándo vence, y —desde el encargo 4— área. La tabla
+    CUATRO CAMPOS: título, cuándo vence, área (desde el encargo 4) y
+    responsable (tarea 146, 28-sep-2026; vacío = sin responsable). DENTRO DE UN
+    PROYECTO (campo oculto `proyecto`, pieza 2 del diseño «proyectos») suma
+    «Primero:», de quién trata y detalle, y el área no se elige. La tabla
     tiene prioridad, recurrencia, proyecto, persona y anticipos, y ninguno de
     ésos entra acá — no se pidieron, y `prioridad` está vacía en las 91 filas
     de producción. Un campo que nadie llenó es una decisión inventada
@@ -1284,9 +1531,32 @@ async def crear_tarea(request: Request):
 
     formulario = await request.form()
 
+    # EL PROYECTO (pieza 2 del diseño «proyectos»): un campo oculto con el id,
+    # validado por LA puerta (`db.proyecto_para_tareas`; el escritor la vuelve a
+    # pasar). Sin el campo, la tarea es suelta, como siempre.
+    proyecto_id = None
+    proyecto_fila = None
+    crudo_proyecto = str(formulario.get("proyecto", "")).strip()
+    en_proyecto = f"?proyecto={crudo_proyecto}&" if crudo_proyecto else "?"
+
     def _vuelta(clave: str):
         log.warning("Panel de tareas: tarea a mano rechazada por %s", clave)
-        return RedirectResponse(f"/tareas/nueva?error={clave}", status_code=303)
+        destino = (f"/tareas/nueva?proyecto={proyecto_id}&error={clave}"
+                   if proyecto_id is not None else f"/tareas/nueva?error={clave}")
+        return RedirectResponse(destino, status_code=303)
+
+    if crudo_proyecto:
+        proyecto_id = _id_escrito(crudo_proyecto)
+        try:
+            if proyecto_id is None:
+                raise db.ProyectoNoAdmiteTareas("no_existe", "")
+            proyecto_fila = await db.proyecto_para_tareas(proyecto_id)
+        except db.ProyectoNoAdmiteTareas as e:
+            log.warning("Panel de tareas: tarea a mano rechazada por proyecto (%s)",
+                        e.clave)
+            return RedirectResponse(
+                "/tareas/nueva?error=proyecto" + ("_cerrado" if e.clave == "cerrado"
+                                                  else ""), status_code=303)
 
     titulo = str(formulario.get("titulo", "")).strip()
     if not titulo or len(titulo) > LARGO_TITULO:
@@ -1300,12 +1570,81 @@ async def crear_tarea(request: Request):
         return _vuelta("fecha")
 
     area = str(formulario.get("area", "")).strip() or None
-    if area is not None:
+    if proyecto_id is not None:
+        # Con proyecto el área es la del proyecto: si llega una en el POST se
+        # IGNORA (la pantalla ni la ofrece) y el escritor guarda `area = NULL`.
+        area = None
+    elif area is not None:
         claves_validas = {a["clave"] for a in await db.areas()}
         if area not in claves_validas:
             return _vuelta("area")
 
-    tid = await db.crear_tarea_desde_el_panel(chat, titulo, vence_en, area)
+    # EL RESPONSABLE (tarea 146): por la MISMA puerta que el desplegable de la
+    # tabla. Vacío = sin responsable, válido. Si es Code, el área pasa a ser
+    # `db.AREA_TECNICA` --lo hace `db.crear_tarea_desde_el_panel`, que es quien
+    # escribe--, pero esa área tiene que existir en `db.areas()` o la FK
+    # reventaría en un 500: se rechaza como cualquier otra área que no existe.
+    vale, responsable = _responsable_pedido(
+        str(formulario.get("responsable", "")))
+    if not vale:
+        return _vuelta("responsable")
+    if responsable == config.CHAT_ID_CODE and proyecto_id is None:
+        if db.AREA_TECNICA not in {a["clave"] for a in await db.areas()}:
+            return _vuelta("area")
+
+    # «DE QUIÉN TRATA» (`persona_id`): una persona que YA existe, elegida de la
+    # lista. Esta pantalla no crea personas. Vacío = ninguna.
+    persona_id = None
+    crudo_persona = str(formulario.get("persona", "")).strip()
+    if crudo_persona:
+        persona_id = _id_escrito(crudo_persona)
+        if persona_id is None or not await db.persona_viva(persona_id):
+            return _vuelta("persona")
+
+    # «PRIMERO:» por LA puerta de siempre (`crud._primero_que_vale`): existe,
+    # no está en la papelera. Al crear no hay círculo posible.
+    primero_id = None
+    crudo_primero = str(formulario.get("primero_id", "")).strip()
+    if crudo_primero:
+        try:
+            primero_id = await crud._primero_que_vale(crudo_primero)
+        except ValueError:
+            return _vuelta("primero")
+
+    # EL DETALLE: texto opcional, con tope.
+    detalle = _detalle_valido(str(formulario.get("detalle", "")))
+    if detalle is False:
+        return _vuelta("detalle")
+
+    try:
+        tid = await db.crear_tarea_desde_el_panel(
+            chat, titulo, vence_en, area, responsable,
+            proyecto_id=proyecto_id, primero_id=primero_id, detalle=detalle,
+            persona_id=persona_id)
+    except db.ProyectoNoAdmiteTareas as e:
+        # El escritor volvió a mirar y el proyecto ya no vale (lo cerraron o lo
+        # archivaron mientras se escribía).
+        return RedirectResponse(
+            "/tareas/nueva?error=proyecto" + ("_cerrado" if e.clave == "cerrado"
+                                              else ""), status_code=303)
+    except db.TareaNoValida as e:
+        # El escritor rechazó el responsable, la persona o el «Primero:» que la
+        # ruta acababa de dar por buenos (cambiaron en medio): mismo aviso que
+        # si se hubiera rechazado antes, nunca un 500.
+        return _vuelta(e.clave)
+    except ValueError as e:
+        # Cualquier otro «no» del escritor: no se guardó nada y se dice.
+        log.warning("Panel de tareas: el escritor rechazó la tarea a mano: %s", e)
+        return _vuelta("rechazada")
+    if proyecto_id is not None:
+        # Al guardar se vuelve AL PROYECTO, y el aviso dice lo que pasó. Si es
+        # de Code y la sala no la va a ver (su proyecto no es del área
+        # técnica), lo dice: ver `db.sala_ve`.
+        sala = ("&sala_no=1" if responsable == config.CHAT_ID_CODE and not
+                db.sala_ve(responsable, proyecto_fila["area"]) else "")
+        return RedirectResponse(
+            f"/proyectos?tarea_creada={tid}{sala}#proyecto-{proyecto_id}",
+            status_code=303)
     # Se vuelve A LA LISTA y no al formulario: la tarea recién escrita tiene
     # que VERSE en su grupo. Un "guardado" que no muestra lo guardado obliga a
     # confiar, y este panel existe para no tener que confiar.
@@ -1317,6 +1656,29 @@ async def crear_tarea(request: Request):
 # que después hay que pintar y mandarle al modelo. Es la misma idea que
 # LARGO_TITULO, con más holgura porque un comentario es para escribir más.
 LARGO_COMENTARIO = 2000
+
+# El detalle de una tarea (`tareas.detalle`, texto libre que Lucy escribe por
+# Telegram): mismo tope que un comentario, por la misma razón.
+LARGO_DETALLE = LARGO_COMENTARIO
+
+
+def _detalle_valido(crudo: str):
+    """El detalle a guardar (`None` si vino vacío) o `False` si se pasa del tope."""
+    limpio = (crudo or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not limpio:
+        return None
+    return False if len(limpio) > LARGO_DETALLE else limpio
+
+
+def _id_escrito(crudo: str):
+    """El id que dice ese texto, o None si no es exactamente un entero positivo
+    escrito de una sola manera (`str(int(t)) == t`), igual que `chat_escrito`."""
+    t = (crudo or "").strip()
+    try:
+        n = int(t)
+    except ValueError:
+        return None
+    return n if n > 0 and str(n) == t else None
 
 
 def _texto_de_comentario(crudo: str) -> str | None:

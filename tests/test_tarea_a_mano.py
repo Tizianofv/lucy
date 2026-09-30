@@ -97,17 +97,24 @@ class _Cursor:
             self._filas = [fila]
 
         elif s.startswith("INSERT INTO tareas"):
-            # Dos formas posibles desde el encargo 4: con área (5 parámetros)
-            # y sin área, la de siempre (4) -- ver `db.crear_tarea_desde_el_panel`.
+            # Dos formas posibles (encargo 4 y tarea 146): con área (6
+            # parámetros, `area` y `responsable_chat_id` al final) y sin área
+            # (5, solo el responsable) -- ver `db.crear_tarea_desde_el_panel`.
+            # Se distingue por las COLUMNAS DEL TEXTO del INSERT, no por
+            # cuántos parámetros llegan.
             c.sig_tarea += 1
-            if len(params) == 5:
-                bandeja_id, titulo, vence_en, anticipos, area = params
-            else:
-                bandeja_id, titulo, vence_en, anticipos = params
-                area = None
-            fila = {"id": c.sig_tarea, "bandeja_id": bandeja_id,
-                    "titulo": titulo, "vence_en": vence_en,
-                    "anticipos_min": anticipos, "area": area,
+            columnas = [x.strip() for x in re.search(
+                r"INSERT INTO tareas\s*\(([^)]*)\)", s).group(1).split(",")]
+            dado = dict(zip(columnas, params))
+            fila = {"id": c.sig_tarea, "bandeja_id": dado["bandeja_id"],
+                    "titulo": dado["titulo"], "vence_en": dado["vence_en"],
+                    "anticipos_min": dado["anticipos_min"],
+                    "area": dado.get("area"),
+                    "responsable_chat_id": dado["responsable_chat_id"],
+                    "proyecto_id": dado.get("proyecto_id"),
+                    "primero_id": dado.get("primero_id"),
+                    "detalle": dado.get("detalle"),
+                    "persona_id": dado.get("persona_id"),
                     "estado": "pendiente",
                     "creado_en": datetime(2026, 9, 9, 12, tzinfo=UTC),
                     "completado_en": None, "borrado_en": None}
@@ -651,15 +658,13 @@ def test_la_tarea_escrita_aparece_en_la_pantalla_y_en_su_grupo():
     assert db.grupo_de_tarea(conn.tareas[0]["estado"],
                              conn.tareas[0]["vence_en"], hoy) == "hoy", (
         "la tarea nació en el día equivocado")
-    # Y NACE SIN RESPONSABLE, que es lo normal: una tarea recién escrita es
-    # una tarea que nadie tomó todavía. Quién la anotó no se pinta desde el
-    # 10-sep-2026; asignarle un responsable por el hecho de haberla escrito
-    # sería confundir las dos preguntas otra vez.
-    columnas = re.search(r"INSERT INTO tareas\s*\(([^)]*)\)",
-                         inspect.getsource(db.crear_tarea_desde_el_panel))
-    assert "responsable" not in columnas.group(1), (
-        "el alta a mano le pone un responsable que nadie pidió: una tarea "
-        "recién escrita es una tarea que nadie tomó todavía")
+    # Y SIN ELEGIR RESPONSABLE NACE SIN RESPONSABLE (Tiziano, 28-sep-2026: el
+    # desplegable del alta sale en «Sin responsable»): el alta AHORA escribe la
+    # columna, pero con `None` si nadie eligió a nadie. Las reglas de elegir
+    # (la puerta, Code → área Técnico, los dos INSERT) están en
+    # `tests/test_alta_con_responsable.py`.
+    assert conn.tareas[0]["responsable_chat_id"] is None, (
+        "el alta sin elegir responsable le puso uno a la tarea")
     assert 'name="resp_' in html, "no se puede asignar el responsable"
 
 

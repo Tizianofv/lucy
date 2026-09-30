@@ -173,6 +173,16 @@ class _Cursor:
         elif s.startswith("SELECT clave, color FROM areas"):
             self._filas = list(c.areas)
 
+        elif s.startswith("SELECT id, nombre, area, estado FROM proyectos"):
+            # `db.proyecto_admite_tareas`: sin `proyectos` declarados, todo
+            # proyecto existe y está activo (lo que suponían estas pruebas).
+            pid = params[0]
+            if c.proyectos is None:
+                self._filas = [{"id": pid, "nombre": "p", "area": None,
+                                "estado": "activo"}]
+            elif pid in c.proyectos:
+                self._filas = [dict(c.proyectos[pid], id=pid)]
+
         elif s.startswith("SELECT id, deriva_de_id FROM tareas"):
             self._filas = [
                 {"id": t["id"], "deriva_de_id": t["deriva_de_id"]}
@@ -195,7 +205,8 @@ class _Cursor:
 
 class _Conn:
     def __init__(self, tareas=None, areas=None, sin_columna_deriva=False,
-                reloj=None):
+                reloj=None, proyectos=None):
+        self.proyectos = proyectos
         self.tareas = {t["id"]: dict(t) for t in (tareas or [])}
         self.areas = list(areas or [])
         self.bandeja: list = []
@@ -763,6 +774,15 @@ def test_de_punta_a_punta_la_pantalla_pinta_sale_de_y_siguio():
     """Se manda el formulario y DESPUÉS se pinta /tareas con la MISMA base,
     igual que test_tarea_a_mano.py::_crear_y_pintar."""
     conn = _Conn([_fila(1, titulo="lavar el carro")])
+    # EL «HOY» DE ESTA PRUEBA ES EL DÍA DE SU RELOJ, NO EL DEL CALENDARIO DE
+    # QUIEN LA CORRE. La base de mentira estampa `completado_en` con
+    # `conn.reloj` (un 25-sep-2026 fijo); el panel esconde en «Historial» lo
+    # cerrado hace `db.DIAS_HISTORIAL` días o más contando desde `db.hoy_rd()`.
+    # Con el reloj real, desde el 28-sep-2026 la madre recién cerrada caía en
+    # Historial y la pantalla no pintaba «→ Siguió». Se fija `hoy_rd` al día del
+    # reloj de la prueba: sigue siendo «cerrada hoy» sin importar cuándo corra.
+    # (El conftest devuelve `db.hoy_rd` a su sitio al terminar la prueba.)
+    db.hoy_rd = lambda: conn.reloj.astimezone(config.TZ).date()
     r = _con_base(conn, lambda: panel.guardar_tareas(_post({
         "prev_1": "pendiente", "hecha_1": "1",
         "deriva_titulo_1_1": "encerar el carro",

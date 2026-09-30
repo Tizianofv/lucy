@@ -57,6 +57,11 @@ CREATE TABLE personas (
   alias      TEXT[] DEFAULT '{}',   -- "Ana", "ana la del gym" → misma persona
   relacion   TEXT,                  -- cliente | familia | amigo | proveedor...
   notas      TEXT,                  -- semilla del "perfil vivo" (req 12)
+  -- La bandeja que la originó (§E, 27-sep-2026, migración
+  -- 2026-09-27_dueno_personas_preferencias.sql). NULL = sin dueño conocido
+  -- -- nunca se adivina. La usa db.lectura_dueno para decidir si es de
+  -- Tiziano, mismo criterio que notas/movimientos.
+  bandeja_id BIGINT REFERENCES bandeja(id),
   borrado_en TIMESTAMPTZ
 );
 
@@ -91,6 +96,10 @@ CREATE TABLE preferencias (
   creado_en  TIMESTAMPTZ NOT NULL DEFAULT now(),
   texto      TEXT NOT NULL,                    -- "no me recuerdes trabajo los domingos"
   contexto   TEXT,                             -- opcional: 'agenda'|'recordatorios'|'personas'…
+  -- La bandeja que la originó (§E, 27-sep-2026, migración
+  -- 2026-09-27_dueno_personas_preferencias.sql). Mismo criterio que
+  -- personas.bandeja_id.
+  bandeja_id BIGINT REFERENCES bandeja(id),
   borrado_en TIMESTAMPTZ
 );
 

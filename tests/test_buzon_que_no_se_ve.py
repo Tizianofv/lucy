@@ -3857,6 +3857,61 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # vigilados de antes. La migración nueva
     # (`db/migrations/2026-09-26_tomada_en.sql`) no es un `.py`.
     #
+    # 27-sep-2026, rama `trabajo/code-lectura` (§A, parte A del plan de
+    # construcción — lectura de solo lo de Tiziano en bandeja/notas/
+    # movimientos/eventos, para Code): 94 → 97 en disco, 53 → 54 EXENTOS
+    # por `tests/test_lectura_dueno.py` (SQL real contra SQLite para las
+    # cuatro lecturas), 41 → 43 VIGILADOS por `db/lectura_dueno.py`
+    # (las cuatro funciones y su única puerta de dueño) y
+    # `tools/contar_lectura_de_dueno.py` (el guion de una vez para la
+    # sala: cuenta contra producción, nunca contenido). Ninguna migración:
+    # no se tocó el esquema.
+    #
+    # 27-sep-2026, rama `trabajo/code-duenos` (§E, parte E del plan de
+    # construcción — marca de dueño en personas/preferencias): 97 → 99 en
+    # disco, 54 → 55 EXENTOS por `tests/test_duenos.py` (nuevo: los tres
+    # escritores reales guardando bandeja_id, con su censo de hermanos).
+    # 43 → 44 VIGILADOS por `tools/rellenar_duenos.py` (nuevo: el guion de
+    # relleno de una vez para la sala). `db/db.py`, `acciones/crud.py` y
+    # `db/lectura_dueno.py` ya estaban vigilados de antes. La migración
+    # nueva (`db/migrations/2026-09-27_dueno_personas_preferencias.sql`)
+    # no es un `.py`.
+    #
+    # 27-sep-2026, mismo día, arreglo del NO PASA del testigo sobre
+    # `cbc2726` (transacción abortada contra Postgres real): 99 → 100 en
+    # disco, 55 → 56 EXENTOS por `tests/_doble_postgres.py` (nuevo: el
+    # doble fiel compartido de la conexión Postgres, que modela la
+    # transacción abortada -- vive bajo `tests/`, así que es EXENTO por
+    # rol aunque su nombre no empiece con `test_`). VIGILADOS sin cambio
+    # en 44: se tocaron `db/db.py`, `acciones/crud.py`, ya vigilados de
+    # antes.
+    #
+    # 28-sep-2026, rama `trabajo/responsable-146` (tarea 146, responsable al
+    # crear una tarea a mano): 100 → 101 en disco, 56 → 57 EXENTOS por
+    # `tests/test_alta_con_responsable.py` (nuevo). VIGILADOS sin cambio en
+    # 44: se tocaron `config.py`, `db/db.py` y `web/app.py`, ya vigilados de
+    # antes.
+    #
+    # 28-sep-2026, rama `trabajo/responsable-145` (tarea 145, clasificar las
+    # tareas por responsable): 101 → 102 en disco, 57 → 58 EXENTOS por
+    # `tests/test_filtro_responsable.py` (nuevo). VIGILADOS sin cambio en 44:
+    # se tocó `web/app.py`, ya vigilado de antes.
+    #
+    # 29-sep-2026, rama `trabajo/proyecto-nombre` (pieza 1 del diseño
+    # «proyectos», editar el nombre de un proyecto): 102 → 103 en disco, 58 → 59
+    # EXENTOS por `tests/test_nombre_de_proyecto.py` (nuevo). VIGILADOS sin
+    # cambio en 44: se tocaron `db/db.py`, `acciones/crud.py` y `web/app.py`, ya
+    # vigilados de antes.
+    #
+    # 29-sep-2026, rama `trabajo/proyecto-tareas` (pieza 2 del diseño
+    # «proyectos», tareas con todas sus características desde el proyecto):
+    # 103 → 104 en disco, 59 → 60 EXENTOS por `tests/test_tarea_en_proyecto.py`
+    # (nuevo). VIGILADOS sin cambio en 44: se tocaron `db/db.py`,
+    # `acciones/crud.py` y `web/app.py`, ya vigilados de antes.
+    # MERGE 30-sep-2026 (main c33406a en `trabajo/code-alarmas`): las dos
+    # historias siguen. A la cuenta de main (104 / 60 / 44) se le suman los dos
+    # archivos de prueba de la parte 4 (+2 en disco, +2 EXENTOS, 0 VIGILADOS).
+    #
     # 26-sep-2026, rama `trabajo/code-alarmas` (§B, parte 4 del plan de
     # construcción — las alarmas técnicas pasan a Code): 94 → 95 en disco,
     # 53 → 54 EXENTOS por `tests/test_code_alarmas.py` (SQL real contra
@@ -3882,15 +3937,14 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `test_`), así que sumarles pruebas no mueve el contador. VIGILADOS
     # sin cambio en 41: no se tocó ningún archivo de producción en esta
     # vuelta, solo pruebas.
-    assert medido == {"en disco": 96, "exentos": 55, "vigilados": 41}, (
+    assert medido == {"en disco": 106, "exentos": 62, "vigilados": 44}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "26-sep-2026 (rama code-alarmas, tras el arreglo del NO PASA) era "
-        "{'en disco': 96, 'exentos': 55, 'vigilados': 41}. La aserción de "
-        "fondo —cero archivos alcanzan la lista cruda— YA CORRIÓ arriba y "
-        "quedó verde, así que esto NO es una fuga. Si los vigilados "
-        "bajaron, algo se está saltando de más y «cero falsos positivos» "
-        "dejó de significar lo que decía; si subieron, hay código nuevo "
-        "que mirar")
+        "30-sep-2026 (merge de main en code-alarmas) era {'en disco': 106, "
+        "'exentos': 62, 'vigilados': 44}. La aserción de fondo —cero "
+        "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
+        "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
+        "está saltando de más y «cero falsos positivos» dejó de "
+        "significar lo que decía; si subieron, hay código nuevo que mirar")
 
 
 def test_la_guarda_no_rojea_a_quien_usa_config_como_se_debe():

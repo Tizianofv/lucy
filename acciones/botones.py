@@ -261,7 +261,11 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             else:
                 despues, log_id = await crud.editar(
                     plan["tabla"], registro_id, plan.get("cambios") or {}, motivo)
-                remate = ("✅ <b>Hecho</b>" if despues else "⚠️ Ya no estaba ahí")
+                # Sin huella (`log_id` None) `editar` no escribió nada porque ya
+                # estaba así: no se dice «Hecho» de algo que no se hizo.
+                remate = ("✅ <b>Hecho</b>" if log_id else
+                          "ℹ️ <b>Ya estaba así: no cambié nada</b>" if despues
+                          else "⚠️ Ya no estaba ahí")
         except Exception as e:
             await db.cambiar_estado(bandeja_id, "esperando_confirmacion")
             log.exception("Fallo aplicando la orden de #%s", bandeja_id)
@@ -273,7 +277,7 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _cerrar_tarjeta(q, remate)
         if log_id:
             await q.message.reply_text(
-                "Si me equivoqué, tocá acá.", reply_markup=teclado_deshacer(log_id))
+                "Si me equivoqué, toca aquí.", reply_markup=teclado_deshacer(log_id))
         log.info("Orden aplicada: %s %s#%s", plan.get("accion"),
                  plan.get("tabla"), registro_id)
         return
@@ -323,15 +327,40 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # cuando Tiziano complete el dato.
         await db.cambiar_estado(bandeja_id, "esperando_confirmacion")
         await q.answer(
-            f"Me falta {e} para poder guardarlo. Mandámelo y lo completo.",
+            f"Me falta {e} para poder guardarlo. Mándamelo y lo completo.",
             show_alert=True,
         )
+        return
+    except (crud.NoDeNegocio, db.NombreDeProyectoNoVale) as e:
+        # `crud` dice «no» con un motivo pensado para leerse (`NoDeNegocio`:
+        # proyecto cerrado, responsable que no vale…, o el nombre de proyecto
+        # que no vale): ESE motivo es lo que se le muestra, y solo esos bajan
+        # a `warning`. Cualquier otro `ValueError` es un fallo de programación
+        # y cae abajo, con su traceback. Reintentar SIN cambiar nada no sirve,
+        # y no se promete. La tarjeta queda abierta (la fila vuelve a
+        # `esperando_confirmacion`).
+        await db.cambiar_estado(bandeja_id, "esperando_confirmacion")
+        log.warning("Rechazada la entidad de #%s: %s", bandeja_id, e)
+        # «Si el proyecto se reabre, vuelve a tocar» solo es verdad si el motivo
+        # ES que el proyecto está cerrado.
+        causa = e.__cause__
+        cierre = (" La tarjeta sigue abierta: si el proyecto se reabre, "
+                  "vuelve a tocar ✅."
+                  if isinstance(causa, db.ProyectoNoAdmiteTareas)
+                  and causa.clave == "cerrado" else "")
+        # El aviso de Telegram se corta a 190 caracteres. Lo que se recorta es
+        # el MOTIVO (con «…»), nunca la promesa del final: una promesa cortada
+        # por la mitad diría algo distinto de lo que es verdad.
+        motivo_texto = str(e)
+        if len(motivo_texto) + len(cierre) > 190:
+            motivo_texto = motivo_texto[:max(190 - len(cierre) - 1, 0)] + "…"
+        await q.answer(f"{motivo_texto}{cierre}"[:190], show_alert=True)
         return
     except Exception:
         await db.cambiar_estado(bandeja_id, "esperando_confirmacion")
         log.exception("Fallo creando la entidad de #%s", bandeja_id)
         await q.answer(
-            "No pude guardarlo. Tu mensaje sigue a salvo; probá de nuevo.",
+            "No pude guardarlo. Tu mensaje sigue a salvo; prueba de nuevo.",
             show_alert=True,
         )
         return

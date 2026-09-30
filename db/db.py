@@ -1079,6 +1079,208 @@ async def cambiar_estado(bandeja_id: int, estado: str, desde: str | None = None)
         return cur.rowcount > 0
 
 
+# ── EL NOMBRE DE UN PROYECTO (28/29-sep-2026, pieza 1 del diseño «proyectos») ──
+#
+# UNA SOLA PUERTA para «qué nombre vale», y UNA SOLA función para «¿ya hay uno
+# con ese nombre?», llamadas por TODO lo que escribe `proyectos.nombre`:
+# `crud.editar` (Telegram y panel, por `crud.PUERTAS`), `crud.deshacer`,
+# `crud.perfil`, `_buscar_o_crear` y `convertir_tarea_en_proyecto`. La lista de
+# escritores no está tecleada acá: la saca de lo real
+# `tests/test_nombre_de_proyecto.py`.
+#
+# Sin candado en la base (decisión de la sala: sin migración): un índice único
+# sería DDL en producción. La regla es de aplicación, y por eso el duplicado se
+# compara con LA MISMA consulta con la que Lucy busca un proyecto por su nombre.
+LARGO_NOMBRE_PROYECTO = 200
+
+
+class NombreDeProyectoNoVale(ValueError):
+    """Un nombre de proyecto que no puede quedar. `clave` dice por qué
+    (`vacio`, `largo`, `repetido`) para que una pantalla lo traduzca sin
+    adivinar por el texto del mensaje. El mensaje NUNCA repite el nombre pedido."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+def nombre_de_proyecto_que_vale(valor) -> str:
+    """El nombre limpio que va a quedar, o `NombreDeProyectoNoVale`.
+
+    LA PARTE QUE NO NECESITA LA BASE (por eso es la que entra en
+    `crud.PUERTAS`, que es síncrona): sin los espacios de alrededor, no vacío y
+    de a lo sumo `LARGO_NOMBRE_PROYECTO` caracteres. Que no haya OTRO proyecto
+    vivo con ese nombre se mira aparte, con `proyecto_vivo_con_nombre`, porque
+    pide la base.
+    """
+    if valor is None or (isinstance(valor, str) and not valor.strip()):
+        raise NombreDeProyectoNoVale(
+            "vacio", "el nombre del proyecto no puede quedar vacío")
+    if not isinstance(valor, str):
+        raise NombreDeProyectoNoVale(
+            "vacio", "el nombre del proyecto tiene que ser un texto")
+    limpio = valor.strip()
+    if len(limpio) > LARGO_NOMBRE_PROYECTO:
+        raise NombreDeProyectoNoVale(
+            "largo",
+            f"el nombre del proyecto no puede pasar de {LARGO_NOMBRE_PROYECTO} caracteres")
+    return limpio
+
+
+async def proyecto_vivo_con_nombre(cur, nombre: str, excluir_id: int | None = None):
+    """El id de un proyecto VIVO que se llama así, o None. LA comparación de
+    nombres de proyecto: la usan la búsqueda de Lucy (`_buscar_o_crear`,
+    `crud.perfil`) y todo chequeo de duplicados, para que no puedan separarse.
+
+    `lower(nombre) = lower(...)` y nada más (ignora mayúsculas, NO tildes: es lo
+    que hacía la búsqueda antes, y un chequeo con otro criterio dejaría pasar
+    nombres que la búsqueda ve iguales). `excluir_id` es la propia fila, para
+    poder cambiar solo las mayúsculas de sí mismo. Un proyecto borrado no
+    cuenta. `ORDER BY id`: si algún día hay dos, siempre gana el mismo (antes,
+    `LIMIT 1` sin orden dejaba la elección a Postgres).
+
+    `cur` es un cursor con `row_factory=dict_row`.
+    """
+    await cur.execute(
+        """
+        SELECT id FROM proyectos
+         WHERE borrado_en IS NULL
+           AND lower(nombre) = lower(%s)
+           AND id <> %s
+         ORDER BY id
+         LIMIT 1
+        """,
+        (nombre, excluir_id or 0))
+    fila = await cur.fetchone()
+    return fila["id"] if fila else None
+
+
+# ── AGREGAR TAREAS A UN PROYECTO (pieza 2 del diseño «proyectos», 29-sep-2026) ─
+#
+# UNA SOLA PUERTA para «¿a este proyecto se le pueden agregar tareas?»:
+# `proyecto_admite_tareas`. La llaman TODOS los que crean una tarea con proyecto
+# (`crear_tarea_desde_el_panel`, `cerrar_y_derivar` para las derivadas y
+# `crud.crear_desde_interpretacion` por Telegram); la lista no está tecleada
+# acá: la saca de lo real `tests/test_tarea_en_proyecto.py`.
+#
+# Decisión de la sala (delegada por Tiziano, 29-sep): un proyecto CERRADO no
+# recibe tareas; uno PAUSADO sí.
+ESTADO_PROYECTO_CERRADO = "cerrado"
+
+
+class ProyectoNoAdmiteTareas(ValueError):
+    """`clave` dice por qué (`no_existe` o `cerrado`) para que una pantalla lo
+    traduzca sin adivinar por el texto. El mensaje no repite nada de lo pedido."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+class TareaNoValida(ValueError):
+    """`crear_tarea_desde_el_panel` rechazó un dato del alta (`clave`:
+    `responsable`, `persona` o `primero`, las mismas de la pantalla). La ruta ya
+    los miró; esto llega si cambiaron entre su chequeo y la escritura."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+async def proyecto_admite_tareas(cur, proyecto_id) -> dict:
+    """La fila `{id, nombre, area, estado}` del proyecto si se le pueden agregar
+    tareas, o `ProyectoNoAdmiteTareas`. `cur` es un cursor con `dict_row`.
+
+    Un id que no es un número, que no existe o que está en la papelera es
+    `no_existe`; uno cerrado es `cerrado` (`estado` es texto libre en la base:
+    se compara contra `ESTADO_PROYECTO_CERRADO`, lo único que se prohíbe).
+    """
+    if isinstance(proyecto_id, bool) or not isinstance(proyecto_id, int):
+        raise ProyectoNoAdmiteTareas("no_existe", "ese proyecto no existe o ya no está")
+    await cur.execute(
+        "SELECT id, nombre, area, estado FROM proyectos "
+        "WHERE id = %s AND borrado_en IS NULL", (proyecto_id,))
+    fila = await cur.fetchone()
+    if fila is None:
+        raise ProyectoNoAdmiteTareas("no_existe", "ese proyecto no existe o ya no está")
+    if fila["estado"] == ESTADO_PROYECTO_CERRADO:
+        raise ProyectoNoAdmiteTareas(
+            "cerrado", "ese proyecto está cerrado: no se le agregan tareas")
+    return fila
+
+
+async def proyecto_para_tareas(proyecto_id) -> dict:
+    """`proyecto_admite_tareas` con su propia conexión, para la ruta y para
+    Telegram (que no tienen cursor)."""
+    async with pool.connection() as conn:
+        return await proyecto_admite_tareas(
+            conn.cursor(row_factory=dict_row), proyecto_id)
+
+
+def sala_ve(responsable_chat_id, area_efectiva) -> bool:
+    """¿La sala de control ve esta tarea? Solo si es de Code Y su área EFECTIVA
+    (la propia o la de su proyecto) es la técnica: la misma condición que pone
+    `tareas_de_code_pendientes` en su SQL (`tests/test_tarea_en_proyecto.py` la
+    contrasta ejecutando esa consulta)."""
+    return responsable_chat_id == CHAT_ID_CODE and area_efectiva == AREA_TECNICA
+
+
+# Cuántos ids de `?sin_cerrar=` mira la pantalla como máximo.
+TOPE_SIN_CERRAR = 20
+
+
+async def tareas_sin_cerrar_por_proyecto_cerrado(ids) -> list[int]:
+    """De los `ids` que dice la URL de /tareas (`?sin_cerrar=`), los que de
+    verdad SIGUEN pendientes, viven y están en un proyecto CERRADO: los únicos de
+    los que la pantalla puede decir «no se cerró porque su proyecto está
+    cerrado». Sin repetidos, en orden, y como mucho `TOPE_SIN_CERRAR`. Una
+    consulta por id (SQL literal, sin armar el texto al vuelo): son pocos."""
+    limpios = list(dict.fromkeys(
+        i for i in ids if isinstance(i, int) and not isinstance(i, bool) and i > 0
+    ))[:TOPE_SIN_CERRAR]
+    salida = []
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        for i in limpios:
+            await cur.execute(
+                """
+                SELECT t.id FROM tareas t
+                  JOIN proyectos p ON p.id = t.proyecto_id
+                 WHERE t.id = %s AND t.borrado_en IS NULL AND t.estado = %s
+                   AND p.borrado_en IS NULL AND p.estado = %s
+                """,
+                (i, ESTADO_PENDIENTE, ESTADO_PROYECTO_CERRADO))
+            if await cur.fetchone() is not None:
+                salida.append(i)
+    return salida
+
+
+async def personas_vivas() -> list[dict]:
+    """`[{id, nombre}]` de las personas no archivadas, para elegir «de quién
+    trata» una tarea."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, nombre FROM personas WHERE borrado_en IS NULL "
+            "ORDER BY nombre, id")
+        return list(await cur.fetchall())
+
+
+async def _persona_viva(cur, persona_id) -> bool:
+    if isinstance(persona_id, bool) or not isinstance(persona_id, int):
+        return False
+    await cur.execute(
+        "SELECT id FROM personas WHERE id = %s AND borrado_en IS NULL",
+        (persona_id,))
+    return await cur.fetchone() is not None
+
+
+async def persona_viva(persona_id) -> bool:
+    """¿Existe esa persona y no está archivada? La puerta de `persona_id`."""
+    async with pool.connection() as conn:
+        return await _persona_viva(conn.cursor(row_factory=dict_row), persona_id)
+
+
 async def _buscar_o_crear(tabla: str, nombre: str, *,
                           bandeja_id: int | None = None) -> int | None:
     """Devuelve el id de la persona/proyecto con ese nombre; la crea si no está.
@@ -1115,24 +1317,73 @@ async def _buscar_o_crear(tabla: str, nombre: str, *,
 
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(
-            f"""
-            SELECT id FROM {tabla}
-             WHERE borrado_en IS NULL
-               AND (lower(nombre) = lower(%s)
-                    {"OR lower(%s) = ANY(SELECT lower(a) FROM unnest(alias) a)"
-                     if tabla == "personas" else ""})
-             LIMIT 1
-            """,
-            (nombre, nombre) if tabla == "personas" else (nombre,),
-        )
-        fila = await cur.fetchone()
-        if fila:
-            return fila["id"]
+        if tabla == "proyectos":
+            # La MISMA consulta que usa el chequeo de duplicados del nombre.
+            existente = await proyecto_vivo_con_nombre(cur, nombre)
+            if existente is not None:
+                return existente
+            # Va a CREARSE un proyecto: por la misma puerta que un renombre.
+            nombre = nombre_de_proyecto_que_vale(nombre)
+        else:
+            await cur.execute(
+                """
+                SELECT id FROM personas
+                 WHERE borrado_en IS NULL
+                   AND (lower(nombre) = lower(%s)
+                        OR lower(%s) = ANY(SELECT lower(a) FROM unnest(alias) a))
+                 LIMIT 1
+                """,
+                (nombre, nombre),
+            )
+            fila = await cur.fetchone()
+            if fila:
+                return fila["id"]
 
-        await cur.execute(
-            f"INSERT INTO {tabla} (nombre) VALUES (%s) RETURNING *", (nombre,)
-        )
+        if tabla == "personas":
+            # `bandeja_id` (§E, 27-sep-2026): la puerta de dueño de la parte
+            # A decide "esto es de Tiziano" por la bandeja que originó la
+            # fila -- INSERT literal, no el `{tabla}` genérico de arriba,
+            # para que el censo de `tests/test_duenos.py` la encuentre por
+            # el AST sin tener que reconstruir un f-string.
+            #
+            # CON UN SAVEPOINT (`async with conn.transaction():`), igual que
+            # `tareas_de_code_pendientes`/`tomar_tarea_de_la_sala`: SIN esto,
+            # el primer INSERT que revienta con SQLSTATE 42703 deja la
+            # transacción ABORTADA en Postgres real (autocommit=False, sin
+            # savepoint de por medio) -- el segundo INSERT del "except"
+            # correría en la MISMA transacción envenenada y reventaría con
+            # 25P02 ("current transaction is aborted"), no con la persona
+            # creada. Hallazgo del testigo sobre `cbc2726`, NO PASA: la
+            # primera versión de este arreglo pasaba las pruebas SQLite
+            # (que no modelan el aborto de la conexión) pero reventaba
+            # contra el comportamiento real de Postgres.
+            try:
+                async with conn.transaction():
+                    await cur.execute(
+                        "INSERT INTO personas (nombre, bandeja_id) VALUES (%s, %s) "
+                        "RETURNING *",
+                        (nombre, bandeja_id),
+                    )
+            except Exception as e:
+                try:
+                    sqlstate = e.sqlstate
+                except AttributeError:
+                    raise e from None
+                if sqlstate != "42703":
+                    raise
+                # SIN LA MIGRACIÓN (§E sin aplicar): cae al INSERT de antes,
+                # sin bandeja_id -- no revienta, la persona se crea igual.
+                # El SAVEPOINT de arriba ya revirtió: esta conexión sigue
+                # sana.
+                cur = conn.cursor(row_factory=dict_row)
+                await cur.execute(
+                    "INSERT INTO personas (nombre) VALUES (%s) RETURNING *",
+                    (nombre,),
+                )
+        else:
+            await cur.execute(
+                f"INSERT INTO {tabla} (nombre) VALUES (%s) RETURNING *", (nombre,)
+            )
         nueva = await cur.fetchone()
         if tabla == "proyectos":
             await conn.execute(
@@ -1149,8 +1400,9 @@ async def _buscar_o_crear(tabla: str, nombre: str, *,
         return nueva["id"]
 
 
-async def buscar_o_crear_persona(nombre: str) -> int | None:
-    return await _buscar_o_crear("personas", nombre)
+async def buscar_o_crear_persona(nombre: str, *,
+                                 bandeja_id: int | None = None) -> int | None:
+    return await _buscar_o_crear("personas", nombre, bandeja_id=bandeja_id)
 
 
 async def buscar_o_crear_proyecto(nombre: str, *,
@@ -1240,13 +1492,22 @@ async def convertir_tarea_en_proyecto(tarea_id: int) -> dict:
         if tarea.get("proyecto_id") is not None:
             raise ValueError("Esa tarea ya tiene proyecto: no se convierte.")
 
+        # El título de la tarea va a ser el NOMBRE de un proyecto: por la misma
+        # puerta que un renombre (no vacío, largo, y que no haya ya otro vivo
+        # con ese nombre: convertir dos tareas con el mismo título dejaba dos
+        # proyectos iguales).
+        nombre_proyecto = nombre_de_proyecto_que_vale(tarea["titulo"])
+        if await proyecto_vivo_con_nombre(cur, nombre_proyecto) is not None:
+            raise NombreDeProyectoNoVale(
+                "repetido", "Ya hay un proyecto con ese nombre: no se convierte.")
+
         await cur.execute(
             """
             INSERT INTO proyectos (nombre, descripcion, area)
             VALUES (%s, %s, %s)
             RETURNING *
             """,
-            (tarea["titulo"], tarea.get("detalle"), tarea.get("area")))
+            (nombre_proyecto, tarea.get("detalle"), tarea.get("area")))
         proyecto = await cur.fetchone()
 
         await cur.execute(
@@ -3718,7 +3979,12 @@ SIN_ANTICIPOS: list[int] = []
 
 async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
                                      vence_en: datetime | None,
-                                     area: str | None = None) -> int:
+                                     area: str | None = None,
+                                     responsable_chat_id: int | None = None,
+                                     *, proyecto_id: int | None = None,
+                                     primero_id: int | None = None,
+                                     detalle: str | None = None,
+                                     persona_id: int | None = None) -> int:
     """Una tarea escrita a mano en el panel. La cuarta escritura del panel.
 
     QUIÉN LA ANOTÓ NO SE PUEDE MENTIR, y por eso esta función escribe DOS filas
@@ -3733,7 +3999,8 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
     y Tiziano la sacó —«nno es relevante quien la anoto»—. Lo que se ve hoy en
     esa columna es el RESPONSABLE (`tareas.responsable_chat_id`), que es otra
     pregunta: quién la tiene pendiente, no quién la escribió. Una tarea recién
-    escrita a mano nace SIN responsable, como todas.
+    escrita a mano nace SIN responsable salvo que quien la escribe elija uno en
+    el formulario (`responsable_chat_id`, tarea 146 de Tiziano, 28-sep-2026).
 
     O sea que lo que esta fila de `bandeja` sostiene ya no es una columna de la
     pantalla: es la trazabilidad de la fila —de dónde salió— y el `bandeja_id`
@@ -3745,7 +4012,23 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
     `registrar_aviso` mete las del despertador con `origen='despertador'`. Ésta
     es la misma idea con `origen='panel'`. Cero DDL de esta función: la única
     columna que este panel tuvo que agregarle a `tareas` es
-    `responsable_chat_id`, y no la escribe acá — una tarea nace sin responsable.
+    `responsable_chat_id`, que esta función escribe solo si se le pasa uno.
+
+    EL RESPONSABLE (tarea 146): `responsable_chat_id=None` es lo normal y no
+    pasa por ninguna puerta. Si viene un valor, se revalida ACÁ con
+    `config.puede_ser_responsable` --la MISMA puerta que ya pasó la ruta--, antes
+    de abrir la conexión y lanzando `ValueError` (mismo trato que
+    `cerrar_y_derivar`): la validación de un formulario protege al formulario,
+    no a la tabla, y `tests/test_responsable.py` censa que todo sitio que
+    inserte la columna nombre la puerta.
+
+    Y SI EL RESPONSABLE ES CODE, EL ÁREA SE PONE SOLA EN `AREA_TECNICA`, sin mirar
+    la que se haya pedido (decisión de Tiziano, 28-sep-2026): la API de la sala
+    solo ve lo que es de Code Y del área técnica (`tareas_de_code_pendientes`),
+    así que una tarea de Code con otra área nacería invisible para ella. Vive
+    acá, en el escritor, y no en la ruta: cualquier camino que llegue a esta
+    función recibe la misma regla. Quien llama tiene que haber comprobado que
+    esa área existe en `areas()` (la ruta lo hace), porque la FK lo exige.
 
     LA FILA DE BANDEJA VA MUDA, y eso es deliberado. `contenido_raw`,
     `transcripcion` y `respuesta_lucy` quedan NULOS, así que las dos consultas
@@ -3805,9 +4088,43 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
 
     La acción se registra como 'crear' porque es lo que `deshacer()` sabe
     revertir: su rama de 'crear' hace `SET borrado_en = now()`.
+
+    DENTRO DE UN PROYECTO (pieza 2 del diseño «proyectos», 29-sep-2026):
+    `proyecto_id`, `primero_id`, `detalle` y `persona_id` (de quién trata) son
+    opcionales y `None` es lo normal. Cada uno se revalida ACÁ, antes de abrir
+    ninguna escritura, aunque la ruta ya lo haya mirado (la validación de un
+    formulario protege al formulario, no a la tabla): el proyecto por
+    `proyecto_admite_tareas` (existe, no está en la papelera, no está cerrado),
+    la persona por `_persona_viva` y el «Primero:» con que exista y no esté en
+    la papelera (el chequeo de círculos vive en `crud._primero_que_vale`, que la
+    ruta llama; al CREAR no hay círculo posible). Con proyecto, `area` se pone
+    en `None` SIEMPRE, sin mirar lo pedido: el CHECK `tareas_area_no_con_proyecto`
+    hace irrepresentable «proyecto + área», y el área de la tarea sale del
+    proyecto. Por lo mismo la regla «Code → área técnica» de arriba NO aplica
+    con proyecto: quien llama dice, con `sala_ve`, si la sala no la va a ver.
     """
+    if responsable_chat_id is not None:
+        if not puede_ser_responsable(responsable_chat_id):
+            raise TareaNoValida(
+                "responsable", "ese chat no puede ser responsable de una tarea")
+        if responsable_chat_id == CHAT_ID_CODE and proyecto_id is None:
+            area = AREA_TECNICA
+    if proyecto_id is not None:
+        area = None
+
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
+        if proyecto_id is not None:
+            await proyecto_admite_tareas(cur, proyecto_id)
+        if persona_id is not None and not await _persona_viva(cur, persona_id):
+            raise TareaNoValida("persona", "esa persona no existe o está archivada")
+        if primero_id is not None:
+            await cur.execute(
+                "SELECT id FROM tareas WHERE id = %s AND borrado_en IS NULL",
+                (primero_id,))
+            if await cur.fetchone() is None:
+                raise TareaNoValida(
+                    "primero", "esa tarea de «Primero:» no existe o está archivada")
         await cur.execute(
             """
             INSERT INTO bandeja
@@ -3828,20 +4145,26 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
         # ella al reintentar.
         con_area = """
             INSERT INTO tareas
-              (bandeja_id, titulo, vence_en, anticipos_min, area)
-            VALUES (%s, %s, %s, %s, %s)
+              (bandeja_id, titulo, vence_en, anticipos_min, area,
+               responsable_chat_id, proyecto_id, primero_id, detalle,
+               persona_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """
         sin_area = """
             INSERT INTO tareas
-              (bandeja_id, titulo, vence_en, anticipos_min)
-            VALUES (%s, %s, %s, %s)
+              (bandeja_id, titulo, vence_en, anticipos_min,
+               responsable_chat_id, proyecto_id, primero_id, detalle,
+               persona_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """
         try:
             async with conn.transaction():
                 await cur.execute(
-                    con_area, (bandeja_id, titulo, vence_en, SIN_ANTICIPOS, area))
+                    con_area, (bandeja_id, titulo, vence_en, SIN_ANTICIPOS, area,
+                               responsable_chat_id, proyecto_id, primero_id,
+                               detalle, persona_id))
                 # RETURNING * y no una fila reconstruida a mano: `despues` tiene
                 # que ser lo que de verdad quedó guardado —con el id, el
                 # creado_en y los defaults que puso Postgres—, no lo que
@@ -3855,7 +4178,9 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
             if sqlstate != "42703":
                 raise
             await cur.execute(
-                sin_area, (bandeja_id, titulo, vence_en, SIN_ANTICIPOS))
+                sin_area, (bandeja_id, titulo, vence_en, SIN_ANTICIPOS,
+                           responsable_chat_id, proyecto_id, primero_id,
+                           detalle, persona_id))
             fila = await cur.fetchone()
 
         await conn.execute(
@@ -3962,6 +4287,14 @@ async def cerrar_y_derivar(
         if madre is None:
             # No existe, o está en la papelera: no hay de dónde derivar.
             return None
+
+        # UN PROYECTO CERRADO NO RECIBE TAREAS, tampoco las derivadas (pieza 2
+        # del diseño «proyectos»): por la MISMA puerta que el alta, y ANTES de
+        # cerrar la madre: «si la nueva no vale, la vieja tampoco se cierra»
+        # (D6). Sin derivadas, cerrar una tarea de un proyecto cerrado sigue
+        # siendo posible.
+        if derivadas and madre.get("proyecto_id") is not None:
+            await proyecto_admite_tareas(cur, madre["proyecto_id"])
 
         cerrada = False
         if madre.get("estado") != ESTADO_HECHA:

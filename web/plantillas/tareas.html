@@ -17,14 +17,49 @@
    (`web/menu.py`), y esta pantalla no cambia lo que Lucy sabe. Sigue estando
    a un clic, igual que /tareas/nueva. #}
 <div class="barra">
-  <a href="/tareas/nueva">+ Agregar tarea</a>
+  {# Desde una vista filtrada, «+ Agregar tarea» llega con ese responsable ya
+     escogido (`/tareas/nueva?responsable=<nombre>`, que el alta revalida). #}
+  <a href="/tareas/nueva{% if filtro %}?responsable={{ filtro|urlencode }}{% endif %}">+ Agregar tarea</a>
   <a href="/tareas/historial">Historial</a>
 </div>
+
+{# LA CLASIFICACIÓN POR RESPONSABLE (tarea 145): botones que son ENLACES y no un
+   formulario, porque esta pantalla tiene UN solo formulario a propósito (tres
+   pruebas lo fijan). Salen de `botones`, que la ruta deriva de quién entra al
+   panel, de Code y de las filas reales: ningún nombre está escrito acá. La
+   clave del enlace es el NOMBRE, nunca el chat. #}
+<p class="barra" id="por-responsable">
+  {% for b in botones %}
+  {% if b.activo %}<strong aria-current="page">{{ b.etiqueta }} ({{ b.n }})</strong>
+  {% else %}<a href="/tareas{% if b.clave %}?responsable={{ b.clave|urlencode }}{% endif %}">{{ b.etiqueta }} ({{ b.n }})</a>
+  {% endif %}
+  {% endfor %}
+</p>
+{% if filtro_aviso %}
+<p class="aviso">No encontré a «{{ filtro_pedido }}» entre los responsables: te
+muestro todas.</p>
+{% endif %}
+{% if filtro %}
+<p class="suave">Viendo: <strong>{{ filtro_etiqueta }}</strong> —
+{{ mostradas }} de {{ total_visibles }}. <a href="/tareas">Ver todas</a></p>
+{% endif %}
 
 {% if creada %}
 {# Se nombra el id de lo que se creó, no un «listo». La tarea está pintada más
    abajo, en su grupo: el aviso dice que pasó y la lista lo demuestra. #}
 <p class="aviso ok">Tarea creada (#{{ creada }}). Está en su grupo, más abajo.</p>
+{% endif %}
+{% if sin_cerrar %}
+{# Una derivada pedida en una tarea de un proyecto CERRADO no se acepta. Se dice
+   CUÁL sigue pendiente, porque el «Cerradas N» de abajo solo cuenta las que sí.
+   LA FRASE DICE SOLO LO QUE LA BASE CONFIRMÓ (`db.tareas_sin_cerrar_por_
+   proyecto_cerrado`): que la tarea sigue pendiente y que su proyecto está
+   cerrado. Que hubiera una derivada pedida en ese envío no se comprueba, así que
+   no se afirma. #}
+<p class="aviso">{{ 'La tarea' if sin_cerrar|length == 1 else 'Las tareas' }}
+{% for i in sin_cerrar %}<a href="/tareas/{{ i }}">#{{ i }}</a>{{ ', ' if not loop.last }}{% endfor %}
+{{ 'sigue pendiente y su proyecto está cerrado: no se le agregan' if sin_cerrar|length == 1 else 'siguen pendientes y sus proyectos están cerrados: no se les agregan' }}
+tareas nuevas.</p>
 {% endif %}
 {% if guardadas %}
 {# El aviso existe por lo mismo que en /sin-clasificar: sin él, el éxito y el
@@ -82,7 +117,11 @@ primeras. Nada se perdió, pero no está todo a la vista.</p>
 {% endif %}
 
 {% if not grupos %}
+{% if total_visibles %}
+<p class="vacio">No hay tareas en esta vista.</p>
+{% else %}
 <p class="vacio">No hay ninguna tarea. 👌</p>
+{% endif %}
 {% else %}
 <p class="suave">Una sola lista para los dos. «Atrasada» es por DÍA, no por
 hora: lo que vence hoy más temprano todavía es de hoy.</p>
@@ -97,6 +136,9 @@ aviso de Telegram que ya sonó.</p>
    lo demás que estuviera marcado sin enviar. Marcar diez y guardar una vez es
    la diferencia entre un panel que se usa y uno que no. #}
 <form method="post" action="/tareas">
+  {# El filtro que se está viendo, YA validado por el servidor al pintar, para
+     que guardar vuelva a la misma vista. El servidor lo vuelve a validar. #}
+  <input type="hidden" name="filtro" value="{{ filtro }}">
   <div class="barra">
     <button>Guardar los cambios</button>
     <span class="suave" id="cuenta"></span>
@@ -268,16 +310,17 @@ aviso de Telegram que ya sonó.</p>
       <input type="hidden" name="prev_resp_{{ t.id }}"
              value="{{ t.responsable_chat_id if t.responsable_chat_id is not none }}">
       <select name="resp_{{ t.id }}">
-        <option value=""
-          {%- if t.responsable_chat_id is none %} selected{% endif %}>sin responsable</option>
-        {% for chat, nombre in personas %}
-        <option value="{{ chat }}"
-          {%- if t.responsable_chat_id == chat %} selected{% endif %}>{{ nombre }}</option>
+        {# LAS OPCIONES SALEN DE `opciones_responsable` (`config.opciones_de_
+           responsable`), la MISMA lista que pinta el alta de /tareas/nueva y
+           el renglón derivado de más abajo: «sin responsable», las personas
+           que entran al panel y Code (26-sep-2026, §2: Code no entra al panel
+           pero sí puede ser responsable). El valor es el chat como texto. #}
+        {% for valor, etiqueta in opciones_responsable %}
+        <option value="{{ valor }}"
+          {%- if (t.responsable_chat_id is none and valor == '')
+                 or (t.responsable_chat_id is not none
+                     and valor == t.responsable_chat_id|string) %} selected{% endif %}>{{ etiqueta }}</option>
         {% endfor %}
-        {# «Code» (26-sep-2026, §2): opción FIJA aparte, no sale de `personas`
-           (esa recorre a quién puede ENTRAR al panel, y Code no entra). #}
-        <option value="{{ chat_id_code }}"
-          {%- if t.responsable_chat_id == chat_id_code %} selected{% endif %}>{{ nombre_code }}</option>
         {% if t.responsable_chat_id is not none
               and t.responsable_chat_id not in asignables %}
         <option value="{{ t.responsable_chat_id }}" selected>
@@ -344,14 +387,12 @@ aviso de Telegram que ya sonó.</p>
         {#- RESPONSABLE: copiado de la tarea que se cierra y editable (P2 del
            diseño, aprobado), mismas opciones que `resp_<id>` acá arriba. #}
         <select name="deriva_resp_{{ t.id }}_{{ n }}" aria-label="Responsable">
-          <option value=""
-            {%- if t.responsable_chat_id is none %} selected{% endif %}>sin responsable</option>
-          {% for chat, nombre in personas %}
-          <option value="{{ chat }}"
-            {%- if t.responsable_chat_id == chat %} selected{% endif %}>{{ nombre }}</option>
+          {% for valor, etiqueta in opciones_responsable %}
+          <option value="{{ valor }}"
+            {%- if (t.responsable_chat_id is none and valor == '')
+                   or (t.responsable_chat_id is not none
+                       and valor == t.responsable_chat_id|string) %} selected{% endif %}>{{ etiqueta }}</option>
           {% endfor %}
-          <option value="{{ chat_id_code }}"
-            {%- if t.responsable_chat_id == chat_id_code %} selected{% endif %}>{{ nombre_code }}</option>
         </select>
         {% if n == 1 and max_derivadas > 1 %}
         <button type="button" class="mas"

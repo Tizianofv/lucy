@@ -648,7 +648,7 @@ async def _avisar_choques(evento_id: int) -> str:
         lugar = f" en {c['lugar']}" if c.get("lugar") else ""
         partes.append(f"«{c['titulo']}»{lugar} ({hora})")
     return (" OJO — CHOQUE DE AGENDA: se pisa con " + "; ".join(partes) +
-            ". Avisale a Tiziano en tu respuesta y, si él quiere, movés una.")
+            ". Avísale a Tiziano en tu respuesta y, si él quiere, mueves una.")
 
 
 # ── LUCY-01: qué puede hacer un turno que NO escribió Tiziano ────────────────
@@ -673,8 +673,8 @@ async def _avisar_choques(evento_id: int) -> str:
 #     prompt de TODOS los mensajes futuros. Un solo correo dejaría una instrucción para
 #     siempre, y esa sobrevive a que alguien note el problema.
 # `crear` y `editar` siguen abiertas a propósito: el propio encargo de la mañana le pide
-# a Lucy que cree la tarea cuando el correo la pide claramente («Creale la tarea cuando
-# esté claro y decíselo»). Cerrarlas rompería lo que el reporte existe para hacer, y son
+# a Lucy que cree la tarea cuando el correo la pide claramente y que se lo diga.
+# Cerrarlas rompería lo que el reporte existe para hacer, y son
 # reversibles y VISIBLES — aparecen en el mensaje que él lee esa misma mañana.
 CANALES_DE_TIZIANO = ("texto", "audio", "foto")
 SOLO_A_MANO = ("archivar", "preferencia")
@@ -893,7 +893,7 @@ async def _ejecutar_herramienta(
         log.warning("#%s: %s BLOQUEADA — el turno vino de '%s', no de Tiziano",
                     bandeja_id, nombre, tipo_entrada)
         return (f"ERROR: no puedo usar '{nombre}' en un turno automático (este vino de "
-                f"'{tipo_entrada}', no de un mensaje suyo). Si hace falta, decíselo a "
+                f"'{tipo_entrada}', no de un mensaje suyo). Si hace falta, díselo a "
                 "Tiziano y que te lo pida él.")
     try:
         if nombre == "consultar":
@@ -912,7 +912,15 @@ async def _ejecutar_herramienta(
             _anotar(acciones, log_id,
                     (f"anoté «{titulo}» ({tabla} #{rid})" if titulo
                      else f"anoté {tabla} #{rid}"))
-            resultado = f"OK: {tabla}#{rid} creado (acción #{log_id}, reversible)."
+            if log_id:
+                resultado = (f"OK: {tabla}#{rid} creado "
+                             f"(acción #{log_id}, reversible).")
+            else:
+                # Sin huella: `crud` devolvió la fila que YA existía y no
+                # escribió otra. Decir «creado (acción #None)» es mentir: se
+                # dice lo que pasó, y no hay nada que deshacer.
+                resultado = (f"OK: {tabla}#{rid} ya existía: no creé otra ni "
+                             "hay acción que deshacer.")
             if tabla == "eventos":
                 resultado += await _avisar_choques(rid)
             return resultado
@@ -925,6 +933,14 @@ async def _ejecutar_herramienta(
                 motivo=f"Orden de Tiziano (bandeja #{bandeja_id})")
             if despues is None:
                 return "ERROR: ese registro no existe o está archivado."
+            if log_id is None:
+                # `crud.editar` no escribió nada porque lo pedido ya era así
+                # (hoy: el nombre de un proyecto que ya se llama igual). Sin
+                # huella no hay «acción #N» que deshacer, y decir «editado»
+                # sería mentirle a Tiziano: se dice lo que pasó.
+                return ("SIN CAMBIOS: eso ya estaba así, no escribí nada y no "
+                        "hay acción que deshacer. Díselo a Tiziano tal cual, "
+                        "no digas que lo editaste.")
             nombre_fila = _como_se_llama(despues)
             quien = (f"«{nombre_fila}»" if nombre_fila
                      else f"{tabla} #{int(args.get('id') or 0)}")
@@ -949,9 +965,16 @@ async def _ejecutar_herramienta(
             # diría a Tiziano que se guardó un área que no se guardó.
             columnas_que_pueden_diferir = (
                 set(con_puerta) | ({"area"} if tabla == "tareas" else set()))
+            #   Y SOLO SE CUENTA LO QUE DE VERDAD SE ESCRIBIÓ: `crud.editar`
+            # marca en su fila (`FilaEditada.escritas`) las columnas que tocó el
+            # UPDATE. Un nombre de proyecto que ya era ese, reenviado junto con
+            # otro campo, no se escribe, y el parte no puede decir que sí.
+            escritas = (despues.escritas if isinstance(despues, crud.FilaEditada)
+                        else None)
             escrito = {k: (despues.get(k) if k in columnas_que_pueden_diferir
                           else v)
-                       for k, v in cambios.items()}
+                       for k, v in cambios.items()
+                       if escritas is None or k in escritas}
             _anotar(acciones, log_id,
                     f"{quien} → {_resumen_cambios(escrito)}")
             resultado = f"OK: editado (acción #{log_id}, reversible)."
@@ -964,7 +987,7 @@ async def _ejecutar_herramienta(
         if nombre == "archivar":
             if not ARCHIVAR_HABILITADO:
                 return ("ERROR: Tiziano todavía no habilitó archivar/borrar. "
-                        "Decíselo: si él quiere, se enciende con una línea.")
+                        "Díselo: si él quiere, se enciende con una línea.")
             log_id = await crud.borrar(
                 str(args.get("tabla") or ""), int(args.get("id") or 0),
                 motivo=f"Orden de Tiziano (bandeja #{bandeja_id})")
@@ -1047,7 +1070,7 @@ async def _ejecutar_herramienta(
         if nombre == "buscar_lugar":
             cands = await viaje.buscar_lugares(str(args.get("texto") or ""))
             if not cands:
-                return ("No encontré ese lugar. Pedile más detalle (sector, "
+                return ("No encontré ese lugar. Pídele más detalle (sector, "
                         "avenida) o que comparta la ubicación.")
             return json.dumps(cands, ensure_ascii=False)
 
@@ -1073,8 +1096,8 @@ async def _ejecutar_herramienta(
                 txt = str(args.get("texto") or "")
                 if not (de or asu or txt):
                     return ("ERROR: 'buscar' necesita al menos 'de', 'asunto' o "
-                            "'texto'. Para «la factura de la luz» usá asunto o "
-                            "texto 'factura'; para «¿me escribió Juan?» usá de "
+                            "'texto'. Para «la factura de la luz» usa asunto o "
+                            "texto 'factura'; para «¿me escribió Juan?» usa de "
                             "'Juan'.")
                 res = await correo.buscar(
                     de=de, asunto=asu, texto=txt,
@@ -1087,12 +1110,12 @@ async def _ejecutar_herramienta(
                 uid = str(args.get("uid") or "")
                 if not (cta and uid):
                     return ("ERROR: 'leer' necesita 'cuenta' y 'uid' — los que "
-                            "vinieron en el buscar previo. Buscá primero si no "
-                            "los tenés.")
+                            "vinieron en el buscar previo. Busca primero si no "
+                            "los tienes.")
                 msg = await correo.leer(cta, uid)
                 return (json.dumps(msg, ensure_ascii=False) if msg
                         else "ERROR: no pude leer ese correo (¿uid/cuenta "
-                             "equivocados o ya no está?). Buscá de nuevo.")
+                             "equivocados o ya no está?). Busca de nuevo.")
             rel = await correo.revisar_ahora()
             if not rel:
                 return ("0 correos sin leer sin informar en los últimos "
@@ -1130,7 +1153,7 @@ async def _ejecutar_herramienta(
                 "recordar, preguntar, responder.")
 
     except crud.FaltanDatos as e:
-        return f"ERROR: me falta {e}. Preguntáselo a Tiziano."
+        return f"ERROR: me falta {e}. Pregúntaselo a Tiziano."
     except (ValueError, KeyError, TypeError) as e:
         return f"ERROR: {e}"
     except Exception as e:
@@ -1302,8 +1325,8 @@ async def atender(fila: dict, texto: str, bot) -> None:
         if not crudo.strip():
             tropiezos += 1
             aviso = {"role": "user", "content":
-                     '[resultado] Devolviste vacío. Elegí UNA herramienta y '
-                     'respondé SOLO el JSON {"herramienta":"...","argumentos":{...}}.'}
+                     '[resultado] Devolviste vacío. Elige UNA herramienta y '
+                     'responde SOLO el JSON {"herramienta":"...","argumentos":{...}}.'}
             mensajes.append(aviso)
             dialogo.append(aviso)
             continue
@@ -1328,7 +1351,7 @@ async def atender(fila: dict, texto: str, bot) -> None:
             # Vacío o mal formado: tropiezo, no paso. Se le pide de nuevo sin
             # cobrarle del presupuesto de trabajo.
             tropiezos += 1
-            resultado = ("ERROR: devolviste vacío o inválido. Respondé SOLO el "
+            resultado = ("ERROR: devolviste vacío o inválido. Responde SOLO el "
                          'JSON {"herramienta": "...", "argumentos": {...}}.')
             aviso = {"role": "user", "content": f"[resultado] {resultado}"}
             mensajes.append(aviso)
@@ -1359,7 +1382,7 @@ async def atender(fila: dict, texto: str, bot) -> None:
             # distinguir. `chat_id` sale de la fila de la bandeja: es el chat
             # que escribió, no una constante.
             if not _auth.puede_entrar(chat_id):
-                await _fin_del_turno("No tenés acceso al panel de finanzas.")
+                await _fin_del_turno("No tienes acceso al panel de finanzas.")
                 return
             token = _auth.crear_token(chat_id)
             # copiar=False: decisión de Tiziano, 21-sep-2026. El enlace entra
@@ -1411,10 +1434,10 @@ async def atender(fila: dict, texto: str, bot) -> None:
     # cree que no pasó nada. Con 11 tareas cerradas eso salía tal cual.
     if acciones:
         salida = ("Me quedé sin pasos antes de poder contártelo bien, pero "
-                  "esto ya está escrito. Si no era eso, tocá el botón.")
+                  "esto ya está escrito. Si no era eso, toca el botón.")
     else:
         salida = ("Me enredé tratando de resolver esto y prefiero no adivinar. "
-                  "¿Me lo decís de otra forma, o en partes?")
+                  "¿Me lo dices de otra forma, o en partes?")
     log.warning("#%s agotó los %s pasos sin terminar (%s acción(es) escritas)",
                 bandeja_id, MAX_PASOS, len(acciones))
     await _fin_del_turno(salida, clasificacion=None, motivo="sin pasos")

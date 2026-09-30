@@ -419,6 +419,34 @@ def test_la_puerta_del_responsable_se_consulta():
 # `crear_o_reusar_alerta_tecnica`
 # ═══════════════════════════════════════════════════════════════════════
 
+def _usa_code_como_valor(funcion) -> bool:
+    """¿Esta función USA `CHAT_ID_CODE` como valor (lo pasa, lo asigna, lo
+    mete en los parámetros de un INSERT) y no solo lo COMPARA?
+
+    Criterio puesto en el merge de main (30-sep-2026): la tarea 146 (main)
+    dejó que un humano elija a Code como responsable desde el formulario del
+    panel (`db.crear_tarea_desde_el_panel`), que nombra `CHAT_ID_CODE` solo en
+    un `==` para fijar el área. Eso NO es una alarma técnica: el responsable
+    lo escribe la persona, no el código. Una alarma técnica, en cambio,
+    escribe Code como valor. Se mira el AST (cada `Name`/`Attribute`
+    `CHAT_ID_CODE` y su padre), no el texto: un docstring que lo nombre no
+    cuenta, y un `==` tampoco. Frontera dicha: un escritor que meta a Code
+    por un literal de SQL (`'...'`) o por una variable intermedia con otro
+    nombre no se ve acá; ese hueco ya existía con la búsqueda de texto."""
+    padres = {}
+    for n in ast.walk(funcion):
+        for h in ast.iter_child_nodes(n):
+            padres[h] = n
+    for n in ast.walk(funcion):
+        nombre = (n.id if isinstance(n, ast.Name)
+                  else n.attr if isinstance(n, ast.Attribute) else None)
+        if nombre != "CHAT_ID_CODE":
+            continue
+        if not isinstance(padres.get(n), ast.Compare):
+            return True
+    return False
+
+
 def test_ningun_insert_de_tarea_tecnica_de_code_fuera_de_la_puerta():
     """GARANTÍA PEDIDA EXPLÍCITAMENTE (condición 3): toda alarma técnica
     pasa por LA MISMA puerta -- se recorre TODO EL REPOSITORIO (no solo
@@ -461,7 +489,7 @@ def test_ningun_insert_de_tarea_tecnica_de_code_fuera_de_la_puerta():
                 continue
             fuente_fn = ast.get_source_segment(fuente_modulo, nodo) or ""
             if ("INSERT INTO tareas" in fuente_fn
-                    and "CHAT_ID_CODE" in fuente_fn):
+                    and _usa_code_como_valor(nodo)):
                 ofensores.append(f"{real.relative_to(raiz)}::{nodo.name}")
     assert not ofensores, (
         f"estas funciones insertan tareas con CHAT_ID_CODE sin pasar por "
@@ -952,3 +980,20 @@ def test_atrasadas_sql_real_usa_la_ultima_alarma_no_la_creacion():
         [{"id": 1, "clave_tecnica": "backup", "creado_en": _hace(30),
           "ultima_alarma_en": _hace(1)}], marcas=[])
     assert filas == []
+
+
+def test_el_criterio_de_valor_distingue_comparar_de_escribir():
+    """Entradas INVENTADAS para `_usa_code_como_valor`: comparar no es
+    escribir; pasar a Code como parámetro, asignarlo o usarlo por atributo sí."""
+    def f(src):
+        return ast.parse(src).body[0]
+    comparar = f("def a(r):\n    if r == CHAT_ID_CODE:\n        x = 1\n")
+    pasar = f("def a(c):\n    c.execute('INSERT INTO tareas', (CHAT_ID_CODE,))\n")
+    asignar = f("def a():\n    r = CHAT_ID_CODE\n")
+    atributo = f("def a(c):\n    c.execute('x', (config.CHAT_ID_CODE,))\n")
+    mezcla = f("def a(r, c):\n    if r == CHAT_ID_CODE:\n        c.execute('x', (CHAT_ID_CODE,))\n")
+    assert _usa_code_como_valor(comparar) is False
+    assert _usa_code_como_valor(pasar) is True
+    assert _usa_code_como_valor(asignar) is True
+    assert _usa_code_como_valor(atributo) is True
+    assert _usa_code_como_valor(mezcla) is True

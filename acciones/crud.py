@@ -40,6 +40,14 @@ TABLAS = ("tareas", "eventos", "notas", "movimientos", "personas", "proyectos",
           "lugares", "preferencias", "micro_pasos")
 
 
+class NoDeNegocio(ValueError):
+    """Un «no» de una regla de negocio de `crud` al CREAR (responsable, área o
+    «Primero:» que no valen, proyecto cerrado, cita/tarea que ya existía…): un
+    motivo pensado para leerse. Es lo ÚNICO que el botón de la tarjeta de
+    Telegram enseña tal cual; cualquier otro `ValueError` es un fallo de
+    programación y sigue con su traceback y el aviso genérico."""
+
+
 class FaltanDatos(Exception):
     """No se puede crear la entidad porque falta un dato obligatorio.
 
@@ -249,7 +257,7 @@ async def crear_desde_interpretacion(
     if clas in ("gasto", "ingreso") and not r.get("monto"):
         raise FaltanDatos("el monto")
     if clas not in ("tarea", "cita", "nota", "idea", "gasto", "ingreso"):
-        raise ValueError(f"'{clas}' no crea ninguna entidad.")
+        raise NoDeNegocio(f"'{clas}' no crea ninguna entidad.")
 
     # EL RESPONSABLE, SOLO PARA TAREAS, por la MISMA puerta que usa `editar()`
     # para cambiarlo — `_por_las_puertas` con `PUERTAS["tareas"]`, y no una
@@ -276,14 +284,25 @@ async def crear_desde_interpretacion(
                 "tareas", {"responsable_chat_id": r.get("responsable_chat_id")}
             )["responsable_chat_id"]
         except ValueError as e:
-            raise ValueError(f"No creé la tarea: {e}.") from e
+            raise NoDeNegocio(f"No creé la tarea: {e}.") from e
 
     # Personas y proyectos se resuelven fuera de la transacción a propósito:
     # crear una persona de más es inofensivo y reutilizable, mientras que
     # meterlo adentro alargaría la transacción de la entidad sin ganar nada.
-    persona_id = await db.buscar_o_crear_persona(str(r.get("persona") or ""))
+    persona_id = await db.buscar_o_crear_persona(
+        str(r.get("persona") or ""), bandeja_id=bandeja_id)
     proyecto_id = await db.buscar_o_crear_proyecto(
         str(r.get("proyecto") or ""), bandeja_id=bandeja_id)
+
+    # UN PROYECTO CERRADO NO RECIBE TAREAS (pieza 2 del diseño «proyectos»), por
+    # la MISMA puerta que el alta del panel y las derivadas. Se corta la
+    # creación entera y se dice por qué: no se crea la tarea «sin proyecto»
+    # como si no se hubiera pedido.
+    if clas == "tarea" and proyecto_id is not None:
+        try:
+            await db.proyecto_para_tareas(proyecto_id)
+        except db.ProyectoNoAdmiteTareas as e:
+            raise NoDeNegocio(f"No creé la tarea: {e}.") from e
 
     # EL ÁREA, SOLO PARA TAREAS (encargo 4), por la MISMA puerta que usa
     # `editar()` para cambiarla — `_area_que_vale`, y no una copia del
@@ -304,7 +323,7 @@ async def crear_desde_interpretacion(
             area_tarea = await _area_que_vale(
                 r.get("area"), tabla="tareas", proyecto_id=proyecto_id)
         except ValueError as e:
-            raise ValueError(f"No creé la tarea: {e}.") from e
+            raise NoDeNegocio(f"No creé la tarea: {e}.") from e
     else:
         area_tarea = None
 
@@ -321,7 +340,7 @@ async def crear_desde_interpretacion(
         try:
             primero_tarea = await _primero_que_vale(r.get("primero_id"))
         except ValueError as e:
-            raise ValueError(f"No creé la tarea: {e}.") from e
+            raise NoDeNegocio(f"No creé la tarea: {e}.") from e
     else:
         primero_tarea = None
 
@@ -392,10 +411,10 @@ async def crear_desde_interpretacion(
                         nombres = config.NOMBRES_POR_CHAT
                         quien = nombres.get(
                             actual, "alguien que no tiene nombre puesto")
-                        raise ValueError(
+                        raise NoDeNegocio(
                             f"No creé la tarea: ya existía («{titulo}», "
                             f"#{ya[0]}) y la tiene {quien}. No la "
-                            "reasigné — si hay que cambiarla, decímelo "
+                            "reasigné — si hay que cambiarla, dímelo "
                             "explícito.")
                 return tabla, ya[0], log_id
             # TRES FORMAS DEL INSERT (encargo 6 suma la tercera a las dos que
@@ -482,7 +501,7 @@ async def crear_desde_interpretacion(
                     "eventos", {"duenos_chat_id": r.get("duenos_chat_id")}
                 )["duenos_chat_id"]
             except ValueError as e:
-                raise ValueError(f"No creé la cita: {e}.") from e
+                raise NoDeNegocio(f"No creé la cita: {e}.") from e
 
             params_evento = (
                 bandeja_id, titulo, cuando, termina,
@@ -522,7 +541,7 @@ async def crear_desde_interpretacion(
                 if not _es_columna_ausente(e):
                     raise
                 if duenos_chat_id:
-                    raise ValueError(
+                    raise NoDeNegocio(
                         "No creé la cita: pediste dueño, pero la base "
                         "todavía no tiene esa columna (falta aplicar la "
                         "migración de \"las citas con dueño\").") from e
@@ -582,7 +601,7 @@ async def crear_desde_interpretacion(
                     f"Ese movimiento ya está: el correo del banco lo registró "
                     f"como M-{fila_gemela[0]:04d} (mismo día, mismo monto). No "
                     "lo anoté otra vez. Si de verdad son dos gastos distintos, "
-                    "decímelo y lo agrego.")
+                    "dímelo y lo agrego.")
             # abs() a propósito: el monto se guarda siempre positivo y la
             # dirección la da `tipo`. Si el modelo devolviera -2300 para un
             # gasto, un monto negativo con tipo='gasto' sumaría al revés en
@@ -625,16 +644,56 @@ async def guardar_preferencia(
     igual que a una tarea: soft-delete por borrado_en. Sin trato especial.
     """
     async with db.pool.connection() as conn:
-        cur = await conn.execute(
-            "INSERT INTO preferencias (texto, contexto) VALUES (%s, %s) RETURNING id",
-            (texto.strip(), (contexto or "").strip() or None),
-        )
-        pid = (await cur.fetchone())[0]
-        log_id = await _registrar(
-            conn, accion="crear", tabla="preferencias", registro_id=pid,
-            despues={"texto": texto, "contexto": contexto},
-            motivo=f"Preferencia aprendida: {texto}", bandeja_id=bandeja_id,
-        )
+        # `bandeja_id` (§E, 27-sep-2026): la marca de dueño que usa la
+        # lectura de la parte A -- esta función ya recibía `bandeja_id`
+        # como parámetro, solo lo usaba para el log, no para la fila.
+        #
+        # UNA TRANSACCIÓN EXPLÍCITA ALREDEDOR DE TODO EL CUERPO -- INSERT Y
+        # `_registrar` -- con el intento que puede fallar como SAVEPOINT
+        # ANIDADO adentro. Hallazgo del testigo sobre `1c4acf0`, NO PASA:
+        # la primera versión de este arreglo ponía el `async with conn.
+        # transaction():` SOLO alrededor del INSERT, y como es la PRIMERA
+        # sentencia de transacción sobre una conexión recién salida del
+        # pool (`IDLE`), psycopg la trata como la transacción OUTER --
+        # salir sin excepción (camino feliz, CON la migración aplicada)
+        # hacía un `COMMIT` de verdad ahí mismo, ANTES de que `_registrar`
+        # escribiera `log_acciones`: la preferencia y su huella dejaban de
+        # ser atómicas (podía sellarse la una sin la otra si el proceso
+        # moría entre medio). Con la transacción explícita de AFUERA, el
+        # `async with conn.transaction():` de adentro deja de ser "outer"
+        # (la conexión ya está `INTRANS`) y se vuelve un SAVEPOINT de
+        # verdad: absorbe el 42703 sin comprometer nada, y el COMMIT real
+        # queda para el final, después de `_registrar`. Mismo criterio que
+        # ya usan `perfil()`/`db.buscar_o_crear_persona`, donde el SELECT
+        # de búsqueda -- anterior al intento que puede fallar -- ya pone la
+        # conexión en `INTRANS` antes de llegar a su `conn.transaction()`.
+        async with conn.transaction():
+            try:
+                async with conn.transaction():
+                    cur = await conn.execute(
+                        "INSERT INTO preferencias (texto, contexto, bandeja_id) "
+                        "VALUES (%s, %s, %s) RETURNING id",
+                        (texto.strip(), (contexto or "").strip() or None, bandeja_id),
+                    )
+            except Exception as e:
+                try:
+                    sqlstate = e.sqlstate
+                except AttributeError:
+                    raise e from None
+                if sqlstate != "42703":
+                    raise
+                # SIN LA MIGRACIÓN: cae al INSERT de antes.
+                cur = await conn.execute(
+                    "INSERT INTO preferencias (texto, contexto) VALUES (%s, %s) "
+                    "RETURNING id",
+                    (texto.strip(), (contexto or "").strip() or None),
+                )
+            pid = (await cur.fetchone())[0]
+            log_id = await _registrar(
+                conn, accion="crear", tabla="preferencias", registro_id=pid,
+                despues={"texto": texto, "contexto": contexto},
+                motivo=f"Preferencia aprendida: {texto}", bandeja_id=bandeja_id,
+            )
     return pid, log_id
 
 
@@ -1106,8 +1165,15 @@ async def crear_pasos(
     return creados
 
 
+# `proyectos.nombre` (pieza 1 del diseño «proyectos», 29-sep-2026): la parte de
+# la regla que no necesita la base --sin espacios de alrededor, no vacío, a lo
+# sumo `db.LARGO_NOMBRE_PROYECTO`-- es `db.nombre_de_proyecto_que_vale`, la misma
+# función que llaman los demás escritores del nombre. Que no haya OTRO proyecto
+# vivo con ese nombre pide la base y se mira en `editar` y en `deshacer`, con
+# `db.proyecto_vivo_con_nombre`: esta tabla de puertas es síncrona.
 PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale},
-          "eventos": {"duenos_chat_id": _duenos_que_valen}}
+          "eventos": {"duenos_chat_id": _duenos_que_valen},
+          "proyectos": {"nombre": db.nombre_de_proyecto_que_vale}}
 
 
 def _por_las_puertas(tabla: str, valores: dict) -> dict:
@@ -1133,6 +1199,13 @@ def _adaptar(v):
         except ValueError:
             return v
     return v
+
+
+class FilaEditada(dict):
+    """La fila que devuelve `editar`, con `escritas`: las columnas que el UPDATE
+    de verdad escribió (puede ser menos de las pedidas: un nombre que ya era ese
+    no se escribe). Es un `dict` más; quien no la mire la usa como siempre."""
+    escritas: frozenset = frozenset()
 
 
 async def editar(
@@ -1220,6 +1293,29 @@ async def editar(
         # SAVEPOINT de tolerancia en `editar`: el `SELECT *` de más arriba ya
         # dice qué columnas existen de verdad.)
 
+        # EL NOMBRE DE UN PROYECTO (pieza 1 del diseño «proyectos»): la parte
+        # síncrona (vacío, largo, espacios) ya pasó por `PUERTAS` arriba; acá
+        # va la que pide la base. (1) Si lo único que se pide es el nombre que
+        # ya tiene, NO se escribe ni se deja huella: se devuelve la fila tal
+        # cual, sin log_id. (2) Si otro proyecto VIVO ya se llama así, por la
+        # MISMA consulta con la que Lucy busca proyectos, se rechaza sin
+        # escribir. La propia fila no cuenta (cambiar solo las mayúsculas vale).
+        if tabla == "proyectos" and "nombre" in campos:
+            if campos["nombre"] == antes["nombre"]:
+                # El nombre NO CAMBIA: ni se escribe ni se revisa, venga solo
+                # o junto con otros campos (una edición que reenvía el nombre
+                # con el estado no puede rechazarse por un duplicado que ya
+                # estaba). Si era lo único pedido, no hay nada que hacer.
+                del campos["nombre"]
+                if not campos:
+                    return antes, None
+            elif await db.proyecto_vivo_con_nombre(
+                    cur, campos["nombre"], excluir_id=registro_id) is not None:
+                raise ValueError(
+                    "No cambié nada: ya hay otro proyecto con ese nombre."
+                ) from db.NombreDeProyectoNoVale(
+                    "repetido", "ya hay otro proyecto con ese nombre")
+
         # EL ÁREA (encargo 4), en TAREAS y en PROYECTOS, por la MISMA puerta
         # que usa `crear_desde_interpretacion` — `_area_que_vale`, ni una
         # validación aparte ni ninguna. Hallazgo del testigo sobre `e94b37a`:
@@ -1256,6 +1352,27 @@ async def editar(
         # `proyecto_id` en una base donde la columna `area` todavía no
         # existe intentaría escribir una columna que no está, y reventaría
         # con 42703 por una tarea que ni siquiera tenía área que limpiar.
+        # MOVER UNA TAREA A UN PROYECTO ES «RECIBIR» una tarea (pieza 2 del diseño
+        # «proyectos»): por la MISMA puerta que el alta, las derivadas y
+        # Telegram al crear (`db.proyecto_admite_tareas`: existe, no está en la
+        # papelera, no está cerrado). Solo si de verdad CAMBIA de proyecto: una
+        # tarea que ya está en un proyecto cerrado puede seguir editándose. Sacarla
+        # de su proyecto (`None`) no es recibir. El id puede llegar como texto
+        # (el JSON del modelo).
+        if tabla == "tareas" and campos.get("proyecto_id") is not None:
+            try:
+                destino = int(str(campos["proyecto_id"]).strip())
+            except ValueError:
+                raise ValueError(
+                    "No cambié nada: el proyecto tiene que ser el número de "
+                    "un proyecto.") from None
+            if destino != antes.get("proyecto_id"):
+                try:
+                    await db.proyecto_admite_tareas(cur, destino)
+                except db.ProyectoNoAdmiteTareas as e:
+                    raise ValueError(f"No cambié nada: {e}.") from e
+            campos["proyecto_id"] = destino
+
         if tabla == "tareas" and ("area" in campos or "proyecto_id" in campos):
             area_pedida_explicita = "area" in campos
             proyecto_final = campos.get("proyecto_id", antes.get("proyecto_id"))
@@ -1386,6 +1503,8 @@ async def editar(
         await db.aprender_categoria(
             normalizar_comercio(antes["contraparte"]), campos["categoria"])
 
+    despues = FilaEditada(despues)
+    despues.escritas = frozenset(campos)
     return despues, log_id
 
 
@@ -1435,23 +1554,53 @@ async def perfil(
                 (nombre, nombre),
             )
         else:
-            await cur.execute(
-                "SELECT * FROM proyectos "
-                "WHERE borrado_en IS NULL AND lower(nombre) = lower(%s) LIMIT 1",
-                (nombre,),
-            )
-        fila = await cur.fetchone()
+            # La MISMA consulta con la que se chequea un nombre repetido.
+            existente = await db.proyecto_vivo_con_nombre(cur, nombre)
+            if existente is not None:
+                await cur.execute(
+                    "SELECT * FROM proyectos WHERE id = %s", (existente,))
+        fila = await cur.fetchone() if (
+            tabla == "personas" or existente is not None) else None
 
         # ── No existía: nace con lo que se sepa hoy ──────────────────────
         if fila is None:
             if tabla == "personas":
-                cur = await conn.execute(
-                    """INSERT INTO personas (nombre, alias, relacion, notas)
-                       VALUES (%s, %s, %s, %s) RETURNING id""",
-                    (nombre, [a.strip() for a in (alias or []) if a.strip()],
-                     (relacion or "").strip() or None, linea),
-                )
+                # `bandeja_id` (§E, 27-sep-2026): la misma marca de dueño
+                # que usa `db.buscar_o_crear_persona` -- acá SÍ hay de dónde
+                # sacarla: `bandeja_id` es el parámetro de esta función, la
+                # bandeja del mensaje de Telegram que disparó el perfil.
+                #
+                # CON UN SAVEPOINT alrededor del intento que puede fallar:
+                # hallazgo del testigo sobre `cbc2726`, NO PASA -- sin esto,
+                # el INSERT que revienta con SQLSTATE 42703 deja la
+                # transacción ABORTADA en Postgres real, y el INSERT de
+                # compatibilidad de abajo reventaría con 25P02.
+                try:
+                    async with conn.transaction():
+                        cur = await conn.execute(
+                            """INSERT INTO personas
+                                 (nombre, alias, relacion, notas, bandeja_id)
+                               VALUES (%s, %s, %s, %s, %s) RETURNING id""",
+                            (nombre, [a.strip() for a in (alias or []) if a.strip()],
+                             (relacion or "").strip() or None, linea, bandeja_id),
+                        )
+                except Exception as e:
+                    try:
+                        sqlstate = e.sqlstate
+                    except AttributeError:
+                        raise e from None
+                    if sqlstate != "42703":
+                        raise
+                    # SIN LA MIGRACIÓN: cae al INSERT de antes.
+                    cur = await conn.execute(
+                        """INSERT INTO personas (nombre, alias, relacion, notas)
+                           VALUES (%s, %s, %s, %s) RETURNING id""",
+                        (nombre, [a.strip() for a in (alias or []) if a.strip()],
+                         (relacion or "").strip() or None, linea),
+                    )
             else:
+                # Por la misma puerta que un renombre (largo, vacío).
+                nombre = db.nombre_de_proyecto_que_vale(nombre)
                 cur = await conn.execute(
                     """INSERT INTO proyectos (nombre, descripcion)
                        VALUES (%s, %s) RETURNING id""",
@@ -1520,7 +1669,7 @@ async def guardar_lugar(
 
     if lat is None or lon is None:
         raise ValueError(
-            "las coordenadas del lugar; buscalas con buscar_lugar y pasá "
+            "las coordenadas del lugar; búscalas con buscar_lugar y pasa "
             "lat/lon.")
 
     async with db.pool.connection() as conn:
@@ -1586,6 +1735,31 @@ async def borrar(tabla: str, registro_id: int, motivo: str) -> int | None:
         )
 
 
+async def _recibir_al_deshacer(cur, tarea_id, quedara, reaparece=False):
+    """La puerta del proyecto para `deshacer` de una TAREA.
+
+    `quedara` es el proyecto que restauraría la huella; `reaparece` es el caso de
+    deshacer un borrado (la tarea vuelve a verse en el proyecto que ya tiene).
+    Solo pasa por la puerta si el resultado deja la tarea en un proyecto distinto
+    del actual, o si reaparece dentro de uno. Cerrado o archivado: «No lo
+    deshice: …», sin escribir."""
+    await cur.execute("SELECT proyecto_id FROM tareas WHERE id = %s", (tarea_id,))
+    fila = await cur.fetchone()
+    actual = fila["proyecto_id"] if fila else None
+    if reaparece:
+        destino = actual
+    else:
+        destino = quedara
+        if destino is None or destino == actual:
+            return
+    if destino is None:
+        return
+    try:
+        await db.proyecto_admite_tareas(cur, destino)
+    except db.ProyectoNoAdmiteTareas as e:
+        raise ValueError(f"No lo deshice: {e}.") from e
+
+
 async def deshacer(log_id: int) -> str:
     """Revierte una acción registrada. Devuelve una frase de qué se revirtió.
 
@@ -1613,6 +1787,26 @@ async def deshacer(log_id: int) -> str:
         if tabla not in TABLAS:
             raise ValueError(f"No sé deshacer cambios en {tabla}.")
 
+        # EL NOMBRE DE UN PROYECTO NO SE RESTAURA SALTÁNDOSE LA REGLA
+        # (pieza 1 del diseño «proyectos»). Deshacer una edición de nombre, o
+        # deshacer el borrado de un proyecto, devuelve un nombre por SQL
+        # genérico; si mientras tanto otro proyecto vivo tomó ese nombre, eso
+        # reintroduciría el duplicado. Se mira con la MISMA consulta que
+        # `editar`, antes de escribir. (Lo demás de `deshacer` sigue igual.)
+        if tabla == "proyectos" and huella["accion"] in ("editar", "borrar"):
+            antes_p = huella["antes"] or {}
+            despues_p = huella.get("despues") or {}
+            vuelve = antes_p.get("nombre") if antes_p.get("nombre") is not None \
+                else None
+            if huella["accion"] == "editar" and (
+                    "nombre" not in despues_p
+                    or despues_p["nombre"] == antes_p.get("nombre")):
+                vuelve = None   # esta edición no cambió el nombre: no se toca
+            if vuelve is not None and await db.proyecto_vivo_con_nombre(
+                    cur, vuelve, excluir_id=registro_id) is not None:
+                raise ValueError(
+                    "No lo deshice: ya hay otro proyecto vivo con ese nombre.")
+
         if huella["accion"] == "crear":
             await conn.execute(
                 f"UPDATE {tabla} SET borrado_en = now() "
@@ -1620,6 +1814,10 @@ async def deshacer(log_id: int) -> str:
             que = "lo que había creado"
 
         elif huella["accion"] == "borrar":
+            # Restaurar una tarea archivada la hace REAPARECER dentro de su
+            # proyecto: también es «recibir».
+            if tabla == "tareas":
+                await _recibir_al_deshacer(cur, registro_id, None, reaparece=True)
             await conn.execute(
                 f"UPDATE {tabla} SET borrado_en = NULL WHERE id = %s", (registro_id,))
             que = "lo que había archivado"
@@ -1645,9 +1843,24 @@ async def deshacer(log_id: int) -> str:
             try:
                 _por_las_puertas(tabla, {c: antes[c] for c in columnas})
             except ValueError as e:
-                raise ValueError(
-                    f"No lo deshice: la tarea volvería a quien la tenía, y {e}."
-                ) from e
+                # El mensaje de antes hablaba de «la tarea» y de quién la tenía,
+                # y con una puerta de otra tabla (el nombre de un proyecto)
+                # mentía: cada tabla dice lo suyo.
+                if tabla == "tareas":
+                    raise ValueError(
+                        f"No lo deshice: la tarea volvería a quien la tenía, y {e}."
+                    ) from e
+                raise ValueError(f"No lo deshice: {e}.") from e
+            # DESHACER TAMBIÉN «RECIBE»: si el resultado deja la tarea en un
+            # proyecto DISTINTO del que tiene AHORA, ese proyecto tiene que
+            # admitirla hoy (puede haberse cerrado desde entonces). Se compara con
+            # el proyecto actual de la fila, no con lo que decía la huella: un
+            # deshacer viejo, después de que otra edición la movió, también entra
+            # por acá. Deshacer un cambio que NO la mueve (el proyecto que
+            # restaura es el mismo que ya tiene) sigue funcionando en un proyecto
+            # cerrado.
+            if tabla == "tareas" and "proyecto_id" in columnas:
+                await _recibir_al_deshacer(cur, registro_id, antes.get("proyecto_id"))
             asignaciones = ", ".join(f"{c} = r.{c}" for c in columnas)
             await conn.execute(
                 f"UPDATE {tabla} t SET {asignaciones} "
