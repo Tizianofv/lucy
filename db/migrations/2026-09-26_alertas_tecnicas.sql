@@ -1,6 +1,6 @@
 -- Alarmas técnicas convertidas en tareas de Code (26-sep-2026, diseño «Code
 -- como responsable», §B — parte 4 del plan de construcción
--- disenos/lucy-code/DISENO.md). Las cinco alarmas técnicas de Lucy
+-- disenos/lucy-sala-conectada/DISENO.md). Las cinco alarmas técnicas de Lucy
 -- (el respaldo, las tres señales del canario de bancos, el latido de la
 -- cosecha de correo) dejan de mandarle a Tiziano un mensaje directo por
 -- Telegram y en su lugar crean -- o reusan -- una tarea Técnica con

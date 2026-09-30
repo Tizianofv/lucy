@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Alarmas técnicas de Lucy convertidas en tareas de Code (26-sep-2026,
-diseño aprobado por Tiziano: disenos/lucy-code/DISENO.md, §B — parte 4 del
+diseño aprobado por Tiziano: disenos/lucy-sala-conectada/DISENO.md, §B — parte 4 del
 plan de construcción).
 
 Parte 4, y SOLO esa: `db.crear_o_reusar_alerta_tecnica` (§B.2), las cinco
@@ -432,7 +432,9 @@ def _usa_code_como_valor(funcion) -> bool:
     `CHAT_ID_CODE` y su padre), no el texto: un docstring que lo nombre no
     cuenta, y un `==` tampoco. Frontera dicha: un escritor que meta a Code
     por un literal de SQL (`'...'`) o por una variable intermedia con otro
-    nombre no se ve acá; ese hueco ya existía con la búsqueda de texto."""
+    nombre no se ve acá; ese hueco ya existía con la búsqueda de texto. Tampoco
+    se ve quien LLAME a `db.crear_tarea_desde_el_panel(..., CHAT_ID_CODE)` desde
+    otro sitio: ese INSERT vive en la función llamada, no en quien la llama."""
     padres = {}
     for n in ast.walk(funcion):
         for h in ast.iter_child_nodes(n):
@@ -997,3 +999,89 @@ def test_el_criterio_de_valor_distingue_comparar_de_escribir():
     assert _usa_code_como_valor(asignar) is True
     assert _usa_code_como_valor(atributo) is True
     assert _usa_code_como_valor(mezcla) is True
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# El CABLEADO: el bucle real de producción llama al respaldo y al aviso de
+# 6 horas (hallazgo A del testigo sobre 75ad01d)
+# ═══════════════════════════════════════════════════════════════════════
+
+def _correr_el_bucle_real(monkeypatch, revisar_backup, revisar_alertas,
+                          vueltas=120):
+    """Corre `cerebro.interpretar.bucle` -- el MISMO que lanza `main.py` en
+    producción -- `vueltas` vueltas, con el sueño reemplazado por un contador
+    que cancela al llegar. Las demás ramas (correo, bancos, calendario,
+    memoria, el resto del despertador) se sustituyen por dobles que no hacen
+    nada: lo que se mide es solo QUÉ llama el bucle a las 120 vueltas (~10
+    min). Decide por comportamiento: si el bucle llama a otra cosa, no hay
+    registro de llamada."""
+    from unittest import mock
+    import cerebro.interpretar as interpretar
+
+    bot = object()
+    nada = mock.AsyncMock(return_value=None)
+    despertador = types.SimpleNamespace(
+        revisar=nada, revisar_backup=revisar_backup,
+        revisar_alertas_tecnicas_sin_tomar=revisar_alertas)
+    monkeypatch.setattr(interpretar, "despertador", despertador)
+    for nombre in ("memoria", "correo", "consumos", "calendario"):
+        monkeypatch.setattr(interpretar, nombre, mock.MagicMock(
+            **{f"{a}": nada for a in (
+                "indexar_pendientes", "reporte_diario", "confirmar_leidos",
+                "vigilar_911", "revisar", "avisar_si_hay_bancos_mudos",
+                "avisar_si_no_hay_latido", "sincronizar")}))
+    monkeypatch.setattr(interpretar.db, "tomar_pendientes",
+                        mock.AsyncMock(return_value=[]))
+    monkeypatch.setattr(interpretar.db, "rescatar_procesando",
+                        mock.AsyncMock(return_value=0))
+    contador = {"n": 0}
+
+    async def sueno(_s):
+        contador["n"] += 1
+        if contador["n"] >= vueltas:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(interpretar.asyncio, "sleep", sueno)
+    try:
+        _correr(interpretar.bucle(bot))
+    except asyncio.CancelledError:
+        pass
+    return bot
+
+
+def test_el_bucle_real_llama_al_respaldo_y_al_aviso_de_6_horas(monkeypatch):
+    from unittest import mock
+    backup = mock.AsyncMock(return_value=0)
+    alertas = mock.AsyncMock(return_value=0)
+    bot = _correr_el_bucle_real(monkeypatch, backup, alertas)
+    backup.assert_awaited_once_with(bot)
+    alertas.assert_awaited_once_with(bot)
+
+
+def test_el_bucle_real_no_las_llama_antes_de_las_120_vueltas(monkeypatch):
+    from unittest import mock
+    backup = mock.AsyncMock(return_value=0)
+    alertas = mock.AsyncMock(return_value=0)
+    _correr_el_bucle_real(monkeypatch, backup, alertas, vueltas=119)
+    backup.assert_not_awaited()
+    alertas.assert_not_awaited()
+
+
+def test_el_bucle_real_si_el_respaldo_revienta_el_aviso_de_6_horas_corre(
+        monkeypatch):
+    """Son ramas hermanas: que una falle no le quita la vuelta a la otra."""
+    from unittest import mock
+    backup = mock.AsyncMock(side_effect=RuntimeError("boom"))
+    alertas = mock.AsyncMock(return_value=0)
+    bot = _correr_el_bucle_real(monkeypatch, backup, alertas)
+    backup.assert_awaited_once_with(bot)
+    alertas.assert_awaited_once_with(bot)
+
+
+def test_el_bucle_real_si_el_aviso_revienta_el_respaldo_ya_corrio(monkeypatch):
+    from unittest import mock
+    backup = mock.AsyncMock(return_value=0)
+    alertas = mock.AsyncMock(side_effect=RuntimeError("boom"))
+    bot = _correr_el_bucle_real(monkeypatch, backup, alertas)
+    backup.assert_awaited_once_with(bot)
+    alertas.assert_awaited_once_with(bot)
