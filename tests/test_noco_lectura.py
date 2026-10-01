@@ -700,3 +700,389 @@ def test_el_modulo_no_escribe_nada():
                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                 and n.func.attr in verbos}
     assert hallados == set(), f"el lector de Noco llama a algo que escribe: {hallados}"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# La garantía de TODO el repositorio: solo el lector tiene el token, y el
+# lector solo hace GET. Decide por lo que el código hace, no por cómo lo escribe.
+# ═══════════════════════════════════════════════════════════════════════
+#
+# POR QUÉ ESTÁ AQUÍ, medido por el testigo el 1-oct-2026 sobre `5dac3b9`: la
+# primera versión de esta garantía miraba solo `noco_lectura.py` y buscaba el
+# texto `NOCODB_` en el resto. Tres roturas la burlaron con la suite verde:
+#   u01  `web/auth.py` gana una función con `urllib` + DELETE a Noco, que usa
+#        `noco_lectura._configurado()` para sacar la URL y el token;
+#   t05  `subprocess.run(["curl", "-X", "POST", ...])` dentro del lector;
+#   u02  `httpx.request("POST", ...)` dentro del lector, en una función sin
+#        llamar. Con el token de la cuenta normal de Tiziano (puede escribir en
+#        el CRM), cualquiera de las tres borra o cambia clientes.
+#
+# LA REGLA, en dos líneas y sin lista de verbos que vigilar:
+#
+#   FUERA DEL LECTOR (todo `.py` del repositorio que no es de `tests/`): nadie
+#   puede obtener la URL ni el token. No se importa nada privado del lector, no
+#   se nombra ninguna variable `NOCODB_*` (en la forma en que esté escrita, si
+#   se puede plegar a un texto) y el entorno no se lee entero. Sin la URL y el
+#   token no hay petición a Noco que escribir: es lo que cierra a u01 sin tener
+#   que saber con qué biblioteca se habla a la red.
+#
+#   DENTRO DEL LECTOR: una LISTA BLANCA. Las únicas importaciones son las de
+#   `_IMPORTS_DEL_LECTOR`; las únicas llamadas son las de `_LLAMADAS_INOCUAS`, las
+#   funciones y clases del propio módulo, y las dos de la red —`httpx.AsyncClient`
+#   y `cliente.get`—, que solo pueden estar en `_get`, una vez cada una, y
+#   `cliente` tiene que ser lo que ata ese `async with`. Lo que no esté en la lista
+#   cae del lado estricto: `subprocess`, `os.system`, `socket`, `httpx.request`,
+#   `cliente.post`, `getattr(cliente, "post")`… todo se detiene por lo mismo:
+#   no está en la lista, y no por cómo está escrito.
+#
+# LA FRONTERA (lo que esta garantía NO ve), dicha para que nadie la dé por cubierta:
+#   · un `.py` de `tests/` que hable con Noco (los tests no se despliegan);
+#   · lo que no es `.py`: scripts de shell, `.yml`, SQL;
+#   · un texto de `NOCODB_*` armado de formas que no se pueden plegar sin correr el
+#     código (`"".join([...])`, `"%s" % x`, una lectura del archivo `.env`);
+#   · una URL de Noco o un token escritos a mano: no pasan por ninguna variable.
+#     Están prohibidos por la regla del repositorio público, pero esto no los ve;
+#   · el entorno entero pasado a un hijo: `db/backup.py` lo hace una vez
+#     (declarado abajo, `_ENTORNO_ENTERO_DECLARADO`) y no manda nada a Noco.
+
+_IMPORTS_DEL_LECTOR = {"__future__", "logging", "os", "httpx"}
+
+# Llamadas que no salen a ningún sitio, exactamente como se escriben. Lo que no
+# esté acá —y no sea una función o clase del propio módulo— hace fallar la prueba.
+_LLAMADAS_INOCUAS = {
+    "isinstance", "len", "str", "zip", "type", "ValueError",
+    "logging.getLogger", "log.warning",
+    "os.environ.get", "os.environ.get().strip", "os.environ.get().strip().rstrip",
+    "<Constant>.join", "texto.replace", "texto.split", "nombre.strip",
+    "fila.get", "datos.get", "respuesta.json",
+}
+
+# La red: lo único que sale del módulo. Cada una, una vez, y solo en `_get`.
+_LLAMADAS_DE_RED = {"httpx.AsyncClient": 1, "cliente.get": 1}
+_FUNCION_DE_LA_RED = "_get"
+
+# Entorno entero leído fuera del lector, declarado uno por uno (cubo que perdona).
+_ENTORNO_ENTERO_DECLARADO = {"db/backup.py": 1}
+
+
+def _punteado(nodo) -> str:
+    """La llamada escrita como texto: `a.b.c`; una llamada en medio es `()`, y lo
+    que no sea nombre ni atributo se escribe `<TipoDeNodo>`."""
+    if isinstance(nodo, ast.Name):
+        return nodo.id
+    if isinstance(nodo, ast.Attribute):
+        return f"{_punteado(nodo.value)}.{nodo.attr}"
+    if isinstance(nodo, ast.Call):
+        return f"{_punteado(nodo.func)}()"
+    return f"<{type(nodo).__name__}>"
+
+
+def _padres(arbol) -> dict:
+    return {hijo: padre for padre in ast.walk(arbol)
+            for hijo in ast.iter_child_nodes(padre)}
+
+
+def _plegar(nodo):
+    """El texto que vale un nodo, si se sabe sin correr nada: una constante, o
+    una suma de constantes (`"NOCODB_" + "BASE"`). Si no, `None`."""
+    if isinstance(nodo, ast.Constant) and isinstance(nodo.value, str):
+        return nodo.value
+    if isinstance(nodo, ast.BinOp) and isinstance(nodo.op, ast.Add):
+        izq, der = _plegar(nodo.left), _plegar(nodo.right)
+        if izq is not None and der is not None:
+            return izq + der
+    return None
+
+
+def _infracciones_del_lector(fuente: str) -> list[str]:
+    """Todo lo que, DENTRO del lector, no está en la lista blanca."""
+    arbol = ast.parse(fuente)
+    malas: list[str] = []
+    propios = {n.name for n in arbol.body
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                 ast.ClassDef))}
+    # 1. Importaciones.
+    for n in ast.walk(arbol):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                if a.name not in _IMPORTS_DEL_LECTOR or a.asname:
+                    malas.append(f"línea {n.lineno}: import {a.name}")
+        elif isinstance(n, ast.ImportFrom):
+            if n.module != "__future__" or n.level:
+                malas.append(f"línea {n.lineno}: from {n.module} import …")
+    # 2. Llamadas: solo las de la lista, las del módulo y las dos de la red.
+    cuenta = {k: 0 for k in _LLAMADAS_DE_RED}
+    for funcion in ast.walk(arbol):
+        if not isinstance(funcion, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        # Solo las llamadas propias de esta función, no las de las anidadas.
+        for n in _propias(funcion):
+            if not isinstance(n, ast.Call):
+                continue
+            quien = _punteado(n.func)
+            if quien in _LLAMADAS_DE_RED:
+                cuenta[quien] += 1
+                if funcion.name != _FUNCION_DE_LA_RED:
+                    malas.append(f"línea {n.lineno}: {quien} fuera de "
+                                 f"{_FUNCION_DE_LA_RED} (en {funcion.name})")
+            elif quien not in _LLAMADAS_INOCUAS and quien not in propios:
+                malas.append(f"línea {n.lineno}: llamada fuera de la lista "
+                             f"blanca: {quien}")
+    # Llamadas a nivel de módulo (fuera de toda función).
+    for n in _propias(arbol):
+        if isinstance(n, ast.Call):
+            quien = _punteado(n.func)
+            if quien not in _LLAMADAS_INOCUAS and quien not in propios:
+                malas.append(f"línea {n.lineno}: llamada de módulo fuera de la "
+                             f"lista blanca: {quien}")
+    for quien, esperadas in _LLAMADAS_DE_RED.items():
+        if cuenta[quien] != esperadas:
+            malas.append(f"{quien} aparece {cuenta[quien]} vez/veces y tiene "
+                         f"que ser {esperadas}")
+    # 3. `httpx` solo se toca con AsyncClient y HTTPError, y solo en `_get`.
+    for f in arbol.body:
+        if not isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for n in ast.walk(f):
+            if (isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                    and n.value.id == "httpx"):
+                if f.name != _FUNCION_DE_LA_RED or n.attr not in (
+                        "AsyncClient", "HTTPError"):
+                    malas.append(f"línea {n.lineno}: httpx.{n.attr} en {f.name}")
+            elif (isinstance(n, ast.Name) and n.id == "httpx"
+                    and not isinstance(_padres(f).get(n), ast.Attribute)):
+                malas.append(f"línea {n.lineno}: `httpx` suelto en {f.name}")
+    # 4. `cliente` es lo que ata el único `async with httpx.AsyncClient(...)`.
+    atados = [(i.optional_vars.id if isinstance(i.optional_vars, ast.Name)
+               else None, _punteado(i.context_expr.func)
+               if isinstance(i.context_expr, ast.Call) else None)
+              for n in ast.walk(arbol) if isinstance(n, ast.AsyncWith)
+              for i in n.items]
+    if atados != [("cliente", "httpx.AsyncClient")]:
+        malas.append(f"los `async with` del módulo son {atados}; tiene que ser "
+                     f"uno solo: httpx.AsyncClient … as cliente")
+    if any(isinstance(n, ast.With) for n in ast.walk(arbol)):
+        malas.append("hay un `with` síncrono en el lector")
+    return malas
+
+
+def _propias(nodo):
+    """Los nodos de `nodo` sin entrar en las funciones definidas dentro."""
+    pila = list(ast.iter_child_nodes(nodo))
+    while pila:
+        n = pila.pop()
+        yield n
+        if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            pila.extend(ast.iter_child_nodes(n))
+
+
+def _nombres_del_lector():
+    """(públicos, privados) sacados del módulo REAL, no de una lista.
+
+    Públicos: funciones y clases definidas en `noco_lectura` cuyo nombre no
+    empieza por `_`. Privados: todo lo demás que el módulo expone (`_get`,
+    `_configurado`, pero también `httpx`, `os`, `COLUMNAS`…): nadie de fuera lo
+    necesita. (Para los TEXTOS solo cuentan los que empiezan por `_`: `\"httpx\"` o
+    `\"os\"` son palabras de cualquier archivo.)"""
+    publicos = {n for n in dir(noco_lectura) if not n.startswith("_")
+                and getattr(getattr(noco_lectura, n), "__module__", None)
+                == "noco_lectura"
+                and (inspect.isfunction(getattr(noco_lectura, n))
+                     or inspect.isclass(getattr(noco_lectura, n)))}
+    privados = {n for n in dir(noco_lectura)
+                if n not in publicos and not n.startswith("__")}
+    return publicos, privados
+
+
+def _infracciones_de_afuera(fuente: str) -> tuple[list[str], int]:
+    """(infracciones, usos del entorno entero) de un `.py` que NO es el lector."""
+    publicos, privados = _nombres_del_lector()
+    arbol = ast.parse(fuente)
+    padres = _padres(arbol)
+    malas: list[str] = []
+    alias: set[str] = set()
+    for n in ast.walk(arbol):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                if a.name.split(".")[0] == "noco_lectura":
+                    if a.name != "noco_lectura":
+                        malas.append(f"línea {n.lineno}: import {a.name}")
+                    alias.add(a.asname or a.name)
+        elif isinstance(n, ast.ImportFrom):
+            modulo = (n.module or "").split(".")[0]
+            for a in n.names:
+                if modulo == "noco_lectura":
+                    if a.name not in publicos:
+                        malas.append(f"línea {n.lineno}: from noco_lectura "
+                                     f"import {a.name} (no es público)")
+                elif a.name == "noco_lectura":
+                    alias.add(a.asname or a.name)
+                elif modulo == "os" and a.name in ("environ", "getenv"):
+                    malas.append(f"línea {n.lineno}: from os import {a.name}")
+    for n in ast.walk(arbol):
+        # El alias del módulo solo vale como `alias.<público>`.
+        if isinstance(n, ast.Name) and n.id in alias:
+            padre = padres.get(n)
+            if isinstance(padre, (ast.Import, ast.ImportFrom, ast.alias)):
+                continue
+            if not (isinstance(padre, ast.Attribute) and padre.value is n
+                    and padre.attr in publicos):
+                malas.append(f"línea {n.lineno}: `{n.id}` se usa de otra forma "
+                             f"que `{n.id}.<función pública>`")
+        # Los textos: ningún NOCODB_*, ni el nombre del módulo, ni un privado.
+        valor = _plegar(n) if isinstance(n, (ast.Constant, ast.BinOp)) else None
+        if valor is not None and not isinstance(padres.get(n), ast.BinOp):
+            if "NOCODB_" in valor.upper():
+                malas.append(f"línea {n.lineno}: nombra una variable NOCODB_*")
+            if valor == "noco_lectura" or (valor in privados
+                                           and valor.startswith("_")):
+                malas.append(f"línea {n.lineno}: el texto {valor!r} apunta al "
+                             f"lector por la puerta de atrás")
+    # El entorno: solo se lee por una clave que es una constante.
+    entero = 0
+    for n in ast.walk(arbol):
+        es_environ = ((isinstance(n, ast.Attribute) and n.attr == "environ"
+                       and isinstance(n.value, ast.Name) and n.value.id == "os")
+                      or (isinstance(n, ast.Name) and n.id == "environ"))
+        if es_environ:
+            padre = padres.get(n)
+            por_clave = isinstance(padre, ast.Subscript) and padre.value is n \
+                and _plegar(padre.slice) is not None
+            por_metodo = (isinstance(padre, ast.Attribute) and padre.value is n
+                          and padre.attr in ("get", "pop", "setdefault")
+                          and isinstance(padres.get(padre), ast.Call)
+                          and padres[padre].args
+                          and _plegar(padres[padre].args[0]) is not None)
+            if not (por_clave or por_metodo):
+                entero += 1
+        elif isinstance(n, ast.Call) and _punteado(n.func) == "os.getenv":
+            if not (n.args and _plegar(n.args[0]) is not None):
+                entero += 1
+    return malas, entero
+
+
+def test_G13_el_lector_tiene_una_sola_puerta_y_es_un_get():
+    """DENTRO del lector, lista blanca: sale a la red `_get`, una vez, con GET."""
+    malas = _infracciones_del_lector(_fuente())
+    assert malas == [], "el lector hace algo que no está en la lista blanca:\n" \
+        + "\n".join(malas)
+
+
+def test_G13_en_todo_el_repositorio_nadie_mas_obtiene_la_url_ni_el_token():
+    """FUERA del lector: todo `.py` que no es de `tests/` (la lista sale del
+    disco, por `_py_en_disco`), sin ninguna lista tecleada de archivos.
+
+    Lo que se exige a cada uno: no importa nada privado del lector, no usa el
+    módulo de otra forma que `noco_lectura.<función pública>`, no nombra ninguna
+    variable `NOCODB_*` ni apunta al lector con un texto, y no lee el entorno
+    entero. La lista de qué es público y qué privado sale del módulo real.
+    """
+    import test_buzon_que_no_se_ve as barrido
+
+    visto = 0
+    entero_por_archivo: dict[str, int] = {}
+    culpas: list[str] = []
+    for ruta in barrido._py_en_disco(RAIZ):
+        rel = ruta.relative_to(RAIZ).as_posix()
+        if rel.startswith("tests/") or rel == "noco_lectura.py":
+            continue
+        visto += 1
+        malas, entero = _infracciones_de_afuera(ruta.read_text(encoding="utf-8"))
+        culpas += [f"{rel}: {m}" for m in malas]
+        if entero:
+            entero_por_archivo[rel] = entero
+    assert visto > 30, f"el barrido solo vio {visto} archivos: algo no anda"
+    assert culpas == [], "alguien más del repositorio puede llegar a Noco:\n" \
+        + "\n".join(culpas)
+    assert entero_por_archivo == _ENTORNO_ENTERO_DECLARADO, (
+        f"lee el entorno entero: {entero_por_archivo}; declarado: "
+        f"{_ENTORNO_ENTERO_DECLARADO}. Un token que vive en el entorno se lleva "
+        f"con él: si de verdad hace falta, se declara uno por uno.")
+
+
+# Entradas inventadas: a la guarda no se le da solo lo que hay hoy (Regla 18).
+def _lector_con(viejo: str, nuevo: str) -> str:
+    fuente = _fuente()
+    assert fuente.count(viejo) == 1, f"el texto a romper no está: {viejo!r}"
+    return fuente.replace(viejo, nuevo)
+
+
+_ROTURAS_DEL_LECTOR = {
+    "t05 subprocess curl POST": lambda: _lector_con(
+        "import os\n", "import os\nimport subprocess\n").replace(
+        "async def _get(", "def _x():\n    subprocess.run(['curl', '-X', "
+        "'POST', 'x'])\n\n\nasync def _get(", 1),
+    "t05b os.system": lambda: _lector_con(
+        "async def _get(", "def _x():\n    os.system('curl -X POST x')\n\n\n"
+        "async def _get(", ),
+    "u02 httpx.request POST sin llamar": lambda: _lector_con(
+        "async def _get(", "def _x():\n    httpx.request('POST', 'x')\n\n\n"
+        "async def _get("),
+    "u02b httpx.post": lambda: _lector_con(
+        "async def _get(", "def _x():\n    httpx.post('x')\n\n\nasync def _get("),
+    "m01 cliente.post": lambda: _lector_con("await cliente.get(", "await cliente.post("),
+    "m02 cliente.request": lambda: _lector_con(
+        "await cliente.get(", "await cliente.request('POST', "),
+    "getattr al verbo": lambda: _lector_con(
+        "await cliente.get(", "await getattr(cliente, 'po' + 'st')("),
+    "urllib": lambda: _lector_con("import os\n", "import os\nimport urllib.request\n"),
+    "socket": lambda: _lector_con("import os\n", "import os\nimport socket\n"),
+    "otro cliente": lambda: _lector_con(
+        "async def _get(", "async def _y():\n    async with httpx.AsyncClient() "
+        "as c:\n        await c.delete('x')\n\n\nasync def _get("),
+    "segunda llamada get": lambda: _lector_con(
+        "    return datos\n", "    await cliente.get('x')\n    return datos\n"),
+}
+
+
+@pytest.mark.parametrize("nombre", sorted(_ROTURAS_DEL_LECTOR))
+def test_G13_la_lista_blanca_del_lector_se_pone_roja_con_entradas_inventadas(nombre):
+    """Cada rotura es la fuente REAL del lector con una cosa más; la guarda tiene
+    que verla. Si una se escapa, la lista blanca prometía de más."""
+    assert _infracciones_del_lector(_ROTURAS_DEL_LECTOR[nombre]()) != []
+
+
+def test_G13_el_lector_sin_romper_no_tiene_infracciones():
+    """El control: la misma función que acusa a las roturas no acusa al original."""
+    assert _infracciones_del_lector(_fuente()) == []
+
+
+_ROTURAS_DE_AFUERA = {
+    "u01 usa _configurado": "import noco_lectura\n"
+        "def f():\n    return noco_lectura._configurado()\n",
+    "u01b from import privado": "from noco_lectura import _configurado\n",
+    "u01c from import _get": "from noco_lectura import _get\n",
+    "u01d import del módulo httpx del lector": "from noco_lectura import httpx\n",
+    "u01e import * ": "from noco_lectura import *\n",
+    "alias": "import noco_lectura as nl\ndef f():\n    return nl._get\n",
+    "getattr sobre el módulo": "import noco_lectura\n"
+        "def f():\n    return getattr(noco_lectura, '_get')\n",
+    "el módulo pasado como valor": "import noco_lectura\nx = noco_lectura\n",
+    "from . import": "from web import noco_lectura\nx = noco_lectura._get\n",
+    "texto privado": "import importlib\nm = importlib.import_module('noco_lectura')\n",
+    "texto _configurado": "x = '_configurado'\n",
+    "variable directa": "import os\nx = os.environ['NOCODB_BASE']\n",
+    "variable en minúsculas": "import os\nx = os.getenv('nocodb_token_lucy')\n",
+    "variable armada": "import os\nx = os.environ.get('NOCODB_' + 'TOKEN_LUCY')\n",
+    "variable en f-string": "x = f'NOCODB_{1}'\n",
+    "entorno entero": "import os\nx = dict(os.environ)\n",
+    "entorno recorrido": "import os\nx = [k for k in os.environ]\n",
+    "environ importado": "from os import environ\n",
+    "getenv con clave dinámica": "import os\nx = os.getenv(k)\n",
+}
+
+
+@pytest.mark.parametrize("nombre", sorted(_ROTURAS_DE_AFUERA))
+def test_G13_la_guarda_de_afuera_se_pone_roja_con_entradas_inventadas(nombre):
+    malas, entero = _infracciones_de_afuera(_ROTURAS_DE_AFUERA[nombre])
+    assert malas or entero, f"se le escapó: {nombre}"
+
+
+@pytest.mark.parametrize("fuente", [
+    "import noco_lectura\nasync def f(q):\n    return await noco_lectura.buscar_personas(q)\n",
+    "from noco_lectura import buscar_personas, persona, NocoNoContesta\n",
+    "import os\nx = os.environ.get('TELEGRAM_TOKEN')\ny = os.environ['DATABASE_URL']\n",
+    "x = 'nocodb'\n",
+])
+def test_G13_la_guarda_de_afuera_deja_pasar_lo_normal(fuente):
+    assert _infracciones_de_afuera(fuente) == ([], 0)

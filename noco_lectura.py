@@ -17,15 +17,33 @@ da el código, y por eso:
     hacer GET;
   · `_get` es además la que decide qué columnas salen (`fields`), para que
     ningún camino de arriba pueda pedir teléfono, correo ni `bsuid`;
-  · ninguna otra parte del repositorio menciona las variables `NOCODB_*`:
-    `tests/test_noco_lectura.py` recorre el repositorio entero (derivado del
-    disco, no de una lista) y lo exige.
+  · **fuera de este archivo nadie puede obtener la URL ni el token.** Ningún
+    `.py` del repositorio que no sea de `tests/` importa algo privado de acá
+    (`_configurado`, `_get`…), ni usa el módulo de otra forma que
+    `noco_lectura.<función pública>`, ni nombra una variable `NOCODB_*`, ni lee
+    el entorno entero. Sin la URL y el token no hay petición a Noco que escribir,
+    sea con la biblioteca que sea;
+  · **dentro de este archivo, lista blanca:** solo se importan `__future__`,
+    `logging`, `os` y `httpx`; solo se llama a lo declarado en
+    `tests/test_noco_lectura.py` (`_LLAMADAS_INOCUAS`), a las funciones propias y
+    a las dos de la red, `httpx.AsyncClient` y `cliente.get`, que solo pueden
+    estar en `_get`. `subprocess`, `socket`, `os.system`, `httpx.request` o
+    `cliente.post` no están en la lista y por eso rompen la prueba, escritos
+    como se escriban.
 
-LO QUE ESA GARANTÍA NO CUBRE, dicho para que no se dé por cubierta: un nombre de
-variable armado al vuelo o una URL escrita a mano no aparecen en ese barrido.
-La otra mitad de la garantía no es estática sino de comportamiento, y está en la
-prueba: todo pedido que sale de este módulo se mira con un cliente HTTP de
-verdad y un transporte de mentira, y tiene que ser un GET.
+Todo eso lo exige `tests/test_noco_lectura.py` recorriendo el repositorio
+entero (la lista de archivos sale del disco) y dándole a la guarda entradas
+inventadas, no solo lo que hay hoy.
+
+LO QUE ESA GARANTÍA NO VE, dicho para que no se dé por cubierto: un `.py` de
+`tests/`; lo que no es `.py` (scripts de shell, `.yml`, SQL); un nombre `NOCODB_*`
+armado de una forma que no se puede plegar a un texto sin correr el código
+(`"".join([...])`, `"%s" % x`); una URL de Noco o un token escritos a mano
+(prohibido por ser público el repositorio, pero esto no lo ve); y el entorno
+entero pasado a un hijo, que `db/backup.py` hace una vez y está declarado en la
+prueba. La otra mitad es de comportamiento: todo pedido que sale de este módulo
+se mira con un cliente HTTP de verdad y un transporte de mentira, y tiene que ser
+un GET.
 
 SI NOCO NO CONTESTA, SE DICE. `NocoNoContesta` sube hasta quien llamó —la ruta
 del panel la traduce a un 503 con su motivo— y NUNCA se devuelve una lista
