@@ -496,6 +496,16 @@ def test_la_descripcion_del_proyecto_se_ve_si_la_hay_y_sale_escapada(mundo):
     assert 'class="descripcion"' not in ver(mundo, p=2)
 
 
+def test_si_falta_uno_de_los_dos_no_se_pinta_su_guion(mundo, gente):
+    mundo.proyecto(1, "Solo responsable", area="CDS", responsable=gente.rosi)
+    mundo.proyecto(2, "Solo cliente", area="CDS", cliente="Colegio")
+    solo_responsable, solo_cliente = ver(mundo, p=1), ver(mundo, p=2)
+    assert "Responsable: <b>Rosi Romero</b>" in solo_responsable
+    assert "Cliente:" not in solo_responsable and "—" not in solo_responsable
+    assert "Cliente: <b>Colegio</b>" in solo_cliente
+    assert "Responsable:" not in solo_cliente and "—" not in solo_cliente
+
+
 def test_cliente_y_responsable_salen_por_nombre_y_nunca_por_numero(mundo, gente):
     mundo.proyecto(1, "Con todo", area="CDS", cliente="Colegio San Juan", responsable=gente.rosi)
     mundo.proyecto(2, "Responsable desconocido", area="CDS", responsable=555000111)
@@ -627,12 +637,13 @@ def test_p_elige_el_proyecto_y_uno_que_no_existe_cae_al_primero(mundo):
 
 
 def test_las_rutas_que_vuelven_con_un_aviso_enseñan_el_proyecto_del_que_hablan(mundo):
-    mundo.proyecto(1, "Uno", area="CDS")
-    mundo.proyecto(2, "Dos", area="CDS")
-    mundo.tarea(20, "de Dos", proyecto=2)
+    mundo.proyecto(1, "Alfa", area="CDS")             # el que se enseña si nada elige
+    mundo.proyecto(2, "Zeta", area="CDS")
+    mundo.tarea(20, "de Zeta", proyecto=2)
+    assert "<h1>Alfa</h1>" in ver(mundo)
     for consulta in ({"nombre_guardado": 2}, {"area_guardada": 2}, {"creado": 2},
                      {"tarea_creada": 20}):
-        assert "<h1>Dos</h1>" in ver(mundo, **consulta), consulta
+        assert "<h1>Zeta</h1>" in ver(mundo, **consulta), consulta
 
 
 def test_las_tareas_sueltas_de_un_grupo_y_de_sin_grupo(mundo):
