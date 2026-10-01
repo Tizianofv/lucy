@@ -2144,8 +2144,9 @@ async def tarea_detalle(request: Request, tid: int, error: str = "",
                 # `nombres_con_code()` y no `NOMBRES_POR_CHAT` a secas: esta
                 # misma pantalla pinta el RESPONSABLE de la tarea (línea 15 de
                 # la plantilla), que sí puede ser Code (§1/§2, 26-sep-2026);
-                # los autores de comentario (línea 194) nunca son Code -- Code
-                # no comenta -- así que ahí el merge no cambia nada.
+                # los autores de comentario (línea 194) SÍ pueden ser Code desde
+                # el 1-oct-2026 (la sala comenta sus tareas por la puerta HTTP),
+                # y este merge es lo que los pinta como «Code».
                 "nombres": config.nombres_con_code(), "error": error,
                 "comentado": comentado, "borrado": borrado,
                 "area_guardada": area_guardada,

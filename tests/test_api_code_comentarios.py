@@ -62,12 +62,23 @@ RUTA_COMENTARIOS = "/api/code/tareas/{}/comentarios"
 
 # ── Una base SQLite con el esquema que estas funciones tocan ──────────────
 
+class _ErrorSQL(Exception):
+    """Como el de psycopg: trae `sqlstate` (42703 = columna que no existe)."""
+    def __init__(self, sqlstate):
+        super().__init__(sqlstate)
+        self.sqlstate = sqlstate
+
+
 class _Cur:
+    sin_tomada_en = False      # lo prende `_sin_la_columna_tomada_en`
+
     def __init__(self, con):
         self._con = con
         self._filas: list[dict] = []
 
     async def execute(self, sql, params=None):
+        if _Cur.sin_tomada_en and "tomada_en" in sql:
+            raise _ErrorSQL("42703")
         cur = self._con.execute(sql.replace("%s", "?"), tuple(params or ()))
         self._filas = [dict(f) for f in cur.fetchall()] if cur.description else []
         return self
@@ -469,6 +480,29 @@ ESPERADO = {i for i, _, es in MATRIZ if es}
 
 def _elegidas_por(consulta) -> set[int]:
     return {i for i in IDS if consulta(i)}
+
+
+@pytest.fixture
+def _sin_la_columna_tomada_en():
+    """Base sin `tareas.tomada_en`: toda consulta que la nombre revienta con
+    SQLSTATE 42703, y `listar` cae a su SELECT de respaldo (`sin_tomada`)."""
+    _Cur.sin_tomada_en = True
+    try:
+        yield
+    finally:
+        _Cur.sin_tomada_en = False
+
+
+def test_listar_por_su_rama_de_respaldo_sin_tomada_en_dice_lo_mismo(
+        sala, _sin_la_columna_tomada_en):
+    """La otra rama de `tareas_de_code_pendientes`. Se comprueba que de verdad
+    cayó al respaldo (cada fila sale con `tomada_en: None`) y que acepta las
+    mismas tareas que el resto."""
+    _con_matriz(sala)
+    r = CLIENTE.get("/api/code/tareas", headers=_h())
+    assert r.status_code == 200
+    assert {t["id"] for t in r.json()["tareas"]} == ESPERADO
+    assert all(t["tomada_en"] is None for t in r.json()["tareas"])
 
 
 def _con_matriz(sala):

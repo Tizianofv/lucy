@@ -4144,8 +4144,9 @@ async def tareas_para_elegir_primero(excluir_id: int) -> list[dict]:
 
 # «¿ES ESTA UNA TAREA DE CODE?», para los comentarios de la sala (1-oct-2026).
 # UNA SOLA PUERTA: leer y escribir comentarios pasan por `tarea_de_code`, y
-# `tests/test_api_code_comentarios.py` corre las CUATRO funciones de la sala
-# (listar, tomar, cerrar, comentar) contra la misma base y exige que digan
+# `tests/test_api_code_comentarios.py` corre los CINCO caminos de la sala
+# (listar -- por sus dos ramas, con y sin `tomada_en` --, tomar, cerrar, leer
+# comentarios y comentar) contra la misma base y exige que digan
 # lo mismo de cada tarea. `tomar`/`cerrar`/`tareas_de_code_pendientes` siguen
 # con su propio `WHERE` (las pruebas de la parte 1 y 3 extraen su texto del
 # árbol de sintaxis): lo que las ata a esta puerta es esa prueba, no el
