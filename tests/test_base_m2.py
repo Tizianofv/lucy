@@ -105,9 +105,7 @@ def _base(participantes_desde: str = "schema") -> sqlite3.Connection:
             con.execute(s)
     fuente = schema if participantes_desde == "schema" else \
         _migracion_m2().read_text(encoding="utf-8")
-    sentencias = _ddl(fuente, "participantes")
-    assert len(sentencias) == 3, sentencias   # la tabla y sus dos índices
-    for s in sentencias:
+    for s in _ddl(fuente, "participantes"):
         con.execute(s)
     con.commit()
     return con
@@ -185,6 +183,14 @@ def _persona(con, *, proyecto_id=None, tarea_id=None, noco_id=10, nombre="Person
               "borrado_en": borrado_en, **resto}
     con.execute(f"INSERT INTO participantes ({', '.join(campos)}) VALUES "
                 f"({', '.join('?' for _ in campos)})", tuple(campos.values()))
+
+
+@pytest.mark.parametrize("fuente", ["schema", "migracion"])
+def test_G7_el_ddl_trae_la_tabla_y_sus_dos_indices(fuente):
+    texto = (_SCHEMA if fuente == "schema" else _migracion_m2()).read_text(encoding="utf-8")
+    ddl = _ddl(texto, "participantes")
+    assert [bool(re.match(r"CREATE\s+TABLE", d, re.I)) for d in ddl] == [True, False, False], ddl
+    assert sum("UNIQUE INDEX" in d.upper() for d in ddl) == 2, ddl
 
 
 def test_G7_una_persona_en_un_proyecto_y_en_una_tarea_entra(con_participantes):
