@@ -264,7 +264,7 @@ _PYTHON = """#!/bin/sh
 case "$1" in
   db/backup.py) [ -n "$DATABASE_URL" ] && echo recibio_url >> "$HOME/marcas.txt"; exit 0 ;;
   tools/verificar_respaldo.py) echo verifico >> "$HOME/marcas.txt"; exit "${CODIGO_VERIFICADOR:-0}" ;;
-  tools/vaciar_papelera.py) echo vacio_papelera >> "$HOME/marcas.txt"; exit 0 ;;
+  tools/vaciar_papelera.py) echo "vacio_papelera $*" >> "$HOME/marcas.txt"; exit 0 ;;
   *) exec "$PYREAL" "$@" ;;
 esac
 """
@@ -289,36 +289,33 @@ def _correr_guion(tmp_path, verificador=0, railway_falla=False):
     res = subprocess.run(["/bin/zsh", str(RAIZ / "tools" / "respaldo_diario.sh")],
                          env=env, capture_output=True, text=True, timeout=60)
     marcas = casa / "marcas.txt"
-    marcas = marcas.read_text().split() if marcas.exists() else []
+    marcas = marcas.read_text().splitlines() if marcas.exists() else []
     return casa, res, marcas
 
 
-def _archivos_bajo(carpeta):
-    """Los archivos del HOME falso, en las tres carpetas donde el guion o los
-    dobles pueden escribir (frontera declarada: no se recorre más abajo; el
-    guion solo escribe en `Library/Logs`, por la variable REGISTRO)."""
-    sitios = [carpeta, carpeta / "Library" / "Logs", carpeta / "Library"]
-    return [d / n for d in sitios if d.is_dir() for n in os.listdir(d)
-            if (d / n).is_file()]
-
-
-def _todo_lo_que_escribio(casa, res):
-    textos = [res.stdout, res.stderr]
-    for f in _archivos_bajo(casa):
-        if f.parent != casa / ".local" / "bin":
-            textos.append(f.read_text(errors="replace"))
-    return "\n".join(textos)
+def _archivos_con_el_secreto(casa):
+    """Los archivos del HOME falso ENTERO (los dobles de `.local/bin` incluidos)
+    que contienen la clave inventada. Se le pregunta a `grep -r`, que recorre
+    el árbol sin pasar por un barrido de Python (la guarda de barridos de
+    `test_buzon_que_no_se_ve.py` es solo para el repo). `grep -r` no sigue
+    enlaces simbólicos: el guion no crea ninguno, y un enlace desde el HOME
+    falso hacia fuera sería un cambio que esta prueba no ve (frontera)."""
+    r = subprocess.run(["grep", "-rlF", SECRETO, str(casa)],
+                       capture_output=True, text=True)
+    assert r.returncode in (0, 1), r.stderr     # 1 = no encontró nada
+    return r.stdout.split()
 
 
 def test_guion_con_respaldo_verificado_vacia_la_papelera(tmp_path):
     casa, res, marcas = _correr_guion(tmp_path, verificador=0)
     assert res.returncode == 0, (res.stdout, res.stderr)
-    assert marcas == ["recibio_url", "verifico", "vacio_papelera"], marcas
+    assert marcas == ["recibio_url", "verifico",
+                      "vacio_papelera tools/vaciar_papelera.py --aplicar"], marcas
 
 
 def test_guion_con_verificador_en_rojo_no_vacia_la_papelera(tmp_path):
     casa, res, marcas = _correr_guion(tmp_path, verificador=1)
-    assert "vacio_papelera" not in marcas, marcas
+    assert not any(m.startswith("vacio_papelera") for m in marcas), marcas
     assert "verifico" in marcas
     assert res.returncode == 1, (res.returncode, res.stderr)
 
@@ -332,7 +329,19 @@ def test_guion_sin_url_de_railway_no_corre_nada(tmp_path):
 def test_guion_nunca_escribe_la_url_de_la_base_en_ninguna_parte(tmp_path):
     for verificador in (0, 1):
         casa, res, _ = _correr_guion(tmp_path / str(verificador), verificador=verificador)
-        todo = _todo_lo_que_escribio(casa, res)
-        assert any(f.name == "lucy-respaldo.log" for f in _archivos_bajo(casa))
-        assert SECRETO not in todo, "la URL de la base (con su clave) quedó escrita"
-        assert "servidor.invalido" not in todo
+        assert (casa / "Library" / "Logs" / "lucy-respaldo.log").is_file()
+        assert SECRETO not in res.stdout and SECRETO not in res.stderr
+        assert _archivos_con_el_secreto(casa) == [], \
+            "la clave de la base quedó escrita en el HOME falso"
+
+
+def test_la_busqueda_del_secreto_ve_hasta_el_fondo_y_los_dobles(tmp_path):
+    """La guarda de la guarda: `grep -r` encuentra el secreto en un archivo
+    hondo y en la carpeta de los dobles; sin esto, 'no hay secreto' podría
+    ser 'no miré'."""
+    casa = tmp_path / "c"
+    (casa / "a" / "b").mkdir(parents=True)
+    (casa / ".local" / "bin").mkdir(parents=True)
+    (casa / "a" / "b" / "f").write_text(SECRETO)
+    (casa / ".local" / "bin" / "x").write_text(SECRETO)
+    assert len(_archivos_con_el_secreto(casa)) == 2
