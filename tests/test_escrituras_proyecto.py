@@ -695,6 +695,19 @@ async def test_la_puerta_deja_pasar_a_rosi_a_tiziano_y_a_code(mundo, gente, quie
 # esos elementos y atributos, y todo lo que el lector no sepa clasificar hace
 # fallar la prueba. No se persigue cada comportamiento del navegador: se les pone
 # fondo prohibiéndolos.
+#
+# LO QUE LA REGLA CUMPLE DE VERDAD, y nada más: el HTML del propio formulario y
+# el de los ANCESTROS QUE NOMBRA LA LISTA (`noscript`, `template`, `dialog`,
+# `details`, otro `form`, y los atributos `hidden`, `inert`, `on*` y `style` de
+# cualquier ancestro). Lo que queda FUERA, y esta prueba NO ve:
+#   · las HOJAS DE ESTILO: un `form.resp{display:none}`, un `pointer-events:none`
+#     o un `visibility:hidden` en el `<style>` de la plantilla (o en cualquier
+#     CSS) esconden o apagan un formulario o un botón sin tocar su HTML;
+#   · los ANCESTROS FUERA DE LA LISTA: un `<fieldset disabled>` o un
+#     `<div popover>` alrededor del formulario lo apagan o lo esconden y el lector
+#     no lo mira.
+# Por eso esta prueba NO garantiza que lo que se envía aquí sea lo que haría un
+# navegador de verdad.
 
 from html.parser import HTMLParser  # noqa: E402
 
@@ -708,8 +721,10 @@ _VACIOS = {"input", "br", "hr", "img", "meta", "link"}
 # lector no sepa clasificar HACE FALLAR la prueba (el cubo estricto). Un
 # navegador de verdad hace mil cosas con `disabled`, `hidden`, `style`,
 # `onsubmit`, `enctype`, `formaction`, `form=`, `type="button"`, un `<noscript>`...
-# y esta prueba no las modela: las PROHÍBE, así que mientras pase, lo que lee el
-# lector es lo que haría el navegador.
+# y esta prueba no las modela: las PROHÍBE en el formulario y en los ancestros
+# que nombra la lista. Mientras pase, el HTML de esos elementos es el simple de la
+# tabla; NO que el navegador haga lo mismo que el lector (las hojas de estilo y
+# los ancestros fuera de la lista quedan sin vigilar: ver la FRONTERA de arriba).
 _ATRIBUTOS = {
     "form": {"method", "action", "class"},
     "input": {"type", "name", "value", "required", "maxlength", "placeholder", "aria-label"},
@@ -730,7 +745,10 @@ _ESTILO_DEL_GRUPO = re.compile(r"display:contents;--color:#[0-9a-fA-F]{3,8}")
 class _LectorDeFormularios(HTMLParser):
     """Lee los formularios y, a la vez, junta `problemas`: todo lo que no sea el
     HTML simple de la regla de arriba. FRONTERA: NO es un navegador. Lo que
-    vigila es esa regla de HTML simple, no el comportamiento completo de un
+    vigila es esa regla sobre el HTML del formulario y de los ancestros que
+    nombra la lista; no ve las hojas de estilo (CSS que esconda o apague un
+    formulario o un botón) ni los ancestros fuera de la lista (`<fieldset
+    disabled>`, `<div popover>`), y no es el comportamiento completo de un
     navegador."""
 
     def __init__(self):
