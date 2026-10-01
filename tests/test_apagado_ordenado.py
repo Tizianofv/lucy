@@ -79,6 +79,8 @@ def test_fila_terminada_no_se_revive_al_apagar():
     res, r = _correr("fin")
     _ordenado(res, r)
     assert res["filas"] == {"1": ["procesado", 0]}, res["filas"]
+    # y el bucle ya la había soltado: no hay nada que devolver, ni se consulta
+    assert "SQL devolver_reclamadas" not in res["eventos"], res["eventos"]
 
 
 def test_control_sin_sigterm_no_se_toca_nada():
@@ -86,3 +88,77 @@ def test_control_sin_sigterm_no_se_toca_nada():
     assert "SQL devolver_reclamadas" not in res["eventos"]
     assert "db.cerrar" not in res["eventos"]
     assert res["filas"] == {"1": ["procesando", 0]}, res["filas"]
+
+
+# ── el SQL de devolver_reclamadas, ejecutado de verdad (sqlite) ─────────────
+# Mismo texto que corre en Postgres, salvo `= ANY(%s)` -> `IN (?, ...)` y `%s`
+# -> `?`. No es Postgres: el parecido que importa aquí es el filtro de estado y
+# qué columnas se tocan.
+import asyncio  # noqa: E402
+import sqlite3  # noqa: E402
+
+for _k, _v in (("TELEGRAM_TOKEN", "1:fake"), ("DATABASE_URL", "postgresql://x/x"),
+               ("CHAT_ID_DUENO", "111")):
+    os.environ.setdefault(_k, _v)   # config.py las exige al importarse
+
+import db.db as base  # noqa: E402
+
+
+def _con_sqlite(monkeypatch, filas):
+    cx = sqlite3.connect(":memory:")
+    cx.execute("CREATE TABLE bandeja (id INTEGER PRIMARY KEY, estado TEXT, "
+               "intentos INT, reintentar_despues TEXT, error_detalle TEXT)")
+    cx.executemany("INSERT INTO bandeja VALUES (?,?,?,NULL,NULL)", filas)
+
+    class _Conn:
+        async def execute(self, sql, params=()):
+            ids = list(params[0])
+            sql = sql.replace("= ANY(%s)", "IN (" + ",".join("?" * len(ids)) + ")")
+            filas_ = cx.execute(sql, ids).fetchall()
+
+            class _Cur:
+                async def fetchall(self):
+                    return filas_
+            return _Cur()
+
+    class _Ctx:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, *a):
+            return False
+
+    class _Pool:
+        def connection(self):
+            return _Ctx()
+
+    monkeypatch.setattr(base, "pool", _Pool())
+    return cx
+
+
+def test_sql_devuelve_procesando_sin_tocar_intentos_ni_espera(monkeypatch):
+    cx = _con_sqlite(monkeypatch, [(1, "procesando", 2), (2, "procesando", 0)])
+    n = asyncio.run(base.devolver_reclamadas([1, 2]))
+    assert n == 2
+    assert cx.execute("SELECT id, estado, intentos, reintentar_despues, "
+                      "error_detalle FROM bandeja ORDER BY id").fetchall() == [
+        (1, "sin_procesar", 2, None, None), (2, "sin_procesar", 0, None, None)]
+
+
+def test_sql_no_revive_una_fila_ya_cerrada(monkeypatch):
+    cx = _con_sqlite(monkeypatch, [(1, "procesado", 0), (2, "error", 1),
+                                   (3, "esperando_confirmacion", 0),
+                                   (4, "procesando", 0), (5, "procesando", 0)])
+    n = asyncio.run(base.devolver_reclamadas([1, 2, 3, 4]))
+    assert n == 1
+    assert cx.execute("SELECT id, estado FROM bandeja ORDER BY id").fetchall() == [
+        (1, "procesado"), (2, "error"), (3, "esperando_confirmacion"),
+        (4, "sin_procesar"), (5, "procesando")]   # la 5 no era de esta instancia
+
+
+def test_sin_ids_no_toca_la_base(monkeypatch):
+    class _Boom:
+        def connection(self):
+            raise AssertionError("no debía abrir conexión")
+    monkeypatch.setattr(base, "pool", _Boom())
+    assert asyncio.run(base.devolver_reclamadas([])) == 0
