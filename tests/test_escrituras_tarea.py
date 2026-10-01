@@ -29,7 +29,7 @@ from datetime import timedelta
 
 import pytest
 
-from test_escrituras_proyecto import (_LectorDeFormularios, _escrito, _formularios_de,  # noqa: F401
+from test_escrituras_proyecto import (FECHA_ESCRITA, _LectorDeFormularios, _escrito, _formularios_de,  # noqa: F401
                                       _la_marcada, _lo_que_manda_el_navegador, _otra_opcion,
                                       _primera_habilitada, _problemas_de_html_simple, _valor)
 from test_grupo_ia import _archivos_de_texto, _ROOT
@@ -617,7 +617,9 @@ def test_cada_formulario_de_tarea_enviado_como_el_navegador_escribe_en_la_tarea_
             ids = _nuevos(antes, despues, "tareas")
             assert len(ids) == 1 and igual_salvo(antes, despues, tareas=ids, log_acciones=nuevas), donde
             t = tarea(m, ids.pop())
-            assert (t["titulo"], t["proyecto_id"], t["vence_en"]) == ("Escrito en titulo", pid, None), donde
+            assert (t["titulo"], t["proyecto_id"]) == ("Escrito en titulo", pid), donde
+            # La fecha que escribió la persona en SU campo llega a la tarea.
+            assert str(t["vence_en"]).startswith(FECHA_ESCRITA), donde
             assert t["responsable_chat_id"] == gente.dueno, donde         # el del proyecto 2
             probados += 1
             continue
@@ -651,6 +653,24 @@ def test_cada_formulario_de_tarea_enviado_como_el_navegador_escribe_en_la_tarea_
                 raise AssertionError(f"formulario sin intención declarada: {form['accion']}")
         probados += 1
     assert probados == len([a for a in esperadas if _ES_DE_TAREA.fullmatch(a)])
+
+
+def test_el_envio_escribe_algo_en_todo_control_que_la_persona_llena_en_todas_las_vistas(monkeypatch, gente):
+    """La lista de controles sale del PROPIO LECTOR, de los formularios de cada
+    vista renderizada: ninguno de los que la persona llena (texto, fecha, texto
+    largo) se envía vacío, porque un campo vacío no prueba que su `name` esté
+    atado a la ruta. Un tipo de control nuevo que el envío no sepa llenar rompe
+    `_lo_que_manda_el_navegador`."""
+    m = _mundo(monkeypatch, gente)
+    vistos = set()
+    for consulta, _ in _VISTAS_DE_TAREAS.values():
+        for form in _formularios_de(ver(m, **consulta)):
+            for c in form["campos"]:
+                if c["tipo"] in ("select", "hidden"):
+                    continue
+                vistos.add(c["tipo"])
+                assert _escrito(c) != "", (consulta, form["accion"], c)
+    assert vistos == {"text", "date", "textarea"}, vistos
 
 
 # ── Cada elemento editable en el sitio tiene su formulario, y el servidor lo dibuja sin JS ──

@@ -913,6 +913,10 @@ def _lo_que_manda_el_navegador(form: dict, escribir, escoger) -> dict:
             datos[c["name"]] = c["value"] or ""
         elif c["tipo"] in ("text", "search", "date", "textarea"):
             datos[c["name"]] = escribir(c)
+        else:
+            # Un tipo de control que el lector conoce y este envío no sabe llenar
+            # no se salta en silencio: se rompe.
+            raise AssertionError(f"el envío no sabe llenar un control {c['tipo']!r} ({c['name']})")
     return datos
 
 
@@ -933,10 +937,15 @@ def _todos(m) -> dict:
     return {f["id"]: dict(f) for f in m.con.execute("SELECT * FROM proyectos")}
 
 
+FECHA_ESCRITA = "2026-10-20"
+
+
 def _escrito(c):
-    """Lo que la persona escribe en un campo: texto con el nombre del campo
-    (si el nombre está mal, el efecto no aparece); la fecha opcional, vacía."""
-    return "" if c["tipo"] == "date" else f"Escrito en {c['name']}"
+    """Lo que la persona escribe en un campo: texto con el nombre del campo (si
+    el nombre está mal, el efecto no aparece) y, en un campo de fecha, una fecha
+    REAL (`2026-10-20`, como la manda el navegador): una fecha opcional que se
+    envía vacía no prueba que el campo esté atado a la ruta."""
+    return FECHA_ESCRITA if c["tipo"] == "date" else f"Escrito en {c['name']}"
 
 
 def _otra_opcion(c):
