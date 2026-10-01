@@ -3957,10 +3957,16 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # disco, 66 → 67 EXENTOS por `tests/test_escrituras_tarea.py` (nuevo).
     # VIGILADOS sin cambio en 44: se tocaron `db/db.py` y `web/app.py`, ya
     # vigilados de antes.
-    assert medido == {"en disco": 111, "exentos": 67, "vigilados": 44}, (
+    # 2-oct-2026, rama `trabajo/proyectos-telegram` (Lucy 1.0, E8, los proyectos
+    # por Telegram): 111 → 113 en disco, 67 → 69 EXENTOS por los DOS archivos
+    # nuevos, `tests/test_crear_proyecto_telegram.py` y
+    # `tests/test_herramientas.py`. VIGILADOS sin cambio en 44: se tocaron
+    # `db/db.py`, `acciones/crud.py` y `cerebro/agente.py`, ya vigilados de
+    # antes — y ningún archivo nuevo de producción.
+    assert medido == {"en disco": 113, "exentos": 69, "vigilados": 44}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "2-oct-2026 (rama escrituras-tarea) era {'en disco': 111, "
-        "'exentos': 67, 'vigilados': 44}. La aserción de fondo —cero "
+        "2-oct-2026 (rama proyectos-telegram) era {'en disco': 113, "
+        "'exentos': 69, 'vigilados': 44}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

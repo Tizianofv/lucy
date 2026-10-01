@@ -1223,9 +1223,18 @@ def _casos_de_no():
         ("proyecto_cerrado", cerrado,
          {"clasificacion": "tarea", "titulo": "x", "proyecto": "cerrado"},
          "ese proyecto está cerrado"),
-        ("nombre_de_proyecto_demasiado_largo", base_,
+        # E8 (1-oct-2026): nombrar un proyecto que no existe ya NO lo crea al
+        # vuelo — se corta y se pregunta. Este caso ANTES esperaba «200
+        # caracteres»: el nombre lo rechazaba `nombre_de_proyecto_que_vale`
+        # porque iba a CREARSE, y ahora no se crea nada, así que un nombre
+        # largo es, sencillamente, un proyecto que no está. Esa puerta sigue
+        # viva donde sí se crea: la herramienta `crear_proyecto`.
+        ("proyecto_que_no_existe", base_,
+         {"clasificacion": "tarea", "titulo": "x",
+          "proyecto": "Proyecto Inventado"}, "no existe"),
+        ("nombre_de_proyecto_larguisimo", base_,
          {"clasificacion": "tarea", "titulo": "x", "proyecto": "p" * 201},
-         "200 caracteres"),
+         "no existe"),
         ("tarea_que_ya_existia_de_otro", duplicado_de_otro,
          {"clasificacion": "tarea", "titulo": "Llamar al banco",
           "responsable_chat_id": "Zutana"}, "ya existía"),
@@ -1262,9 +1271,10 @@ def test_los_casos_de_no_cubren_cada_raise_de_no_de_negocio_de_crear():
     raises = [n for n in ast.walk(arbol) if isinstance(n, ast.Raise)
               and isinstance(n.exc, ast.Call) and isinstance(n.exc.func, ast.Name)
               and n.exc.func.id == "NoDeNegocio"]
-    # Los 4 «No creé la tarea: {e}» de responsable, área, «Primero:» y proyecto,
-    # el «ya existía», la clasificación, el dueño de cita y la migración de citas.
-    assert len(raises) == 8, (
+    # Los 4 «No creé la tarea: {e}» de responsable, área, «Primero:» y proyecto
+    # cerrado, la PREGUNTA del proyecto que no existe (E8), el «ya existía», la
+    # clasificación, el dueño de cita y la migración de citas.
+    assert len(raises) == 9, (
         f"cambió el número de `raise NoDeNegocio` ({len(raises)}): agrega su "
         f"caso a `_casos_de_no`")
     assert len(_casos_de_no()) >= len(raises)

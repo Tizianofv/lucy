@@ -1446,7 +1446,46 @@ async def buscar_o_crear_persona(nombre: str, *,
 
 async def buscar_o_crear_proyecto(nombre: str, *,
                                   bandeja_id: int | None = None) -> int | None:
+    """Busca el proyecto y, si no está, LO CREA (sin grupo ni responsable).
+
+    Desde E8 (1-oct-2026) NINGÚN camino de Telegram llama acá: `crud.crear_
+    desde_interpretacion` pregunta por `proyecto_vivo_por_nombre` y, si el
+    proyecto no existe, no lo crea — le pregunta a Tiziano el grupo y el
+    responsable. Se queda porque es la forma genérica de «búscalo o créalo»
+    de la que sale `buscar_o_crear_persona` (que sí se usa), y porque sus
+    pruebas la miden.
+
+    LA PUERTA DE UN PROYECTO NUEVO ES `crear_proyecto`, y solo esa: nace con
+    grupo y con responsable.
+    """
     return await _buscar_o_crear("proyectos", nombre, bandeja_id=bandeja_id)
+
+
+async def proyecto_vivo_por_nombre(nombre: str) -> int | None:
+    """El id del proyecto VIVO que se llama así, o `None`. **NO CREA NADA.**
+
+    Es la búsqueda que usa Telegram desde E8 (1-oct-2026). Un proyecto nace
+    SOLO por `crear_proyecto`, que exige grupo y responsable: un proyecto que
+    aparece porque alguien lo nombró al vuelo nace sin las dos cosas y en la
+    página cae en «Sin grupo», que es de donde salió este encargo.
+
+    La comparación es la MISMA de siempre — `proyecto_vivo_con_nombre`, la que
+    comparten `_buscar_o_crear`, `crud.perfil`, `crear_proyecto` y
+    `convertir_tarea_en_proyecto` —, así que «¿existe?» contesta lo mismo por
+    donde se pregunte. Lo único que cambia es que acá no hay INSERT detrás.
+
+    Abre su propia conexión (a diferencia de `proyecto_vivo_con_nombre`, que
+    recibe el cursor): quien pregunta desde `acciones/crud.py` no está dentro
+    de una transacción en ese momento, y meterlo adentro alargaría la
+    transacción de la entidad sin ganar nada — el mismo criterio con el que
+    `crear_desde_interpretacion` resuelve personas y proyectos fuera.
+    """
+    nombre = (nombre or "").strip()
+    if not nombre:
+        return None
+    async with pool.connection() as conn:
+        return await proyecto_vivo_con_nombre(
+            conn.cursor(row_factory=dict_row), nombre)
 
 
 class ProyectoNoSeCrea(ValueError):
@@ -1491,6 +1530,11 @@ async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> di
     actor viaje como variable fuera de `crud._registrar`. No se puede usar `crud._registrar` (`crud` importa este módulo): la fila de
     `log_acciones` se escribe a mano con la misma forma que las otras
     escrituras de este archivo.
+
+    DEVUELVE LA FILA CON SU `log_id` — el asa para deshacer, que es lo que
+    `cerebro/agente.py::_anotar` necesita. La ruta del panel la ignora; quien
+    la llame desde Telegram (por `crud.crear_proyecto`) la usa. NADA MÁS
+    cambia con eso: mismo INSERT, misma huella, misma transacción.
     """
     nombre = nombre_de_proyecto_que_vale(nombre)
     if area not in {a["clave"] for a in await areas()}:
@@ -1511,14 +1555,31 @@ async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> di
             """,
             (nombre, area, responsable_chat_id))
         nuevo = await cur.fetchone()
-        await conn.execute(
+        # EL ASA, EN LA MISMA FILA QUE SE DEVUELVE. La huella ya se escribía;
+        # lo que faltaba era PODER NOMBRARLA. Quien crea un proyecto desde
+        # Telegram (E8) tiene que poder decir «acción #N, reversible» y dejar
+        # el botón de deshacer — `cerebro/agente.py::_anotar` no anota nada sin
+        # un id—, y para eso necesita el id. Va como una clave más de la fila, y
+        # no como un segundo valor de retorno, para no cambiarle la firma a
+        # quien ya la llama: la ruta del panel la ignora.
+        #
+        # Es el mismo `RETURNING id` que ya usa `convertir_tarea_en_proyecto`
+        # unas líneas más abajo, sobre el MISMO INSERT: ni una escritura más ni
+        # una transacción distinta. Y va con `cur` (el cursor con
+        # `row_factory=dict_row`) y no con `conn.execute`, porque el id se lee
+        # POR NOMBRE y `conn.execute` devuelve un cursor con la factoría de la
+        # conexión, que en SQLite son tuplas — el mismo motivo por el que
+        # `convertir_tarea_en_proyecto` lee su `RETURNING id` con `cur`.
+        await cur.execute(
             """
             INSERT INTO log_acciones
               (actor, accion, tabla, registro_id, antes, despues, motivo)
             VALUES ('panel', 'crear', 'proyectos', %s, NULL, %s,
                     'Proyecto nuevo, creado desde el panel de proyectos')
+            RETURNING id
             """,
             (nuevo["id"], json.dumps(nuevo, default=str, ensure_ascii=False)))
+        nuevo["log_id"] = (await cur.fetchone())["id"]
         return nuevo
 
 
