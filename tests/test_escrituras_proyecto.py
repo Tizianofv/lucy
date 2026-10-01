@@ -89,7 +89,8 @@ def test_crear_deja_su_huella_de_panel_y_se_puede_deshacer(mundo, gente):
     # Deshacer (la rama genérica de «crear») lo manda a la papelera.
     asyncio.new_event_loop().run_until_complete(crud.deshacer(h["id"]))
     assert _fila(mundo, h["registro_id"])["borrado_en"] is not None
-    assert "Grabación del sencillo" not in ver(mundo)
+    # (sin el ejemplo del campo «Nombre» de la ventanita, que dice lo mismo)
+    assert "Grabación del sencillo" not in re.sub(r'placeholder="[^"]*"', "", ver(mundo))
 
 
 def test_el_proyecto_recien_creado_se_ve_con_su_aviso_y_su_responsable(mundo, gente):
@@ -633,7 +634,10 @@ def test_el_selector_del_responsable_no_escribe_ningun_numero_de_chat(mundo, gen
     for numero in (str(gente.rosi), str(gente.dueno)):
         assert numero not in html, numero
     assert re.search(r'value="-?\d+"', html) is None, "una opción viaja con un número de chat"
-    assert "Escoge" not in html           # ya tiene responsable: no hay marcador de «falta»
+    # Ya tiene responsable: el selector del proyecto no lleva el marcador de «falta»
+    # (la ventanita de «+ Proyecto» sí tiene el suyo, y no cuenta).
+    quienes = html.split('<div class="quienes">', 1)[1].split("</form>", 1)[0]
+    assert "Escoge" not in quienes
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1066,7 +1070,11 @@ _TIPOS_DE_INPUT = {"hidden", "text", "date", "datetime-local"}
 # La ÚNICA excepción, por nombre: `form.renombrar` nace `hidden` y lo muestra el
 # JavaScript (doble clic) o el servidor (`?editar=nombre`); hay pruebas de las dos.
 _NACE_ESCONDIDO = {"renombrar"}
-_ESTILO_DEL_GRUPO = re.compile(r"display:contents;--color:#[0-9a-fA-F]{3,8}")
+# El color de cada grupo viaja en dos variables (1-oct-2026): `--claro`, el de
+# `areas.color`, y `--oscuro`, el mismo tono aclarado para el modo oscuro. El
+# envoltorio de la vista lleva además `display:contents`.
+_ESTILO_DEL_GRUPO = re.compile(
+    r"(display:contents;)?--claro:#[0-9a-fA-F]{3,8};--oscuro:#[0-9a-fA-F]{3,8}")
 
 
 class _LectorDeFormularios(HTMLParser):
@@ -1117,8 +1125,14 @@ class _LectorDeFormularios(HTMLParser):
             # `<summary>` lo abre con un clic, sin JavaScript, y adentro están
             # las mismas filas con sus formularios. Cualquier otro `details`
             # esconde el formulario y falla.
-            if tag in ("noscript", "template", "dialog", "form") or (
-                    tag == "details" and atr.get("class") != "plegar"):
+            # `dialog` solo si es la ventanita de «+ Proyecto en X» (1-oct-2026):
+            # el servidor la escribe cerrada, el enlace de al lado la abre con
+            # JavaScript y sin JavaScript no se ve nunca (el enlace lleva a la
+            # página aparte). Su formulario es el mismo de esa página. Cualquier
+            # otro `dialog` esconde el formulario y falla.
+            if tag in ("noscript", "template", "form") or (
+                    tag == "details" and atr.get("class") != "plegar") or (
+                    tag == "dialog" and atr.get("class") != "ventana"):
                 self._mal(f"{donde}: dentro de <{tag}>")
             for n, v in atr.items():
                 if n in ("hidden", "inert") or n.startswith("on"):
@@ -1295,16 +1309,22 @@ def _del_proyecto(formularios):
     return [f for f in formularios if _SOLO_PROYECTO.fullmatch(f["accion"] or "")]
 
 
+# La ventanita de «+ Proyecto en X» (1-oct-2026): el servidor escribe UNA por
+# grupo de la lista de la izquierda en TODA vista, y cada una es un formulario
+# `/proyectos/nuevo`. Cuántas: tantas como grupos tiene el mundo de prueba.
+_V = ["/proyectos/nuevo"] * len(_pagina.AREAS)
+
 _VISTAS = {
-    "abierto": ({"p": 2}, ["/proyectos/2/area", "/proyectos/2/nombre", "/proyectos/2/responsable"]),
+    "abierto": ({"p": 2}, ["/proyectos/2/area", "/proyectos/2/nombre", "/proyectos/2/responsable"] + _V),
     "cerrado": ({"p": 4}, ["/proyectos/4/area", "/proyectos/4/estado", "/proyectos/4/nombre",
-                           "/proyectos/4/responsable"]),
+                           "/proyectos/4/responsable"] + _V),
     "confirmar": ({"p": 2, "confirmar": "cerrar"},
                   ["/proyectos/2/area", "/proyectos/2/estado", "/proyectos/2/nombre",
-                   "/proyectos/2/responsable"]),
+                   "/proyectos/2/responsable"] + _V),
     "editar_nombre": ({"p": 2, "editar": "nombre"},
-                      ["/proyectos/2/area", "/proyectos/2/nombre", "/proyectos/2/responsable"]),
-    "nuevo": ({"nuevo": "CDS"}, ["/proyectos/nuevo"]),
+                      ["/proyectos/2/area", "/proyectos/2/nombre", "/proyectos/2/responsable"] + _V),
+    # La página aparte (`?nuevo=`) es un formulario MÁS, el de siempre.
+    "nuevo": ({"nuevo": "CDS"}, ["/proyectos/nuevo"] + _V),
 }
 
 
@@ -1313,7 +1333,7 @@ def test_cada_vista_tiene_exactamente_estos_formularios_de_escritura(mundo, gent
     consulta, esperadas = _VISTAS[vista]
     m = _mundo_de_formularios(monkeypatch, gente)
     html = ver(m, **consulta)
-    assert sorted(f["accion"] for f in _del_proyecto(_formularios_de(html))) == esperadas
+    assert sorted(f["accion"] for f in _del_proyecto(_formularios_de(html))) == sorted(esperadas)
 
 
 @pytest.mark.parametrize("vista", sorted(_VISTAS))
@@ -1349,7 +1369,10 @@ def test_cada_formulario_enviado_como_el_navegador_escribe_en_el_proyecto_de_la_
             nuevos = set(despues) - set(antes)
             assert len(nuevos) == 1 and all(despues[k] == antes[k] for k in antes), (vista, nuevos)
             fila = despues[nuevos.pop()]
-            assert (fila["nombre"], fila["area"]) == ("Escrito en nombre", "CDS"), (vista, fila)
+            # El grupo es el que ESE formulario trae escondido: cada ventanita lleva
+            # el de su grupo, y la página aparte el de `?nuevo=`.
+            suyo = next(c["value"] for c in form["campos"] if c["name"] == "area")
+            assert (fila["nombre"], fila["area"]) == ("Escrito en nombre", suyo), (vista, fila)
             assert fila["responsable_chat_id"] == nombres["Persona Uno"], (vista, fila)
             casos += 1
             continue
@@ -1406,7 +1429,7 @@ def test_los_formularios_de_cada_vista_cumplen_la_regla_de_html_simple(mundo, ge
     assert len(_del_proyecto(_formularios_de(html))) == len(_VISTAS[vista][1])
 
 
-_BUENO = ('<div style="display:contents;--color:#0f7c74"><form class="resp" method="post" '
+_BUENO = ('<div style="display:contents;--claro:#0f7c74;--oscuro:#3cc0b4"><form class="resp" method="post" '
           'action="/proyectos/2/responsable"><select id="r" name="responsable">'
           '<option value="" selected disabled>Escoge</option><option value="Code">Code</option></select>'
           '<button class="btn-linea">Guardar</button></form></div>')
@@ -1521,6 +1544,14 @@ _ATAQUES = {
     "x13_textarea_con_atributo_raro": _con("<button class", '<textarea name="t" readonly></textarea><button class'),
     "x14_input_date_con_atributo_raro": _con("<button class", '<input type="date" name="d" disabled><button class'),
     "x11_form_dentro_de_form": '<form method="post" action="/a"><button>x</button>' + _BUENO + "</form>",
+    # La ventanita de «+ Proyecto» es el ÚNICO `dialog` que se acepta; cualquier
+    # otro, o ésta escondida o con un manejador, esconde o apaga el formulario.
+    "d1_dialog_con_otra_clase": '<dialog class="otra">' + _BUENO + "</dialog>",
+    "d2_dialog_sin_clase": "<dialog>" + _BUENO + "</dialog>",
+    "d3_ventanita_hidden": '<dialog class="ventana" hidden>' + _BUENO + "</dialog>",
+    "d4_ventanita_con_style": '<dialog class="ventana" style="display:none">' + _BUENO + "</dialog>",
+    "d5_ventanita_con_manejador": '<dialog class="ventana" onclose="x()">' + _BUENO + "</dialog>",
+    "d6_ventanita_inerte": '<dialog class="ventana" inert>' + _BUENO + "</dialog>",
     "x12_method_distinto_de_post_con_atributos": _con('method="post"', 'method="POST" target="_blank"'),
 }
 
@@ -1528,6 +1559,10 @@ _ATAQUES = {
 @pytest.mark.parametrize("ataque", sorted(_ATAQUES))
 def test_cada_ataque_escrito_a_mano_hace_fallar_la_regla(ataque):
     assert _problemas_de_html_simple(_ATAQUES[ataque]) != [], ataque
+
+
+def test_la_ventanita_de_proyecto_nuevo_se_acepta():
+    assert _problemas_de_html_simple('<dialog class="ventana" aria-label="x">' + _BUENO + "</dialog>") == []
 
 
 def test_el_details_que_pliega_las_hechas_se_acepta_y_el_textarea_y_la_fecha_tambien():
@@ -1540,7 +1575,11 @@ def test_el_details_que_pliega_las_hechas_se_acepta_y_el_textarea_y_la_fecha_tam
 
 def test_un_ancestro_con_el_style_del_grupo_si_se_acepta_y_otro_no():
     assert _problemas_de_html_simple(_BUENO) == []                       # el de la página
-    assert _problemas_de_html_simple(_con("display:contents;--color:#0f7c74", "display:contents;--color:red")) != []
+    assert _problemas_de_html_simple(_con("--claro:#0f7c74;--oscuro:#3cc0b4", "--claro:#0f7c74;--oscuro:red")) != []
+    assert _problemas_de_html_simple(_con("--claro:#0f7c74;--oscuro:#3cc0b4", "--claro:red;--oscuro:#3cc0b4")) != []
+    # El `.grupo` de la lista (sin `display:contents`) también lo lleva, porque la
+    # ventanita vive dentro de él.
+    assert _problemas_de_html_simple(_con("display:contents;", "")) == []
 
 
 def test_solo_renombrar_puede_nacer_escondido_y_las_dos_formas_de_mostrarla_existen(mundo, gente, monkeypatch):

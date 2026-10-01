@@ -538,7 +538,8 @@ def test_la_lista_cuenta_cada_grupo_con_su_color_y_sus_proyectos(mundo):
     html = ver(mundo)
     assert html.index('href="/proyectos?p=2"') < html.index('href="/proyectos?p=1"'), (
         "los proyectos van por nombre sin importar mayúsculas")
-    assert 'style="--color:#0f7c74"' in html and "1 cerrado" in html
+    assert 'style="--claro:#0f7c74;--oscuro:%s"' % db.color_oscuro_de_grupo("#0f7c74") in html
+    assert "1 cerrado" in html
     assert html.count("Sin proyectos abiertos.") == 2          # ACD e IA
 
 

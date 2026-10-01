@@ -556,30 +556,35 @@ _TAREAS_DE_2 = ["/proyectos/tarea/10/hecha", "/proyectos/tarea/10/titulo",
 _DETALLE_10 = ["/proyectos/tarea/10/comentar", "/proyectos/tarea/10/comentario/50/editar",
                "/proyectos/tarea/10/responsable"]
 
+# La ventanita de «+ Proyecto en X» (1-oct-2026) la escribe el servidor en CADA
+# vista, una por grupo de la lista de la izquierda: un formulario
+# `/proyectos/nuevo` más por grupo del mundo de prueba (`_pagina.AREAS`).
+_V = ["/proyectos/nuevo"] * len(_pagina.AREAS)
+
 # vista -> (consulta, TODAS las acciones POST que tiene que tener, exactas)
 _VISTAS_DE_TAREAS = {
-    "abierto": ({"p": 2}, _A + _TAREAS_DE_2),
-    "detalle": ({"p": 2, "t": 10}, _A + _TAREAS_DE_2 + _DETALLE_10),
-    "editar_titulo": ({"p": 2, "editar_tarea": 10}, _A + _TAREAS_DE_2),
-    "confirmar_borrar": ({"p": 2, "confirmar_borrar": 10}, _A + _TAREAS_DE_2 + ["/proyectos/tarea/10/borrar"]),
-    "editar_comentario": ({"p": 2, "t": 10, "editar_comentario": 50}, _A + _TAREAS_DE_2 + _DETALLE_10),
-    "confirmar_cerrar": ({"p": 2, "confirmar": "cerrar"}, _A + _TAREAS_DE_2 + ["/proyectos/2/estado"]),
-    "editar_nombre": ({"p": 2, "editar": "nombre"}, _A + _TAREAS_DE_2),
+    "abierto": ({"p": 2}, _A + _TAREAS_DE_2 + _V),
+    "detalle": ({"p": 2, "t": 10}, _A + _TAREAS_DE_2 + _DETALLE_10 + _V),
+    "editar_titulo": ({"p": 2, "editar_tarea": 10}, _A + _TAREAS_DE_2 + _V),
+    "confirmar_borrar": ({"p": 2, "confirmar_borrar": 10}, _A + _TAREAS_DE_2 + ["/proyectos/tarea/10/borrar"] + _V),
+    "editar_comentario": ({"p": 2, "t": 10, "editar_comentario": 50}, _A + _TAREAS_DE_2 + _DETALLE_10 + _V),
+    "confirmar_cerrar": ({"p": 2, "confirmar": "cerrar"}, _A + _TAREAS_DE_2 + ["/proyectos/2/estado"] + _V),
+    "editar_nombre": ({"p": 2, "editar": "nombre"}, _A + _TAREAS_DE_2 + _V),
     "cerrado": ({"p": 3}, ["/proyectos/3/area", "/proyectos/3/estado", "/proyectos/3/nombre",
                            "/proyectos/3/responsable", "/proyectos/tarea/40/reabrir",
-                           "/proyectos/tarea/40/titulo"]),
-    "sueltas": ({"g": "CDS"}, ["/proyectos/tarea/30/hecha", "/proyectos/tarea/30/titulo"]),
-    "sin_grupo": ({"sin_grupo": 1}, ["/proyectos/tarea/31/hecha", "/proyectos/tarea/31/titulo"]),
-    "nuevo": ({"nuevo": "CDS"}, ["/proyectos/nuevo"]),
+                           "/proyectos/tarea/40/titulo"] + _V),
+    "sueltas": ({"g": "CDS"}, ["/proyectos/tarea/30/hecha", "/proyectos/tarea/30/titulo"] + _V),
+    "sin_grupo": ({"sin_grupo": 1}, ["/proyectos/tarea/31/hecha", "/proyectos/tarea/31/titulo"] + _V),
+    "nuevo": ({"nuevo": "CDS"}, ["/proyectos/nuevo"] + _V),
     # El renglón «¿sale una tarea nueva de ésta?», abierto por el servidor
     # (`?derivar=`): no agrega ningún formulario —los campos viven DENTRO del
     # de marcar hecha, que sigue siendo el mismo envío—, pero sí los campos de
     # la tarea nueva.
-    "derivada": ({"p": 2, "derivar": 10}, _A + _TAREAS_DE_2),
+    "derivada": ({"p": 2, "derivar": 10}, _A + _TAREAS_DE_2 + _V),
     # La misma tarea suelta: ahí el renglón SÍ ofrece el grupo (la nueva se
     # queda en el de la tarea que se cierra).
     "derivada_suelta": ({"g": "CDS", "derivar": 30},
-                        ["/proyectos/tarea/30/hecha", "/proyectos/tarea/30/titulo"]),
+                        ["/proyectos/tarea/30/hecha", "/proyectos/tarea/30/titulo"] + _V),
 }
 
 _ES_DE_TAREA = re.compile(r"/proyectos/(tarea/\d+/.*|\d+/tareas)")

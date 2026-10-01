@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 from datetime import date, datetime, timezone
@@ -2596,6 +2597,72 @@ def color_de_grupo(color) -> str:
     return color if isinstance(color, str) and _HEX.fullmatch(color) else COLOR_SIN_GRUPO
 
 
+# El tono de un grupo para el modo oscuro SALE DEL MISMO `areas.color`, no de una
+# lista escrita grupo por grupo: la regla es una línea. Se pasa el color a OKLCH
+# (claridad, color y tono), se conserva el TONO, la claridad sube a
+# `_OSCURO_CLARIDAD` (un color que ya es más claro se deja tal cual) y el color se
+# acota a [`_OSCURO_COLOR_MIN`, `_OSCURO_COLOR_MAX`]; un gris queda gris. Medido
+# el 1-oct-2026 contra los tres tonos claros de la maqueta aprobada
+# (#0f7c74 -> #3cc0b4, #b5611a -> #e59a55, #8a4a8f -> #c98ccf): la diferencia
+# mayor en un canal es 7 de 255 (`tests/test_pagina_proyectos_maqueta.py`). Un
+# color que al aclararlo se sale de la gama de la pantalla se recorta y su tono
+# puede correrse (medido en una rejilla de 864 colores, hasta unos 25 grados
+# de tono HSL); el contraste del resultado contra el fondo oscuro de la página
+# no baja de 6.6 contra 1 en esa rejilla; la prueba exige 4.5 o más.
+_OSCURO_CLARIDAD = 0.735
+_OSCURO_COLOR_MIN, _OSCURO_COLOR_MAX = 0.11, 0.125
+_OSCURO_GRIS = 0.02
+
+
+def _oklch_de(rgb: tuple) -> tuple:
+    def lineal(c):
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (lineal(c) for c in rgb)
+    l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ** (1 / 3)
+    m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ** (1 / 3)
+    s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ** (1 / 3)
+    claridad = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s
+    a = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s
+    bb = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+    return claridad, math.hypot(a, bb), math.atan2(bb, a)
+
+
+def _rgb_de(claridad: float, croma: float, tono: float) -> tuple:
+    a, bb = croma * math.cos(tono), croma * math.sin(tono)
+    l = (claridad + 0.3963377774 * a + 0.2158037573 * bb) ** 3
+    m = (claridad - 0.1055613458 * a - 0.0638541728 * bb) ** 3
+    s = (claridad - 0.0894841775 * a - 1.2914855480 * bb) ** 3
+    lineales = (4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+                -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+                -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s)
+
+    def gamma(c):
+        c = min(1.0, max(0.0, c))
+        return 12.92 * c if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
+    return tuple(gamma(c) for c in lineales)
+
+
+def color_oscuro_de_grupo(color) -> str:
+    """El tono del grupo para el fondo oscuro (ver arriba). Pasa por
+    `color_de_grupo`: lo que no es un hex se pinta con el gris, aclarado. Un hex
+    de largo raro (5 o 7 dígitos) no se puede leer y vuelve igual."""
+    color = color_de_grupo(color)
+    digitos = color[1:]
+    if len(digitos) in (3, 4):
+        digitos = "".join(c * 2 for c in digitos[:3])
+    elif len(digitos) in (6, 8):
+        digitos = digitos[:6]
+    else:
+        return color
+    claridad, croma, tono = _oklch_de(tuple(int(digitos[i:i + 2], 16) / 255 for i in (0, 2, 4)))
+    if claridad >= _OSCURO_CLARIDAD:
+        return "#" + digitos.lower()               # ya es clara: sobre el fondo oscuro se lee tal cual
+    if croma >= _OSCURO_GRIS:
+        croma = min(max(croma, _OSCURO_COLOR_MIN), _OSCURO_COLOR_MAX)
+    rgb = _rgb_de(_OSCURO_CLARIDAD, croma, tono)
+    return "#" + "".join(f"{round(c * 255):02x}" for c in rgb)
+
+
 def ultimo_movimiento(creado_en, huellas) -> datetime | None:
     """El más reciente entre la creación del proyecto y cada huella (ya sin las
     automáticas). `None` solo si no hay ni creación."""
@@ -2746,6 +2813,7 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
                       key=lambda m: m["nombre"].casefold())
         pend, otras = _repartir(sueltas_por_area.get(clave, []))
         return {"clave": clave, "color": color_de_grupo(color),
+                "color_oscuro": color_oscuro_de_grupo(color),
                 "abiertos": [m for m in mios if not m["cerrado"]],
                 "cerrados": [m for m in mios if m["cerrado"]],
                 "sueltas": {"pendientes": pend, "otras": otras,

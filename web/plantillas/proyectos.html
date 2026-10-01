@@ -21,9 +21,15 @@
   --display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;
   --texto:"Figtree",ui-sans-serif,system-ui,-apple-system,sans-serif;
 }
+/* El color de un grupo viaja en dos variables que escribe el servidor desde
+   `areas.color`: `--claro` (el de la tabla) y `--oscuro` (el mismo tono, aclarado
+   por una regla en `db.color_oscuro_de_grupo`). `.gc` escoge una según el modo;
+   la regla clara va ANTES de la oscura para que la oscura gane. */
+.gc{--color:var(--claro)}
 @media (prefers-color-scheme: dark){:root{
   --bg:#101614; --papel:#18201d; --tinta:#e7ece9; --suave:#9aa6a0; --linea:#2a3430;
-  --vencida:#f2867c; --vencida-fondo:#3a1f1c; --dormido:#e6b84f; --dormido-fondo:#3a2f12; --ok:#6cc38b; color-scheme:dark}}
+  --vencida:#f2867c; --vencida-fondo:#3a1f1c; --dormido:#e6b84f; --dormido-fondo:#3a2f12; --ok:#6cc38b; color-scheme:dark}
+  .gc{--color:var(--oscuro)}}
 *{box-sizing:border-box}
 body{background:var(--bg);color:var(--tinta);font:15px/1.5 var(--texto);margin:0}
 a{color:inherit}
@@ -107,11 +113,14 @@ section.bloque h2{font:700 1.05rem var(--display);margin:0}
 .ini{width:1.55rem;height:1.55rem;border-radius:50%;display:grid;place-items:center;font:600 .66rem var(--texto);color:#fff;background:var(--color);flex:none}
 .vence{font-size:.8rem;color:var(--suave);white-space:nowrap;font-variant-numeric:tabular-nums;min-width:6.5rem;text-align:right}
 .tarea.vencida .vence{color:var(--vencida);font-weight:600}
-.col-fecha{display:flex;justify-content:flex-end;font-size:.66rem;letter-spacing:.06em;text-transform:uppercase;font-weight:600;color:var(--suave);padding:0 0 .3rem}
+.col-fecha{display:flex;justify-content:flex-end;font-size:.66rem;letter-spacing:.06em;text-transform:uppercase;font-weight:600;color:var(--suave);padding:0 1.9rem .3rem 0}
 .col-fecha span{min-width:6.5rem;text-align:right}
 .detalle{margin:.6rem 0 .2rem 1.8rem;padding:.6rem .8rem;border-radius:10px;background:var(--bg)}
 .detalle > summary{cursor:pointer;font-size:.8rem;color:var(--suave)}
 .comentarios{display:flex;flex-direction:column;gap:.6rem;margin-top:.6rem}
+.comentario{display:flex;gap:.55rem;align-items:flex-start}
+.comentario .ini{width:1.6rem;height:1.6rem;font-size:.68rem}
+.comentario .globo{background:var(--papel);border:1px solid var(--linea);border-radius:10px;padding:.45rem .7rem;min-width:0;flex:1}
 .comentario .de{font-size:.76rem;color:var(--suave)}
 .comentario .de b{color:var(--tinta);font-weight:600}
 .comentario p{margin:.15rem 0 0;overflow-wrap:anywhere;white-space:pre-wrap}
@@ -142,6 +151,14 @@ form.nuevo .botones{display:flex;gap:.5rem;align-items:center}
 form.nuevo button,form.renombrar button.guardar{font:600 .88rem var(--texto);padding:.5rem 1rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
 .nuevo-proy{color:var(--suave);font-size:.85rem;padding:.35rem .6rem;text-decoration:none;display:block}
 .nuevo-proy:hover{color:var(--tinta)}
+/* «+ Proyecto en X» abre esta ventana encima de la página (con JavaScript); sin
+   JavaScript la ventana nunca se ve y el enlace lleva a la página aparte. */
+dialog.ventana{border:1px solid var(--linea);border-radius:14px;background:var(--papel);color:var(--tinta);padding:1.2rem;width:min(26rem,calc(100vw - 32px))}
+dialog.ventana::backdrop{background:rgb(0 0 0 / .35)}
+dialog.ventana h2{font:700 1.15rem var(--display);margin:0 0 .9rem}
+dialog.ventana form.nuevo{max-width:none;gap:.7rem}
+dialog.ventana form.nuevo input,dialog.ventana form.nuevo select{background:var(--bg)}
+dialog.ventana .botones{justify-content:flex-end;margin-top:.3rem}
 button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--color);outline-offset:2px}
 
 form.marcar,form.comentar,form.resp-tarea,form.nueva-tarea{display:inline-flex;margin:0;gap:.4rem;align-items:center;flex-wrap:wrap}
@@ -273,14 +290,17 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     <div class="comentarios">
       {% for c in t.comentarios %}
       <div class="comentario" data-edita>
-        <div class="de"><b>{{ c.autor }}</b> · {{ c.creado_en|hora_rd }}{{ ' · editado' if c.editado }}</div>
-        <p data-dbl="texto" title="Doble clic para editar" {% if editar_comentario == c.id %}hidden{% endif %}>{{ c.texto }}</p>
-        <form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/comentario/{{ c.id }}/editar" data-auto {% if editar_comentario != c.id %}hidden{% endif %}>
-          <textarea name="texto" required maxlength="{{ largo_comentario }}" aria-label="Editar el comentario">{{ c.texto }}</textarea>
-          <button class="guardar">Guardar</button>
-          <a class="btn-linea" href="{{ u }}&amp;t={{ t.id }}#tarea-{{ t.id }}">Cancelar</a>
-        </form>
-        <noscript><a class="nota" href="{{ u }}&amp;t={{ t.id }}&amp;editar_comentario={{ c.id }}#tarea-{{ t.id }}">Editar el comentario</a></noscript>
+        <span class="ini" title="{{ c.autor }}">{{ c.autor|iniciales }}</span>
+        <div class="globo">
+          <div class="de"><b>{{ c.autor }}</b> · {{ c.creado_en|hora_rd }}{{ ' · editado' if c.editado }}</div>
+          <p data-dbl="texto" title="Doble clic para editar" {% if editar_comentario == c.id %}hidden{% endif %}>{{ c.texto }}</p>
+          <form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/comentario/{{ c.id }}/editar" data-auto {% if editar_comentario != c.id %}hidden{% endif %}>
+            <textarea name="texto" required maxlength="{{ largo_comentario }}" aria-label="Editar el comentario">{{ c.texto }}</textarea>
+            <button class="guardar">Guardar</button>
+            <a class="btn-linea" href="{{ u }}&amp;t={{ t.id }}#tarea-{{ t.id }}">Cancelar</a>
+          </form>
+          <noscript><a class="nota" href="{{ u }}&amp;t={{ t.id }}&amp;editar_comentario={{ c.id }}#tarea-{{ t.id }}">Editar el comentario</a></noscript>
+        </div>
       </div>
       {% else %}<p class="vacio">Sin comentarios todavía.</p>{% endfor %}
     </div>
@@ -319,7 +339,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 
 {% macro bloque_grupo(g, es_sin_grupo, vista) %}
 {% set actual = vista.proyecto if vista.tipo == 'proyecto' else none %}
-<div class="grupo" style="--color:{{ g.color }}">
+<div class="grupo gc" style="--claro:{{ g.color }};--oscuro:{{ g.color_oscuro }}">
   <h3><i></i>{{ 'Sin grupo' if es_sin_grupo else g.clave }}</h3>
   {% for m in g.abiertos %}{{ un_proyecto(m, actual) }}
   {% else %}{% if not es_sin_grupo and not q %}<p class="vacio" style="padding:.3rem .6rem">Sin proyectos abiertos.</p>{% endif %}{% endfor %}
@@ -329,7 +349,26 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% for m in g.cerrados %}{{ un_proyecto(m, actual, True) }}{% endfor %}
   </details>
   {% endif %}
-  {% if not es_sin_grupo and not q %}<a class="nuevo-proy" href="/proyectos?nuevo={{ g.clave|urlencode }}">+ Proyecto en {{ g.clave }}</a>{% endif %}
+  {% if not es_sin_grupo and not q %}<a class="nuevo-proy" href="/proyectos?nuevo={{ g.clave|urlencode }}">+ Proyecto en {{ g.clave }}</a>
+  {#- LA VENTANITA: el servidor la escribe completa, con su grupo y su
+      responsable, justo después del enlace. Sin JavaScript no se ve nunca (un
+      `<dialog>` cerrado no se pinta) y el enlace lleva a la página aparte
+      (`?nuevo=`); con JavaScript, el clic en el enlace la abre encima de la
+      página. Envía el mismo formulario a la misma ruta que la página aparte. -#}
+  <dialog class="ventana" aria-label="Proyecto nuevo en {{ g.clave }}">
+    <h2>Proyecto nuevo en {{ g.clave }}</h2>
+    <form class="nuevo" method="post" action="/proyectos/nuevo">
+      <label>Nombre del proyecto
+        <input name="nombre" type="text" required maxlength="{{ largo_nombre }}" placeholder="Ej. Grabación del sencillo"></label>
+      <label>Responsable
+        <select name="responsable" required>
+          <option value="" selected disabled>Escoge…</option>
+          {% for n in nombres_responsable %}<option value="{{ n }}">{{ n }}</option>{% endfor %}
+        </select></label>
+      <input type="hidden" name="area" value="{{ g.clave }}">
+      <div class="botones"><a class="btn-linea cancelar" href="/proyectos">Cancelar</a><button>Crear proyecto</button></div>
+    </form>
+  </dialog>{% endif %}
   {% if g.sueltas and g.sueltas.n_total %}
   <a class="proy sueltas" href="/proyectos?{{ 'sin_grupo=1' if es_sin_grupo else 'g=' ~ (g.clave|urlencode) }}"
      aria-current="{{ 'true' if vista.tipo in ('grupo', 'sin_grupo') and vista.grupo.clave == g.clave else 'false' }}">
@@ -407,7 +446,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% if vista.tipo == 'proyecto' %}
     {% set m = vista.proyecto %}
     {% set g = vista.grupo %}
-    <div style="display:contents;--color:{{ g.color if g else '#6b6b6b' }}">
+    {% set gc = g if g else visibles.sin_grupo %}
+    <div class="gc" style="display:contents;--claro:{{ gc.color }};--oscuro:{{ gc.color_oscuro }}">
     <div class="cabeza" id="proyecto-{{ m.id }}" data-edita>
       <div class="migas"><span><b>{{ g.clave if g else 'Sin grupo' }}</b> / Proyecto</span>
         <form class="cambiar-grupo" method="post" action="/proyectos/{{ m.id }}/area" data-auto>
@@ -458,7 +498,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% if m.dormido %}<div class="aviso-dormido">Este proyecto lleva {{ m.dias_sin_movimiento }} días sin movimiento.</div>{% endif %}
 
     <section class="bloque">
-      <div class="encabezado"><h2>Tareas</h2><span class="nota">Las vencidas arriba. El título de cada una lleva a su pantalla</span></div>
+      <div class="encabezado"><h2>Tareas</h2><span class="nota">Las vencidas arriba. Toca el título de una tarea para ver su detalle y sus comentarios</span></div>
       {{ lista_de_tareas(m.pendientes, m.otras, m.n_hechas, m.n_otras, 'Sin tareas todavía.' if not m.n_total else 'No queda nada pendiente.') }}
       {% if not m.cerrado %}
       <form class="nueva-tarea" method="post" action="/proyectos/{{ m.id }}/tareas">
@@ -487,7 +527,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 
     {% elif vista.tipo == 'nuevo' %}
     {% set g = vista.grupo %}
-    <div style="display:contents;--color:{{ g.color }}">
+    <div class="gc" style="display:contents;--claro:{{ g.color }};--oscuro:{{ g.color_oscuro }}">
     <div class="cabeza">
       <div class="migas"><b>{{ g.clave }}</b> / Proyecto nuevo</div>
       <h1>Proyecto nuevo en {{ g.clave }}</h1>
@@ -510,7 +550,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif vista.tipo in ('grupo', 'sin_grupo') %}
     {% set g = vista.grupo %}
     {% set s = g.sueltas %}
-    <div style="display:contents;--color:{{ g.color }}">
+    <div class="gc" style="display:contents;--claro:{{ g.color }};--oscuro:{{ g.color_oscuro }}">
     <div class="cabeza">
       <div class="migas"><b>{{ 'Sin grupo' if vista.tipo == 'sin_grupo' else g.clave }}</b> / Tareas sin proyecto</div>
       <h1>Tareas sin proyecto</h1>
@@ -550,7 +590,30 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
    va al `href` que escribió el servidor. */
 var esperando = null;
 var yendo = false;
+/* LA VENTANITA DE «+ PROYECTO»: el clic en el enlace abre el `<dialog>` que el
+   servidor escribió justo después (`showModal`), y «Cancelar» lo cierra. No
+   escribe nada: la ventana es el mismo formulario de la página aparte. Si el
+   navegador no sabe de `<dialog>`, no se toca el clic y el enlace lleva a la
+   página aparte, como sin JavaScript. */
 document.addEventListener("click", function (e) {
+  var ventana = e.target.closest && e.target.closest("a.nuevo-proy");
+  if (ventana) {
+    var cuadro = ventana.nextElementSibling;
+    if (cuadro && cuadro.showModal) {
+      e.preventDefault();
+      cuadro.showModal();
+    }
+    return;
+  }
+  var cancelar = e.target.closest && e.target.closest("a.cancelar");
+  if (cancelar) {
+    var abierto = cancelar.closest("dialog");
+    if (abierto && abierto.close) {
+      e.preventDefault();
+      abierto.close();
+    }
+    return;
+  }
   var enlace = e.target.closest && e.target.closest("a[data-dbl]");
   if (!enlace || yendo) return;
   e.preventDefault();
