@@ -2320,14 +2320,21 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
     # La única escritura que NO pasa por ahí es la creación en lote
     # (`crud.crear_pasos`, porque un pedido crea VARIAS filas de una vez y
     # `crear_desde_interpretacion` no tiene una "clasificación" para esto).
-    assert len(declaradas) == 19 and len(vigiladas) == 9, (
+    #
+    # 2-oct-2026: 19 → 20 por `participantes` (Lucy 1.0, E2): las personas de un
+    # proyecto o de una tarea. Queda FUERA de `crud.TABLAS` por ahora: en E2 es
+    # solo la tabla y sus restricciones, sin ningún escritor. La puerta que la
+    # escribe (`db.agregar_participante`) es de E7, que decide ahí si entra en
+    # `crud.TABLAS` (el diseño dice que solo para borrar y deshacer) y actualiza
+    # esta frontera.
+    assert len(declaradas) == 20 and len(vigiladas) == 9, (
         f"el reparto de tablas cambió: el esquema declara {len(declaradas)} y "
-        f"`crud.TABLAS` vigila {len(vigiladas)} (el 22-sep-2026 eran 19 y 9). "
+        f"`crud.TABLAS` vigila {len(vigiladas)} (el 2-oct-2026 eran 20 y 9). "
         f"Las que quedan sin juzgar serían {sorted(sin_juzgar)}. No se afloja "
         f"este número: se decide si las nuevas entran en la vigilancia y se "
         f"actualiza la frontera.")
 
-    # Las nueve que la puerta VE y la guarda NO JUZGA, enumeradas. `log_acciones`
+    # Las diez que la puerta VE y la guarda NO JUZGA, enumeradas. `log_acciones`
     # está acá porque no es una tabla de dominio: es donde viven las huellas, y
     # se la mira aparte (`_Libro.huellas`). `backups` es donde escribe
     # `db/backup.py:360`, que es legítimo y por eso sigue verde. `areas` es el
@@ -2335,7 +2342,7 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
     assert sin_juzgar == {
         "areas", "backups", "bandeja", "categorias_aprendidas",
         "comentarios_tarea", "consumos_estado", "correo_estado",
-        "correo_reportado", "cuentas_propias", "log_acciones",
+        "correo_reportado", "cuentas_propias", "log_acciones", "participantes",
     }, (f"cambió qué tablas quedan fuera del juicio de esta guarda: "
         f"{sorted(sin_juzgar)}. Una escritura a cualquiera de ellas se VE pero "
         f"no se exige que deje huella ni que salga en el parte.")

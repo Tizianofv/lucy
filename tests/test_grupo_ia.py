@@ -410,6 +410,29 @@ def test_G2_M1b_sin_el_area_IA_falla_fuerte_y_no_aplica_nada():
 # G1: la puerta de Code, con las funciones reales de db/db.py
 # ═══════════════════════════════════════════════════════════════════════
 
+class _Fila(dict):
+    """Una fila como la de psycopg con `dict_row`, que también se deja indexar
+    por posición (`(await cur.fetchone())[0]`, como hace `crud._registrar`), y
+    con las columnas JSON (`antes`, `despues`) ya leídas: Postgres las devuelve
+    como dict, SQLite como texto. Es una imitación declarada (frontera del
+    archivo)."""
+
+    def __getitem__(self, k):
+        if isinstance(k, int):
+            return list(self.values())[k]
+        return super().__getitem__(k)
+
+
+def _fila(f):
+    if f is None:
+        return None
+    d = _Fila(dict(f))
+    for k in ("antes", "despues"):
+        if isinstance(d.get(k), str):
+            d[k] = json.loads(d[k])
+    return d
+
+
 class _Cur:
     def __init__(self, con):
         self.con = con
@@ -420,11 +443,10 @@ class _Cur:
         return self
 
     async def fetchone(self):
-        f = self._cur.fetchone()
-        return dict(f) if f is not None else None
+        return _fila(self._cur.fetchone())
 
     async def fetchall(self):
-        return [dict(f) for f in self._cur.fetchall()]
+        return [_fila(f) for f in self._cur.fetchall()]
 
 
 class _Conn:

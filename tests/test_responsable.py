@@ -1176,7 +1176,17 @@ def test_deshacer_un_cambio_de_titulo_no_toca_el_responsable():
             error = _correr(base, lambda: crud.deshacer(77))
             assert error is None, f"no deshizo el título ({resp}): {error}"
             escrito = _escrituras(base)
-            assert len(escrito) == 1 and "titulo" in escrito[0][0], escrito
+            # Desde el 2-oct-2026 (Lucy 1.0, E2, G12) `titulo` es TAMBIÉN una
+            # columna con puerta (`crud.PUERTAS["tareas"]["titulo"]`): vuelve
+            # atrás solo si la huella dice que ESA edición la cambió. Con una
+            # huella que no dice qué quedó (`despues=None`) no se sabe, y no se
+            # toca, igual que el responsable. Las huellas que escribe
+            # `crud.editar` siempre traen `despues`.
+            assert len(escrito) == 1, escrito
+            if despues is not None:
+                assert "titulo" in escrito[0][0], escrito
+            else:
+                assert "titulo" not in escrito[0][0], escrito
             assert not re.search(rf"\b{columna}\b", escrito[0][0]), (
                 f"deshacer un cambio de título reescribió {columna}: "
                 f"{escrito[0][0]}")

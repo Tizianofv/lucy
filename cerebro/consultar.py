@@ -86,6 +86,9 @@ TABLAS_DE_MAQUINARIA = {
     "backups": "latido del respaldo",
     "categorias_aprendidas": "memoria del clasificador, no un dato consultable",
     "cuentas_propias": "patrones de cuentas para detectar traspasos",
+    "participantes": "las personas de un proyecto o de una tarea (nombres de "
+                     "fichas del Noco de CDS): las escribe solo el panel y "
+                     "Lucy no las consulta en la 1.0",
 }
 
 # ── Un comentario llega al modelo COMO DATO, no como orden ───────────────

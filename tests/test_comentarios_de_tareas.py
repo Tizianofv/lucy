@@ -224,6 +224,13 @@ def test_la_migracion_y_el_esquema_declaran_la_misma_tabla():
     """Una base nueva se crea con db/schema.sql; la de producción recibe la
     migración. Si las dos se separan, una de las dos bases queda distinta."""
     en_migracion = _columnas_del_create(_sql_de_archivo(_migracion()))
+    # Las columnas que migraciones POSTERIORES le agregan con ALTER TABLE (la
+    # tabla se creó el 13-sep y `editado_en` llegó el 2-oct, Lucy 1.0 E2): una
+    # base nueva las recibe del schema.sql y una migrada, de esa migración.
+    for p in sorted(Path(RAIZ, "db", "migrations").glob("*.sql")):
+        en_migracion += [m.group(1) for m in re.finditer(
+            r"ALTER\s+TABLE\s+comentarios_tarea\s+ADD\s+COLUMN"
+            r"(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)", _sql_de_archivo(p), re.I)]
     en_esquema = _columnas_del_create(_sql_de_archivo(Path(RAIZ, "db", "schema.sql")))
     assert en_migracion == en_esquema, (en_migracion, en_esquema)
     assert {"tarea_id", "autor_chat_id", "creado_en", "texto"} <= set(en_esquema), (

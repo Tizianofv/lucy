@@ -228,7 +228,7 @@ def _hoy() -> date:
 # `concepto` en POST /efectivo, y por el mismo motivo: el campo de la base es
 # TEXT —no tiene tope— así que sin esto un POST a mano puede guardar un título
 # de megabytes que después hay que pintar en una tabla.
-LARGO_TITULO = 200
+LARGO_TITULO = db.LARGO_TITULO_TAREA
 
 
 def _vence_valido(texto: str, piso: date = PISO_FECHA):

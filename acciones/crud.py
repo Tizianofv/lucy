@@ -1171,9 +1171,27 @@ async def crear_pasos(
 # función que llaman los demás escritores del nombre. Que no haya OTRO proyecto
 # vivo con ese nombre pide la base y se mira en `editar` y en `deshacer`, con
 # `db.proyecto_vivo_con_nombre`: esta tabla de puertas es síncrona.
-PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale},
+def _el_cliente_se_elige_en_el_panel(valor):
+    """La puerta de `proyectos.cliente_noco_id` y `proyectos.cliente_nombre`:
+    NINGÚN valor pasa. El cliente lo escribe solo `db.poner_cliente`, que vuelve
+    a leer la ficha de Noco y guarda el nombre que Noco devuelve (Lucy 1.0, E2,
+    G6); por el chat se podría guardar un nombre que no es el de esa ficha.
+    Como columna con puerta, `deshacer` tampoco la restaura desde el chat ni la
+    pisa al deshacer otra edición del proyecto."""
+    raise ValueError("el cliente de un proyecto se elige en el panel")
+
+
+# `proyectos` (Lucy 1.0, E2): el responsable pasa por la MISMA puerta que el de
+# una tarea (G5); el estado, por su vocabulario cerrado (G9); el cliente, por
+# la que no deja pasar nada (G6). `tareas.titulo`: no vacío ni largo (G12).
+PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale,
+                      "titulo": db.titulo_de_tarea_que_vale},
           "eventos": {"duenos_chat_id": _duenos_que_valen},
-          "proyectos": {"nombre": db.nombre_de_proyecto_que_vale}}
+          "proyectos": {"nombre": db.nombre_de_proyecto_que_vale,
+                        "responsable_chat_id": _responsable_que_vale,
+                        "estado": db.estado_de_proyecto_que_vale,
+                        "cliente_noco_id": _el_cliente_se_elige_en_el_panel,
+                        "cliente_nombre": _el_cliente_se_elige_en_el_panel}}
 
 
 def _por_las_puertas(tabla: str, valores: dict) -> dict:
@@ -1701,8 +1719,14 @@ async def guardar_lugar(
     return f"OK: lugar '{nombre}' guardado (#{rid}).", log_id
 
 
-async def borrar(tabla: str, registro_id: int, motivo: str) -> int | None:
+async def borrar(tabla: str, registro_id: int, motivo: str,
+                 *, actor: str = "lucy") -> int | None:
     """Soft-delete: marca borrado_en y guarda el 'antes' completo en el log.
+
+    `actor` es 'lucy' por omisión (todos los llamadores de siempre son
+    Telegram); el panel manda `actor='panel'` (la × de una tarea, Lucy 1.0,
+    G15) para que la huella diga quién fue de verdad. Sigue siendo
+    soft-delete: nunca hay DELETE.
 
     Devuelve el log_id, o None si no había nada que borrar. Ese 'antes' ES el
     deshacer: restaurar la fila es volver a escribir lo que quedó guardado
@@ -1732,6 +1756,7 @@ async def borrar(tabla: str, registro_id: int, motivo: str) -> int | None:
             antes=antes,
             motivo=motivo,
             bandeja_id=antes.get("bandeja_id"),
+            actor=actor,
         )
 
 

@@ -84,7 +84,17 @@ CREATE TABLE proyectos (
   estado      TEXT NOT NULL DEFAULT 'activo',  -- activo | pausado | cerrado
   area        TEXT REFERENCES areas(clave),    -- NULL = sin área, se ve con
                                                --   su propia etiqueta gris
-  borrado_en  TIMESTAMPTZ
+  borrado_en  TIMESTAMPTZ,
+  -- Lucy 1.0 (E2, migración 2026-10-02_proyectos_responsable_cliente_
+  -- participantes.sql). Quién lleva el proyecto: chat de Rosi, Tiziano o Code;
+  -- NULL = sin responsable. Sin FK, como `tareas.responsable_chat_id`.
+  responsable_chat_id BIGINT,
+  -- El cliente es OPCIONAL: las dos columnas NULL. La ficha de Noco y el
+  -- nombre que tenía al elegirla; las escribe SOLO `db.poner_cliente`.
+  cliente_noco_id BIGINT,
+  cliente_nombre  TEXT,
+  CONSTRAINT proyectos_cliente_entero
+    CHECK ((cliente_noco_id IS NULL) = (cliente_nombre IS NULL))
 );
 
 -- Lo que Lucy aprende de CÓMO Tiziano quiere que trabaje (req 35). Cada fila es
@@ -347,9 +357,38 @@ CREATE TABLE comentarios_tarea (
   creado_en           TIMESTAMPTZ NOT NULL DEFAULT now(),
   texto               TEXT NOT NULL,                   -- el código no lo reescribe; la base no lo impide
   borrado_en          TIMESTAMPTZ,
-  borrado_por_chat_id BIGINT                           -- quién lo borró (cualquiera de los dos puede)
+  borrado_por_chat_id BIGINT,                          -- quién lo borró (cualquiera de los dos puede)
+  editado_en          TIMESTAMPTZ                      -- NULL = nunca se editó (Lucy 1.0, E2)
 );
 CREATE INDEX idx_comentarios_tarea_tarea ON comentarios_tarea(tarea_id);
+
+-- LAS PERSONAS DE UN PROYECTO O DE UNA TAREA (Lucy 1.0, E2; migración
+-- 2026-10-02_proyectos_responsable_cliente_participantes.sql). Una sola tabla
+-- para las dos cosas: el CHECK impide una persona sin sitio o en los dos, y los
+-- índices únicos impiden la misma persona dos veces en el mismo sitio mientras
+-- no esté borrada. `nombre` es el de Noco al agregarla; `rol`, «qué hace aquí».
+CREATE TABLE participantes (
+  id                  BIGSERIAL PRIMARY KEY,
+  proyecto_id         BIGINT REFERENCES proyectos(id),
+  tarea_id            BIGINT REFERENCES tareas(id),
+  noco_id             BIGINT NOT NULL,
+  nombre              TEXT NOT NULL,
+  rol                 TEXT NOT NULL,
+  creado_en           TIMESTAMPTZ NOT NULL DEFAULT now(),
+  creado_por_chat_id  BIGINT NOT NULL,
+  borrado_en          TIMESTAMPTZ,
+  borrado_por_chat_id BIGINT,
+  CONSTRAINT participantes_en_un_solo_sitio
+    CHECK ((proyecto_id IS NULL) <> (tarea_id IS NULL)),
+  CONSTRAINT participantes_rol_valido
+    CHECK (length(trim(rol)) BETWEEN 1 AND 80)
+);
+CREATE UNIQUE INDEX participantes_una_vez_por_proyecto
+  ON participantes (proyecto_id, noco_id)
+  WHERE borrado_en IS NULL AND proyecto_id IS NOT NULL;
+CREATE UNIQUE INDEX participantes_una_vez_por_tarea
+  ON participantes (tarea_id, noco_id)
+  WHERE borrado_en IS NULL AND tarea_id IS NOT NULL;
 
 -- LOS MICRO-PASOS (encargo 7, 22-sep-2026): una lista de chequeo DENTRO de
 -- una tarea, para cuando sigue siendo grande. Decisión de Tiziano, textual:

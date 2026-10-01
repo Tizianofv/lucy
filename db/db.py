@@ -1104,6 +1104,25 @@ class NombreDeProyectoNoVale(ValueError):
         self.clave = clave
 
 
+# EL TÍTULO DE UNA TAREA (Lucy 1.0, E2, G12): no vacío y de a lo sumo
+# `LARGO_TITULO_TAREA` caracteres. El panel ya lo exigía al crear (`web/app.py`
+# usa esta misma constante); por Telegram, `crud.editar` dejaba un título
+# vacío o larguísimo. La puerta es `crud.PUERTAS["tareas"]["titulo"]`.
+LARGO_TITULO_TAREA = 200
+
+
+def titulo_de_tarea_que_vale(valor) -> str:
+    """El título limpio que va a quedar, o ValueError diciendo por qué no."""
+    if not isinstance(valor, str) or not valor.strip():
+        raise ValueError("el título de una tarea no puede quedar vacío")
+    limpio = valor.strip()
+    if len(limpio) > LARGO_TITULO_TAREA:
+        raise ValueError(
+            f"el título de una tarea no puede pasar de {LARGO_TITULO_TAREA} "
+            "caracteres")
+    return limpio
+
+
 def nombre_de_proyecto_que_vale(valor) -> str:
     """El nombre limpio que va a quedar, o `NombreDeProyectoNoVale`.
 
@@ -1166,6 +1185,26 @@ async def proyecto_vivo_con_nombre(cur, nombre: str, excluir_id: int | None = No
 # Decisión de la sala (delegada por Tiziano, 29-sep): un proyecto CERRADO no
 # recibe tareas; uno PAUSADO sí.
 ESTADO_PROYECTO_CERRADO = "cerrado"
+
+# EL VOCABULARIO CERRADO DE `proyectos.estado` (Lucy 1.0, E2, G9). Hasta aquí
+# `estado` era texto libre: `crud.editar` guardaba lo que dijera el modelo
+# («terminado», «Cerrado », ...) y un proyecto con un estado que nadie reconoce
+# no estaba ni cerrado ni abierto. La puerta es `estado_de_proyecto_que_vale`
+# y entra en `crud.PUERTAS["proyectos"]["estado"]`: la pasan `crud.editar`
+# (Telegram y panel) y `crud.deshacer`. Los demás escritores del estado no lo
+# nombran: los INSERT de `proyectos` (`_buscar_o_crear`, `crud.perfil`,
+# `convertir_tarea_en_proyecto`) lo dejan al DEFAULT 'activo' de la base.
+ESTADOS_PROYECTO = ("activo", "pausado", ESTADO_PROYECTO_CERRADO)
+
+
+def estado_de_proyecto_que_vale(valor) -> str:
+    """El estado limpio que va a quedar, o ValueError diciendo cuáles hay.
+    Sin los espacios de alrededor y en minúscula; fuera del vocabulario (o
+    vacío, o no texto) se rechaza. El mensaje no repite lo pedido."""
+    if isinstance(valor, str) and valor.strip().lower() in ESTADOS_PROYECTO:
+        return valor.strip().lower()
+    raise ValueError(
+        "el estado de un proyecto es uno de: " + ", ".join(ESTADOS_PROYECTO))
 
 
 class ProyectoNoAdmiteTareas(ValueError):
@@ -3332,6 +3371,69 @@ async def marcar_aviso_atraso_code(tarea_id: int) -> None:
                     'avisado a Tiziano: la sala no tomó esta tarea técnica a tiempo')
             """,
             (tarea_id,))
+
+
+async def poner_cliente(proyecto_id: int, noco_id: int | None, *,
+                        leer_persona) -> bool:
+    """Pone (o quita) el cliente de UN proyecto. Devuelve si cambió algo.
+    (Lucy 1.0, E2, G6.)
+
+    EL NOMBRE QUE SE GUARDA ES EL QUE NOCO DEVUELVE PARA ESE Id, nunca uno que
+    haya mandado quien llama: `leer_persona(noco_id)` es la función que vuelve a
+    pedirle la ficha a Noco (`noco_lectura.persona`, de E3: `{id, nombre}` o
+    `None`) y se pasa por parámetro, sin valor por omisión, para que no haya un
+    camino que guarde sin haberla leído. Una ficha que no existe, o que vuelve
+    con otro Id o sin nombre, se rechaza con ValueError y no se escribe nada. Si
+    Noco no contesta, la excepción de `leer_persona` sube tal cual, antes de
+    abrir ninguna conexión.
+
+    `noco_id=None` quita el cliente (el cliente es OPCIONAL: las dos columnas
+    NULL, que es como nacen todos). Lo que ya decía lo mismo no se reescribe ni
+    deja huella. Las dos columnas se escriben JUNTAS en un solo UPDATE (el CHECK
+    `proyectos_cliente_entero` lo exige) y con su huella `editar` de actor
+    'panel' en la misma transacción. Es el ÚNICO escritor de `cliente_noco_id`
+    y `cliente_nombre`: `crud.editar` y `crud.deshacer` las rechazan por
+    `crud.PUERTAS`, así que Telegram no las toca.
+    """
+    if isinstance(proyecto_id, bool) or not isinstance(proyecto_id, int):
+        raise ValueError("ese proyecto no existe o ya no está")
+    nuevo_id, nuevo_nombre = None, None
+    if noco_id is not None:
+        if isinstance(noco_id, bool) or not isinstance(noco_id, int) or noco_id <= 0:
+            raise ValueError("el cliente tiene que ser el Id de una ficha de Noco")
+        ficha = await leer_persona(noco_id)
+        if not ficha:
+            raise ValueError("esa ficha no existe en Noco")
+        nombre = ficha.get("nombre")
+        if ficha.get("id") != noco_id or not isinstance(nombre, str) or not nombre.strip():
+            raise ValueError("Noco no devolvió una ficha que valga para ese Id")
+        nuevo_id, nuevo_nombre = noco_id, nombre.strip()
+
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT * FROM proyectos WHERE id = %s AND borrado_en IS NULL",
+            (proyecto_id,))
+        antes = await cur.fetchone()
+        if antes is None:
+            raise ValueError("ese proyecto no existe o ya no está")
+        if (antes.get("cliente_noco_id") == nuevo_id
+                and antes.get("cliente_nombre") == nuevo_nombre):
+            return False
+        await conn.execute(
+            "UPDATE proyectos SET cliente_noco_id = %s, cliente_nombre = %s "
+            "WHERE id = %s", (nuevo_id, nuevo_nombre, proyecto_id))
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo)
+            VALUES ('panel', 'editar', 'proyectos', %s, %s, %s,
+                    'cliente cambiado desde el panel de proyectos')
+            """,
+            (proyecto_id, json.dumps(antes, default=str, ensure_ascii=False),
+             json.dumps({"cliente_noco_id": nuevo_id,
+                         "cliente_nombre": nuevo_nombre}, ensure_ascii=False)))
+        return True
 
 
 async def asignar_responsable(tarea_id: int, chat_id: int | None) -> bool:
