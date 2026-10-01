@@ -603,6 +603,21 @@ document.addEventListener("change", function (e) {
   if (!form || !form.dataset || form.dataset.auto === undefined) return;
   if (e.target.tagName === "SELECT") form.requestSubmit();
 });
+/* NUNCA DOS ENVÍOS DEL MISMO FORMULARIO. Al hacer clic en «Comentar», el cuadro
+   pierde el foco (se envía solo) y el clic del botón lo vuelve a enviar: sin
+   esto llegarían dos comentarios iguales. Un formulario que acaba de enviarse
+   no se reenvía durante un par de segundos (la página ya se está yendo); el
+   servidor sigue decidiendo qué hacer con lo que llega. */
+document.addEventListener("submit", function (e) {
+  var form = e.target;
+  if (!form || !form.dataset) return;
+  if (form.dataset.enviado !== undefined) {
+    e.preventDefault();
+    return;
+  }
+  form.dataset.enviado = "";
+  setTimeout(function () { delete form.dataset.enviado; }, 2000);
+});
 document.addEventListener("focusout", function (e) {
   var form = e.target.form;
   if (!form || !form.dataset || form.dataset.auto === undefined) return;

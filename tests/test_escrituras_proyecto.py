@@ -249,14 +249,17 @@ function sitioDeMentira(datos) {
      El texto es el enlace del título: `navego` cuenta las veces que el clic
      siguió el `href` (lo que en un navegador sería irse a la otra página). */
   var texto = {hidden: !datos.oculto, navego: 0,
-    click: function () { this.navego++; },
+    /* Como un navegador: `click()` sobre el enlace VUELVE a disparar el evento
+       `click` en el documento (con el enlace de destino). Un guion que no se
+       proteja de eso se espera a sí mismo para siempre. */
+    click: function () { this.navego++; if (oyentes.click) oyentes.click(ev(this)); },
     closest: function (s) {
       if (s === "[data-dbl]" || s === "a[data-dbl]") return this;
       return (s === "[data-edita]" && datos.edita) ? sitio : null; }};
   var form = {
     hidden: !!datos.oculto, action: datos.accion, enviados: 0,
     dataset: datos.auto ? {auto: ""} : {},
-    requestSubmit: function () { this.enviados++; },
+    requestSubmit: function () { enviarFormulario(this); },
     closest: function (s) { return (s === "[data-edita]" && datos.edita) ? sitio : null; },
     querySelector: function (s) {
       return s === "[data-dbl]" ? texto : (s === "input, textarea" ? campos[0] : null); },
@@ -273,6 +276,13 @@ function sitioDeMentira(datos) {
   sitio.querySelector = function (s) {
     return s === "form.renombrar" ? form : (s === "[data-dbl]" ? texto : null); };
   return {sitio: sitio, form: form, campos: campos, texto: texto};
+}
+/* Un envío como lo hace un navegador (`requestSubmit`, o el clic en el botón):
+   dispara `submit` en el documento y solo cuenta si nadie lo cancela. */
+function enviarFormulario(form) {
+  var e = {target: form, prevenido: false, preventDefault: function () { this.prevenido = true; }};
+  if (oyentes.submit) oyentes.submit(e);
+  if (!e.prevenido) form.enviados++;
 }
 var otro = {closest: function () { return null; }};
 var document = {addEventListener: function (tipo, f) { oyentes[tipo] = f; }};
@@ -326,10 +336,25 @@ def test_js_un_clic_en_el_titulo_abre_el_detalle(mundo):
     antes = _correr_en_jxa(guion, clic + "JSON.stringify({navego: S.texto.navego,"
                                           " esperando: cuantosTemporizadores(), evitado: evitado})")
     assert antes == {"navego": 0, "esperando": 1, "evitado": 1}
+    # `enlace.click()` en un navegador VUELVE a disparar el clic; el guion no
+    # puede esperarse a sí mismo (otro temporizador) ni cancelar ese segundo
+    # clic (`evitado` sigue en 1: el segundo clic tiene que dejar seguir el enlace).
     despues = _correr_en_jxa(guion, clic + "correrTemporizadores();"
                                            "JSON.stringify({navego: S.texto.navego, form: S.form.hidden,"
-                                           " texto: S.texto.hidden})")
-    assert despues == {"navego": 1, "form": True, "texto": False}
+                                           " texto: S.texto.hidden, esperando: cuantosTemporizadores(),"
+                                           " evitado: evitado})")
+    assert despues == {"navego": 1, "form": True, "texto": False, "esperando": 0, "evitado": 1}
+
+
+@hay_osascript
+def test_js_dos_clics_separados_abren_el_detalle_las_dos_veces(mundo):
+    """El seguro contra el clic que el propio guion provoca se suelta al
+    terminar: si se quedara puesto, el segundo clic de la persona (otra tarea,
+    o la misma después) no abriría nada."""
+    escenario = (_SITIO + "oyentes.click(ev(S.texto));correrTemporizadores();"
+                 "oyentes.click(ev(S.texto));correrTemporizadores();"
+                 "JSON.stringify({navego: S.texto.navego, esperando: cuantosTemporizadores()})")
+    assert _correr_en_jxa(_script_de_la_pagina(mundo), escenario) == {"navego": 2, "esperando": 0}
 
 
 @hay_osascript
@@ -429,6 +454,69 @@ def test_js_un_comentario_vacio_no_envia_y_uno_escrito_si(mundo):
     assert _correr_en_jxa(guion, tocado)["enviados"] == 1
 
 
+def _formulario_de_comentar_de_verdad(mundo) -> dict:
+    mundo.tarea(10, "una", proyecto=1)
+    html = ver(mundo, p=1, t=10)
+    return next(f for f in _formularios_de(html) if f["accion"] == "/proyectos/tarea/10/comentar")
+
+
+@hay_osascript
+def test_js_enter_en_el_cuadro_de_comentarios_es_un_salto_de_linea_y_en_un_texto_envia(mundo):
+    """Enter en un `textarea` (el comentario) escribe un salto de línea: ni
+    envía ni se le cancela la tecla. Enter en un campo de una línea sí envía.
+    Los dos formularios son los del HTML de verdad."""
+    guion = _script_de_la_pagina(mundo)          # ya deja el proyecto 1
+    comentar = _formulario_de_comentar_de_verdad(mundo)
+    assert [c["tipo"] for c in comentar["campos"] if c["name"]] == ["textarea"]
+    foto = "JSON.stringify({enviados: S.form.enviados, evitado: evitado})"
+    en_textarea = (_sitio_de_mentira(comentar, edita=False)
+                   + 'S.campos[0].value = "linea uno";oyentes.keydown(ev(S.campos[0], {key: "Enter"}));' + foto)
+    assert _correr_en_jxa(guion, en_textarea) == {"enviados": 0, "evitado": 0}
+    # (el doble clic que abre el campo ya cancela su propio evento: 1; el Enter: 1 más)
+    en_linea = _SITIO + 'oyentes.dblclick(ev(S.texto));oyentes.keydown(ev(S.campos[0], {key: "Enter"}));' + foto
+    assert _correr_en_jxa(guion, en_linea) == {"enviados": 1, "evitado": 2}
+
+
+@hay_osascript
+def test_js_al_comentar_el_foco_y_el_clic_del_boton_no_envian_dos_veces(mundo):
+    """Lo que pasa de verdad al hacer clic en «Comentar» con el cuadro lleno:
+    primero el cuadro pierde el foco (se envía solo) y luego el clic del botón
+    envía el MISMO formulario. Llega un solo envío. Y pasado el par de segundos
+    (la página no se fue), el formulario se puede enviar otra vez."""
+    guion = _script_de_la_pagina(mundo)          # ya deja el proyecto 1
+    comentar = _formulario_de_comentar_de_verdad(mundo)
+    sitio = (_sitio_de_mentira(comentar, edita=False)
+             + 'S.campos[0].value = "un comentario";oyentes.focusout(ev(S.campos[0]));')
+    doble = sitio + "enviarFormulario(S.form);JSON.stringify({enviados: S.form.enviados})"
+    assert _correr_en_jxa(guion, doble) == {"enviados": 1}
+    pasado = sitio + "correrTemporizadores();enviarFormulario(S.form);JSON.stringify({enviados: S.form.enviados})"
+    assert _correr_en_jxa(guion, pasado) == {"enviados": 2}
+
+
+@hay_osascript
+def test_js_el_seguro_de_doble_envio_vale_para_todos_los_formularios_de_la_pagina(mundo, gente, monkeypatch):
+    """Hermanos: la lista de formularios sale del HTML renderizado de todas las
+    vistas (los del proyecto y los de la tarea); a cada uno se le manda un
+    envío doble y a todos les llega uno solo."""
+    import test_escrituras_tarea as _t
+    formas = {}
+    for m, consultas in ((_mundo_de_formularios(monkeypatch, gente), [c for c, _ in _VISTAS.values()]),
+                         (_t._mundo(monkeypatch, gente), [c for c, _ in _t._VISTAS_DE_TAREAS.values()])):
+        for consulta in consultas:
+            for f in _formularios_de(ver(m, **consulta)):
+                formas[f["accion"]] = "data-auto" in f["atributos"]
+    assert len(formas) >= 8, formas
+    escenario = (
+        "var acciones = " + json.dumps(sorted(formas)) + ";\n"
+        "JSON.stringify(acciones.map(function (a) {\n"
+        "  var S = sitioDeMentira({accion: a, auto: false, edita: false, oculto: false, campos: []});\n"
+        "  enviarFormulario(S.form); enviarFormulario(S.form);\n"
+        "  return {accion: a, enviados: S.form.enviados};\n"
+        "}))")
+    for dicho in _correr_en_jxa(_script_de_la_pagina(mundo), escenario):
+        assert dicho["enviados"] == 1, dicho
+
+
 @hay_osascript
 def test_js_el_comentario_que_se_vuelve_a_editar_va_a_la_ruta_de_editar(mundo):
     """Con el formulario de verdad del comentario que se está editando: al
@@ -456,10 +544,10 @@ def test_el_script_no_decide_nada_de_negocio(mundo):
     codigo = re.sub(r"/\*.*?\*/", "", guion, flags=re.S)
     assert re.search(r"fetch\(|XMLHttpRequest|\.submit\(|FormData|localStorage|eval\(", codigo) is None
     # Un oyente por evento y nada más: el clic (abrir el detalle, esperando al
-    # segundo), el doble clic, el teclado, el cambio de un desplegable y la
-    # salida de un campo.
+    # segundo), el doble clic, el teclado, el cambio de un desplegable, la
+    # salida de un campo y el envío (para no mandar dos veces el mismo).
     assert sorted(re.findall(r'addEventListener\("(\w+)"', codigo)) == [
-        "change", "click", "dblclick", "focusout", "keydown"]
+        "change", "click", "dblclick", "focusout", "keydown", "submit"]
 
 
 def _valor_del_campo(c: dict) -> str:

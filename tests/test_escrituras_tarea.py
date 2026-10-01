@@ -619,6 +619,11 @@ def test_cada_formulario_de_tarea_enviado_como_el_navegador_escribe_en_la_tarea_
         if not _ES_DE_TAREA.fullmatch(form["accion"]):
             continue                          # los del proyecto: `tests/test_escrituras_proyecto.py`
         escoger = _otra_opcion if form["accion"].endswith("/responsable") else _la_marcada
+        if form["accion"].endswith("/hecha") and _lleva_derivada(form):
+            # El responsable de la tarea nueva lo CAMBIA la persona: así, un
+            # `name` mal escrito (la hija nacería sin responsable) se nota.
+            def escoger(c):
+                return _otra_opcion(c) if c["name"].startswith("deriva_resp_") else _la_marcada(c)
         datos = _lo_que_manda_el_navegador(form, _escrito, escoger)
         antes = foto(m)
         r = _cliente(config.CHAT_ID_DUENO).post(form["accion"], data=datos, follow_redirects=False)
@@ -656,23 +661,38 @@ def test_cada_formulario_de_tarea_enviado_como_el_navegador_escribe_en_la_tarea_
             # que puede aparecer es ésa (y solo cuando la vista los tiene
             # abiertos).
             hijas = _nuevos(antes, despues, "tareas") if _lleva_derivada(form) else set()
+            if accion == "hecha" and consulta.get("derivar") == tid:
+                # Esa tarea es la que la vista abre para ofrecer la que sigue: si el
+                # formulario de marcar hecha no trae sus campos (o el `name`
+                # del título no llega a la ruta), la hija no nace y la madre
+                # se cierra sola. Se exige la hija.
+                cuantos = len([c for c in form["campos"] if (c["name"] or "").startswith("deriva_titulo_")])
+                assert cuantos >= 1 and len(hijas) == cuantos, (donde, "la tarea que sigue no nació")
             assert igual_salvo(antes, despues, tareas={tid} | hijas, log_acciones=nuevas), (
                 donde, "cambió OTRA cosa")
             t = tarea(m, tid)
             if accion == "hecha":
                 assert t["estado"] == "hecha" and t["completado_en"] is not None, donde
                 if hijas:
-                    hija = tarea(m, hijas.pop())
-                    assert (hija["titulo"], hija["deriva_de_id"]) == (
-                        f"Escrito en deriva_titulo_{tid}_1", tid), donde
-                    # Con proyecto, la nueva va al MISMO proyecto y sin grupo
-                    # propio; suelta, se queda con el grupo que se eligió (el
-                    # de la tarea que se cierra).
-                    if t["proyecto_id"]:
-                        assert (hija["proyecto_id"], hija["area"]) == (t["proyecto_id"], None), donde
-                    else:
-                        assert (hija["proyecto_id"], hija["area"]) == (None, t["area"]), donde
-                    assert str(hija["vence_en"]).startswith(FECHA_Y_HORA_ESCRITA[:10]), donde
+                    por_titulo = {h["titulo"]: h for h in (tarea(m, i) for i in hijas)}
+                    nombres_n = sorted(c["name"] for c in form["campos"]
+                                       if c["name"].startswith("deriva_titulo_"))
+                    assert len(por_titulo) == len(hijas) == len(nombres_n), donde
+                    for nombre in nombres_n:
+                        n = nombre.rsplit("_", 1)[1]
+                        hija = por_titulo[f"Escrito en deriva_titulo_{tid}_{n}"]
+                        assert hija["deriva_de_id"] == tid, donde
+                        elegido = _otra_opcion(next(c for c in form["campos"]
+                                                    if c["name"] == f"deriva_resp_{tid}_{n}"))
+                        assert hija["responsable_chat_id"] == chat_de[_valor(elegido)] is not None, donde
+                        # Con proyecto, la nueva va al MISMO proyecto y sin grupo
+                        # propio; suelta, se queda con el grupo que se eligió (el
+                        # de la tarea que se cierra).
+                        if t["proyecto_id"]:
+                            assert (hija["proyecto_id"], hija["area"]) == (t["proyecto_id"], None), donde
+                        else:
+                            assert (hija["proyecto_id"], hija["area"]) == (None, t["area"]), donde
+                        assert str(hija["vence_en"]).startswith(FECHA_Y_HORA_ESCRITA[:10]), donde
             elif accion == "reabrir":
                 assert t["estado"] == "pendiente" and t["completado_en"] is None, donde
             elif accion == "titulo":
