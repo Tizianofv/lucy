@@ -165,11 +165,15 @@ def _instalar(conn):
     async def _cero(_, bandeja_id=None):
         return None
 
-    async def _cero_proyecto(_, bandeja_id=None):
+    async def _cero_proyecto(_):
+        # E8 (1-oct-2026): `crear_desde_interpretacion` ya no crea el proyecto
+        # que alguien nombró al vuelo, solo lo BUSCA por acá. El doble sigue al
+        # camino real; si se quedara en `buscar_o_crear_proyecto`, doblaría una
+        # función que este camino ya no llama.
         return None
 
     db.buscar_o_crear_persona = _cero
-    db.buscar_o_crear_proyecto = _cero_proyecto
+    db.proyecto_vivo_por_nombre = _cero_proyecto
 
 
 # ---------------------------------------------------------------------------
