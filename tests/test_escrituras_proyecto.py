@@ -686,41 +686,122 @@ async def test_la_puerta_deja_pasar_a_rosi_a_tiziano_y_a_code(mundo, gente, quie
 # valores que el navegador mandaría (hidden con su `value`, select con la opción
 # marcada o la que la persona escoge, texto con lo que se escriba), se envía a
 # la ruta de verdad y se mira el efecto sobre el proyecto DE LA PÁGINA y que nada
-# más cambió. FRONTERA: es un navegador de mentira (`html.parser`); no ejecuta el
-# script ni aplica `required`.
+# más cambió.
+#
+# FRONTERA, dicha una vez: ESTO NO ES UN NAVEGADOR (es `html.parser`). No ejecuta
+# el script, no aplica `required`, y no sabe qué hace un navegador con `disabled`,
+# `hidden`, `style`, `onsubmit`, `enctype`, `formaction`... Lo que vigila es una
+# REGLA de HTML simple (ver `_ATRIBUTOS`): los formularios de escritura usan solo
+# esos elementos y atributos, y todo lo que el lector no sepa clasificar hace
+# fallar la prueba. No se persigue cada comportamiento del navegador: se les pone
+# fondo prohibiéndolos.
 
 from html.parser import HTMLParser  # noqa: E402
 
 import test_pagina_proyectos as _pagina  # noqa: E402
 
 
+_VACIOS = {"input", "br", "hr", "img", "meta", "link"}
+
+# LA REGLA, EN UNA LÍNEA: los formularios de escritura de la página usan HTML
+# SIMPLE —los elementos y atributos de esta tabla, ninguno más—, y lo que el
+# lector no sepa clasificar HACE FALLAR la prueba (el cubo estricto). Un
+# navegador de verdad hace mil cosas con `disabled`, `hidden`, `style`,
+# `onsubmit`, `enctype`, `formaction`, `form=`, `type="button"`, un `<noscript>`...
+# y esta prueba no las modela: las PROHÍBE, así que mientras pase, lo que lee el
+# lector es lo que haría el navegador.
+_ATRIBUTOS = {
+    "form": {"method", "action", "class"},
+    "input": {"type", "name", "value", "required", "maxlength", "placeholder", "aria-label"},
+    "select": {"id", "name", "required"},
+    "option": {"value", "selected", "disabled"},
+    "button": {"class", "type"},
+    "label": {"for"},
+    "a": {"class", "href"},
+    "div": {"class"},
+}
+_TIPOS_DE_INPUT = {"hidden", "text"}
+# La ÚNICA excepción, por nombre: `form.renombrar` nace `hidden` y lo muestra el
+# JavaScript (doble clic) o el servidor (`?editar=nombre`); hay pruebas de las dos.
+_NACE_ESCONDIDO = {"renombrar"}
+_ESTILO_DEL_GRUPO = re.compile(r"display:contents;--color:#[0-9a-fA-F]{3,8}")
+
+
 class _LectorDeFormularios(HTMLParser):
+    """Lee los formularios y, a la vez, junta `problemas`: todo lo que no sea el
+    HTML simple de la regla de arriba. FRONTERA: NO es un navegador. Lo que
+    vigila es esa regla de HTML simple, no el comportamiento completo de un
+    navegador."""
+
     def __init__(self):
         super().__init__()
         self.formularios = []
+        self.problemas = []
+        self._pila = []
         self._f = self._sel = self._op = self._boton = None
+
+    def _mal(self, texto):
+        self.problemas.append(texto)
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
+        nombres = [k for k, _ in attrs]
         if tag == "form":
-            self._f = {"metodo": (a.get("method") or "get").lower(), "accion": a.get("action"),
-                       "clase": a.get("class") or "", "campos": [], "botones": []}
-            self.formularios.append(self._f)
-        elif self._f is None:
+            metodo = (a.get("method") or "get").lower()
+            f = {"metodo": metodo, "accion": a.get("action"), "clase": a.get("class") or "",
+                 "campos": [], "botones": [], "post": metodo == "post"}
+            self.formularios.append(f)
+            if f["post"]:
+                self._revisar_formulario(f, nombres)
+            self._f = f
+        elif self._f is not None and self._f["post"]:
+            self._dentro_de_un_formulario(tag, a, nombres)
+        if tag not in _VACIOS:
+            self._pila.append((tag, a))
+
+    def _revisar_formulario(self, f, nombres):
+        donde = f"form {f['accion']}"
+        permitidos = set(_ATRIBUTOS["form"])
+        if f["clase"] in _NACE_ESCONDIDO:
+            permitidos.add("hidden")
+        for n in nombres:
+            if n not in permitidos:
+                self._mal(f"{donde}: atributo no permitido {n!r}")
+        for tag, atr in self._pila:
+            if tag in ("noscript", "template", "dialog", "details", "form"):
+                self._mal(f"{donde}: dentro de <{tag}>")
+            for n, v in atr.items():
+                if n in ("hidden", "inert") or n.startswith("on"):
+                    self._mal(f"{donde}: un ancestro <{tag}> tiene {n!r}")
+                if n == "style" and not _ESTILO_DEL_GRUPO.fullmatch(v or ""):
+                    self._mal(f"{donde}: un ancestro <{tag}> tiene un style que no es el del grupo")
+
+    def _dentro_de_un_formulario(self, tag, a, nombres):
+        donde = f"form {self._f['accion']}"
+        if tag not in _ATRIBUTOS:
+            self._mal(f"{donde}: elemento no permitido <{tag}>")
             return
-        elif tag == "input":
-            self._f["campos"].append({"tipo": a.get("type", "text"), "name": a.get("name"),
-                                      "value": a.get("value"), "disabled": "disabled" in a})
+        for n in nombres:
+            if n not in _ATRIBUTOS[tag]:
+                self._mal(f"{donde}: <{tag}> con atributo no permitido {n!r}")
+        if tag == "input" and a.get("type", "text") not in _TIPOS_DE_INPUT:
+            self._mal(f"{donde}: <input> con type {a.get('type')!r}")
+        if tag == "button" and a.get("type") not in (None, "submit"):
+            self._mal(f"{donde}: <button> con type {a.get('type')!r}")
+        f = self._f
+        if tag == "input":
+            f["campos"].append({"tipo": a.get("type", "text"), "name": a.get("name"),
+                                "value": a.get("value"), "disabled": "disabled" in a})
         elif tag == "select":
             self._sel = {"tipo": "select", "name": a.get("name"), "disabled": "disabled" in a, "opciones": []}
-            self._f["campos"].append(self._sel)
+            f["campos"].append(self._sel)
         elif tag == "option" and self._sel is not None:
             self._op = {"value": a.get("value"), "selected": "selected" in a,
                         "disabled": "disabled" in a, "texto": ""}
             self._sel["opciones"].append(self._op)
         elif tag == "button":
-            self._boton = {"texto": ""}
-            self._f["botones"].append(self._boton)
+            self._boton = {"texto": "", "tipo": a.get("type")}
+            f["botones"].append(self._boton)
 
     def handle_data(self, dato):
         if self._boton is not None:
@@ -730,6 +811,15 @@ class _LectorDeFormularios(HTMLParser):
 
     def handle_endtag(self, tag):
         if tag == "form":
+            f = self._f
+            if f is not None and f["post"]:
+                donde = f"form {f['accion']}"
+                if not f["botones"]:
+                    self._mal(f"{donde}: no tiene un botón que envíe")
+                nombres = [c["name"] for c in f["campos"] if c["name"]]
+                repetidos = sorted({n for n in nombres if nombres.count(n) > 1})
+                if repetidos:
+                    self._mal(f"{donde}: nombre repetido {repetidos}")
             self._f = self._sel = self._op = self._boton = None
         elif tag == "select":
             self._sel = self._op = None
@@ -737,12 +827,26 @@ class _LectorDeFormularios(HTMLParser):
             self._op = None
         elif tag == "button":
             self._boton = None
+        if tag not in _VACIOS:
+            for i in range(len(self._pila) - 1, -1, -1):
+                if self._pila[i][0] == tag:
+                    del self._pila[i:]
+                    break
 
 
 def _formularios_de(html: str, solo_post=True) -> list[dict]:
     lector = _LectorDeFormularios()
     lector.feed(html)
     return [f for f in lector.formularios if not solo_post or f["metodo"] == "post"]
+
+
+def _problemas_de_html_simple(html: str) -> list[str]:
+    """Todo lo que, en los formularios `post` de `html`, se sale del HTML simple
+    (vacío = cumple la regla)."""
+    lector = _LectorDeFormularios()
+    lector.feed(html)
+    lector.close()
+    return lector.problemas
 
 
 def _valor(op: dict) -> str:
@@ -755,6 +859,8 @@ def _lo_que_manda_el_navegador(form: dict, escribir, escoger) -> dict:
     opción que la persona deja o cambia); un control sin nombre, deshabilitado
     o una opción deshabilitada no viajan."""
     datos = {}
+    vistos = [c["name"] for c in form["campos"] if c["name"] and not c.get("disabled")]
+    assert len(vistos) == len(set(vistos)), f"nombre repetido en {form['accion']}: un dict lo colapsaría"
     for c in form["campos"]:
         if not c["name"] or c.get("disabled"):
             continue
@@ -834,7 +940,9 @@ def test_cada_formulario_enviado_como_el_navegador_escribe_en_el_proyecto_de_la_
     casos = 0
     for i in range(len(esperadas)):
         m = _mundo_de_formularios(monkeypatch, gente)
-        form = _formularios_de(ver(m, **consulta))[i]
+        html = ver(m, **consulta)
+        assert _problemas_de_html_simple(html) == [], (vista, _problemas_de_html_simple(html))
+        form = _formularios_de(html)[i]
         clase = form["clase"]
         escoger = _la_marcada
         if clase == "resp":
@@ -901,3 +1009,83 @@ def test_el_lector_de_formularios_ve_lo_que_ve_un_navegador():
     datos = _lo_que_manda_el_navegador(forms[0], lambda c: "", _otra_opcion)
     assert datos["s"] == "Texto"                               # sin `value`, viaja el texto de la opción
     assert len(_formularios_de(html, solo_post=False)) == 2
+
+
+# ── La regla de HTML simple: cada vista la cumple y el cubo estricto se alcanza ──
+
+@pytest.mark.parametrize("vista", sorted(_VISTAS))
+def test_los_formularios_de_cada_vista_cumplen_la_regla_de_html_simple(mundo, gente, monkeypatch, vista):
+    m = _mundo_de_formularios(monkeypatch, gente)
+    html = ver(m, **_VISTAS[vista][0])
+    assert _problemas_de_html_simple(html) == []
+    # Y la regla se aplica a TODO formulario post que haya, sin excepción de vista.
+    assert len(_formularios_de(html)) == len(_VISTAS[vista][1])
+
+
+_BUENO = ('<div style="display:contents;--color:#0f7c74"><form class="resp" method="post" '
+          'action="/proyectos/2/responsable"><select id="r" name="responsable">'
+          '<option value="" selected disabled>Escoge</option><option value="Code">Code</option></select>'
+          '<button class="btn-linea">Guardar</button></form></div>')
+
+
+def test_el_html_simple_bueno_no_da_problemas():
+    assert _problemas_de_html_simple(_BUENO) == []
+    assert _problemas_de_html_simple(_BUENO.replace("<button class", '<button type="submit" class')) == []
+
+
+def _con(cambio_de, cambio_a, base=_BUENO):
+    assert cambio_de in base
+    return base.replace(cambio_de, cambio_a, 1)
+
+
+# Los ataques del testigo, ESCRITOS A MANO: cada uno tiene que dar al menos un problema.
+_ATAQUES = {
+    "a1_boton_type_button": _con("<button class", '<button type="button" class'),
+    "a2_boton_disabled": _con("<button class", "<button disabled class"),
+    "a3_form_dentro_de_noscript": "<noscript>" + _BUENO + "</noscript>",
+    "a4_form_hidden": _con('<form class="resp"', '<form class="resp" hidden'),
+    "a4b_form_con_style": _con('<form class="resp"', '<form class="resp" style="display:none"'),
+    "a5_hidden_duplicado_antes": _con('<select id="r"', '<input type="hidden" name="responsable" value="Code"><select id="r"'),
+    "a5b_hidden_duplicado_despues": _con("<button class", '<input type="hidden" name="responsable" value="Code"><button class'),
+    "a6_enctype": _con('<form class="resp"', '<form class="resp" enctype="text/plain"'),
+    "a7_sin_boton": _con('<button class="btn-linea">Guardar</button>', ""),
+    "a8_onsubmit": _con('<form class="resp"', '<form class="resp" onsubmit="return false"'),
+    "a9_form_que_nace_hidden_dentro_de_noscript": (
+        '<noscript><form class="renombrar" hidden method="post" action="/proyectos/2/nombre">'
+        '<input type="text" name="nombre" value="x"><button>Guardar</button></form></noscript>'),
+    # Lo que el lector no sabe clasificar cae en el cubo estricto.
+    "x1_atributo_desconocido": _con("<button class", '<button data-x="1" class'),
+    "x2_formaction": _con("<button class", '<button formaction="/otra" class'),
+    "x3_form_que_apunta_a_otro": _con('<select id="r"', '<select form="otro" id="r"'),
+    "x4_elemento_desconocido": _con("<button class", '<textarea name="t"></textarea><button class'),
+    "x5_input_checkbox": _con("<button class", '<input type="checkbox" name="c"><button class'),
+    "x6_input_submit": _con("<button class", '<input type="submit" name="c"><button class'),
+    "x7_ancestro_escondido": "<div hidden>" + _BUENO + "</div>",
+    "x8_ancestro_con_style": '<div style="display:none">' + _BUENO + "</div>",
+    "x9_ancestro_con_onclick": '<div onclick="x()">' + _BUENO + "</div>",
+    "x10_form_dentro_de_details": "<details>" + _BUENO + "</details>",
+    "x11_form_dentro_de_form": '<form method="post" action="/a"><button>x</button>' + _BUENO + "</form>",
+    "x12_method_distinto_de_post_con_atributos": _con('method="post"', 'method="POST" target="_blank"'),
+}
+
+
+@pytest.mark.parametrize("ataque", sorted(_ATAQUES))
+def test_cada_ataque_escrito_a_mano_hace_fallar_la_regla(ataque):
+    assert _problemas_de_html_simple(_ATAQUES[ataque]) != [], ataque
+
+
+def test_un_ancestro_con_el_style_del_grupo_si_se_acepta_y_otro_no():
+    assert _problemas_de_html_simple(_BUENO) == []                       # el de la página
+    assert _problemas_de_html_simple(_con("display:contents;--color:#0f7c74", "display:contents;--color:red")) != []
+
+
+def test_solo_renombrar_puede_nacer_escondido_y_las_dos_formas_de_mostrarla_existen(mundo, gente, monkeypatch):
+    m = _mundo_de_formularios(monkeypatch, gente)
+    oculto = re.compile(r"<form\b[^>]*\bhidden\b[^>]*>")
+    for vista in sorted(_VISTAS):
+        html = ver(m, **_VISTAS[vista][0])
+        clases = [re.search(r'class="([^"]*)"', f).group(1) for f in oculto.findall(html)]
+        assert clases in ([], ["renombrar"]), (vista, clases)
+    # Sin JavaScript, el servidor la dibuja visible; con JavaScript, el doble clic
+    # le quita `hidden` (`test_js_el_doble_clic_en_el_titulo_muestra_el_formulario...`).
+    assert oculto.findall(ver(m, p=2)) != [] and oculto.findall(ver(m, p=2, editar="nombre")) == []
