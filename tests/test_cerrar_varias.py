@@ -2322,14 +2322,15 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
     # `crear_desde_interpretacion` no tiene una "clasificación" para esto).
     #
     # 2-oct-2026: 19 → 20 por `participantes` (Lucy 1.0, E2): las personas de un
-    # proyecto o de una tarea. Queda FUERA de `crud.TABLAS` por ahora: en E2 es
-    # solo la tabla y sus restricciones, sin ningún escritor. La puerta que la
-    # escribe (`db.agregar_participante`) es de E7, que decide ahí si entra en
-    # `crud.TABLAS` (el diseño dice que solo para borrar y deshacer) y actualiza
-    # esta frontera.
-    assert len(declaradas) == 20 and len(vigiladas) == 9, (
+    # proyecto o de una tarea. En E2 quedó FUERA de `crud.TABLAS` (era solo la tabla
+    # y sus restricciones, sin escritor). E7 (1-oct-2026, rama igual-maqueta) la
+    # METE, como dice el diseño §5.4: solo para `borrar` y `deshacer` (`crud.editar`
+    # la rechaza), para que las huellas de `db.agregar_participante` y
+    # `db.quitar_participante` se puedan deshacer. Pasa de las que no se juzgan
+    # a las vigiladas: 20 declaradas, 10 vigiladas.
+    assert len(declaradas) == 20 and len(vigiladas) == 10, (
         f"el reparto de tablas cambió: el esquema declara {len(declaradas)} y "
-        f"`crud.TABLAS` vigila {len(vigiladas)} (el 2-oct-2026 eran 20 y 9). "
+        f"`crud.TABLAS` vigila {len(vigiladas)} (el 1-oct-2026, E7, eran 20 y 10). "
         f"Las que quedan sin juzgar serían {sorted(sin_juzgar)}. No se afloja "
         f"este número: se decide si las nuevas entran en la vigilancia y se "
         f"actualiza la frontera.")
@@ -2342,7 +2343,7 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
     assert sin_juzgar == {
         "areas", "backups", "bandeja", "categorias_aprendidas",
         "comentarios_tarea", "consumos_estado", "correo_estado",
-        "correo_reportado", "cuentas_propias", "log_acciones", "participantes",
+        "correo_reportado", "cuentas_propias", "log_acciones",
     }, (f"cambió qué tablas quedan fuera del juicio de esta guarda: "
         f"{sorted(sin_juzgar)}. Una escritura a cualquiera de ellas se VE pero "
         f"no se exige que deje huella ni que salga en el parte.")

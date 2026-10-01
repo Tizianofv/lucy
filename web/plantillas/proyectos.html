@@ -128,8 +128,23 @@ section.bloque h2{font:700 1.05rem var(--display);margin:0}
 .agregar{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.8rem}
 .agregar input,.agregar select{font:inherit;padding:.45rem .65rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0;flex:1 1 9rem}
 .agregar button{font:600 .88rem var(--texto);padding:.45rem .9rem;border-radius:8px;border:0;background:var(--color);color:#fff}
-.agregar[aria-disabled="true"]{opacity:.55}
-.agregar[aria-disabled="true"] button{cursor:not-allowed}
+/* Buscar y elegir a una persona de Noco (cliente, personas del proyecto y de la
+   tarea). Las coincidencias son botones que envían su formulario. */
+.persona-campo{display:flex;flex-direction:column;gap:.4rem;margin-top:.8rem;position:relative}
+.persona-campo .agregar{margin-top:0}
+.buscar-persona{display:flex;gap:.4rem;align-items:center;margin:0;flex-wrap:wrap}
+.buscar-persona label{display:flex;align-items:center;gap:.45rem;color:var(--suave);font-size:.92rem}
+.buscar-persona input[type=text]:not(.campo-quien){font:inherit;padding:.45rem .65rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0;flex:1 1 9rem}
+.sugerencias{display:flex;flex-direction:column;gap:.15rem;max-height:14rem;overflow-y:auto;flex:1 1 100%}
+.sugerencias:empty{display:none}
+.sugerencia{font:inherit;font-size:.9rem;text-align:left;padding:.35rem .6rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta);cursor:pointer}
+.sugerencia:hover{background:var(--bg)}
+.cliente-campo{margin-top:0;flex-direction:row;align-items:center;flex-wrap:wrap}
+.cliente-campo .sugerencias{position:absolute;top:100%;left:0;z-index:5;min-width:16rem;background:var(--papel);box-shadow:0 4px 12px rgb(0 0 0 / .15);border-radius:10px;padding:.2rem}
+form.elegir-persona{margin:0;display:flex;gap:.4rem}
+.quitar{all:unset;cursor:pointer;color:var(--suave);font-size:.95rem;padding:0 .2rem;border-radius:4px}
+.quitar:hover{color:var(--tinta)}
+.quitar:focus-visible{outline:2px solid var(--color)}
 .tareas{display:flex;flex-direction:column}
 .tarea{border-top:1px solid var(--linea);padding:.7rem 0}
 .tarea:first-child{border-top:0}
@@ -225,7 +240,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
    maqueta no lo tienen): el desplegable guarda al escoger y el texto al
    salir del campo o con Enter. Sin JavaScript el botón sigue ahí y es lo que
    envía el formulario. «Comentar» NO se esconde: es el botón de la maqueta. */
-.js form.resp button,.js form.renombrar button.guardar,.js .buscador button{display:none}
+.js form.resp button,.js form.renombrar button.guardar,.js .buscador button,.js .buscar-persona button,.js .quitar-cliente{display:none}
 </style></head><body>
 
 {#- UNA FILA DE TAREA (Lucy 1.0, E6). Cada acción es un `<form method="post">`
@@ -233,6 +248,48 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     título (doble clic, o el enlace de `<noscript>`), el detalle (`?t=`), la ×
     (con su confirmación que dibuja el servidor). El responsable sale como
     nombre, nunca como número de chat. -#}
+{#- LAS PERSONAS DE NOCO (Lucy 1.0, E7). Elegir una persona es BUSCARLA (Noco
+    tiene cientos): con JavaScript, el navegador pide las coincidencias a
+    `/personas/buscar` mientras se escribe y las enseña como botones; SIN
+    JavaScript, el formulario de búsqueda (GET) recarga la página con `?pq=` y
+    el SERVIDOR las dibuja como esos mismos botones. Un botón de coincidencia
+    envía su formulario con el Id de Noco (`noco_id`): el nombre que se guarda
+    lo vuelve a leer el servidor de Noco, nunca sale de la página. Lucy solo LEE
+    de Noco. -#}
+{% macro sugerencias(donde) %}<div class="sugerencias">
+  {%- if busqueda and busqueda.donde == donde -%}
+    {%- if busqueda.error %}<p class="vacio">{{ busqueda.error }}</p>
+    {%- elif busqueda.personas %}{% for x in busqueda.personas %}<button class="sugerencia" name="noco_id" value="{{ x.id }}" title="Elegir a {{ x.nombre }}">{{ x.nombre }}</button>{% endfor %}
+    {%- else %}<p class="vacio">Nadie con «{{ busqueda.q }}» en Noco.</p>{% endif -%}
+  {%- endif -%}
+</div>{% endmacro %}
+
+{% macro vista_oculta(donde) %}
+{%- if vista.tipo == 'proyecto' %}<input type="hidden" name="p" value="{{ vista.proyecto.id }}">
+{%- elif vista.tipo == 'grupo' %}<input type="hidden" name="g" value="{{ vista.grupo.clave }}">
+{%- elif vista.tipo == 'sin_grupo' %}<input type="hidden" name="sin_grupo" value="1">{% endif -%}
+{%- if t_abierta %}<input type="hidden" name="t" value="{{ t_abierta }}">{% endif -%}
+<input type="hidden" name="pdonde" value="{{ donde }}">{% endmacro %}
+
+{% macro ficha_persona(x, quitar) %}<div class="persona"><span class="ini" title="{{ x.nombre }}">{{ x.nombre|iniciales }}</span>
+  <span class="quien"><b>{{ x.nombre }}</b><span>{{ x.rol }}</span></span>
+  <form class="en-linea" method="post" action="{{ quitar }}"><button class="quitar" aria-label="Quitar a {{ x.nombre }}" title="Quitar a {{ x.nombre }}">×</button></form></div>{% endmacro %}
+
+{#- El renglón de agregar una persona (de un proyecto o de una tarea): buscar, y
+    elegir con un clic; el «qué hace aquí» es obligatorio. -#}
+{% macro agregar_persona(donde, accion) %}
+<div class="persona-campo">
+  <form class="buscar-persona" method="get" action="/proyectos" role="search">
+    <input type="text" name="pq" placeholder="Buscar en Noco…" aria-label="Buscar a una persona en Noco" data-buscar-persona="enviar" autocomplete="off"{% if busqueda and busqueda.donde == donde %} value="{{ busqueda.q }}"{% endif %}>
+    {{ vista_oculta(donde) }}
+    <button class="btn-linea">Buscar</button>
+  </form>
+  <form class="agregar" method="post" action="{{ accion }}">
+    <input name="rol" type="text" required maxlength="{{ largo_rol }}" placeholder="¿Qué hace aquí?" aria-label="Qué hace esta persona">
+    {{ sugerencias(donde) }}
+  </form>
+</div>{% endmacro %}
+
 {% macro fila_tarea(t) %}
 {% set u = vuelta %}
 {% set abierta = t_abierta == t.id %}
@@ -265,7 +322,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     </form>
     <noscript><a class="nota" href="{{ u }}&amp;editar_tarea={{ t.id }}#tarea-{{ t.id }}">Cambiar el título</a></noscript>
     {% if not t.es_pendiente and not t.es_hecha %}<span class="vence" style="min-width:0">{{ t.estado }}</span>{% endif %}
-    <span class="caritas">{% if t.responsable %}<span class="ini" title="Responsable: {{ t.responsable }}">{{ t.responsable|iniciales }}</span>{% endif %}</span>
+    <span class="caritas">{% if t.responsable %}<span class="ini" title="Responsable: {{ t.responsable }}">{{ t.responsable|iniciales }}</span>{% endif %}{% for x in t.personas %}<span class="ini" title="{{ x.nombre }} · {{ x.rol }}">{{ x.nombre|iniciales }}</span>{% endfor %}</span>
     <span class="vence" {% if t.vence_en %}title="{{ t.vence_en|hora_rd }}"{% endif %}>{{ 'Venció el ' if t.vencida }}{{ t.dia|dia_corto }}</span>
     {% if confirmar_borrar == t.id %}
     <span class="confirmar">¿Borrarla?
@@ -276,18 +333,15 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
   </div>
   {% if abierta %}
   <div class="detalle">
-    {#- LAS PERSONAS DE LA TAREA, como en la maqueta. Hoy la única persona que
-        Lucy guarda en una tarea es su responsable, y sale aquí con el rol
-        «Responsable» (se cambia con el desplegable de abajo). Agregar otras
-        personas NO se guarda todavía: el renglón se ve igual que en la maqueta
-        pero está apagado, y no es un formulario. -#}
+    {#- LAS PERSONAS DE LA TAREA, como en la maqueta. El responsable de la tarea
+        (lo que Lucy ya guardaba) sale primero con el rol «Responsable» y no se
+        quita desde aquí; las demás se agregan y se quitan con su formulario. -#}
     <h4>Personas de esta tarea</h4>
     <div class="personas">{% if t.responsable %}<div class="persona"><span class="ini">{{ t.responsable|iniciales }}</span>
-      <span class="quien"><b>{{ t.responsable }}</b><span>Responsable</span></span></div>{% else %}<p class="vacio">Nadie asignado.</p>{% endif %}</div>
-    <div class="agregar" aria-disabled="true" title="Todavía no se guarda: agregar personas a una tarea llega con otro trabajo">
-      <select disabled aria-label="Persona"><option>Escoge de las personas de Noco…</option></select>
-      <input disabled placeholder="¿Qué hace aquí?" aria-label="Qué hace esta persona">
-      <button type="button" disabled>Agregar</button></div>
+      <span class="quien"><b>{{ t.responsable }}</b><span>Responsable</span></span></div>{% endif %}
+      {%- for x in t.personas %}{{ ficha_persona(x, '/proyectos/tarea/' ~ t.id ~ '/personas/' ~ x.id ~ '/quitar') }}{% endfor %}
+      {%- if not t.responsable and not t.personas %}<p class="vacio">Nadie asignado.</p>{% endif %}</div>
+    {{ agregar_persona('tarea-' ~ t.id, '/proyectos/tarea/' ~ t.id ~ '/personas') }}
     <div class="separa"></div>
     <h4>Comentarios</h4>
     <div class="comentarios">
@@ -362,6 +416,12 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     <form class="nuevo" method="post" action="/proyectos/nuevo">
       <label>Nombre del proyecto
         <input name="nombre" type="text" required maxlength="{{ largo_nombre }}" placeholder="Ej. Grabación del sencillo"></label>
+      <div class="persona-campo">
+        <label>Cliente (opcional)
+          <input type="text" placeholder="Buscar en Noco… (sin cliente)" aria-label="Cliente del proyecto" data-buscar-persona="elegir" autocomplete="off"></label>
+        <input type="hidden" name="cliente" value="">
+        <div class="sugerencias"></div>
+      </div>
       <label>Responsable
         <select name="responsable" required>
           <option value="" selected disabled>Escoge…</option>
@@ -427,10 +487,25 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'tarea_rechazada' %}<p class="aviso">No se pudo crear la tarea.</p>
     {% elif error == 'tarea_derivada' %}<p class="aviso">La tarea nueva no se pudo crear (revisa el título, la fecha o el responsable): la tarea NO se marcó hecha.</p>
     {% elif error == 'tarea_derivada_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe la tarea nueva, así que la tarea NO se marcó hecha.</p>
+    {% elif error == 'cliente' %}<p class="aviso">No se pudo poner ese cliente: la ficha ya no está en Noco o el proyecto ya no está.</p>
+    {% elif error == 'cliente_noco' %}<p class="aviso">Noco no contestó: el cliente NO se cambió. Intenta otra vez en un momento.</p>
+    {% elif error == 'cliente_igual' %}<p class="aviso">No cambió nada: ese ya era el cliente.</p>
+    {% elif error == 'cliente_nuevo' %}<p class="aviso">El proyecto se creó, pero SIN cliente: Noco no contestó o la ficha ya no está. Se puede poner desde la cabecera.</p>
+    {% elif error == 'persona_noco' %}<p class="aviso">Noco no contestó: la persona NO se agregó. Intenta otra vez en un momento.</p>
+    {% elif error == 'persona_ficha' %}<p class="aviso">Esa persona ya no está en Noco, o no se pudo leer su ficha.</p>
+    {% elif error == 'persona_rol' %}<p class="aviso">«Qué hace aquí» no puede quedar vacío ni pasar de {{ largo_rol }} caracteres.</p>
+    {% elif error == 'persona_repetida' %}<p class="aviso">Esa persona ya está ahí.</p>
+    {% elif error == 'persona_sitio' %}<p class="aviso">Ese proyecto o esa tarea ya no está.</p>
+    {% elif error == 'persona_no_esta' %}<p class="aviso">Esa persona ya no estaba ahí.</p>
+    {% elif error == 'persona_quien' %}<p class="aviso">Solo quien entra al panel puede cambiar las personas.</p>
     {% elif error == 'proyecto_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe tareas nuevas.</p>{% endif %}
     {% if hecho == 'proyecto_nuevo' %}<p class="aviso ok">Proyecto creado.</p>
     {% elif hecho == 'responsable' %}<p class="aviso ok">Responsable guardado.</p>
     {% elif hecho == 'cerrado' %}<p class="aviso ok">Proyecto cerrado. Está en «cerrados» en la lista de la izquierda.</p>
+    {% elif hecho == 'cliente' %}<p class="aviso ok">Cliente guardado.</p>
+    {% elif hecho == 'cliente_quitado' %}<p class="aviso ok">Cliente quitado: el proyecto queda sin cliente.</p>
+    {% elif hecho == 'persona' %}<p class="aviso ok">Persona agregada.</p>
+    {% elif hecho == 'persona_quitada' %}<p class="aviso ok">Persona quitada.</p>
     {% elif hecho == 'reabierto' %}<p class="aviso ok">Proyecto reabierto.</p>
     {% elif hecho == 'tarea_hecha' %}<p class="aviso ok">Tarea marcada como hecha.{% if derivadas %}{{ ' Salieron las tareas que siguen' if ',' in derivadas else ' Salió la tarea que sigue' }} (#{{ derivadas }}).{% endif %}</p>
     {% elif hecho == 'tarea_reabierta' %}<p class="aviso ok">Tarea desmarcada: vuelve a pendiente, con la misma fecha.</p>
@@ -467,10 +542,21 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {% if m.dormido %}<div class="aviso-dormido">Este proyecto lleva {{ m.dias_sin_movimiento }} días sin movimiento: ni tareas hechas ni comentarios.</div>{% endif %}
       {% if m.descripcion %}<p class="descripcion">{{ m.descripcion }}</p>{% endif %}
       <div class="quienes">
-        {#- El CLIENTE se ve como en la maqueta (un campo con su nombre), pero
-            cambiarlo desde aquí NO se guarda todavía: el campo es de solo
-            lectura y no es un formulario. -#}
-        <label>Cliente <input class="campo-quien" value="{{ m.cliente or '' }}" placeholder="Buscar en Noco… (sin cliente)" readonly title="Todavía no se puede cambiar el cliente desde aquí"></label>
+        {#- EL CLIENTE se busca entre las personas de Noco (opcional: se puede
+            quitar). Con JavaScript, escribir ofrece coincidencias y elegir
+            guarda; vaciar la caja quita el cliente. Sin JavaScript: «Buscar»
+            y un botón por coincidencia. -#}
+        <div class="persona-campo cliente-campo">
+          <form class="buscar-persona" method="get" action="/proyectos" role="search">
+            <label>Cliente <input class="campo-quien" type="text" name="pq" value="{% if busqueda and busqueda.donde == 'cliente' %}{{ busqueda.q }}{% else %}{{ m.cliente or '' }}{% endif %}" placeholder="Buscar en Noco… (sin cliente)" aria-label="Cliente del proyecto" data-buscar-persona="enviar" autocomplete="off"{% if m.cliente %} data-actual{% endif %}></label>
+            {{ vista_oculta('cliente') }}
+            <button class="btn-linea">Buscar</button>
+          </form>
+          <form class="elegir-persona" method="post" action="/proyectos/{{ m.id }}/cliente">
+            {{ sugerencias('cliente') }}
+            {% if m.cliente %}<button class="btn-linea quitar-cliente" name="noco_id" value="">Quitar el cliente</button>{% endif %}
+          </form>
+        </div>
         <form class="resp" method="post" action="/proyectos/{{ m.id }}/responsable" data-auto>
           <label for="resp-{{ m.id }}">Responsable</label>
           <select id="resp-{{ m.id }}" name="responsable">
@@ -524,17 +610,12 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% endif %}
       </div>
       {#- LAS PERSONAS DEL PROYECTO, en la tercera columna como en la maqueta.
-          Lucy todavía no las guarda desde la página (la tabla existe, pero
-          ninguna ruta las escribe): se ve igual, vacía y con el renglón de
-          agregar apagado; no es un formulario. -#}
+          Agregar o quitar una persona NO cuenta como movimiento del proyecto. -#}
       <aside class="lado-der">
     <section class="bloque personas-p">
       <div class="encabezado"><h2>Personas del proyecto</h2><span class="nota">Quién está metido y qué hace aquí</span></div>
-      <div class="personas"><p class="vacio">Nadie más todavía.</p></div>
-      <div class="agregar" aria-disabled="true" title="Todavía no se guarda: agregar personas a un proyecto llega con otro trabajo">
-        <select disabled aria-label="Persona"><option>Escoge de las personas de Noco…</option></select>
-        <input disabled placeholder="¿Qué hace aquí?" aria-label="Qué hace esta persona">
-        <button type="button" disabled>Agregar</button></div>
+      <div class="personas">{% for x in m.personas %}{{ ficha_persona(x, '/proyectos/' ~ m.id ~ '/personas/' ~ x.id ~ '/quitar') }}{% else %}<p class="vacio">Nadie más todavía.</p>{% endfor %}</div>
+      {{ agregar_persona('proyecto', '/proyectos/' ~ m.id ~ '/personas') }}
     </section>
       </aside>
     </div>
@@ -630,6 +711,15 @@ function centrarElEscogido() {
 centrarElEscogido();
 if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("load", centrarElEscogido);
 document.addEventListener("click", function (e) {
+  var elegida = e.target.closest && e.target.closest("button.sugerencia");
+  if (elegida && elegida.type === "button") {                // la ventanita: copia el Id y el nombre
+    var sitio = elegida.closest(".persona-campo");
+    sitio.querySelector('input[name="cliente"]').value = elegida.value;
+    sitio.querySelector("input[data-buscar-persona]").value = elegida.textContent;
+    vaciarSugerencias(sitio.querySelector(".sugerencias"));
+    e.preventDefault();
+    return;
+  }
   var ventana = e.target.closest && e.target.closest("a.nuevo-proy");
   if (ventana) {
     var grupo = ventana.closest && ventana.closest(".grupo");
@@ -708,6 +798,60 @@ function filtrarLista(escrito) {
     aviso.textContent = "Ningún proyecto ni cliente con «" + texto + "».";
   }
 }
+/* BUSCAR A UNA PERSONA DE NOCO (el cliente, las personas de un proyecto o de una
+   tarea): a partir de dos letras, y esperando un momento a que se termine de
+   escribir, el navegador pide las coincidencias a `/personas/buscar` (UNA
+   lectura, GET: Lucy solo LEE de Noco) y las enseña como botones. En los
+   formularios de la página cada botón envía SU formulario con el Id de Noco; en
+   la ventanita de «Proyecto nuevo» (modo «elegir») el botón solo copia el Id al
+   campo escondido `cliente`. Lo que se guarda lo decide el servidor, que vuelve
+   a leer la ficha de Noco: aquí no se calcula nada. Si Noco no contesta, lo
+   dice (nunca una lista vacía que parezca «no está»). Sin JavaScript hace lo
+   mismo el servidor con `?pq=`. */
+var buscandoPersona = null;
+function vaciarSugerencias(lista) {
+  while (lista.firstChild) lista.removeChild(lista.firstChild);
+}
+function avisarEnSugerencias(lista, texto) {
+  vaciarSugerencias(lista);
+  var p = document.createElement("p");
+  p.className = "vacio";
+  p.textContent = texto;
+  lista.appendChild(p);
+}
+function ponerSugerencias(lista, personas, modo) {
+  vaciarSugerencias(lista);
+  for (var i = 0; i < personas.length; i++) {
+    var b = document.createElement("button");
+    b.className = "sugerencia";
+    b.textContent = personas[i].nombre;
+    b.value = personas[i].id;
+    b.title = "Elegir a " + personas[i].nombre;
+    if (modo === "elegir") b.type = "button"; else b.name = "noco_id";
+    lista.appendChild(b);
+  }
+}
+function buscarPersonas(caja) {
+  var campo = caja.closest(".persona-campo");
+  var lista = campo && campo.querySelector(".sugerencias");
+  if (!lista) return;
+  var q = caja.value.trim();
+  clearTimeout(buscandoPersona);
+  if (q.length < 2) { vaciarSugerencias(lista); return; }
+  buscandoPersona = setTimeout(function () {
+    fetch("/personas/buscar?q=" + encodeURIComponent(q))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (caja.value.trim() !== q) return;                  // ya escribió otra cosa
+        if (d.error) avisarEnSugerencias(lista, d.error);
+        else if (!d.personas.length) avisarEnSugerencias(lista, "Nadie con «" + q + "» en Noco.");
+        else ponerSugerencias(lista, d.personas, caja.dataset.buscarPersona);
+      })
+      .catch(function () {
+        if (caja.value.trim() === q) avisarEnSugerencias(lista, "No se pudo buscar en Noco.");
+      });
+  }, 250);
+}
 function cancelarEdicion(form) {
   var sitio = form.closest("[data-edita]");
   var texto = sitio && sitio.querySelector("[data-dbl]");
@@ -734,11 +878,19 @@ document.addEventListener("dblclick", function (e) {
 });
 document.addEventListener("input", function (e) {
   var caja = e.target.closest && e.target.closest("input.buscar");
-  if (caja) filtrarLista(caja.value);
+  if (caja) { filtrarLista(caja.value); return; }
+  var persona = e.target.closest && e.target.closest("input[data-buscar-persona]");
+  if (persona) {
+    if (persona.dataset.buscarPersona === "elegir") {      // escribir otra cosa deshace la elección
+      var elegido = persona.closest(".persona-campo").querySelector('input[name="cliente"]');
+      if (elegido) elegido.value = "";
+    }
+    buscarPersonas(persona);
+  }
 });
 document.addEventListener("keydown", function (e) {
   /* En la caja del buscador, Enter no recarga la página: ya filtra al escribir. */
-  var buscador = e.target.closest && e.target.closest("input.buscar");
+  var buscador = e.target.closest && e.target.closest("input.buscar, input[data-buscar-persona]");
   if (buscador && e.key === "Enter") {
     e.preventDefault();
     return;
@@ -756,6 +908,15 @@ document.addEventListener("keydown", function (e) {
   }
 });
 document.addEventListener("change", function (e) {
+  /* Vaciar la caja del cliente QUITA el cliente (es opcional): envía el
+     formulario con el botón «Quitar el cliente», el mismo que sin JavaScript. */
+  var cliente = e.target.closest && e.target.closest("input[data-buscar-persona]");
+  if (cliente && cliente.dataset.actual !== undefined && !cliente.value.trim()) {
+    var envio = cliente.closest(".persona-campo").querySelector("form.elegir-persona");
+    var quitar = envio && envio.querySelector("button.quitar-cliente");
+    if (envio && quitar) envio.requestSubmit(quitar);
+    return;
+  }
   var form = e.target.form;
   if (!form || !form.dataset || form.dataset.auto === undefined) return;
   if (e.target.tagName === "SELECT") form.requestSubmit();

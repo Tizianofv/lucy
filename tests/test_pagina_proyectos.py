@@ -488,8 +488,8 @@ def test_el_avance_y_los_contadores(mundo):
 
 def _cliente_de_la_cabecera(html: str):
     """El valor del campo «Cliente» de la cabecera (como en la maqueta, un campo
-    de solo lectura con el nombre), o None si el campo no está."""
-    m = re.search(r'<label>Cliente <input class="campo-quien" value="([^"]*)"', html)
+    con el nombre; buscar en él cambia el cliente), o None si el campo no está."""
+    m = re.search(r'<label>Cliente <input class="campo-quien" type="text" name="pq" value="([^"]*)"', html)
     return m.group(1) if m else None
 
 
@@ -594,15 +594,19 @@ def test_la_pagina_no_promete_nada_que_no_hace(mundo):
     # TODA escritura es una de estas rutas (la lista EXACTA de cada vista está
     # en `tests/test_escrituras_proyecto.py` y `tests/test_escrituras_tarea.py`).
     permitidas = re.compile(
-        r"/proyectos/(nuevo|\d+/(nombre|area|responsable|estado|tareas)|"
-        r"tarea/\d+/(hecha|reabrir|titulo|borrar|responsable|comentar|comentario/\d+/editar))")
+        r"/proyectos/(nuevo|\d+/(nombre|area|responsable|estado|tareas|cliente|personas(/\d+/quitar)?)|"
+        r"tarea/\d+/(hecha|reabrir|titulo|borrar|responsable|comentar|comentario/\d+/editar|"
+        r"personas(/\d+/quitar)?))")
     for consulta in ({"p": 1}, {"p": 3}, {"g": "CDS"}, {"sin_grupo": 1}, {"nuevo": "CDS"}, {},
                      {"p": 1, "t": 10}):
         html = ver(mundo, **consulta)
         for prohibido in ('type="checkbox"', "borrar-x\" type", "data-hecha"):
             assert prohibido not in html, (consulta, prohibido)
         guiones = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
-        assert len(guiones) == 1 and not _JS_QUE_DECIDIRIA.search(guiones[0]), (consulta, guiones)
+        assert len(guiones) == 1, (consulta, guiones)
+        # (Con el único pedido que se le permite: el GET que busca personas de Noco.)
+        from test_escrituras_proyecto import sin_el_unico_pedido_permitido
+        assert not _JS_QUE_DECIDIRIA.search(sin_el_unico_pedido_permitido(guiones[0])), (consulta, guiones)
         for form in re.findall(r"<form[^>]*>", html):
             if 'method="post"' in form:
                 assert permitidas.fullmatch(re.search(r'action="([^"]*)"', form).group(1)), (consulta, form)

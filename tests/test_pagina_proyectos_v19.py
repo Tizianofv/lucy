@@ -29,6 +29,7 @@ import pytest  # noqa: F401
 
 from test_escrituras_proyecto import _ARNES, _formularios_de, _problemas_de_html_simple, hay_osascript
 from test_pagina_proyectos import AREAS, _dia, gente, mundo, ver  # noqa: F401
+import db.db as db
 from test_pagina_proyectos_maqueta import _css, _guion_de, _vistas, arbol
 import config
 import web.menu as menu
@@ -185,13 +186,25 @@ def test_cliente_y_responsable_van_en_la_cabecera_como_campos_con_su_etiqueta(mu
     cliente = quienes.buscar("input")[0]
     assert cliente.clases == ["campo-quien"] and cliente.attrs["value"] == "Colegio"
     assert cliente.attrs["placeholder"] == "Buscar en Noco… (sin cliente)"
-    # NO se guarda todavía: de solo lectura, sin nombre y fuera de todo formulario.
-    assert "readonly" in cliente.attrs and "name" not in cliente.attrs and cliente.ancestro("form") is None
+    # E7: escribir en la caja BUSCA en Noco (con JavaScript, ofrece coincidencias; sin él, el
+    # formulario GET con su botón «Buscar»), y elegir una coincidencia envía el
+    # formulario del cliente. La caja misma NO se envía (el nombre no viaja).
+    assert cliente.attrs["name"] == "pq" and cliente.attrs["data-buscar-persona"] == "enviar"
+    assert "data-actual" in cliente.attrs and "readonly" not in cliente.attrs
+    assert cliente.ancestro("form").attrs["method"] == "get"
+    elegir = quienes.buscar("form", "elegir-persona")[0]
+    assert elegir.attrs["method"] == "post" and elegir.attrs["action"] == "/proyectos/1/cliente"
+    assert [b.todo_el_texto() for b in elegir.buscar("button")] == ["Quitar el cliente"]
+    assert elegir.buscar("button")[0].attrs["value"] == "" and elegir.buscar("div", "sugerencias")
     resp = quienes.buscar("select")[0]
     assert resp.attrs["name"] == "responsable" and resp.ancestro("form").attrs["action"] == "/proyectos/1/responsable"
     css = _regla(html, "form.resp select")
     assert css["min-width"] == "12rem" and css["border-radius"] == "8px" and css["background"] == "var(--papel)"
     assert _regla(html, ".campo-quien")["min-width"] == "12rem"
+    # Sin cliente no hay «Quitar el cliente».
+    sin = arbol(ver(mundo, p=2)).buscar("div", "quienes")[0]
+    assert not sin.buscar("form", "elegir-persona")[0].buscar("button")
+    assert "data-actual" not in sin.buscar("input")[0].attrs
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -241,22 +254,28 @@ def test_el_proyecto_va_en_tres_columnas_las_tareas_al_centro_y_las_personas_a_l
     assert centro.padre is lado.padre
 
 
-def test_las_personas_del_proyecto_y_las_de_la_tarea_siguen_apagadas_y_no_son_formularios(mundo):
-    """Lo que la página NO guarda no se puede enviar: sin `<form>`, sin `name`, con
-    todos los controles `disabled` y el renglón marcado `aria-disabled`."""
+def test_las_personas_del_proyecto_y_las_de_la_tarea_son_formularios_que_se_envian_con_la_coincidencia(mundo):
+    """E7: agregar una persona es BUSCARLA en Noco y elegirla. El formulario de
+    agregar trae el «qué hace aquí» (obligatorio, con tope) y el lugar de las
+    coincidencias; el Id de Noco viaja en el botón de la coincidencia; nada
+    manda el nombre ni un número de chat."""
     _con_de_todo(mundo)
-    for consulta in ({"p": 1}, {"p": 1, "t": 10}):
+    for consulta, accion, donde in (({"p": 1}, "/proyectos/1/personas", "proyecto"),
+                                    ({"p": 1, "t": 10}, "/proyectos/tarea/10/personas", "tarea-10")):
         html = ver(mundo, **consulta)
         raiz = arbol(html)
-        apagados = [n for n in raiz.buscar("div", "agregar")]
-        assert apagados, consulta
-        for renglon in apagados:
-            assert renglon.attrs["aria-disabled"] == "true" and renglon.ancestro("form") is None
-            controles = [c for c in renglon.buscar() if c.tag in ("select", "input", "button")]
-            assert len(controles) == 3
-            for c in controles:
-                assert "disabled" in c.attrs and "name" not in c.attrs, c.tag
-        assert [f["accion"] for f in _formularios_de(html) if "persona" in (f["accion"] or "")] == []
+        formas = [f for f in raiz.buscar("form", "agregar") if f.attrs["action"] == accion]
+        assert len(formas) == 1, (consulta, accion)
+        forma = formas[0]
+        rol = [i for i in forma.buscar("input") if i.attrs.get("name") == "rol"]
+        assert len(rol) == 1 and "required" in rol[0].attrs and rol[0].attrs["maxlength"] == str(db.LARGO_ROL_PARTICIPANTE)
+        assert forma.buscar("div", "sugerencias") and "data-auto" not in forma.attrs
+        # La búsqueda sin JavaScript: un GET con su botón, hacia la misma página, y el sitio dicho.
+        busca = forma.padre.buscar("form", "buscar-persona")[0]
+        assert busca.attrs["method"] == "get" and busca.attrs["action"] == "/proyectos"
+        ocultos = {i.attrs["name"]: i.attrs["value"] for i in busca.buscar("input") if i.attrs.get("type") == "hidden"}
+        assert ocultos["pdonde"] == donde and ocultos["p"] == "1"
+        assert busca.buscar("input")[0].attrs["name"] == "pq" and busca.buscar("button")
         assert _problemas_de_html_simple(html) == []
 
 
@@ -484,7 +503,7 @@ var grupos = DATOS.map(function (g) {
 var aviso = nodo({hidden: AVISO_OCULTO, textContent: ""});
 document.querySelectorAll = function (s) { return s === "nav.grupos .grupo" ? grupos : []; };
 document.querySelector = function (s) { return s === "nav.grupos [data-sin-resultados]" ? aviso : null; };
-var caja = {value: "", closest: function (s) { return s === "input.buscar" ? this : null; }};
+var caja = {value: "", closest: function (s) { return s.indexOf("input.buscar") === 0 ? this : null; }};
 function estado() {
   return JSON.stringify({
     grupos: grupos.map(function (g) { return {g: g.data, oculto: g.hidden, mas: g.mas.map(function (x) { return x.hidden; }),

@@ -29,6 +29,7 @@ from datetime import timedelta
 
 import pytest
 
+from test_escrituras_proyecto import noco  # noqa: F401  (el Noco de mentira)
 from test_escrituras_proyecto import (FECHA_ESCRITA, FECHA_Y_HORA_ESCRITA, _LectorDeFormularios,  # noqa: F401
                                       _escrito, _formularios_de, _la_marcada,
                                       _lo_que_manda_el_navegador, _otra_opcion,
@@ -554,11 +555,14 @@ async def test_la_puerta_de_borrar_directo_deja_el_actor_que_se_le_pide(mt):
 # Sin `/proyectos/N/area` ni `/proyectos/tarea/N/responsable`: el «Mover a» y el
 # «Responsable» del detalle se quitaron de la página (1-oct-2026, decisión de
 # Tiziano: la maqueta no los tiene). Las rutas siguen y se prueban directo.
-_A = ["/proyectos/2/nombre", "/proyectos/2/responsable"]
+_A = ["/proyectos/2/nombre", "/proyectos/2/responsable",
+      # E7 (1-oct-2026): el cliente y las personas del proyecto son formularios.
+      "/proyectos/2/cliente", "/proyectos/2/personas"]
 _TAREAS_DE_2 = ["/proyectos/tarea/10/hecha", "/proyectos/tarea/10/titulo",
                 "/proyectos/tarea/11/reabrir", "/proyectos/tarea/11/titulo",
                 "/proyectos/tarea/12/hecha", "/proyectos/tarea/12/titulo", "/proyectos/2/tareas"]
-_DETALLE_10 = ["/proyectos/tarea/10/comentar", "/proyectos/tarea/10/comentario/50/editar"]
+_DETALLE_10 = ["/proyectos/tarea/10/comentar", "/proyectos/tarea/10/comentario/50/editar",
+               "/proyectos/tarea/10/personas"]
 
 # La ventanita de «+ Proyecto en X» (1-oct-2026) la escribe el servidor en CADA
 # vista, una por grupo de la lista de la izquierda: un formulario
@@ -575,7 +579,8 @@ _VISTAS_DE_TAREAS = {
     "confirmar_cerrar": ({"p": 2, "confirmar": "cerrar"}, _A + _TAREAS_DE_2 + ["/proyectos/2/estado"] + _V),
     "editar_nombre": ({"p": 2, "editar": "nombre"}, _A + _TAREAS_DE_2 + _V),
     "cerrado": ({"p": 3}, ["/proyectos/3/estado", "/proyectos/3/nombre",
-                           "/proyectos/3/responsable", "/proyectos/tarea/40/reabrir",
+                           "/proyectos/3/responsable", "/proyectos/3/cliente",
+                           "/proyectos/3/personas", "/proyectos/tarea/40/reabrir",
                            "/proyectos/tarea/40/titulo"] + _V),
     "sueltas": ({"g": "CDS"}, ["/proyectos/tarea/30/hecha", "/proyectos/tarea/30/titulo"] + _V),
     "sin_grupo": ({"sin_grupo": 1}, ["/proyectos/tarea/31/hecha", "/proyectos/tarea/31/titulo"] + _V),
@@ -612,7 +617,7 @@ def _nuevos(antes: dict, despues: dict, tabla: str) -> set:
 
 @pytest.mark.parametrize("vista", sorted(_VISTAS_DE_TAREAS))
 def test_cada_formulario_de_tarea_enviado_como_el_navegador_escribe_en_la_tarea_de_la_pagina(
-        monkeypatch, gente, vista):
+        monkeypatch, gente, vista, noco):
     consulta, esperadas = _VISTAS_DE_TAREAS[vista]
     chat_de = _nombres_a_chat()
     probados = 0
@@ -629,6 +634,8 @@ def test_cada_formulario_de_tarea_enviado_como_el_navegador_escribe_en_la_tarea_
             def escoger(c):
                 return _otra_opcion(c) if c["name"].startswith("deriva_resp_") else _la_marcada(c)
         datos = _lo_que_manda_el_navegador(form, _escrito, escoger)
+        if form["accion"].endswith("/personas"):          # la persona se elige con el clic en su botón
+            datos["noco_id"] = "102"
         antes = foto(m)
         r = _cliente(config.CHAT_ID_DUENO).post(form["accion"], data=datos, follow_redirects=False)
         despues = foto(m)
@@ -658,6 +665,12 @@ def test_cada_formulario_de_tarea_enviado_como_el_navegador_escribe_en_la_tarea_
             assert len(ids) == 1 and igual_salvo(antes, despues, comentarios_tarea=ids, log_acciones=nuevas), donde
             c = comentario(m, ids.pop())
             assert (c["texto"], c["tarea_id"], c["autor_chat_id"]) == ("Escrito en texto", tid, gente.dueno), donde
+        elif accion == "personas":
+            assert igual_salvo(antes, despues, log_acciones=nuevas), (donde, "cambió OTRA cosa")
+            filas = [dict(f) for f in m.con.execute("SELECT * FROM participantes")]
+            assert len(filas) == 1 and (filas[0]["tarea_id"], filas[0]["proyecto_id"], filas[0]["noco_id"],
+                                        filas[0]["nombre"], filas[0]["rol"], filas[0]["creado_por_chat_id"]) == (
+                tid, None, 102, "Persona Dos de Noco", "Escrito en rol", gente.dueno), (donde, filas)
         else:
             # La vista `derivada` trae los renglones de «¿sale una tarea nueva
             # de ésta?» DENTRO del formulario de marcar hecha: el mismo envío
@@ -889,7 +902,8 @@ def _rutas_post_de_tareas():
                     escribe.append((f"crud.{n.func.attr}({n.args[0].value})", actor))
                 elif n.func.attr in ("marcar_tarea_hecha", "cerrar_y_derivar", "reabrir_tarea",
                                      "asignar_responsable", "comentar_tarea", "editar_comentario",
-                                     "crear_tarea_desde_el_panel"):
+                                     "crear_tarea_desde_el_panel", "agregar_participante",
+                                     "quitar_participante"):
                     escribe.append((f"db.{n.func.attr}", ()))
                 elif n.func.attr == "puede_entrar":
                     sesion = True
@@ -903,7 +917,9 @@ def test_toda_ruta_post_de_tarea_pide_sesion_y_escribe_por_una_puerta_con_actor_
         "/proyectos/{pid}/tareas", "/proyectos/tarea/{tid}/hecha", "/proyectos/tarea/{tid}/reabrir",
         "/proyectos/tarea/{tid}/titulo", "/proyectos/tarea/{tid}/borrar",
         "/proyectos/tarea/{tid}/responsable", "/proyectos/tarea/{tid}/comentar",
-        "/proyectos/tarea/{tid}/comentario/{cid}/editar"}
+        "/proyectos/tarea/{tid}/comentario/{cid}/editar",
+        # E7 (1-oct-2026): las personas de la tarea.
+        "/proyectos/tarea/{tid}/personas", "/proyectos/tarea/{tid}/personas/{xid}/quitar"}
     for nombre, r in rutas.items():
         assert r["sesion"], f"{nombre} no pide sesión"
         assert len(r["escribe"]) == 1, f"{nombre} escribe por {r['escribe']}"
@@ -915,7 +931,8 @@ def test_toda_ruta_post_de_tarea_pide_sesion_y_escribe_por_una_puerta_con_actor_
     # en un solo sitio (Tiziano, 1-oct-2026).
     assert {r["escribe"][0][0] for r in rutas.values()} == {
         "db.crear_tarea_desde_el_panel", "db.cerrar_y_derivar", "db.reabrir_tarea", "crud.editar(tareas)",
-        "crud.borrar(tareas)", "db.asignar_responsable", "db.comentar_tarea", "db.editar_comentario"}
+        "crud.borrar(tareas)", "db.asignar_responsable", "db.comentar_tarea", "db.editar_comentario",
+        "db.agregar_participante", "db.quitar_participante"}
 
 
 def _escritores_sql() -> dict:

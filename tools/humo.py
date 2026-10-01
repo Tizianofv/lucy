@@ -136,8 +136,9 @@ async def main() -> int:
         # `UNION ALL` sobre `log_acciones` y las columnas que agregó la migración
         # `2026-10-02_proyectos_responsable_cliente_participantes.sql`
         # (`proyectos.responsable_chat_id`, `cliente_nombre`,
-        # `comentarios_tarea.editado_en`). Sin tolerancia a propósito: si esa
-        # migración no está, esta línea es la que lo dice. Es una LECTURA.
+        # `comentarios_tarea.editado_en`) y la lectura de `participantes` (las
+        # personas de cada proyecto y tarea, E7). Sin tolerancia a propósito: si
+        # esa migración no está, esta línea es la que lo dice. Es una LECTURA.
         ("pagina_de_proyectos", lambda: db.pagina_de_proyectos()),
     ]
 
