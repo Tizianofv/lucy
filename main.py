@@ -49,6 +49,37 @@ _tarea_interpretacion: asyncio.Task | None = None
 _tarea_panel: asyncio.Task | None = None
 
 
+def _servidor_del_panel(cfg):
+    """El `uvicorn.Server` del panel, SIN capturar las señales del proceso.
+
+    Por qué (medido el 1-oct-2026 con el código real): `Server.serve()` de
+    uvicorn 0.34 reemplaza los manejadores de SIGINT/SIGTERM (`signal.signal`)
+    y, al terminar, RE-LANZA la señal capturada (`capture_signals`,
+    uvicorn/server.py:313-330). Con el panel en el mismo proceso que PTB, un
+    SIGTERM disparaba dos `SystemExit` seguidos: el segundo cortaba
+    `run_until_complete(Updater.stop)` dentro del `finally` de
+    `Application.run_polling`, y nunca corrían `Application.stop()` (que
+    espera los handlers en curso), `shutdown()` ni `_al_apagar`. Salían los
+    «Task was destroyed but it is pending», «Event loop is closed», y un
+    mensaje que Telegram ya había dado por entregado podía morir sin entrar a
+    la bandeja.
+
+    LA ÚNICA FORMA de apagar en este proceso es la de PTB: SIGTERM -> PTB
+    detiene el sondeo, deja terminar los handlers, y llama a `_al_apagar`, que
+    es quien para el panel. Por eso el panel no escucha señales.
+    """
+    import contextlib
+
+    import uvicorn
+
+    class _ServidorSinSenales(uvicorn.Server):
+        @contextlib.contextmanager
+        def capture_signals(self):
+            yield
+
+    return _ServidorSinSenales(cfg)
+
+
 async def _al_arrancar(app) -> None:
     await db.abrir()
     log.info("Pool de Postgres abierto. Lucy escuchando a %s.", config.CHAT_IDS_PERMITIDOS)
@@ -147,22 +178,40 @@ async def _al_arrancar(app) -> None:
         puerto = int(os.environ.get("PORT", "8080"))
         cfg = uvicorn.Config(panel, host="0.0.0.0", port=puerto,
                              log_level="warning", access_log=False)
-        _tarea_panel = asyncio.create_task(uvicorn.Server(cfg).serve())
+        _tarea_panel = asyncio.create_task(_servidor_del_panel(cfg).serve())
         log.info("Panel de finanzas escuchando en el puerto %s.", puerto)
     except Exception:
         log.exception("No pude levantar el panel; Lucy sigue sin él.")
 
 
 async def _al_apagar(app) -> None:
+    """Lo último que corre al apagar (PTB lo llama tras `Application.stop()`).
+
+    Orden: panel, bucle de interpretación, devolver a la cola lo que el bucle
+    había reclamado y no terminó, y recién entonces cerrar la base.
+    """
     if _tarea_panel is not None:
         _tarea_panel.cancel()
         await asyncio.gather(_tarea_panel, return_exceptions=True)
     if _tarea_interpretacion is not None:
         _tarea_interpretacion.cancel()
-        # Esperamos a que muera de verdad: si el proceso se apaga con una
-        # fila en 'procesando', esa fila queda huérfana hasta que alguien la
-        # rescate a mano.
+        # Esperamos a que muera de verdad antes de mirar qué quedó a medias.
         await asyncio.gather(_tarea_interpretacion, return_exceptions=True)
+    # Cancelar la tarea NO devuelve sus filas a la cola: una fila reclamada
+    # ('procesando') y cortada a medias se queda así. Sin esto, la rescata
+    # `rescatar_procesando` unos 10 minutos después y con `intentos + 1`
+    # (medido en la sonda del 1-oct-2026). Acá se devuelven al instante y
+    # sin sumar intentos: no fallaron, se cortaron.
+    # Frontera: solo las filas de las que el bucle ya recibió el id. Si el
+    # apagado cae entre el UPDATE de `tomar_pendientes` y su retorno, esa
+    # fila sigue en 'procesando' y la rescata el camino de siempre.
+    try:
+        n = await db.devolver_reclamadas(interpretar.reclamadas_sin_terminar())
+        if n:
+            log.warning("Apagado: %s mensaje(s) a medias devueltos a la cola.", n)
+    except Exception:
+        log.exception("No pude devolver a la cola lo que quedó a medias; "
+                      "lo rescatará el arranque o el rescate periódico.")
     await db.cerrar()
 
 
