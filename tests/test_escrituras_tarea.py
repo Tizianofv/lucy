@@ -757,7 +757,7 @@ def test_sin_javascript_cada_edicion_tiene_su_enlace_y_el_servidor_la_dibuja(mt)
     assert html.count("<noscript>") == 1 + 3 + 1
     abierto = ver(mt, p=2, editar_tarea=12)
     assert re.search(r'<form class="renombrar" method="post" action="/proyectos/tarea/12/titulo"[^>]*>', abierto)
-    assert re.search(r'<span class="titulo" data-dbl="titulo"[^>]*hidden>tarea doce</span>', abierto)
+    assert re.search(r'<a class="titulo" data-dbl="titulo"[^>]*hidden>tarea doce</a>', abierto)
     assert re.search(r'action="/proyectos/tarea/10/titulo"[^>]*hidden>', abierto)   # las otras siguen escondidas
 
 
@@ -787,6 +787,23 @@ def test_el_selector_de_la_tarea_ofrece_sin_responsable_y_las_tres_personas(mt):
 
 
 # ── La × y el botón de marcar son lo que dice la maqueta ─────────────────
+
+def test_el_titulo_es_el_enlace_que_abre_el_detalle_y_ya_no_hay_enlace_chiquitito(mt):
+    """Como en la maqueta: un clic en la tarea enseña sus opciones. El enlace
+    «▸ N» se fue —el número de comentarios queda como TEXTO— y sin JavaScript el
+    título es un enlace normal: al detalle, y de vuelta si ya está abierto."""
+    cerrado = ver(mt, p=2)
+    assert ('<a class="titulo" data-dbl="titulo" href="/proyectos?p=2&amp;t=10#tarea-10"'
+            in cerrado)
+    assert 'class="detalle-enlace"' not in cerrado
+    sin_css = re.sub(r"<style>.*?</style>", "", cerrado, flags=re.S)
+    assert "▸" not in sin_css and "▾" not in sin_css
+    assert cerrado.count("1 comentario<") == 2          # la 10 y la 12: texto, no enlace
+    assert "primer comentario" not in cerrado           # el detalle está cerrado
+    abierto = ver(mt, p=2, t=10)
+    assert '<a class="titulo" data-dbl="titulo" href="/proyectos?p=2#tarea-10"' in abierto
+    assert "primer comentario" in abierto
+
 
 def test_la_x_va_al_final_a_la_derecha_de_cada_fila(mt):
     html = ver(mt, p=2)

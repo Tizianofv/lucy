@@ -169,8 +169,7 @@ form.resp-tarea select,form.nueva-tarea input{font:inherit;padding:.3rem .5rem;b
 form.nueva-tarea{margin-top:.8rem;width:100%}
 form.nueva-tarea input[name=titulo]{flex:1 1 12rem}
 form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar button.guardar{font:600 .85rem var(--texto);padding:.4rem .9rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
-.detalle-enlace{color:var(--suave);text-decoration:none;font-size:.85rem;padding:0 .3rem}
-.detalle-enlace:hover{color:var(--tinta)}
+.comentarios-n{flex:none}
 .borrar-x{color:var(--suave);text-decoration:none;font-size:1.15rem;line-height:1;padding:.1rem .35rem;border-radius:6px;flex:none}
 .borrar-x:hover{color:var(--vencida);background:var(--vencida-fondo)}
 .detalle h4{margin:.6rem 0 .3rem;font:600 .78rem var(--texto);letter-spacing:.07em;text-transform:uppercase;color:var(--suave)}
@@ -234,14 +233,21 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {% endif %}
     </form>
     {% else %}<span class="marca" role="img" aria-label="{{ t.estado }}">–</span>{% endif %}
-    <span class="titulo" data-dbl="titulo" title="Doble clic para cambiar el título" {% if editar_tarea == t.id %}hidden{% endif %}>{{ t.titulo }}</span>
+    {#- EL TÍTULO ES EL ENLACE QUE ABRE EL DETALLE (responsable y comentarios),
+        como en la maqueta: un clic en la tarea enseña sus opciones, y el
+        enlace viejo «▸» ya no está. Sin JavaScript esto es un enlace normal
+        (al detalle abierto, o de vuelta si ya lo está); con JavaScript, el
+        primer clic espera un momento por si llega el segundo, que es el doble
+        clic que renombra. El `href` lo escribe el servidor: el guion no calcula
+        a dónde va. -#}
+    <a class="titulo" data-dbl="titulo" href="{{ u }}{{ '' if abierta else '&t=' ~ t.id }}#tarea-{{ t.id }}" title="Un clic abre el detalle; doble clic cambia el título" aria-label="{{ 'Cerrar' if abierta else 'Abrir' }} el detalle de la tarea" {% if editar_tarea == t.id %}hidden{% endif %}>{{ t.titulo }}</a>
+    {% if t.comentarios %}<span class="nota comentarios-n" title="Comentarios de la tarea">{{ t.comentarios|length }} comentario{{ 's' if t.comentarios|length != 1 }}</span>{% endif %}
     <form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/titulo" data-auto {% if editar_tarea != t.id %}hidden{% endif %}>
       <input name="titulo" type="text" required maxlength="{{ largo_titulo }}" value="{{ t.titulo }}" aria-label="Título de la tarea">
       <button class="guardar">Guardar</button>
       <a class="btn-linea" href="{{ u }}#tarea-{{ t.id }}">Cancelar</a>
     </form>
     <noscript><a class="nota" href="{{ u }}&amp;editar_tarea={{ t.id }}#tarea-{{ t.id }}">Cambiar el título</a></noscript>
-    <a class="detalle-enlace" href="{{ u }}{{ '' if abierta else '&t=' ~ t.id }}#tarea-{{ t.id }}" aria-label="{{ 'Cerrar' if abierta else 'Abrir' }} el detalle de la tarea" title="Responsable y comentarios">{{ '▾' if abierta else '▸' }}{% if t.comentarios %} {{ t.comentarios|length }}{% endif %}</a>
     {% if not t.es_pendiente and not t.es_hecha %}<span class="vence" style="min-width:0">{{ t.estado }}</span>{% endif %}
     {% if t.responsable %}<span class="ini" title="Responsable: {{ t.responsable }}">{{ t.responsable|iniciales }}</span>{% endif %}
     <span class="vence" {% if t.vence_en %}title="{{ t.vence_en|hora_rd }}"{% endif %}>{{ 'Venció el ' if t.vencida }}{{ t.dia|dia_corto }}</span>
@@ -537,6 +543,24 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
    (`requestSubmit`), el botón sigue ahí y sin este script se guarda con él.
    Vacío no se envía, y un texto que no cambió tampoco: son dos viajes que no
    dirían nada (el servidor ya sabe contestar «no cambió nada»). */
+/* EL CLIC EN EL TÍTULO ABRE EL DETALLE, pero no se va derecho: espera un
+   momento (250 ms, lo que esperaba la maqueta) por si llega el segundo clic, el
+   doble clic que renombra. Si no llega, sigue el enlace con `click()`, que es
+   exactamente lo que haría el navegador sin este script: no decide a dónde va,
+   va al `href` que escribió el servidor. */
+var esperando = null;
+var yendo = false;
+document.addEventListener("click", function (e) {
+  var enlace = e.target.closest && e.target.closest("a[data-dbl]");
+  if (!enlace || yendo) return;
+  e.preventDefault();
+  clearTimeout(esperando);
+  esperando = setTimeout(function () {
+    yendo = true;
+    enlace.click();
+    yendo = false;
+  }, 250);
+});
 function cancelarEdicion(form) {
   var sitio = form.closest("[data-edita]");
   var texto = sitio && sitio.querySelector("[data-dbl]");
@@ -551,6 +575,9 @@ document.addEventListener("dblclick", function (e) {
   var sitio = texto && texto.closest("[data-edita]");
   var form = sitio && sitio.querySelector("form.renombrar");
   if (!form) return;
+  /* Llegó el segundo clic: el detalle YA NO se abre, se renombra. */
+  clearTimeout(esperando);
+  esperando = null;
   e.preventDefault();
   texto.hidden = true;
   form.hidden = false;

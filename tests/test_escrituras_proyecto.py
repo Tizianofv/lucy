@@ -245,9 +245,14 @@ function ev(destino, extra) {
 function sitioDeMentira(datos) {
   var sitio = {};
   var campos = [];
-  /* Cerrado, el formulario está escondido y el TEXTO se ve; abierto, al revés. */
-  var texto = {hidden: !datos.oculto, closest: function (s) {
-    return s === "[data-dbl]" ? this : (s === "[data-edita]" && datos.edita ? sitio : null); }};
+  /* Cerrado, el formulario está escondido y el TEXTO se ve; abierto, al revés.
+     El texto es el enlace del título: `navego` cuenta las veces que el clic
+     siguió el `href` (lo que en un navegador sería irse a la otra página). */
+  var texto = {hidden: !datos.oculto, navego: 0,
+    click: function () { this.navego++; },
+    closest: function (s) {
+      if (s === "[data-dbl]" || s === "a[data-dbl]") return this;
+      return (s === "[data-edita]" && datos.edita) ? sitio : null; }};
   var form = {
     hidden: !!datos.oculto, action: datos.accion, enviados: 0,
     dataset: datos.auto ? {auto: ""} : {},
@@ -271,6 +276,18 @@ function sitioDeMentira(datos) {
 }
 var otro = {closest: function () { return null; }};
 var document = {addEventListener: function (tipo, f) { oyentes[tipo] = f; }};
+/* Los temporizadores, de mentira: el escenario decide cuándo pasa el tiempo
+   (`correrTemporizadores()`), así que la prueba no espera de verdad. */
+var temporizadores = {}, siguienteT = 0;
+function setTimeout(f, ms) { siguienteT++; temporizadores[siguienteT] = f; return siguienteT; }
+function clearTimeout(id) { delete temporizadores[id]; }
+function cuantosTemporizadores() { return Object.keys(temporizadores).length; }
+function correrTemporizadores() {
+  var pendientes = [];
+  for (var id in temporizadores) pendientes.push({id: id, f: temporizadores[id]});
+  temporizadores = {};
+  pendientes.forEach(function (p) { p.f(); });
+}
 """
 
 
@@ -297,6 +314,43 @@ _FOTO = "JSON.stringify({texto: S.texto.hidden, form: S.form.hidden, focos: S.ca
 def test_js_el_doble_clic_en_el_titulo_muestra_el_formulario_y_enfoca_el_campo(mundo):
     r = _correr_en_jxa(_script_de_la_pagina(mundo), _SITIO + 'oyentes.dblclick(ev(S.texto));' + _FOTO)
     assert r == {"texto": True, "form": False, "focos": 1, "sel": 1, "enviados": 0}
+
+
+@hay_osascript
+def test_js_un_clic_en_el_titulo_abre_el_detalle(mundo):
+    """El clic no se va derecho: espera al segundo. Cuando el tiempo pasa sin
+    que llegue nadie más, sigue el enlace del título —el `href` que escribió el
+    servidor— y NO abre el renombrar."""
+    guion = _script_de_la_pagina(mundo)
+    clic = _SITIO + "oyentes.click(ev(S.texto));"
+    antes = _correr_en_jxa(guion, clic + "JSON.stringify({navego: S.texto.navego,"
+                                          " esperando: cuantosTemporizadores(), evitado: evitado})")
+    assert antes == {"navego": 0, "esperando": 1, "evitado": 1}
+    despues = _correr_en_jxa(guion, clic + "correrTemporizadores();"
+                                           "JSON.stringify({navego: S.texto.navego, form: S.form.hidden,"
+                                           " texto: S.texto.hidden})")
+    assert despues == {"navego": 1, "form": True, "texto": False}
+
+
+@hay_osascript
+def test_js_un_doble_clic_renombra_y_no_abre_el_detalle(mundo):
+    """Los dos clics y el doble clic, en el orden en que los manda un navegador:
+    el detalle NO se abre y el renombrar sí."""
+    guion = _script_de_la_pagina(mundo)
+    escenario = (_SITIO + "oyentes.click(ev(S.texto));oyentes.click(ev(S.texto));"
+                 "oyentes.dblclick(ev(S.texto));correrTemporizadores();"
+                 "JSON.stringify({navego: S.texto.navego, form: S.form.hidden,"
+                 " texto: S.texto.hidden, focos: S.campos[0].focos})")
+    assert _correr_en_jxa(guion, escenario) == {
+        "navego": 0, "form": False, "texto": True, "focos": 1}
+
+
+@hay_osascript
+def test_js_un_clic_fuera_del_titulo_no_abre_nada(mundo):
+    guion = _script_de_la_pagina(mundo)
+    r = _correr_en_jxa(guion, "oyentes.click(ev(otro));correrTemporizadores();"
+                              "JSON.stringify({esperando: cuantosTemporizadores(), evitado: evitado})")
+    assert r == {"esperando": 0, "evitado": 0}
 
 
 @hay_osascript
@@ -388,10 +442,11 @@ def test_el_script_no_decide_nada_de_negocio(mundo):
     guion = _script_de_la_pagina(mundo)
     codigo = re.sub(r"/\*.*?\*/", "", guion, flags=re.S)
     assert re.search(r"fetch\(|XMLHttpRequest|\.submit\(|FormData|localStorage|eval\(", codigo) is None
-    # Un oyente por evento y nada más: el doble clic, el teclado, el cambio de
-    # un desplegable y la salida de un campo.
+    # Un oyente por evento y nada más: el clic (abrir el detalle, esperando al
+    # segundo), el doble clic, el teclado, el cambio de un desplegable y la
+    # salida de un campo.
     assert sorted(re.findall(r'addEventListener\("(\w+)"', codigo)) == [
-        "change", "dblclick", "focusout", "keydown"]
+        "change", "click", "dblclick", "focusout", "keydown"]
 
 
 def _valor_del_campo(c: dict) -> str:

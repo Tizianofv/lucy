@@ -614,9 +614,9 @@ def test_los_comentarios_se_leen_con_nombre_fecha_y_marca_de_editado(mundo, gent
                      editado=_dia(0, 10))
     mundo.comentario(52, 10, gente.dueno, "borrado, no sale", borrado=True)
     cerrado = ver(mundo, p=1)
-    assert "▸ 2</a>" in cerrado and "Le escribí a Luis" not in cerrado   # el detalle está cerrado
+    assert "2 comentarios" in cerrado and "Le escribí a Luis" not in cerrado   # el detalle está cerrado
     html = ver(mundo, p=1, t=10)
-    assert "▾ 2</a>" in html
+    assert "2 comentarios" in html
     assert "<b>Persona Dos</b>" in html and "Le escribí a Luis" in html
     assert "borrado, no sale" not in html
     assert "Segundo <b>comentario</b>" not in html and "Segundo &lt;b&gt;comentario&lt;/b&gt;" in html
