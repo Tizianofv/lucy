@@ -4142,6 +4142,47 @@ async def tareas_para_elegir_primero(excluir_id: int) -> list[dict]:
         return list(await cur.fetchall())
 
 
+# «¿ES ESTA UNA TAREA DE CODE?», para los comentarios de la sala (1-oct-2026).
+# UNA SOLA PUERTA: leer y escribir comentarios pasan por `tarea_de_code`, y
+# `tests/test_api_code_comentarios.py` corre las CUATRO funciones de la sala
+# (listar, tomar, cerrar, comentar) contra la misma base y exige que digan
+# lo mismo de cada tarea. `tomar`/`cerrar`/`tareas_de_code_pendientes` siguen
+# con su propio `WHERE` (las pruebas de la parte 1 y 3 extraen su texto del
+# árbol de sintaxis): lo que las ata a esta puerta es esa prueba, no el
+# texto compartido. Comentar NO mira el estado (una tarea hecha se puede
+# comentar: el cierre se cuenta después de cerrar); tomar y cerrar sí, además
+# de esta condición.
+async def tarea_de_code(cur, tarea_id: int) -> dict | None:
+    """La tarea `tarea_id` si es de Code: viva, con `responsable_chat_id =
+    CHAT_ID_CODE` y área EFECTIVA `AREA_TECNICA` (`COALESCE(t.area, p.area)`,
+    la misma que usan `tomar_tarea_de_la_sala` y `cerrar_tarea_de_la_sala`).
+    Si no, None. Solo lee."""
+    await cur.execute(
+        "SELECT t.id, t.bandeja_id FROM tareas t "
+        "LEFT JOIN proyectos p ON p.id = t.proyecto_id "
+        "WHERE t.id = %s AND t.borrado_en IS NULL "
+        "AND t.responsable_chat_id = %s "
+        "AND COALESCE(t.area, p.area) = %s",
+        (tarea_id, CHAT_ID_CODE, AREA_TECNICA))
+    return await cur.fetchone()
+
+
+async def comentarios_de_tarea_de_code(tarea_id: int) -> list[dict] | None:
+    """Los comentarios vivos de una tarea DE CODE, del más viejo al más nuevo,
+    con `editado_en`. None si la tarea no es de Code (no existe, está en la
+    papelera, otro responsable u otra área): de esas no se lee nada."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        if await tarea_de_code(cur, tarea_id) is None:
+            return None
+        await cur.execute(
+            "SELECT id, autor_chat_id, creado_en, texto, editado_en "
+            "FROM comentarios_tarea "
+            "WHERE tarea_id = %s AND borrado_en IS NULL "
+            "ORDER BY creado_en ASC, id ASC", (tarea_id,))
+        return list(await cur.fetchall())
+
+
 async def comentar_tarea(tarea_id: int, autor_chat_id: int,
                          texto: str) -> int | None:
     """Guarda UN comentario. Devuelve su id, o None si no se guardó.
@@ -4153,20 +4194,29 @@ async def comentar_tarea(tarea_id: int, autor_chat_id: int,
     No se guarda si quien escribe no puede entrar al panel, si el texto está
     vacío, o si la tarea no existe o está en la papelera.
 
+    UNA EXCEPCIÓN, la sala (1-oct-2026): `CHAT_ID_CODE` no entra al panel, pero
+    puede comentar -- SOLO una tarea de Code (`tarea_de_code`) -- y su huella
+    es de actor 'sala', como la de tomar y cerrar. La regla vive acá, no en la
+    ruta: cualquiera que llame con ese autor pasa por ella.
+
     Deja su huella en log_acciones con actor 'panel', como toda escritura del
     panel. La fila y la huella van en la misma transacción.
     """
     from web.auth import puede_entrar
 
     limpio = (texto or "").strip()
-    if not limpio or not puede_entrar(autor_chat_id):
+    de_la_sala = autor_chat_id == CHAT_ID_CODE
+    if not limpio or not (de_la_sala or puede_entrar(autor_chat_id)):
         return None
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(
-            "SELECT id, bandeja_id FROM tareas "
-            "WHERE id = %s AND borrado_en IS NULL", (tarea_id,))
-        tarea = await cur.fetchone()
+        if de_la_sala:
+            tarea = await tarea_de_code(cur, tarea_id)
+        else:
+            await cur.execute(
+                "SELECT id, bandeja_id FROM tareas "
+                "WHERE id = %s AND borrado_en IS NULL", (tarea_id,))
+            tarea = await cur.fetchone()
         if tarea is None:
             return None
         await cur.execute(
@@ -4177,16 +4227,27 @@ async def comentar_tarea(tarea_id: int, autor_chat_id: int,
             """,
             (tarea_id, autor_chat_id, limpio))
         fila = await cur.fetchone()
-        await conn.execute(
-            """
-            INSERT INTO log_acciones
-              (actor, accion, tabla, registro_id, antes, despues, motivo,
-               bandeja_id)
-            VALUES ('panel', 'crear', 'comentarios_tarea', %s, NULL, %s,
-                    'comentario escrito desde el panel de tareas', %s)
-            """,
-            (fila["id"], json.dumps(fila, default=str, ensure_ascii=False),
-             tarea.get("bandeja_id")))
+        huella = json.dumps(fila, default=str, ensure_ascii=False)
+        if de_la_sala:
+            await conn.execute(
+                """
+                INSERT INTO log_acciones
+                  (actor, accion, tabla, registro_id, antes, despues, motivo,
+                   bandeja_id)
+                VALUES ('sala', 'crear', 'comentarios_tarea', %s, NULL, %s,
+                        'comentario escrito por la sala de control (Code)', %s)
+                """,
+                (fila["id"], huella, tarea.get("bandeja_id")))
+        else:
+            await conn.execute(
+                """
+                INSERT INTO log_acciones
+                  (actor, accion, tabla, registro_id, antes, despues, motivo,
+                   bandeja_id)
+                VALUES ('panel', 'crear', 'comentarios_tarea', %s, NULL, %s,
+                        'comentario escrito desde el panel de tareas', %s)
+                """,
+                (fila["id"], huella, tarea.get("bandeja_id")))
         return fila["id"]
 
 

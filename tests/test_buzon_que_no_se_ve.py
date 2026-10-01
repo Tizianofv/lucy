@@ -3961,10 +3961,14 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # EXENTOS por `tests/test_apagado_ordenado.py` y `tests/_arnes_apagado.py`
     # (nuevos). VIGILADOS sin cambio en 44: se tocaron `main.py`,
     # `cerebro/interpretar.py` y `db/db.py`, ya vigilados de antes.
-    assert medido == {"en disco": 113, "exentos": 69, "vigilados": 44}, (
+    # 1-oct-2026, rama `trabajo/code-comenta`: 113 → 114 en disco, 69 → 70
+    # EXENTOS por `tests/test_api_code_comentarios.py` (nuevo). VIGILADOS sin
+    # cambio en 44: se tocaron `db/db.py`, `web/api_code.py` y `config.py`, ya
+    # vigilados de antes.
+    assert medido == {"en disco": 114, "exentos": 70, "vigilados": 44}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "1-oct-2026 (rama apagado-ordenado) era {'en disco': 113, "
-        "'exentos': 69, 'vigilados': 44}. La aserción de fondo —cero "
+        "1-oct-2026 (rama code-comenta) era {'en disco': 114, "
+        "'exentos': 70, 'vigilados': 44}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "
