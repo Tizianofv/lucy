@@ -608,3 +608,296 @@ def test_la_nota_del_menu_ya_no_dice_que_la_pagina_es_solo_para_mirar():
     for dicho in ("se crea un proyecto nuevo", "el nombre", "el responsable", "el grupo",
                   "se cierra o se reabre", "el cliente todavía no se pone"):
         assert dicho in nota, dicho
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# La puerta `db.crear_proyecto`, llamada DIRECTO (sin la ruta)
+# ═══════════════════════════════════════════════════════════════════════
+#
+# El docstring de la puerta dice que decide ella el nombre, el grupo y el
+# responsable, y que la ruta solo traduce. Quien la llame sin la ruta (el
+# Telegram de E8) tiene que encontrar la misma puerta: se prueba llamándola.
+
+def _filas(mundo) -> int:
+    return mundo.con.execute("SELECT count(*) FROM proyectos").fetchone()[0]
+
+
+@pytest.mark.parametrize("responsable", [None, True, False, "Persona Dos", "700100001", 12345,
+                                          700100999, 3.5, [700100001]])
+async def test_la_puerta_rechaza_un_responsable_que_no_es_un_chat_que_valga(mundo, gente, responsable):
+    with pytest.raises(db.ProyectoNoSeCrea) as e:
+        await db.crear_proyecto("Un proyecto", "CDS", responsable)
+    assert e.value.clave == "responsable"
+    assert _filas(mundo) == 0 and _huellas(mundo) == []
+
+
+@pytest.mark.parametrize("area", ["Inventada", "", None, "cds", 5, "CDS' OR 1=1 --"])
+async def test_la_puerta_rechaza_un_grupo_que_no_existe(mundo, gente, area):
+    with pytest.raises(db.ProyectoNoSeCrea) as e:
+        await db.crear_proyecto("Un proyecto", area, gente.rosi)
+    assert e.value.clave == "grupo"
+    assert _filas(mundo) == 0 and _huellas(mundo) == []
+
+
+@pytest.mark.parametrize("nombre,clave", [("", "vacio"), ("   ", "vacio"), (None, "vacio"), (5, "vacio"),
+                                           ("x" * (db.LARGO_NOMBRE_PROYECTO + 1), "largo")])
+async def test_la_puerta_rechaza_un_nombre_malo(mundo, gente, nombre, clave):
+    with pytest.raises(db.NombreDeProyectoNoVale) as e:
+        await db.crear_proyecto(nombre, "CDS", gente.rosi)
+    assert e.value.clave == clave
+    assert _filas(mundo) == 0 and _huellas(mundo) == []
+
+
+async def test_la_puerta_rechaza_un_nombre_repetido_pero_no_el_de_uno_en_la_papelera(mundo, gente):
+    mundo.proyecto(1, "Ya existe", area="CDS")
+    mundo.proyecto(2, "En la papelera", area="CDS", borrado=True)
+    with pytest.raises(db.NombreDeProyectoNoVale) as e:
+        await db.crear_proyecto(" YA EXISTE ", "CDS", gente.rosi)
+    assert e.value.clave == "repetido" and _filas(mundo) == 2
+    nuevo = await db.crear_proyecto("en la papelera", "CDS", gente.rosi)
+    assert nuevo["nombre"] == "en la papelera" and _filas(mundo) == 3
+
+
+async def test_la_puerta_decide_en_orden_nombre_grupo_responsable(mundo):
+    with pytest.raises(db.NombreDeProyectoNoVale):
+        await db.crear_proyecto("", "Inventada", None)
+    with pytest.raises(db.ProyectoNoSeCrea) as e:
+        await db.crear_proyecto("Bien", "Inventada", None)
+    assert e.value.clave == "grupo"
+
+
+@pytest.mark.parametrize("quien", ["dueno", "rosi", "code"])
+async def test_la_puerta_deja_pasar_a_rosi_a_tiziano_y_a_code(mundo, gente, quien):
+    chat = {"dueno": gente.dueno, "rosi": gente.rosi, "code": config.CHAT_ID_CODE}[quien]
+    nuevo = await db.crear_proyecto("  Con espacios  ", "ACD", chat)
+    assert (nuevo["nombre"], nuevo["area"], nuevo["responsable_chat_id"]) == ("Con espacios", "ACD", chat)
+    h, = _huellas(mundo)
+    assert (h["actor"], h["accion"], h["registro_id"]) == ("panel", "crear", nuevo["id"])
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Los formularios del HTML, enviados a la ruta real como lo haría el navegador
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Antes las pruebas llamaban a la ruta con campos escritos a mano y nunca leían
+# el formulario de la plantilla: un `name` cambiado o un `action` apuntando a
+# otro proyecto no lo veía nadie. Acá la lista de formularios SALE DEL HTML
+# renderizado de cada vista; de cada uno se toma su `action`, sus controles y los
+# valores que el navegador mandaría (hidden con su `value`, select con la opción
+# marcada o la que la persona escoge, texto con lo que se escriba), se envía a
+# la ruta de verdad y se mira el efecto sobre el proyecto DE LA PÁGINA y que nada
+# más cambió. FRONTERA: es un navegador de mentira (`html.parser`); no ejecuta el
+# script ni aplica `required`.
+
+from html.parser import HTMLParser  # noqa: E402
+
+import test_pagina_proyectos as _pagina  # noqa: E402
+
+
+class _LectorDeFormularios(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.formularios = []
+        self._f = self._sel = self._op = self._boton = None
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        if tag == "form":
+            self._f = {"metodo": (a.get("method") or "get").lower(), "accion": a.get("action"),
+                       "clase": a.get("class") or "", "campos": [], "botones": []}
+            self.formularios.append(self._f)
+        elif self._f is None:
+            return
+        elif tag == "input":
+            self._f["campos"].append({"tipo": a.get("type", "text"), "name": a.get("name"),
+                                      "value": a.get("value"), "disabled": "disabled" in a})
+        elif tag == "select":
+            self._sel = {"tipo": "select", "name": a.get("name"), "disabled": "disabled" in a, "opciones": []}
+            self._f["campos"].append(self._sel)
+        elif tag == "option" and self._sel is not None:
+            self._op = {"value": a.get("value"), "selected": "selected" in a,
+                        "disabled": "disabled" in a, "texto": ""}
+            self._sel["opciones"].append(self._op)
+        elif tag == "button":
+            self._boton = {"texto": ""}
+            self._f["botones"].append(self._boton)
+
+    def handle_data(self, dato):
+        if self._boton is not None:
+            self._boton["texto"] += dato
+        if self._op is not None:
+            self._op["texto"] += dato
+
+    def handle_endtag(self, tag):
+        if tag == "form":
+            self._f = self._sel = self._op = self._boton = None
+        elif tag == "select":
+            self._sel = self._op = None
+        elif tag == "option":
+            self._op = None
+        elif tag == "button":
+            self._boton = None
+
+
+def _formularios_de(html: str, solo_post=True) -> list[dict]:
+    lector = _LectorDeFormularios()
+    lector.feed(html)
+    return [f for f in lector.formularios if not solo_post or f["metodo"] == "post"]
+
+
+def _valor(op: dict) -> str:
+    return op["value"] if op["value"] is not None else op["texto"].strip()
+
+
+def _lo_que_manda_el_navegador(form: dict, escribir, escoger) -> dict:
+    """Los pares nombre=valor que mandaría el navegador: hidden con su `value`,
+    texto con lo que `escribir(campo)` devuelva, select con `escoger(campo)` (la
+    opción que la persona deja o cambia); un control sin nombre, deshabilitado
+    o una opción deshabilitada no viajan."""
+    datos = {}
+    for c in form["campos"]:
+        if not c["name"] or c.get("disabled"):
+            continue
+        if c["tipo"] == "select":
+            op = escoger(c)
+            if op is not None and not op["disabled"]:
+                datos[c["name"]] = _valor(op)
+        elif c["tipo"] == "hidden":
+            datos[c["name"]] = c["value"] or ""
+        elif c["tipo"] in ("text", "search"):
+            datos[c["name"]] = escribir(c)
+    return datos
+
+
+def _mundo_de_formularios(monkeypatch, gente):
+    m = _pagina.Mundo()
+    monkeypatch.setattr(db, "pool", _pagina.g._Pool(m.con))
+    monkeypatch.setattr(db, "hoy_rd", lambda: _pagina.HOY)
+    m.proyecto(1, "Otro uno", area="CDS", responsable=gente.rosi)
+    m.proyecto(2, "El de la página", area="CDS", responsable=gente.dueno)
+    m.proyecto(3, "Otro tres", area="ACD", responsable=gente.dueno)
+    m.proyecto(4, "Cerrado de la página", area="CDS", estado="cerrado", responsable=gente.dueno)
+    m.proyecto(5, "Otro cinco", area="IA")
+    m.tarea(10, "pendiente", proyecto=2)
+    return m
+
+
+def _todos(m) -> dict:
+    return {f["id"]: dict(f) for f in m.con.execute("SELECT * FROM proyectos")}
+
+
+def _escrito(c):
+    return f"Escrito en {c['name']}"
+
+
+def _otra_opcion(c):
+    """La persona CAMBIA la selección: la última opción habilitada que no es la marcada."""
+    libres = [o for o in c["opciones"] if not o["disabled"] and not o["selected"]]
+    return libres[-1] if libres else None
+
+
+def _la_marcada(c):
+    return next((o for o in c["opciones"] if o["selected"]), None)
+
+
+def _primera_habilitada(c):
+    return next((o for o in c["opciones"] if not o["disabled"]), None)
+
+
+# vista -> (consulta, acciones POST exactas que tiene que tener, página = proyecto)
+_VISTAS = {
+    "abierto": ({"p": 2}, ["/proyectos/2/area", "/proyectos/2/nombre", "/proyectos/2/responsable"]),
+    "cerrado": ({"p": 4}, ["/proyectos/4/area", "/proyectos/4/estado", "/proyectos/4/nombre",
+                           "/proyectos/4/responsable"]),
+    "confirmar": ({"p": 2, "confirmar": "cerrar"},
+                  ["/proyectos/2/area", "/proyectos/2/estado", "/proyectos/2/nombre",
+                   "/proyectos/2/responsable"]),
+    "editar_nombre": ({"p": 2, "editar": "nombre"},
+                      ["/proyectos/2/area", "/proyectos/2/nombre", "/proyectos/2/responsable"]),
+    "nuevo": ({"nuevo": "CDS"}, ["/proyectos/nuevo"]),
+}
+
+
+@pytest.mark.parametrize("vista", sorted(_VISTAS))
+def test_cada_vista_tiene_exactamente_estos_formularios_de_escritura(mundo, gente, monkeypatch, vista):
+    consulta, esperadas = _VISTAS[vista]
+    m = _mundo_de_formularios(monkeypatch, gente)
+    html = ver(m, **consulta)
+    assert sorted(f["accion"] for f in _formularios_de(html)) == esperadas
+
+
+@pytest.mark.parametrize("vista", sorted(_VISTAS))
+def test_cada_formulario_enviado_como_el_navegador_escribe_en_el_proyecto_de_la_pagina(
+        mundo, gente, monkeypatch, vista):
+    consulta, esperadas = _VISTAS[vista]
+    nombres = {n: c for c, n in config.nombres_con_code().items()}
+    casos = 0
+    for i in range(len(esperadas)):
+        m = _mundo_de_formularios(monkeypatch, gente)
+        form = _formularios_de(ver(m, **consulta))[i]
+        clase = form["clase"]
+        escoger = _la_marcada
+        if clase == "resp":
+            escoger = _otra_opcion
+        elif clase == "cambiar-grupo":
+            escoger = _otra_opcion
+        elif clase == "nuevo":
+            escoger = _primera_habilitada
+        datos = _lo_que_manda_el_navegador(form, _escrito, escoger)
+        antes = _todos(m)
+        pid = consulta.get("p")
+        r = _cliente(config.CHAT_ID_DUENO).post(form["accion"], data=datos, follow_redirects=False)
+        despues = _todos(m)
+        assert r.status_code == 303, (vista, form["accion"], datos)
+        assert r.headers["location"].startswith("/proyectos?") and "error=" not in r.headers["location"], (
+            vista, form["accion"], datos, r.headers["location"])
+        textos = " ".join(b["texto"] for b in form["botones"])
+
+        if clase == "nuevo":
+            nuevos = set(despues) - set(antes)
+            assert len(nuevos) == 1 and all(despues[k] == antes[k] for k in antes), (vista, nuevos)
+            fila = despues[nuevos.pop()]
+            assert (fila["nombre"], fila["area"]) == ("Escrito en nombre", "CDS"), (vista, fila)
+            assert fila["responsable_chat_id"] == nombres["Persona Uno"], (vista, fila)
+            casos += 1
+            continue
+
+        assert set(despues) == set(antes)
+        otros = {k for k in antes if k != pid}
+        assert all(despues[k] == antes[k] for k in otros), (
+            vista, form["accion"], "cambió OTRO proyecto",
+            [k for k in otros if despues[k] != antes[k]])
+        fila = despues[pid]
+        if clase == "renombrar":
+            assert fila["nombre"] == "Escrito en nombre", (vista, fila)
+        elif clase == "resp":
+            elegido = _otra_opcion(next(c for c in form["campos"] if c["tipo"] == "select"))
+            assert fila["responsable_chat_id"] == nombres[_valor(elegido)], (vista, fila)
+        elif clase == "cambiar-grupo":
+            elegido = _otra_opcion(next(c for c in form["campos"] if c["tipo"] == "select"))
+            assert fila["area"] == _valor(elegido) and fila["area"] != antes[pid]["area"], (vista, fila)
+        elif clase == "en-linea" and "Reabrir" in textos:
+            assert fila["estado"] == "activo" and antes[pid]["estado"] == "cerrado", (vista, fila)
+        elif clase == "en-linea" and "Sí, cerrar" in textos:
+            assert fila["estado"] == "cerrado" and antes[pid]["estado"] == "activo", (vista, fila)
+        else:
+            raise AssertionError(f"formulario sin intención declarada: {clase!r} {form['accion']} {textos!r}")
+        casos += 1
+    assert casos == len(esperadas)
+
+
+def test_el_lector_de_formularios_ve_lo_que_ve_un_navegador():
+    """Con HTML inventado: hidden, opción marcada, placeholder deshabilitado, un
+    control sin nombre y uno deshabilitado."""
+    html = ('<form method="post" action="/x/1" class="a"><input type="hidden" name="h" value="v">'
+            '<select name="s"><option value="" selected disabled>Escoge</option>'
+            '<option value="u">U</option><option>Texto</option></select>'
+            '<input type="text" name="t"><input type="text"><input type="hidden" name="d" value="z" disabled>'
+            '<button>Ir</button></form><form method="get" action="/y"></form>')
+    forms = _formularios_de(html)
+    assert len(forms) == 1 and forms[0]["accion"] == "/x/1"
+    datos = _lo_que_manda_el_navegador(forms[0], lambda c: "escrito", _la_marcada)
+    assert datos == {"h": "v", "t": "escrito"}                # el placeholder deshabilitado no viaja
+    datos = _lo_que_manda_el_navegador(forms[0], lambda c: "", _otra_opcion)
+    assert datos["s"] == "Texto"                               # sin `value`, viaja el texto de la opción
+    assert len(_formularios_de(html, solo_post=False)) == 2

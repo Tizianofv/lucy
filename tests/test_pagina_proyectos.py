@@ -576,19 +576,27 @@ def test_la_pagina_no_promete_nada_que_no_hace(mundo):
     formulario del nombre (no manda ni calcula nada)."""
     _sembrar_los_casos(mundo)
     mundo.comentario(50, 10, config.CHAT_ID_DUENO, "un comentario")
-    permitidas = re.compile(r"/proyectos/(nuevo|\d+/(nombre|area|responsable|estado))")
-    for consulta in ({"p": 1}, {"p": 3}, {"g": "CDS"}, {"sin_grupo": 1}, {"nuevo": "CDS"}, {}):
+    abierto = ["/proyectos/1/area", "/proyectos/1/nombre", "/proyectos/1/responsable"]
+    # LA LISTA EXACTA de escrituras de cada vista (no un patrón que las acepte
+    # todas): una acción de más o de menos se pone roja.
+    esperadas = [({"p": 1}, abierto),
+                 ({"p": 3}, ["/proyectos/3/area", "/proyectos/3/estado",
+                             "/proyectos/3/nombre", "/proyectos/3/responsable"]),
+                 ({"g": "CDS"}, []), ({"sin_grupo": 1}, []),
+                 ({"nuevo": "CDS"}, ["/proyectos/nuevo"]), ({}, abierto)]
+    for consulta, acciones_esperadas in esperadas:
         html = ver(mundo, **consulta)
         for prohibido in ('type="checkbox"', "<textarea", "borrar-x", "data-hecha"):
             assert prohibido not in html, (consulta, prohibido)
         guiones = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
         assert len(guiones) == 1 and not _JS_QUE_DECIDIRIA.search(guiones[0]), (consulta, guiones)
+        acciones = []
         for form in re.findall(r"<form[^>]*>", html):
             if 'method="post"' in form:
-                accion = re.search(r'action="([^"]*)"', form).group(1)
-                assert permitidas.fullmatch(accion), (consulta, form)
+                acciones.append(re.search(r'action="([^"]*)"', form).group(1))
             else:
                 assert 'action="/proyectos"' in form and 'method="get"' in form, (consulta, form)
+        assert sorted(acciones) == acciones_esperadas, (consulta, acciones)
 
 
 def test_se_siguen_pudiendo_cambiar_el_nombre_y_el_grupo_con_su_ruta_de_siempre(mundo):

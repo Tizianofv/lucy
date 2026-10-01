@@ -1449,9 +1449,21 @@ async def buscar_o_crear_proyecto(nombre: str, *,
     return await _buscar_o_crear("proyectos", nombre, bandeja_id=bandeja_id)
 
 
+class ProyectoNoSeCrea(ValueError):
+    """Un proyecto nuevo que no vale por algo que no es el nombre. `clave` dice
+    qué (`grupo` o `responsable`) para que una pantalla lo traduzca sin adivinar
+    por el texto. (El nombre tiene la suya: `NombreDeProyectoNoVale`.)"""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
 async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> dict:
     """El diálogo «+ Proyecto en X» de la página de proyectos (Lucy 1.0, E5).
-    Crea un proyecto y devuelve su fila. ValueError con el motivo si no vale.
+    Crea un proyecto y devuelve su fila. Si no vale, `NombreDeProyectoNoVale`
+    (por el nombre) o `ProyectoNoSeCrea` (por el grupo o el responsable), las
+    dos con `clave`; las dos son ValueError.
 
     TODO LO QUE DECIDE ESTÁ AQUÍ, UNA VEZ, Y NO EN LA RUTA:
       · el nombre, por `nombre_de_proyecto_que_vale` (no vacío, largo, sin
@@ -1462,8 +1474,12 @@ async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> di
         con grupo: sale del botón que se tocó);
       · el responsable, por `puede_ser_responsable` (Rosi, Tiziano o Code): no
         hay «sin responsable» al crear (Tiziano, 1-oct-2026: «somos siempre
-        Rosi, Yo o Code»). La ruta traduce el nombre elegido a chat con la
-        puerta de `crud.PUERTAS`; acá solo llega el chat.
+        Rosi, Yo o Code»). Lo que llega tiene que SER un chat (un número que
+        pase esa puerta): `None`, un texto o un chat que no entra al panel se
+        rechazan acá. La ruta solo TRADUCE el nombre elegido a chat (con la
+        puerta de `crud.PUERTAS`, que es sync y vive en `crud`); la decisión
+        de si vale es de esta función, así que quien la llame sin la ruta (el
+        Telegram de E8) tiene la misma puerta.
 
     NO lleva cliente: lo pone `poner_cliente` (E3), con la ficha releída de
     Noco; nace sin cliente, que es un estado válido (es opcional).
@@ -1478,10 +1494,10 @@ async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> di
     """
     nombre = nombre_de_proyecto_que_vale(nombre)
     if area not in {a["clave"] for a in await areas()}:
-        raise ValueError("ese grupo no existe")
+        raise ProyectoNoSeCrea("grupo", "ese grupo no existe")
     if (isinstance(responsable_chat_id, bool) or not isinstance(responsable_chat_id, int)
             or not puede_ser_responsable(responsable_chat_id)):
-        raise ValueError("ese chat no puede ser responsable")
+        raise ProyectoNoSeCrea("responsable", "ese chat no puede ser responsable")
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         if await proyecto_vivo_con_nombre(cur, nombre) is not None:

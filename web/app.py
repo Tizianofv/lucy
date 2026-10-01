@@ -965,32 +965,32 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
 
 @app.post("/proyectos/nuevo")
 async def crear_proyecto_nuevo(request: Request):
-    """El formulario «+ Proyecto en X». Todo lo decide `db.crear_proyecto`;
-    esta ruta traduce el formulario y el rechazo. El responsable llega por
-    NOMBRE y se vuelve chat con la MISMA puerta que usan `crud.editar` y
-    `deshacer`. Un rechazo vuelve al formulario con una CLAVE en la URL (nunca
-    el nombre pedido)."""
+    """El formulario «+ Proyecto en X». Todo lo decide `db.crear_proyecto`
+    (nombre, grupo y responsable); esta ruta solo traduce el formulario y el
+    rechazo. El responsable llega por NOMBRE y se vuelve chat con la MISMA
+    puerta de traducción que usan `crud.editar` y `deshacer`. Un rechazo vuelve
+    al formulario con una CLAVE en la URL (nunca el nombre pedido)."""
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     formulario = await request.form()
     nombre = str(formulario.get("nombre", ""))
     area = str(formulario.get("area", "")).strip()
     vuelta = f"/proyectos?nuevo={quote(area)}"
+    # SOLO TRADUCE: el nombre elegido pasa a chat; si no se puede traducir, llega
+    # `None` y la puerta (`db.crear_proyecto`) es la que lo rechaza.
     try:
         responsable = crud.PUERTAS["proyectos"]["responsable_chat_id"](
             str(formulario.get("responsable", "")))
     except ValueError:
         responsable = None
-    if responsable is None:
-        return RedirectResponse(f"{vuelta}&error=responsable", status_code=303)
     try:
         nuevo = await db.crear_proyecto(nombre, area, responsable)
     except db.NombreDeProyectoNoVale as e:
         log.warning("Panel de proyectos: proyecto nuevo rechazado (%s)", e.clave)
         return RedirectResponse(f"{vuelta}&error=nombre_{e.clave}", status_code=303)
-    except ValueError as e:
-        log.warning("Panel de proyectos: proyecto nuevo rechazado: %s", e)
-        return RedirectResponse(f"{vuelta}&error=grupo", status_code=303)
+    except db.ProyectoNoSeCrea as e:
+        log.warning("Panel de proyectos: proyecto nuevo rechazado (%s)", e.clave)
+        return RedirectResponse(f"{vuelta}&error={e.clave}", status_code=303)
     return RedirectResponse(
         f"/proyectos?hecho=proyecto_nuevo&p={nuevo['id']}", status_code=303)
 
