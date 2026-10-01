@@ -334,8 +334,8 @@ def test_agregar_una_persona_a_la_tarea_vuelve_a_la_tarea_con_el_detalle_abierto
 @pytest.mark.parametrize("campos,aviso", [
     ({"noco_id": "101", "rol": ""}, "persona_rol"),
     ({"noco_id": "101", "rol": "x" * 81}, "persona_rol"),
-    ({"noco_id": "", "rol": "r"}, "persona_ficha"),
-    ({"rol": "r"}, "persona_ficha"),
+    ({"noco_id": "", "rol": "r"}, "persona_falta"),               # «Agregar» sin escoger a nadie
+    ({"rol": "r"}, "persona_falta"),
     ({"noco_id": "abc", "rol": "r"}, "persona_ficha"),
     ({"noco_id": "-5", "rol": "r"}, "persona_ficha"),
     ({"noco_id": "999", "rol": "r"}, "persona_ficha"),            # una ficha que Noco no tiene
@@ -664,7 +664,7 @@ var fetch = function (url) { pedidos.push(url); var r = respuestas.shift();
   if (r === "falla") return {then: function () { return this; }, catch: function (f) { f(); return this; }};
   return trampa({json: function () { return r; }}); };
 document.createElement = function (tag) {
-  return {tag: tag, className: "", textContent: "", value: "", title: "", name: "", type: "submit", hijos: []}; };
+  return {tag: tag, className: "", textContent: "", value: "", title: "", name: "", type: "submit", hijos: [], dataset: {}}; };
 function lista() {
   var l = {hijos: [], firstChild: null,
     removeChild: function (h) { this.hijos.shift(); this.firstChild = this.hijos[0] || null; },
@@ -678,7 +678,7 @@ function campoDeMentira(modo, valor) {
   var caja = {value: valor, dataset: {buscarPersona: modo}, focos: 0};
   var campo = {querySelector: function (s) {
       if (s === ".sugerencias") return sug;
-      if (s === 'input[name="cliente"]') return oculto;
+      if (s === 'input[data-elegida]') return oculto;
       if (s === "input[data-buscar-persona]") return caja;
       if (s === "form.elegir-persona") return envio;
       return null; }};
@@ -690,6 +690,30 @@ function campoDeMentira(modo, valor) {
     if (s === "input[data-buscar-persona]") return this;
     return null; };
   return {caja: caja, sug: sug, oculto: oculto, campo: campo, envios: envios, quitar: quitar};
+}
+/* El bloque «agregar una persona»: caja de buscar (modo elegir) y, en su formulario, el
+   campo escondido que el guion CREA al escoger. */
+function campoPersona() {
+  var sug = lista();
+  var forma = {dataset: {pidePersona: ""}, hijos: [],
+    appendChild: function (h) { this.hijos.push(h); },
+    querySelector: function (s) {
+      if (s === "input[data-elegida]") return this.hijos[0] || null;
+      if (s === ".sugerencias") return sug;
+      return null; }};
+  var caja = {value: "ana", dataset: {buscarPersona: "elegir"}};
+  var campo = {querySelector: function (s) {
+      if (s === ".sugerencias") return sug;
+      if (s === "input[data-elegida]") return forma.querySelector(s);
+      if (s === "form[data-pide-persona]") return forma;
+      if (s === "input[data-buscar-persona]") return caja;
+      return null; }};
+  caja.closest = function (s) { return s === ".persona-campo" ? campo : (s === "input[data-buscar-persona]" ? this : null); };
+  return {caja: caja, sug: sug, forma: forma, campo: campo};
+}
+function enviar(forma, boton) {
+  var e = {target: forma, prevenido: false, submitter: boton, preventDefault: function () { this.prevenido = true; }};
+  oyentes.submit(e); return e.prevenido;
 }
 function boton(c, id, nombre, tipo) {
   var b = {value: id, textContent: nombre, type: tipo,
@@ -876,3 +900,89 @@ async def test_no_se_deshace_el_quitar_si_la_misma_persona_ya_volvio_a_estar_ahi
         vivas = [f for f in _filas(mundo) if f["borrado_en"] is None
                  and f["noco_id"] == 101 and (f["proyecto_id"] or f["tarea_id"])]
         assert len(vivas) >= 1
+
+
+# ── «Agregar una persona»: tocar un resultado solo ESCOGE; «Agregar» envía ─────
+
+@hay_osascript
+def test_js_tocar_un_resultado_de_agregar_persona_solo_escoge_y_no_envia(mundo):
+    r = _jxa_personas(mundo, """
+      var c = campoPersona(); var b = boton(c, 7, "Ana Pérez", "button");
+      oyentes.click(ev(b));
+      var h = c.forma.hijos[0];
+      JSON.stringify({campos: c.forma.hijos.length, tipo: h.type, name: h.name, value: h.value, caja: c.caja.value,
+                      lista: c.sug.hijos.length, evitado: evitado, enviados: c.forma.dataset.enviado === undefined ? 0 : 1})""")
+    assert r == {"campos": 1, "tipo": "hidden", "name": "noco_id", "value": 7, "caja": "Ana Pérez",
+                 "lista": 0, "evitado": 1, "enviados": 0}
+
+
+@hay_osascript
+def test_js_escoger_a_otra_persona_reutiliza_el_campo_y_escribir_otra_cosa_deshace_la_eleccion(mundo):
+    r = _jxa_personas(mundo, """
+      var c = campoPersona();
+      oyentes.click(ev(boton(c, 7, "Ana Pérez", "button"))); oyentes.click(ev(boton(c, 9, "Anabel", "button")));
+      var tras_dos = {campos: c.forma.hijos.length, value: c.forma.hijos[0].value, caja: c.caja.value};
+      c.caja.value = "Anab"; oyentes.input(ev(c.caja));
+      JSON.stringify({tras_dos: tras_dos, despues: c.forma.hijos[0].value})""")
+    assert r == {"tras_dos": {"campos": 1, "value": 9, "caja": "Anabel"}, "despues": ""}
+
+
+@hay_osascript
+def test_js_agregar_sin_persona_escogida_no_envia_y_dice_por_que(mundo):
+    r = _jxa_personas(mundo, """
+      var c = campoPersona();
+      var sin = enviar(c.forma);                                    // nadie escogido
+      var aviso = c.sug.hijos.map(function (h) { return h.className + ":" + h.textContent; });
+      oyentes.click(ev(boton(c, 7, "Ana Pérez", "button")));
+      c.caja.value = "Anab"; oyentes.input(ev(c.caja));              // la eleccion se deshizo
+      var deshecha = enviar(c.forma);
+      oyentes.click(ev(boton(c, 7, "Ana Pérez", "button")));
+      var con = enviar(c.forma);
+      JSON.stringify({sin: sin, aviso: aviso, deshecha: deshecha, con: con, enviado: c.forma.dataset.enviado !== undefined})""")
+    assert r == {"sin": True, "aviso": ["vacio:Escoge a la persona antes de agregarla: búscala y toca su nombre."],
+                 "deshecha": True, "con": False, "enviado": True}
+
+
+@hay_osascript
+def test_js_el_boton_de_un_resultado_sin_javascript_envia_aunque_no_haya_campo_escondido(mundo):
+    """Si la página vino de `?pq=` el resultado es un botón de envío con su `noco_id`:
+    el guion no lo frena."""
+    r = _jxa_personas(mundo, """
+      var c = campoPersona(); JSON.stringify({prevenido: enviar(c.forma, {name: "noco_id", value: "7"}),
+        otro: enviar(campoPersona().forma, {name: "otra", value: "7"})})""")
+    assert r == {"prevenido": False, "otro": True}
+
+
+def test_cada_bloque_de_agregar_persona_se_ve_como_el_de_la_maqueta(mundo, gente, noco):
+    """Maqueta v19 (líneas 274-279): el campo para escoger a la persona, el «qué hace
+    aquí» y el botón «Agregar», SIEMPRE visible. Se comprueba en el proyecto y en la
+    tarea, con y sin resultados de búsqueda."""
+    from test_pagina_proyectos_v19 import _selectores_que_esconden
+    _sembrar(mundo)
+    for consulta in ({"p": 1}, {"p": 1, "t": 10}, {"p": 1, "t": 10, "pq": "de noco", "pdonde": "tarea-10"}):
+        html = ver(mundo, **consulta)
+        raiz = arbol(html)
+        formas = raiz.buscar("form", "agregar")
+        assert len(formas) == 2 if "t" in consulta else len(formas) == 1
+        for forma in formas:
+            busca = forma.padre.buscar("form", "buscar-persona")[0]
+            caja = busca.buscar("input")[0]
+            assert caja.attrs["placeholder"] == "Escoge de las personas de Noco…"
+            assert caja.attrs["data-buscar-persona"] == "elegir"
+            # Abajo: la ayuda de «qué hace aquí» y «Agregar», este último a la vista.
+            hijos = [h for h in forma.hijos if h.tag in ("div", "input", "button")]
+            assert [(h.tag, h.attrs.get("class") if h.tag == "div" else (h.attrs.get("name") or h.todo_el_texto())) for h in hijos] == [
+                ("div", "sugerencias"), ("input", "rol"), ("button", "Agregar")]
+            assert hijos[1].attrs["placeholder"] == "¿Qué hace aquí?" and "data-pide-persona" in forma.attrs
+            assert not [i for i in forma.buscar("input") if i.attrs.get("type") == "hidden"]   # el Id lo pone el guion
+            # La hoja no esconde ese botón (a diferencia de «Buscar», que con JS sobra).
+            esconden = _selectores_que_esconden(html)
+            assert not any("agregar" in x for x in esconden) and ".js .buscar-persona button" in esconden
+        assert _problemas_de_html_simple(html) == []
+
+
+def test_agregar_sin_escoger_a_nadie_por_la_ruta_vuelve_con_el_aviso_de_que_falta_escoger(mundo, gente, noco):
+    _sembrar(mundo)
+    assert "Escoge a la persona antes de agregarla" in ver(mundo, error="persona_falta", p=1)
+    assert mandar("/proyectos/1/personas", {"rol": "r"}).headers["location"] == "/proyectos?error=persona_falta&p=1"
+    assert _filas(mundo) == [] and noco.pedidos == []

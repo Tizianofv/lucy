@@ -1140,7 +1140,9 @@ _ATRIBUTOS = {
     # escoger—, para que el script no tenga que llevar una lista de clases
     # tecleada. Los que CREAN una fila con más de un campo (proyecto nuevo,
     # tarea nueva) NO lo llevan: guardarían a medias.
-    "form": {"method", "action", "class", "data-auto"},
+    # `data-pide-persona` (1-oct-2026): el formulario de agregar una persona; le dice
+    # al script que NO lo envíe sin persona escogida. No cambia lo que se envía.
+    "form": {"method", "action", "class", "data-auto", "data-pide-persona"},
     # `min` (1-oct-2026): el piso de fecha del campo de día y hora de la tarea
     # nueva. Es una ayuda del navegador, no una guarda — lo que vale lo decide
     # `_vence_con_hora_valido` en el servidor.
@@ -1150,7 +1152,10 @@ _ATRIBUTOS = {
     # copiando el Id a un campo escondido) y no cambia lo que se envía;
     # `autocomplete="off"` solo apaga la ayuda del navegador.
     "input": {"type", "name", "value", "required", "maxlength", "placeholder", "aria-label", "min",
-              "data-buscar-persona", "autocomplete"},
+              "data-buscar-persona", "autocomplete",
+              # `data-elegida` (1-oct-2026): el campo escondido donde queda el Id de la
+              # persona o del cliente ESCOGIDOS en la ventanita; solo marca cuál es.
+              "data-elegida"},
     "select": {"id", "name", "required"},
     "option": {"value", "selected", "disabled"},
     # `title` y `aria-label` (E6): el botón redondo de marcar hecha (○ o ✓) no

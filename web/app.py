@@ -1147,7 +1147,10 @@ async def agregar_persona_al_proyecto(request: Request, pid: int):
     formulario = await request.form()
     vale, noco_id = _noco_id_de(formulario)
     if not vale or noco_id is None:
-        return RedirectResponse(f"/proyectos?error=persona_ficha&p={pid}", status_code=303)
+        # Sin persona escogida (el botón «Agregar» sin haber tocado un resultado) es
+        # otro aviso que un Id que no vale.
+        clave = "persona_ficha" if not vale else "persona_falta"
+        return RedirectResponse(f"/proyectos?error={clave}&p={pid}", status_code=303)
     try:
         await db.agregar_participante(("proyecto", pid), noco_id, str(formulario.get("rol", "")),
                                       chat, leer_persona=noco_lectura.persona)
@@ -1181,8 +1184,9 @@ async def agregar_persona_a_la_tarea(request: Request, tid: int):
     formulario = await request.form()
     vale, noco_id = _noco_id_de(formulario)
     if not vale or noco_id is None:
+        clave = "persona_ficha" if not vale else "persona_falta"
         return RedirectResponse(await _volver_a_la_tarea(
-            tid, error="persona_ficha", t=tid), status_code=303)
+            tid, error=clave, t=tid), status_code=303)
     try:
         await db.agregar_participante(("tarea", tid), noco_id, str(formulario.get("rol", "")),
                                       chat, leer_persona=noco_lectura.persona)

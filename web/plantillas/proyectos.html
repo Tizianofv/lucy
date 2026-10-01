@@ -280,13 +280,19 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 {% macro agregar_persona(donde, accion) %}
 <div class="persona-campo">
   <form class="buscar-persona" method="get" action="/proyectos" role="search">
-    <input type="text" name="pq" placeholder="Buscar en Noco…" aria-label="Buscar a una persona en Noco" data-buscar-persona="enviar" autocomplete="off"{% if busqueda and busqueda.donde == donde %} value="{{ busqueda.q }}"{% endif %}>
+    <input type="text" name="pq" placeholder="Escoge de las personas de Noco…" aria-label="Escoge a una persona de Noco" data-buscar-persona="elegir" autocomplete="off"{% if busqueda and busqueda.donde == donde %} value="{{ busqueda.q }}"{% endif %}>
     {{ vista_oculta(donde) }}
     <button class="btn-linea">Buscar</button>
   </form>
-  <form class="agregar" method="post" action="{{ accion }}">
-    <input name="rol" type="text" required maxlength="{{ largo_rol }}" placeholder="¿Qué hace aquí?" aria-label="Qué hace esta persona">
+  {#- «Agregar» está SIEMPRE a la vista, como en la maqueta. Tocar un resultado solo
+      ESCOGE a la persona (con JavaScript queda escrita en la caja y su Id en un campo
+      escondido que crea el guion); se agrega al apretar «Agregar». Sin persona
+      escogida no se envía y se dice por qué. Sin JavaScript, el resultado es un
+      botón que envía este formulario con su `noco_id`. -#}
+  <form class="agregar" method="post" action="{{ accion }}" data-pide-persona>
     {{ sugerencias(donde) }}
+    <input name="rol" type="text" required maxlength="{{ largo_rol }}" placeholder="¿Qué hace aquí?" aria-label="Qué hace esta persona">
+    <button class="guardar">Agregar</button>
   </form>
 </div>{% endmacro %}
 
@@ -419,7 +425,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       <div class="persona-campo">
         <label>Cliente (opcional)
           <input type="text" placeholder="Buscar en Noco… (sin cliente)" aria-label="Cliente del proyecto" data-buscar-persona="elegir" autocomplete="off"></label>
-        <input type="hidden" name="cliente" value="">
+        <input type="hidden" name="cliente" value="" data-elegida>
         <div class="sugerencias"></div>
       </div>
       <label>Responsable
@@ -492,6 +498,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'cliente_igual' %}<p class="aviso">No cambió nada: ese ya era el cliente.</p>
     {% elif error == 'cliente_nuevo' %}<p class="aviso">El proyecto se creó, pero SIN cliente: Noco no contestó o la ficha ya no está. Se puede poner desde la cabecera.</p>
     {% elif error == 'persona_noco' %}<p class="aviso">Noco no contestó: la persona NO se agregó. Intenta otra vez en un momento.</p>
+    {% elif error == 'persona_falta' %}<p class="aviso">Escoge a la persona antes de agregarla: búscala y toca su nombre.</p>
     {% elif error == 'persona_ficha' %}<p class="aviso">Esa persona ya no está en Noco, o no se pudo leer su ficha.</p>
     {% elif error == 'persona_rol' %}<p class="aviso">«Qué hace aquí» no puede quedar vacío ni pasar de {{ largo_rol }} caracteres.</p>
     {% elif error == 'persona_repetida' %}<p class="aviso">Esa persona ya está ahí.</p>
@@ -714,7 +721,7 @@ document.addEventListener("click", function (e) {
   var elegida = e.target.closest && e.target.closest("button.sugerencia");
   if (elegida && elegida.type === "button") {                // la ventanita: copia el Id y el nombre
     var sitio = elegida.closest(".persona-campo");
-    sitio.querySelector('input[name="cliente"]').value = elegida.value;
+    campoElegido(sitio).value = elegida.value;
     sitio.querySelector("input[data-buscar-persona]").value = elegida.textContent;
     vaciarSugerencias(sitio.querySelector(".sugerencias"));
     e.preventDefault();
@@ -831,6 +838,22 @@ function ponerSugerencias(lista, personas, modo) {
     lista.appendChild(b);
   }
 }
+/* Tocar un resultado en modo «elegir» solo ESCOGE: el Id queda en un campo escondido
+   (`data-elegida`; el de la ventanita ya viene escrito por el servidor, el de
+   «agregar una persona» lo crea este guion dentro de su formulario) y el nombre en
+   la caja. Se envía al apretar «Agregar» / «Crear proyecto». */
+function campoElegido(sitio) {
+  var campo = sitio.querySelector("input[data-elegida]");
+  if (campo) return campo;
+  var envio = sitio.querySelector("form[data-pide-persona]");
+  if (!envio) return null;
+  campo = document.createElement("input");
+  campo.type = "hidden";
+  campo.name = "noco_id";
+  campo.dataset.elegida = "";
+  envio.appendChild(campo);
+  return campo;
+}
 function buscarPersonas(caja) {
   var campo = caja.closest(".persona-campo");
   var lista = campo && campo.querySelector(".sugerencias");
@@ -882,7 +905,7 @@ document.addEventListener("input", function (e) {
   var persona = e.target.closest && e.target.closest("input[data-buscar-persona]");
   if (persona) {
     if (persona.dataset.buscarPersona === "elegir") {      // escribir otra cosa deshace la elección
-      var elegido = persona.closest(".persona-campo").querySelector('input[name="cliente"]');
+      var elegido = persona.closest(".persona-campo").querySelector("input[data-elegida]");
       if (elegido) elegido.value = "";
     }
     buscarPersonas(persona);
@@ -929,6 +952,18 @@ document.addEventListener("change", function (e) {
 document.addEventListener("submit", function (e) {
   var form = e.target;
   if (!form || !form.dataset) return;
+  /* «Agregar» sin persona escogida no se envía, y dice por qué. (Un botón de
+     resultado de la búsqueda sin JavaScript sí: trae su `noco_id`.) */
+  if (form.dataset.pidePersona !== undefined) {
+    var escogida = form.querySelector("input[data-elegida]");
+    var deResultado = e.submitter && e.submitter.name === "noco_id";
+    if (!deResultado && (!escogida || !escogida.value)) {
+      e.preventDefault();
+      avisarEnSugerencias(form.querySelector(".sugerencias"),
+        "Escoge a la persona antes de agregarla: búscala y toca su nombre.");
+      return;
+    }
+  }
   if (form.dataset.enviado !== undefined) {
     e.preventDefault();
     return;
