@@ -919,7 +919,8 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
                     p: int = 0, g: str = "", sin_grupo: int = 0, q: str = "",
                     hecho: str = "", nuevo: str = "", confirmar: str = "",
                     editar: str = "", t: int = 0, editar_tarea: int = 0,
-                    confirmar_borrar: int = 0, editar_comentario: int = 0):
+                    confirmar_borrar: int = 0, editar_comentario: int = 0,
+                    derivar: int = 0, derivadas: str = ""):
     """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
     (`?g=`), las de «Sin grupo» (`?sin_grupo=1`) o el formulario de un proyecto
@@ -932,10 +933,13 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
     de la tarea (`/{pid}/tareas`, y `/proyectos/tarea/{tid}/...`: hecha,
     reabrir, titulo, borrar, responsable, comentar y editar un comentario). Los
     parámetros `confirmar=cerrar`, `editar=nombre`, `t` (el detalle abierto de
-    una tarea), `editar_tarea`, `confirmar_borrar` y `editar_comentario` solo
-    hacen que el SERVIDOR dibuje la confirmación o el formulario, para que todo
-    funcione también sin JavaScript. `hecho` y `error` son los avisos con los que
-    vuelven los POST, junto con `p` (el proyecto del que hablan).
+    una tarea), `editar_tarea`, `confirmar_borrar`, `editar_comentario` y
+    `derivar` (los renglones de «¿sale una tarea nueva de ésta?» abiertos en esa
+    tarea) solo hacen que el SERVIDOR dibuje la confirmación o el formulario,
+    para que todo funcione también sin JavaScript. `hecho`, `error` y
+    `derivadas` (los ids de las tareas que salieron de la que se cerró) son los
+    avisos con los que vuelven los POST, junto con `p` (el proyecto del que
+    hablan).
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
@@ -966,6 +970,11 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
          "t_abierta": t, "editar_tarea": editar_tarea,
          "confirmar_borrar": confirmar_borrar,
          "editar_comentario": editar_comentario,
+         # Los renglones de la tarea derivada: cuál los tiene abiertos
+         # (`?derivar=`), cuántos se pintan y el piso de fecha, las MISMAS
+         # piezas que usa /tareas (`MAX_DERIVADAS`, `PISO_FECHA`).
+         "derivar": derivar, "max_derivadas": MAX_DERIVADAS,
+         "piso_fecha": PISO_FECHA, "derivadas": derivadas,
          "vuelta": _direccion_de_la_vista(vista),
          "largo_comentario": db.LARGO_COMENTARIO,
          "largo_titulo": db.LARGO_TITULO_TAREA,
@@ -1130,14 +1139,60 @@ async def agregar_tarea_al_proyecto(request: Request, pid: int):
 
 @app.post("/proyectos/tarea/{tid}/hecha")
 async def marcar_tarea_hecha_desde_proyectos(request: Request, tid: int):
-    """Marcar UNA tarea hecha: `db.marcar_tarea_hecha`, la de siempre (huella de
-    panel). Lo que ya estaba hecho no se reescribe y se dice."""
-    if not auth.puede_entrar(_sesion(request)):
+    """Marcar UNA tarea hecha desde la página de Proyectos — y, si la persona
+    escribió la tarea que sale de ella, crearla en el MISMO gesto.
+
+    POR LA MISMA PUERTA QUE `/tareas`: `db.cerrar_y_derivar`, que cierra la
+    madre y crea las hijas en una sola transacción (Tiziano, 1-oct-2026: «Sí»
+    a tener «crear la tarea que sigue» también en Proyectos). Antes esta ruta
+    llamaba a `db.marcar_tarea_hecha`, que no deriva; el camino de cerrar una
+    tarea es UNO para las dos pantallas, no dos que se parecen.
+
+    Los renglones de la tarea nueva se leen y se validan con LAS MISMAS piezas
+    que `/tareas` (`_derivadas_pedidas` y `_vence_con_hora_valido`), con el
+    responsable por NOMBRE, que es como viaja en esta página. Un renglón que
+    no vale NO cierra la madre (decisión D6 del diseño de la tarea derivada:
+    «si la nueva no vale, la vieja tampoco se cierra»): se vuelve con los
+    renglones abiertos y el aviso.
+
+    Un proyecto cerrado tampoco recibe la derivada, y por la misma puerta
+    (`db.ProyectoNoAdmiteTareas`, que `cerrar_y_derivar` levanta ANTES de
+    cerrar nada): la madre se queda pendiente y se dice.
+    """
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
         return _fuera(request)
-    cambio = await db.marcar_tarea_hecha(tid)
-    return RedirectResponse(await _volver_a_la_tarea(
-        tid, **({"hecho": "tarea_hecha"} if cambio else {"error": "tarea_igual"})),
-        status_code=303)
+    formulario = await request.form()
+    claves_area_validas = {a["clave"] for a in await db.areas()}
+    vale, derivadas = _derivadas_pedidas(
+        formulario, tid, claves_area_validas, _responsable_por_nombre)
+    if not vale:
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, error="tarea_derivada", derivar=tid), status_code=303)
+    try:
+        resultado = await db.cerrar_y_derivar(chat, tid, derivadas)
+    except db.ProyectoNoAdmiteTareas as e:
+        log.warning("Panel de proyectos: derivada rechazada, el proyecto no "
+                    "admite tareas (%s)", e.clave)
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, error="tarea_derivada_cerrado", derivar=tid), status_code=303)
+    except ValueError as e:
+        # `cerrar_y_derivar` revalida el responsable contra
+        # `config.puede_ser_responsable` antes de escribir nada: si dijera que
+        # no, no entró ni la madre ni ninguna hija.
+        log.warning("Panel de proyectos: tarea derivada rechazada: %s", e)
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, error="tarea_derivada", derivar=tid), status_code=303)
+    if resultado is None:
+        return RedirectResponse("/proyectos?error=tarea", status_code=303)
+    cerrada, hijas = resultado
+    if not cerrada and not hijas:
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, error="tarea_igual"), status_code=303)
+    vuelta = {"hecho": "tarea_hecha"}
+    if hijas:
+        vuelta["derivadas"] = ",".join(str(i) for i in hijas)
+    return RedirectResponse(await _volver_a_la_tarea(tid, **vuelta), status_code=303)
 
 
 @app.post("/proyectos/tarea/{tid}/reabrir")
@@ -1464,6 +1519,28 @@ RESP_SIN = "_sin"
 RESP_OTROS = "_otros"
 
 
+def _responsable_por_nombre(crudo: str):
+    """El responsable que manda la página de Proyectos: por NOMBRE.
+
+    Es el hermano de `_responsable_pedido` para la otra convención de la casa.
+    `/tareas` pinta los desplegables con el chat como valor (nadie lo LEE, pero
+    viaja); la página de Proyectos los pinta con el NOMBRE, que es lo único que
+    se escribe en el HTML (`tests/test_responsable.py::
+    test_la_pantalla_no_enseña_ningun_numero_de_chat_como_texto`).
+
+    La lectura del nombre NO se decide acá: la hace `crud.PUERTAS["tareas"]
+    ["responsable_chat_id"]`, la MISMA puerta que usan los otros desplegables de
+    la página y el `editar` de Telegram. Devuelve `(vale, chat | None)`, la
+    misma forma de tres respuestas que `_responsable_pedido`: vacío es «sin
+    responsable» (una respuesta de verdad, no un campo que falte), un nombre
+    resuelve al chat, y cualquier otra cosa no vale y quien llama no escribe.
+    """
+    try:
+        return True, crud.PUERTAS["tareas"]["responsable_chat_id"](crudo)
+    except ValueError:
+        return False, None
+
+
 def _responsable_de_la_url(crudo: str):
     """El chat que dice `?responsable=<nombre>`, o None si no dice ninguno.
 
@@ -1580,11 +1657,22 @@ def _botones_de_responsable(filas, activa: str):
 MAX_DERIVADAS = 3
 
 
-def _derivadas_pedidas(formulario, tid: int, claves_area_validas: set[str]):
+def _derivadas_pedidas(formulario, tid: int, claves_area_validas: set[str],
+                       lee_responsable=_responsable_pedido):
     """Los renglones «¿sale algo nuevo de ésta?» de la tarea `tid`, leídos
     del MISMO envío que trae `hecha_<tid>`. Devuelve `(vale, [derivadas])`,
     con cada derivada ya lista para `db.cerrar_y_derivar`:
     `{"titulo", "vence_en", "area", "responsable_chat_id"}`.
+
+    LA ÚNICA PIEZA PARA LAS DOS PANTALLAS QUE OFRECEN LA TAREA DERIVADA:
+    `/tareas` (`guardar_tareas`) y la página de Proyectos
+    (`marcar_tarea_hecha_desde_proyectos`), que la llaman con sus propios
+    lectores de responsable porque las dos páginas escriben esa columna de
+    forma distinta —una con el chat, otra con el nombre— pero TIENEN QUE
+    decidir igual todo lo demás (título, fecha, área, y que un renglón que no
+    vale no cierre la madre). `lee_responsable` es lo único que cambia entre
+    las dos: `_responsable_pedido` (el chat, `/tareas`) o
+    `_responsable_por_nombre` (el nombre, Proyectos).
 
     LOS ÍNDICES VAN DE 1 A `MAX_DERIVADAS`, SIN HUECOS QUE ADIVINAR: la
     plantilla pinta siempre los `MAX_DERIVADAS` renglones de cada fila
@@ -1628,7 +1716,7 @@ def _derivadas_pedidas(formulario, tid: int, claves_area_validas: set[str]):
         area = str(formulario.get(f"deriva_area_{tid}_{n}", "")).strip() or None
         if area is not None and area not in claves_area_validas:
             return False, []
-        vale, resp = _responsable_pedido(
+        vale, resp = lee_responsable(
             str(formulario.get(f"deriva_resp_{tid}_{n}", "")))
         if not vale:
             return False, []

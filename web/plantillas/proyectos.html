@@ -34,8 +34,18 @@ a{color:inherit}
 .panel{margin-left:auto;display:flex;gap:1rem;flex-wrap:wrap;font-size:.85rem}
 .panel a{color:var(--suave);text-decoration:none}
 .panel a.on{color:var(--tinta);font-weight:600}
-.envoltura{display:grid;grid-template-columns:17rem minmax(0,1fr);gap:1.5rem;max-width:72rem;margin:0 auto;padding-inline:16px;padding-block:1.2rem 4rem}
-@media (max-width:760px){.envoltura{grid-template-columns:minmax(0,1fr)}}
+/* La lista de proyectos (izquierda) y el detalle (derecha) son dos cosas
+   distintas y se ven separadas: más aire entre las dos columnas y una línea
+   sutil al lado de la lista, con su propio espacio interno. El color sale de
+   `--linea`, el mismo token que el resto de la página, así que sirve igual en
+   modo claro y en modo oscuro. En el teléfono no hay columnas: la línea pasa a
+   ser un separador horizontal debajo de la lista. */
+.envoltura{display:grid;grid-template-columns:17rem minmax(0,1fr);gap:2.75rem;max-width:72rem;margin:0 auto;padding-inline:16px;padding-block:1.2rem 4rem}
+.envoltura > aside{padding-inline-end:1.6rem;border-inline-end:1px solid var(--linea)}
+@media (max-width:760px){
+  .envoltura{grid-template-columns:minmax(0,1fr);gap:1.6rem}
+  .envoltura > aside{padding-inline-end:0;border-inline-end:0;padding-block-end:1.4rem;border-block-end:1px solid var(--linea)}
+}
 .buscador{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem}
 .buscar{flex:1 1 9rem;min-width:0;font:inherit;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
 .buscar:focus-visible{outline:2px solid var(--color);outline-offset:1px}
@@ -138,6 +148,17 @@ form.marcar,form.comentar,form.resp-tarea,form.nueva-tarea{display:inline-flex;m
 form.marcar button.marca{all:unset;cursor:pointer;width:1.4rem;text-align:center;color:var(--suave);font-size:1.05rem;line-height:1}
 form.marcar button.marca.hecha-b{color:var(--ok)}
 form.marcar button.marca:focus-visible{outline:2px solid var(--color);outline-offset:2px;border-radius:50%}
+/* El renglón «¿sale una tarea nueva de ésta?»: cuando está abierto, el
+   formulario del botón redondo ocupa la línea entera y los campos van debajo,
+   para que el título y la fecha de la fila no se aprieten contra ellos. */
+form.marcar.abierta{flex:1 1 100%}
+.sale-otra{color:var(--suave);text-decoration:none;font-size:.95rem;line-height:1;padding:.1rem .3rem;border-radius:6px;flex:none}
+.sale-otra:hover{color:var(--tinta);background:var(--bg)}
+.derivada{flex:1 1 100%;display:flex;flex-direction:column;gap:.4rem;margin:.4rem 0 0;padding:.55rem .7rem;border-radius:10px;background:var(--bg)}
+.derivada .renglon{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
+.derivada input,.derivada select{font:inherit;padding:.3rem .5rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta);min-width:0}
+.derivada label{font-size:.8rem;color:var(--suave)}
+.derivada input[name^=deriva_titulo]{flex:1 1 12rem}
 .fila .titulo[hidden],.comentario p[hidden]{display:none}
 .fila form.renombrar{flex:1 1 12rem;min-width:0}
 .fila form.renombrar input{font:inherit;font-weight:500;flex:1 1 10rem}
@@ -169,10 +190,52 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% if t.es_hecha %}
     <form class="marcar" method="post" action="/proyectos/tarea/{{ t.id }}/reabrir"><button class="marca hecha-b" title="Desmarcar: vuelve a pendiente" aria-label="Desmarcar la tarea: vuelve a pendiente">✓</button></form>
     {% elif t.es_pendiente %}
-    <form class="marcar" method="post" action="/proyectos/tarea/{{ t.id }}/hecha"><button class="marca" title="Marcar hecha" aria-label="Marcar la tarea como hecha">○</button></form>
+    {#- MARCAR HECHA SIGUE SIENDO DE UN CLIC: el botón redondo envía este mismo
+        formulario, y el renglón «¿sale una tarea nueva de ésta?» es OPCIONAL y
+        vive DENTRO de él para que cerrar la vieja y crear la nueva sean un solo
+        gesto (lo mismo que hace /tareas, por la misma puerta:
+        `db.cerrar_y_derivar`). El enlace `＋` solo lo abre: con JavaScript el
+        servidor lo dibuja ya abierto (`?derivar=`), y sin JavaScript el enlace
+        lleva a esa misma dirección, así que funciona igual. Vacío no crea nada. -#}
+    {% set derivando = derivar == t.id %}
+    <form class="marcar{{ ' abierta' if derivando }}" method="post" action="/proyectos/tarea/{{ t.id }}/hecha">
+      <button class="marca" title="Marcar hecha" aria-label="Marcar la tarea como hecha">○</button>
+      {% if not derivando %}
+      <a class="sale-otra" href="{{ u }}&amp;derivar={{ t.id }}#tarea-{{ t.id }}" title="Crear la tarea que sigue" aria-label="Crear la tarea que sigue: abre el renglón de la tarea nueva">＋</a>
+      {% else %}
+      <div class="derivada">
+        <div class="nota">¿Sale una tarea nueva de ésta? Si no escribes nada, no se crea ninguna.</div>
+        {% for n in range(1, max_derivadas + 1) %}
+        <div class="renglon">
+          <input type="text" name="deriva_titulo_{{ t.id }}_{{ n }}" maxlength="{{ largo_titulo }}"
+                 placeholder="Título de la tarea nueva" aria-label="Título de la tarea nueva">
+          <input type="datetime-local" name="deriva_vence_{{ t.id }}_{{ n }}" min="{{ piso_fecha }}T00:00"
+                 aria-label="Vence la tarea nueva">
+          {#- El grupo solo se elige si la tarea NO tiene proyecto: con proyecto,
+              la nueva va al mismo y el grupo sale de él (lo mismo que hace
+              /tareas, y la misma restricción de la base). -#}
+          {% if not t.proyecto_id %}
+          <label for="dg-{{ t.id }}-{{ n }}">Grupo</label>
+          <select id="dg-{{ t.id }}-{{ n }}" name="deriva_area_{{ t.id }}_{{ n }}">
+            <option value="">sin grupo</option>
+            {% for a in areas %}<option value="{{ a.clave }}" {%- if t.area == a.clave %} selected{% endif %}>{{ a.clave }}</option>{% endfor %}
+          </select>
+          {% endif %}
+          <label for="dr-{{ t.id }}-{{ n }}">Responsable</label>
+          <select id="dr-{{ t.id }}-{{ n }}" name="deriva_resp_{{ t.id }}_{{ n }}">
+            <option value="">sin responsable</option>
+            {% if t.responsable and t.responsable not in nombres_responsable %}<option value="" selected disabled>{{ t.responsable }}</option>{% endif %}
+            {% for nombre in nombres_responsable %}<option value="{{ nombre }}" {%- if t.responsable == nombre %} selected{% endif %}>{{ nombre }}</option>{% endfor %}
+          </select>
+        </div>
+        {% endfor %}
+        <a class="btn-linea" href="{{ u }}#tarea-{{ t.id }}">Cerrar</a>
+      </div>
+      {% endif %}
+    </form>
     {% else %}<span class="marca" role="img" aria-label="{{ t.estado }}">–</span>{% endif %}
     <span class="titulo" data-dbl="titulo" title="Doble clic para cambiar el título" {% if editar_tarea == t.id %}hidden{% endif %}>{{ t.titulo }}</span>
-    <form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/titulo" {% if editar_tarea != t.id %}hidden{% endif %}>
+    <form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/titulo" data-auto {% if editar_tarea != t.id %}hidden{% endif %}>
       <input name="titulo" type="text" required maxlength="{{ largo_titulo }}" value="{{ t.titulo }}" aria-label="Título de la tarea">
       <button class="guardar">Guardar</button>
       <a class="btn-linea" href="{{ u }}#tarea-{{ t.id }}">Cancelar</a>
@@ -191,7 +254,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
   </div>
   {% if abierta %}
   <div class="detalle">
-    <form class="resp-tarea" method="post" action="/proyectos/tarea/{{ t.id }}/responsable">
+    <form class="resp-tarea" method="post" action="/proyectos/tarea/{{ t.id }}/responsable" data-auto>
       <label for="rt-{{ t.id }}">Responsable:</label>
       <select id="rt-{{ t.id }}" name="responsable">
         <option value="" {%- if not t.responsable %} selected{% endif %}>sin responsable</option>
@@ -206,7 +269,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       <div class="comentario" data-edita>
         <div class="de"><b>{{ c.autor }}</b> · {{ c.creado_en|hora_rd }}{{ ' · editado' if c.editado }}</div>
         <p data-dbl="texto" title="Doble clic para editar" {% if editar_comentario == c.id %}hidden{% endif %}>{{ c.texto }}</p>
-        <form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/comentario/{{ c.id }}/editar" {% if editar_comentario != c.id %}hidden{% endif %}>
+        <form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/comentario/{{ c.id }}/editar" data-auto {% if editar_comentario != c.id %}hidden{% endif %}>
           <textarea name="texto" required maxlength="{{ largo_comentario }}" aria-label="Editar el comentario">{{ c.texto }}</textarea>
           <button class="guardar">Guardar</button>
           <a class="btn-linea" href="{{ u }}&amp;t={{ t.id }}#tarea-{{ t.id }}">Cancelar</a>
@@ -215,7 +278,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       </div>
       {% else %}<p class="vacio">Sin comentarios todavía.</p>{% endfor %}
     </div>
-    <form class="comentar" method="post" action="/proyectos/tarea/{{ t.id }}/comentar">
+    <form class="comentar" method="post" action="/proyectos/tarea/{{ t.id }}/comentar" data-auto>
       <textarea name="texto" required maxlength="{{ largo_comentario }}" placeholder="Escribe un comentario…" aria-label="Comentario"></textarea>
       <button class="guardar">Comentar</button>
     </form>
@@ -315,12 +378,14 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'tarea_comentario' %}<p class="aviso">El comentario no puede quedar vacío ni pasar de {{ largo_comentario }} caracteres.</p>
     {% elif error == 'tarea_responsable' %}<p class="aviso">Ese responsable no vale: se escoge entre {{ nombres_responsable|join(', ') }}.</p>
     {% elif error == 'tarea_rechazada' %}<p class="aviso">No se pudo crear la tarea.</p>
+    {% elif error == 'tarea_derivada' %}<p class="aviso">La tarea nueva no se pudo crear (revisa el título, la fecha o el responsable): la tarea NO se marcó hecha.</p>
+    {% elif error == 'tarea_derivada_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe la tarea nueva, así que la tarea NO se marcó hecha.</p>
     {% elif error == 'proyecto_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe tareas nuevas.</p>{% endif %}
     {% if hecho == 'proyecto_nuevo' %}<p class="aviso ok">Proyecto creado.</p>
     {% elif hecho == 'responsable' %}<p class="aviso ok">Responsable guardado.</p>
     {% elif hecho == 'cerrado' %}<p class="aviso ok">Proyecto cerrado. Está en «cerrados» en la lista de la izquierda.</p>
     {% elif hecho == 'reabierto' %}<p class="aviso ok">Proyecto reabierto.</p>
-    {% elif hecho == 'tarea_hecha' %}<p class="aviso ok">Tarea marcada como hecha.</p>
+    {% elif hecho == 'tarea_hecha' %}<p class="aviso ok">Tarea marcada como hecha.{% if derivadas %}{{ ' Salieron las tareas que siguen' if ',' in derivadas else ' Salió la tarea que sigue' }} (#{{ derivadas }}).{% endif %}</p>
     {% elif hecho == 'tarea_reabierta' %}<p class="aviso ok">Tarea desmarcada: vuelve a pendiente, con la misma fecha.</p>
     {% elif hecho == 'tarea_titulo' %}<p class="aviso ok">Título guardado.</p>
     {% elif hecho == 'tarea_borrada' %}<p class="aviso ok">Tarea borrada. Está en la papelera: de ahí se recupera.</p>
@@ -339,7 +404,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     <div style="display:contents;--color:{{ g.color if g else '#6b6b6b' }}">
     <div class="cabeza" id="proyecto-{{ m.id }}" data-edita>
       <div class="migas"><span><b>{{ g.clave if g else 'Sin grupo' }}</b> / Proyecto</span>
-        <form class="cambiar-grupo" method="post" action="/proyectos/{{ m.id }}/area">
+        <form class="cambiar-grupo" method="post" action="/proyectos/{{ m.id }}/area" data-auto>
           <label for="grupo-{{ m.id }}">Mover a</label>
           <select id="grupo-{{ m.id }}" name="area">
             {% if not m.area %}<option value="" selected>Sin grupo</option>{% endif %}
@@ -352,7 +417,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
           formulario); sin JavaScript, el enlace de `<noscript>` abre el mismo
           formulario desde el servidor. -#}
       <h1 data-dbl="nombre" title="Doble clic para cambiar el nombre" {% if editar == 'nombre' %}hidden{% endif %}>{{ m.nombre }}</h1>
-      <form class="renombrar" method="post" action="/proyectos/{{ m.id }}/nombre" {% if editar != 'nombre' %}hidden{% endif %}>
+      <form class="renombrar" method="post" action="/proyectos/{{ m.id }}/nombre" data-auto {% if editar != 'nombre' %}hidden{% endif %}>
         <input name="nombre" type="text" required maxlength="{{ largo_nombre }}" value="{{ m.nombre }}" aria-label="Nombre del proyecto">
         <button class="guardar">Guardar</button>
         <a class="btn-linea" href="/proyectos?p={{ m.id }}">Cancelar</a>
@@ -361,7 +426,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {% if m.descripcion %}<p class="descripcion">{{ m.descripcion }}</p>{% endif %}
       <div class="quienes">
         {% if m.cliente %}<span>Cliente: <b>{{ m.cliente }}</b></span>{% endif %}
-        <form class="resp" method="post" action="/proyectos/{{ m.id }}/responsable">
+        <form class="resp" method="post" action="/proyectos/{{ m.id }}/responsable" data-auto>
           <label for="resp-{{ m.id }}">Responsable:</label>
           <select id="resp-{{ m.id }}" name="responsable">
             {% if not m.responsable %}<option value="" selected disabled>Escoge…</option>
@@ -460,11 +525,27 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
   </main>
 </div>
 <script>
-/* Lo único que hace este script: mostrar el formulario de edición en el sitio
-   (el nombre del proyecto, el título de una tarea, un comentario) al dar doble
-   clic en su texto, y esconderlo con Escape. No decide nada ni manda nada:
-   guardar es el envío normal del formulario, que también funciona sin este
-   script. */
+/* Lo que hace este script, y nada más:
+   · el doble clic abre el formulario de edición del sitio (el nombre del
+     proyecto, el título de una tarea, un comentario) y Escape lo cierra SIN
+     guardar: devuelve cada campo a lo que decía y esconde el formulario;
+   · un desplegable de un formulario `[data-auto]` (responsable, grupo) se
+     guarda al escoger la opción;
+   · un texto se guarda con Enter o al salir del campo; un comentario, al salir
+     del cuadro.
+   NO decide nada del negocio: envía EL MISMO formulario que envía su botón
+   (`requestSubmit`), el botón sigue ahí y sin este script se guarda con él.
+   Vacío no se envía, y un texto que no cambió tampoco: son dos viajes que no
+   dirían nada (el servidor ya sabe contestar «no cambió nada»). */
+function cancelarEdicion(form) {
+  var sitio = form.closest("[data-edita]");
+  var texto = sitio && sitio.querySelector("[data-dbl]");
+  if (!texto) return;                    // no es una edición con texto: no se toca
+  var campos = form.querySelectorAll("input, textarea");
+  for (var i = 0; i < campos.length; i++) campos[i].value = campos[i].defaultValue;
+  form.hidden = true;
+  texto.hidden = false;
+}
 document.addEventListener("dblclick", function (e) {
   var texto = e.target.closest && e.target.closest("[data-dbl]");
   var sitio = texto && texto.closest("[data-edita]");
@@ -478,13 +559,31 @@ document.addEventListener("dblclick", function (e) {
   campo.select();
 });
 document.addEventListener("keydown", function (e) {
-  if (e.key !== "Escape") return;
-  var form = e.target.closest && e.target.closest("form.renombrar");
-  var sitio = form && form.closest("[data-edita]");
-  var texto = sitio && sitio.querySelector("[data-dbl]");
-  if (!texto) return;
-  form.hidden = true;
-  texto.hidden = false;
+  var form = e.target.closest && e.target.closest("form[data-auto]");
+  if (!form) return;
+  if (e.key === "Escape") {
+    e.preventDefault();
+    cancelarEdicion(form);
+    return;
+  }
+  if (e.key === "Enter" && e.target.tagName === "INPUT") {
+    e.preventDefault();
+    form.requestSubmit();
+  }
+});
+document.addEventListener("change", function (e) {
+  var form = e.target.form;
+  if (!form || !form.dataset || form.dataset.auto === undefined) return;
+  if (e.target.tagName === "SELECT") form.requestSubmit();
+});
+document.addEventListener("focusout", function (e) {
+  var form = e.target.form;
+  if (!form || !form.dataset || form.dataset.auto === undefined) return;
+  var campo = e.target;
+  if (campo.tagName === "SELECT") return;                  // el desplegable guarda al cambiar
+  if (!campo.value || !campo.value.trim()) return;         // vacío no guarda nada
+  if (campo.value === campo.defaultValue) return;          // no cambió: no hay nada que guardar
+  form.requestSubmit();
 });
 </script>
 </body></html>

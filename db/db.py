@@ -2650,6 +2650,12 @@ def _fila_de_tarea(t: dict, hoy: date, nombres: dict, comentarios: dict) -> dict
         "responsable": nombres.get(t["responsable_chat_id"]),
         "comentarios": comentarios.get(t["id"], []),
         "de_proyecto_en_papelera": False,
+        # De dónde cuelga la tarea: lo necesita el renglón «¿sale una tarea
+        # nueva de ésta?» de la página (1-oct-2026) para decidir lo MISMO que
+        # decide /tareas — con proyecto, la nueva va al mismo proyecto y el
+        # grupo no se elige; suelta, se ofrece el grupo que ya tiene.
+        "proyecto_id": t["proyecto_id"],
+        "area": t["area"],
     }
 
 
