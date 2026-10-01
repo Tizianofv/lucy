@@ -720,7 +720,7 @@ def test_el_modulo_no_escribe_nada():
 # LA REGLA, en dos líneas y sin lista de verbos que vigilar:
 #
 #   FUERA DEL LECTOR (todo `.py` del repositorio que no es de `tests/`): nadie
-#   puede obtener la URL ni el token. No se importa nada privado del lector, no
+#   puede obtener la URL ni el token POR LAS FORMAS QUE ESTA GUARDA VE (abajo). No se importa nada privado del lector, no
 #   se nombra ninguna variable `NOCODB_*` (en la forma en que esté escrita, si
 #   se puede plegar a un texto) y el entorno no se lee entero. Sin la URL y el
 #   token no hay petición a Noco que escribir: es lo que cierra a u01 sin tener
@@ -736,6 +736,12 @@ def test_el_modulo_no_escribe_nada():
 #   no está en la lista, y no por cómo está escrito.
 #
 # LA FRONTERA (lo que esta garantía NO ve), dicha para que nadie la dé por cubierta:
+#   · el token del proceso PUEDE escribir en Noco: cualquier código del mismo
+#     proceso que lea el entorno de una forma que esta guarda no ve podría usarlo.
+#     La protección completa es un token de solo lectura en NocoDB;
+#   · rebuscadas medidas por el testigo, que NO se persiguen: `persona.__globals__`,
+#     `leer = os.getenv; leer(clave)`, `db/backup.py` cambiando `pg_dump` por
+#     `curl`, y `subprocess` con `env`;
 #   · un `.py` de `tests/` que hable con Noco (los tests no se despliegan);
 #   · lo que no es `.py`: scripts de shell, `.yml`, SQL;
 #   · un texto de `NOCODB_*` armado de formas que no se pueden plegar sin correr el
@@ -901,9 +907,13 @@ def _infracciones_de_afuera(fuente: str) -> tuple[list[str], int]:
     padres = _padres(arbol)
     malas: list[str] = []
     alias: set[str] = set()
+    # Los nombres con que este archivo conoce al módulo `os` (`import os as _os`).
+    alias_os: set[str] = {"os"}
     for n in ast.walk(arbol):
         if isinstance(n, ast.Import):
             for a in n.names:
+                if a.name == "os" and a.asname:
+                    alias_os.add(a.asname)
                 if a.name.split(".")[0] == "noco_lectura":
                     if a.name != "noco_lectura":
                         malas.append(f"línea {n.lineno}: import {a.name}")
@@ -942,7 +952,7 @@ def _infracciones_de_afuera(fuente: str) -> tuple[list[str], int]:
     entero = 0
     for n in ast.walk(arbol):
         es_environ = ((isinstance(n, ast.Attribute) and n.attr == "environ"
-                       and isinstance(n.value, ast.Name) and n.value.id == "os")
+                       and isinstance(n.value, ast.Name) and n.value.id in alias_os)
                       or (isinstance(n, ast.Name) and n.id == "environ"))
         if es_environ:
             padre = padres.get(n)
@@ -955,7 +965,10 @@ def _infracciones_de_afuera(fuente: str) -> tuple[list[str], int]:
                           and _plegar(padres[padre].args[0]) is not None)
             if not (por_clave or por_metodo):
                 entero += 1
-        elif isinstance(n, ast.Call) and _punteado(n.func) == "os.getenv":
+        elif (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "getenv"
+                and isinstance(n.func.value, ast.Name)
+                and n.func.value.id in alias_os):
             if not (n.args and _plegar(n.args[0]) is not None):
                 entero += 1
     return malas, entero
@@ -1068,6 +1081,10 @@ _ROTURAS_DE_AFUERA = {
     "entorno entero": "import os\nx = dict(os.environ)\n",
     "entorno recorrido": "import os\nx = [k for k in os.environ]\n",
     "environ importado": "from os import environ\n",
+    "v08 import os as o": "import os as o\nx = o.environ.items()\n",
+    "v08p import os as _os": "import os as _os\nx = dict(_os.environ)\n",
+    "v08q from os import environ as e": "from os import environ as e\nx = e.items()\n",
+    "v08r getenv por alias": "import os as _os\nx = _os.getenv(k)\n",
     "getenv con clave dinámica": "import os\nx = os.getenv(k)\n",
 }
 

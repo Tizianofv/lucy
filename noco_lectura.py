@@ -17,12 +17,14 @@ da el código, y por eso:
     hacer GET;
   · `_get` es además la que decide qué columnas salen (`fields`), para que
     ningún camino de arriba pueda pedir teléfono, correo ni `bsuid`;
-  · **fuera de este archivo nadie puede obtener la URL ni el token.** Ningún
+  · **fuera de este archivo nadie obtiene la URL ni el token por las formas
+    que la prueba ve** (`os` y sus alias, `environ`/`getenv` con clave constante,
+    imports del lector). Ningún
     `.py` del repositorio que no sea de `tests/` importa algo privado de acá
     (`_configurado`, `_get`…), ni usa el módulo de otra forma que
     `noco_lectura.<función pública>`, ni nombra una variable `NOCODB_*`, ni lee
     el entorno entero. Sin la URL y el token no hay petición a Noco que escribir,
-    sea con la biblioteca que sea;
+    con la biblioteca que sea;
   · **dentro de este archivo, lista blanca:** solo se importan `__future__`,
     `logging`, `os` y `httpx`; solo se llama a lo declarado en
     `tests/test_noco_lectura.py` (`_LLAMADAS_INOCUAS`), a las funciones propias y
@@ -35,7 +37,13 @@ Todo eso lo exige `tests/test_noco_lectura.py` recorriendo el repositorio
 entero (la lista de archivos sale del disco) y dándole a la guarda entradas
 inventadas, no solo lo que hay hoy.
 
-LO QUE ESA GARANTÍA NO VE, dicho para que no se dé por cubierto: un `.py` de
+LÍMITE QUE NINGÚN CÓDIGO ARREGLA: el token del proceso puede escribir. Cualquier
+código del mismo proceso que lea el entorno de formas que la guarda no ve podría
+usarlo. La protección completa es un token de solo lectura en NocoDB.
+
+LO QUE ESA GARANTÍA NO VE, dicho para que no se dé por cubierto: las formas
+rebuscadas (`persona.__globals__`, `leer = os.getenv; leer(clave)`, `db/backup.py`
+cambiando `pg_dump` por `curl`, `subprocess` con `env`); un `.py` de
 `tests/`; lo que no es `.py` (scripts de shell, `.yml`, SQL); un nombre `NOCODB_*`
 armado de una forma que no se puede plegar a un texto sin correr el código
 (`"".join([...])`, `"%s" % x`); una URL de Noco o un token escritos a mano
