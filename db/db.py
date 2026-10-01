@@ -513,6 +513,27 @@ async def rescatar_procesando(minutos: int = 10, max_intentos: int = 3) -> int:
         return len(await cur.fetchall())
 
 
+async def devolver_reclamadas(ids: list[int]) -> int:
+    """Devuelve a 'sin_procesar' las filas que esta instancia reclamó y no
+    terminó, al apagarse. Devuelve cuántas.
+
+    NO suma `intentos` ni pone `reintentar_despues`: no fallaron, se cortaron
+    (a diferencia de `rescatar_procesando` y `devolver_a_cola`, que sí cuentan).
+    Solo toca filas todavía en 'procesando': una que alcanzó a cerrarse
+    ('procesado', 'error', 'esperando_confirmacion') no se revive.
+    """
+    if not ids:
+        return 0
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            UPDATE bandeja SET estado = 'sin_procesar'
+             WHERE id = ANY(%s) AND estado = 'procesando'
+            RETURNING id
+            """, (list(ids),))
+        return len(await cur.fetchall())
+
+
 async def tomar_pendientes(
     tipos: tuple[str, ...] = ("texto", "audio", "foto", "sistema", "email"),
     limite: int = 5,
