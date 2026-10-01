@@ -823,7 +823,7 @@ def test_el_titulo_es_el_enlace_que_abre_el_detalle_y_ya_no_hay_enlace_chiquitit
     assert 'class="detalle-enlace"' not in cerrado
     sin_css = re.sub(r"<style>.*?</style>", "", cerrado, flags=re.S)
     assert "▸" not in sin_css and "▾" not in sin_css
-    assert cerrado.count("1 comentario<") == 2          # la 10 y la 12: texto, no enlace
+    assert cerrado.count("1 coment.<") == 2          # la 10 y la 12: texto, no enlace
     assert "primer comentario" not in cerrado           # el detalle está cerrado
     abierto = ver(mt, p=2, t=10)
     assert '<a class="titulo" data-dbl="titulo" href="/proyectos?p=2#tarea-10"' in abierto

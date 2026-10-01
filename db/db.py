@@ -2701,19 +2701,18 @@ def color_de_grupo(color) -> str:
 
 # El tono de un grupo para el modo oscuro SALE DEL MISMO `areas.color`, no de una
 # lista escrita grupo por grupo: la regla es una línea. Se pasa el color a OKLCH
-# (claridad, color y tono), se conserva el TONO, la claridad sube a
-# `_OSCURO_CLARIDAD` (un color que ya es más claro se deja tal cual) y el color se
-# acota a [`_OSCURO_COLOR_MIN`, `_OSCURO_COLOR_MAX`]; un gris queda gris. Medido
-# el 1-oct-2026 contra los tres tonos claros de la maqueta aprobada
-# (#0f7c74 -> #3cc0b4, #b5611a -> #e59a55, #8a4a8f -> #c98ccf): la diferencia
-# mayor en un canal es 7 de 255 (`tests/test_pagina_proyectos_maqueta.py`). Un
-# color que al aclararlo se sale de la gama de la pantalla se recorta y su tono
-# puede correrse (medido en una rejilla de 864 colores, hasta unos 25 grados
-# de tono HSL); el contraste del resultado contra el fondo oscuro de la página
-# no baja de 6.6 contra 1 en esa rejilla; la prueba exige 4.5 o más.
-_OSCURO_CLARIDAD = 0.735
-_OSCURO_COLOR_MIN, _OSCURO_COLOR_MAX = 0.11, 0.125
-_OSCURO_GRIS = 0.02
+# (claridad, color y tono), se conservan el TONO y el COLOR, y la claridad sube
+# `_OSCURO_HACIA_BLANCO` del camino que le falta hasta el blanco, sin quedar por
+# debajo de `_OSCURO_PISO` (para que un color muy oscuro también se lea sobre el
+# fondo oscuro). Medido el 1-oct-2026 contra los tres tonos oscuros de la
+# maqueta aprobada, versión 19 (#c8102e -> #ff6b6b, #ef6c00 -> #ffa04a,
+# #8a4a8f -> #c98ccf): la diferencia mayor en un canal es 6 de 255
+# (`tests/test_pagina_proyectos_maqueta.py` la vuelve a medir). Un color que al
+# aclararlo se sale de la gama de la pantalla se recorta y su tono puede
+# correrse; el contraste del resultado contra el fondo oscuro de la página lo
+# exige la misma prueba en una rejilla de colores (4.5 o más).
+_OSCURO_HACIA_BLANCO = 0.44
+_OSCURO_PISO = 0.70
 
 
 def _oklch_de(rgb: tuple) -> tuple:
@@ -2757,11 +2756,8 @@ def color_oscuro_de_grupo(color) -> str:
     else:
         return color
     claridad, croma, tono = _oklch_de(tuple(int(digitos[i:i + 2], 16) / 255 for i in (0, 2, 4)))
-    if claridad >= _OSCURO_CLARIDAD:
-        return "#" + digitos.lower()               # ya es clara: sobre el fondo oscuro se lee tal cual
-    if croma >= _OSCURO_GRIS:
-        croma = min(max(croma, _OSCURO_COLOR_MIN), _OSCURO_COLOR_MAX)
-    rgb = _rgb_de(_OSCURO_CLARIDAD, croma, tono)
+    nueva = max(claridad + _OSCURO_HACIA_BLANCO * (1 - claridad), _OSCURO_PISO)
+    rgb = _rgb_de(nueva, croma, tono)
     return "#" + "".join(f"{round(c * 255):02x}" for c in rgb)
 
 

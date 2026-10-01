@@ -10,14 +10,14 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Figtree:wght@400;500;600&display=swap">
 <style>
 /* Página de proyectos (Lucy 1.0, E4). El aspecto es el de la maqueta aprobada
-   por Tiziano: columna de grupos a la izquierda, el proyecto a la derecha; en
-   el teléfono se apilan. El color de cada grupo lo pone `--color`, que sale de
-   `areas.color`, no de esta hoja. Sin JavaScript: todo es enlace, formulario o
-   <details>. */
+   por Tiziano (versión 19, 1-oct-2026): columna de grupos a la izquierda, el
+   proyecto en el centro y sus personas a la derecha; en el teléfono se apilan.
+   El color de cada grupo lo pone `--color`, que sale de `areas.color`, no de
+   esta hoja. Sin JavaScript: todo es enlace, formulario o <details>. */
 :root{
   --bg:#f3f4f1; --papel:#ffffff; --tinta:#16201c; --suave:#5f6a65; --linea:#dfe3de;
   --vencida:#b3261e; --vencida-fondo:#fbe9e7; --dormido:#9a6b00; --dormido-fondo:#fff4d6;
-  --ok:#1e6b3a; --color:#0f7c74;
+  --ok:#1e6b3a; --color:#0f7c74; --marca:#eb2129;
   --display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;
   --texto:"Figtree",ui-sans-serif,system-ui,-apple-system,sans-serif;
 }
@@ -34,41 +34,54 @@
 body{background:var(--bg);color:var(--tinta);font:15px/1.5 var(--texto);margin:0}
 a{color:inherit}
 .barra-marca{background:var(--papel);border-bottom:1px solid var(--linea);box-shadow:0 1px 3px rgb(0 0 0 / .08);position:sticky;top:env(safe-area-inset-top,0px);z-index:10}
-.barra-dentro{padding-inline:16px;padding-block:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.barra-dentro{padding-inline:16px;padding-block:12px;display:flex;align-items:center;gap:10px}
+.menu{margin-left:auto;display:flex;flex-wrap:wrap;gap:.2rem 1rem;font-size:.88rem}
+.menu a{color:var(--suave);text-decoration:none;padding:.3rem 0;border-bottom:2px solid transparent}
+.menu a:hover{color:var(--tinta)}
+.menu a[aria-current="page"]{color:var(--tinta);font-weight:600;border-bottom-color:var(--marca,#eb2129)}
 .barra-marca .logo{height:17px;width:auto;max-width:70vw;display:block}
 .barra-tag{background:#eb2129;color:#fff;font:700 11px var(--texto);letter-spacing:.8px;padding:3px 8px;border-radius:7px}
-.panel{margin-left:auto;display:flex;gap:1rem;flex-wrap:wrap;font-size:.85rem}
-.panel a{color:var(--suave);text-decoration:none}
-.panel a.on{color:var(--tinta);font-weight:600}
-/* La lista de proyectos (izquierda) y el detalle (derecha) son dos cosas
-   distintas y se ven separadas: más aire entre las dos columnas y una línea
-   sutil al lado de la lista, con su propio espacio interno. El color sale de
-   `--linea`, el mismo token que el resto de la página, así que sirve igual en
-   modo claro y en modo oscuro. En el teléfono no hay columnas: la línea pasa a
-   ser un separador horizontal debajo de la lista. */
-.envoltura{display:grid;grid-template-columns:17rem minmax(0,1fr);gap:2.75rem;max-width:72rem;margin:0 auto;padding-inline:16px;padding-block:1.2rem 4rem}
-.envoltura > aside{padding-inline-end:1.6rem;border-inline-end:1px solid var(--linea)}
-@media (max-width:760px){
-  .envoltura{grid-template-columns:minmax(0,1fr);gap:1.6rem}
-  .envoltura > aside{padding-inline-end:0;border-inline-end:0;padding-block-end:1.4rem;border-block-end:1px solid var(--linea)}
-}
+/* Tres columnas, como la maqueta: la lista de grupos (izquierda, una tarjeta que
+   baja sola), el proyecto (centro, también baja solo) y, dentro del centro, las
+   personas del proyecto a la derecha. En el teléfono se apilan. */
+.envoltura{display:grid;grid-template-columns:17rem minmax(0,1fr);gap:3.5rem;max-width:96rem;margin:0 auto;padding-inline:16px;padding-block:1.6rem 4rem}
+.cuerpo{display:grid;grid-template-columns:minmax(0,1fr) 17rem;gap:2rem;align-items:start}
+.centro{display:flex;flex-direction:column;gap:1.2rem;min-width:0}
+.lado-der{position:sticky;top:1rem}
+@media (max-width:1100px){.cuerpo{grid-template-columns:minmax(0,1fr)}.lado-der{position:static}}
+.envoltura > aside{background:var(--papel);border:1px solid var(--linea);border-radius:16px;padding:1.2rem 1.1rem;align-self:start}
+.envoltura > aside{position:sticky;top:1rem;max-height:calc(100vh - 2rem);overflow-y:auto;overscroll-behavior:contain}
+.envoltura > main{position:sticky;top:1rem;max-height:calc(100vh - 2rem);overflow-y:auto;overscroll-behavior:contain;padding-right:.4rem}
+@media (max-width:760px){.envoltura{grid-template-columns:minmax(0,1fr);gap:1.6rem}.envoltura > aside,.envoltura > main{position:static;max-height:none;overflow:visible}}
 .buscador{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem}
-.buscar{flex:1 1 9rem;min-width:0;font:inherit;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
-.buscar:focus-visible{outline:2px solid var(--color);outline-offset:1px}
+.buscar{flex:1 1 9rem;min-width:0;width:100%;font:inherit;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
+.buscar:focus-visible{outline:2px solid var(--marca);outline-offset:1px}
 .quitar-filtro{font-size:.82rem;color:var(--suave);align-self:center}
 nav.grupos{display:flex;flex-direction:column;gap:1.1rem}
 .grupo h3{margin:0 0 .35rem;font:700 .74rem var(--texto);letter-spacing:.09em;text-transform:uppercase;display:flex;align-items:center;gap:.45rem}
 .grupo h3 i{width:.6rem;height:.6rem;border-radius:2px;display:inline-block;background:var(--color)}
 .grupo a.proy{text-decoration:none;display:flex;justify-content:space-between;gap:.5rem;width:100%;padding:.45rem .6rem;border-radius:8px;font-size:.93rem}
 .grupo a.proy:hover{background:var(--papel)}
-.grupo a.proy[aria-current="true"]{background:var(--papel);box-shadow:inset 3px 0 0 var(--color);font-weight:600}
+.grupo a.proy{border-bottom:1px solid var(--linea)}
+.grupo a.proy:not([aria-current="true"]){background:color-mix(in srgb, var(--tinta) 7%, var(--papel))}
+.grupo a.proy:not([aria-current="true"]):hover{background:color-mix(in srgb, var(--tinta) 3%, var(--papel))}
+.grupo a.proy:last-of-type{border-bottom:0}
+.grupo a.proy[aria-current="true"]{background:color-mix(in srgb, var(--color) 16%, var(--papel));box-shadow:inset 4px 0 0 var(--color);font-weight:600;color:color-mix(in srgb, var(--color) 70%, var(--tinta))}
+.grupo a.proy[aria-current="true"] .sub{color:color-mix(in srgb, var(--color) 55%, var(--suave))}
+/* El seleccionado lleva el fondo de su color, que se va degradando hacia la
+   derecha (CDS en rojo, IA en morado: lo pidió Tiziano en la maqueta). */
+.grupo a.proy[aria-current="true"]{background:linear-gradient(90deg,color-mix(in srgb,var(--color) 30%,var(--papel)),color-mix(in srgb,var(--color) 10%,var(--papel)))}
+/* ACD: rojo, naranja y amarillo (pedido de Tiziano en la maqueta). Es el ÚNICO
+   grupo con un degradado propio y por eso va escrito por su clave: un solo color
+   de `areas.color` no alcanza para tres. */
+.grupo[data-g="acd"] h3 i{background:linear-gradient(135deg,#d62828,#f77f00,#fcbf49)!important}
+.grupo[data-g="acd"] a.proy[aria-current="true"]{background:linear-gradient(90deg,color-mix(in srgb,#d62828 18%,var(--papel)),color-mix(in srgb,#f77f00 16%,var(--papel)),color-mix(in srgb,#fcbf49 18%,var(--papel)));box-shadow:none;border-left:4px solid;border-image:linear-gradient(180deg,#d62828,#f77f00,#fcbf49) 1}
 .grupo a.proy:focus-visible{outline:2px solid var(--color);outline-offset:1px}
 .grupo .cuenta{color:var(--suave);font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap}
 .grupo .cuenta b{color:var(--vencida);font-weight:600}
 .grupo .proy .sub{display:block;font-size:.76rem;color:var(--suave);font-weight:400}
 .grupo .proy .sub.dormido{color:var(--dormido);font-weight:600}
 .grupo .proy.cerrado{color:var(--suave)}
-.grupo a.sueltas{color:var(--suave);font-style:italic}
 .grupo details.cerrados > summary{cursor:pointer;color:var(--suave);font-size:.8rem;padding:.3rem .6rem;list-style:none}
 .grupo details.cerrados > summary::-webkit-details-marker{display:none}
 .grupo details.cerrados > summary::before{content:"▸ "}
@@ -82,14 +95,18 @@ main{min-width:0;display:flex;flex-direction:column;gap:1.4rem}
 h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balance;overflow-wrap:anywhere}
 .descripcion{margin:0;color:var(--suave);font-size:.92rem;white-space:pre-wrap;overflow-wrap:anywhere}
 .quienes{display:flex;flex-wrap:wrap;gap:.4rem 1.4rem;font-size:.95rem}
-.quienes span{color:var(--suave)} .quienes b{font-weight:600;color:var(--tinta)}
+.quienes span{color:var(--suave)} .quienes b{font-weight:600}
+.quienes label{display:flex;align-items:center;gap:.45rem;color:var(--suave);font-size:.92rem}
+.campo-quien{font:inherit;font-size:.92rem;color:var(--tinta);background:var(--papel);border:1px solid var(--linea);border-radius:8px;padding:.3rem .55rem;min-width:12rem}
+.campo-quien:focus{outline:2px solid var(--color);outline-offset:1px}
 .meta{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
 .pastilla{font-size:.78rem;padding:.2rem .6rem;border-radius:99px;border:1px solid var(--linea);background:var(--papel)}
 .pastilla.roja{border-color:var(--vencida);color:var(--vencida)}
 .pastilla.dormido{border-color:var(--dormido);color:var(--dormido);background:var(--dormido-fondo)}
 .avance{display:flex;align-items:center;gap:.7rem;font-size:.85rem;color:var(--suave)}
 .avance .riel{flex:1;height:8px;border-radius:99px;background:var(--linea);overflow:hidden;max-width:22rem}
-.avance .riel span{display:block;height:100%;background:var(--color);border-radius:99px}
+.avance .riel span{display:block;height:100%;background:var(--color);border-radius:99px;transition:width .3s}
+@media (prefers-reduced-motion:reduce){.avance .riel span{transition:none}}
 .aviso-dormido{background:var(--dormido-fondo);color:var(--dormido);border-radius:10px;padding:.6rem .8rem;font-size:.88rem;font-weight:500}
 .aviso-cerrado{background:var(--papel);border:1px dashed var(--linea);border-radius:10px;padding:.6rem .8rem;font-size:.88rem;color:var(--suave)}
 .aviso{background:var(--papel);border-left:3px solid var(--vencida);padding:.7rem 1rem;border-radius:0 8px 8px 0}
@@ -99,6 +116,17 @@ section.bloque{background:var(--papel);border:1px solid var(--linea);border-radi
 section.bloque > .encabezado{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;margin-bottom:.8rem;flex-wrap:wrap}
 section.bloque h2{font:700 1.05rem var(--display);margin:0}
 .nota{color:var(--suave);font-size:.82rem}
+.personas{display:flex;flex-wrap:wrap;gap:.6rem}
+.persona{display:flex;align-items:center;gap:.55rem;padding:.35rem .7rem .35rem .35rem;border:1px solid var(--linea);border-radius:99px;background:var(--bg);min-width:0}
+.persona .ini{width:1.9rem;height:1.9rem;font-size:.78rem}
+.persona .quien{display:flex;flex-direction:column;line-height:1.15;min-width:0}
+.persona .quien b{font-weight:600;font-size:.88rem}
+.persona .quien span{font-size:.76rem;color:var(--suave)}
+.agregar{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.8rem}
+.agregar input,.agregar select{font:inherit;padding:.45rem .65rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0;flex:1 1 9rem}
+.agregar button{font:600 .88rem var(--texto);padding:.45rem .9rem;border-radius:8px;border:0;background:var(--color);color:#fff}
+.agregar[aria-disabled="true"]{opacity:.55}
+.agregar[aria-disabled="true"] button{cursor:not-allowed}
 .tareas{display:flex;flex-direction:column}
 .tarea{border-top:1px solid var(--linea);padding:.7rem 0}
 .tarea:first-child{border-top:0}
@@ -106,18 +134,21 @@ section.bloque h2{font:700 1.05rem var(--display);margin:0}
 .tarea.vencida + .tarea{border-top-color:transparent}
 .fila{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}
 .marca{width:1.1rem;text-align:center;color:var(--suave);flex:none}
-.tarea.hecha .marca{color:var(--ok)}
-.fila .titulo{flex:1 1 12rem;min-width:0;font-weight:500;text-decoration:none;overflow-wrap:anywhere}
-.fila .titulo:hover{text-decoration:underline}
+.fila .titulo{flex:1 1 12rem;min-width:0;font-weight:500;text-decoration:none;overflow-wrap:anywhere;cursor:pointer}
 .tarea.hecha .titulo{text-decoration:line-through;color:var(--suave)}
 .ini{width:1.55rem;height:1.55rem;border-radius:50%;display:grid;place-items:center;font:600 .66rem var(--texto);color:#fff;background:var(--color);flex:none}
-.vence{font-size:.8rem;color:var(--suave);white-space:nowrap;font-variant-numeric:tabular-nums;min-width:6.5rem;text-align:right}
+.caritas{display:flex}
+.caritas .ini{width:1.55rem;height:1.55rem;font-size:.66rem;border:2px solid var(--papel);margin-left:-.35rem}
+.vence{font-size:.8rem;color:var(--suave);white-space:nowrap;font-variant-numeric:tabular-nums;display:flex;flex-direction:column;align-items:flex-end;line-height:1.2;min-width:6.5rem}
 .tarea.vencida .vence{color:var(--vencida);font-weight:600}
 .col-fecha{display:flex;justify-content:flex-end;font-size:.66rem;letter-spacing:.06em;text-transform:uppercase;font-weight:600;color:var(--suave);padding:0 1.9rem .3rem 0}
 .col-fecha span{min-width:6.5rem;text-align:right}
-.detalle{margin:.6rem 0 .2rem 1.8rem;padding:.6rem .8rem;border-radius:10px;background:var(--bg)}
+.detalle{margin:.7rem 0 .2rem 1.8rem;padding:.8rem;border-radius:10px;background:var(--bg)}
 .detalle > summary{cursor:pointer;font-size:.8rem;color:var(--suave)}
-.comentarios{display:flex;flex-direction:column;gap:.6rem;margin-top:.6rem}
+.detalle h4{margin:0 0 .5rem;font:600 .78rem var(--texto);letter-spacing:.07em;text-transform:uppercase;color:var(--suave)}
+.detalle h4 + .personas{margin-bottom:0}
+.detalle .separa{height:1px;background:var(--linea);margin:.9rem 0}
+.comentarios{display:flex;flex-direction:column;gap:.6rem;margin-bottom:.6rem}
 .comentario{display:flex;gap:.55rem;align-items:flex-start}
 .comentario .ini{width:1.6rem;height:1.6rem;font-size:.68rem}
 .comentario .globo{background:var(--papel);border:1px solid var(--linea);border-radius:10px;padding:.45rem .7rem;min-width:0;flex:1}
@@ -125,12 +156,13 @@ section.bloque h2{font:700 1.05rem var(--display);margin:0}
 .comentario .de b{color:var(--tinta);font-weight:600}
 .comentario p{margin:.15rem 0 0;overflow-wrap:anywhere;white-space:pre-wrap}
 details.plegar > summary{cursor:pointer;color:var(--suave);font-size:.85rem;margin-top:.8rem;list-style:none}
+details.plegar > summary:hover{color:var(--tinta)}
 details.plegar > summary::-webkit-details-marker{display:none}
 details.plegar > summary::before{content:"▸ "}
 details.plegar[open] > summary::before{content:"▾ "}
 .acciones{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:.8rem}
 .btn-linea{font:600 .82rem var(--texto);padding:.35rem .75rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta);cursor:pointer;text-decoration:none;display:inline-block}
-.acciones.abajo{justify-content:flex-end}
+.acciones.abajo{justify-content:flex-end;margin-top:0}
 .btn-lleno{font:600 .82rem var(--texto);padding:.35rem .75rem;border-radius:8px;border:0;background:var(--vencida);color:#fff;cursor:pointer}
 .confirmar{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.86rem}
 form.en-linea{display:inline-flex;margin:0}
@@ -138,8 +170,9 @@ form.en-linea{display:inline-flex;margin:0}
 .aviso-raro{background:var(--dormido-fondo);color:var(--dormido);border-radius:10px;padding:.6rem .8rem;font-size:.88rem}
 .migas{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
 form.cambiar-grupo,form.resp{display:inline-flex;gap:.35rem;align-items:center;margin:0;font-size:.82rem;color:var(--suave)}
-form.cambiar-grupo select,form.resp select,form.nuevo select,form.nuevo input,form.renombrar input{font:inherit;padding:.25rem .45rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0}
-form.resp select{font-size:.9rem}
+form.resp{font-size:.92rem}
+form.cambiar-grupo select,form.nuevo select,form.nuevo input,form.renombrar input{font:inherit;padding:.25rem .45rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0}
+form.resp select{font:inherit;font-size:.92rem;color:var(--tinta);background:var(--papel);border:1px solid var(--linea);border-radius:8px;padding:.3rem .55rem;min-width:12rem}
 form.renombrar{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin:0}
 form.renombrar[hidden],h1[hidden]{display:none}
 form.renombrar input{font:700 clamp(1.4rem,3.4vw,2rem)/1.1 var(--display);flex:1 1 14rem;padding:.05rem .35rem;border-color:var(--color)}
@@ -149,9 +182,13 @@ form.nuevo label{display:flex;flex-direction:column;gap:.25rem;font-size:.85rem;
 form.nuevo input,form.nuevo select{padding:.5rem .65rem}
 form.nuevo .botones{display:flex;gap:.5rem;align-items:center}
 form.nuevo button,form.renombrar button.guardar{font:600 .88rem var(--texto);padding:.5rem 1rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
-.nuevo-proy{color:var(--suave);font-size:.85rem;padding:.35rem .6rem;text-decoration:none;display:block}
+/* El «+» al lado del nombre del grupo (en la maqueta, a la derecha): crea un
+   proyecto en ese grupo. */
+.nuevo-proy{cursor:pointer;color:var(--suave);font-size:.85rem;padding:.35rem .6rem;text-decoration:none}
 .nuevo-proy:hover{color:var(--tinta)}
-/* «+ Proyecto en X» abre esta ventana encima de la página (con JavaScript); sin
+.nuevo-proy.mas{margin-left:auto;font-size:1.15rem;font-weight:600;line-height:1;padding:.1rem .45rem;border-radius:6px;color:var(--color);letter-spacing:0}
+.nuevo-proy.mas:hover{background:color-mix(in srgb, var(--color) 14%, transparent)}
+/* El «+» abre esta ventana encima de la página (con JavaScript); sin
    JavaScript la ventana nunca se ve y el enlace lleva a la página aparte. */
 dialog.ventana{border:1px solid var(--linea);border-radius:14px;background:var(--papel);color:var(--tinta);padding:1.2rem;width:min(26rem,calc(100vw - 32px))}
 dialog.ventana::backdrop{background:rgb(0 0 0 / .35)}
@@ -162,9 +199,12 @@ dialog.ventana .botones{justify-content:flex-end;margin-top:.3rem}
 button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--color);outline-offset:2px}
 
 form.marcar,form.comentar,form.resp-tarea,form.nueva-tarea{display:inline-flex;margin:0;gap:.4rem;align-items:center;flex-wrap:wrap}
-form.marcar button.marca{all:unset;cursor:pointer;width:1.4rem;text-align:center;color:var(--suave);font-size:1.05rem;line-height:1}
-form.marcar button.marca.hecha-b{color:var(--ok)}
-form.marcar button.marca:focus-visible{outline:2px solid var(--color);outline-offset:2px;border-radius:50%}
+/* La marca de hecha se dibuja como la casilla de la maqueta (cuadrito con el
+   color del grupo y una palomita) pero sigue siendo un botón que envía su
+   formulario. */
+form.marcar button.marca{all:unset;cursor:pointer;box-sizing:border-box;width:1.1rem;height:1.1rem;flex:none;border:2px solid #767676;border-radius:3px;background:var(--papel);display:grid;place-items:center;font-size:.8rem;line-height:1;color:transparent}
+form.marcar button.marca.hecha-b{background:var(--color);border-color:var(--color);color:#fff}
+form.marcar button.marca:focus-visible{outline:2px solid var(--color);outline-offset:2px}
 /* El renglón «¿sale una tarea nueva de ésta?»: cuando está abierto, el
    formulario del botón redondo ocupa la línea entera y los campos van debajo,
    para que el título y la fecha de la fila no se aprieten contra ellos. */
@@ -179,18 +219,23 @@ form.marcar.abierta{flex:1 1 100%}
 .fila .titulo[hidden],.comentario p[hidden]{display:none}
 .fila form.renombrar{flex:1 1 12rem;min-width:0}
 .fila form.renombrar input{font:inherit;font-weight:500;flex:1 1 10rem}
-form.renombrar textarea,form.comentar textarea{font:inherit;flex:1 1 14rem;min-width:0;min-height:2.6rem;resize:vertical;padding:.4rem .6rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
-form.comentar{width:100%;margin-top:.6rem}
+form.renombrar textarea,form.comentar textarea{font:inherit;flex:1 1 14rem;min-width:0;min-height:2.6rem;resize:vertical;padding:.45rem .65rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
+form.comentar{width:100%;margin-top:.6rem;align-items:flex-end;gap:.5rem}
 form.resp-tarea{margin-bottom:.4rem;font-size:.85rem;color:var(--suave)}
-form.resp-tarea select,form.nueva-tarea input{font:inherit;padding:.3rem .5rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0}
-form.nueva-tarea{margin-top:.8rem;width:100%}
+form.resp-tarea select,form.nueva-tarea input{font:inherit;padding:.45rem .65rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0}
+form.resp-tarea select{padding:.3rem .5rem}
+form.nueva-tarea{margin-top:.8rem;width:100%;gap:.5rem}
 form.nueva-tarea input[name=titulo]{flex:1 1 12rem}
-form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar button.guardar{font:600 .85rem var(--texto);padding:.4rem .9rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
+form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar button.guardar{font:600 .88rem var(--texto);padding:.45rem .9rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
 .comentarios-n{flex:none}
 .borrar-x{color:var(--suave);text-decoration:none;font-size:1.15rem;line-height:1;padding:.1rem .35rem;border-radius:6px;flex:none}
 .borrar-x:hover{color:var(--vencida);background:var(--vencida-fondo)}
-.detalle h4{margin:.6rem 0 .3rem;font:600 .78rem var(--texto);letter-spacing:.07em;text-transform:uppercase;color:var(--suave)}
 .tarea .de-papelera{font-size:.76rem;color:var(--suave);flex-basis:100%;margin-left:1.8rem}
+/* Con JavaScript los campos que se guardan solos no llevan su botón (en la
+   maqueta no lo tienen): el desplegable guarda al escoger y el texto al
+   salir del campo o con Enter. Sin JavaScript el botón sigue ahí y es lo que
+   envía el formulario. «Comentar» NO se esconde: es el botón de la maqueta. */
+.js form.resp button,.js form.cambiar-grupo button,.js form.resp-tarea button,.js form.renombrar button.guardar,.js .buscador button{display:none}
 </style></head><body>
 
 {#- UNA FILA DE TAREA (Lucy 1.0, E6). Cada acción es un `<form method="post">`
@@ -258,7 +303,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         clic que renombra. El `href` lo escribe el servidor: el guion no calcula
         a dónde va. -#}
     <a class="titulo" data-dbl="titulo" href="{{ u }}{{ '' if abierta else '&t=' ~ t.id }}#tarea-{{ t.id }}" title="Un clic abre el detalle; doble clic cambia el título" aria-label="{{ 'Cerrar' if abierta else 'Abrir' }} el detalle de la tarea" {% if editar_tarea == t.id %}hidden{% endif %}>{{ t.titulo }}</a>
-    {% if t.comentarios %}<span class="nota comentarios-n" title="Comentarios de la tarea">{{ t.comentarios|length }} comentario{{ 's' if t.comentarios|length != 1 }}</span>{% endif %}
+    {% if t.comentarios %}<span class="nota comentarios-n" title="Comentarios de la tarea">{{ t.comentarios|length }} coment.</span>{% endif %}
     <form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/titulo" data-auto {% if editar_tarea != t.id %}hidden{% endif %}>
       <input name="titulo" type="text" required maxlength="{{ largo_titulo }}" value="{{ t.titulo }}" aria-label="Título de la tarea">
       <button class="guardar">Guardar</button>
@@ -266,7 +311,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     </form>
     <noscript><a class="nota" href="{{ u }}&amp;editar_tarea={{ t.id }}#tarea-{{ t.id }}">Cambiar el título</a></noscript>
     {% if not t.es_pendiente and not t.es_hecha %}<span class="vence" style="min-width:0">{{ t.estado }}</span>{% endif %}
-    {% if t.responsable %}<span class="ini" title="Responsable: {{ t.responsable }}">{{ t.responsable|iniciales }}</span>{% endif %}
+    <span class="caritas">{% if t.responsable %}<span class="ini" title="Responsable: {{ t.responsable }}">{{ t.responsable|iniciales }}</span>{% endif %}</span>
     <span class="vence" {% if t.vence_en %}title="{{ t.vence_en|hora_rd }}"{% endif %}>{{ 'Venció el ' if t.vencida }}{{ t.dia|dia_corto }}</span>
     {% if confirmar_borrar == t.id %}
     <span class="confirmar">¿Borrarla?
@@ -277,6 +322,18 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
   </div>
   {% if abierta %}
   <div class="detalle">
+    {#- LAS PERSONAS DE LA TAREA, como en la maqueta. Hoy la única persona que
+        Lucy guarda en una tarea es su responsable, y sale aquí con el rol
+        «Responsable» (se cambia con el desplegable de abajo). Agregar otras
+        personas NO se guarda todavía: el renglón se ve igual que en la maqueta
+        pero está apagado, y no es un formulario. -#}
+    <h4>Personas de esta tarea</h4>
+    <div class="personas">{% if t.responsable %}<div class="persona"><span class="ini">{{ t.responsable|iniciales }}</span>
+      <span class="quien"><b>{{ t.responsable }}</b><span>Responsable</span></span></div>{% else %}<p class="vacio">Nadie asignado.</p>{% endif %}</div>
+    <div class="agregar" aria-disabled="true" title="Todavía no se guarda: agregar personas a una tarea llega con otro trabajo">
+      <select disabled aria-label="Persona"><option>Escoge de las personas de Noco…</option></select>
+      <input disabled placeholder="¿Qué hace aquí?" aria-label="Qué hace esta persona">
+      <button type="button" disabled>Agregar</button></div>
     <form class="resp-tarea" method="post" action="/proyectos/tarea/{{ t.id }}/responsable" data-auto>
       <label for="rt-{{ t.id }}">Responsable:</label>
       <select id="rt-{{ t.id }}" name="responsable">
@@ -286,6 +343,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       </select>
       <button class="btn-linea">Guardar</button>
     </form>
+    <div class="separa"></div>
     <h4>Comentarios</h4>
     <div class="comentarios">
       {% for c in t.comentarios %}
@@ -331,7 +389,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 {% set bq = ('&q=' ~ (q|urlencode)) if q else '' %}
 <a class="proy {{ 'cerrado' if cerrado }}" href="/proyectos?p={{ m.id }}{{ bq }}" aria-current="{{ 'true' if actual and actual.id == m.id else 'false' }}">
   <span>{{ m.nombre }}
-    {%- if m.cliente %}<span class="sub">{{ m.cliente }}</span>{% endif %}
+    {%- if m.cliente %}<span class="sub">{{ m.cliente }}</span>{% elif not cerrado %}<span class="sub">Sin cliente</span>{% endif %}
     {%- if not cerrado %}<span class="sub {{ 'dormido' if m.dormido }}">{{ 'Sin movimiento ' if m.dormido else 'Último movimiento: ' }}{{ m.dias_sin_movimiento|hace_dias }}</span>{% endif %}</span>
   {%- if not cerrado %}<span class="cuenta">{% if m.n_vencidas %}<b>{{ m.n_vencidas }} vencida{{ 's' if m.n_vencidas > 1 }}</b> · {% endif %}{{ m.n_hechas }}/{{ m.n_total }}</span>{% endif %}
 </a>
@@ -339,8 +397,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 
 {% macro bloque_grupo(g, es_sin_grupo, vista) %}
 {% set actual = vista.proyecto if vista.tipo == 'proyecto' else none %}
-<div class="grupo gc" style="--claro:{{ g.color }};--oscuro:{{ g.color_oscuro }}">
-  <h3><i></i>{{ 'Sin grupo' if es_sin_grupo else g.clave }}</h3>
+<div class="grupo gc" data-g="{{ 'sin-grupo' if es_sin_grupo else g.clave|lower }}" style="--claro:{{ g.color }};--oscuro:{{ g.color_oscuro }}">
+  <h3><i></i>{{ 'Sin grupo' if es_sin_grupo else g.clave }}{% if not es_sin_grupo and not q %}<a class="nuevo-proy mas" href="/proyectos?nuevo={{ g.clave|urlencode }}" aria-label="Proyecto nuevo en {{ g.clave }}" title="Proyecto nuevo en {{ g.clave }}">+</a>{% endif %}</h3>
   {% for m in g.abiertos %}{{ un_proyecto(m, actual) }}
   {% else %}{% if not es_sin_grupo and not q %}<p class="vacio" style="padding:.3rem .6rem">Sin proyectos abiertos.</p>{% endif %}{% endfor %}
   {% if g.cerrados %}
@@ -349,11 +407,11 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% for m in g.cerrados %}{{ un_proyecto(m, actual, True) }}{% endfor %}
   </details>
   {% endif %}
-  {% if not es_sin_grupo and not q %}<a class="nuevo-proy" href="/proyectos?nuevo={{ g.clave|urlencode }}">+ Proyecto en {{ g.clave }}</a>
+  {% if not es_sin_grupo and not q %}
   {#- LA VENTANITA: el servidor la escribe completa, con su grupo y su
-      responsable, justo después del enlace. Sin JavaScript no se ve nunca (un
+      responsable, en el mismo grupo que su «+». Sin JavaScript no se ve nunca (un
       `<dialog>` cerrado no se pinta) y el enlace lleva a la página aparte
-      (`?nuevo=`); con JavaScript, el clic en el enlace la abre encima de la
+      (`?nuevo=`); con JavaScript, el clic en el «+» la abre encima de la
       página. Envía el mismo formulario a la misma ruta que la página aparte. -#}
   <dialog class="ventana" aria-label="Proyecto nuevo en {{ g.clave }}">
     <h2>Proyecto nuevo en {{ g.clave }}</h2>
@@ -379,13 +437,13 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 </div>
 {% endmacro %}
 
-<div class="barra-marca"><div class="barra-dentro">
+<header class="barra-marca"><div class="barra-dentro">
   <img class="logo" src="/logo-cds.png" alt="Caribbean Dream Studios">
   <span class="barra-tag">PROYECTOS</span>
-  <nav class="panel" aria-label="Panel">
-    {% for a in pantallas %}<a href="{{ a.ruta }}" class="{{ 'on' if a.ruta == '/proyectos' }}">{{ a.nombre }}</a>{% endfor %}
+  <nav class="menu" aria-label="Lucy">
+    {% for a in pantallas %}<a href="{{ a.ruta }}"{% if a.ruta == '/proyectos' %} aria-current="page"{% endif %}>{{ a.nombre }}</a>{% endfor %}
   </nav>
-</div></div>
+</div></header>
 
 <div class="envoltura">
   <aside>
@@ -469,13 +527,18 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         <a class="btn-linea" href="/proyectos?p={{ m.id }}">Cancelar</a>
       </form>
       <noscript><a class="nota" href="/proyectos?p={{ m.id }}&amp;editar=nombre">Cambiar el nombre</a></noscript>
+      {#- El aviso va justo debajo del título, como en la maqueta. -#}
+      {% if m.dormido %}<div class="aviso-dormido">Este proyecto lleva {{ m.dias_sin_movimiento }} días sin movimiento: ni tareas hechas ni comentarios.</div>{% endif %}
       {% if m.descripcion %}<p class="descripcion">{{ m.descripcion }}</p>{% endif %}
       <div class="quienes">
-        {% if m.cliente %}<span>Cliente: <b>{{ m.cliente }}</b></span>{% endif %}
+        {#- El CLIENTE se ve como en la maqueta (un campo con su nombre), pero
+            cambiarlo desde aquí NO se guarda todavía: el campo es de solo
+            lectura y no es un formulario. -#}
+        <label>Cliente <input class="campo-quien" value="{{ m.cliente or '' }}" placeholder="Buscar en Noco… (sin cliente)" readonly title="Todavía no se puede cambiar el cliente desde aquí"></label>
         <form class="resp" method="post" action="/proyectos/{{ m.id }}/responsable" data-auto>
-          <label for="resp-{{ m.id }}">Responsable:</label>
+          <label for="resp-{{ m.id }}">Responsable</label>
           <select id="resp-{{ m.id }}" name="responsable">
-            {% if not m.responsable %}<option value="" selected disabled>Escoge…</option>
+            {% if not m.responsable %}<option value="" selected disabled>—</option>
             {% elif m.responsable not in nombres_responsable %}<option value="" selected disabled>{{ m.responsable }}</option>{% endif %}
             {% for n in nombres_responsable %}<option value="{{ n }}" {%- if m.responsable == n %} selected{% endif %}>{{ n }}</option>{% endfor %}
           </select>
@@ -495,8 +558,9 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% if m.cerrado %}<div class="aviso-cerrado">Proyecto cerrado: no se le agregan tareas.
       <form class="en-linea" method="post" action="/proyectos/{{ m.id }}/estado"><input type="hidden" name="estado" value="activo"><button class="btn-linea">Reabrir</button></form></div>{% endif %}
     {% if not m.estado_conocido %}<div class="aviso-raro">Este proyecto tiene un estado que no es de la lista («{{ m.estado }}»). Al cerrarlo o reabrirlo se corrige.</div>{% endif %}
-    {% if m.dormido %}<div class="aviso-dormido">Este proyecto lleva {{ m.dias_sin_movimiento }} días sin movimiento.</div>{% endif %}
 
+    <div class="cuerpo">
+      <div class="centro">
     <section class="bloque">
       <div class="encabezado"><h2>Tareas</h2><span class="nota">Las vencidas arriba. Toca el título de una tarea para ver su detalle y sus comentarios</span></div>
       {{ lista_de_tareas(m.pendientes, m.otras, m.n_hechas, m.n_otras, 'Sin tareas todavía.' if not m.n_total else 'No queda nada pendiente.') }}
@@ -523,6 +587,22 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {% else %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;confirmar=cerrar">Cerrar proyecto</a>{% endif %}
     </div>
     {% endif %}
+      </div>
+      {#- LAS PERSONAS DEL PROYECTO, en la tercera columna como en la maqueta.
+          Lucy todavía no las guarda desde la página (la tabla existe, pero
+          ninguna ruta las escribe): se ve igual, vacía y con el renglón de
+          agregar apagado; no es un formulario. -#}
+      <aside class="lado-der">
+    <section class="bloque personas-p">
+      <div class="encabezado"><h2>Personas del proyecto</h2><span class="nota">Quién está metido y qué hace aquí</span></div>
+      <div class="personas"><p class="vacio">Nadie más todavía.</p></div>
+      <div class="agregar" aria-disabled="true" title="Todavía no se guarda: agregar personas a un proyecto llega con otro trabajo">
+        <select disabled aria-label="Persona"><option>Escoge de las personas de Noco…</option></select>
+        <input disabled placeholder="¿Qué hace aquí?" aria-label="Qué hace esta persona">
+        <button type="button" disabled>Agregar</button></div>
+    </section>
+      </aside>
+    </div>
     </div>
 
     {% elif vista.tipo == 'nuevo' %}
@@ -588,17 +668,32 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
    doble clic que renombra. Si no llega, sigue el enlace con `click()`, que es
    exactamente lo que haría el navegador sin este script: no decide a dónde va,
    va al `href` que escribió el servidor. */
+/* Marca la página como «con JavaScript» para que la hoja esconda los botones de
+   los campos que se guardan solos (`.js form.resp button`...). */
+if (document.documentElement) document.documentElement.className += " js";
 var esperando = null;
 var yendo = false;
-/* LA VENTANITA DE «+ PROYECTO»: el clic en el enlace abre el `<dialog>` que el
-   servidor escribió justo después (`showModal`), y «Cancelar» lo cierra. No
+/* LA VENTANITA DE «+ PROYECTO»: el clic en el «+» abre el `<dialog>` que el
+   servidor escribió en el mismo grupo (`showModal`), y «Cancelar» lo cierra. No
    escribe nada: la ventana es el mismo formulario de la página aparte. Si el
    navegador no sabe de `<dialog>`, no se toca el clic y el enlace lleva a la
    página aparte, como sin JavaScript. */
+/* EL PROYECTO ESCOGIDO QUEDA EN EL CENTRO de la columna de la izquierda (como
+   en la maqueta). Solo mueve el desplazamiento de esa columna: no decide nada. */
+(function () {
+  if (!document.querySelector) return;
+  var lado = document.querySelector(".envoltura > aside");
+  var b = lado && lado.querySelector('a.proy[aria-current="true"]');
+  if (!b || lado.scrollHeight <= lado.clientHeight) return;
+  var r = b.getBoundingClientRect(), l = lado.getBoundingClientRect();
+  lado.scrollTo({top: lado.scrollTop + (r.top - l.top) - (lado.clientHeight - r.height) / 2,
+                 behavior: "smooth"});
+})();
 document.addEventListener("click", function (e) {
   var ventana = e.target.closest && e.target.closest("a.nuevo-proy");
   if (ventana) {
-    var cuadro = ventana.nextElementSibling;
+    var grupo = ventana.closest && ventana.closest(".grupo");
+    var cuadro = grupo && grupo.querySelector("dialog.ventana");
     if (cuadro && cuadro.showModal) {
       e.preventDefault();
       cuadro.showModal();

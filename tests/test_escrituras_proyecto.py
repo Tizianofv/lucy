@@ -165,9 +165,10 @@ def test_cada_grupo_ofrece_su_boton_de_proyecto_nuevo_y_sin_grupo_no(mundo):
     html = ver(mundo)
     lista = html.split("<aside>", 1)[1].split("</aside>", 1)[0]
     for grupo in ("CDS", "ACD", "IA"):
-        assert f'href="/proyectos?nuevo={grupo}">+ Proyecto en {grupo}</a>' in lista
-    assert lista.count("+ Proyecto en") == 3
-    assert "+ Proyecto en" not in ver(mundo, q="sin").split("<aside>", 1)[1].split("</aside>", 1)[0]
+        assert (f'<a class="nuevo-proy mas" href="/proyectos?nuevo={grupo}" aria-label="Proyecto nuevo en {grupo}" '
+                f'title="Proyecto nuevo en {grupo}">+</a></h3>') in lista
+    assert lista.count('class="nuevo-proy mas"') == 3
+    assert 'class="nuevo-proy' not in ver(mundo, q="sin").split("<aside>", 1)[1].split("</aside>", 1)[0]
 
 
 def test_un_grupo_que_no_existe_no_abre_el_formulario(mundo):
@@ -779,7 +780,10 @@ def test_un_grupo_que_no_existe_no_se_guarda(mundo):
 def test_el_cliente_no_se_escribe_desde_la_pagina_todavia(mundo):
     mundo.proyecto(1, "P", area="CDS", cliente="Colegio")
     html = ver(mundo, p=1)
-    assert "Cliente: <b>Colegio</b>" in html                  # se LEE si lo hay
+    assert '<label>Cliente <input class="campo-quien" value="Colegio"' in html   # se LEE si lo hay
+    assert 'readonly' in html.split('<label>Cliente <input', 1)[1].split(">", 1)[0]   # y NO se escribe
+    # El campo no es un formulario: no hay forma de enviarlo.
+    assert not any("cliente" in (f["accion"] or "") for f in _formularios_de(html))
     assert 'name="cliente' not in html
     llamadas = []
     for archivo in _archivos_de_texto():

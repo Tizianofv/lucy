@@ -486,13 +486,22 @@ def test_el_avance_y_los_contadores(mundo):
     assert "<b>1 vencida</b> · 1/4" in html          # la lista de la izquierda
 
 
-def test_un_proyecto_sin_cliente_ni_responsable_no_pinta_guiones(mundo):
+def _cliente_de_la_cabecera(html: str):
+    """El valor del campo «Cliente» de la cabecera (como en la maqueta, un campo
+    de solo lectura con el nombre), o None si el campo no está."""
+    m = re.search(r'<label>Cliente <input class="campo-quien" value="([^"]*)"', html)
+    return m.group(1) if m else None
+
+
+def test_un_proyecto_sin_cliente_ni_responsable_lo_dice_como_la_maqueta(mundo):
     mundo.proyecto(1, "Interno", area="IA")
     html = ver(mundo, p=1)
-    assert "Cliente:" not in html
-    assert "—" not in html and "Sin cliente" not in html
-    # Sin responsable no se inventa uno: el desplegable pide que se escoja.
-    assert '<option value="" selected disabled>Escoge…</option>' in html
+    # El campo del cliente sale vacío (con su «Buscar en Noco… (sin cliente)») y
+    # la lista de la izquierda dice «Sin cliente», igual que la maqueta.
+    assert _cliente_de_la_cabecera(html) == ""
+    assert "(sin cliente)" in html and '<span class="sub">Sin cliente</span>' in html
+    # Sin responsable no se inventa uno: el desplegable muestra «—» y pide que se escoja.
+    assert '<option value="" selected disabled>—</option>' in html
 
 
 def test_la_descripcion_del_proyecto_se_ve_si_la_hay_y_sale_escapada(mundo):
@@ -510,9 +519,9 @@ def test_si_falta_uno_de_los_dos_no_se_pinta_su_guion(mundo, gente):
     mundo.proyecto(2, "Solo cliente", area="CDS", cliente="Colegio")
     solo_responsable, solo_cliente = ver(mundo, p=1), ver(mundo, p=2)
     assert '<option value="Persona Dos" selected>' in solo_responsable
-    assert "Cliente:" not in solo_responsable and "—" not in solo_responsable
-    assert "Cliente: <b>Colegio</b>" in solo_cliente
-    assert 'selected disabled>Escoge…' in solo_cliente and "—" not in solo_cliente
+    assert _cliente_de_la_cabecera(solo_responsable) == "" and "selected disabled>—" not in solo_responsable
+    assert _cliente_de_la_cabecera(solo_cliente) == "Colegio"
+    assert 'selected disabled>—' in solo_cliente
 
 
 def test_cliente_y_responsable_salen_por_nombre_y_nunca_por_numero(mundo, gente):
@@ -522,13 +531,14 @@ def test_cliente_y_responsable_salen_por_nombre_y_nunca_por_numero(mundo, gente)
     mundo.tarea(11, "de Code", proyecto=1, responsable=config.CHAT_ID_CODE)
     mundo.tarea(12, "de alguien sin nombre", proyecto=1, responsable=555000111)
     html = ver(mundo, p=1)
-    assert "Cliente: <b>Colegio San Juan</b>" in html and '<option value="Persona Dos" selected>' in html
+    assert _cliente_de_la_cabecera(html) == "Colegio San Juan" and '<option value="Persona Dos" selected>' in html
     assert 'title="Responsable: Persona Uno"' in html and 'title="Responsable: Code"' in html
     for pid in (1, 2):
         pagina = ver(mundo, p=pid)
         for numero in (str(gente.rosi), str(gente.dueno), "555000111"):
             assert numero not in pagina, f"salió el número {numero} en /proyectos?p={pid}"
-    assert "selected disabled>Escoge…" in ver(mundo, p=2)   # sin nombre conocido, no se pinta
+    assert "selected disabled>555000111" not in ver(mundo, p=2)
+    assert "selected disabled>—" in ver(mundo, p=2)   # sin nombre conocido, no se pinta
 
 
 def test_la_lista_cuenta_cada_grupo_con_su_color_y_sus_proyectos(mundo):
@@ -615,9 +625,9 @@ def test_los_comentarios_se_leen_con_nombre_fecha_y_marca_de_editado(mundo, gent
                      editado=_dia(0, 10))
     mundo.comentario(52, 10, gente.dueno, "borrado, no sale", borrado=True)
     cerrado = ver(mundo, p=1)
-    assert "2 comentarios" in cerrado and "Le escribí a Luis" not in cerrado   # el detalle está cerrado
+    assert "2 coment." in cerrado and "Le escribí a Luis" not in cerrado   # el detalle está cerrado
     html = ver(mundo, p=1, t=10)
-    assert "2 comentarios" in html
+    assert "2 coment." in html
     assert "<b>Persona Dos</b>" in html and "Le escribí a Luis" in html
     assert "borrado, no sale" not in html
     assert "Segundo <b>comentario</b>" not in html and "Segundo &lt;b&gt;comentario&lt;/b&gt;" in html
