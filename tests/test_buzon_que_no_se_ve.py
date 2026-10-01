@@ -3957,14 +3957,30 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # disco, 66 → 67 EXENTOS por `tests/test_escrituras_tarea.py` (nuevo).
     # VIGILADOS sin cambio en 44: se tocaron `db/db.py` y `web/app.py`, ya
     # vigilados de antes.
+    # 1-oct-2026, rama `trabajo/apagado-ordenado`: 111 → 113 en disco, 67 → 69
+    # EXENTOS por `tests/test_apagado_ordenado.py` y `tests/_arnes_apagado.py`
+    # (nuevos). VIGILADOS sin cambio en 44: se tocaron `main.py`,
+    # `cerebro/interpretar.py` y `db/db.py`, ya vigilados de antes.
+    # 2-oct-2026, rama `trabajo/noco-lectura` (Lucy 1.0, E3, el lector de Noco):
+    # 111 → 113 en disco, 67 → 68 EXENTOS por `tests/test_noco_lectura.py`
+    # (nuevo). VIGILADOS 44 → 45 por `noco_lectura.py` (nuevo: el lector de
+    # personas del Noco de CDS, con la única puerta de red del repositorio hacia
+    # ahí); se tocó además `web/app.py` (la ruta del buscador), ya vigilado.
+    # 2-oct-2026, rama `trabajo/proyectos-telegram` (Lucy 1.0, E8, los proyectos
+    # por Telegram): 111 → 113 en disco, 67 → 69 EXENTOS por los DOS archivos
+    # nuevos, `tests/test_crear_proyecto_telegram.py` y
+    # `tests/test_herramientas.py`. VIGILADOS sin cambio en 44: se tocaron
+    # `db/db.py`, `acciones/crud.py` y `cerebro/agente.py`, ya vigilados de
+    # antes — y ningún archivo nuevo de producción.
+    # Junta de E8 con main (medida corriendo la prueba): 117 en disco, 72 EXENTOS, 45 VIGILADOS.
     # 1-oct-2026, rama `trabajo/visual-maqueta` (la página contra la maqueta):
-    # 111 → 112 en disco, 67 → 68 EXENTOS por
-    # `tests/test_pagina_proyectos_maqueta.py` (nuevo). VIGILADOS sin cambio en
-    # 44: se tocó `db/db.py`, ya vigilado de antes.
-    assert medido == {"en disco": 112, "exentos": 68, "vigilados": 44}, (
+    # +1 en disco y +1 EXENTO por `tests/test_pagina_proyectos_maqueta.py`
+    # (nuevo); VIGILADOS sin cambio: se tocó `db/db.py`, ya vigilado. Junta con
+    # main (medida corriendo la prueba): 118 en disco, 73 EXENTOS, 45 VIGILADOS.
+    assert medido == {"en disco": 118, "exentos": 73, "vigilados": 45}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "1-oct-2026 (rama visual-maqueta) era {'en disco': 112, "
-        "'exentos': 68, 'vigilados': 44}. La aserción de fondo —cero "
+        "1-oct-2026 (junta de visual-maqueta con main) era {'en disco': 118, "
+        "'exentos': 73, 'vigilados': 45}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

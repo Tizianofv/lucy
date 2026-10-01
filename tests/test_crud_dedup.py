@@ -323,11 +323,14 @@ def _instalar(conn):
     async def _cero_persona(_, bandeja_id=None):
         return None
 
-    async def _cero_proyecto(_, bandeja_id=None):
+    async def _cero_proyecto(_):
+        # E8 (1-oct-2026): `crear_desde_interpretacion` ya no CREA el proyecto
+        # que alguien nombró al vuelo — solo lo BUSCA por acá. El doble cambia
+        # con el camino real: antes era `buscar_o_crear_proyecto`, que creaba.
         return None
 
     db.buscar_o_crear_persona = _cero_persona
-    db.buscar_o_crear_proyecto = _cero_proyecto
+    db.proyecto_vivo_por_nombre = _cero_proyecto
 
 
 # ---------------------------------------------------------------------------
@@ -601,12 +604,13 @@ async def test_el_area_se_ignora_en_silencio_si_la_tarea_tiene_proyecto():
     async def _cero_persona(_, bandeja_id=None):
         return None
 
-    async def _con_proyecto_77(_, bandeja_id=None):
+    async def _con_proyecto_77(_):
+        # E8 (1-oct-2026): el proyecto se BUSCA, ya no se crea al nombrarlo.
         return 77
 
     db.pool = FakePool(conn)
     db.buscar_o_crear_persona = _cero_persona
-    db.buscar_o_crear_proyecto = _con_proyecto_77
+    db.proyecto_vivo_por_nombre = _con_proyecto_77
 
     await crud.crear_desde_interpretacion(
         1, {"clasificacion": "tarea", "titulo": "algo del proyecto",
@@ -626,12 +630,13 @@ async def test_sin_pedir_area_se_crea_igual_con_proyecto():
     async def _cero_persona(_, bandeja_id=None):
         return None
 
-    async def _con_proyecto_77(_, bandeja_id=None):
+    async def _con_proyecto_77(_):
+        # E8 (1-oct-2026): el proyecto se BUSCA, ya no se crea al nombrarlo.
         return 77
 
     db.pool = FakePool(conn)
     db.buscar_o_crear_persona = _cero_persona
-    db.buscar_o_crear_proyecto = _con_proyecto_77
+    db.proyecto_vivo_por_nombre = _con_proyecto_77
 
     await crud.crear_desde_interpretacion(
         1, {"clasificacion": "tarea", "titulo": "algo del proyecto",

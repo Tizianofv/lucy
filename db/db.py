@@ -514,6 +514,27 @@ async def rescatar_procesando(minutos: int = 10, max_intentos: int = 3) -> int:
         return len(await cur.fetchall())
 
 
+async def devolver_reclamadas(ids: list[int]) -> int:
+    """Devuelve a 'sin_procesar' las filas que esta instancia reclamó y no
+    terminó, al apagarse. Devuelve cuántas.
+
+    NO suma `intentos` ni pone `reintentar_despues`: no fallaron, se cortaron
+    (a diferencia de `rescatar_procesando` y `devolver_a_cola`, que sí cuentan).
+    Solo toca filas todavía en 'procesando': una que alcanzó a cerrarse
+    ('procesado', 'error', 'esperando_confirmacion') no se revive.
+    """
+    if not ids:
+        return 0
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            """
+            UPDATE bandeja SET estado = 'sin_procesar'
+             WHERE id = ANY(%s) AND estado = 'procesando'
+            RETURNING id
+            """, (list(ids),))
+        return len(await cur.fetchall())
+
+
 async def tomar_pendientes(
     tipos: tuple[str, ...] = ("texto", "audio", "foto", "sistema", "email"),
     limite: int = 5,
@@ -1447,7 +1468,46 @@ async def buscar_o_crear_persona(nombre: str, *,
 
 async def buscar_o_crear_proyecto(nombre: str, *,
                                   bandeja_id: int | None = None) -> int | None:
+    """Busca el proyecto y, si no está, LO CREA (sin grupo ni responsable).
+
+    Desde E8 (1-oct-2026) NINGÚN camino de Telegram llama acá: `crud.crear_
+    desde_interpretacion` pregunta por `proyecto_vivo_por_nombre` y, si el
+    proyecto no existe, no lo crea — le pregunta a Tiziano el grupo y el
+    responsable. Se queda porque es la forma genérica de «búscalo o créalo»
+    de la que sale `buscar_o_crear_persona` (que sí se usa), y porque sus
+    pruebas la miden.
+
+    LA PUERTA DE UN PROYECTO NUEVO ES `crear_proyecto`, y solo esa: nace con
+    grupo y con responsable.
+    """
     return await _buscar_o_crear("proyectos", nombre, bandeja_id=bandeja_id)
+
+
+async def proyecto_vivo_por_nombre(nombre: str) -> int | None:
+    """El id del proyecto VIVO que se llama así, o `None`. **NO CREA NADA.**
+
+    Es la búsqueda que usa Telegram desde E8 (1-oct-2026). Un proyecto nace
+    SOLO por `crear_proyecto`, que exige grupo y responsable: un proyecto que
+    aparece porque alguien lo nombró al vuelo nace sin las dos cosas y en la
+    página cae en «Sin grupo», que es de donde salió este encargo.
+
+    La comparación es la MISMA de siempre — `proyecto_vivo_con_nombre`, la que
+    comparten `_buscar_o_crear`, `crud.perfil`, `crear_proyecto` y
+    `convertir_tarea_en_proyecto` —, así que «¿existe?» contesta lo mismo por
+    donde se pregunte. Lo único que cambia es que acá no hay INSERT detrás.
+
+    Abre su propia conexión (a diferencia de `proyecto_vivo_con_nombre`, que
+    recibe el cursor): quien pregunta desde `acciones/crud.py` no está dentro
+    de una transacción en ese momento, y meterlo adentro alargaría la
+    transacción de la entidad sin ganar nada — el mismo criterio con el que
+    `crear_desde_interpretacion` resuelve personas y proyectos fuera.
+    """
+    nombre = (nombre or "").strip()
+    if not nombre:
+        return None
+    async with pool.connection() as conn:
+        return await proyecto_vivo_con_nombre(
+            conn.cursor(row_factory=dict_row), nombre)
 
 
 class ProyectoNoSeCrea(ValueError):
@@ -1460,7 +1520,8 @@ class ProyectoNoSeCrea(ValueError):
         self.clave = clave
 
 
-async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> dict:
+async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int,
+                         desde: str = "panel") -> dict:
     """El diálogo «+ Proyecto en X» de la página de proyectos (Lucy 1.0, E5).
     Crea un proyecto y devuelve su fila. Si no vale, `NombreDeProyectoNoVale`
     (por el nombre) o `ProyectoNoSeCrea` (por el grupo o el responsable), las
@@ -1482,17 +1543,31 @@ async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> di
         de si vale es de esta función, así que quien la llame sin la ruta (el
         Telegram de E8) tiene la misma puerta.
 
+    `desde` dice QUIÉN lo pide y queda en la huella: `"panel"` (el botón de la
+    página, por omisión) o `"lucy"` (Telegram, vía `crud.crear_proyecto`). Es un
+    ValueError si es otra cosa. Cada origen tiene su `INSERT` con el actor como
+    LITERAL, no como variable, para no romper el guarda de
+    `tests/test_proyectos_panel.py` (el actor variable solo viaja por
+    `crud._registrar`).
+
     NO lleva cliente: lo pone `poner_cliente` (E3), con la ficha releída de
     Noco; nace sin cliente, que es un estado válido (es opcional).
 
     UNA SOLA TRANSACCIÓN: el INSERT y su huella `crear` (con lo que quedó
     guardado en `despues`, así que `crud.deshacer` la revierte con la rama
-    genérica de 'crear'). El actor es el literal `'panel'`: lo dispara un botón
-    del panel, y el guarda de `tests/test_proyectos_panel.py` no deja que el
+    genérica de 'crear'). El actor es un literal (`'panel'` o `'lucy'`, según `desde`): lo dispara un botón
+    del panel o Telegram, y el guarda de `tests/test_proyectos_panel.py` no deja que el
     actor viaje como variable fuera de `crud._registrar`. No se puede usar `crud._registrar` (`crud` importa este módulo): la fila de
     `log_acciones` se escribe a mano con la misma forma que las otras
     escrituras de este archivo.
+
+    DEVUELVE LA FILA CON SU `log_id` — el asa para deshacer, que es lo que
+    `cerebro/agente.py::_anotar` necesita. La ruta del panel la ignora; quien
+    la llame desde Telegram (por `crud.crear_proyecto`) la usa. NADA MÁS
+    cambia con eso: mismo INSERT, misma huella, misma transacción.
     """
+    if desde not in ("panel", "lucy"):
+        raise ValueError(f"origen de proyecto desconocido: {desde!r}")
     nombre = nombre_de_proyecto_que_vale(nombre)
     if area not in {a["clave"] for a in await areas()}:
         raise ProyectoNoSeCrea("grupo", "ese grupo no existe")
@@ -1512,14 +1587,41 @@ async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> di
             """,
             (nombre, area, responsable_chat_id))
         nuevo = await cur.fetchone()
-        await conn.execute(
-            """
-            INSERT INTO log_acciones
-              (actor, accion, tabla, registro_id, antes, despues, motivo)
-            VALUES ('panel', 'crear', 'proyectos', %s, NULL, %s,
-                    'Proyecto nuevo, creado desde el panel de proyectos')
-            """,
-            (nuevo["id"], json.dumps(nuevo, default=str, ensure_ascii=False)))
+        # EL ASA, EN LA MISMA FILA QUE SE DEVUELVE. La huella ya se escribía;
+        # lo que faltaba era PODER NOMBRARLA. Quien crea un proyecto desde
+        # Telegram (E8) tiene que poder decir «acción #N, reversible» y dejar
+        # el botón de deshacer — `cerebro/agente.py::_anotar` no anota nada sin
+        # un id—, y para eso necesita el id. Va como una clave más de la fila, y
+        # no como un segundo valor de retorno, para no cambiarle la firma a
+        # quien ya la llama: la ruta del panel la ignora.
+        #
+        # Es el mismo `RETURNING id` que ya usa `convertir_tarea_en_proyecto`
+        # unas líneas más abajo, sobre el MISMO INSERT: ni una escritura más ni
+        # una transacción distinta. Y va con `cur` (el cursor con
+        # `row_factory=dict_row`) y no con `conn.execute`, porque el id se lee
+        # POR NOMBRE y `conn.execute` devuelve un cursor con la factoría de la
+        # conexión, que en SQLite son tuplas — el mismo motivo por el que
+        # `convertir_tarea_en_proyecto` lee su `RETURNING id` con `cur`.
+        huella = (nuevo["id"], json.dumps(nuevo, default=str, ensure_ascii=False))
+        if desde == "lucy":
+            await cur.execute(
+                """
+                INSERT INTO log_acciones
+                  (actor, accion, tabla, registro_id, antes, despues, motivo)
+                VALUES ('lucy', 'crear', 'proyectos', %s, NULL, %s,
+                        'Proyecto nuevo, creado por Telegram')
+                RETURNING id
+                """, huella)
+        else:
+            await cur.execute(
+                """
+                INSERT INTO log_acciones
+                  (actor, accion, tabla, registro_id, antes, despues, motivo)
+                VALUES ('panel', 'crear', 'proyectos', %s, NULL, %s,
+                        'Proyecto nuevo, creado desde el panel de proyectos')
+                RETURNING id
+                """, huella)
+        nuevo["log_id"] = (await cur.fetchone())["id"]
         return nuevo
 
 

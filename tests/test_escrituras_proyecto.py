@@ -893,7 +893,12 @@ def test_quien_escribe_cada_columna_del_proyecto_y_si_pasa_por_su_puerta():
     assert escritores["area"] == {"convertir_tarea_en_proyecto", "crear_proyecto"}
     # (`_buscar_o_crear` arma su `INSERT INTO {tabla}` al vuelo y este censo no lo
     # ve; el de `tests/test_nombre_de_proyecto.py` sí, y exige la puerta del nombre.)
-    assert escritores["nombre"] == {"convertir_tarea_en_proyecto", "perfil", "crear_proyecto"}
+    # `perfil` SALIÓ de acá con E8 (1-oct-2026): su `INSERT INTO proyectos
+    # (nombre, descripcion)` se borró, porque un proyecto ya no nace por el
+    # perfil — nace con grupo y responsable, por `crear_proyecto`. El trinquete
+    # hizo lo suyo: al desaparecer ese escritor, esta línea se puso roja hasta
+    # que alguien vino y lo declaró.
+    assert escritores["nombre"] == {"convertir_tarea_en_proyecto", "crear_proyecto"}
     # `crear_proyecto` llama a las puertas de lo que escribe.
     fuente = ast.parse((_ROOT / "db" / "db.py").read_text(encoding="utf-8"))
     crear = next(f for f in ast.walk(fuente) if isinstance(f, ast.AsyncFunctionDef) and f.name == "crear_proyecto")

@@ -47,11 +47,13 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               RedirectResponse)
 from fastapi.templating import Jinja2Templates
 
 import config
 import db.db as db
+import noco_lectura
 import web.auth as auth
 import web.menu as _menu
 from acciones import crud
@@ -1315,6 +1317,39 @@ async def logo_cds(request: Request):
         return _fuera(request)
     return FileResponse(LOGO_CDS, media_type="image/png",
                         headers={"Cache-Control": "private, max-age=86400"})
+
+
+@app.get("/personas/buscar")
+async def buscar_personas_en_noco(request: Request, q: str = ""):
+    """El buscador de personas de Noco, en JSON (Lucy 1.0, E3).
+
+    Es la ÚNICA ruta del panel que contesta JSON, y existe para que el
+    navegador pueda buscar sin recargar la página: el Noco de CDS tiene 733
+    personas (medido por la sala el 1-oct-2026), así que elegir un cliente o
+    agregar una persona a un proyecto es escribir dos letras y escoger de una
+    lista corta, no un desplegable con todas.
+
+    TODAVÍA NO LA USA NINGUNA PÁGINA. La pintan los encargos siguientes (el
+    cliente del proyecto y las personas de proyectos y tareas); se construye
+    ahora porque el diseño la pone acá y porque es la mitad que no se puede
+    probar sin el lector de Noco.
+
+    EXIGE SESIÓN, igual que todas las pantallas: no es una puerta de programa
+    —para eso está `/api/code/*`, con su clave— sino una llamada del navegador
+    de alguien que ya entró al panel. Sin cookie: 401 y ni una palabra a Noco.
+
+    Y DICE CUANDO NO PUDO: si Noco no contesta (o falta configurarlo), la
+    respuesta es un 503 con el motivo, nunca una lista vacía. Un buscador que
+    devuelve «no hay nadie» cuando el que falló es el CRM es peor que un error:
+    hace crear una ficha duplicada creyendo que la persona no estaba.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return JSONResponse({"error": "sin sesión"}, status_code=401)
+    try:
+        personas = await noco_lectura.buscar_personas(q)
+    except noco_lectura.NocoNoContesta as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    return JSONResponse({"personas": personas})
 
 
 @app.post("/proyectos/{pid}/area")
