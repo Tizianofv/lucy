@@ -134,8 +134,8 @@ TITULOS = {
                '"casa").',
     "proyectos": "los proyectos de su vida y de CDS.",
     "log_acciones": "todo lo que Lucy hizo, con el antes y el después.",
-    "areas": "el vocabulario cerrado de áreas -- CDS, ACD, Técnico, "
-             "Personal-- que puede llevar una tarea o un proyecto.",
+    "areas": "el vocabulario cerrado de áreas (los grupos) que puede llevar "
+             "una tarea o un proyecto; sus nombres son las filas de esta tabla.",
 }
 
 # El significado de una columna, cuando el nombre no alcanza. Es lo ÚNICO

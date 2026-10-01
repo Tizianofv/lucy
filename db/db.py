@@ -2261,7 +2261,15 @@ ESTADO_HECHA = "hecha"
 # `areas.clave` en la base -- así que ésta es la primera, y nace acá porque
 # `cerrar_tarea_de_la_sala` (26-sep-2026, §4) es el primer sitio que necesita
 # nombrarla en vez de solo pintarla.
-AREA_TECNICA = "🛠️ Técnico"
+#
+# Desde el 1-oct-2026 el grupo se llama «IA» (Lucy 1.0, E1) y antes tenía otro
+# nombre, que ya no se escribe en ningún sitio del código (lo vigila
+# `tests/test_grupo_ia.py`). La base lo cambia en dos pasos para que no haya
+# ventana de error: `2026-10-01_area_ia.sql` crea el área y
+# `2026-10-01b_area_ia_mover_y_borrar.sql` mueve lo que había y borra las
+# viejas. Entre el despliegue y el segundo paso, `tareas_de_code_pendientes`
+# devuelve lista vacía.
+AREA_TECNICA = "IA"
 
 # El orden en que se pintan los grupos, y su título. Es una decisión de
 # presentación y vive acá, pegada al criterio que produce las claves, para que
@@ -2391,8 +2399,8 @@ def grupo_de_tarea(estado, vence_en, hoy: date, completado_en=None) -> str:
 async def areas() -> list[dict]:
     """Las áreas declaradas, en su orden: `[{clave, color}, ...]`.
 
-    LA CLAVE ES EL NOMBRE QUE SE VE ('CDS', 'ACD', '🛠️ Técnico',
-    '🏠 Personal') — no hay traducción por medio, ver
+    LA CLAVE ES EL NOMBRE QUE SE VE ('CDS', 'ACD', 'IA') — no hay
+    traducción por medio, ver
     `db/migrations/2026-09-22_areas.sql`. Panel y Lucy leen esta función; no
     hay ninguna copia de la lista escrita a mano en ningún otro sitio del
     código, así que un área nueva aparece sola en los dos.

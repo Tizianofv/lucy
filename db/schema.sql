@@ -71,7 +71,7 @@ CREATE TABLE personas (
 -- y `proyectos.area`, lo que Lucy escribe por Telegram y lo que pinta el
 -- panel son la MISMA cadena, sin tabla de traducción en el medio.
 CREATE TABLE areas (
-  clave  TEXT PRIMARY KEY,       -- 'CDS' | 'ACD' | '🛠️ Técnico' | '🏠 Personal'
+  clave  TEXT PRIMARY KEY,       -- 'CDS' | 'ACD' | 'IA'
   color  TEXT NOT NULL,          -- para la etiqueta del panel, un hex
   orden  INT NOT NULL DEFAULT 0  -- el orden en que se pintan
 );
@@ -240,7 +240,7 @@ CREATE TABLE tareas (
   -- mismo patrón incremental que `area`/`primero_id`/`deriva_de_id`: una
   -- columna nullable que no rompe nada de lo que ya lee `tareas`.
   -- LA PONE SOLO `db.tomar_tarea_de_la_sala`, con la misma guarda embebida
-  -- en el SQL que `cerrar_tarea_de_la_sala` (Técnico + Code + pendiente +
+  -- en el SQL que `cerrar_tarea_de_la_sala` (área IA + Code + pendiente +
   -- no tomada todavía): tomar una tarea que no es de Code, o tomarla dos
   -- veces, no escribe nada.
   tomada_en       TIMESTAMPTZ,

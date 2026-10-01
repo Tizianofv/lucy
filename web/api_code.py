@@ -185,7 +185,7 @@ async def listar_tareas(quien: str = Depends(requiere("tareas:listar"))) -> dict
 async def cerrar_tarea(
     tid: int, quien: str = Depends(requiere("tareas:cerrar"))
 ) -> dict:
-    """Cierra la tarea `tid`. La guarda de valor (área Técnico + responsable
+    """Cierra la tarea `tid`. La guarda de valor (área IA + responsable
     Code) NO se repite acá: vive en el `WHERE` de `db.cerrar_tarea_de_la_
     sala` (parte 1), la misma para la sala local, la sala en la nube, o
     cualquier otro camino que llame a esa función. Esta ruta solo traduce
@@ -196,7 +196,7 @@ async def cerrar_tarea(
         raise HTTPException(
             status_code=409,
             detail="no se cerró: no existe, ya está hecha, o no es una "
-                   "tarea Técnica de Code")
+                   "tarea del grupo IA asignada a Code")
     return {"cerrada": True}
 
 
@@ -205,7 +205,7 @@ async def tomar_tarea(
     tid: int, quien: str = Depends(requiere("tareas:tomar"))
 ) -> dict:
     """Marca que la sala EMPEZÓ a trabajar la tarea `tid` (§D, parte 3). La
-    guarda de valor (Técnico + Code + pendiente + no tomada todavía) NO se
+    guarda de valor (IA + Code + pendiente + no tomada todavía) NO se
     repite acá: vive en el `WHERE` de `db.tomar_tarea_de_la_sala`.
 
     TRES RESPUESTAS, porque `db.tomar_tarea_de_la_sala` distingue TRES
@@ -227,7 +227,7 @@ async def tomar_tarea(
         raise HTTPException(
             status_code=409,
             detail="no se tomó: no existe, no está pendiente, no es una "
-                   "tarea Técnica de Code, o ya estaba tomada")
+                   "tarea del grupo IA asignada a Code, o ya estaba tomada")
     return {"tomada": True}
 
 

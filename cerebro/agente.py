@@ -116,8 +116,9 @@ HERRAMIENTAS DISPONIBLES:
   ambiguo, preguntá antes; si no vale, `crear` rechaza la cita entera.
   ÁREA (tareas, opcional): una de estas, tal cual: {AREAS}. Inferila por el
   contexto de lo que dice Tiziano —un cliente de ACD, algo del estudio, algo
-  técnico del sistema, algo suyo y personal—; si no queda claro cuál,
-  preguntá antes de crear en vez de adivinar. Si la tarea lleva "proyecto",
+  de IA o técnico del sistema—; lo suyo y personal no tiene área: mandalo
+  sin área. Si no queda claro cuál, preguntá antes de crear en vez de
+  adivinar. Si la tarea lleva "proyecto",
   NO hace falta que mandes "area": la hereda del proyecto sola (una tarea
   con proyecto nunca tiene un área propia distinta), y si igual la mandás,
   se IGNORA sin avisar —la tarea se crea igual, con el área del proyecto—.

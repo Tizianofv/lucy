@@ -3937,10 +3937,14 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `test_`), así que sumarles pruebas no mueve el contador. VIGILADOS
     # sin cambio en 41: no se tocó ningún archivo de producción en esta
     # vuelta, solo pruebas.
-    assert medido == {"en disco": 106, "exentos": 62, "vigilados": 44}, (
+    # 1-oct-2026, rama `trabajo/grupo-ia` (Lucy 1.0, E1, el grupo «IA»): 106 →
+    # 107 en disco, 62 → 63 EXENTOS por `tests/test_grupo_ia.py` (nuevo).
+    # VIGILADOS sin cambio en 44: se tocaron `db/db.py`, `cerebro/agente.py`,
+    # `cerebro/consultar.py` y `web/api_code.py`, ya vigilados de antes.
+    assert medido == {"en disco": 107, "exentos": 63, "vigilados": 44}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "30-sep-2026 (merge de main en code-alarmas) era {'en disco': 106, "
-        "'exentos': 62, 'vigilados': 44}. La aserción de fondo —cero "
+        "1-oct-2026 (rama grupo-ia) era {'en disco': 107, "
+        "'exentos': 63, 'vigilados': 44}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "
