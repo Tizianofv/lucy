@@ -401,19 +401,32 @@ def test_js_un_cambio_en_el_select_envia_su_formulario(mundo):
 
 @hay_osascript
 def test_js_un_comentario_vacio_no_envia_y_uno_escrito_si(mundo):
-    """El cuadro del comentario, con los datos de verdad del formulario que
-    sirve la página: vacío no manda nada; con texto, sí."""
+    """Los DOS cuadros de verdad que sirve la página: el de comentar (nace
+    vacío) y el de editar (nace con el texto del comentario). Vacío no manda
+    nada en ninguno de los dos —también el que la persona VACÍA, que es el
+    único caso que la guarda de «no cambió» no cubre—; con texto, sí."""
     guion = _script_de_la_pagina(mundo)          # ya deja el proyecto 1
     mundo.tarea(10, "una", proyecto=1)
-    html = ver(mundo, p=1, t=10)
-    form = next(f for f in _formularios_de(html) if f["accion"] == "/proyectos/tarea/10/comentar")
-    assert form["clase"] == "comentar"
-    sitio = _sitio_de_mentira(form, edita=False)
-    vacio = sitio + 'oyentes.focusout(ev(S.campos[0]));' + _FOTO
+    mundo.comentario(50, 10, config.CHAT_ID_DUENO, "primer comentario")
+    cerrado = ver(mundo, p=1, t=10)
+    crear = next(f for f in _formularios_de(cerrado) if f["accion"] == "/proyectos/tarea/10/comentar")
+    assert crear["clase"] == "comentar"
+    editar = next(f for f in _formularios_de(ver(mundo, p=1, t=10, editar_comentario=50))
+                  if f["accion"] == "/proyectos/tarea/10/comentario/50/editar")
+
+    vacio = _sitio_de_mentira(crear, edita=False) + "oyentes.focusout(ev(S.campos[0]));" + _FOTO
     assert _correr_en_jxa(guion, vacio)["enviados"] == 0
-    escrito = sitio + 'S.campos[0].value = "un comentario";oyentes.focusout(ev(S.campos[0]));' + _FOTO
+    escrito = (_sitio_de_mentira(crear, edita=False)
+               + 'S.campos[0].value = "un comentario";oyentes.focusout(ev(S.campos[0]));' + _FOTO)
     r = _correr_en_jxa(guion, escrito)
     assert r["enviados"] == 1 and r["form"] is False
+    # El de editar nace CON el texto del comentario: si lo borra, no se guarda.
+    borrado = (_sitio_de_mentira(editar, edita=True)
+               + 'S.campos[0].value = "";oyentes.focusout(ev(S.campos[0]));' + _FOTO)
+    assert _correr_en_jxa(guion, borrado)["enviados"] == 0
+    tocado = (_sitio_de_mentira(editar, edita=True)
+              + 'S.campos[0].value = "ya corregido";oyentes.focusout(ev(S.campos[0]));' + _FOTO)
+    assert _correr_en_jxa(guion, tocado)["enviados"] == 1
 
 
 @hay_osascript
