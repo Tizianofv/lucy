@@ -384,6 +384,11 @@ def _iniciales(nombre) -> str:
 plantillas.env.filters["dia_corto"] = _dia_corto
 plantillas.env.filters["hace_dias"] = _hace_dias
 plantillas.env.filters["iniciales"] = _iniciales
+# El buscador de la página de proyectos filtra EN VIVO en el navegador (1-oct-2026,
+# como la maqueta): cada proyecto de la lista lleva su nombre y su cliente ya
+# sin tildes ni mayúsculas (`data-n`, `data-c`), con la MISMA función con la que
+# filtra el servidor (`_sin_tildes`), y el guion solo busca el texto en ellos.
+plantillas.env.filters["sin_tildes"] = lambda t: _sin_tildes(t)
 
 
 def _sesion(request: Request) -> int | None:

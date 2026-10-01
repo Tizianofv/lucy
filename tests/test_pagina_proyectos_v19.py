@@ -343,7 +343,8 @@ def test_con_javascript_cada_campo_que_se_guarda_solo_pierde_su_boton_salvo_come
         for f in _formularios_de(ver(mt, **consulta)):
             if "data-auto" in f["atributos"]:
                 vistos[f["clase"]] = {b["tipo"] for b in f["botones"]}
-    assert set(vistos) >= {"resp", "cambiar-grupo", "resp-tarea", "renombrar", "comentar"}, vistos
+    # (Sin `cambiar-grupo` ni `resp-tarea`: se quitaron de la página el 1-oct-2026.)
+    assert set(vistos) == {"resp", "renombrar", "comentar"}, vistos
     for clase in sorted(vistos):
         esconde = _lo_esconde(selectores, clase, "guardar")
         assert esconde == (clase != "comentar"), (clase, selectores)
@@ -411,3 +412,183 @@ def test_js_al_terminar_de_cargar_vuelve_a_centrar_porque_las_alturas_se_mueven(
 def test_js_si_no_hay_nada_que_desplazar_o_no_hay_escogido_no_mueve_nada(mundo):
     assert _correr_con(mundo, _lado(300, 520), "JSON.stringify({m: movidos})") == {"m": []}      # cabe entera
     assert _correr_con(mundo, _lado(1000, 520, seleccionado=False), "JSON.stringify({m: movidos})") == {"m": []}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# El buscador filtra en vivo, como la maqueta (maqueta-v19.html:457, 244-262)
+# ═══════════════════════════════════════════════════════════════════════
+
+def _buscable(mundo):
+    mundo.proyecto(1, "Cotización de bachatas", area="CDS", cliente="Academia Ñandú")
+    mundo.proyecto(2, "Mezcla del EP", area="CDS")
+    mundo.proyecto(3, "Cerrado viejo", area="CDS", estado="cerrado", cliente="Academia Ñandú")
+    mundo.proyecto(4, "Curso de producción", area="ACD", cliente="Colegio")
+    mundo.proyecto(5, "Panel", area="IA")
+    mundo.proyecto(6, "Sin grupo ni cliente", area=None)
+    mundo.tarea(30, "suelta", area="CDS")
+    mundo.tarea(31, "suelta de ACD", area="ACD")
+
+
+def test_cada_proyecto_de_la_lista_lleva_su_nombre_y_su_cliente_sin_tildes_para_el_buscador(mundo):
+    _buscable(mundo)
+    anchors = {a.attrs["href"].split("&")[0]: a for a in arbol(ver(mundo)).buscar("a", "proy") if "data-n" in a.attrs}
+    assert anchors["/proyectos?p=1"].attrs["data-n"] == "cotizacion de bachatas"
+    assert anchors["/proyectos?p=1"].attrs["data-c"] == "academia nandu"
+    assert anchors["/proyectos?p=2"].attrs["data-c"] == ""
+    assert anchors["/proyectos?p=3"].attrs["data-c"] == "academia nandu"          # los cerrados también
+    assert len(anchors) == 6
+    # Las «sin proyecto» no llevan esos datos: el buscador no las cuenta como proyectos.
+    assert all("data-n" not in a.attrs for a in arbol(ver(mundo)).buscar("a", "sueltas"))
+
+
+def _dom_de_mentira(html: str) -> str:
+    """El JavaScript que arma, con los grupos, los proyectos y los avisos DEL HTML
+    servido, los objetos que el guion toca (`querySelectorAll`, `hidden`,
+    `dataset`, `getAttribute`...). Los selectores que contestan son los del guion."""
+    raiz = arbol(html)
+    grupos = []
+    for g in raiz.buscar("nav", "grupos")[0].buscar("div", "grupo"):
+        def dato(a):
+            return {"sueltas": "sueltas" in a.clases, "n": a.attrs.get("data-n"), "c": a.attrs.get("data-c"),
+                    "href": a.attrs["href"], "g": g.attrs["data-g"]}
+        detalles = [[dato(a) for a in d.buscar("a", "proy")] for d in g.buscar("details", "cerrados")]
+        grupos.append({"g": g.attrs["data-g"], "anchors": [dato(a) for a in g.buscar("a", "proy")],
+                       "detalles": detalles, "mas": len(g.buscar("a", "nuevo-proy")),
+                       "vacios": len(g.buscar("p", "vacio-grupo"))})
+    aviso = [p for p in raiz.buscar("p") if "data-sin-resultados" in p.attrs]
+    assert len(aviso) == 1
+    return ("var DATOS = " + json.dumps(grupos) + "; var AVISO_OCULTO = " + json.dumps("hidden" in aviso[0].attrs) + ";\n"
+            """
+function nodo(extra) { var n = {hidden: false, _atrs: {}}; for (var k in extra) n[k] = extra[k]; return n; }
+var porHref = {};
+var grupos = DATOS.map(function (g) {
+  var anchors = g.anchors.map(function (a) {
+    var n = nodo({dataset: {n: a.n === null ? undefined : a.n, c: a.c === null ? undefined : a.c}, sueltas: a.sueltas,
+      classList: {contains: function (c) { return c === "sueltas" ? a.sueltas : c === "proy"; }},
+      getAttribute: function (k) { return this._atrs[k]; },
+      setAttribute: function (k, v) { this._atrs[k] = v; }});
+    n._atrs.href = a.href;
+    return n;
+  });
+  var mas = []; for (var i = 0; i < g.mas; i++) mas.push(nodo({}));
+  var vacios = []; for (var j = 0; j < g.vacios; j++) vacios.push(nodo({}));
+  var nodos = g.detalles.map(function (d) {
+    var primero = g.anchors.findIndex(function (x) { return d.length && x.href === d[0].href; });
+    return nodo({querySelectorAll: function (s) { return s === "a.proy" ? anchors.slice(primero, primero + d.length) : []; }});
+  });
+  return nodo({data: g.g, anchors: anchors, mas: mas, vacios: vacios, detalles: nodos,
+    querySelectorAll: function (s) {
+      return s === "a.proy" ? anchors : s === "details.cerrados" ? nodos : s === ".nuevo-proy" ? mas
+           : s === "p.vacio-grupo" ? vacios : []; }});
+});
+var aviso = nodo({hidden: AVISO_OCULTO, textContent: ""});
+document.querySelectorAll = function (s) { return s === "nav.grupos .grupo" ? grupos : []; };
+document.querySelector = function (s) { return s === "nav.grupos [data-sin-resultados]" ? aviso : null; };
+var caja = {value: "", closest: function (s) { return s === "input.buscar" ? this : null; }};
+function estado() {
+  return JSON.stringify({
+    grupos: grupos.map(function (g) { return {g: g.data, oculto: g.hidden, mas: g.mas.map(function (x) { return x.hidden; }),
+      vacios: g.vacios.map(function (x) { return x.hidden; }), detalles: g.detalles.map(function (x) { return x.hidden; }),
+      proyectos: g.anchors.map(function (a) { return {href: a._atrs.href, oculto: a.hidden}; })}; }),
+    aviso: {oculto: aviso.hidden, texto: aviso.textContent}});
+}
+""")
+
+
+def _filtrar_con_el_guion(mundo, escrito: str) -> dict:
+    """La lista tal como la deja el guion de la página (de verdad, en JavaScriptCore)
+    después de escribir `escrito` en la caja."""
+    html = ver(mundo)
+    guion = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)[0]
+    escenario = (_dom_de_mentira(html) + "caja.value = " + json.dumps(escrito)
+                 + "; oyentes.input(ev(caja)); estado()")
+    r = subprocess.run(["osascript", "-l", "JavaScript", "-e", _ARNES + guion + "\n" + escenario],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout.strip() or r.stderr.strip())
+
+
+def _lo_que_ve_el_servidor(mundo, escrito: str) -> dict:
+    raiz = arbol(ver(mundo, q=escrito))
+    nav = raiz.buscar("nav", "grupos")[0]
+    avisos = [p for p in nav.buscar("p") if "data-sin-resultados" in p.attrs]
+    return {"grupos": [g.attrs["data-g"] for g in nav.buscar("div", "grupo")],
+            "proyectos": {a.attrs["href"] for a in nav.buscar("a", "proy")},
+            "sin_resultados": not any("hidden" in p.attrs for p in avisos)}
+
+
+@hay_osascript
+@pytest.mark.parametrize("escrito", ["cotiz", "COTIZACION", "ñandú", "nandu", "academia", "col", "zzzz", "p", "mezcla ep"])
+def test_js_el_filtro_en_vivo_deja_a_la_vista_lo_mismo_que_el_servidor_con_q(mundo, escrito):
+    """Hermanos: el filtro del navegador y el del servidor (`?q=`, el de sin JavaScript)
+    tienen que dar la MISMA lista: los mismos proyectos, con los mismos enlaces, los
+    mismos grupos y el mismo aviso de «nada»."""
+    _buscable(mundo)
+    js = _filtrar_con_el_guion(mundo, escrito)
+    sv = _lo_que_ve_el_servidor(mundo, escrito)
+    visibles = {p["href"] for g in js["grupos"] if not g["oculto"] for p in g["proyectos"] if not p["oculto"]}
+    assert visibles == sv["proyectos"], (escrito, visibles, sv["proyectos"])
+    assert [g["g"] for g in js["grupos"] if not g["oculto"]] == sv["grupos"], escrito
+    assert (not js["aviso"]["oculto"]) == sv["sin_resultados"], escrito
+    if sv["sin_resultados"]:
+        assert js["aviso"]["texto"] == f"Ningún proyecto ni cliente con «{escrito}»."
+    # Mientras se busca no hay «+», ni «sin proyecto», ni «Sin proyectos abiertos».
+    for g in js["grupos"]:
+        assert all(g["mas"]) and all(g["vacios"]), escrito
+        assert all(p["oculto"] for p in g["proyectos"] if "g=" in p["href"] or "sin_grupo=1" in p["href"]), escrito
+
+
+@hay_osascript
+def test_js_con_la_caja_vacia_vuelve_todo_y_sin_el_q_en_los_enlaces(mundo):
+    _buscable(mundo)
+    html = ver(mundo)
+    originales = [a.attrs["href"] for a in arbol(html).buscar("a", "proy")]
+    escenario = (_dom_de_mentira(html) + 'caja.value = "cotiz"; oyentes.input(ev(caja)); caja.value = "  ";'
+                 " oyentes.input(ev(caja)); estado()")
+    guion = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)[0]
+    r = subprocess.run(["osascript", "-l", "JavaScript", "-e", _ARNES + guion + "\n" + escenario],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    estado = json.loads(r.stdout.strip())
+    assert all(not g["oculto"] and not any(g["mas"]) and not any(g["vacios"]) and not any(g["detalles"])
+               for g in estado["grupos"])
+    assert [p["href"] for g in estado["grupos"] for p in g["proyectos"]] == originales
+    assert all(not p["oculto"] for g in estado["grupos"] for p in g["proyectos"])
+    assert estado["aviso"]["oculto"] is True
+
+
+@hay_osascript
+def test_js_enter_en_la_caja_del_buscador_no_recarga_y_en_otro_campo_sigue_igual(mundo):
+    _buscable(mundo)
+    html = ver(mundo)
+    guion = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)[0]
+    escenario = (_dom_de_mentira(html) + 'oyentes.keydown(ev(caja, {key: "Enter"})); var a = evitado;'
+                 ' oyentes.keydown(ev({closest: function () { return null; }}, {key: "Enter"}));'
+                 " JSON.stringify({caja: a, otro: evitado - a, enviados: 0})")
+    r = subprocess.run(["osascript", "-l", "JavaScript", "-e", _ARNES + guion + "\n" + escenario],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout.strip()) == {"caja": 1, "otro": 0, "enviados": 0}
+
+
+def test_sin_javascript_el_buscador_sigue_siendo_un_formulario_que_busca_en_el_servidor(mundo):
+    _buscable(mundo)
+    html = ver(mundo)
+    forma = arbol(html).buscar("form", "buscador")[0]
+    assert forma.attrs["method"] == "get" and forma.attrs["action"] == "/proyectos"
+    assert forma.buscar("input")[0].attrs["name"] == "q" and forma.buscar("button")        # el botón sigue en el HTML
+    assert ".js .buscador button" in _selectores_que_esconden(html)                         # y solo con JS se esconde
+
+
+def test_la_hoja_deja_que_hidden_esconda_de_verdad_lo_que_filtra_el_buscador(mundo):
+    """Medido a mano en el navegador del panel: `hidden` pierde contra el `display`
+    de `a.proy` si la hoja no lo refuerza. Cada cosa que el guion esconde tiene su
+    selector en la regla con `display:none!important`."""
+    _buscable(mundo)
+    css = _css(ver(mundo)).replace("\n", "")
+    m = re.search(r"((?:\.grupo|nav\.grupos)[^{]*\[hidden\][^{]*)\{display:none!important\}", css)
+    assert m, "no hay regla que esconda lo `hidden` de la lista"
+    selectores = [x.strip() for x in m.group(1).split(",")]
+    for pieza in (".grupo[hidden]", ".grupo a[hidden]", ".grupo details[hidden]", ".grupo p[hidden]",
+                  ".grupo .nuevo-proy[hidden]", "nav.grupos > p[hidden]"):
+        assert pieza in selectores, pieza

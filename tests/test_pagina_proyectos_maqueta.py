@@ -593,4 +593,4 @@ def test_el_guion_de_la_ventanita_no_escribe_ni_decide_nada(mundo):
     assert re.search(r"fetch\(|XMLHttpRequest|\.submit\(|FormData|localStorage|\.action", guion) is None
     # Sigue habiendo un oyente por evento: la ventanita se cuelga del clic que ya había.
     assert sorted(re.findall(r'addEventListener\("(\w+)"', guion)) == [
-        "change", "click", "dblclick", "focusout", "keydown", "load", "submit"]
+        "change", "click", "dblclick", "focusout", "input", "keydown", "load", "submit"]

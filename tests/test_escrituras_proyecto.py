@@ -419,8 +419,8 @@ def test_js_un_texto_se_guarda_al_salir_del_campo_y_solo_si_cambio(mundo):
 
 @hay_osascript
 def test_js_un_cambio_en_el_select_envia_su_formulario(mundo):
-    sitio = ('var S = sitioDeMentira({accion: "/proyectos/1/area", auto: true,'
-             ' campos: [{tag: "select", name: "area", valor: "CDS"}]});')
+    sitio = ('var S = sitioDeMentira({accion: "/proyectos/1/responsable", auto: true,'
+             ' campos: [{tag: "select", name: "responsable", valor: "Code"}]});')
     r = _correr_en_jxa(_script_de_la_pagina(mundo),
                        sitio + 'S.campos[0].value = "IA";oyentes.change(ev(S.campos[0]));' + _FOTO)
     assert r["enviados"] == 1 and r["form"] is False
@@ -549,7 +549,7 @@ def test_el_script_no_decide_nada_de_negocio(mundo):
     # segundo), el doble clic, el teclado, el cambio de un desplegable, la
     # salida de un campo y el envío (para no mandar dos veces el mismo).
     assert sorted(re.findall(r'addEventListener\("(\w+)"', codigo)) == [
-        "change", "click", "dblclick", "focusout", "keydown", "load", "submit"]
+        "change", "click", "dblclick", "focusout", "input", "keydown", "load", "submit"]
 
 
 def _valor_del_campo(c: dict) -> str:
@@ -651,7 +651,8 @@ def test_el_boton_de_cerrar_va_debajo_al_final_a_la_derecha(mundo):
     html = ver(mundo, p=1)
     boton = '<a class="btn-linea" href="/proyectos?p=1&amp;confirmar=cerrar">Cerrar proyecto</a>'
     assert html.count(boton) == 1
-    assert html.index("+ Agregar tarea con más opciones") < html.index(boton)
+    # (El «+ Agregar tarea con más opciones» se quitó de esta página: la maqueta no lo tiene.)
+    assert "más opciones" not in html and html.index("Agregar tarea</button>") < html.index(boton)
     assert '<div class="acciones abajo">\n      ' + boton in html
     assert "justify-content:flex-end" in html.split(".acciones.abajo{", 1)[1].split("}", 1)[0]
 
@@ -746,12 +747,16 @@ def test_el_esquema_no_impide_un_estado_libre_y_por_eso_la_pagina_lo_tolera():
 # Cambiar de grupo (P4)
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_el_selector_de_grupo_esta_arriba_junto_al_grupo_con_el_actual_marcado(mundo):
+def test_la_pagina_ya_no_ofrece_cambiar_de_grupo_porque_la_maqueta_no_lo_tiene(mundo):
+    """Decisión de Tiziano (1-oct-2026): la página tiene las mismas funciones que
+    la maqueta, y la maqueta no tiene «Mover a». Se quitó de ESTA página; la ruta
+    `/proyectos/{pid}/area` y su efecto siguen (las pruebas de abajo le mandan el
+    formulario directo)."""
     mundo.proyecto(1, "P", area="ACD")
     html = ver(mundo, p=1)
     migas = html.split('<div class="migas">', 1)[1].split("</div>", 1)[0]
-    assert "<b>ACD</b> / Proyecto" in migas and 'action="/proyectos/1/area"' in migas
-    assert '<option value="ACD" selected>' in migas and migas.count("<option") == 3
+    assert "<b>ACD</b> / Proyecto" in migas
+    assert "Mover a" not in html and "/proyectos/1/area" not in html and "cambiar-grupo" not in html
 
 
 def test_cambiar_de_grupo_lo_mueve_con_sus_tareas_y_deja_huella_de_panel(mundo):
@@ -1324,14 +1329,16 @@ def _del_proyecto(formularios):
 _V = ["/proyectos/nuevo"] * len(_pagina.AREAS)
 
 _VISTAS = {
-    "abierto": ({"p": 2}, ["/proyectos/2/area", "/proyectos/2/nombre", "/proyectos/2/responsable"] + _V),
-    "cerrado": ({"p": 4}, ["/proyectos/4/area", "/proyectos/4/estado", "/proyectos/4/nombre",
+    # Sin `/proyectos/N/area`: el «Mover a» se quitó de esta página (la maqueta no
+    # lo tiene; la ruta sigue y se prueba aparte, enviándole el formulario directo).
+    "abierto": ({"p": 2}, ["/proyectos/2/nombre", "/proyectos/2/responsable"] + _V),
+    "cerrado": ({"p": 4}, ["/proyectos/4/estado", "/proyectos/4/nombre",
                            "/proyectos/4/responsable"] + _V),
     "confirmar": ({"p": 2, "confirmar": "cerrar"},
-                  ["/proyectos/2/area", "/proyectos/2/estado", "/proyectos/2/nombre",
+                  ["/proyectos/2/estado", "/proyectos/2/nombre",
                    "/proyectos/2/responsable"] + _V),
     "editar_nombre": ({"p": 2, "editar": "nombre"},
-                      ["/proyectos/2/area", "/proyectos/2/nombre", "/proyectos/2/responsable"] + _V),
+                      ["/proyectos/2/nombre", "/proyectos/2/responsable"] + _V),
     # La página aparte (`?nuevo=`) es un formulario MÁS, el de siempre.
     "nuevo": ({"nuevo": "CDS"}, ["/proyectos/nuevo"] + _V),
 }
@@ -1359,8 +1366,6 @@ def test_cada_formulario_enviado_como_el_navegador_escribe_en_el_proyecto_de_la_
         clase = form["clase"]
         escoger = _la_marcada
         if clase == "resp":
-            escoger = _otra_opcion
-        elif clase == "cambiar-grupo":
             escoger = _otra_opcion
         elif clase == "nuevo":
             escoger = _primera_habilitada
@@ -1397,9 +1402,6 @@ def test_cada_formulario_enviado_como_el_navegador_escribe_en_el_proyecto_de_la_
         elif clase == "resp":
             elegido = _otra_opcion(next(c for c in form["campos"] if c["tipo"] == "select"))
             assert fila["responsable_chat_id"] == nombres[_valor(elegido)], (vista, fila)
-        elif clase == "cambiar-grupo":
-            elegido = _otra_opcion(next(c for c in form["campos"] if c["tipo"] == "select"))
-            assert fila["area"] == _valor(elegido) and fila["area"] != antes[pid]["area"], (vista, fila)
         elif clase == "en-linea" and "Reabrir" in textos:
             assert fila["estado"] == "activo" and antes[pid]["estado"] == "cerrado", (vista, fila)
         elif clase == "en-linea" and "Sí, cerrar" in textos:

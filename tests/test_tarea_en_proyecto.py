@@ -427,23 +427,22 @@ def _pintar_proyectos(m, **kw):
         pagina.modelo_de_filas(proyectos=proyectos, tareas=tareas), areas=[], **kw)
 
 
-def test_cada_proyecto_tiene_su_enlace_y_el_cerrado_dice_por_que_no():
+def test_la_pantalla_de_alta_sigue_ahi_y_la_pagina_de_proyectos_ya_no_la_enlaza():
+    """El «+ Agregar tarea con más opciones» se quitó de `/proyectos` (1-oct-2026,
+    decisión de Tiziano: la maqueta no lo tiene). La pantalla `/tareas/nueva?proyecto=`
+    y su ruta no se tocan: se prueban llamándola directo. El cerrado sigue diciendo
+    por qué no recibe tareas."""
     A._casa()
     m = Mundo()
     activo = m.proyecto("Activo")
     pausado = m.proyecto("Pausado", estado="pausado")
     cerrado = m.proyecto("Cerrado", estado="cerrado")
-    for pid in (activo, pausado):
-        assert f'href="/tareas/nueva?proyecto={pid}"' in _pintar_proyectos(m, p=pid), pid
-    html = _pintar_proyectos(m, p=cerrado)
-    assert f'href="/tareas/nueva?proyecto={cerrado}"' not in html
-    assert "Proyecto cerrado: no se le agregan tareas." in html
-    # De punta a punta: cada enlace lleva a la pantalla de ESE proyecto.
+    for pid in (activo, pausado, cerrado):
+        assert "/tareas/nueva" not in _pintar_proyectos(m, p=pid), pid
+    assert "Proyecto cerrado: no se le agregan tareas." in _pintar_proyectos(m, p=cerrado)
+    # De punta a punta, directo: la pantalla de alta es la de ESE proyecto.
     for pid, nombre in ((activo, "Activo"), (pausado, "Pausado")):
-        href = re.search(r'href="(/tareas/nueva\?proyecto=%d)"' % pid,
-                         _pintar_proyectos(m, p=pid)).group(1)
-        destino = parse_qs(urlparse(href).query)["proyecto"][0]
-        assert f"Nueva tarea en «{nombre}»" in _alta(m, proyecto=destino)
+        assert f"Nueva tarea en «{nombre}»" in _alta(m, proyecto=str(pid))
 
 
 def test_lo_creado_se_ve_en_el_proyecto_y_el_aviso_dice_lo_que_paso():

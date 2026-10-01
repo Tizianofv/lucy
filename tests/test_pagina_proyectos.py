@@ -563,16 +563,19 @@ def test_las_hechas_salen_plegadas_y_no_en_la_lista_principal(mundo):
     assert "1 hecha<" in html or "1 hecha</summary>" in html
 
 
-def test_una_pendiente_lleva_a_su_pantalla_y_lo_nuevo_es_un_enlace(mundo):
+def test_la_pagina_no_manda_a_otras_pantallas_para_abrir_o_agregar_una_tarea(mundo):
+    """La maqueta abre la tarea ahí mismo y agrega la tarea con su renglón: la
+    página ya no lleva a `/tareas/<id>` ni a `/tareas/nueva` (se quitaron el
+    «Abrir la pantalla de la tarea» y el «+ Agregar tarea con más opciones», 1-oct-2026)."""
     mundo.proyecto(1, "Abierto", area="CDS")
     mundo.proyecto(2, "Cerrado", area="CDS", estado="cerrado")
     mundo.tarea(10, "mi tarea", proyecto=1)
     html = ver(mundo, p=1)
-    assert 'href="/tareas/10"' not in html                  # el detalle está cerrado
-    assert 'href="/tareas/10"' in ver(mundo, p=1, t=10)     # y de ahí se abre su pantalla
-    assert 'href="/tareas/nueva?proyecto=1"' in html
+    assert 'href="/tareas/10"' not in html and 'href="/tareas/10"' not in ver(mundo, p=1, t=10)
+    assert "/tareas/nueva" not in html and "Abrir la pantalla" not in ver(mundo, p=1, t=10)
+    assert 'name="titulo"' in html                             # el renglón de «Nueva tarea» sigue
     cerrado = ver(mundo, p=2)
-    assert 'href="/tareas/nueva?proyecto=2"' not in cerrado
+    assert 'name="titulo"' not in cerrado
     assert "Proyecto cerrado: no se le agregan tareas." in cerrado
 
 
@@ -607,14 +610,11 @@ def test_la_pagina_no_promete_nada_que_no_hace(mundo):
                 assert 'action="/proyectos"' in form and 'method="get"' in form, (consulta, form)
 
 
-def test_se_siguen_pudiendo_cambiar_el_nombre_y_el_grupo_con_su_ruta_de_siempre(mundo):
+def test_se_sigue_pudiendo_cambiar_el_nombre_con_su_ruta_de_siempre(mundo):
     mundo.proyecto(1, "Mi proyecto", area="CDS")
     html = ver(mundo, p=1)
-    assert 'action="/proyectos/1/nombre"' in html and 'action="/proyectos/1/area"' in html
+    assert 'action="/proyectos/1/nombre"' in html
     assert f'maxlength="{db.LARGO_NOMBRE_PROYECTO}"' in html
-    for grupo in ("CDS", "ACD", "IA"):
-        assert f'<option value="{grupo}"' in html
-    assert re.search(r'<option value="CDS" selected>', html)
 
 
 def test_los_comentarios_se_leen_con_nombre_fecha_y_marca_de_editado(mundo, gente):

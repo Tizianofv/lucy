@@ -87,6 +87,9 @@ nav.grupos{display:flex;flex-direction:column;gap:1.1rem}
 .grupo details.cerrados > summary::before{content:"▸ "}
 .grupo details.cerrados[open] > summary::before{content:"▾ "}
 .vacio{color:var(--suave);font-size:.88rem;margin:0}
+/* Lo que el buscador en vivo esconde (el atributo `hidden` pierde contra el
+   `display` de estas reglas si no se le da más fuerza). */
+.grupo[hidden],.grupo a[hidden],.grupo details[hidden],.grupo p[hidden],.grupo .nuevo-proy[hidden],nav.grupos > p[hidden]{display:none!important}
 
 main{min-width:0;display:flex;flex-direction:column;gap:1.4rem}
 .cabeza{display:flex;flex-direction:column;gap:.6rem}
@@ -169,9 +172,9 @@ form.en-linea{display:inline-flex;margin:0}
 .aviso-cerrado{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap}
 .aviso-raro{background:var(--dormido-fondo);color:var(--dormido);border-radius:10px;padding:.6rem .8rem;font-size:.88rem}
 .migas{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
-form.cambiar-grupo,form.resp{display:inline-flex;gap:.35rem;align-items:center;margin:0;font-size:.82rem;color:var(--suave)}
+form.resp{display:inline-flex;gap:.35rem;align-items:center;margin:0;font-size:.82rem;color:var(--suave)}
 form.resp{font-size:.92rem}
-form.cambiar-grupo select,form.nuevo select,form.nuevo input,form.renombrar input{font:inherit;padding:.25rem .45rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0}
+form.nuevo select,form.nuevo input,form.renombrar input{font:inherit;padding:.25rem .45rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0}
 form.resp select{font:inherit;font-size:.92rem;color:var(--tinta);background:var(--papel);border:1px solid var(--linea);border-radius:8px;padding:.3rem .55rem;min-width:12rem}
 form.renombrar{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin:0}
 form.renombrar[hidden],h1[hidden]{display:none}
@@ -198,32 +201,19 @@ dialog.ventana form.nuevo input,dialog.ventana form.nuevo select{background:var(
 dialog.ventana .botones{justify-content:flex-end;margin-top:.3rem}
 button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--color);outline-offset:2px}
 
-form.marcar,form.comentar,form.resp-tarea,form.nueva-tarea{display:inline-flex;margin:0;gap:.4rem;align-items:center;flex-wrap:wrap}
+form.marcar,form.comentar,form.nueva-tarea{display:inline-flex;margin:0;gap:.4rem;align-items:center;flex-wrap:wrap}
 /* La marca de hecha se dibuja como la casilla de la maqueta (cuadrito con el
    color del grupo y una palomita) pero sigue siendo un botón que envía su
    formulario. */
 form.marcar button.marca{all:unset;cursor:pointer;box-sizing:border-box;width:1.1rem;height:1.1rem;flex:none;border:2px solid #767676;border-radius:3px;background:var(--papel);display:grid;place-items:center;font-size:.8rem;line-height:1;color:transparent}
 form.marcar button.marca.hecha-b{background:var(--color);border-color:var(--color);color:#fff}
 form.marcar button.marca:focus-visible{outline:2px solid var(--color);outline-offset:2px}
-/* El renglón «¿sale una tarea nueva de ésta?»: cuando está abierto, el
-   formulario del botón redondo ocupa la línea entera y los campos van debajo,
-   para que el título y la fecha de la fila no se aprieten contra ellos. */
-form.marcar.abierta{flex:1 1 100%}
-.sale-otra{color:var(--suave);text-decoration:none;font-size:.95rem;line-height:1;padding:.1rem .3rem;border-radius:6px;flex:none}
-.sale-otra:hover{color:var(--tinta);background:var(--bg)}
-.derivada{flex:1 1 100%;display:flex;flex-direction:column;gap:.4rem;margin:.4rem 0 0;padding:.55rem .7rem;border-radius:10px;background:var(--bg)}
-.derivada .renglon{display:flex;gap:.4rem;align-items:center;flex-wrap:wrap}
-.derivada input,.derivada select{font:inherit;padding:.3rem .5rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta);min-width:0}
-.derivada label{font-size:.8rem;color:var(--suave)}
-.derivada input[name^=deriva_titulo]{flex:1 1 12rem}
 .fila .titulo[hidden],.comentario p[hidden]{display:none}
 .fila form.renombrar{flex:1 1 12rem;min-width:0}
 .fila form.renombrar input{font:inherit;font-weight:500;flex:1 1 10rem}
 form.renombrar textarea,form.comentar textarea{font:inherit;flex:1 1 14rem;min-width:0;min-height:2.6rem;resize:vertical;padding:.45rem .65rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
 form.comentar{width:100%;margin-top:.6rem;align-items:flex-end;gap:.5rem}
-form.resp-tarea{margin-bottom:.4rem;font-size:.85rem;color:var(--suave)}
-form.resp-tarea select,form.nueva-tarea input{font:inherit;padding:.45rem .65rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0}
-form.resp-tarea select{padding:.3rem .5rem}
+form.nueva-tarea input{font:inherit;padding:.45rem .65rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0}
 form.nueva-tarea{margin-top:.8rem;width:100%;gap:.5rem}
 form.nueva-tarea input[name=titulo]{flex:1 1 12rem}
 form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar button.guardar{font:600 .88rem var(--texto);padding:.45rem .9rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
@@ -235,7 +225,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
    maqueta no lo tienen): el desplegable guarda al escoger y el texto al
    salir del campo o con Enter. Sin JavaScript el botón sigue ahí y es lo que
    envía el formulario. «Comentar» NO se esconde: es el botón de la maqueta. */
-.js form.resp button,.js form.cambiar-grupo button,.js form.resp-tarea button,.js form.renombrar button.guardar,.js .buscador button{display:none}
+.js form.resp button,.js form.renombrar button.guardar,.js .buscador button{display:none}
 </style></head><body>
 
 {#- UNA FILA DE TAREA (Lucy 1.0, E6). Cada acción es un `<form method="post">`
@@ -251,48 +241,12 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% if t.es_hecha %}
     <form class="marcar" method="post" action="/proyectos/tarea/{{ t.id }}/reabrir"><button class="marca hecha-b" title="Desmarcar: vuelve a pendiente" aria-label="Desmarcar la tarea: vuelve a pendiente">✓</button></form>
     {% elif t.es_pendiente %}
-    {#- MARCAR HECHA SIGUE SIENDO DE UN CLIC: el botón redondo envía este mismo
-        formulario, y el renglón «¿sale una tarea nueva de ésta?» es OPCIONAL y
-        vive DENTRO de él para que cerrar la vieja y crear la nueva sean un solo
-        gesto (lo mismo que hace /tareas, por la misma puerta:
-        `db.cerrar_y_derivar`). El enlace `＋` solo lo abre: con JavaScript el
-        servidor lo dibuja ya abierto (`?derivar=`), y sin JavaScript el enlace
-        lleva a esa misma dirección, así que funciona igual. Vacío no crea nada. -#}
-    {% set derivando = derivar == t.id %}
-    <form class="marcar{{ ' abierta' if derivando }}" method="post" action="/proyectos/tarea/{{ t.id }}/hecha">
+    {#- MARCAR HECHA ES DE UN CLIC: el botón (dibujado como la casilla de la
+        maqueta) envía este formulario. La maqueta no ofrece «la tarea que
+        sigue» (el «＋» y sus renglones se quitaron de esta página el 1-oct-2026,
+        decisión de Tiziano; la ruta y `/tareas` siguen haciéndolo). -#}
+    <form class="marcar" method="post" action="/proyectos/tarea/{{ t.id }}/hecha">
       <button class="marca" title="Marcar hecha" aria-label="Marcar la tarea como hecha">○</button>
-      {% if not derivando %}
-      <a class="sale-otra" href="{{ u }}&amp;derivar={{ t.id }}#tarea-{{ t.id }}" title="Crear la tarea que sigue" aria-label="Crear la tarea que sigue: abre el renglón de la tarea nueva">＋</a>
-      {% else %}
-      <div class="derivada">
-        <div class="nota">¿Sale una tarea nueva de ésta? Si no escribes nada, no se crea ninguna.</div>
-        {% for n in range(1, max_derivadas + 1) %}
-        <div class="renglon">
-          <input type="text" name="deriva_titulo_{{ t.id }}_{{ n }}" maxlength="{{ largo_titulo }}"
-                 placeholder="Título de la tarea nueva" aria-label="Título de la tarea nueva">
-          <input type="datetime-local" name="deriva_vence_{{ t.id }}_{{ n }}" min="{{ piso_fecha }}T00:00"
-                 aria-label="Vence la tarea nueva">
-          {#- El grupo solo se elige si la tarea NO tiene proyecto: con proyecto,
-              la nueva va al mismo y el grupo sale de él (lo mismo que hace
-              /tareas, y la misma restricción de la base). -#}
-          {% if not t.proyecto_id %}
-          <label for="dg-{{ t.id }}-{{ n }}">Grupo</label>
-          <select id="dg-{{ t.id }}-{{ n }}" name="deriva_area_{{ t.id }}_{{ n }}">
-            <option value="">sin grupo</option>
-            {% for a in areas %}<option value="{{ a.clave }}" {%- if t.area == a.clave %} selected{% endif %}>{{ a.clave }}</option>{% endfor %}
-          </select>
-          {% endif %}
-          <label for="dr-{{ t.id }}-{{ n }}">Responsable</label>
-          <select id="dr-{{ t.id }}-{{ n }}" name="deriva_resp_{{ t.id }}_{{ n }}">
-            <option value="">sin responsable</option>
-            {% if t.responsable and t.responsable not in nombres_responsable %}<option value="" selected disabled>{{ t.responsable }}</option>{% endif %}
-            {% for nombre in nombres_responsable %}<option value="{{ nombre }}" {%- if t.responsable == nombre %} selected{% endif %}>{{ nombre }}</option>{% endfor %}
-          </select>
-        </div>
-        {% endfor %}
-        <a class="btn-linea" href="{{ u }}#tarea-{{ t.id }}">Cerrar</a>
-      </div>
-      {% endif %}
     </form>
     {% else %}<span class="marca" role="img" aria-label="{{ t.estado }}">–</span>{% endif %}
     {#- EL TÍTULO ES EL ENLACE QUE ABRE EL DETALLE (responsable y comentarios),
@@ -334,15 +288,6 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       <select disabled aria-label="Persona"><option>Escoge de las personas de Noco…</option></select>
       <input disabled placeholder="¿Qué hace aquí?" aria-label="Qué hace esta persona">
       <button type="button" disabled>Agregar</button></div>
-    <form class="resp-tarea" method="post" action="/proyectos/tarea/{{ t.id }}/responsable" data-auto>
-      <label for="rt-{{ t.id }}">Responsable:</label>
-      <select id="rt-{{ t.id }}" name="responsable">
-        <option value="" {%- if not t.responsable %} selected{% endif %}>sin responsable</option>
-        {% if t.responsable and t.responsable not in nombres_responsable %}<option value="" selected disabled>{{ t.responsable }}</option>{% endif %}
-        {% for n in nombres_responsable %}<option value="{{ n }}" {%- if t.responsable == n %} selected{% endif %}>{{ n }}</option>{% endfor %}
-      </select>
-      <button class="btn-linea">Guardar</button>
-    </form>
     <div class="separa"></div>
     <h4>Comentarios</h4>
     <div class="comentarios">
@@ -366,7 +311,6 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       <textarea name="texto" required maxlength="{{ largo_comentario }}" placeholder="Escribe un comentario…" aria-label="Comentario"></textarea>
       <button class="guardar">Comentar</button>
     </form>
-    <p class="nota"><a href="/tareas/{{ t.id }}">Abrir la pantalla de la tarea</a></p>
   </div>
   {% endif %}
 </div>
@@ -387,7 +331,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 {#- UN GRUPO DE LA IZQUIERDA -#}
 {% macro un_proyecto(m, actual, cerrado=False) %}
 {% set bq = ('&q=' ~ (q|urlencode)) if q else '' %}
-<a class="proy {{ 'cerrado' if cerrado }}" href="/proyectos?p={{ m.id }}{{ bq }}" aria-current="{{ 'true' if actual and actual.id == m.id else 'false' }}">
+<a class="proy {{ 'cerrado' if cerrado }}" data-n="{{ m.nombre|sin_tildes }}" data-c="{{ (m.cliente or '')|sin_tildes }}" href="/proyectos?p={{ m.id }}{{ bq }}" aria-current="{{ 'true' if actual and actual.id == m.id else 'false' }}">
   <span>{{ m.nombre }}
     {%- if m.cliente %}<span class="sub">{{ m.cliente }}</span>{% elif not cerrado %}<span class="sub">Sin cliente</span>{% endif %}
     {%- if not cerrado %}<span class="sub {{ 'dormido' if m.dormido }}">{{ 'Sin movimiento ' if m.dormido else 'Último movimiento: ' }}{{ m.dias_sin_movimiento|hace_dias }}</span>{% endif %}</span>
@@ -400,7 +344,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 <div class="grupo gc" data-g="{{ 'sin-grupo' if es_sin_grupo else g.clave|lower }}" style="--claro:{{ g.color }};--oscuro:{{ g.color_oscuro }}">
   <h3><i></i>{{ 'Sin grupo' if es_sin_grupo else g.clave }}{% if not es_sin_grupo and not q %}<a class="nuevo-proy mas" href="/proyectos?nuevo={{ g.clave|urlencode }}" aria-label="Proyecto nuevo en {{ g.clave }}" title="Proyecto nuevo en {{ g.clave }}">+</a>{% endif %}</h3>
   {% for m in g.abiertos %}{{ un_proyecto(m, actual) }}
-  {% else %}{% if not es_sin_grupo and not q %}<p class="vacio" style="padding:.3rem .6rem">Sin proyectos abiertos.</p>{% endif %}{% endfor %}
+  {% else %}{% if not es_sin_grupo and not q %}<p class="vacio vacio-grupo" style="padding:.3rem .6rem">Sin proyectos abiertos.</p>{% endif %}{% endfor %}
   {% if g.cerrados %}
   <details class="cerrados" {% if actual and actual.cerrado and actual.area == g.clave %}open{% endif %}>
     <summary>{{ g.cerrados|length }} cerrado{{ 's' if g.cerrados|length > 1 }}</summary>
@@ -456,9 +400,9 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {% for g in visibles.grupos %}{{ bloque_grupo(g, False, vista) }}{% endfor %}
       {% set sg = visibles.sin_grupo %}
       {% if sg.abiertos or sg.cerrados or (sg.sueltas and sg.sueltas.n_total) %}{{ bloque_grupo(sg, True, vista) }}{% endif %}
-      {% if q and not visibles.grupos and not (visibles.sin_grupo.abiertos or visibles.sin_grupo.cerrados) %}
-      <p class="vacio">Ningún proyecto ni cliente con «{{ q }}».</p>
-      {% endif %}
+      {#- El mensaje de «no hay nada» es UNO, y el guion lo muestra y lo escribe al
+          filtrar en vivo; el servidor lo deja a la vista cuando `?q=` no encontró nada. -#}
+      <p class="vacio" data-sin-resultados{% if not (q and not visibles.grupos and not (visibles.sin_grupo.abiertos or visibles.sin_grupo.cerrados)) %} hidden{% endif %}>Ningún proyecto ni cliente con «{{ q }}».</p>
     </nav>
   </aside>
 
@@ -508,14 +452,6 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     <div class="gc" style="display:contents;--claro:{{ gc.color }};--oscuro:{{ gc.color_oscuro }}">
     <div class="cabeza" id="proyecto-{{ m.id }}" data-edita>
       <div class="migas"><span><b>{{ g.clave if g else 'Sin grupo' }}</b> / Proyecto</span>
-        <form class="cambiar-grupo" method="post" action="/proyectos/{{ m.id }}/area" data-auto>
-          <label for="grupo-{{ m.id }}">Mover a</label>
-          <select id="grupo-{{ m.id }}" name="area">
-            {% if not m.area %}<option value="" selected>Sin grupo</option>{% endif %}
-            {% for a in areas %}<option value="{{ a.clave }}" {%- if m.area == a.clave %} selected{% endif %}>{{ a.clave }}</option>{% endfor %}
-          </select>
-          <button class="btn-linea">Mover</button>
-        </form>
       </div>
       {#- El nombre se cambia con doble clic (el script de abajo solo muestra el
           formulario); sin JavaScript, el enlace de `<noscript>` abre el mismo
@@ -570,7 +506,6 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         <input name="vence" type="date" aria-label="Fecha límite (opcional)">
         <button class="guardar">Agregar tarea</button>
       </form>
-      <div class="acciones"><a class="btn-linea" href="/tareas/nueva?proyecto={{ m.id }}">+ Agregar tarea con más opciones</a></div>
       {% endif %}
     </section>
 
@@ -724,6 +659,55 @@ document.addEventListener("click", function (e) {
     yendo = false;
   }, 250);
 });
+/* EL BUSCADOR FILTRA EN VIVO, como la maqueta: a cada letra esconde los
+   proyectos que no tienen lo escrito en su nombre ni en su cliente (los dos ya
+   vienen sin tildes ni mayúsculas en `data-n` y `data-c`, escritos por el
+   servidor con la misma función con la que filtra `?q=`), esconde los grupos que
+   se quedan vacíos, el «+», los «sin proyecto» y el «Sin proyectos abiertos», y
+   dice «Ningún proyecto…» si no queda ninguno. Los enlaces de los proyectos
+   llevan lo escrito (`&q=`) para que, al abrir uno, la lista siga filtrada.
+   No decide nada de negocio: solo muestra o esconde lo que el servidor ya
+   escribió. Sin JavaScript la caja envía el formulario y filtra el servidor. */
+function sinTildes(t) {
+  return (t.normalize ? t.normalize("NFD").replace(/[\u0300-\u036f]/g, "") : t).toLowerCase();
+}
+function filtrarLista(escrito) {
+  var texto = escrito.trim();
+  var q = sinTildes(texto);
+  var grupos = document.querySelectorAll("nav.grupos .grupo");
+  var quedan = 0;
+  for (var i = 0; i < grupos.length; i++) {
+    var g = grupos[i], coinciden = 0;
+    var proyectos = g.querySelectorAll("a.proy");
+    for (var j = 0; j < proyectos.length; j++) {
+      var a = proyectos[j];
+      var sueltas = a.classList.contains("sueltas");
+      var ok = !q || (!sueltas && ((a.dataset.n || "").indexOf(q) >= 0 || (a.dataset.c || "").indexOf(q) >= 0));
+      a.hidden = !ok;
+      if (ok) coinciden++;
+      if (!sueltas) {
+        var h = a.getAttribute("href").replace(/&q=[^&]*/, "");
+        a.setAttribute("href", h + (q ? "&q=" + encodeURIComponent(texto) : ""));
+      }
+    }
+    var cerrados = g.querySelectorAll("details.cerrados");
+    for (var k = 0; k < cerrados.length; k++) {
+      var dentro = cerrados[k].querySelectorAll("a.proy"), hay = false;
+      for (var m = 0; m < dentro.length; m++) if (!dentro[m].hidden) hay = true;
+      cerrados[k].hidden = !!q && !hay;
+    }
+    var mas = g.querySelectorAll(".nuevo-proy"), vacios = g.querySelectorAll("p.vacio-grupo");
+    for (var n = 0; n < mas.length; n++) mas[n].hidden = !!q;
+    for (var o = 0; o < vacios.length; o++) vacios[o].hidden = !!q;
+    g.hidden = !!q && coinciden === 0;
+    if (!g.hidden) quedan++;
+  }
+  var aviso = document.querySelector("nav.grupos [data-sin-resultados]");
+  if (aviso) {
+    aviso.hidden = !(q && quedan === 0);
+    aviso.textContent = "Ningún proyecto ni cliente con «" + texto + "».";
+  }
+}
 function cancelarEdicion(form) {
   var sitio = form.closest("[data-edita]");
   var texto = sitio && sitio.querySelector("[data-dbl]");
@@ -748,7 +732,17 @@ document.addEventListener("dblclick", function (e) {
   campo.focus();
   campo.select();
 });
+document.addEventListener("input", function (e) {
+  var caja = e.target.closest && e.target.closest("input.buscar");
+  if (caja) filtrarLista(caja.value);
+});
 document.addEventListener("keydown", function (e) {
+  /* En la caja del buscador, Enter no recarga la página: ya filtra al escribir. */
+  var buscador = e.target.closest && e.target.closest("input.buscar");
+  if (buscador && e.key === "Enter") {
+    e.preventDefault();
+    return;
+  }
   var form = e.target.closest && e.target.closest("form[data-auto]");
   if (!form) return;
   if (e.key === "Escape") {
