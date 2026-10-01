@@ -410,32 +410,27 @@ def test_G2_M1b_sin_el_area_IA_falla_fuerte_y_no_aplica_nada():
 # G1: la puerta de Code, con las funciones reales de db/db.py
 # ═══════════════════════════════════════════════════════════════════════
 
-class _Fila(dict):
-    """Una fila como la de psycopg con `dict_row`, que también se deja indexar
-    por posición (`(await cur.fetchone())[0]`, como hace `crud._registrar`), y
-    con las columnas JSON (`antes`, `despues`) ya leídas: Postgres las devuelve
-    como dict, SQLite como texto. Es una imitación declarada (frontera del
-    archivo)."""
-
-    def __getitem__(self, k):
-        if isinstance(k, int):
-            return list(self.values())[k]
-        return super().__getitem__(k)
-
-
-def _fila(f):
+def _fila(f, como_dict: bool):
+    """Una fila como la entrega psycopg 3.2.3 (`psycopg/rows.py`, leído el
+    2-oct-2026): con `dict_row` es un `dict` común (sin índice por posición:
+    `fila[0]` es KeyError), y SIN `row_factory` —el caso de `conn.execute(...)`
+    en una conexión del pool— es `tuple_row`, el valor por omisión, una tupla
+    (sin acceso por nombre). Las columnas JSON (`antes`, `despues`) llegan ya
+    leídas, como las entrega psycopg con `jsonb` (SQLite las guarda como texto:
+    eso sí es una imitación declarada)."""
     if f is None:
         return None
-    d = _Fila(dict(f))
+    d = dict(f)
     for k in ("antes", "despues"):
         if isinstance(d.get(k), str):
             d[k] = json.loads(d[k])
-    return d
+    return d if como_dict else tuple(d.values())
 
 
 class _Cur:
-    def __init__(self, con):
+    def __init__(self, con, como_dict: bool):
         self.con = con
+        self.como_dict = como_dict
         self._cur = None
 
     async def execute(self, sql, params=()):
@@ -443,10 +438,10 @@ class _Cur:
         return self
 
     async def fetchone(self):
-        return _fila(self._cur.fetchone())
+        return _fila(self._cur.fetchone(), self.como_dict)
 
     async def fetchall(self):
-        return [_fila(f) for f in self._cur.fetchall()]
+        return [_fila(f, self.como_dict) for f in self._cur.fetchall()]
 
 
 class _Conn:
@@ -454,10 +449,10 @@ class _Conn:
         self.con = con
 
     def cursor(self, row_factory=None):
-        return _Cur(self.con)
+        return _Cur(self.con, como_dict=row_factory is not None)
 
     async def execute(self, sql, params=()):
-        return await _Cur(self.con).execute(sql, params)
+        return await _Cur(self.con, como_dict=False).execute(sql, params)
 
     @asynccontextmanager
     async def transaction(self):

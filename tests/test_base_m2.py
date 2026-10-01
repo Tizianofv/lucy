@@ -341,8 +341,12 @@ async def test_G5_deshacer_no_devuelve_un_responsable_que_ya_no_vale(base, gente
              "responsable_chat_id": gente.ajeno}
     log_id = _huella(base, "editar", "proyectos", 1, antes,
                      {**antes, "responsable_chat_id": gente.rosi})
-    with pytest.raises(ValueError, match="No lo deshice"):
+    with pytest.raises(ValueError) as e:
         await crud.deshacer(log_id)
+    assert re.fullmatch(
+        r"No lo deshice: el proyecto volvería a quien lo llevaba, y ese chat no "
+        r"puede ser responsable: solo quien entra al panel y tiene nombre "
+        r"\(hoy: .*\)\.", str(e.value)), str(e.value)
     assert _una(base, "SELECT responsable_chat_id r FROM proyectos WHERE id = 1")["r"] == gente.rosi
 
 
@@ -454,8 +458,10 @@ async def test_G6_deshacer_tampoco_escribe_el_cliente_desde_el_chat(base, gente)
              "cliente_noco_id": 5, "cliente_nombre": "Vieja"}
     log_id = _huella(base, "editar", "proyectos", 1, antes,
                      {"cliente_noco_id": None, "cliente_nombre": None})
-    with pytest.raises(ValueError, match="No lo deshice"):
+    with pytest.raises(ValueError) as e:
         await crud.deshacer(log_id)
+    assert str(e.value) == ("No lo deshice: el proyecto volvería al cliente que "
+                            "tenía, y el cliente de un proyecto se elige en el panel."), str(e.value)
 
 
 def _funciones_que_escriben_cliente(arbol) -> set[str]:
@@ -531,19 +537,22 @@ async def test_G9_deshacer_no_deja_un_estado_fuera_del_vocabulario(base, gente):
     _proyecto(base, 1, estado="activo")
     antes = {"id": 1, "nombre": "Proyecto de prueba", "estado": "terminado"}
     log_id = _huella(base, "editar", "proyectos", 1, antes, {**antes, "estado": "activo"})
-    with pytest.raises(ValueError, match="No lo deshice"):
+    with pytest.raises(ValueError) as e:
         await crud.deshacer(log_id)
+    assert str(e.value) == ("No lo deshice: el proyecto volvería al estado que tenía, "
+                            "y el estado de un proyecto es uno de: activo, pausado, "
+                            "cerrado."), str(e.value)
 
 
 async def test_G9_un_proyecto_cerrado_por_la_puerta_no_recibe_tareas(base, gente):
     _proyecto(base, 1)
     await crud.editar("proyectos", 1, {"estado": "cerrado"}, "prueba")
-    cur = g._Conn(base).cursor()
+    cur = g._Conn(base).cursor(row_factory=dict)
     with pytest.raises(db.ProyectoNoAdmiteTareas) as e:
         await db.proyecto_admite_tareas(cur, 1)
     assert e.value.clave == "cerrado"
     await crud.editar("proyectos", 1, {"estado": "pausado"}, "prueba")
-    assert (await db.proyecto_admite_tareas(g._Conn(base).cursor(), 1))["estado"] == "pausado"
+    assert (await db.proyecto_admite_tareas(g._Conn(base).cursor(row_factory=dict), 1))["estado"] == "pausado"
 
 
 def test_G9_los_estados_con_los_que_nace_un_proyecto_estan_en_el_vocabulario():
@@ -587,8 +596,12 @@ async def test_G12_deshacer_no_deja_un_titulo_vacio(base, gente):
     _tarea(base, 1, titulo="el de ahora")
     antes = {"id": 1, "titulo": "", "estado": "pendiente"}
     log_id = _huella(base, "editar", "tareas", 1, antes, {**antes, "titulo": "el de ahora"})
-    with pytest.raises(ValueError, match="No lo deshice"):
+    with pytest.raises(ValueError) as e:
         await crud.deshacer(log_id)
+    # La frase COMPLETA: antes decía «la tarea volvería a quien la tenía», que
+    # habla del responsable, aunque lo que no valiera fuera el título.
+    assert str(e.value) == ("No lo deshice: la tarea volvería a tener el título que "
+                            "tenía, y el título de una tarea no puede quedar vacío."), str(e.value)
 
 
 def test_G12_el_panel_y_la_puerta_usan_el_mismo_tope():
@@ -629,3 +642,147 @@ async def test_G15_borrar_dos_veces_no_hace_nada_la_segunda(base):
     assert await crud.borrar("tareas", 1, "x", actor="panel") is not None
     assert await crud.borrar("tareas", 1, "x", actor="panel") is None
     assert len(_huellas(base)) == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Lo que cierra la vuelta del NO PASA sobre 73181ff
+# ═══════════════════════════════════════════════════════════════════════
+
+async def test_G12_el_largo_se_mide_despues_de_quitar_los_espacios(base, gente):
+    """200 caracteres con espacios alrededor valen: el tope es del título que
+    queda, no del que se escribió."""
+    _tarea(base, 1)
+    await crud.editar("tareas", 1, {"titulo": "  " + "x" * db.LARGO_TITULO_TAREA + "  "}, "prueba")
+    assert len(_una(base, "SELECT titulo t FROM tareas WHERE id = 1")["t"]) == db.LARGO_TITULO_TAREA
+
+
+async def test_G6_el_mismo_id_con_otro_nombre_en_noco_actualiza_el_nombre(base):
+    """El diseño promete guardar el nombre que Noco devuelve. Si la ficha cambió
+    de nombre en Noco (mismo Id), el proyecto toma el nombre nuevo y deja huella."""
+    _proyecto(base, 1, cliente_noco_id=7, cliente_nombre="Nombre viejo")
+    leer = _noco_de_mentira({7: {"id": 7, "nombre": "Nombre nuevo"}})
+    assert await db.poner_cliente(1, 7, leer_persona=leer) is True
+    assert _una(base, "SELECT cliente_nombre n FROM proyectos WHERE id = 1")["n"] == "Nombre nuevo"
+    assert len(_huellas(base)) == 1
+
+
+@pytest.mark.parametrize("lugar", ["proyecto_id", "tarea_id"])
+def test_G7_el_proyecto_o_la_tarea_tiene_que_existir(con_participantes, lugar):
+    """La FK de `participantes`: no se puede agregar a alguien a un sitio que no
+    existe (SQLite las hace cumplir porque `_base` enciende `foreign_keys`)."""
+    with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+        _persona(con_participantes, **{lugar: 999})
+
+
+_PALABRAS_DE_RESTRICCION = re.compile(
+    r"\b(DEFAULT|NOT\s+NULL|NULL|REFERENCES|CHECK|PRIMARY|UNIQUE|CONSTRAINT)\b", re.I)
+
+
+def _tipo(definicion: str):
+    resto = definicion.strip().split(None, 1)
+    if len(resto) < 2:
+        return None
+    m = _PALABRAS_DE_RESTRICCION.search(resto[1])
+    return re.sub(r"\s+", "", resto[1][:m.start()] if m else resto[1]).lower()
+
+
+def _tipos_de_los_create(texto: str) -> dict:
+    salida = {}
+    for m in db._RE_TABLA.finditer(texto):
+        piezas, pieza, prof = [], "", 0
+        for ch in m.group(2):
+            prof += (ch == "(") - (ch == ")")
+            if ch == "," and prof == 0:
+                piezas.append(pieza)
+                pieza = ""
+            else:
+                pieza += ch
+        piezas.append(pieza)
+        cols = {}
+        for pz in piezas:
+            w = pz.split()
+            if w and w[0].lower() not in ("primary", "unique", "foreign", "check", "constraint"):
+                cols[w[0].lower()] = _tipo(pz)
+        salida[m.group(1).lower()] = cols
+    return salida
+
+
+def _tipos_que_declaran_las_migraciones() -> list[tuple]:
+    """(archivo, tabla, columna, tipo) de cada `ADD COLUMN` y de cada columna de
+    un `CREATE TABLE` de CUALQUIER migración. Sale de lo real, no de una lista."""
+    salida = []
+    for archivo in g._migraciones():
+        texto = db._sin_comentarios(archivo.read_text(encoding="utf-8"))
+        for m in re.finditer(
+                r"ALTER\s+TABLE\s+(\w+)\s+ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)\s+([^;]*)",
+                texto, re.I | re.S):
+            salida.append((archivo.name, m.group(1).lower(), m.group(2).lower(),
+                           _tipo(m.group(2) + " " + m.group(3))))
+        for tabla, cols in _tipos_de_los_create(texto).items():
+            salida += [(archivo.name, tabla, c, t) for c, t in cols.items()]
+    return salida
+
+
+def test_el_tipo_de_cada_columna_es_el_mismo_en_la_migracion_y_en_el_esquema():
+    """Una base nueva sale de `db/schema.sql` y la de producción, de las
+    migraciones: si una columna dice BIGINT en un lado e INTEGER en el otro, las
+    dos bases quedan distintas y nadie se entera (el 2-oct se vio con
+    `responsable_chat_id`). Se miran TODAS las migraciones."""
+    esquema = _tipos_de_los_create(db._sin_comentarios(_SCHEMA.read_text(encoding="utf-8")))
+    declaradas = _tipos_que_declaran_las_migraciones()
+    assert len(declaradas) > 50, "casi no se leyeron columnas: ¿se rompió el parseo?"
+    diferencias = [(a, t, c, tipo, esquema.get(t, {}).get(c, "no está en schema.sql"))
+                   for a, t, c, tipo in declaradas
+                   if esquema.get(t, {}).get(c, "no está en schema.sql") != tipo]
+    assert not diferencias, "\n".join(
+        f"{a}: {t}.{c} es {tipo!r} en la migración y {en!r} en schema.sql"
+        for a, t, c, tipo, en in diferencias)
+
+
+def test_la_guarda_de_tipos_ve_un_tipo_distinto_inventado():
+    migracion = _tipos_de_los_create("CREATE TABLE x (\n  a BIGINT NOT NULL,\n  b TEXT\n);")
+    esquema = _tipos_de_los_create("CREATE TABLE x (\n  a INTEGER NOT NULL,\n  b TEXT\n);")
+    assert migracion["x"]["a"] == "bigint" and esquema["x"]["a"] == "integer"
+    assert migracion["x"]["b"] == esquema["x"]["b"] == "text"
+
+
+# ── Los hermanos de `deshacer`: cada columna con puerta dice lo que se rechazó ──
+
+_MALOS = ["", None, -5, 10 ** 13, "zzz-nadie", ["zzz-nadie"], 3.5, "x" * 500]
+
+
+def _columnas_con_puerta():
+    return [(t, c) for t, cs in crud.PUERTAS.items() for c in cs]
+
+
+def test_cada_columna_con_puerta_tiene_su_frase_en_deshacer():
+    """La lista sale de `crud.PUERTAS`: si alguien le agrega una columna, tiene
+    que decir qué volvería a quedar, o `deshacer` hablaría de otra cosa."""
+    assert set(_columnas_con_puerta()) == set(crud._VUELVE_A)
+
+
+@pytest.mark.parametrize("tabla,columna", _columnas_con_puerta())
+async def test_deshacer_nombra_lo_que_la_puerta_rechazo(base, gente, tabla, columna):
+    puerta = crud.PUERTAS[tabla][columna]
+    malo, motivo = None, None
+    for candidato in _MALOS:
+        try:
+            puerta(candidato)
+        except ValueError as e:
+            malo, motivo = candidato, str(e)
+            break
+    assert motivo is not None, (
+        f"no hay un valor de prueba que la puerta {tabla}.{columna} rechace: "
+        f"agregá uno a _MALOS")
+    _proyecto(base, 1)
+    _tarea(base, 1)
+    antes = {"id": 1, columna: malo}
+    log_id = _huella(base, "editar", tabla, 1, antes, {columna: "otro valor distinto"})
+    with pytest.raises(ValueError) as e:
+        await crud.deshacer(log_id)
+    que = crud._VUELVE_A[(tabla, columna)]
+    assert str(e.value) == f"No lo deshice: {que}, y {motivo}.", str(e.value)
+    # Y no habla de ninguna de las OTRAS columnas.
+    for otra, frase in crud._VUELVE_A.items():
+        if frase != que:
+            assert frase not in str(e.value), (otra, str(e.value))

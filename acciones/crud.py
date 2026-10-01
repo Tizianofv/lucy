@@ -1204,8 +1204,31 @@ def _por_las_puertas(tabla: str, valores: dict) -> dict:
     salida = dict(valores)
     for columna, puerta in PUERTAS.get(tabla, {}).items():
         if columna in salida:
-            salida[columna] = puerta(salida[columna])
+            try:
+                salida[columna] = puerta(salida[columna])
+            except ValueError as e:
+                # Se le deja puesta la columna que rechazó, SOBRE LA MISMA
+                # excepción (no una nueva: `web/app.py` mira su `__cause__`):
+                # `deshacer` dice con eso qué fue lo que no vale.
+                e.columna_con_puerta = columna
+                raise
     return salida
+
+
+# Qué volvería a quedar si `deshacer` restaurara la columna que la puerta
+# rechazó, para el mensaje «No lo deshice: …». UNA frase por cada columna de
+# `PUERTAS` (una prueba exige que no falte ninguna): el mensaje de antes hablaba
+# siempre de quién tenía la tarea, y con el título o el estado mentía.
+_VUELVE_A = {
+    ("tareas", "responsable_chat_id"): "la tarea volvería a quien la tenía",
+    ("tareas", "titulo"): "la tarea volvería a tener el título que tenía",
+    ("eventos", "duenos_chat_id"): "la cita volvería a sus dueños de antes",
+    ("proyectos", "nombre"): "el proyecto volvería a llamarse como se llamaba",
+    ("proyectos", "responsable_chat_id"): "el proyecto volvería a quien lo llevaba",
+    ("proyectos", "estado"): "el proyecto volvería al estado que tenía",
+    ("proyectos", "cliente_noco_id"): "el proyecto volvería al cliente que tenía",
+    ("proyectos", "cliente_nombre"): "el proyecto volvería al cliente que tenía",
+}
 
 
 def _adaptar(v):
@@ -1868,14 +1891,15 @@ async def deshacer(log_id: int) -> str:
             try:
                 _por_las_puertas(tabla, {c: antes[c] for c in columnas})
             except ValueError as e:
-                # El mensaje de antes hablaba de «la tarea» y de quién la tenía,
-                # y con una puerta de otra tabla (el nombre de un proyecto)
-                # mentía: cada tabla dice lo suyo.
-                if tabla == "tareas":
-                    raise ValueError(
-                        f"No lo deshice: la tarea volvería a quien la tenía, y {e}."
-                    ) from e
-                raise ValueError(f"No lo deshice: {e}.") from e
+                # El mensaje depende de la COLUMNA que la puerta rechazó, no de
+                # la tabla: el de antes hablaba de quién tenía la tarea aunque
+                # lo que no valiera fuera el título (`_VUELVE_A`).
+                # (`_por_las_puertas` es lo único que corre en este `try` y
+                # siempre le deja la columna puesta.)
+                que = _VUELVE_A.get((tabla, e.columna_con_puerta))
+                if que is None:
+                    raise ValueError(f"No lo deshice: {e}.") from e
+                raise ValueError(f"No lo deshice: {que}, y {e}.") from e
             # DESHACER TAMBIÉN «RECIBE»: si el resultado deja la tarea en un
             # proyecto DISTINTO del que tiene AHORA, ese proyecto tiene que
             # admitirla hoy (puede haberse cerrado desde entonces). Se compara con

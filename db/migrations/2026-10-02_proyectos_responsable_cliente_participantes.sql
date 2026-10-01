@@ -25,7 +25,10 @@
 --
 -- NO SE APLICA ACÁ. Lo corre la sala, con `python3 db/backup.py` antes (regla
 -- del repo para todo DDL en producción) y su guion `m2_proyectos.py`.
--- Idempotente: correrlo dos veces no hace nada la segunda.
+-- Se puede correr otra vez sin error y deja el mismo resultado (todo es
+-- `IF NOT EXISTS`), pero NO es un no-hacer-nada: la segunda corrida suelta y
+-- vuelve a poner el CHECK `proyectos_cliente_entero`, que recorre `proyectos`
+-- una vez más y toma por un instante el candado de esa tabla.
 
 BEGIN;
 
