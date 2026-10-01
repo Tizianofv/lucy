@@ -233,6 +233,7 @@ async def _serve_marcado(self, *a, **k):
     try:
         return await _serve(self, *a, **k)
     finally:
+        await asyncio.sleep(0.3)   # una tarea que tarda en morir (cierra sockets...)
         ev("panel termino")
 
 uvicorn.Server.serve = _serve_marcado
@@ -243,6 +244,7 @@ async def _bucle_marcado(bot):
     try:
         return await _bucle(bot)
     finally:
+        await asyncio.sleep(0.3)   # una tarea que tarda en morir (cierra clientes...)
         ev("bucle termino")
 
 interpretar.bucle = _bucle_marcado
