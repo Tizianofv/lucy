@@ -293,10 +293,19 @@ def _correr_guion(tmp_path, verificador=0, railway_falla=False):
     return casa, res, marcas
 
 
+def _archivos_bajo(carpeta):
+    """Los archivos del HOME falso, en las tres carpetas donde el guion o los
+    dobles pueden escribir (frontera declarada: no se recorre más abajo; el
+    guion solo escribe en `Library/Logs`, por la variable REGISTRO)."""
+    sitios = [carpeta, carpeta / "Library" / "Logs", carpeta / "Library"]
+    return [d / n for d in sitios if d.is_dir() for n in os.listdir(d)
+            if (d / n).is_file()]
+
+
 def _todo_lo_que_escribio(casa, res):
     textos = [res.stdout, res.stderr]
-    for f in casa.rglob("*"):
-        if f.is_file() and f.parent != casa / ".local" / "bin":
+    for f in _archivos_bajo(casa):
+        if f.parent != casa / ".local" / "bin":
             textos.append(f.read_text(errors="replace"))
     return "\n".join(textos)
 
@@ -324,6 +333,6 @@ def test_guion_nunca_escribe_la_url_de_la_base_en_ninguna_parte(tmp_path):
     for verificador in (0, 1):
         casa, res, _ = _correr_guion(tmp_path / str(verificador), verificador=verificador)
         todo = _todo_lo_que_escribio(casa, res)
-        assert "lucy-respaldo.log" in "".join(str(p) for p in casa.rglob("*.log"))
+        assert any(f.name == "lucy-respaldo.log" for f in _archivos_bajo(casa))
         assert SECRETO not in todo, "la URL de la base (con su clave) quedó escrita"
         assert "servidor.invalido" not in todo
