@@ -390,16 +390,42 @@ def test_la_ruta_valida_con_la_misma_regla_que_el_panel():
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_escribir_y_leer_no_crean_ningun_bot_de_telegram(sala, monkeypatch):
+    """El `Bot` de mentira RECUERDA que lo crearon (no lanza: `_avisar_abuso`
+    se traga cualquier excepción, y una prueba que dependiera de eso no
+    vería nada)."""
     import telegram
+    creados = []
 
-    def _bot_prohibido(*a, **k):
-        raise AssertionError("un comentario de Code intentó hablar con Telegram")
-    monkeypatch.setattr(telegram, "Bot", _bot_prohibido)
+    class _BotQueRecuerda:
+        def __init__(self, *a, **k):
+            creados.append((a, k))
+
+        async def send_message(self, *a, **k):
+            creados.append(("send_message", a, k))
+    monkeypatch.setattr(telegram, "Bot", _BotQueRecuerda)
     con = sala([{"id": 1, **DE_CODE}])
     assert CLIENTE.post(RUTA_COMENTARIOS.format(1), headers=_h(),
                         json={"texto": "x"}).status_code == 200
     assert CLIENTE.get(RUTA_COMENTARIOS.format(1), headers=_h()).status_code == 200
     assert _n(con, "comentarios_tarea") == 1
+    assert creados == [], f"un comentario de Code tocó Telegram: {creados}"
+
+
+def test_el_bot_que_recuerda_si_ve_un_aviso_real(sala, monkeypatch):
+    """Control de la prueba de arriba: el mismo `Bot` de mentira SÍ registra
+    el aviso de abuso, que es el único mensaje que esta puerta sabe mandar."""
+    import telegram
+    creados = []
+
+    class _BotQueRecuerda:
+        def __init__(self, *a, **k):
+            creados.append("creado")
+
+        async def send_message(self, *a, **k):
+            creados.append("enviado")
+    monkeypatch.setattr(telegram, "Bot", _BotQueRecuerda)
+    asyncio.run(api_code._avisar_abuso(10))
+    assert creados == ["creado", "enviado"]
 
 
 def test_comentar_tarea_no_nombra_telegram():
