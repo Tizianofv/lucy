@@ -245,6 +245,10 @@ async def test_agregar_o_quitar_una_persona_no_cuenta_como_movimiento_del_proyec
     persona = await db.agregar_participante(("proyecto", 1), 101, "rol", gente.dueno, leer_persona=_ficha)
     await db.agregar_participante(("tarea", 10), 102, "rol", gente.dueno, leer_persona=_ficha)
     await db.quitar_participante(persona["id"], ("proyecto", 1), gente.dueno)
+    # El reloj de SQLite no devuelve fechas de verdad (`now()` es un texto fijo): se
+    # le ponen a las huellas de las personas fechas de AYER, para que, si el
+    # «último movimiento» las mirara, el proyecto dejara de estar dormido.
+    mundo.con.execute("UPDATE log_acciones SET ts = ? WHERE tabla = 'participantes'", (_dia(-1).isoformat(),))
     despues = (await db.pagina_de_proyectos())["proyectos"][1]
     assert despues["dormido"] is True and despues["ultimo"] == antes["ultimo"]
     assert despues["dias_sin_movimiento"] == antes["dias_sin_movimiento"]
