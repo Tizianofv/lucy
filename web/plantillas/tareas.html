@@ -194,7 +194,7 @@ aviso de Telegram que ya sonó.</p>
       <span class="suave">· {{ t.pasos_hechos }} de {{ t.pasos_total }}</span>
       {%- endif -%}
       {%- if t.proyecto_nombre %}
-      <br><a class="suave" href="/proyectos#proyecto-{{ t.proyecto_id }}">{{ t.proyecto_nombre }}</a>
+      <br><a class="suave" href="/proyectos?p={{ t.proyecto_id }}#proyecto-{{ t.proyecto_id }}">{{ t.proyecto_nombre }}</a>
       {%- endif %}
       {%- if t.primero_esperando %}
       <br><span class="suave">→ Primero:

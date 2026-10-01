@@ -1,120 +1,314 @@
-{% extends "base.html" %}{% set activo='proyectos' %}
-{% block titulo %}Proyectos{% endblock %}
-{% block cuerpo %}
-<h1>Proyectos</h1>
+<!doctype html>
+<html lang="es"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proyectos de Lucy</title>
+{#- Las tipografías son las de la maqueta aprobada. Si no cargan, el navegador
+    usa la del sistema y la página se lee igual. -#}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Figtree:wght@400;500;600&display=swap">
+<style>
+/* Página de proyectos (Lucy 1.0, E4). El aspecto es el de la maqueta aprobada
+   por Tiziano: columna de grupos a la izquierda, el proyecto a la derecha; en
+   el teléfono se apilan. El color de cada grupo lo pone `--color`, que sale de
+   `areas.color`, no de esta hoja. Sin JavaScript: todo es enlace, formulario o
+   <details>. */
+:root{
+  --bg:#f3f4f1; --papel:#ffffff; --tinta:#16201c; --suave:#5f6a65; --linea:#dfe3de;
+  --vencida:#b3261e; --vencida-fondo:#fbe9e7; --dormido:#9a6b00; --dormido-fondo:#fff4d6;
+  --ok:#1e6b3a; --color:#0f7c74;
+  --display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;
+  --texto:"Figtree",ui-sans-serif,system-ui,-apple-system,sans-serif;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#101614; --papel:#18201d; --tinta:#e7ece9; --suave:#9aa6a0; --linea:#2a3430;
+  --vencida:#f2867c; --vencida-fondo:#3a1f1c; --dormido:#e6b84f; --dormido-fondo:#3a2f12; --ok:#6cc38b; color-scheme:dark}}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--tinta);font:15px/1.5 var(--texto);margin:0}
+a{color:inherit}
+.barra-marca{background:var(--papel);border-bottom:1px solid var(--linea);box-shadow:0 1px 3px rgb(0 0 0 / .08);position:sticky;top:env(safe-area-inset-top,0px);z-index:10}
+.barra-dentro{padding-inline:16px;padding-block:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.barra-marca .logo{height:17px;width:auto;max-width:70vw;display:block}
+.barra-tag{background:#eb2129;color:#fff;font:700 11px var(--texto);letter-spacing:.8px;padding:3px 8px;border-radius:7px}
+.panel{margin-left:auto;display:flex;gap:1rem;flex-wrap:wrap;font-size:.85rem}
+.panel a{color:var(--suave);text-decoration:none}
+.panel a.on{color:var(--tinta);font-weight:600}
+.envoltura{display:grid;grid-template-columns:17rem minmax(0,1fr);gap:1.5rem;max-width:72rem;margin:0 auto;padding-inline:16px;padding-block:1.2rem 4rem}
+@media (max-width:760px){.envoltura{grid-template-columns:minmax(0,1fr)}}
+.buscador{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem}
+.buscar{flex:1 1 9rem;min-width:0;font:inherit;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
+.buscar:focus-visible{outline:2px solid var(--color);outline-offset:1px}
+.quitar-filtro{font-size:.82rem;color:var(--suave);align-self:center}
+nav.grupos{display:flex;flex-direction:column;gap:1.1rem}
+.grupo h3{margin:0 0 .35rem;font:700 .74rem var(--texto);letter-spacing:.09em;text-transform:uppercase;display:flex;align-items:center;gap:.45rem}
+.grupo h3 i{width:.6rem;height:.6rem;border-radius:2px;display:inline-block;background:var(--color)}
+.grupo a.proy{text-decoration:none;display:flex;justify-content:space-between;gap:.5rem;width:100%;padding:.45rem .6rem;border-radius:8px;font-size:.93rem}
+.grupo a.proy:hover{background:var(--papel)}
+.grupo a.proy[aria-current="true"]{background:var(--papel);box-shadow:inset 3px 0 0 var(--color);font-weight:600}
+.grupo a.proy:focus-visible{outline:2px solid var(--color);outline-offset:1px}
+.grupo .cuenta{color:var(--suave);font-size:.8rem;font-variant-numeric:tabular-nums;white-space:nowrap}
+.grupo .cuenta b{color:var(--vencida);font-weight:600}
+.grupo .proy .sub{display:block;font-size:.76rem;color:var(--suave);font-weight:400}
+.grupo .proy .sub.dormido{color:var(--dormido);font-weight:600}
+.grupo .proy.cerrado{color:var(--suave)}
+.grupo a.sueltas{color:var(--suave);font-style:italic}
+.grupo details.cerrados > summary{cursor:pointer;color:var(--suave);font-size:.8rem;padding:.3rem .6rem;list-style:none}
+.grupo details.cerrados > summary::-webkit-details-marker{display:none}
+.grupo details.cerrados > summary::before{content:"▸ "}
+.grupo details.cerrados[open] > summary::before{content:"▾ "}
+.vacio{color:var(--suave);font-size:.88rem;margin:0}
 
-{# Igual que en /tareas/nueva: una clave por la URL, traducida acá para quien
-   lo lee desde el celular, no desde el log. #}
-{% if error == 'area' %}
-<p class="aviso">Esa área ya no está en la lista, o ese proyecto ya no
-existe.</p>
-{% elif error == 'proyecto' %}
-<p class="aviso">Ese proyecto ya no está.</p>
-{% elif error == 'nombre_vacio' %}
-<p class="aviso">El nombre no puede quedar vacío.</p>
-{% elif error == 'nombre_largo' %}
-<p class="aviso">El nombre no puede pasar de {{ largo_nombre }} caracteres.</p>
-{% elif error == 'nombre_repetido' %}
-<p class="aviso">Ya hay otro proyecto con ese nombre. Cada proyecto se llama
-distinto.</p>
-{% elif error == 'nombre_igual' %}
-<p class="aviso">El nombre ya era ese: no cambió nada.</p>
-{% elif error == 'nombre_invalido' %}
-<p class="aviso">Ese nombre no se puede guardar.</p>
-{% endif %}
-{% if nombre_guardado %}
-<p class="aviso ok">Nombre guardado.</p>
-{% endif %}
-{% if creado %}
-<p class="aviso ok">Proyecto creado (#{{ creado }}). Está más abajo, con la
-tarea que le dio origen ya archivada.</p>
-{% endif %}
-{% if area_guardada %}
-<p class="aviso ok">Área guardada.</p>
-{% endif %}
-{% if tarea_creada %}
-<p class="aviso ok">Tarea creada (#{{ tarea_creada }}). Está en la tabla de este
-proyecto.</p>
-{% if sala_no %}
-<p class="aviso">Es de {{ nombre_code }}, pero el proyecto no es del área
-«{{ area_tecnica }}»: la sala de control NO la verá.</p>
-{% endif %}
-{% endif %}
+main{min-width:0;display:flex;flex-direction:column;gap:1.4rem}
+.cabeza{display:flex;flex-direction:column;gap:.6rem}
+.migas{font-size:.82rem;color:var(--suave)}
+.migas b{color:var(--color);font-weight:600}
+h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balance;overflow-wrap:anywhere}
+.descripcion{margin:0;color:var(--suave);font-size:.92rem;white-space:pre-wrap;overflow-wrap:anywhere}
+.quienes{display:flex;flex-wrap:wrap;gap:.4rem 1.4rem;font-size:.95rem}
+.quienes span{color:var(--suave)} .quienes b{font-weight:600;color:var(--tinta)}
+.meta{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+.pastilla{font-size:.78rem;padding:.2rem .6rem;border-radius:99px;border:1px solid var(--linea);background:var(--papel)}
+.pastilla.roja{border-color:var(--vencida);color:var(--vencida)}
+.pastilla.dormido{border-color:var(--dormido);color:var(--dormido);background:var(--dormido-fondo)}
+.avance{display:flex;align-items:center;gap:.7rem;font-size:.85rem;color:var(--suave)}
+.avance .riel{flex:1;height:8px;border-radius:99px;background:var(--linea);overflow:hidden;max-width:22rem}
+.avance .riel span{display:block;height:100%;background:var(--color);border-radius:99px}
+.aviso-dormido{background:var(--dormido-fondo);color:var(--dormido);border-radius:10px;padding:.6rem .8rem;font-size:.88rem;font-weight:500}
+.aviso-cerrado{background:var(--papel);border:1px dashed var(--linea);border-radius:10px;padding:.6rem .8rem;font-size:.88rem;color:var(--suave)}
+.aviso{background:var(--papel);border-left:3px solid var(--vencida);padding:.7rem 1rem;border-radius:0 8px 8px 0}
+.aviso.ok{border-left-color:var(--ok)}
 
-{% if not proyectos %}
-<p class="vacio">No hay ningún proyecto todavía. Se crean desde una tarea, con
-el botón «Convertir en proyecto» de su pantalla.</p>
-{% else %}
-<p class="suave">Cada tarea de acá abajo es la MISMA que se ve en
-<a href="/tareas">Tareas</a> si sigue pendiente -- ésta es la vista por
-proyecto, con las hechas incluidas.</p>
+section.bloque{background:var(--papel);border:1px solid var(--linea);border-radius:14px;padding:1.1rem;min-width:0}
+section.bloque > .encabezado{display:flex;justify-content:space-between;align-items:baseline;gap:1rem;margin-bottom:.8rem;flex-wrap:wrap}
+section.bloque h2{font:700 1.05rem var(--display);margin:0}
+.nota{color:var(--suave);font-size:.82rem}
+.tareas{display:flex;flex-direction:column}
+.tarea{border-top:1px solid var(--linea);padding:.7rem 0}
+.tarea:first-child{border-top:0}
+.tarea.vencida{background:var(--vencida-fondo);border-radius:10px;padding-inline:.6rem;border-top-color:transparent}
+.tarea.vencida + .tarea{border-top-color:transparent}
+.fila{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}
+.marca{width:1.1rem;text-align:center;color:var(--suave);flex:none}
+.tarea.hecha .marca{color:var(--ok)}
+.fila .titulo{flex:1 1 12rem;min-width:0;font-weight:500;text-decoration:none;overflow-wrap:anywhere}
+.fila .titulo:hover{text-decoration:underline}
+.tarea.hecha .titulo{text-decoration:line-through;color:var(--suave)}
+.ini{width:1.55rem;height:1.55rem;border-radius:50%;display:grid;place-items:center;font:600 .66rem var(--texto);color:#fff;background:var(--color);flex:none}
+.vence{font-size:.8rem;color:var(--suave);white-space:nowrap;font-variant-numeric:tabular-nums;min-width:6.5rem;text-align:right}
+.tarea.vencida .vence{color:var(--vencida);font-weight:600}
+.col-fecha{display:flex;justify-content:flex-end;font-size:.66rem;letter-spacing:.06em;text-transform:uppercase;font-weight:600;color:var(--suave);padding:0 0 .3rem}
+.col-fecha span{min-width:6.5rem;text-align:right}
+.detalle{margin:.6rem 0 .2rem 1.8rem;padding:.6rem .8rem;border-radius:10px;background:var(--bg)}
+.detalle > summary{cursor:pointer;font-size:.8rem;color:var(--suave)}
+.comentarios{display:flex;flex-direction:column;gap:.6rem;margin-top:.6rem}
+.comentario .de{font-size:.76rem;color:var(--suave)}
+.comentario .de b{color:var(--tinta);font-weight:600}
+.comentario p{margin:.15rem 0 0;overflow-wrap:anywhere;white-space:pre-wrap}
+details.plegar > summary{cursor:pointer;color:var(--suave);font-size:.85rem;margin-top:.8rem;list-style:none}
+details.plegar > summary::-webkit-details-marker{display:none}
+details.plegar > summary::before{content:"▸ "}
+details.plegar[open] > summary::before{content:"▾ "}
+.acciones{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:.8rem}
+.btn-linea{font:600 .82rem var(--texto);padding:.35rem .75rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta);cursor:pointer;text-decoration:none;display:inline-block}
+details.editar-proy > summary{cursor:pointer;color:var(--suave);font-size:.85rem}
+details.editar-proy form{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.6rem}
+details.editar-proy label{font-size:.85rem;color:var(--suave)}
+details.editar-proy input,details.editar-proy select{font:inherit;padding:.4rem .6rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0;flex:1 1 12rem;max-width:26rem}
+details.editar-proy button{font:600 .85rem var(--texto);padding:.4rem .9rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--color);outline-offset:2px}
 
-{% for p in proyectos %}
-<div class="tarjeta" id="proyecto-{{ p.id }}">
-  <h2 style="margin-top:0">{{ p.nombre }}
-    {%- if p.area %}
-    <span class="etiqueta-area" style="background:{{ p.color or '#6b6b6b' }}">{{ p.area }}</span>
-    {%- else %}
-    <span class="etiqueta-area etiqueta-area-vacia">sin área</span>
-    {%- endif %}
-  </h2>
-  {# EL NOMBRE SE EDITA ACÁ, un formulario por proyecto (esta pantalla no tiene
-     el formulario único de /tareas), y pasa por la MISMA puerta que Telegram
-     (`crud.editar` → `crud.PUERTAS["proyectos"]["nombre"]`; ver
-     `cambiar_nombre_de_proyecto` en web/app.py). #}
-  <form method="post" action="/proyectos/{{ p.id }}/nombre" class="barra">
-    <label for="nombre-{{ p.id }}" class="suave">Nombre:</label>
-    <input id="nombre-{{ p.id }}" name="nombre" type="text" required
-           maxlength="{{ largo_nombre }}" value="{{ p.nombre }}"
-           style="width:100%;max-width:26rem">
-    <button>Guardar</button>
-  </form>
-  {# AGREGAR TAREAS AL PROYECTO: un enlace a la pantalla de «Nueva tarea» con
-     este proyecto fijado. Un proyecto CERRADO no recibe tareas (por la misma
-     puerta que el alta, `db.proyecto_admite_tareas`): en vez del enlace se dice
-     por qué no hay. #}
-  {% if p.estado == estado_cerrado %}
-  <p class="suave">Proyecto cerrado: no se le agregan tareas.</p>
-  {% else %}
-  <p><a href="/tareas/nueva?proyecto={{ p.id }}">+ Agregar tarea a este proyecto</a></p>
-  {% endif %}
-  <p class="suave">
-    Estado: {{ p.estado }}
-    {%- if p.descripcion %} · {{ p.descripcion }}{% endif %}
-  </p>
+.tarea .de-papelera{font-size:.76rem;color:var(--suave);flex-basis:100%;margin-left:1.8rem}
+</style></head><body>
 
-  {# EL <SELECT> DE ÁREA, un formulario propio por proyecto -- esta pantalla
-     no tiene el formulario único de /tareas (no hay «cerrar varias» acá), así
-     que cada proyecto puede tener el suyo, igual que ya hace /tareas/{tid}
-     con sus comentarios. Pasa por la MISMA puerta que Telegram
-     (`crud._area_que_vale`, vía `crud.editar` -- ver `cambiar_area_de_proyecto`
-     en web/app.py). #}
-  <form method="post" action="/proyectos/{{ p.id }}/area" class="barra">
-    <label for="area-{{ p.id }}" class="suave">Área:</label>
-    <select id="area-{{ p.id }}" name="area">
-      <option value="" {%- if not p.area %} selected{% endif %}>Sin área</option>
-      {% for a in areas %}
-      <option value="{{ a.clave }}" {%- if p.area == a.clave %} selected{% endif %}>{{ a.clave }}</option>
+{#- UNA FILA DE TAREA. Es de SOLO LECTURA: la casilla de la maqueta no está
+    (marcar hecha llega con E6) y el título lleva a la pantalla de la tarea, que
+    es donde hoy se cambia todo de ella. El responsable sale como nombre,
+    nunca como número de chat. -#}
+{% macro fila_tarea(t) %}
+<div class="tarea {{ 'hecha' if t.es_hecha }} {{ 'vencida' if t.vencida }}" id="tarea-{{ t.id }}" data-tarea="{{ t.id }}">
+  <div class="fila">
+    <span class="marca" role="img" aria-label="{{ 'hecha' if t.es_hecha else 'pendiente' if t.es_pendiente else t.estado }}">{{ '✓' if t.es_hecha else '○' if t.es_pendiente else '–' }}</span>
+    <a class="titulo" href="/tareas/{{ t.id }}">{{ t.titulo }}</a>
+    {% if t.comentarios %}<span class="vence" style="min-width:0">{{ t.comentarios|length }} coment.</span>{% endif %}
+    {% if not t.es_pendiente and not t.es_hecha %}<span class="vence" style="min-width:0">{{ t.estado }}</span>{% endif %}
+    {% if t.responsable %}<span class="ini" title="Responsable: {{ t.responsable }}">{{ t.responsable|iniciales }}</span>{% endif %}
+    <span class="vence" {% if t.vence_en %}title="{{ t.vence_en|hora_rd }}"{% endif %}>{{ 'Venció el ' if t.vencida }}{{ t.dia|dia_corto }}</span>
+    {% if t.de_proyecto_en_papelera %}<span class="de-papelera">Era de un proyecto que está en la papelera.</span>{% endif %}
+  </div>
+  {% if t.comentarios %}
+  <details class="detalle"><summary>Comentarios ({{ t.comentarios|length }})</summary>
+    <div class="comentarios">
+      {% for c in t.comentarios %}
+      <div class="comentario"><div class="de"><b>{{ c.autor }}</b> · {{ c.creado_en|hora_rd }}{{ ' · editado' if c.editado }}</div><p>{{ c.texto }}</p></div>
       {% endfor %}
-    </select>
-    <button>Guardar</button>
-  </form>
-
-  {% if not p.tareas %}
-  <p class="vacio">Sin tareas todavía.</p>
-  {% else %}
-  <table>
-    <tr><th>Tarea</th><th>Vence</th><th>Estado</th></tr>
-    {% for t in p.tareas %}
-    <tr>
-      <td><a href="/tareas/{{ t.id }}">{{ t.titulo }}</a></td>
-      <td class="suave">{{ t.vence_en|hora_rd if t.vence_en else 'sin fecha' }}</td>
-      <td class="suave">{{ t.estado }}</td>
-    </tr>
-    {% endfor %}
-  </table>
+    </div>
+  </details>
   {% endif %}
 </div>
-{% endfor %}
+{% endmacro %}
+
+{#- LAS TAREAS (pendientes, y las hechas plegadas) de un proyecto o de un
+    apartado de «Tareas sin proyecto». -#}
+{% macro lista_de_tareas(pendientes, otras, n_hechas, n_otras, vacio) %}
+<div class="col-fecha"><span>Fecha límite</span></div>
+<div class="tareas">{% for t in pendientes %}{{ fila_tarea(t) }}{% else %}<p class="vacio">{{ vacio }}</p>{% endfor %}</div>
+{% if otras %}
+<details class="plegar"><summary>{{ n_hechas }} hecha{{ 's' if n_hechas != 1 }}{% if n_otras %} y {{ n_otras }} con otro estado{% endif %}</summary>
+  <div class="tareas">{% for t in otras %}{{ fila_tarea(t) }}{% endfor %}</div>
+</details>
 {% endif %}
-{% endblock %}
+{% endmacro %}
+
+{#- UN GRUPO DE LA IZQUIERDA -#}
+{% macro un_proyecto(m, actual, cerrado=False) %}
+{% set bq = ('&q=' ~ (q|urlencode)) if q else '' %}
+<a class="proy {{ 'cerrado' if cerrado }}" href="/proyectos?p={{ m.id }}{{ bq }}" aria-current="{{ 'true' if actual and actual.id == m.id else 'false' }}">
+  <span>{{ m.nombre }}
+    {%- if m.cliente %}<span class="sub">{{ m.cliente }}</span>{% endif %}
+    {%- if not cerrado %}<span class="sub {{ 'dormido' if m.dormido }}">{{ 'Sin movimiento ' if m.dormido else 'Último movimiento: ' }}{{ m.dias_sin_movimiento|hace_dias }}</span>{% endif %}</span>
+  {%- if not cerrado %}<span class="cuenta">{% if m.n_vencidas %}<b>{{ m.n_vencidas }} vencida{{ 's' if m.n_vencidas > 1 }}</b> · {% endif %}{{ m.n_hechas }}/{{ m.n_total }}</span>{% endif %}
+</a>
+{% endmacro %}
+
+{% macro bloque_grupo(g, es_sin_grupo, vista) %}
+{% set actual = vista.proyecto if vista.tipo == 'proyecto' else none %}
+<div class="grupo" style="--color:{{ g.color }}">
+  <h3><i></i>{{ 'Sin grupo' if es_sin_grupo else g.clave }}</h3>
+  {% for m in g.abiertos %}{{ un_proyecto(m, actual) }}
+  {% else %}{% if not es_sin_grupo and not q %}<p class="vacio" style="padding:.3rem .6rem">Sin proyectos abiertos.</p>{% endif %}{% endfor %}
+  {% if g.cerrados %}
+  <details class="cerrados" {% if actual and actual.cerrado and actual.area == g.clave %}open{% endif %}>
+    <summary>{{ g.cerrados|length }} cerrado{{ 's' if g.cerrados|length > 1 }}</summary>
+    {% for m in g.cerrados %}{{ un_proyecto(m, actual, True) }}{% endfor %}
+  </details>
+  {% endif %}
+  {% if g.sueltas and g.sueltas.n_total %}
+  <a class="proy sueltas" href="/proyectos?{{ 'sin_grupo=1' if es_sin_grupo else 'g=' ~ (g.clave|urlencode) }}"
+     aria-current="{{ 'true' if vista.tipo in ('grupo', 'sin_grupo') and vista.grupo.clave == g.clave else 'false' }}">
+    <span>Tareas sin proyecto</span>
+    <span class="cuenta">{% if g.sueltas.n_vencidas %}<b>{{ g.sueltas.n_vencidas }} vencida{{ 's' if g.sueltas.n_vencidas > 1 }}</b> · {% endif %}{{ g.sueltas.n_hechas }}/{{ g.sueltas.n_total }}</span>
+  </a>
+  {% endif %}
+</div>
+{% endmacro %}
+
+<div class="barra-marca"><div class="barra-dentro">
+  <img class="logo" src="/logo-cds.png" alt="Caribbean Dream Studios">
+  <span class="barra-tag">PROYECTOS</span>
+  <nav class="panel" aria-label="Panel">
+    {% for a in pantallas %}<a href="{{ a.ruta }}" class="{{ 'on' if a.ruta == '/proyectos' }}">{{ a.nombre }}</a>{% endfor %}
+  </nav>
+</div></div>
+
+<div class="envoltura">
+  <aside>
+    <form class="buscador" method="get" action="/proyectos" role="search">
+      <input class="buscar" type="search" name="q" value="{{ q }}" placeholder="Buscar cliente o proyecto…" aria-label="Buscar cliente o proyecto">
+      <button class="btn-linea">Buscar</button>
+      {% if q %}<a class="quitar-filtro" href="/proyectos">Quitar el filtro</a>{% endif %}
+    </form>
+    <nav class="grupos" aria-label="Proyectos por grupo">
+      {% for g in visibles.grupos %}{{ bloque_grupo(g, False, vista) }}{% endfor %}
+      {% set sg = visibles.sin_grupo %}
+      {% if sg.abiertos or sg.cerrados or (sg.sueltas and sg.sueltas.n_total) %}{{ bloque_grupo(sg, True, vista) }}{% endif %}
+      {% if q and not visibles.grupos and not (visibles.sin_grupo.abiertos or visibles.sin_grupo.cerrados) %}
+      <p class="vacio">Ningún proyecto ni cliente con «{{ q }}».</p>
+      {% endif %}
+    </nav>
+  </aside>
+
+  <main>
+    {#- Los avisos con los que vuelven las rutas que escriben (nombre y grupo). -#}
+    {% if error == 'area' %}<p class="aviso">Ese grupo ya no está en la lista, o ese proyecto ya no existe.</p>
+    {% elif error == 'proyecto' %}<p class="aviso">Ese proyecto ya no está.</p>
+    {% elif error == 'nombre_vacio' %}<p class="aviso">El nombre no puede quedar vacío.</p>
+    {% elif error == 'nombre_largo' %}<p class="aviso">El nombre no puede pasar de {{ largo_nombre }} caracteres.</p>
+    {% elif error == 'nombre_repetido' %}<p class="aviso">Ya hay otro proyecto con ese nombre. Cada proyecto se llama distinto.</p>
+    {% elif error == 'nombre_igual' %}<p class="aviso">El nombre ya era ese: no cambió nada.</p>
+    {% elif error == 'nombre_invalido' %}<p class="aviso">Ese nombre no se puede guardar.</p>{% endif %}
+    {% if nombre_guardado %}<p class="aviso ok">Nombre guardado.</p>{% endif %}
+    {% if area_guardada %}<p class="aviso ok">Grupo guardado.</p>{% endif %}
+    {% if creado %}<p class="aviso ok">Proyecto creado (#{{ creado }}), con la tarea que le dio origen ya archivada.</p>{% endif %}
+    {% if tarea_creada %}<p class="aviso ok">Tarea creada (#{{ tarea_creada }}). Está en la lista de este proyecto.</p>
+    {% if sala_no %}<p class="aviso">Es de {{ nombre_code }}, pero el proyecto no es del grupo «{{ area_tecnica }}»: la sala de control NO la verá.</p>{% endif %}{% endif %}
+
+    {% if vista.tipo == 'proyecto' %}
+    {% set m = vista.proyecto %}
+    {% set g = vista.grupo %}
+    <div style="display:contents;--color:{{ g.color if g else '#6b6b6b' }}">
+    <div class="cabeza" id="proyecto-{{ m.id }}">
+      <div class="migas"><b>{{ g.clave if g else 'Sin grupo' }}</b> / Proyecto</div>
+      <h1>{{ m.nombre }}</h1>
+      {% if m.descripcion %}<p class="descripcion">{{ m.descripcion }}</p>{% endif %}
+      {% if m.cliente or m.responsable %}
+      <div class="quienes">
+        {% if m.cliente %}<span>Cliente: <b>{{ m.cliente }}</b></span>{% endif %}
+        {% if m.responsable %}<span>Responsable: <b>{{ m.responsable }}</b></span>{% endif %}
+      </div>
+      {% endif %}
+      <div class="meta">
+        <span class="pastilla">{{ m.estado_calculado }}</span>
+        <span class="pastilla {{ 'dormido' if m.dormido }}">Último movimiento: {{ m.dias_sin_movimiento|hace_dias }}</span>
+        <span class="pastilla">{{ m.n_pendientes }} pendiente{{ 's' if m.n_pendientes != 1 }}</span>
+        {% if m.n_vencidas %}<span class="pastilla roja">{{ m.n_vencidas }} vencida{{ 's' if m.n_vencidas > 1 }}</span>{% endif %}
+      </div>
+      {% if m.n_total %}
+      <div class="avance"><div class="riel"><span style="width:{{ m.pct }}%"></span></div>{{ m.n_hechas }} de {{ m.n_total }} tareas hechas</div>
+      {% endif %}
+    </div>
+    {% if m.cerrado %}<div class="aviso-cerrado">Proyecto cerrado: no se le agregan tareas.</div>{% endif %}
+    {% if m.dormido %}<div class="aviso-dormido">Este proyecto lleva {{ m.dias_sin_movimiento }} días sin movimiento.</div>{% endif %}
+
+    <section class="bloque">
+      <div class="encabezado"><h2>Tareas</h2><span class="nota">Las vencidas arriba. El título de cada una lleva a su pantalla</span></div>
+      {{ lista_de_tareas(m.pendientes, m.otras, m.n_hechas, m.n_otras, 'Sin tareas todavía.' if not m.n_total else 'No queda nada pendiente.') }}
+      {% if not m.cerrado %}
+      <div class="acciones"><a class="btn-linea" href="/tareas/nueva?proyecto={{ m.id }}">+ Agregar tarea a este proyecto</a></div>
+      {% endif %}
+    </section>
+
+    <section class="bloque">
+      <details class="editar-proy">
+        <summary>Cambiar el nombre o el grupo</summary>
+        <form method="post" action="/proyectos/{{ m.id }}/nombre">
+          <label for="nombre-{{ m.id }}">Nombre</label>
+          <input id="nombre-{{ m.id }}" name="nombre" type="text" required maxlength="{{ largo_nombre }}" value="{{ m.nombre }}">
+          <button>Guardar</button>
+        </form>
+        <form method="post" action="/proyectos/{{ m.id }}/area">
+          <label for="area-{{ m.id }}">Grupo</label>
+          <select id="area-{{ m.id }}" name="area">
+            <option value="" {%- if not m.area %} selected{% endif %}>Sin grupo</option>
+            {% for a in areas %}<option value="{{ a.clave }}" {%- if m.area == a.clave %} selected{% endif %}>{{ a.clave }}</option>{% endfor %}
+          </select>
+          <button>Guardar</button>
+        </form>
+      </details>
+    </section>
+    </div>
+
+    {% elif vista.tipo in ('grupo', 'sin_grupo') %}
+    {% set g = vista.grupo %}
+    {% set s = g.sueltas %}
+    <div style="display:contents;--color:{{ g.color }}">
+    <div class="cabeza">
+      <div class="migas"><b>{{ 'Sin grupo' if vista.tipo == 'sin_grupo' else g.clave }}</b> / Tareas sin proyecto</div>
+      <h1>Tareas sin proyecto</h1>
+      <div class="meta">
+        <span class="pastilla">{{ s.n_pendientes }} pendiente{{ 's' if s.n_pendientes != 1 }}</span>
+        {% if s.n_vencidas %}<span class="pastilla roja">{{ s.n_vencidas }} vencida{{ 's' if s.n_vencidas > 1 }}</span>{% endif %}
+      </div>
+    </div>
+    <section class="bloque">
+      <div class="encabezado"><h2>Tareas</h2><span class="nota">Las mismas de <a href="/tareas">Tareas</a>: acá van las que no están dentro de un proyecto</span></div>
+      {{ lista_de_tareas(s.pendientes, s.otras, s.n_hechas, s.n_otras, 'No queda nada pendiente.') }}
+    </section>
+    </div>
+
+    {% else %}
+    <p class="vacio">{% if q %}Ningún proyecto ni cliente con «{{ q }}».{% else %}Todavía no hay proyectos ni tareas sueltas que enseñar.{% endif %}</p>
+    {% endif %}
+  </main>
+</div>
+</body></html>

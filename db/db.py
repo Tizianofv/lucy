@@ -31,7 +31,7 @@ import db.sin_preparadas  # noqa: F401
 # puede quedar con una tarea pendiente, y tiene que ser la misma para la ruta
 # del panel y para la escritura de acá. Dos copias del criterio se separan.
 from config import (CHAT_ID_CODE, CHAT_ID_DUENO, DATABASE_URL, TZ,
-                    puede_ser_responsable)
+                    nombres_con_code, puede_ser_responsable)
 
 # HALLAZGO LATERAL (25-sep-2026, mientras se escribía `cerrar_y_derivar`):
 # este módulo ya llamaba `log.warning(...)` en dos sitios de
@@ -2491,61 +2491,250 @@ async def proyectos_vivos() -> list[dict]:
         return list(await cur.fetchall())
 
 
-async def proyectos_con_tareas() -> list[dict]:
-    """Cada proyecto vivo, con su área, su estado y sus tareas en orden
-    (encargo 5, requisito 1). `[{id, nombre, descripcion, estado, area,
-    color, tareas: [...]}, ...]`.
+# ═══════════════════════════════════════════════════════════════════════════
+# LA PÁGINA DE PROYECTOS (Lucy 1.0, E4: solo lectura)
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# El SQL solo TRAE filas (`pagina_de_proyectos`); todo criterio vive en
+# `armar_pagina` y sus funciones, que son Python puro y se prueban con un `hoy`
+# fijo: la misma separación que `tareas_por_grupo`/`grupo_de_tarea`.
 
-    LOS PROYECTOS se ordenan por `estado` (activo, pausado, cerrado -- en ese
-    orden, el que un humano leería primero) y dentro de cada estado por
-    nombre. Ninguna parte del encargo dijo un orden para los proyectos entre
-    sí (solo para SUS TAREAS): ésta es una decisión de presentación, técnica,
-    no de negocio.
+# Cuántos días sin movimiento hacen que un proyecto se marque «dormido». Lo
+# puso la sala (diseño de Lucy 1.0, §5.6). Se cuenta por día de Santo Domingo.
+DIAS_DORMIDO = 5
 
-    LAS TAREAS de cada proyecto, en el MISMO criterio que ya usa
-    `tareas_por_grupo`: `vence_en ASC NULLS LAST, creado_en ASC`. Van TODAS
-    las vivas de ese proyecto -- pendientes y hechas -- porque esta pantalla
-    contesta "qué hay en este proyecto", no "qué falta hacer": eso ya lo
-    tiene `/tareas`.
+# QUÉ ES «MOVERSE» (§5.6): cada huella de `log_acciones` sobre el proyecto, sus
+# tareas o los comentarios de sus tareas es un movimiento, MENOS las que Lucy
+# escribe sola cuando AVISA (no es que alguien se moviera). TODA `accion` que
+# el código escribe tiene que estar en una de las dos listas: lo comprueba
+# `tests/test_pagina_proyectos.py` recorriendo el código. Una `accion` que no
+# esté en ninguna cuenta como movimiento (el lado que no despierta falsas
+# alarmas) hasta que alguien la clasifique.
+ACCIONES_AUTOMATICAS = ("avisar", "aviso_atraso_code")
+ACCIONES_QUE_MUEVEN = ("crear", "editar", "borrar", "deshacer")
+
+# El color de un grupo sale de `areas.color` y se escribe en un `style=`: solo
+# pasa un hex; cualquier otra cosa se pinta con este gris.
+COLOR_SIN_GRUPO = "#6b6b6b"
+_HEX = re.compile(r"#[0-9a-fA-F]{3,8}")
+
+
+def color_de_grupo(color) -> str:
+    return color if isinstance(color, str) and _HEX.fullmatch(color) else COLOR_SIN_GRUPO
+
+
+def ultimo_movimiento(creado_en, huellas) -> datetime | None:
+    """El más reciente entre la creación del proyecto y cada huella (ya sin las
+    automáticas). `None` solo si no hay ni creación."""
+    candidatos = [c for c in [creado_en, *huellas] if isinstance(c, datetime)]
+    return max(candidatos, key=lambda c: c if c.tzinfo else c.replace(tzinfo=timezone.utc)) \
+        if candidatos else None
+
+
+def dias_sin_movimiento(ultimo, hoy: date) -> int | None:
+    dia = dia_rd(ultimo)
+    return None if dia is None else max((hoy - dia).days, 0)
+
+
+def esta_dormido(estado, dias: int | None) -> bool:
+    """Un proyecto cerrado nunca está dormido."""
+    return estado != ESTADO_PROYECTO_CERRADO and dias is not None and dias >= DIAS_DORMIDO
+
+
+def estado_calculado(estado, hechas: int) -> str:
+    """Lo que se lee del proyecto, calculado (P7: nadie lo elige a mano):
+    cerrado y pausado son el `estado` guardado; si no, 0 tareas hechas es «Sin
+    empezar» y 1 o más, «En curso»."""
+    if estado == ESTADO_PROYECTO_CERRADO:
+        return "Cerrado"
+    if estado == "pausado":
+        return "Pausado"
+    return "Sin empezar" if hechas == 0 else "En curso"
+
+
+def _orden_de_pendientes(t: dict):
+    """Vencidas primero, después las de fecha más cercana y al final las sin
+    fecha (el `ordenar` de la maqueta). Empata por id."""
+    futuro = datetime.max.replace(tzinfo=timezone.utc)
+    cuando = t["vence_en"] if isinstance(t["vence_en"], datetime) else futuro
+    if cuando.tzinfo is None:
+        cuando = cuando.replace(tzinfo=timezone.utc)
+    return (not t["vencida"], t["vence_en"] is None, cuando, t["id"])
+
+
+def _fila_de_tarea(t: dict, hoy: date, nombres: dict, comentarios: dict) -> dict:
+    estado = t["estado"]
+    return {
+        "id": t["id"], "titulo": t["titulo"], "estado": estado,
+        "es_hecha": estado == ESTADO_HECHA,
+        "es_pendiente": estado == ESTADO_PENDIENTE,
+        "vence_en": t["vence_en"], "dia": dia_rd(t["vence_en"]),
+        "completado_en": t["completado_en"],
+        # Por día de Santo Domingo, con LA definición (`grupo_de_tarea`): una
+        # que vence hoy a las 9 no está vencida a las 10.
+        "vencida": grupo_de_tarea(estado, t["vence_en"], hoy) == "atrasadas",
+        # El NOMBRE, nunca el número de chat; sin nombre conocido no se pinta.
+        "responsable": nombres.get(t["responsable_chat_id"]),
+        "comentarios": comentarios.get(t["id"], []),
+        "de_proyecto_en_papelera": False,
+    }
+
+
+def _repartir(filas: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(pendientes ordenadas, no pendientes). Lo que no es `pendiente` —hecha,
+    descartada o un estado que nadie declaró— va al segundo grupo, que también
+    se ve: no se pierde nada por no estar en una lista."""
+    pendientes = sorted((f for f in filas if f["es_pendiente"]), key=_orden_de_pendientes)
+    otras = [f for f in filas if not f["es_pendiente"]]
+    otras.sort(key=lambda f: (f["completado_en"] is None,
+                              -(f["completado_en"].timestamp()
+                                if isinstance(f["completado_en"], datetime) else 0),
+                              f["id"]))
+    return pendientes, otras
+
+
+def _resumen(pendientes: list[dict], otras: list[dict]) -> dict:
+    hechas = sum(1 for f in otras if f["es_hecha"])
+    total = len(pendientes) + len(otras)
+    return {
+        "n_total": total, "n_hechas": hechas,
+        "n_otras": len(otras) - hechas, "n_pendientes": len(pendientes),
+        "n_vencidas": sum(1 for f in pendientes if f["vencida"]),
+        "pct": round(hechas * 100 / total) if total else 0,
+    }
+
+
+def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
+                 hoy: date) -> dict:
+    """El modelo de la página de proyectos, con todas las decisiones.
+
+    `huellas` es `[(proyecto_id, accion, ts)]`; `comentarios`, las filas de
+    `comentarios_tarea` vivas; `nombres`, `{chat: nombre}`. EL REPARTO (diseño
+    §5.2): cada tarea viva cae en EXACTAMENTE un sitio —dentro de su proyecto si
+    el proyecto está vivo; si no, suelta en el grupo de su área; y lo que no
+    tiene grupo (o su proyecto está en la papelera) va a «Sin grupo»—. Nada se
+    pierde por no encajar: el cubo que se ve es el último.
     """
+    por_tarea: dict[int, list] = {}
+    for c in comentarios:
+        por_tarea.setdefault(c["tarea_id"], []).append({
+            "autor": nombres.get(c["autor_chat_id"]) or "Alguien",
+            "creado_en": c["creado_en"], "texto": c["texto"],
+            "editado": c.get("editado_en") is not None})
+
+    ultimas: dict[int, list] = {}
+    for pid, accion, ts in huellas:
+        if accion not in ACCIONES_AUTOMATICAS:
+            ultimas.setdefault(pid, []).append(ts)
+
+    vivos = {p["id"]: p for p in proyectos}
+    del_proyecto: dict[int, list] = {pid: [] for pid in vivos}
+    sueltas_por_area: dict = {}
+    for t in tareas:
+        fila = _fila_de_tarea(t, hoy, nombres, por_tarea)
+        pid = t["proyecto_id"]
+        if pid in vivos:
+            del_proyecto[pid].append(fila)
+        else:
+            if pid is not None:
+                fila["de_proyecto_en_papelera"] = True
+            sueltas_por_area.setdefault(None if pid is not None else t["area"], []).append(fila)
+
+    claves = {a["clave"] for a in areas}
+    modelo_proyectos: dict[int, dict] = {}
+    for pid, p in vivos.items():
+        pendientes, otras = _repartir(del_proyecto[pid])
+        resumen = _resumen(pendientes, otras)
+        ultimo = ultimo_movimiento(p["creado_en"], ultimas.get(pid, []))
+        dias = dias_sin_movimiento(ultimo, hoy)
+        modelo_proyectos[pid] = {
+            "id": pid, "nombre": p["nombre"], "area": p["area"] if p["area"] in claves else None,
+            "descripcion": p["descripcion"], "estado": p["estado"],
+            "cerrado": p["estado"] == ESTADO_PROYECTO_CERRADO,
+            "estado_calculado": estado_calculado(p["estado"], resumen["n_hechas"]),
+            "cliente": (p["cliente_nombre"] or None),
+            "responsable": nombres.get(p["responsable_chat_id"]),
+            "pendientes": pendientes, "otras": otras, **resumen,
+            "ultimo": ultimo, "dias_sin_movimiento": dias,
+            "dormido": esta_dormido(p["estado"], dias),
+        }
+
+    def _grupo(clave, color):
+        mios = sorted((m for m in modelo_proyectos.values() if m["area"] == clave),
+                      key=lambda m: m["nombre"].casefold())
+        pend, otras = _repartir(sueltas_por_area.get(clave, []))
+        return {"clave": clave, "color": color_de_grupo(color),
+                "abiertos": [m for m in mios if not m["cerrado"]],
+                "cerrados": [m for m in mios if m["cerrado"]],
+                "sueltas": {"pendientes": pend, "otras": otras,
+                            **_resumen(pend, otras)}}
+
+    grupos = [_grupo(a["clave"], a["color"]) for a in areas]
+    # Lo que cae en el cubo que se ve: sin área, o con un área que ya no está.
+    huerfanas = [f for k, fs in sueltas_por_area.items() if k not in claves for f in fs]
+    sin_grupo = _grupo(None, None)
+    pend, otras = _repartir(huerfanas)
+    sin_grupo["sueltas"] = {"pendientes": pend, "otras": otras, **_resumen(pend, otras)}
+    return {"grupos": grupos, "sin_grupo": sin_grupo, "proyectos": modelo_proyectos}
+
+
+async def pagina_de_proyectos(hoy: date | None = None) -> dict:
+    """Trae lo que hace falta de la base y lo entrega a `armar_pagina`. Cuatro
+    lecturas, ninguna escribe. (Necesita las columnas de la migración
+    `2026-10-02_proyectos_responsable_cliente_participantes.sql`, aplicada en
+    producción el 1-oct-2026.)"""
+    hoy = hoy or hoy_rd()
+    grupos = await areas()
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        # El ORDER BY va LITERAL, sin armarlo con un f-string: una consulta
-        # que un censo (`tests/test_responsable.py::_censo`) no pueda resolver
-        # como texto fijo cae en el cubo de "escritor genérico" aunque sea un
-        # SELECT puro -- ese censo busca escrituras dinámicas de
-        # `responsable_chat_id` en TODO el repo, y una plantilla con `{...}`
-        # se ve igual de "no legible" le escriba algo o no.
         await cur.execute(
             """
-            SELECT p.id, p.nombre, p.descripcion, p.estado, p.area, a.color
-              FROM proyectos p
-              LEFT JOIN areas a ON a.clave = p.area
-             WHERE p.borrado_en IS NULL
-             ORDER BY CASE p.estado WHEN 'activo' THEN 0
-                                     WHEN 'pausado' THEN 1 ELSE 2 END,
-                      p.nombre
+            SELECT id, nombre, descripcion, estado, area, creado_en,
+                   responsable_chat_id, cliente_nombre
+              FROM proyectos
+             WHERE borrado_en IS NULL
             """)
         proyectos = list(await cur.fetchall())
-        if not proyectos:
-            return []
-
         await cur.execute(
             """
-            SELECT id, proyecto_id, titulo, estado, vence_en, completado_en
+            SELECT id, proyecto_id, area, titulo, estado, vence_en,
+                   completado_en, creado_en, responsable_chat_id
               FROM tareas
-             WHERE borrado_en IS NULL AND proyecto_id = ANY(%s)
-             ORDER BY vence_en ASC NULLS LAST, creado_en ASC, id ASC
-            """,
-            ([p["id"] for p in proyectos],))
+             WHERE borrado_en IS NULL
+            """)
         tareas = list(await cur.fetchall())
-
-    por_proyecto: dict[int, list] = {p["id"]: [] for p in proyectos}
-    for t in tareas:
-        por_proyecto[t["proyecto_id"]].append(t)
-    for p in proyectos:
-        p["tareas"] = por_proyecto[p["id"]]
-    return proyectos
+        await cur.execute(
+            """
+            SELECT x.pid, x.accion, max(x.ts) AS ts
+              FROM (
+                SELECT l.registro_id AS pid, l.accion, l.ts
+                  FROM log_acciones l
+                 WHERE l.tabla = 'proyectos'
+                UNION ALL
+                SELECT t.proyecto_id, l.accion, l.ts
+                  FROM log_acciones l JOIN tareas t ON t.id = l.registro_id
+                 WHERE l.tabla = 'tareas' AND t.proyecto_id IS NOT NULL
+                UNION ALL
+                SELECT t.proyecto_id, l.accion, l.ts
+                  FROM log_acciones l
+                  JOIN comentarios_tarea c ON c.id = l.registro_id
+                  JOIN tareas t ON t.id = c.tarea_id
+                 WHERE l.tabla = 'comentarios_tarea' AND t.proyecto_id IS NOT NULL
+              ) x
+             GROUP BY x.pid, x.accion
+            """)
+        huellas = [(f["pid"], f["accion"], f["ts"]) for f in await cur.fetchall()]
+        await cur.execute(
+            """
+            SELECT c.id, c.tarea_id, c.autor_chat_id, c.creado_en, c.texto,
+                   c.editado_en
+              FROM comentarios_tarea c JOIN tareas t ON t.id = c.tarea_id
+             WHERE c.borrado_en IS NULL AND t.borrado_en IS NULL
+             ORDER BY c.creado_en, c.id
+            """)
+        comentarios = list(await cur.fetchall())
+    return armar_pagina(grupos, proyectos, tareas, huellas, comentarios,
+                        nombres_con_code(), hoy)
 
 
 async def derivaciones() -> dict[int, int]:

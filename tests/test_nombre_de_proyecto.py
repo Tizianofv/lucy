@@ -224,7 +224,7 @@ def test_renombrar_desde_el_panel_escribe_solo_el_nombre_con_huella_de_panel():
     pid = b.proyecto("Viejo")
     r = _renombrar(b, pid, "  Nombre nuevo  ")
     assert r.status_code == 303
-    assert r.headers["location"] == f"/proyectos?nombre_guardado={pid}#proyecto-{pid}"
+    assert r.headers["location"] == f"/proyectos?nombre_guardado={pid}&p={pid}#proyecto-{pid}"
     assert b.nombre_de(pid) == "Nombre nuevo", "no quedó limpio y guardado"
     assert b.updates() == ["UPDATE proyectos SET nombre = ? WHERE id = ?".replace(
         "?", "%s")], f"tocó más que el nombre: {b.updates()}"
@@ -242,7 +242,7 @@ def test_el_largo_maximo_es_200_y_201_no_entra():
     assert b.nombre_de(pid) == "a" * LARGO
     antes = b.huellas()
     r = _renombrar(b, pid, "b" * (LARGO + 1))
-    assert r.headers["location"] == f"/proyectos?error=nombre_largo#proyecto-{pid}"
+    assert r.headers["location"] == f"/proyectos?error=nombre_largo&p={pid}#proyecto-{pid}"
     assert b.nombre_de(pid) == "a" * LARGO and b.huellas() == antes
 
 
@@ -259,7 +259,7 @@ def test_los_rechazos_no_escriben_nada_y_dicen_su_clave_por_el_panel():
         b.proyecto("Otro Proyecto")
         b.proyecto("Ya no existe", borrado=True)
         r = _renombrar(b, pid, texto)
-        assert r.headers["location"] == f"/proyectos?error={clave}#proyecto-{pid}", (
+        assert r.headers["location"] == f"/proyectos?error={clave}&p={pid}#proyecto-{pid}", (
             f"{texto[:12]!r}: {r.headers['location']}")
         assert b.nombre_de(pid) == "Mio", f"{texto[:12]!r}: escribió"
         assert b.updates() == [] and b.huellas() == [], (
@@ -302,7 +302,7 @@ def test_el_mismo_nombre_no_escribe_ni_deja_huella_pero_las_mayusculas_si_cuenta
     b = Base()
     pid = b.proyecto("Casa")
     r = _renombrar(b, pid, " Casa ")
-    assert r.headers["location"] == f"/proyectos?error=nombre_igual#proyecto-{pid}"
+    assert r.headers["location"] == f"/proyectos?error=nombre_igual&p={pid}#proyecto-{pid}"
     assert b.updates() == [] and b.huellas() == []
     # Por Telegram, lo mismo: no escribe y no hay log_id.
     despues, log_id = _correr(b, _editar(pid, "Casa"))
@@ -484,38 +484,26 @@ def test_el_nombre_nuevo_llega_a_la_lista_de_lucy_y_a_su_prompt():
 
 
 def _pintar(proyectos, **kw):
-    """La página con la lista de proyectos que se le da (sin base)."""
-    async def _lista():
-        return proyectos
-
-    async def _areas():
-        return []
-    g = (db.proyectos_con_tareas, db.areas)
-    db.proyectos_con_tareas, db.areas = _lista, _areas
-    try:
-        bucle = asyncio.new_event_loop()
-        try:
-            return bucle.run_until_complete(
-                panel.proyectos(base._get("/proyectos"), **kw)).body.decode()
-        finally:
-            bucle.close()
-    finally:
-        db.proyectos_con_tareas, db.areas = g
+    """La página (ruta y plantilla reales) con los proyectos que se le dan, sin
+    base. Enseña UN proyecto a la vez (`p=`), como la página nueva."""
+    import test_pagina_proyectos as pagina
+    return pagina.pintar_modelo(pagina.modelo_de_filas(proyectos=proyectos),
+                                areas=[], **kw)
 
 
 def _proyecto_falso(pid, nombre):
-    return {"id": pid, "nombre": nombre, "descripcion": None, "estado": "activo",
-            "area": None, "color": None, "tareas": []}
+    return {"id": pid, "nombre": nombre}
 
 
-def test_cada_tarjeta_trae_su_formulario_de_nombre_con_el_largo_y_escapado():
+def test_cada_proyecto_trae_su_formulario_de_nombre_con_el_largo_y_escapado():
     peligroso = '"><script>alert(1)</script>'
-    html = _pintar([_proyecto_falso(1, "Uno"), _proyecto_falso(2, peligroso)])
+    lista = [_proyecto_falso(1, "Uno"), _proyecto_falso(2, peligroso)]
     for pid in (1, 2):
+        html = _pintar(lista, p=pid)
         assert f'action="/proyectos/{pid}/nombre"' in html
-    assert html.count(f'maxlength="{LARGO}"') == 2
-    assert "<script>alert(1)" not in html, "el nombre salió sin escapar"
-    assert 'value="Uno"' in html
+        assert html.count(f'maxlength="{LARGO}"') == 1
+        assert "<script>alert(1)" not in html, "el nombre salió sin escapar"
+    assert 'value="Uno"' in _pintar(lista, p=1)
 
 
 def test_los_rechazos_y_el_guardado_se_traducen_a_palabras():

@@ -41,17 +41,19 @@ from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 from urllib.parse import quote
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 import config
 import db.db as db
 import web.auth as auth
+import web.menu as _menu
 from acciones import crud
 from cerebro.bancos.categorias import (CATEGORIAS, NO_SUMAN,
                                        categoria_permitida)
@@ -229,6 +231,7 @@ def _hoy() -> date:
 # TEXT —no tiene tope— así que sin esto un POST a mano puede guardar un título
 # de megabytes que después hay que pintar en una tabla.
 LARGO_TITULO = db.LARGO_TITULO_TAREA
+LOGO_CDS = Path(__file__).resolve().parent / "imagenes" / "logo-cds.png"
 
 
 def _vence_valido(texto: str, piso: date = PISO_FECHA):
@@ -353,6 +356,32 @@ def _hora_rd(cuando) -> str:
 
 
 plantillas.env.filters["hora_rd"] = _hora_rd
+
+_MESES_CORTOS = ("ene", "feb", "mar", "abr", "may", "jun",
+                 "jul", "ago", "sep", "oct", "nov", "dic")
+
+
+def _dia_corto(dia) -> str:
+    """Un día → «5 oct» (como la maqueta de la página de proyectos)."""
+    return f"{dia.day} {_MESES_CORTOS[dia.month - 1]}" if dia else "sin fecha"
+
+
+def _hace_dias(n) -> str:
+    """Días enteros → «hoy», «ayer» o «hace N días»."""
+    if n is None:
+        return ""
+    return "hoy" if n <= 0 else "ayer" if n == 1 else f"hace {n} días"
+
+
+def _iniciales(nombre) -> str:
+    """«Rosi Romero» → «RR». Las dos primeras palabras; sin nombre, «?»."""
+    partes = str(nombre or "").split()[:2]
+    return "".join(p[0] for p in partes).upper() or "?"
+
+
+plantillas.env.filters["dia_corto"] = _dia_corto
+plantillas.env.filters["hace_dias"] = _hace_dias
+plantillas.env.filters["iniciales"] = _iniciales
 
 
 def _sesion(request: Request) -> int | None:
@@ -817,32 +846,117 @@ async def tareas_historial(request: Request):
          "dias": db.DIAS_HISTORIAL})
 
 
+def _sin_tildes(texto: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", str(texto or ""))
+                   if not unicodedata.combining(c)).casefold()
+
+
+def _filtrar_por_busqueda(modelo: dict, q: str) -> dict:
+    """La lista de la izquierda con solo lo que casa con `q` (el nombre del
+    proyecto o el de su cliente, sin tildes ni mayúsculas, como la maqueta).
+    Sin `q` no se toca nada. Con `q` un grupo sin coincidencias desaparece y
+    los apartados de «Tareas sin proyecto» no se ofrecen: no son proyectos ni
+    clientes."""
+    clave = _sin_tildes(q.strip())
+    if not clave:
+        return modelo
+
+    def casa(m):
+        return clave in _sin_tildes(m["nombre"]) or clave in _sin_tildes(m["cliente"] or "")
+
+    def recortar(g):
+        return {**g, "abiertos": [m for m in g["abiertos"] if casa(m)],
+                "cerrados": [m for m in g["cerrados"] if casa(m)], "sueltas": None}
+
+    grupos = [recortar(g) for g in modelo["grupos"]]
+    sin = recortar(modelo["sin_grupo"])
+    return {**modelo,
+            "grupos": [g for g in grupos if g["abiertos"] or g["cerrados"]],
+            "sin_grupo": sin}
+
+
+def _vista_de_proyectos(modelo: dict, visibles: dict, *, p: int, g: str,
+                        sin_grupo: int, tarea_creada: int,
+                        buscando: bool = False) -> dict:
+    """Qué se enseña a la derecha: un proyecto, las tareas sueltas de un grupo
+    o las de «Sin grupo». `{"tipo", ...}`; `tipo` es None si no hay nada que
+    enseñar. Cuando la URL no dice (o dice algo que ya no existe) se enseña el
+    primer proyecto de la lista; sin proyectos, lo primero que haya suelto."""
+    proyectos = modelo["proyectos"]
+    if not p and tarea_creada:
+        p = next((m["id"] for m in proyectos.values()
+                  if any(t["id"] == tarea_creada for t in m["pendientes"] + m["otras"])), 0)
+    if p in proyectos:
+        m = proyectos[p]
+        grupo = next((x for x in modelo["grupos"] if x["clave"] == m["area"]), None)
+        return {"tipo": "proyecto", "proyecto": m, "grupo": grupo}
+    if g:
+        grupo = next((x for x in modelo["grupos"] if x["clave"] == g), None)
+        if grupo is not None and grupo["sueltas"]["n_total"]:
+            return {"tipo": "grupo", "grupo": grupo}
+    if sin_grupo and modelo["sin_grupo"]["sueltas"]["n_total"]:
+        return {"tipo": "sin_grupo", "grupo": modelo["sin_grupo"]}
+    for x in [*visibles["grupos"], visibles["sin_grupo"]]:
+        for m in [*x["abiertos"], *x["cerrados"]]:
+            return {"tipo": "proyecto", "proyecto": proyectos[m["id"]],
+                    "grupo": next((y for y in modelo["grupos"] if y["clave"] == m["area"]), None)}
+    if not buscando:
+        for x in [*modelo["grupos"], modelo["sin_grupo"]]:
+            if x["sueltas"]["n_total"]:
+                return {"tipo": "sin_grupo" if x["clave"] is None else "grupo", "grupo": x}
+    return {"tipo": None}
+
+
 @app.get("/proyectos", response_class=HTMLResponse)
 async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
                     error: str = "", nombre_guardado: int = 0,
-                    tarea_creada: int = 0, sala_no: int = 0):
-    """Cada proyecto vivo, con su área, su estado y sus tareas en orden
-    (encargo 5, requisito 1).
+                    tarea_creada: int = 0, sala_no: int = 0,
+                    p: int = 0, g: str = "", sin_grupo: int = 0, q: str = ""):
+    """La página de proyectos (Lucy 1.0, E4): los grupos y sus proyectos a la
+    izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
+    (`?g=`) o las de «Sin grupo» (`?sin_grupo=1`). `?q=` filtra la lista por el
+    nombre del proyecto o del cliente.
 
-    SOLO LECTURA salvo por el <select> de área de cada proyecto, que postea a
-    `/proyectos/{pid}/area` — un formulario POR PROYECTO, y está bien acá
-    (esta pantalla no es `/tareas`: no tiene el formulario único de cerrar
-    varias de una vez, así que nada impide que cada proyecto tenga el suyo,
-    igual que ya hace `/tareas/{tid}` con sus comentarios).
+    SOLO LECTURA, con dos excepciones que ya existían y siguen: el nombre y el
+    grupo del proyecto se cambian con los formularios de «Cambiar el nombre o el
+    grupo», que postean a `/proyectos/{pid}/nombre` y `/proyectos/{pid}/area`.
+    Esas dos rutas, y los parámetros con los que vuelven (`error`,
+    `nombre_guardado`, `area_guardada`, `creado`, `tarea_creada`, `sala_no`),
+    no cambian: el proyecto del que hablan se elige con ellos.
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
+    modelo = await db.pagina_de_proyectos()
+    visibles = _filtrar_por_busqueda(modelo, q)
+    elegido = p or nombre_guardado or area_guardada or creado
+    vista = _vista_de_proyectos(modelo, visibles, p=elegido, g=g,
+                                sin_grupo=sin_grupo, tarea_creada=tarea_creada,
+                                buscando=bool(q.strip()))
+    # Los enlaces de la barra salen del menú de verdad (`web/menu.py`). Un menú
+    # ilegible NO se traga acá: el único sitio que lo hace es el armado del
+    # prompt, y `base.html`, que es ese menú, también tumba las demás pantallas.
+    pantallas = _menu.pantallas()
     return plantillas.TemplateResponse(
         request, "proyectos.html",
-        {"proyectos": await db.proyectos_con_tareas(),
-         "areas": await db.areas(), "error": error,
+        {"modelo": modelo, "visibles": visibles, "vista": vista, "q": q,
+         "pantallas": pantallas, "areas": await db.areas(), "error": error,
          "area_guardada": area_guardada, "creado": creado,
-         "nombre_guardado": nombre_guardado,
-         "tarea_creada": tarea_creada, "sala_no": sala_no,
-         "nombre_code": config.NOMBRE_CODE, "area_tecnica": db.AREA_TECNICA,
-         "estado_cerrado": db.ESTADO_PROYECTO_CERRADO,
+         "nombre_guardado": nombre_guardado, "tarea_creada": tarea_creada,
+         "sala_no": sala_no, "nombre_code": config.NOMBRE_CODE,
+         "area_tecnica": db.AREA_TECNICA, "estado_cerrado": db.ESTADO_PROYECTO_CERRADO,
          "largo_nombre": db.LARGO_NOMBRE_PROYECTO,
-         "pendiente": db.ESTADO_PENDIENTE, "hecha": db.ESTADO_HECHA})
+         "dias_dormido": db.DIAS_DORMIDO})
+
+
+@app.get("/logo-cds.png")
+async def logo_cds(request: Request):
+    """El logo de la barra de la página de proyectos, el mismo de la App. Va
+    por una ruta propia: el panel no sirve archivos estáticos."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    return FileResponse(LOGO_CDS, media_type="image/png",
+                        headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.post("/proyectos/{pid}/area")
@@ -870,10 +984,10 @@ async def cambiar_area_de_proyecto(request: Request, pid: int):
             motivo="Área cambiada desde el panel", actor="panel")
     except ValueError as e:
         log.warning("Panel de proyectos: área rechazada para #%s: %s", pid, e)
-        return RedirectResponse("/proyectos?error=area", status_code=303)
+        return RedirectResponse(f"/proyectos?error=area&p={pid}", status_code=303)
     if despues is None:
         return RedirectResponse(f"/proyectos?error=proyecto", status_code=303)
-    return RedirectResponse(f"/proyectos?area_guardada={pid}", status_code=303)
+    return RedirectResponse(f"/proyectos?area_guardada={pid}&p={pid}", status_code=303)
 
 
 @app.post("/proyectos/{pid}/nombre")
@@ -907,15 +1021,15 @@ async def cambiar_nombre_de_proyecto(request: Request, pid: int):
         log.warning("Panel de proyectos: nombre rechazado para #%s (%s)",
                     pid, clave or "otro")
         return RedirectResponse(
-            f"/proyectos?error=nombre_{clave or 'invalido'}"
+            f"/proyectos?error=nombre_{clave or 'invalido'}&p={pid}"
             f"#proyecto-{pid}", status_code=303)
     if despues is None:
         return RedirectResponse("/proyectos?error=proyecto", status_code=303)
     if log_id is None:
         return RedirectResponse(
-            f"/proyectos?error=nombre_igual#proyecto-{pid}", status_code=303)
+            f"/proyectos?error=nombre_igual&p={pid}#proyecto-{pid}", status_code=303)
     return RedirectResponse(
-        f"/proyectos?nombre_guardado={pid}#proyecto-{pid}", status_code=303)
+        f"/proyectos?nombre_guardado={pid}&p={pid}#proyecto-{pid}", status_code=303)
 
 
 @app.post("/tareas/{tid}/area")

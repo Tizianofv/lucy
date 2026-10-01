@@ -43,6 +43,7 @@ import sqlite3
 import sys
 import types
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 import pytest
 
@@ -424,6 +425,17 @@ def _fila(f, como_dict: bool):
     for k in ("antes", "despues"):
         if isinstance(d.get(k), str):
             d[k] = json.loads(d[k])
+    # Las fechas `timestamptz` llegan de psycopg como `datetime` con zona;
+    # SQLite las guarda como texto ISO (imitación declarada). Un texto sin zona
+    # se lee como UTC, igual que `db.dia_rd`.
+    for k in ("creado_en", "vence_en", "completado_en", "borrado_en",
+              "editado_en", "ts"):
+        if isinstance(d.get(k), str):
+            try:
+                visto = datetime.fromisoformat(d[k])
+            except ValueError:
+                continue
+            d[k] = visto if visto.tzinfo else visto.replace(tzinfo=timezone.utc)
     return d if como_dict else tuple(d.values())
 
 

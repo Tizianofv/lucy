@@ -132,6 +132,13 @@ async def main() -> int:
         # (`cerrar_y_derivar`) no se prueba acá, porque humo.py no escribe en
         # producción.
         ("derivaciones (sin tolerancia)", _derivaciones_sin_tolerancia),
+        # La página de proyectos (Lucy 1.0, E4): cuatro lecturas, una con
+        # `UNION ALL` sobre `log_acciones` y las columnas que agregó la migración
+        # `2026-10-02_proyectos_responsable_cliente_participantes.sql`
+        # (`proyectos.responsable_chat_id`, `cliente_nombre`,
+        # `comentarios_tarea.editado_en`). Sin tolerancia a propósito: si esa
+        # migración no está, esta línea es la que lo dice. Es una LECTURA.
+        ("pagina_de_proyectos", lambda: db.pagina_de_proyectos()),
     ]
 
     rojas = []

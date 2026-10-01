@@ -347,7 +347,7 @@ def test_la_pantalla_de_alta_en_proyecto_trae_todos_los_campos_y_no_el_area():
     assert ">Ana<" in html, "«De quién trata» no lista las personas reales"
     assert "prioridad, repetición ni avisos por Telegram" in html, (
         "no dice lo que esta pantalla no pone")
-    assert f'href="/proyectos#proyecto-{pid}"' in html
+    assert f'href="/proyectos?p={pid}#proyecto-{pid}"' in html
     assert html.count("<form") == 1
 
 
@@ -403,42 +403,28 @@ def test_cada_clave_de_rechazo_del_alta_tiene_su_aviso_y_una_inventada_no():
     assert 'class="aviso"' not in _alta(m, error="inventada")
 
 
-def _lista_de_proyectos(m):
-    """Lo que devolvería `db.proyectos_con_tareas`, armado con lo que de verdad
-    hay en la base (esa consulta usa `= ANY(%s)`, que sqlite no tiene)."""
+def _pintar_proyectos(m, **kw):
+    """La página de proyectos (ruta y plantilla reales) con lo que de verdad hay
+    en la base de esta prueba. Su SQL real (`db.pagina_de_proyectos`) no corre
+    acá, que tiene otro doble de base; el modelo se arma con las mismas filas y
+    la MISMA función (`db.armar_pagina`)."""
+    import test_pagina_proyectos as pagina
     m.con.row_factory = sqlite3.Row
     try:
         proyectos = [dict(f) for f in m.con.execute(
             "SELECT * FROM proyectos WHERE borrado_en IS NULL ORDER BY id")]
-        for p in proyectos:
-            p["color"] = None
-            p["tareas"] = [dict(f) for f in m.con.execute(
-                "SELECT * FROM tareas WHERE proyecto_id = ? AND borrado_en IS NULL",
-                (p["id"],))]
+        tareas = [dict(f) for f in m.con.execute(
+            "SELECT * FROM tareas WHERE borrado_en IS NULL ORDER BY id")]
     finally:
         m.con.row_factory = None
-    return proyectos
-
-
-def _pintar_proyectos(m, **kw):
-    lista = _lista_de_proyectos(m)
-
-    async def _con_tareas():
-        return lista
-
-    async def _areas():
-        return []
-    g = (db.proyectos_con_tareas, db.areas)
-    db.proyectos_con_tareas, db.areas = _con_tareas, _areas
-    try:
-        bucle = asyncio.new_event_loop()
-        try:
-            return bucle.run_until_complete(
-                panel.proyectos(base._get("/proyectos"), **kw)).body.decode()
-        finally:
-            bucle.close()
-    finally:
-        db.proyectos_con_tareas, db.areas = g
+    for p in proyectos:
+        p.pop("creado_en", None)
+    for t in tareas:
+        t.pop("creado_en", None)
+        t.pop("vence_en", None)
+        t.pop("completado_en", None)
+    return pagina.pintar_modelo(
+        pagina.modelo_de_filas(proyectos=proyectos, tareas=tareas), areas=[], **kw)
 
 
 def test_cada_proyecto_tiene_su_enlace_y_el_cerrado_dice_por_que_no():
@@ -447,14 +433,15 @@ def test_cada_proyecto_tiene_su_enlace_y_el_cerrado_dice_por_que_no():
     activo = m.proyecto("Activo")
     pausado = m.proyecto("Pausado", estado="pausado")
     cerrado = m.proyecto("Cerrado", estado="cerrado")
-    html = _pintar_proyectos(m)
     for pid in (activo, pausado):
-        assert f'href="/tareas/nueva?proyecto={pid}"' in html, pid
+        assert f'href="/tareas/nueva?proyecto={pid}"' in _pintar_proyectos(m, p=pid), pid
+    html = _pintar_proyectos(m, p=cerrado)
     assert f'href="/tareas/nueva?proyecto={cerrado}"' not in html
     assert "Proyecto cerrado: no se le agregan tareas." in html
     # De punta a punta: cada enlace lleva a la pantalla de ESE proyecto.
     for pid, nombre in ((activo, "Activo"), (pausado, "Pausado")):
-        href = re.search(r'href="(/tareas/nueva\?proyecto=%d)"' % pid, html).group(1)
+        href = re.search(r'href="(/tareas/nueva\?proyecto=%d)"' % pid,
+                         _pintar_proyectos(m, p=pid)).group(1)
         destino = parse_qs(urlparse(href).query)["proyecto"][0]
         assert f"Nueva tarea en «{nombre}»" in _alta(m, proyecto=destino)
 

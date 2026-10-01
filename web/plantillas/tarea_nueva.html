@@ -153,7 +153,7 @@ nada.</p>
   {% endif %}
   <div class="barra">
     <button>Guardar la tarea</button>
-    {% if proyecto %}<a href="/proyectos#proyecto-{{ proyecto.id }}" class="suave">Volver al proyecto</a>
+    {% if proyecto %}<a href="/proyectos?p={{ proyecto.id }}#proyecto-{{ proyecto.id }}" class="suave">Volver al proyecto</a>
     {% else %}<a href="/tareas" class="suave">Volver a la lista</a>{% endif %}
   </div>
 </form>

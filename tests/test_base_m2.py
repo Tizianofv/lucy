@@ -86,7 +86,9 @@ def _ddl(texto: str, tabla: str) -> list[str]:
 
 
 def _base(participantes_desde: str = "schema") -> sqlite3.Connection:
-    con = sqlite3.connect(":memory:")
+    # `check_same_thread=False`: el cliente HTTP de prueba corre la ruta en otro
+    # hilo (`tests/test_pagina_proyectos.py`).
+    con = sqlite3.connect(":memory:", check_same_thread=False)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     con.create_function("now", 0, lambda: "2026-10-02T12:00:00+00:00")

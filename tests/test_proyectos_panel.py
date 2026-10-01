@@ -435,21 +435,9 @@ def test_proyectos_vivos_devuelve_lo_que_hay_sin_filtrar_por_estado():
         "borrado_en IS NULL, no estado == activo")
 
 
-def test_proyectos_con_tareas_reparte_cada_tarea_bajo_su_proyecto():
-    conn = _ConnListas(
-        proyectos=[{"id": 1, "nombre": "A", "descripcion": None,
-                   "estado": "activo", "area": None, "color": None},
-                  {"id": 2, "nombre": "B", "descripcion": None,
-                   "estado": "activo", "area": None, "color": None}],
-        tareas=[{"id": 10, "proyecto_id": 1, "titulo": "de A",
-                "estado": "pendiente", "vence_en": None, "completado_en": None},
-               {"id": 11, "proyecto_id": 2, "titulo": "de B",
-                "estado": "pendiente", "vence_en": None, "completado_en": None}])
-    datos = _con_base(conn, lambda: db.proyectos_con_tareas())
-    por_nombre = {p["nombre"]: [t["titulo"] for t in p["tareas"]] for p in datos}
-    assert por_nombre == {"A": ["de A"], "B": ["de B"]}, (
-        f"una tarea apareció bajo el proyecto equivocado, o no apareció: "
-        f"{por_nombre}")
+# (`db.proyectos_con_tareas` ya no existe: la página nueva se arma con
+# `db.pagina_de_proyectos`. Que cada tarea cae bajo su proyecto lo prueba
+# `tests/test_pagina_proyectos.py::test_el_modelo_reparte_cada_tarea_bajo_su_proyecto`.)
 
 
 # ── Las rutas del panel: MISMA puerta que Telegram, sin criterio propio ──
@@ -549,7 +537,7 @@ def test_cambiar_area_de_proyecto_llama_a_la_misma_puerta_que_telegram():
     assert llamadas == [("proyectos", 3, {"area": "ACD"}, "panel")], (
         f"la ruta no llamó a crud.editar con los argumentos esperados: {llamadas}")
     assert r.status_code == 303
-    assert r.headers["location"] == "/proyectos?area_guardada=3"
+    assert r.headers["location"] == "/proyectos?area_guardada=3&p=3"
 
 
 def test_convertir_en_proyecto_llama_a_db_convertir_y_redirige_al_nuevo():
@@ -590,26 +578,27 @@ def test_convertir_en_proyecto_redirige_con_error_si_la_tarea_no_califica():
 
 
 def test_proyectos_pide_lo_que_hace_falta_para_pintar_la_pagina():
-    """`GET /proyectos` trae `proyectos_con_tareas()` Y `areas()` -- sin la
-    segunda, el <select> de cada tarjeta no tendría con qué llenarse."""
+    """`GET /proyectos` trae `pagina_de_proyectos()` Y `areas()` -- sin la
+    segunda, el <select> de grupo del proyecto no tendría con qué llenarse."""
+    import test_pagina_proyectos as pagina
     llamados = []
 
-    async def _proyectos_espia():
-        llamados.append("proyectos_con_tareas")
-        return []
+    async def _pagina_espia(hoy=None):
+        llamados.append("pagina_de_proyectos")
+        return pagina.modelo_de_filas()
 
     async def _areas_espia():
         llamados.append("areas")
         return [{"clave": "CDS", "color": "#1"}]
 
-    g1, g2 = db.proyectos_con_tareas, db.areas
-    db.proyectos_con_tareas, db.areas = _proyectos_espia, _areas_espia
+    g1, g2 = db.pagina_de_proyectos, db.areas
+    db.pagina_de_proyectos, db.areas = _pagina_espia, _areas_espia
     try:
         r = _llamar(lambda: panel.proyectos(_peticion("GET", "/proyectos")))
     finally:
-        db.proyectos_con_tareas, db.areas = g1, g2
+        db.pagina_de_proyectos, db.areas = g1, g2
 
-    assert set(llamados) == {"proyectos_con_tareas", "areas"}
+    assert set(llamados) == {"pagina_de_proyectos", "areas"}
     assert r.status_code == 200
 
 

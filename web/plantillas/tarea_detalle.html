@@ -79,7 +79,7 @@ largo para ser el nombre de un proyecto.</p>
   {% if tarea.proyecto_id %}
   <p class="suave" style="margin:0">
     Proyecto:
-    <a href="/proyectos#proyecto-{{ tarea.proyecto_id }}">{{ tarea.proyecto_nombre }}</a>
+    <a href="/proyectos?p={{ tarea.proyecto_id }}#proyecto-{{ tarea.proyecto_id }}">{{ tarea.proyecto_nombre }}</a>
     — el área la hereda de ahí
     {%- if tarea.area and tarea.area in colores_area %}
     (<span class="etiqueta-area" style="background:{{ colores_area[tarea.area] }}">{{ tarea.area }}</span>)
