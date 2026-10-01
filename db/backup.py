@@ -106,8 +106,19 @@ def _candidatos() -> list[Path]:
     return rutas
 
 
-def _destino() -> Path:
+# El patrón con el que se reconoce un respaldo dentro de la carpeta. Lo usan
+# quien elige la carpeta, quien rota y `tools/verificar_respaldo.py`.
+PATRON_COPIAS = "lucy_*.json.gz"
+
+
+def _destino(crear: bool = True) -> Path:
     """La carpeta de backups de ESTA máquina. Revienta si no la encuentra.
+
+    ES LA ÚNICA PUERTA: quien guarda (`hacer_backup`) y quien verifica
+    (`tools/verificar_respaldo.py`, que llama `_destino(crear=False)`) tienen
+    que mirar la misma carpeta, y la única forma de garantizarlo es que ninguno
+    tenga su propia lista. Con `crear=False` no se crea ninguna carpeta: el que
+    verifica solo mira.
 
     Con LUCY_BACKUP_DIR se manda a mano y no se discute (es la salida para
     Railway el día que el respaldo corra allá, o para un disco montado).
@@ -122,10 +133,14 @@ def _destino() -> Path:
     manual = os.environ.get("LUCY_BACKUP_DIR", "").strip()
     if manual:
         destino = Path(manual)
-        destino.mkdir(parents=True, exist_ok=True)
+        if crear:
+            destino.mkdir(parents=True, exist_ok=True)
         return destino
 
-    candidatas = _candidatos()
+    # Una ruta que no es absoluta en ESTA máquina (`G:\\My Drive` en una Mac, donde
+    # es un nombre de archivo cualquiera) no es una candidata: su "padre" sería
+    # la carpeta de trabajo, y se crearía una carpeta con ese nombre ahí.
+    candidatas = [r for r in _candidatos() if r.is_absolute()]
 
     # Primero, las carpetas que YA tienen backups adentro. Es la señal más
     # fuerte de "esta es la de verdad": si una máquina arrastra un
@@ -133,7 +148,7 @@ def _destino() -> Path:
     # las dos existen y solo una tiene la historia. Elegir por existir a secas
     # podría mandar las copias a la muerta, y se vería idéntico desde afuera.
     con_historia = [r for r in candidatas
-                    if r.is_dir() and any(r.glob("lucy_*.json.gz"))]
+                    if r.is_dir() and any(r.glob(PATRON_COPIAS))]
     if con_historia:
         return con_historia[0]
 
@@ -142,7 +157,8 @@ def _destino() -> Path:
             return ruta
     for ruta in candidatas:
         if ruta.parent.is_dir():        # existe .../Lucy → falta solo 'backups'
-            ruta.mkdir(exist_ok=True)
+            if crear:
+                ruta.mkdir(exist_ok=True)
             return ruta
 
     raise SystemExit(
@@ -455,7 +471,7 @@ def _rotar(destino: Path, conservar: int = CONSERVAR) -> None:
     de datos que ya no están, o —peor— datos viejos junto a un esquema nuevo,
     que es la forma más silenciosa de que una restauración salga mal.
     """
-    copias = sorted(destino.glob("lucy_*.json.gz"))
+    copias = sorted(destino.glob(PATRON_COPIAS))
     for viejo in copias[:-conservar]:
         viejo.unlink()
         print(f"    (rotación: borré {viejo.name})")

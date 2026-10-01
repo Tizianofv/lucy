@@ -34,7 +34,6 @@ la diferencia entre "el paracaídas está bien plegado" y "salté con él".
 """
 from __future__ import annotations
 
-import glob
 import gzip
 import json
 import os
@@ -54,8 +53,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # otra sosteniendo todo. Ahora no hay ninguna llamada que borrar por
 # accidente: solo este import.
 import db.sin_preparadas  # noqa: E402,F401
-
-CARPETA = os.path.expanduser("~/Google Drive/My Drive/Lucy/backups")
+# La carpeta se la pide a la MISMA función con la que `db/backup.py` decide
+# dónde guarda. Aquí no hay lista propia de candidatas (Regla 18: una sola
+# puerta); `crear=False` porque el que verifica solo mira.
+from db.backup import PATRON_COPIAS, _destino  # noqa: E402
 
 
 def main() -> int:
@@ -64,12 +65,13 @@ def main() -> int:
         print("Falta DATABASE_URL.", file=sys.stderr)
         return 2
 
-    archivos = sorted(glob.glob(os.path.join(CARPETA, "*.json.gz")))
+    carpeta = _destino(crear=False)
+    archivos = sorted(str(p) for p in carpeta.glob(PATRON_COPIAS))
     if not archivos:
-        print(f"No hay respaldos en {CARPETA}", file=sys.stderr)
+        print(f"No hay respaldos en {carpeta}", file=sys.stderr)
         return 1
     ruta = archivos[-1]
-    print(f"  respaldo: {os.path.basename(ruta)}")
+    print(f"  respaldo: {os.path.basename(ruta)} (carpeta: {carpeta})")
 
     problemas: list[str] = []
 

@@ -23,7 +23,9 @@ REGISTRO="$HOME/Library/Logs/lucy-respaldo.log"
 
 cd "$REPO" || { echo "$(date '+%F %T') · no encuentro el repo en $REPO" >> "$REGISTRO"; exit 1 }
 
-DATABASE_URL="$(railway variables --service Postgres --kv 2>/dev/null | grep '^DATABASE_PUBLIC_URL=' | cut -d= -f2-)"
+# Se lee el JSON y Python saca SOLO esa variable; el resto de las variables y el
+# valor mismo nunca se imprimen: el valor queda solo en la variable del shell.
+DATABASE_URL="$(railway variables --service Postgres --json 2>/dev/null | python3 -c 'import json,sys; sys.stdout.write(json.load(sys.stdin).get("DATABASE_PUBLIC_URL", ""))' 2>/dev/null)"
 if [[ -z "$DATABASE_URL" ]]; then
   # Casi siempre es que la sesión del CLI de Railway venció. Se dice cuál es el
   # arreglo: un registro que solo dice "falló" obliga a investigar de nuevo cada
