@@ -310,6 +310,15 @@ def test_el_panel_sigue_igual_una_persona_de_la_casa_comenta_cualquier_tarea(sal
     assert asyncio.run(db.comentar_tarea(1, 555000111, "de un desconocido")) is None
 
 
+def test_un_desconocido_ni_con_un_negativo_comenta_ni_en_una_tarea_de_code(sala):
+    """Solo `CHAT_ID_CODE` exacto es la sala: otro chat, incluso negativo (un
+    grupo de Telegram) o positivo, no comenta ni en una tarea de Code."""
+    con = sala([{"id": 1, **DE_CODE}])
+    for chat in (555000111, -555000111, config.CHAT_ID_CODE - 1, 0):
+        assert asyncio.run(db.comentar_tarea(1, chat, "intruso")) is None, chat
+    assert _n(con, "comentarios_tarea") == 0
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Rechazos por la clave
 # ═══════════════════════════════════════════════════════════════════════
