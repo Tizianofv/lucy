@@ -679,16 +679,21 @@ var yendo = false;
    navegador no sabe de `<dialog>`, no se toca el clic y el enlace lleva a la
    página aparte, como sin JavaScript. */
 /* EL PROYECTO ESCOGIDO QUEDA EN EL CENTRO de la columna de la izquierda (como
-   en la maqueta). Solo mueve el desplazamiento de esa columna: no decide nada. */
-(function () {
+   en la maqueta). Solo mueve el desplazamiento de esa columna: no decide nada.
+   Se mueve DE UNA VEZ (sin `behavior: "smooth"`): medido el 1-oct-2026 en el
+   navegador del panel, un desplazamiento suave pedido mientras la página carga
+   se pierde y la lista se queda arriba. Corre al leerse el guion y otra vez
+   cuando termina de cargar (las tipografías mueven las alturas). */
+function centrarElEscogido() {
   if (!document.querySelector) return;
   var lado = document.querySelector(".envoltura > aside");
   var b = lado && lado.querySelector('a.proy[aria-current="true"]');
   if (!b || lado.scrollHeight <= lado.clientHeight) return;
   var r = b.getBoundingClientRect(), l = lado.getBoundingClientRect();
-  lado.scrollTo({top: lado.scrollTop + (r.top - l.top) - (lado.clientHeight - r.height) / 2,
-                 behavior: "smooth"});
-})();
+  lado.scrollTo({top: lado.scrollTop + (r.top - l.top) - (lado.clientHeight - r.height) / 2});
+}
+centrarElEscogido();
+if (typeof window !== "undefined" && window.addEventListener) window.addEventListener("load", centrarElEscogido);
 document.addEventListener("click", function (e) {
   var ventana = e.target.closest && e.target.closest("a.nuevo-proy");
   if (ventana) {

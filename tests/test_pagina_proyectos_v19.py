@@ -368,6 +368,7 @@ def _correr_con(mundo, preparar: str, escenario: str) -> dict:
 
 _LADO = """
 var movidos = [];
+var window = {oyentes: {}, addEventListener: function (t, f) { this.oyentes[t] = f; }};
 var seleccionado = {getBoundingClientRect: function () { return {top: TOPE, height: 40}; }};
 var lado = {scrollHeight: ALTO, clientHeight: 400, scrollTop: 100,
   getBoundingClientRect: function () { return {top: 20}; },
@@ -388,8 +389,22 @@ def test_js_el_proyecto_escogido_se_centra_en_la_columna_de_la_izquierda(mundo):
     """Con la fórmula de la maqueta: arriba de la columna + lo que falta para que
     el escogido quede a media altura."""
     r = _correr_con(mundo, _lado(1000, 520), "JSON.stringify({m: movidos})")
-    # 100 + (520 - 20) - (400 - 40) / 2 = 420
-    assert r == {"m": [{"top": 420, "behavior": "smooth"}]}
+    # 100 + (520 - 20) - (400 - 40) / 2 = 420. SIN `behavior: "smooth"`: medido el
+    # 1-oct-2026 en el navegador del panel, un desplazamiento suave pedido mientras la
+    # página carga se pierde y la lista se queda arriba (scrollTop 0 con `?p=10`).
+    assert r == {"m": [{"top": 420}]}
+
+
+@hay_osascript
+def test_js_al_terminar_de_cargar_vuelve_a_centrar_porque_las_alturas_se_mueven(mundo):
+    """Las tipografías llegan después y cambian las alturas: el evento `load` de la
+    ventana centra otra vez con las medidas de entonces."""
+    r = _correr_con(mundo, _lado(1000, 520),
+                    "seleccionado.getBoundingClientRect = function () { return {top: 700, height: 40}; };"
+                    "lado.scrollTop = 420; window.oyentes.load();"
+                    "JSON.stringify({m: movidos, tipos: Object.keys(window.oyentes)})")
+    # 420 + (700 - 20) - 180 = 920
+    assert r == {"m": [{"top": 420}, {"top": 920}], "tipos": ["load"]}
 
 
 @hay_osascript

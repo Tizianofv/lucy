@@ -549,7 +549,7 @@ def test_el_script_no_decide_nada_de_negocio(mundo):
     # segundo), el doble clic, el teclado, el cambio de un desplegable, la
     # salida de un campo y el envío (para no mandar dos veces el mismo).
     assert sorted(re.findall(r'addEventListener\("(\w+)"', codigo)) == [
-        "change", "click", "dblclick", "focusout", "keydown", "submit"]
+        "change", "click", "dblclick", "focusout", "keydown", "load", "submit"]
 
 
 def _valor_del_campo(c: dict) -> str:
