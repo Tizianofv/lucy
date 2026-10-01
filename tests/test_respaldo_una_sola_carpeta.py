@@ -27,28 +27,33 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent.parent
 
 _RUNNER = r"""
-import runpy, sys
+import os, runpy, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 import db.backup as b
 modo, inventada = sys.argv[2], sys.argv[3]
 if inventada:
-    b._candidatos = lambda: [Path(inventada)]
+    b._candidatos = lambda: [Path(x) for x in inventada.split(os.pathsep)]
 if modo == "candidatas":
     for c in b._candidatos():
         print(c)
 elif modo == "guardar":
     print(b._destino())
+elif modo == "mirar":
+    print(b._destino(crear=False))
+elif modo == "rotar":
+    b._rotar(Path(sys.argv[4]), 1)
 else:
     runpy.run_path(sys.argv[1] + "/tools/verificar_respaldo.py", run_name="__main__")
 """
 
 
-def _correr(home, modo, inventada=""):
+def _correr(home, modo, inventada="", extra_env=None, arg=""):
     env = {"PATH": os.environ.get("PATH", ""), "HOME": str(home),
            "DATABASE_URL": "postgresql://nadie:x@127.0.0.1:1/x"}
+    env.update(extra_env or {})
     return subprocess.run(
-        [sys.executable, "-c", _RUNNER, str(RAIZ), modo, inventada],
+        [sys.executable, "-c", _RUNNER, str(RAIZ), modo, inventada, arg],
         env=env, capture_output=True, text=True, timeout=60)
 
 
@@ -193,3 +198,132 @@ def test_una_ruta_de_windows_no_fabrica_carpetas_en_la_mac(tmp_path):
                          env=env, cwd=cwd, capture_output=True, text=True, timeout=60)
     assert Path(res.stdout.strip()) == drive / "backups", (res.stdout, res.stderr)
     assert list(cwd.iterdir()) == [], list(cwd.iterdir())
+
+
+# ── LUCY_BACKUP_DIR respeta `crear` ──────────────────────────────────────
+
+def test_la_carpeta_manual_solo_se_crea_si_se_pide(tmp_path):
+    casa = _casa(tmp_path, "h")
+    manual = tmp_path / "otra" / "cosa" / "backups"
+    mirar = _correr(casa, "mirar", extra_env={"LUCY_BACKUP_DIR": str(manual)})
+    assert Path(mirar.stdout.strip()) == manual, (mirar.stdout, mirar.stderr)
+    assert not manual.exists(), "crear=False creó la carpeta manual"
+    guarda = _correr(casa, "guardar", extra_env={"LUCY_BACKUP_DIR": str(manual)})
+    assert Path(guarda.stdout.strip()) == manual, guarda.stderr
+    assert manual.is_dir()
+
+
+# ── El patrón de los respaldos es el mismo en toda la puerta ─────────────
+
+def test_rotar_solo_toca_los_respaldos_de_lucy(tmp_path):
+    carpeta = tmp_path / "c"
+    carpeta.mkdir()
+    for n in ("lucy_1", "lucy_2", "lucy_3"):
+        (carpeta / f"{n}.json.gz").write_text("x")
+        (carpeta / f"{n}.schema.sql.gz").write_text("x")
+    (carpeta / "AAA_ajeno.json.gz").write_text("x")      # ordena antes que lucy_*
+    res = _correr(_casa(tmp_path, "h"), "rotar", arg=str(carpeta))
+    assert res.returncode == 0, res.stderr
+    quedan = sorted(p.name for p in carpeta.iterdir())
+    assert quedan == ["AAA_ajeno.json.gz", "lucy_3.json.gz", "lucy_3.schema.sql.gz"], quedan
+
+
+def test_la_carpeta_con_historia_se_reconoce_solo_por_respaldos_de_lucy(tmp_path):
+    ajena = tmp_path / "a" / "Lucy" / "backups"
+    buena = tmp_path / "b" / "Lucy" / "backups"
+    ajena.mkdir(parents=True)
+    (ajena / "otro.json.gz").write_text("x")             # no es un respaldo de Lucy
+    _respaldo_roto(buena)
+    res = _correr(_casa(tmp_path, "h"), "guardar", f"{ajena}{os.pathsep}{buena}")
+    assert Path(res.stdout.strip()) == buena, (res.stdout, res.stderr)
+
+
+# ── El guion diario, EJECUTADO de verdad ─────────────────────────────────
+#
+# `railway` y `python3` son dobles en `$HOME/.local/bin` (el guion pone ahí su
+# PATH). El doble de python3 contesta a los tres guiones del repo y deja pasar
+# `-c` al intérprete real, que es lo que el guion usa para leer el JSON. Lo
+# que el doble afirma sobre `railway` (que `variables --json` devuelve un
+# objeto con la variable) es lo que el guion pide en su texto; no está
+# comprobado contra el CLI real.
+
+SECRETO = "SECRETO_INVENTADO_9f3a"
+URL_FALSA = f"postgresql://usuario:{SECRETO}@servidor.invalido:5432/base"
+
+_RAILWAY = """#!/bin/sh
+echo "$@" >> "$HOME/llamadas_railway.txt"
+case "$*" in
+  *--json*) ;;
+  *) exit 3 ;;
+esac
+if [ -n "$RAILWAY_FALLA" ]; then exit 1; fi
+printf '{"OTRA": "nada", "DATABASE_PUBLIC_URL": "%s"}' "$URL_FALSA"
+"""
+
+_PYTHON = """#!/bin/sh
+case "$1" in
+  db/backup.py) [ -n "$DATABASE_URL" ] && echo recibio_url >> "$HOME/marcas.txt"; exit 0 ;;
+  tools/verificar_respaldo.py) echo verifico >> "$HOME/marcas.txt"; exit "${CODIGO_VERIFICADOR:-0}" ;;
+  tools/vaciar_papelera.py) echo vacio_papelera >> "$HOME/marcas.txt"; exit 0 ;;
+  *) exec "$PYREAL" "$@" ;;
+esac
+"""
+
+
+def _correr_guion(tmp_path, verificador=0, railway_falla=False):
+    casa = tmp_path / "casa"
+    repo = (casa / "Library" / "CloudStorage"
+            / "GoogleDrive-caribbeandreamstudios@gmail.com" / "My Drive"
+            / "Organizacion economica Familiar")
+    repo.mkdir(parents=True)
+    (casa / "Library" / "Logs").mkdir(parents=True)
+    binarios = casa / ".local" / "bin"
+    binarios.mkdir(parents=True)
+    for nombre, texto in (("railway", _RAILWAY), ("python3", _PYTHON)):
+        (binarios / nombre).write_text(texto)
+        (binarios / nombre).chmod(0o755)
+    env = {"HOME": str(casa), "URL_FALSA": URL_FALSA, "PYREAL": sys.executable,
+           "CODIGO_VERIFICADOR": str(verificador)}
+    if railway_falla:
+        env["RAILWAY_FALLA"] = "1"
+    res = subprocess.run(["/bin/zsh", str(RAIZ / "tools" / "respaldo_diario.sh")],
+                         env=env, capture_output=True, text=True, timeout=60)
+    marcas = casa / "marcas.txt"
+    marcas = marcas.read_text().split() if marcas.exists() else []
+    return casa, res, marcas
+
+
+def _todo_lo_que_escribio(casa, res):
+    textos = [res.stdout, res.stderr]
+    for f in casa.rglob("*"):
+        if f.is_file() and f.parent != casa / ".local" / "bin":
+            textos.append(f.read_text(errors="replace"))
+    return "\n".join(textos)
+
+
+def test_guion_con_respaldo_verificado_vacia_la_papelera(tmp_path):
+    casa, res, marcas = _correr_guion(tmp_path, verificador=0)
+    assert res.returncode == 0, (res.stdout, res.stderr)
+    assert marcas == ["recibio_url", "verifico", "vacio_papelera"], marcas
+
+
+def test_guion_con_verificador_en_rojo_no_vacia_la_papelera(tmp_path):
+    casa, res, marcas = _correr_guion(tmp_path, verificador=1)
+    assert "vacio_papelera" not in marcas, marcas
+    assert "verifico" in marcas
+    assert res.returncode == 1, (res.returncode, res.stderr)
+
+
+def test_guion_sin_url_de_railway_no_corre_nada(tmp_path):
+    casa, res, marcas = _correr_guion(tmp_path, railway_falla=True)
+    assert marcas == [], marcas
+    assert res.returncode == 1
+
+
+def test_guion_nunca_escribe_la_url_de_la_base_en_ninguna_parte(tmp_path):
+    for verificador in (0, 1):
+        casa, res, _ = _correr_guion(tmp_path / str(verificador), verificador=verificador)
+        todo = _todo_lo_que_escribio(casa, res)
+        assert "lucy-respaldo.log" in "".join(str(p) for p in casa.rglob("*.log"))
+        assert SECRETO not in todo, "la URL de la base (con su clave) quedó escrita"
+        assert "servidor.invalido" not in todo
