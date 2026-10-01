@@ -233,7 +233,7 @@ async def _serve_marcado(self, *a, **k):
     try:
         return await _serve(self, *a, **k)
     finally:
-        await asyncio.sleep(0.3)   # una tarea que tarda en morir (cierra sockets...)
+        await asyncio.sleep(0.6)   # tarda en morir MÁS que el bucle (cierra sockets...)
         ev("panel termino")
 
 uvicorn.Server.serve = _serve_marcado
