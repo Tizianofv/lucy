@@ -218,14 +218,37 @@ async def _procesar(fila: dict, bot) -> None:
         await _fallo(fila, e, bot)
 
 
+# Ids de las filas que ESTA instancia reclamó con `tomar_pendientes` y todavía
+# no terminó de procesar. `_al_apagar` (main.py) las devuelve a la cola: una
+# tarea cancelada no deja la fila en otro estado que 'procesando'.
+_reclamadas: set[int] = set()
+
+
+def reclamadas_sin_terminar() -> list[int]:
+    return sorted(_reclamadas)
+
+
 async def bucle(bot) -> None:
     """Bucle infinito de comprensión. Se lanza al arrancar (ver main.py)."""
     log.info("Bucle de interpretación en marcha (cada %ss).", INTERVALO_S)
     vuelta = 0
     while True:
         try:
-            for fila in await db.tomar_pendientes():
-                await _procesar(fila, bot)
+            filas = await db.tomar_pendientes()
+            _reclamadas.update(f["id"] for f in filas)
+            try:
+                for fila in filas:
+                    await _procesar(fila, bot)
+                    _reclamadas.discard(fila["id"])
+            except Exception:
+                # Un fallo que sale de `_procesar`/`_fallo` (p. ej. la base
+                # caída) corta el lote: los ids que quedaran aquí los
+                # devolvería `_al_apagar` aunque otro contenedor ya los
+                # hubiera reclamado de nuevo tras el rescate. Se sueltan todos.
+                # `CancelledError` NO es `Exception`: en el apagado los ids se
+                # conservan a propósito, es lo que `_al_apagar` va a devolver.
+                _reclamadas.difference_update(f["id"] for f in filas)
+                raise
         except asyncio.CancelledError:
             raise  # apagado ordenado: no lo tratamos como error
         except Exception:
