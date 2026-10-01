@@ -533,7 +533,7 @@ _PROMESA = re.compile(
     r"|nace|queda\s+creado|se\s+abre|se\s+arma)"
     r"[^.]*?(solo|sola|autom[aá]tic\w*|al\s+vuelo|por\s+su\s+cuenta|sin\s+avisar"
     r"|sin\s+preguntar|con\s+ese\s+nombre)", re.I)
-_NEGADA_ANTES = re.compile(r"\b(no|nunca|ni|jam[aá]s)\s+(?:\w+\s+){0,2}$", re.I)
+_NEGADA_ANTES = re.compile(r"\b(no|nunca|ni|jam[aá]s)\s+$", re.I)
 
 
 def _promesas_de_alta_silenciosa(texto: str) -> list[str]:
@@ -571,7 +571,8 @@ def test_el_detector_de_promesas_ve_formas_que_no_estan_en_el_prompt():
             "El proyecto nuevo se crea automáticamente.",
             "Un proyecto que no está en la lista nace solo.",
             "Si el proyecto no está, se da de alta sin preguntar.",
-            "Si de verdad no existe, se crea solo, con ese nombre."):
+            "Si de verdad no existe, se crea solo, con ese nombre.",
+            "Un proyecto que no existe lo crea Lucy por su cuenta."):
         assert _promesas_de_alta_silenciosa(promesa), promesa
     for honesta in (
             "Un proyecto NUNCA nace por nombrarlo.",
