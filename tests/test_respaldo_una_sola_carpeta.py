@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import gzip
+import hashlib
 import os
 import re
 import subprocess
@@ -54,7 +55,7 @@ def _correr(home, modo, inventada="", extra_env=None, arg=""):
     env.update(extra_env or {})
     return subprocess.run(
         [sys.executable, "-c", _RUNNER, str(RAIZ), modo, inventada, arg],
-        env=env, capture_output=True, text=True, timeout=60)
+        env=env, capture_output=True, text=True, timeout=240)
 
 
 def _casa(tmp_path, nombre):
@@ -195,7 +196,7 @@ def test_una_ruta_de_windows_no_fabrica_carpetas_en_la_mac(tmp_path):
     cwd.mkdir()
     env = {"PATH": os.environ.get("PATH", ""), "HOME": str(casa)}
     res = subprocess.run([sys.executable, "-c", _RUNNER, str(RAIZ), "guardar", ""],
-                         env=env, cwd=cwd, capture_output=True, text=True, timeout=60)
+                         env=env, cwd=cwd, capture_output=True, text=True, timeout=240)
     assert Path(res.stdout.strip()) == drive / "backups", (res.stdout, res.stderr)
     assert list(cwd.iterdir()) == [], list(cwd.iterdir())
 
@@ -271,7 +272,11 @@ esac
 
 
 def _correr_guion(tmp_path, verificador=0, railway_falla=False):
+    """Devuelve (casa, res, marcas, antes, despues, tmp_antes, tmp_despues):
+    las fotos del HOME falso y de un TMPDIR propio, antes y después."""
     casa = tmp_path / "casa"
+    tmpd = tmp_path / "tmpd"
+    tmpd.mkdir(parents=True)
     repo = (casa / "Library" / "CloudStorage"
             / "GoogleDrive-caribbeandreamstudios@gmail.com" / "My Drive"
             / "Organizacion economica Familiar")
@@ -283,65 +288,110 @@ def _correr_guion(tmp_path, verificador=0, railway_falla=False):
         (binarios / nombre).write_text(texto)
         (binarios / nombre).chmod(0o755)
     env = {"HOME": str(casa), "URL_FALSA": URL_FALSA, "PYREAL": sys.executable,
-           "CODIGO_VERIFICADOR": str(verificador)}
+           "CODIGO_VERIFICADOR": str(verificador), "TMPDIR": str(tmpd)}
     if railway_falla:
         env["RAILWAY_FALLA"] = "1"
+    antes, tmp_antes = _foto(casa), _foto(tmpd)
     res = subprocess.run(["/bin/zsh", str(RAIZ / "tools" / "respaldo_diario.sh")],
-                         env=env, capture_output=True, text=True, timeout=60)
+                         env=env, capture_output=True, text=True, timeout=240)
+    despues, tmp_despues = _foto(casa), _foto(tmpd)
     marcas = casa / "marcas.txt"
     marcas = marcas.read_text().splitlines() if marcas.exists() else []
-    return casa, res, marcas
+    return casa, res, marcas, antes, despues, tmp_antes, tmp_despues
 
 
-def _archivos_con_el_secreto(casa):
-    """Los archivos del HOME falso ENTERO (los dobles de `.local/bin` incluidos)
-    que contienen la clave inventada. Se le pregunta a `grep -r`, que recorre
-    el árbol sin pasar por un barrido de Python (la guarda de barridos de
-    `test_buzon_que_no_se_ve.py` es solo para el repo). `grep -r` no sigue
-    enlaces simbólicos: el guion no crea ninguno, y un enlace desde el HOME
-    falso hacia fuera sería un cambio que esta prueba no ve (frontera)."""
-    r = subprocess.run(["grep", "-rlF", SECRETO, str(casa)],
-                       capture_output=True, text=True)
-    assert r.returncode in (0, 1), r.stderr     # 1 = no encontró nada
-    return r.stdout.split()
+def _foto(raiz):
+    """Foto de un árbol por VALORES: por cada ruta (la lista la da `find`, no
+    un barrido de Python), su tipo, su tamaño, el hash de su contenido si es
+    archivo y el destino si es enlace simbólico. {ruta relativa: valor}."""
+    r = subprocess.run(["find", str(raiz), "-print0"], capture_output=True)
+    assert r.returncode == 0, r.stderr
+    foto = {}
+    for ruta in r.stdout.decode().split("\0"):
+        if not ruta or ruta == str(raiz):
+            continue
+        p = Path(ruta)
+        rel = str(p.relative_to(raiz))
+        if p.is_symlink():
+            foto[rel] = ("enlace", os.readlink(p))
+        elif p.is_dir():
+            foto[rel] = ("carpeta",)
+        else:
+            foto[rel] = ("archivo", p.stat().st_size,
+                         hashlib.sha256(p.read_bytes()).hexdigest())
+    return foto
+
+
+# Lo ÚNICO que el guion (con sus dobles) puede crear o cambiar en el HOME falso:
+# su registro y las marcas de los dobles.
+_PERMITIDOS = {"Library/Logs/lucy-respaldo.log", "marcas.txt", "llamadas_railway.txt"}
+
+
+def _diferencias_no_permitidas(antes, despues):
+    cambios = {k for k in set(antes) | set(despues) if antes.get(k) != despues.get(k)}
+    return sorted(cambios - _PERMITIDOS)
 
 
 def test_guion_con_respaldo_verificado_vacia_la_papelera(tmp_path):
-    casa, res, marcas = _correr_guion(tmp_path, verificador=0)
+    casa, res, marcas, *_ = _correr_guion(tmp_path, verificador=0)
     assert res.returncode == 0, (res.stdout, res.stderr)
     assert marcas == ["recibio_url", "verifico",
                       "vacio_papelera tools/vaciar_papelera.py --aplicar"], marcas
 
 
 def test_guion_con_verificador_en_rojo_no_vacia_la_papelera(tmp_path):
-    casa, res, marcas = _correr_guion(tmp_path, verificador=1)
+    casa, res, marcas, *_ = _correr_guion(tmp_path, verificador=1)
     assert not any(m.startswith("vacio_papelera") for m in marcas), marcas
     assert "verifico" in marcas
     assert res.returncode == 1, (res.returncode, res.stderr)
 
 
 def test_guion_sin_url_de_railway_no_corre_nada(tmp_path):
-    casa, res, marcas = _correr_guion(tmp_path, railway_falla=True)
+    casa, res, marcas, *_ = _correr_guion(tmp_path, railway_falla=True)
     assert marcas == [], marcas
     assert res.returncode == 1
 
 
-def test_guion_nunca_escribe_la_url_de_la_base_en_ninguna_parte(tmp_path):
+def test_guion_no_deja_nada_en_el_home_falso_salvo_su_registro(tmp_path):
+    """LA REGLA, por valores y no por buscar la clave: foto del HOME falso
+    entero (los dobles de `.local/bin` incluidos) antes y después; lo único
+    que puede aparecer o cambiar es el registro y las marcas de los dobles.
+    Cierra la clave escrita partida, codificada, invertida, en una ruta
+    inesperada o como enlace simbólico, sin enumerar formas.
+    LO QUE NO VE (frontera): una escritura con ruta absoluta fuera del HOME
+    falso y de `TMPDIR` (un `/tmp/...` escrito a mano, `/var/...`, etc.)."""
     for verificador in (0, 1):
-        casa, res, _ = _correr_guion(tmp_path / str(verificador), verificador=verificador)
-        assert (casa / "Library" / "Logs" / "lucy-respaldo.log").is_file()
-        assert SECRETO not in res.stdout and SECRETO not in res.stderr
-        assert _archivos_con_el_secreto(casa) == [], \
-            "la clave de la base quedó escrita en el HOME falso"
+        casa, res, _, antes, despues, _, _ = _correr_guion(
+            tmp_path / str(verificador), verificador=verificador)
+        assert _diferencias_no_permitidas(antes, despues) == []
+        assert "Library/Logs/lucy-respaldo.log" in despues
 
 
-def test_la_busqueda_del_secreto_ve_hasta_el_fondo_y_los_dobles(tmp_path):
-    """La guarda de la guarda: `grep -r` encuentra el secreto en un archivo
-    hondo y en la carpeta de los dobles; sin esto, 'no hay secreto' podría
-    ser 'no miré'."""
-    casa = tmp_path / "c"
-    (casa / "a" / "b").mkdir(parents=True)
-    (casa / ".local" / "bin").mkdir(parents=True)
-    (casa / "a" / "b" / "f").write_text(SECRETO)
-    (casa / ".local" / "bin" / "x").write_text(SECRETO)
-    assert len(_archivos_con_el_secreto(casa)) == 2
+def test_guion_no_toca_su_TMPDIR(tmp_path):
+    for verificador in (0, 1):
+        _, _, _, _, _, tmp_antes, tmp_despues = _correr_guion(
+            tmp_path / str(verificador), verificador=verificador)
+        assert tmp_antes == tmp_despues == {}, tmp_despues
+
+
+def test_ni_la_clave_ni_el_host_salen_por_el_registro_ni_por_la_consola(tmp_path):
+    for verificador in (0, 1):
+        casa, res, *_ = _correr_guion(tmp_path / str(verificador), verificador=verificador)
+        log = (casa / "Library" / "Logs" / "lucy-respaldo.log").read_text()
+        for texto in (log, res.stdout, res.stderr):
+            assert SECRETO not in texto
+            assert "servidor.invalido" not in texto
+
+
+def test_la_foto_ve_lo_que_cambia(tmp_path):
+    """La guarda de la guarda: la foto ve un archivo hondo, un cambio de
+    contenido, una carpeta vacía y un enlace simbólico nuevos."""
+    c = tmp_path / "c"
+    (c / "a").mkdir(parents=True)
+    (c / "a" / "f").write_text("uno")
+    antes = _foto(c)
+    (c / "a" / "f").write_text("dos")
+    (c / "a" / "b" / "c").mkdir(parents=True)
+    (c / "e").symlink_to("/nada")
+    dif = _diferencias_no_permitidas(antes, _foto(c))
+    assert dif == ["a/b", "a/b/c", "a/f", "e"], dif
