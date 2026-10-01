@@ -388,6 +388,56 @@ def test_crear_proyecto_rechaza_un_grupo_que_no_existe():
         f"el rechazo no dice qué grupos hay: {r}")
 
 
+def test_crear_proyecto_rechaza_el_grupo_vacio_nulo_o_ausente():
+    """Sin grupo el proyecto no nace (nadie lo elige por Tiziano): ni vacío, ni
+    en blanco, ni `None`, ni sin la clave. Un `args.get("grupo") or "CDS"` en la
+    herramienta lo dejaría nacer en un grupo que nadie eligió."""
+    _casa()
+    m = Mundo(areas=("CDS", "ACD", "IA"))
+    casos = (
+        {"nombre": "Sin grupo uno", "grupo": "", "responsable": "Rosi"},
+        {"nombre": "Sin grupo dos", "grupo": "   ", "responsable": "Rosi"},
+        {"nombre": "Sin grupo tres", "grupo": None, "responsable": "Rosi"},
+        {"nombre": "Sin grupo cuatro", "responsable": "Rosi"},
+    )
+    for args in casos:
+        r, acciones = _herramienta(m, "crear_proyecto", args)
+        assert r.startswith("ERROR"), (args, r)
+        assert acciones == [], args
+    assert m.proyectos() == [] and m.huellas() == [], (
+        m.proyectos(), m.huellas())
+
+
+def test_la_huella_de_un_proyecto_de_telegram_dice_que_vino_de_telegram():
+    """La huella dice quién lo hizo: `lucy` y «por Telegram» cuando entra por la
+    herramienta, `panel` cuando entra por el botón de la página (el camino de
+    siempre, que no cambia)."""
+    _casa()
+    m = Mundo()
+    _herramienta(m, "crear_proyecto", {
+        "nombre": "Por Telegram", "grupo": "CDS", "responsable": "Rosi"})
+    h, = m.huellas()
+    assert h["actor"] == "lucy", h
+    assert "Telegram" in h["motivo"] and "panel" not in h["motivo"], h
+
+    m2 = Mundo()
+    _correr(m2, lambda: db.crear_proyecto("Por el panel", "CDS", ROSI))
+    h2, = m2.huellas()
+    assert (h2["actor"], "panel" in h2["motivo"]) == ("panel", True), h2
+
+
+def test_la_puerta_rechaza_un_origen_desconocido():
+    _casa()
+    m = Mundo()
+    try:
+        _correr(m, lambda: db.crear_proyecto("X", "CDS", ROSI, desde="otro"))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("aceptó un origen que no es panel ni lucy")
+    assert m.proyectos() == [] and m.huellas() == []
+
+
 def test_crear_proyecto_rechaza_un_responsable_que_no_es_de_la_casa():
     _casa()
     m = Mundo()
@@ -467,14 +517,68 @@ def test_el_prompt_describe_la_herramienta_nueva_con_sus_tres_campos():
         "el prompt tiene que decir que el cliente NO se pide por acá")
 
 
+# LO QUE SE VIGILA ES EL SENTIDO, no una frase: ninguna oración del prompt de
+# las herramientas puede prometer que algo nace solo (al nombrarlo, al
+# vuelo, automáticamente…) sin negarlo justo antes del verbo. Antes era
+# `"se crea solo" not in bloque`: reescribir la promesa con otras palabras («lo
+# crea al vuelo», «se da de alta») dejaba la prueba verde.
+#
+# FRONTERA, DICHA: un prompt no se puede demostrar con un detector. Esto cierra
+# la FAMILIA de promesas de alta silenciosa que se conocen (los verbos y los
+# modos de abajo), no cualquier forma de decirlo; la otra mitad de la garantía
+# es de comportamiento y la cubren las pruebas de la sección 1 (la tarea que
+# nombra un proyecto inexistente NO lo crea, corriendo el código).
+_PROMESA = re.compile(
+    r"(se\s+crea|lo\s+crea|la\s+crea|crea(?:r[aá]|r[eé]|n)?|se\s+da\s+de\s+alta"
+    r"|nace|queda\s+creado|se\s+abre|se\s+arma)"
+    r"[^.]*?(solo|sola|autom[aá]tic\w*|al\s+vuelo|por\s+su\s+cuenta|sin\s+avisar"
+    r"|sin\s+preguntar|con\s+ese\s+nombre)", re.I)
+_NEGADA_ANTES = re.compile(r"\b(no|nunca|ni|jam[aá]s)\s+(?:\w+\s+){0,2}$", re.I)
+
+
+def _promesas_de_alta_silenciosa(texto: str) -> list[str]:
+    """Las oraciones de `texto` que prometen que algo nace solo y no lo niegan
+    JUSTO ANTES del verbo («no se crea solo»). Una negación suelta en otra
+    parte de la oración no salva a la promesa: «Si de verdad no existe, se crea
+    solo» lleva un «no» y promete igual."""
+    oraciones = re.split(r"(?<=[.;])\s+|\n\s*\n", texto)
+    salida = []
+    for o in oraciones:
+        for m in _PROMESA.finditer(o):
+            if not _NEGADA_ANTES.search(o[:m.start()]):
+                salida.append(o.strip())
+                break
+    return salida
+
+
 def test_el_prompt_ya_no_promete_que_nombrar_un_proyecto_lo_crea():
     """El defecto, en el texto que lee el modelo: `crear` decía «Si de verdad
-    no existe, se crea solo, con ese nombre». Eso ya no es verdad."""
+    no existe, se crea solo, con ese nombre». Eso ya no es verdad. Se mira el
+    texto ENTERO de las herramientas (no solo `crear`), por el sentido."""
+    assert _promesas_de_alta_silenciosa(agente.HERRAMIENTAS) == [], (
+        _promesas_de_alta_silenciosa(agente.HERRAMIENTAS))
     bloque = _bloque_de("crear")
-    assert "se crea solo" not in bloque, (
-        "sigue prometiendo el alta silenciosa que E8 vino a cerrar")
     assert "crear_proyecto" in bloque, (
         "tiene que decir por dónde sí se crea")
+    assert re.search(r"NO\s+se\s+crea|rechaza", bloque), (
+        "tiene que decir qué pasa cuando el proyecto no existe: se rechaza")
+
+
+def test_el_detector_de_promesas_ve_formas_que_no_estan_en_el_prompt():
+    """Entradas inventadas: el detector no se limita a la frase que había."""
+    for promesa in (
+            "Si no existe, lo crea al vuelo con ese nombre.",
+            "El proyecto nuevo se crea automáticamente.",
+            "Un proyecto que no está en la lista nace solo.",
+            "Si el proyecto no está, se da de alta sin preguntar.",
+            "Si de verdad no existe, se crea solo, con ese nombre."):
+        assert _promesas_de_alta_silenciosa(promesa), promesa
+    for honesta in (
+            "Un proyecto NUNCA nace por nombrarlo.",
+            "Si el proyecto no existe, la tarea no se crea y se pregunta.",
+            "El proyecto se crea con crear_proyecto, con grupo y responsable.",
+            "El proyecto no se crea solo: lo pide Tiziano."):
+        assert not _promesas_de_alta_silenciosa(honesta), honesta
 
 
 def test_el_prompt_del_perfil_avisa_que_por_ahi_no_nace_ningun_proyecto():
@@ -754,3 +858,221 @@ def test_el_grafo_de_llamadas_ve_una_arista_inventada(tmp_path):
         "async def hondo():\n    return 1\n", encoding="utf-8")
     alcanzables = _alcanzables(tmp_path, [("a.py", "entrada")])
     assert ("b.py", "hondo") in alcanzables, alcanzables
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 5) La TARJETA de Telegram: lo que lee Tiziano al pulsar ✅
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# El motivo de `crud` va escrito para el MODELO («pregúntale a Tiziano…, crealo
+# con la herramienta `crear_proyecto`»). Cuando el que pulsa es Tiziano, lo que
+# tiene que leer es una frase suya, corta y ENTERA. Se entra por
+# `acciones/botones.py::al_pulsar`, el camino de producción; `crud` y `db`
+# corren de verdad sobre el mundo sqlite. Lo único de mentira es la BANDEJA
+# (`db.cambiar_estado` y `db.obtener`, que son de otra tabla) y el objeto
+# `CallbackQuery` de Telegram, que no controlamos.
+
+import types  # noqa: E402
+
+import acciones.botones as botones  # noqa: E402
+
+
+class _Q:
+    def __init__(self, data):
+        self.data = data
+        self.message = types.SimpleNamespace(
+            chat_id=DUENO, text_html="La tarjeta.")
+        self.avisos: list = []
+        self.editado: list = []
+
+    async def answer(self, texto=None, **k):
+        self.avisos.append((texto, k))
+
+    async def edit_message_text(self, text, **k):
+        self.editado.append(text)
+
+
+def _pulsar(m, interpretacion, bandeja_id=7):
+    """Corre `al_pulsar` con ✅ sobre una tarjeta cuya interpretación es la
+    dada. Devuelve `(q, estados)`: lo que Telegram recibió y cómo quedó la fila
+    de la bandeja."""
+    estados = []
+    guardados = (db.cambiar_estado, db.obtener)
+
+    async def _cambiar(bid, nuevo, desde=None):
+        estados.append(nuevo)
+        return True
+
+    async def _obtener(bid):
+        return {"id": bid, "interpretacion": dict(interpretacion)}
+
+    db.cambiar_estado, db.obtener = _cambiar, _obtener
+    q = _Q(f"ok:{bandeja_id}")
+    try:
+        _correr(m, lambda: botones.al_pulsar(
+            types.SimpleNamespace(callback_query=q), None))
+    finally:
+        db.cambiar_estado, db.obtener = guardados
+    return q, estados
+
+
+def _aviso_de_alerta(q):
+    alertas = [t for t, k in q.avisos if k.get("show_alert")]
+    assert len(alertas) == 1, q.avisos
+    return alertas[0]
+
+
+def test_la_tarjeta_le_habla_a_tiziano_con_una_frase_entera_y_la_tarea_no_se_pierde():
+    _casa()
+    m = Mundo(areas=("CDS", "ACD", "IA"))
+    q, estados = _pulsar(m, {
+        "clasificacion": "tarea", "titulo": "Grabar la intro",
+        "proyecto": "Proyecto Fantasma"})
+    texto = _aviso_de_alerta(q)
+
+    assert "Proyecto Fantasma" in texto and "no existe" in texto, texto
+    assert texto.endswith("y lo creo."), f"frase cortada: {texto!r}"
+    assert not texto.endswith("…"), texto
+    assert len(texto) <= 190, (len(texto), texto)
+    for grupo in ("CDS", "ACD", "IA"):
+        assert grupo in texto, texto
+    for quien in ("Rosi", "Tiziano"):
+        assert quien in texto, texto
+    # Escrito para él: sin nombres de herramienta ni tercera persona.
+    for del_modelo in ("crear_proyecto", "herramienta", "Pregúntale",
+                       "Pregúntale a Tiziano", "`"):
+        assert del_modelo not in texto, (del_modelo, texto)
+    # La tarea no se pierde: la tarjeta sigue abierta y no se escribió nada.
+    assert estados[-1] == "esperando_confirmacion", estados
+    assert m.tareas() == [] and m.proyectos() == [] and m.huellas() == []
+    assert q.editado == [], "cerró la tarjeta aunque no guardó nada"
+
+
+def test_la_frase_de_la_tarjeta_cabe_entera_aunque_el_nombre_sea_larguisimo():
+    """Lo que se acorta es el nombre, nunca la pregunta."""
+    _casa()
+    m = Mundo(areas=("CDS", "ACD", "IA"))
+    q, _ = _pulsar(m, {"clasificacion": "tarea", "titulo": "x",
+                       "proyecto": "Nombre larguisimo " * 4})
+    texto = _aviso_de_alerta(q)
+    assert len(texto) <= 190, (len(texto), texto)
+    assert texto.endswith("y lo creo."), texto
+    assert "…" in texto and "CDS" in texto and "Rosi" in texto, texto
+
+
+def test_la_frase_de_la_tarjeta_sigue_entera_con_muchos_grupos():
+    """Con tantos grupos que las listas no caben, se pregunta sin ellas: sigue
+    siendo una frase completa y no una lista cortada."""
+    _casa()
+    m = Mundo(areas=tuple(f"Grupo numero {i}" for i in range(30)))
+    q, _ = _pulsar(m, {"clasificacion": "tarea", "titulo": "x",
+                       "proyecto": "Fantasma"})
+    texto = _aviso_de_alerta(q)
+    assert len(texto) <= 190, (len(texto), texto)
+    assert texto.startswith("El proyecto «Fantasma» no existe."), texto
+    assert texto.endswith("y lo creo."), texto
+    assert "…" not in texto, texto
+
+
+def test_el_modelo_sigue_leyendo_su_texto_y_la_persona_el_suyo():
+    """Dos lectores, dos textos: el del modelo no se perdió."""
+    _casa()
+    m = Mundo()
+    r, _ = _herramienta(m, "crear", {
+        "clasificacion": "tarea", "titulo": "x", "proyecto": "Fantasma"})
+    assert "crear_proyecto" in r and "Pregúntale a Tiziano" in r, r
+
+
+def _sin_docstring(fn):
+    cuerpo = list(fn.body)
+    if (cuerpo and isinstance(cuerpo[0], ast.Expr)
+            and isinstance(cuerpo[0].value, ast.Constant)
+            and isinstance(cuerpo[0].value.value, str)):
+        cuerpo = cuerpo[1:]
+    return cuerpo
+
+
+def _nombra(nodo, nombre) -> bool:
+    return any((isinstance(n, ast.Name) and n.id == nombre)
+               or (isinstance(n, ast.Attribute) and n.attr == nombre)
+               for n in ast.walk(nodo))
+
+
+_VOZ_DEL_MODELO = re.compile(r"Pregúntale|herramienta|crear_proyecto", re.I)
+
+
+def _sitios_que_le_muestran_un_no_a_una_persona(raiz, entradas):
+    """Desde las puertas de la PERSONA (el botón), sacado del árbol de
+    llamadas real: `(handlers, constructores)`.
+
+    · handlers: los `except … NoDeNegocio` de las funciones alcanzables;
+    · constructores: los `NoDeNegocio(...)` de las funciones alcanzables cuyo
+      texto (sin docstring) habla con voz de modelo.
+    """
+    alcanzables = _alcanzables(raiz, entradas)
+    handlers, constructores = [], []
+    for rel, arbol in _modulos(raiz):
+        for fn in _funciones(arbol):
+            if (rel, fn.name) not in alcanzables:
+                continue
+            textos = " ".join(
+                n.value for st in _sin_docstring(fn) for n in ast.walk(st)
+                if isinstance(n, ast.Constant) and isinstance(n.value, str))
+            for st in _sin_docstring(fn):
+                for n in ast.walk(st):
+                    if (isinstance(n, ast.ExceptHandler) and n.type is not None
+                            and _nombra(n.type, "NoDeNegocio")):
+                        handlers.append((rel, fn.name, n))
+                    if (isinstance(n, ast.Call) and isinstance(
+                            n.func, (ast.Name, ast.Attribute))
+                            and getattr(n.func, "id", getattr(
+                                n.func, "attr", None)) == "NoDeNegocio"
+                            and _VOZ_DEL_MODELO.search(textos)):
+                        constructores.append((rel, fn.name, n))
+    return handlers, constructores
+
+
+ENTRADAS_DE_LA_PERSONA = (("acciones/botones.py", "al_pulsar"),)
+
+
+def test_todo_sitio_que_muestra_un_no_a_una_persona_usa_el_texto_de_la_persona():
+    """Los hermanos de la tarjeta, de lo real: cada `except NoDeNegocio` que
+    alcanza el botón lee `lo_que_lee_la_persona`, y cada `NoDeNegocio(...)`
+    escrito con voz de modelo desde ahí lleva su `para_la_persona`.
+
+    FRONTERA: ve `except` que NOMBRAN `NoDeNegocio`; un `except ValueError` o
+    `except Exception` que mostrara `str(e)` no se ve (en el camino del botón
+    el único `except Exception` muestra un aviso fijo, medido leyendo)."""
+    handlers, constructores = _sitios_que_le_muestran_un_no_a_una_persona(
+        _ROA, ENTRADAS_DE_LA_PERSONA)
+    assert handlers, "no vio ni el `except` del botón: dejó de medir"
+    assert constructores, "no vio la pregunta del proyecto: dejó de medir"
+    for rel, fn, h in handlers:
+        assert _nombra(h, "lo_que_lee_la_persona"), (
+            f"{rel}::{fn} muestra un NoDeNegocio sin pasar por "
+            f"`lo_que_lee_la_persona`")
+    for rel, fn, c in constructores:
+        assert any(k.arg == "para_la_persona" for k in c.keywords), (
+            f"{rel}::{fn} arma un NoDeNegocio con voz de modelo y sin "
+            f"`para_la_persona`")
+
+
+def test_el_censo_de_sitios_ve_entradas_inventadas(tmp_path):
+    (tmp_path / "boton.py").write_text(
+        "import dentro as dentro\n"
+        "async def entrada(q):\n"
+        "    try:\n"
+        "        await dentro.hondo()\n"
+        "    except dentro.NoDeNegocio as e:\n"
+        "        await q.answer(str(e))\n",
+        encoding="utf-8")
+    (tmp_path / "dentro.py").write_text(
+        "class NoDeNegocio(ValueError):\n    pass\n"
+        "async def hondo():\n"
+        "    raise NoDeNegocio('Pregúntale a Tiziano y llama la herramienta')\n",
+        encoding="utf-8")
+    handlers, constructores = _sitios_que_le_muestran_un_no_a_una_persona(
+        tmp_path, [("boton.py", "entrada")])
+    assert [(r, f) for r, f, _ in handlers] == [("boton.py", "entrada")]
+    assert [(r, f) for r, f, _ in constructores] == [("dentro.py", "hondo")]
+    assert not _nombra(handlers[0][2], "lo_que_lee_la_persona")

@@ -351,7 +351,12 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # El aviso de Telegram se corta a 190 caracteres. Lo que se recorta es
         # el MOTIVO (con «…»), nunca la promesa del final: una promesa cortada
         # por la mitad diría algo distinto de lo que es verdad.
-        motivo_texto = str(e)
+        # Lo que lee Tiziano es `lo_que_lee_la_persona`, NO `str(e)`: el motivo
+        # de `crud` puede estar escrito para el modelo (nombres de herramientas,
+        # «pregúntale a Tiziano»). Quien arma un `NoDeNegocio` así le pone su
+        # frase para la persona, y ya viene dentro del tope.
+        motivo_texto = (crud.lo_que_lee_la_persona(e)
+                        if isinstance(e, crud.NoDeNegocio) else str(e))
         if len(motivo_texto) + len(cierre) > 190:
             motivo_texto = motivo_texto[:max(190 - len(cierre) - 1, 0)] + "…"
         await q.answer(f"{motivo_texto}{cierre}"[:190], show_alert=True)

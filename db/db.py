@@ -1498,7 +1498,8 @@ class ProyectoNoSeCrea(ValueError):
         self.clave = clave
 
 
-async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> dict:
+async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int,
+                         desde: str = "panel") -> dict:
     """El diálogo «+ Proyecto en X» de la página de proyectos (Lucy 1.0, E5).
     Crea un proyecto y devuelve su fila. Si no vale, `NombreDeProyectoNoVale`
     (por el nombre) o `ProyectoNoSeCrea` (por el grupo o el responsable), las
@@ -1520,13 +1521,20 @@ async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> di
         de si vale es de esta función, así que quien la llame sin la ruta (el
         Telegram de E8) tiene la misma puerta.
 
+    `desde` dice QUIÉN lo pide y queda en la huella: `"panel"` (el botón de la
+    página, por omisión) o `"lucy"` (Telegram, vía `crud.crear_proyecto`). Es un
+    ValueError si es otra cosa. Cada origen tiene su `INSERT` con el actor como
+    LITERAL, no como variable, para no romper el guarda de
+    `tests/test_proyectos_panel.py` (el actor variable solo viaja por
+    `crud._registrar`).
+
     NO lleva cliente: lo pone `poner_cliente` (E3), con la ficha releída de
     Noco; nace sin cliente, que es un estado válido (es opcional).
 
     UNA SOLA TRANSACCIÓN: el INSERT y su huella `crear` (con lo que quedó
     guardado en `despues`, así que `crud.deshacer` la revierte con la rama
-    genérica de 'crear'). El actor es el literal `'panel'`: lo dispara un botón
-    del panel, y el guarda de `tests/test_proyectos_panel.py` no deja que el
+    genérica de 'crear'). El actor es un literal (`'panel'` o `'lucy'`, según `desde`): lo dispara un botón
+    del panel o Telegram, y el guarda de `tests/test_proyectos_panel.py` no deja que el
     actor viaje como variable fuera de `crud._registrar`. No se puede usar `crud._registrar` (`crud` importa este módulo): la fila de
     `log_acciones` se escribe a mano con la misma forma que las otras
     escrituras de este archivo.
@@ -1536,6 +1544,8 @@ async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> di
     la llame desde Telegram (por `crud.crear_proyecto`) la usa. NADA MÁS
     cambia con eso: mismo INSERT, misma huella, misma transacción.
     """
+    if desde not in ("panel", "lucy"):
+        raise ValueError(f"origen de proyecto desconocido: {desde!r}")
     nombre = nombre_de_proyecto_que_vale(nombre)
     if area not in {a["clave"] for a in await areas()}:
         raise ProyectoNoSeCrea("grupo", "ese grupo no existe")
@@ -1570,15 +1580,25 @@ async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> di
         # POR NOMBRE y `conn.execute` devuelve un cursor con la factoría de la
         # conexión, que en SQLite son tuplas — el mismo motivo por el que
         # `convertir_tarea_en_proyecto` lee su `RETURNING id` con `cur`.
-        await cur.execute(
-            """
-            INSERT INTO log_acciones
-              (actor, accion, tabla, registro_id, antes, despues, motivo)
-            VALUES ('panel', 'crear', 'proyectos', %s, NULL, %s,
-                    'Proyecto nuevo, creado desde el panel de proyectos')
-            RETURNING id
-            """,
-            (nuevo["id"], json.dumps(nuevo, default=str, ensure_ascii=False)))
+        huella = (nuevo["id"], json.dumps(nuevo, default=str, ensure_ascii=False))
+        if desde == "lucy":
+            await cur.execute(
+                """
+                INSERT INTO log_acciones
+                  (actor, accion, tabla, registro_id, antes, despues, motivo)
+                VALUES ('lucy', 'crear', 'proyectos', %s, NULL, %s,
+                        'Proyecto nuevo, creado por Telegram')
+                RETURNING id
+                """, huella)
+        else:
+            await cur.execute(
+                """
+                INSERT INTO log_acciones
+                  (actor, accion, tabla, registro_id, antes, despues, motivo)
+                VALUES ('panel', 'crear', 'proyectos', %s, NULL, %s,
+                        'Proyecto nuevo, creado desde el panel de proyectos')
+                RETURNING id
+                """, huella)
         nuevo["log_id"] = (await cur.fetchone())["id"]
         return nuevo
 

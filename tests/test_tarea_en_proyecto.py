@@ -1268,9 +1268,15 @@ def test_los_casos_de_no_cubren_cada_raise_de_no_de_negocio_de_crear():
     (eso lo hace el comportamiento de la prueba de arriba); solo evita que un
     `raise` nuevo quede sin caso."""
     arbol = ast.parse(textwrap.dedent(inspect.getsource(crud.crear_desde_interpretacion)))
+    # `raise NoDeNegocio(...)`, y `raise await _la_pregunta_del_proyecto(...)`,
+    # que arma el mismo `NoDeNegocio` con sus dos textos (E8, vuelta 2).
+    def _es_no_de_negocio(exc):
+        if isinstance(exc, ast.Await):
+            exc = exc.value
+        return (isinstance(exc, ast.Call) and isinstance(exc.func, ast.Name)
+                and exc.func.id in ("NoDeNegocio", "_la_pregunta_del_proyecto"))
     raises = [n for n in ast.walk(arbol) if isinstance(n, ast.Raise)
-              and isinstance(n.exc, ast.Call) and isinstance(n.exc.func, ast.Name)
-              and n.exc.func.id == "NoDeNegocio"]
+              and _es_no_de_negocio(n.exc)]
     # Los 4 «No creé la tarea: {e}» de responsable, área, «Primero:» y proyecto
     # cerrado, la PREGUNTA del proyecto que no existe (E8), el «ya existía», la
     # clasificación, el dueño de cita y la migración de citas.

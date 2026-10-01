@@ -45,7 +45,27 @@ class NoDeNegocio(ValueError):
     «Primero:» que no valen, proyecto cerrado, cita/tarea que ya existía…): un
     motivo pensado para leerse. Es lo ÚNICO que el botón de la tarjeta de
     Telegram enseña tal cual; cualquier otro `ValueError` es un fallo de
-    programación y sigue con su traceback y el aviso genérico."""
+    programación y sigue con su traceback y el aviso genérico.
+
+    DOS LECTORES, DOS TEXTOS. `str(e)` es lo que lee el MODELO (la herramienta
+    se lo devuelve en el `ERROR: …`): puede nombrar herramientas y hablar de
+    Tiziano en tercera persona. `para_la_persona` es lo que lee TIZIANO en la
+    tarjeta de Telegram, cuando el que pulsó ✅ fue él y no el modelo: una frase
+    corta, dirigida a él, entera y sin nombres de herramientas. Sin él, la
+    persona lee `str(e)`. Todo sitio que muestre un `NoDeNegocio` a una persona
+    lo hace con `lo_que_lee_la_persona(e)`, nunca con `str(e)`."""
+
+    def __init__(self, motivo: str, para_la_persona: str | None = None):
+        super().__init__(motivo)
+        self.para_la_persona = para_la_persona
+
+
+def lo_que_lee_la_persona(e: Exception) -> str:
+    """El texto de un `NoDeNegocio` para quien pulsó el botón: el suyo si lo
+    trae, y si no el motivo de siempre."""
+    if isinstance(e, NoDeNegocio) and e.para_la_persona:
+        return e.para_la_persona
+    return str(e)
 
 
 class FaltanDatos(Exception):
@@ -309,7 +329,7 @@ async def crear_proyecto(nombre: str, grupo: str,
             f"{await los_grupos_y_los_responsables()}.") from e
     try:
         nuevo = await db.crear_proyecto(
-            str(nombre or ""), str(grupo or "").strip(), chat)
+            str(nombre or ""), str(grupo or "").strip(), chat, desde="lucy")
     except db.ProyectoNoSeCrea as e:
         if e.clave == "responsable":
             raise NoDeNegocio(
@@ -325,20 +345,44 @@ async def crear_proyecto(nombre: str, grupo: str,
     return nuevo, nuevo.get("log_id")
 
 
-async def _la_pregunta_del_proyecto(nombre: str) -> str:
-    """Lo que se le dice al modelo cuando nombró un proyecto que NO existe.
+# Lo que cabe en el aviso de una tarjeta de Telegram (el tope de Telegram es
+# 200 caracteres; 190 deja margen). Es un dato de Telegram, no medido en Lucy.
+LARGO_DEL_AVISO = 190
 
-    El texto ES la pregunta que hay que hacerle a Tiziano («¿lo creo en CDS,
-    ACD o IA, y quién es el responsable?», diseño §7), con las dos listas
-    puestas: así, aunque el modelo se limite a repetir el motivo, Tiziano lee
-    la pregunta completa y con las opciones de verdad.
+
+async def _la_pregunta_del_proyecto(nombre: str) -> NoDeNegocio:
+    """El «no» de cuando se nombró un proyecto que NO existe, con sus DOS textos.
+
+    · Para el MODELO (`str(e)`): dice qué hacer y por qué herramienta.
+    · Para TIZIANO (`para_la_persona`, lo que enseña la tarjeta): la pregunta
+      del diseño §7 dirigida a él, con las dos listas puestas, ENTERA. Cabe en
+      `LARGO_DEL_AVISO`: lo que se acorta es el NOMBRE del proyecto (con «…»),
+      nunca la pregunta; y si ni con un nombre mínimo caben las listas (muchos
+      grupos), se pregunta sin ellas, que sigue siendo una frase completa.
     """
-    return (f"No creé la tarea: el proyecto «{nombre.strip()[:60]}» no existe, "
-            f"y no lo creo por mi cuenta — nacería sin grupo y sin responsable. "
-            f"Pregúntale a Tiziano si lo crea, "
-            f"{await los_grupos_y_los_responsables()}; cuando te lo diga, "
-            f"crealo con la herramienta `crear_proyecto` y vuelve a crear la "
-            f"tarea.")
+    dicho = nombre.strip()
+    listas = await los_grupos_y_los_responsables()
+    modelo = (f"No creé la tarea: el proyecto «{dicho[:60]}» no existe, "
+              f"y no lo creo por mi cuenta — nacería sin grupo y sin responsable. "
+              f"Pregúntale a Tiziano si lo crea, {listas}; cuando te lo diga, "
+              f"crealo con la herramienta `crear_proyecto` y vuelve a crear la "
+              f"tarea.")
+
+    def _frase(con_listas: bool, nombre_visible: str) -> str:
+        pide = (f"Dime {listas}" if con_listas
+                else "Dime en qué grupo va y quién es el responsable")
+        return (f"El proyecto «{nombre_visible}» no existe. {pide}, "
+                f"y lo creo.")
+
+    for con_listas in (True, False):
+        frase = _frase(con_listas, dicho)
+        if len(frase) <= LARGO_DEL_AVISO:
+            break
+        sobra = len(frase) - LARGO_DEL_AVISO
+        if len(dicho) - sobra - 1 >= 8:
+            frase = _frase(con_listas, dicho[:len(dicho) - sobra - 1] + "…")
+            break
+    return NoDeNegocio(modelo, para_la_persona=frase)
 
 
 async def crear_desde_interpretacion(
@@ -417,7 +461,7 @@ async def crear_desde_interpretacion(
     dicho = str(r.get("proyecto") or "").strip()
     proyecto_id = await db.proyecto_vivo_por_nombre(dicho)
     if clas == "tarea" and dicho and proyecto_id is None:
-        raise NoDeNegocio(await _la_pregunta_del_proyecto(dicho))
+        raise await _la_pregunta_del_proyecto(dicho)
 
     # UN PROYECTO CERRADO NO RECIBE TAREAS (pieza 2 del diseño «proyectos»), por
     # la MISMA puerta que el alta del panel y las derivadas. Se corta la
