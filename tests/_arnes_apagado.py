@@ -16,7 +16,7 @@ Los dobles están en el borde y son solo estos:
   · `agente.atender`: duerme 30 s (un turno largo de DeepSeek) o termina al
     instante (escenario `fin`).
 Uso: python _arnes_apagado.py ESCENARIO   con la raíz del repo como cwd.
-ESCENARIOS: turno | guardar | dos | fin | quieto
+ESCENARIOS: turno | guardar | dos | fin | quieto | lote
 Imprime una línea `RESULTADO {json}`.
 """
 import asyncio
@@ -173,7 +173,12 @@ def _upd(uid, mid):
         "from": {"id": 111, "is_bot": False, "first_name": "T"}, "text": "x"}}
 
 
-_cola = [[_upd(1000, 7), _upd(1001, 8)] if ESC == "dos" else [_upd(1000, 7)]]
+_cola = [[_upd(1000, 7), _upd(1001, 8)] if ESC == "dos" else
+         [] if ESC == "lote" else [_upd(1000, 7)]]
+if ESC == "lote":   # tres filas ya en la bandeja: tomar_pendientes las reclama juntas
+    for _i in (1, 2, 3):
+        FILAS[_i] = dict(estado="sin_procesar", intentos=0, chat_id=111, msg=_i,
+                         tipo_entrada="texto", contenido_raw="x", transcripcion=None)
 
 
 async def _do_post(self, endpoint, data, request_data=None, **kw):
@@ -217,6 +222,30 @@ def _resultado():
             "filas": {str(i): [f["estado"], f["intentos"]] for i, f in FILAS.items()},
             "offsets": OFFSETS}
 
+
+# Marcas de ORDEN del apagado: cuándo terminan de verdad el panel y el bucle.
+import uvicorn  # noqa: E402
+
+_serve = uvicorn.Server.serve
+
+
+async def _serve_marcado(self, *a, **k):
+    try:
+        return await _serve(self, *a, **k)
+    finally:
+        ev("panel termino")
+
+uvicorn.Server.serve = _serve_marcado
+_bucle = interpretar.bucle
+
+
+async def _bucle_marcado(bot):
+    try:
+        return await _bucle(bot)
+    finally:
+        ev("bucle termino")
+
+interpretar.bucle = _bucle_marcado
 
 threading.Thread(target=_disparar, daemon=True).start()
 import main as lucy_main  # noqa: E402

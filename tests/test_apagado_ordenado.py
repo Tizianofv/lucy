@@ -75,6 +75,27 @@ def test_dos_updates_en_la_misma_tanda_no_se_pierden():
     assert 1002 in res["offsets"], res["offsets"]
 
 
+def test_lote_reclamado_completo_vuelve_a_la_cola_con_la_senal_a_mitad():
+    # `tomar_pendientes` reclama hasta 5 filas juntas: la 1 queda a medias y la
+    # 2 y la 3 ni empezaron, pero las tres están 'procesando'.
+    res, r = _correr("lote")
+    _ordenado(res, r)
+    assert res["filas"] == {"1": ["sin_procesar", 0], "2": ["sin_procesar", 0],
+                            "3": ["sin_procesar", 0]}, res["filas"]
+
+
+def test_el_panel_y_el_bucle_terminan_antes_de_devolver_y_de_cerrar():
+    # Orden observado, no prometido: el panel y el bucle MUEREN de verdad
+    # (sus tareas terminan) antes de que se lea qué quedó a medias y antes de
+    # cerrar la base.
+    res, r = _correr("turno")
+    ev = res["eventos"]
+    assert "panel termino" in ev and "bucle termino" in ev, ev
+    assert ev.index("panel termino") < ev.index("db.cerrar"), ev
+    assert ev.index("bucle termino") < ev.index("SQL devolver_reclamadas"), ev
+    assert ev.index("panel termino") < ev.index("SQL devolver_reclamadas"), ev
+
+
 def test_fila_terminada_no_se_revive_al_apagar():
     res, r = _correr("fin")
     _ordenado(res, r)
@@ -162,3 +183,50 @@ def test_sin_ids_no_toca_la_base(monkeypatch):
             raise AssertionError("no debía abrir conexión")
     monkeypatch.setattr(base, "pool", _Boom())
     assert asyncio.run(base.devolver_reclamadas([])) == 0
+
+
+# ── los ids se sueltan si el lote revienta (no así si lo cancelan) ──────────
+import cerebro.interpretar as interpretar  # noqa: E402
+
+
+@pytest.fixture
+def _limpio():
+    interpretar._reclamadas.clear()
+    yield
+    interpretar._reclamadas.clear()
+
+
+async def _correr_bucle(monkeypatch, *, falla_la_primera: bool):
+    llamadas = {"n": 0}
+
+    async def tomar(*a, **k):
+        llamadas["n"] += 1
+        if llamadas["n"] == 1:
+            return [dict(id=i) for i in (10, 11, 12)]
+        raise asyncio.CancelledError   # fin de la prueba: lo que hace el apagado
+
+    visto = []
+
+    async def procesar(fila, bot):
+        visto.append(fila["id"])
+        if falla_la_primera and fila["id"] == 10:
+            raise RuntimeError("la base se cayó dentro de _fallo")
+
+    monkeypatch.setattr(interpretar.db, "tomar_pendientes", tomar)
+    monkeypatch.setattr(interpretar, "_procesar", procesar)
+    monkeypatch.setattr(interpretar, "INTERVALO_S", 0)
+    with pytest.raises(asyncio.CancelledError):
+        await interpretar.bucle(object())
+    return visto
+
+
+async def test_si_el_lote_revienta_se_sueltan_todos_los_ids(monkeypatch, _limpio):
+    visto = await _correr_bucle(monkeypatch, falla_la_primera=True)
+    assert visto == [10], visto              # el lote se cortó en la 10
+    assert interpretar.reclamadas_sin_terminar() == []
+
+
+async def test_control_si_nada_falla_tambien_quedan_sueltos(monkeypatch, _limpio):
+    visto = await _correr_bucle(monkeypatch, falla_la_primera=False)
+    assert visto == [10, 11, 12]
+    assert interpretar.reclamadas_sin_terminar() == []

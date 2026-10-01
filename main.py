@@ -67,6 +67,12 @@ def _servidor_del_panel(cfg):
     LA ÚNICA FORMA de apagar en este proceso es la de PTB: SIGTERM -> PTB
     detiene el sondeo, deja terminar los handlers, y llama a `_al_apagar`, que
     es quien para el panel. Por eso el panel no escucha señales.
+
+    FRONTERA (medida el 1-oct-2026 por el testigo): esto cubre UN SIGTERM. Un
+    SEGUNDO SIGTERM mientras PTB ya está apagando levanta otro `SystemExit`
+    dentro del `finally` de `run_polling` y lo vuelve a desordenar (tareas
+    destruidas, `_al_apagar` sin correr). No se arregla aquí; no se sabe si
+    Railway manda una segunda señal.
     """
     import contextlib
 

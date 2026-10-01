@@ -236,9 +236,19 @@ async def bucle(bot) -> None:
         try:
             filas = await db.tomar_pendientes()
             _reclamadas.update(f["id"] for f in filas)
-            for fila in filas:
-                await _procesar(fila, bot)
-                _reclamadas.discard(fila["id"])
+            try:
+                for fila in filas:
+                    await _procesar(fila, bot)
+                    _reclamadas.discard(fila["id"])
+            except Exception:
+                # Un fallo que sale de `_procesar`/`_fallo` (p. ej. la base
+                # caída) corta el lote: los ids que quedaran aquí los
+                # devolvería `_al_apagar` aunque otro contenedor ya los
+                # hubiera reclamado de nuevo tras el rescate. Se sueltan todos.
+                # `CancelledError` NO es `Exception`: en el apagado los ids se
+                # conservan a propósito, es lo que `_al_apagar` va a devolver.
+                _reclamadas.difference_update(f["id"] for f in filas)
+                raise
         except asyncio.CancelledError:
             raise  # apagado ordenado: no lo tratamos como error
         except Exception:
