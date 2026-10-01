@@ -29,8 +29,9 @@ from datetime import timedelta
 
 import pytest
 
-from test_escrituras_proyecto import (FECHA_ESCRITA, _LectorDeFormularios, _escrito, _formularios_de,  # noqa: F401
-                                      _la_marcada, _lo_que_manda_el_navegador, _otra_opcion,
+from test_escrituras_proyecto import (FECHA_ESCRITA, FECHA_Y_HORA_ESCRITA, _LectorDeFormularios,  # noqa: F401
+                                      _escrito, _formularios_de, _la_marcada,
+                                      _lo_que_manda_el_navegador, _otra_opcion,
                                       _primera_habilitada, _problemas_de_html_simple, _valor)
 from test_grupo_ia import _archivos_de_texto, _ROOT
 import test_pagina_proyectos as _pagina
@@ -313,7 +314,7 @@ def test_G12_un_titulo_vacio_o_largo_se_rechaza_y_vuelve_al_formulario_abierto(m
     assert foto(mt) == foto0
     html = ver(mt, p=2, error="tarea_titulo", editar_tarea=10)
     assert "El título no puede quedar vacío ni pasar de 200 caracteres." in html
-    assert re.search(r'<form class="renombrar" method="post" action="/proyectos/tarea/10/titulo" >', html)
+    assert re.search(r'<form class="renombrar" method="post" action="/proyectos/tarea/10/titulo"[^>]*>', html)
 
 
 def test_el_tope_del_titulo_son_200(mt):
@@ -429,7 +430,7 @@ def test_un_texto_malo_vuelve_al_comentario_abierto(mt, texto):
     assert _adonde(r) == "/proyectos?p=2&error=tarea_comentario&t=10&editar_comentario=50#tarea-10"
     assert foto(mt) == foto0
     html = ver(mt, p=2, t=10, editar_comentario=50, error="tarea_comentario")
-    assert re.search(r'<form class="renombrar" method="post" action="/proyectos/tarea/10/comentario/50/editar" >', html)
+    assert re.search(r'<form class="renombrar" method="post" action="/proyectos/tarea/10/comentario/50/editar"[^>]*>', html)
 
 
 # ── Agregar una tarea dentro del proyecto (P10) ──────────────────────────
@@ -555,24 +556,43 @@ _TAREAS_DE_2 = ["/proyectos/tarea/10/hecha", "/proyectos/tarea/10/titulo",
 _DETALLE_10 = ["/proyectos/tarea/10/comentar", "/proyectos/tarea/10/comentario/50/editar",
                "/proyectos/tarea/10/responsable"]
 
+# La ventanita de «+ Proyecto en X» (1-oct-2026) la escribe el servidor en CADA
+# vista, una por grupo de la lista de la izquierda: un formulario
+# `/proyectos/nuevo` más por grupo del mundo de prueba (`_pagina.AREAS`).
+_V = ["/proyectos/nuevo"] * len(_pagina.AREAS)
+
 # vista -> (consulta, TODAS las acciones POST que tiene que tener, exactas)
 _VISTAS_DE_TAREAS = {
-    "abierto": ({"p": 2}, _A + _TAREAS_DE_2),
-    "detalle": ({"p": 2, "t": 10}, _A + _TAREAS_DE_2 + _DETALLE_10),
-    "editar_titulo": ({"p": 2, "editar_tarea": 10}, _A + _TAREAS_DE_2),
-    "confirmar_borrar": ({"p": 2, "confirmar_borrar": 10}, _A + _TAREAS_DE_2 + ["/proyectos/tarea/10/borrar"]),
-    "editar_comentario": ({"p": 2, "t": 10, "editar_comentario": 50}, _A + _TAREAS_DE_2 + _DETALLE_10),
-    "confirmar_cerrar": ({"p": 2, "confirmar": "cerrar"}, _A + _TAREAS_DE_2 + ["/proyectos/2/estado"]),
-    "editar_nombre": ({"p": 2, "editar": "nombre"}, _A + _TAREAS_DE_2),
+    "abierto": ({"p": 2}, _A + _TAREAS_DE_2 + _V),
+    "detalle": ({"p": 2, "t": 10}, _A + _TAREAS_DE_2 + _DETALLE_10 + _V),
+    "editar_titulo": ({"p": 2, "editar_tarea": 10}, _A + _TAREAS_DE_2 + _V),
+    "confirmar_borrar": ({"p": 2, "confirmar_borrar": 10}, _A + _TAREAS_DE_2 + ["/proyectos/tarea/10/borrar"] + _V),
+    "editar_comentario": ({"p": 2, "t": 10, "editar_comentario": 50}, _A + _TAREAS_DE_2 + _DETALLE_10 + _V),
+    "confirmar_cerrar": ({"p": 2, "confirmar": "cerrar"}, _A + _TAREAS_DE_2 + ["/proyectos/2/estado"] + _V),
+    "editar_nombre": ({"p": 2, "editar": "nombre"}, _A + _TAREAS_DE_2 + _V),
     "cerrado": ({"p": 3}, ["/proyectos/3/area", "/proyectos/3/estado", "/proyectos/3/nombre",
                            "/proyectos/3/responsable", "/proyectos/tarea/40/reabrir",
-                           "/proyectos/tarea/40/titulo"]),
-    "sueltas": ({"g": "CDS"}, ["/proyectos/tarea/30/hecha", "/proyectos/tarea/30/titulo"]),
-    "sin_grupo": ({"sin_grupo": 1}, ["/proyectos/tarea/31/hecha", "/proyectos/tarea/31/titulo"]),
-    "nuevo": ({"nuevo": "CDS"}, ["/proyectos/nuevo"]),
+                           "/proyectos/tarea/40/titulo"] + _V),
+    "sueltas": ({"g": "CDS"}, ["/proyectos/tarea/30/hecha", "/proyectos/tarea/30/titulo"] + _V),
+    "sin_grupo": ({"sin_grupo": 1}, ["/proyectos/tarea/31/hecha", "/proyectos/tarea/31/titulo"] + _V),
+    "nuevo": ({"nuevo": "CDS"}, ["/proyectos/nuevo"] + _V),
+    # El renglón «¿sale una tarea nueva de ésta?», abierto por el servidor
+    # (`?derivar=`): no agrega ningún formulario —los campos viven DENTRO del
+    # de marcar hecha, que sigue siendo el mismo envío—, pero sí los campos de
+    # la tarea nueva.
+    "derivada": ({"p": 2, "derivar": 10}, _A + _TAREAS_DE_2 + _V),
+    # La misma tarea suelta: ahí el renglón SÍ ofrece el grupo (la nueva se
+    # queda en el de la tarea que se cierra).
+    "derivada_suelta": ({"g": "CDS", "derivar": 30},
+                        ["/proyectos/tarea/30/hecha", "/proyectos/tarea/30/titulo"] + _V),
 }
 
 _ES_DE_TAREA = re.compile(r"/proyectos/(tarea/\d+/.*|\d+/tareas)")
+
+
+def _lleva_derivada(form: dict) -> bool:
+    """¿Ese formulario trae los renglones de «¿sale una tarea nueva de ésta?»?"""
+    return any((c["name"] or "").startswith("deriva_titulo_") for c in form["campos"])
 
 
 @pytest.mark.parametrize("vista", sorted(_VISTAS_DE_TAREAS))
@@ -604,6 +624,11 @@ def test_cada_formulario_de_tarea_enviado_como_el_navegador_escribe_en_la_tarea_
         if not _ES_DE_TAREA.fullmatch(form["accion"]):
             continue                          # los del proyecto: `tests/test_escrituras_proyecto.py`
         escoger = _otra_opcion if form["accion"].endswith("/responsable") else _la_marcada
+        if form["accion"].endswith("/hecha") and _lleva_derivada(form):
+            # El responsable de la tarea nueva lo CAMBIA la persona: así, un
+            # `name` mal escrito (la hija nacería sin responsable) se nota.
+            def escoger(c):
+                return _otra_opcion(c) if c["name"].startswith("deriva_resp_") else _la_marcada(c)
         datos = _lo_que_manda_el_navegador(form, _escrito, escoger)
         antes = foto(m)
         r = _cliente(config.CHAT_ID_DUENO).post(form["accion"], data=datos, follow_redirects=False)
@@ -635,11 +660,44 @@ def test_cada_formulario_de_tarea_enviado_como_el_navegador_escribe_en_la_tarea_
             c = comentario(m, ids.pop())
             assert (c["texto"], c["tarea_id"], c["autor_chat_id"]) == ("Escrito en texto", tid, gente.dueno), donde
         else:
-            assert igual_salvo(antes, despues, tareas={tid}, log_acciones=nuevas), (
+            # La vista `derivada` trae los renglones de «¿sale una tarea nueva
+            # de ésta?» DENTRO del formulario de marcar hecha: el mismo envío
+            # que cierra la tarea crea la hija, así que la única fila de más
+            # que puede aparecer es ésa (y solo cuando la vista los tiene
+            # abiertos).
+            hijas = _nuevos(antes, despues, "tareas") if _lleva_derivada(form) else set()
+            if accion == "hecha" and consulta.get("derivar") == tid:
+                # Esa tarea es la que la vista abre para ofrecer la que sigue: si el
+                # formulario de marcar hecha no trae sus campos (o el `name`
+                # del título no llega a la ruta), la hija no nace y la madre
+                # se cierra sola. Se exige la hija.
+                cuantos = len([c for c in form["campos"] if (c["name"] or "").startswith("deriva_titulo_")])
+                assert cuantos >= 1 and len(hijas) == cuantos, (donde, "la tarea que sigue no nació")
+            assert igual_salvo(antes, despues, tareas={tid} | hijas, log_acciones=nuevas), (
                 donde, "cambió OTRA cosa")
             t = tarea(m, tid)
             if accion == "hecha":
                 assert t["estado"] == "hecha" and t["completado_en"] is not None, donde
+                if hijas:
+                    por_titulo = {h["titulo"]: h for h in (tarea(m, i) for i in hijas)}
+                    nombres_n = sorted(c["name"] for c in form["campos"]
+                                       if c["name"].startswith("deriva_titulo_"))
+                    assert len(por_titulo) == len(hijas) == len(nombres_n), donde
+                    for nombre in nombres_n:
+                        n = nombre.rsplit("_", 1)[1]
+                        hija = por_titulo[f"Escrito en deriva_titulo_{tid}_{n}"]
+                        assert hija["deriva_de_id"] == tid, donde
+                        elegido = _otra_opcion(next(c for c in form["campos"]
+                                                    if c["name"] == f"deriva_resp_{tid}_{n}"))
+                        assert hija["responsable_chat_id"] == chat_de[_valor(elegido)] is not None, donde
+                        # Con proyecto, la nueva va al MISMO proyecto y sin grupo
+                        # propio; suelta, se queda con el grupo que se eligió (el
+                        # de la tarea que se cierra).
+                        if t["proyecto_id"]:
+                            assert (hija["proyecto_id"], hija["area"]) == (t["proyecto_id"], None), donde
+                        else:
+                            assert (hija["proyecto_id"], hija["area"]) == (None, t["area"]), donde
+                        assert str(hija["vence_en"]).startswith(FECHA_Y_HORA_ESCRITA[:10]), donde
             elif accion == "reabrir":
                 assert t["estado"] == "pendiente" and t["completado_en"] is None, donde
             elif accion == "titulo":
@@ -670,7 +728,9 @@ def test_el_envio_escribe_algo_en_todo_control_que_la_persona_llena_en_todas_las
                     continue
                 vistos.add(c["tipo"])
                 assert _escrito(c) != "", (consulta, form["accion"], c)
-    assert vistos == {"text", "date", "textarea"}, vistos
+    # `datetime-local` entra con el renglón de la tarea derivada: es el MISMO
+    # campo de día y hora que ofrece /tareas en su renglón.
+    assert vistos == {"text", "date", "textarea", "datetime-local"}, vistos
 
 
 # ── Cada elemento editable en el sitio tiene su formulario, y el servidor lo dibuja sin JS ──
@@ -721,9 +781,9 @@ def test_sin_javascript_cada_edicion_tiene_su_enlace_y_el_servidor_la_dibuja(mt)
     assert '<noscript><a class="nota" href="/proyectos?p=2&amp;t=10&amp;editar_comentario=50#tarea-10">' in html
     assert html.count("<noscript>") == 1 + 3 + 1
     abierto = ver(mt, p=2, editar_tarea=12)
-    assert re.search(r'<form class="renombrar" method="post" action="/proyectos/tarea/12/titulo" >', abierto)
-    assert re.search(r'<span class="titulo" data-dbl="titulo"[^>]*hidden>tarea doce</span>', abierto)
-    assert re.search(r'action="/proyectos/tarea/10/titulo" hidden>', abierto)       # las otras siguen escondidas
+    assert re.search(r'<form class="renombrar" method="post" action="/proyectos/tarea/12/titulo"[^>]*>', abierto)
+    assert re.search(r'<a class="titulo" data-dbl="titulo"[^>]*hidden>tarea doce</a>', abierto)
+    assert re.search(r'action="/proyectos/tarea/10/titulo"[^>]*hidden>', abierto)   # las otras siguen escondidas
 
 
 # ── «Fecha límite» una sola vez; nunca un número de chat ─────────────────
@@ -752,6 +812,23 @@ def test_el_selector_de_la_tarea_ofrece_sin_responsable_y_las_tres_personas(mt):
 
 
 # ── La × y el botón de marcar son lo que dice la maqueta ─────────────────
+
+def test_el_titulo_es_el_enlace_que_abre_el_detalle_y_ya_no_hay_enlace_chiquitito(mt):
+    """Como en la maqueta: un clic en la tarea enseña sus opciones. El enlace
+    «▸ N» se fue —el número de comentarios queda como TEXTO— y sin JavaScript el
+    título es un enlace normal: al detalle, y de vuelta si ya está abierto."""
+    cerrado = ver(mt, p=2)
+    assert ('<a class="titulo" data-dbl="titulo" href="/proyectos?p=2&amp;t=10#tarea-10"'
+            in cerrado)
+    assert 'class="detalle-enlace"' not in cerrado
+    sin_css = re.sub(r"<style>.*?</style>", "", cerrado, flags=re.S)
+    assert "▸" not in sin_css and "▾" not in sin_css
+    assert cerrado.count("1 comentario<") == 2          # la 10 y la 12: texto, no enlace
+    assert "primer comentario" not in cerrado           # el detalle está cerrado
+    abierto = ver(mt, p=2, t=10)
+    assert '<a class="titulo" data-dbl="titulo" href="/proyectos?p=2#tarea-10"' in abierto
+    assert "primer comentario" in abierto
+
 
 def test_la_x_va_al_final_a_la_derecha_de_cada_fila(mt):
     html = ver(mt, p=2)
@@ -795,8 +872,9 @@ def _rutas_post_de_tareas():
                     actor = tuple(k.value.value for k in n.keywords
                                   if k.arg == "actor" and isinstance(k.value, ast.Constant))
                     escribe.append((f"crud.{n.func.attr}({n.args[0].value})", actor))
-                elif n.func.attr in ("marcar_tarea_hecha", "reabrir_tarea", "asignar_responsable",
-                                     "comentar_tarea", "editar_comentario", "crear_tarea_desde_el_panel"):
+                elif n.func.attr in ("marcar_tarea_hecha", "cerrar_y_derivar", "reabrir_tarea",
+                                     "asignar_responsable", "comentar_tarea", "editar_comentario",
+                                     "crear_tarea_desde_el_panel"):
                     escribe.append((f"db.{n.func.attr}", ()))
                 elif n.func.attr == "puede_entrar":
                     sesion = True
@@ -817,8 +895,11 @@ def test_toda_ruta_post_de_tarea_pide_sesion_y_escribe_por_una_puerta_con_actor_
         puerta, actor = r["escribe"][0]
         if puerta.startswith("crud."):
             assert actor == ("panel",), f"{nombre}: actor {actor}"
+    # «Marcar hecha» escribe por `db.cerrar_y_derivar`, LA MISMA puerta que usa
+    # /tareas: cerrar una tarea —con la que sale de ella o sin ella— se decide
+    # en un solo sitio (Tiziano, 1-oct-2026).
     assert {r["escribe"][0][0] for r in rutas.values()} == {
-        "db.crear_tarea_desde_el_panel", "db.marcar_tarea_hecha", "db.reabrir_tarea", "crud.editar(tareas)",
+        "db.crear_tarea_desde_el_panel", "db.cerrar_y_derivar", "db.reabrir_tarea", "crud.editar(tareas)",
         "crud.borrar(tareas)", "db.asignar_responsable", "db.comentar_tarea", "db.editar_comentario"}
 
 
@@ -883,6 +964,91 @@ def test_las_puertas_nuevas_estan_donde_las_dicen_sus_hermanas():
     assert "AND tarea_id = %s" in cuerpo and "t.borrado_en IS NULL" in cuerpo      # G8
 
 
+# ── La tarea que sale de otra: /tareas y Proyectos deciden IGUAL ─────────
+
+def test_hermanos_las_dos_pantallas_arman_y_escriben_la_derivada_con_lo_mismo():
+    """`/tareas` (`guardar_tareas`) y la página de Proyectos
+    (`marcar_tarea_hecha_desde_proyectos`) ofrecen la tarea derivada con LAS
+    MISMAS piezas: se leen y se validan con `_derivadas_pedidas` y se escriben
+    por `db.cerrar_y_derivar`. SALE DEL ÁRBOL SINTÁCTICO de `web/app.py`: no de
+    una lista de nombres escrita a mano."""
+    fuente = ast.parse((_ROOT / "web" / "app.py").read_text(encoding="utf-8"))
+    fns = {f.name: f for f in ast.walk(fuente) if isinstance(f, ast.AsyncFunctionDef)}
+
+    def usa(fn, nombre):
+        """Lo NOMBRA, llamándolo (`db.cerrar_y_derivar(...)`) o pasándolo como
+        lector (`_responsable_por_nombre`): las dos formas cuentan."""
+        return any(nombre in (getattr(n, "id", None), getattr(n, "attr", None))
+                   for n in ast.walk(fns[fn]))
+
+    cierran = {n for n in fns if usa(n, "cerrar_y_derivar")}
+    assert cierran == {"guardar_tareas", "marcar_tarea_hecha_desde_proyectos"}, cierran
+    for n in sorted(cierran):
+        assert usa(n, "_derivadas_pedidas"), f"{n} no valida la derivada por la pieza común"
+    # Lo ÚNICO que cambia entre las dos es cómo se lee el responsable, porque
+    # las dos páginas lo escriben distinto (chat / nombre), no qué se decide.
+    assert usa("marcar_tarea_hecha_desde_proyectos", "_responsable_por_nombre")
+    assert not usa("guardar_tareas", "_responsable_por_nombre")
+
+
+def test_la_tarea_que_sigue_nace_con_lo_que_se_escribio_por_la_puerta_de_siempre(mt, gente):
+    """Título, fecha, grupo, responsable y de qué tarea sale, y la huella de
+    creación: todo por `db.cerrar_y_derivar`, en el mismo gesto que cierra la
+    madre. El responsable va y vuelve por NOMBRE: el número de chat no se
+    escribe en la página."""
+    antes = foto(mt)
+    r = post("/proyectos/tarea/10/hecha", {
+        "deriva_titulo_10_1": "  La que sigue  ", "deriva_vence_10_1": FECHA_Y_HORA_ESCRITA,
+        "deriva_resp_10_1": "Persona Dos"})
+    assert _adonde(r).startswith("/proyectos?p=2&hecho=tarea_hecha&derivadas=")
+    hija_id = int(re.search(r"derivadas=(\d+)", _adonde(r)).group(1))
+    hija = tarea(mt, hija_id)
+    assert (hija["titulo"], hija["proyecto_id"], hija["area"], hija["responsable_chat_id"],
+            hija["deriva_de_id"]) == ("La que sigue", 2, None, gente.rosi, 10)
+    assert str(hija["vence_en"]).startswith(FECHA_Y_HORA_ESCRITA[:10])
+    assert tarea(mt, 10)["estado"] == "hecha"
+    h = huellas(mt)[-1]
+    assert (h["actor"], h["accion"], h["tabla"], h["registro_id"]) == ("panel", "crear", "tareas", hija_id)
+    assert igual_salvo(antes, foto(mt), tareas={10, hija_id}, log_acciones={x["id"] for x in huellas(mt)})
+    html = ver(mt, p=2, hecho="tarea_hecha", derivadas=str(hija_id))
+    assert f"Salió la tarea que sigue (#{hija_id})." in html
+    # El desplegable del responsable de la tarea nueva ofrece NOMBRES: el
+    # número de chat no se escribe en la página.
+    fila = ver(mt, p=2, derivar=10)
+    assert '<option value="Persona Dos">' in fila and str(gente.rosi) not in fila
+
+
+def test_en_un_proyecto_cerrado_la_tarea_que_sigue_no_se_crea_y_la_madre_no_se_cierra(mt):
+    """El proyecto cerrado no recibe la tarea nueva, y por eso la vieja NO se
+    cierra (D6). Sin renglón, la misma tarea sí se cierra: lo que el proyecto
+    cerrado impide es la tarea nueva, no cerrar lo que ya estaba."""
+    mt.tarea(70, "pendiente de un cerrado", proyecto=3)
+    foto0 = foto(mt)
+    r = post("/proyectos/tarea/70/hecha", {"deriva_titulo_70_1": "La que sigue"})
+    assert "error=tarea_derivada_cerrado" in _adonde(r)
+    assert foto(mt) == foto0
+    assert "no recibe la tarea nueva" in ver(mt, p=3, error="tarea_derivada_cerrado")
+    assert _adonde(post("/proyectos/tarea/70/hecha")).startswith("/proyectos?p=3&hecho=tarea_hecha")
+    assert tarea(mt, 70)["estado"] == "hecha"
+
+
+@pytest.mark.parametrize("pagina", ["tareas", "proyectos"])
+def test_hermanos_un_renglon_que_no_vale_no_cierra_la_madre_en_ninguna(mt, pagina):
+    """El mismo renglón malo (un título de más de `LARGO_TITULO`) deja la tarea
+    SIN cerrar en las dos pantallas, y sin escribir nada."""
+    foto0 = foto(mt)
+    largo = "x" * (db.LARGO_TITULO_TAREA + 1)
+    if pagina == "tareas":
+        r = post("/tareas", {"filtro": "", "prev_10": "pendiente", "hecha_10": "1",
+                             "deriva_titulo_10_1": largo})
+        assert _adonde(r).startswith("/tareas?")
+    else:
+        r = post("/proyectos/tarea/10/hecha", {"deriva_titulo_10_1": largo})
+        assert "error=tarea_derivada" in _adonde(r)
+    assert tarea(mt, 10)["estado"] == "pendiente", pagina
+    assert foto(mt) == foto0, pagina
+
+
 def test_el_censo_de_escritores_ve_un_escritor_inventado():
     fuente = "async def inventado(c):\n    await c.execute('UPDATE tareas SET titulo = 1, estado = 2 WHERE id = 3')\n"
     n = [n for n in ast.walk(ast.parse(fuente)) if isinstance(n, ast.Constant)][0]
@@ -894,5 +1060,6 @@ def test_la_nota_del_menu_cuenta_lo_que_se_hace_con_una_tarea():
     import web.menu as menu
     nota = next(p.nota for p in menu.pantallas() if p.ruta == "/proyectos")
     for dicho in ("se marca hecha o se desmarca", "el título", "el responsable", "se comenta",
-                  "se edita un comentario", "se borra con la ×", "nace con el responsable del proyecto"):
+                  "se edita un comentario", "se borra con la ×", "nace con el responsable del proyecto",
+                  "se guarda solo", "la tarea que sale de ella"):
         assert dicho in nota, dicho

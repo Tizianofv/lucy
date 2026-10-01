@@ -579,8 +579,10 @@ def test_todo_lo_que_escribe_el_nombre_pasa_por_la_puerta_y_la_funcion_unica():
     assert censo["sitios"], "el censo no vio ni un execute: estaría verde sin mirar"
     legibles = censo["legibles"]
     # El censo VE a los escritores que se sabe que existen (si dejara de verlos,
-    # estaría ciego, no arreglado).
-    for fn in (db._buscar_o_crear, db.convertir_tarea_en_proyecto, crud.perfil,
+    # estaría ciego, no arreglado). `crud.perfil` SALIÓ de esta lista con E8
+    # (1-oct-2026): dejó de escribir el nombre de un proyecto — su INSERT se
+    # borró, porque un proyecto nuevo ya no nace por el perfil.
+    for fn in (db._buscar_o_crear, db.convertir_tarea_en_proyecto,
                db.crear_proyecto):
         assert tr._id_de(fn) in legibles, (
             f"el censo no ve a {tr._id_de(fn)}: dejó de ver")
@@ -722,6 +724,11 @@ def _herramientas_que_arman_accion() -> set:
 _SIN_CASO_PORQUE = {
     "preferencia": "`crud.guardar_preferencia` siempre escribe y devuelve su "
                    "huella; la rama de olvidar ya devuelve ERROR si es None",
+    "crear_proyecto": "`db.crear_proyecto` escribe la fila y su huella en la "
+                      "MISMA transacción (`RETURNING id` sobre el mismo "
+                      "INSERT), así que el asa nunca falta. El caso que sí hay "
+                      "que probar —crear de verdad y que el parte traiga el "
+                      "log_id— está en `tests/test_crear_proyecto_telegram.py`",
 }
 
 
@@ -950,16 +957,23 @@ def test_titulos_con_espacios_en_los_bordes_se_limpian_y_su_duplicado_se_detecta
     )["nombre"] == "Nuevo"
 
 
-def test_lucy_y_el_perfil_encuentran_y_crean_con_el_nombre_limpio():
+def test_lucy_y_el_perfil_encuentran_con_el_nombre_limpio_y_no_crean_proyectos():
+    """La búsqueda limpia los espacios igual que antes — «  CASA » encuentra a
+    «Casa» y no deja un duplicado—, pero desde E8 (1-oct-2026) el PERFIL ya no
+    crea: un proyecto nuevo nace con grupo y con responsable, por
+    `crear_proyecto`. Antes de E8, `crud.perfil("proyecto", "Tercero", ...)`
+    creaba «Tercero» sin grupo, sin cliente y sin responsable."""
     b = Base()
     pid = b.proyecto("Casa")
     assert _correr(b, lambda: db.buscar_o_crear_proyecto("  Casa ")) == pid
     r = _correr(b, lambda: crud.perfil("proyecto", "  CASA ", nota="x"))
     assert "actualizado" in r[0]
     assert b.nombres_vivos() == ["Casa"], "creó un duplicado con espacios"
-    _correr(b, lambda: db.buscar_o_crear_proyecto("  Otro  "))
-    _correr(b, lambda: crud.perfil("proyecto", "   Tercero ", nota="x"))
-    assert b.nombres_vivos() == ["Casa", "Otro", "Tercero"], b.nombres_vivos()
+    e = _rechazo(b, lambda: crud.perfil("proyecto", "   Tercero ", nota="x"))
+    assert isinstance(e, crud.NoDeNegocio), e
+    assert "crear_proyecto" in str(e), (
+        f"el rechazo tiene que decir por dónde sí se crea: {e}")
+    assert b.nombres_vivos() == ["Casa"], b.nombres_vivos()
 
 
 def test_renombrar_con_espacios_choca_con_el_duplicado_y_guarda_limpio():

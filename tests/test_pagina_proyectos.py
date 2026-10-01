@@ -538,7 +538,8 @@ def test_la_lista_cuenta_cada_grupo_con_su_color_y_sus_proyectos(mundo):
     html = ver(mundo)
     assert html.index('href="/proyectos?p=2"') < html.index('href="/proyectos?p=1"'), (
         "los proyectos van por nombre sin importar mayúsculas")
-    assert 'style="--color:#0f7c74"' in html and "1 cerrado" in html
+    assert 'style="--claro:#0f7c74;--oscuro:%s"' % db.color_oscuro_de_grupo("#0f7c74") in html
+    assert "1 cerrado" in html
     assert html.count("Sin proyectos abiertos.") == 2          # ACD e IA
 
 
@@ -614,9 +615,9 @@ def test_los_comentarios_se_leen_con_nombre_fecha_y_marca_de_editado(mundo, gent
                      editado=_dia(0, 10))
     mundo.comentario(52, 10, gente.dueno, "borrado, no sale", borrado=True)
     cerrado = ver(mundo, p=1)
-    assert "▸ 2</a>" in cerrado and "Le escribí a Luis" not in cerrado   # el detalle está cerrado
+    assert "2 comentarios" in cerrado and "Le escribí a Luis" not in cerrado   # el detalle está cerrado
     html = ver(mundo, p=1, t=10)
-    assert "▾ 2</a>" in html
+    assert "2 comentarios" in html
     assert "<b>Persona Dos</b>" in html and "Le escribí a Luis" in html
     assert "borrado, no sale" not in html
     assert "Segundo <b>comentario</b>" not in html and "Segundo &lt;b&gt;comentario&lt;/b&gt;" in html

@@ -90,15 +90,16 @@ HERRAMIENTAS DISPONIBLES:
           "monto": 0, "moneda": "DOP", "referencia": "", "contraparte": "",
           "responsable_chat_id": "", "duenos_chat_id": "", "area": "",
           "primero_id": 0}
-  Crea la fila real. Personas y proyectos se enlazan solos por nombre.
+  Crea la fila real. Las PERSONAS se enlazan solas por nombre.
   PROYECTOS que ya existen, para que "dentro del proyecto X" los reconozca
   en vez de crear uno nuevo parecido: {PROYECTOS}. Si "X" se parece a uno de
   éstos pero no es exacto, preguntá cuál es en vez de adivinar —dos
   proyectos casi iguales por una diferencia de tipeo separan sus tareas en
-  dos historias que deberían ser una—. Si de verdad no existe, se crea solo,
-  con ese nombre. NADA DE ESTO ES UNA GUARDA: es información para que decidas
-  mejor: `crear` no rechaza ningún nombre de proyecto por no estar en la
-  lista.
+  dos historias que deberían ser una—. Si de verdad NO existe, la tarea NO se
+  crea: `crear` la rechaza entera y te dice que le preguntes a Tiziano en qué
+  grupo va el proyecto y quién es el responsable. Cuando te lo diga, creá el
+  proyecto con `crear_proyecto` y creá la tarea otra vez. Un proyecto NUNCA
+  nace por nombrarlo: nace con grupo y con responsable, o no nace.
   RESPONSABLE (solo tareas, opcional): "crea X para Rosi" = mandalo YA en
   esta misma llamada, con el NOMBRE tal como está en esta lista, y nunca un
   número: {PERSONAS_Y_CODE}. Sin responsable = no mandes el campo (o "").
@@ -160,6 +161,22 @@ HERRAMIENTAS DISPONIBLES:
   cierra. Si el número que mandás no es una tarea viva, o formaría un
   círculo (X espera a Y y Y ya esperaba, directa o indirectamente, a X),
   `crear` lo rechaza entero y el motivo te dice por qué.
+
+· crear_proyecto  {"nombre": "...", "grupo": "...", "responsable": "..."}
+  Da de alta un proyecto NUEVO. Es la ÚNICA forma de que un proyecto nazca:
+  pedir una tarea "dentro del proyecto X" cuando X no existe NO lo crea, te
+  lo rechaza y te toca preguntar antes.
+  LOS TRES CAMPOS SON OBLIGATORIOS, y por eso son tres y no uno:
+   · "nombre": como lo dijo Tiziano, y que no sea el de otro proyecto vivo.
+   · "grupo": UNA de estas, tal cual: {AREAS}. Sin grupo, el proyecto cae en
+     «Sin grupo» en la página y sus tareas no se agrupan con nada.
+   · "responsable": UNO de estos nombres, nunca un número: {PERSONAS_Y_CODE}.
+     No hay «sin responsable» al crear — un proyecto lo lleva alguien.
+  El CLIENTE no se pide por acá ni se adivina: no todo proyecto tiene uno, y
+  el que tenga se pone en el panel. No mandes "cliente".
+  Si Tiziano no dijo el grupo o el responsable, PREGUNTÁNTASELO antes de
+  llamar —los dos se eligen, no se inventan— y no crees el proyecto a medias:
+  el rechazo te dice cuáles hay.
 
 · editar  {"tabla": "tareas|eventos|notas|movimientos|personas|proyectos|"
                     "micro_pasos",
@@ -248,6 +265,10 @@ HERRAMIENTAS DISPONIBLES:
   te lo pida, y confirmalo en una palabra. Es acumulativo: los alias se
   suman, las notas se agregan con fecha, nada se pisa. Mandá solo los campos
   que aprendiste ahora.
+  De un PROYECTO, solo si YA existe: por acá no nace ninguno. Si te cuenta
+  algo de un proyecto que no está en la lista de arriba, no lo anotes a
+  medias — preguntale en qué grupo va y quién es el responsable, crealo con
+  `crear_proyecto` y después sí anotá lo que te dijo.
 
 · preferencia  {"accion": "guardar|olvidar", "texto": "...", "contexto": "", "id": 0}
   CÓMO quiere Tiziano que trabajes. Cuando te CORRIJA o te dé una instrucción
@@ -875,6 +896,22 @@ def _parte_de_lo_hecho(acciones: list[dict]) -> str:
     return (f"<b>Ya quedó hecho ({len(acciones)}):</b>\n" + "\n".join(lineas))
 
 
+# Las herramientas que `_ejecutar_herramienta` sabe atender, para el mensaje
+# que se le devuelve al modelo cuando pide una que no existe.
+#
+# ES UNA LISTA TECLEADA, y por eso lleva guarda: `tests/test_herramientas.py::
+# test_la_lista_de_herramientas_es_exactamente_la_que_el_despachador_atiende`
+# saca los nombres del propio despachador (recorriendo su árbol sintáctico,
+# buscando cada `if nombre == "..."`) y falla si esta lista y aquéllos no son
+# el mismo conjunto. Sin esa guarda, una herramienta nueva se agrega al
+# despachador y este mensaje sigue diciendo lo de antes — que es exactamente
+# lo que había pasado: `pasos` existía y no estaba en la lista.
+HERRAMIENTAS_QUE_HAY = (
+    "consultar", "crear", "crear_proyecto", "editar", "archivar", "pasos",
+    "deshacer", "perfil", "preferencia", "correo", "lugar", "buscar_lugar",
+    "viaje", "panel", "recordar", "preguntar", "responder")
+
+
 async def _ejecutar_herramienta(
     nombre: str, args: dict, bandeja_id: int, acciones: list[dict],
     tipo_entrada: str = "texto",
@@ -925,6 +962,25 @@ async def _ejecutar_herramienta(
             if tabla == "eventos":
                 resultado += await _avisar_choques(rid)
             return resultado
+
+        if nombre == "crear_proyecto":
+            # EL ÚNICO CAMINO POR EL QUE NACE UN PROYECTO DESDE TELEGRAM (E8,
+            # 1-oct-2026). Va por `crud`, como TODA escritura que dispara una
+            # herramienta: así la fila trae su asa (`log_id`) y la creación
+            # entra en el parte con su botón de deshacer. Las decisiones
+            # —nombre, grupo y responsable— son las de `db.crear_proyecto`, la
+            # misma puerta que usa el panel; esta rama no decide nada.
+            nuevo, log_id = await crud.crear_proyecto(
+                str(args.get("nombre") or ""),
+                str(args.get("grupo") or ""),
+                args.get("responsable"))
+            _anotar(acciones, log_id,
+                    f"creé el proyecto «{str(nuevo.get('nombre') or '')[:40]}» "
+                    f"en {nuevo.get('area')}")
+            return (f"OK: proyecto «{nuevo['nombre']}» #{nuevo['id']} creado en "
+                    f"el grupo {nuevo['area']}, con "
+                    f"{_con_nombres(str(nuevo.get('responsable_chat_id')))} de "
+                    f"responsable (acción #{log_id}, reversible).")
 
         if nombre == "editar":
             tabla = str(args.get("tabla") or "")
@@ -1149,9 +1205,7 @@ async def _ejecutar_herramienta(
             return json.dumps(filas, default=str, ensure_ascii=False)
 
         return (f"ERROR: no existe la herramienta '{nombre}'. Las que hay: "
-                "consultar, crear, editar, archivar, deshacer, perfil, "
-                "preferencia, correo, lugar, buscar_lugar, viaje, panel, "
-                "recordar, preguntar, responder.")
+                + ", ".join(HERRAMIENTAS_QUE_HAY) + ".")
 
     except crud.FaltanDatos as e:
         return f"ERROR: me falta {e}. Pregúntaselo a Tiziano."

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 from datetime import date, datetime, timezone
@@ -1467,7 +1468,46 @@ async def buscar_o_crear_persona(nombre: str, *,
 
 async def buscar_o_crear_proyecto(nombre: str, *,
                                   bandeja_id: int | None = None) -> int | None:
+    """Busca el proyecto y, si no está, LO CREA (sin grupo ni responsable).
+
+    Desde E8 (1-oct-2026) NINGÚN camino de Telegram llama acá: `crud.crear_
+    desde_interpretacion` pregunta por `proyecto_vivo_por_nombre` y, si el
+    proyecto no existe, no lo crea — le pregunta a Tiziano el grupo y el
+    responsable. Se queda porque es la forma genérica de «búscalo o créalo»
+    de la que sale `buscar_o_crear_persona` (que sí se usa), y porque sus
+    pruebas la miden.
+
+    LA PUERTA DE UN PROYECTO NUEVO ES `crear_proyecto`, y solo esa: nace con
+    grupo y con responsable.
+    """
     return await _buscar_o_crear("proyectos", nombre, bandeja_id=bandeja_id)
+
+
+async def proyecto_vivo_por_nombre(nombre: str) -> int | None:
+    """El id del proyecto VIVO que se llama así, o `None`. **NO CREA NADA.**
+
+    Es la búsqueda que usa Telegram desde E8 (1-oct-2026). Un proyecto nace
+    SOLO por `crear_proyecto`, que exige grupo y responsable: un proyecto que
+    aparece porque alguien lo nombró al vuelo nace sin las dos cosas y en la
+    página cae en «Sin grupo», que es de donde salió este encargo.
+
+    La comparación es la MISMA de siempre — `proyecto_vivo_con_nombre`, la que
+    comparten `_buscar_o_crear`, `crud.perfil`, `crear_proyecto` y
+    `convertir_tarea_en_proyecto` —, así que «¿existe?» contesta lo mismo por
+    donde se pregunte. Lo único que cambia es que acá no hay INSERT detrás.
+
+    Abre su propia conexión (a diferencia de `proyecto_vivo_con_nombre`, que
+    recibe el cursor): quien pregunta desde `acciones/crud.py` no está dentro
+    de una transacción en ese momento, y meterlo adentro alargaría la
+    transacción de la entidad sin ganar nada — el mismo criterio con el que
+    `crear_desde_interpretacion` resuelve personas y proyectos fuera.
+    """
+    nombre = (nombre or "").strip()
+    if not nombre:
+        return None
+    async with pool.connection() as conn:
+        return await proyecto_vivo_con_nombre(
+            conn.cursor(row_factory=dict_row), nombre)
 
 
 class ProyectoNoSeCrea(ValueError):
@@ -1480,7 +1520,8 @@ class ProyectoNoSeCrea(ValueError):
         self.clave = clave
 
 
-async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> dict:
+async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int,
+                         desde: str = "panel") -> dict:
     """El diálogo «+ Proyecto en X» de la página de proyectos (Lucy 1.0, E5).
     Crea un proyecto y devuelve su fila. Si no vale, `NombreDeProyectoNoVale`
     (por el nombre) o `ProyectoNoSeCrea` (por el grupo o el responsable), las
@@ -1502,17 +1543,31 @@ async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> di
         de si vale es de esta función, así que quien la llame sin la ruta (el
         Telegram de E8) tiene la misma puerta.
 
+    `desde` dice QUIÉN lo pide y queda en la huella: `"panel"` (el botón de la
+    página, por omisión) o `"lucy"` (Telegram, vía `crud.crear_proyecto`). Es un
+    ValueError si es otra cosa. Cada origen tiene su `INSERT` con el actor como
+    LITERAL, no como variable, para no romper el guarda de
+    `tests/test_proyectos_panel.py` (el actor variable solo viaja por
+    `crud._registrar`).
+
     NO lleva cliente: lo pone `poner_cliente` (E3), con la ficha releída de
     Noco; nace sin cliente, que es un estado válido (es opcional).
 
     UNA SOLA TRANSACCIÓN: el INSERT y su huella `crear` (con lo que quedó
     guardado en `despues`, así que `crud.deshacer` la revierte con la rama
-    genérica de 'crear'). El actor es el literal `'panel'`: lo dispara un botón
-    del panel, y el guarda de `tests/test_proyectos_panel.py` no deja que el
+    genérica de 'crear'). El actor es un literal (`'panel'` o `'lucy'`, según `desde`): lo dispara un botón
+    del panel o Telegram, y el guarda de `tests/test_proyectos_panel.py` no deja que el
     actor viaje como variable fuera de `crud._registrar`. No se puede usar `crud._registrar` (`crud` importa este módulo): la fila de
     `log_acciones` se escribe a mano con la misma forma que las otras
     escrituras de este archivo.
+
+    DEVUELVE LA FILA CON SU `log_id` — el asa para deshacer, que es lo que
+    `cerebro/agente.py::_anotar` necesita. La ruta del panel la ignora; quien
+    la llame desde Telegram (por `crud.crear_proyecto`) la usa. NADA MÁS
+    cambia con eso: mismo INSERT, misma huella, misma transacción.
     """
+    if desde not in ("panel", "lucy"):
+        raise ValueError(f"origen de proyecto desconocido: {desde!r}")
     nombre = nombre_de_proyecto_que_vale(nombre)
     if area not in {a["clave"] for a in await areas()}:
         raise ProyectoNoSeCrea("grupo", "ese grupo no existe")
@@ -1532,14 +1587,41 @@ async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> di
             """,
             (nombre, area, responsable_chat_id))
         nuevo = await cur.fetchone()
-        await conn.execute(
-            """
-            INSERT INTO log_acciones
-              (actor, accion, tabla, registro_id, antes, despues, motivo)
-            VALUES ('panel', 'crear', 'proyectos', %s, NULL, %s,
-                    'Proyecto nuevo, creado desde el panel de proyectos')
-            """,
-            (nuevo["id"], json.dumps(nuevo, default=str, ensure_ascii=False)))
+        # EL ASA, EN LA MISMA FILA QUE SE DEVUELVE. La huella ya se escribía;
+        # lo que faltaba era PODER NOMBRARLA. Quien crea un proyecto desde
+        # Telegram (E8) tiene que poder decir «acción #N, reversible» y dejar
+        # el botón de deshacer — `cerebro/agente.py::_anotar` no anota nada sin
+        # un id—, y para eso necesita el id. Va como una clave más de la fila, y
+        # no como un segundo valor de retorno, para no cambiarle la firma a
+        # quien ya la llama: la ruta del panel la ignora.
+        #
+        # Es el mismo `RETURNING id` que ya usa `convertir_tarea_en_proyecto`
+        # unas líneas más abajo, sobre el MISMO INSERT: ni una escritura más ni
+        # una transacción distinta. Y va con `cur` (el cursor con
+        # `row_factory=dict_row`) y no con `conn.execute`, porque el id se lee
+        # POR NOMBRE y `conn.execute` devuelve un cursor con la factoría de la
+        # conexión, que en SQLite son tuplas — el mismo motivo por el que
+        # `convertir_tarea_en_proyecto` lee su `RETURNING id` con `cur`.
+        huella = (nuevo["id"], json.dumps(nuevo, default=str, ensure_ascii=False))
+        if desde == "lucy":
+            await cur.execute(
+                """
+                INSERT INTO log_acciones
+                  (actor, accion, tabla, registro_id, antes, despues, motivo)
+                VALUES ('lucy', 'crear', 'proyectos', %s, NULL, %s,
+                        'Proyecto nuevo, creado por Telegram')
+                RETURNING id
+                """, huella)
+        else:
+            await cur.execute(
+                """
+                INSERT INTO log_acciones
+                  (actor, accion, tabla, registro_id, antes, despues, motivo)
+                VALUES ('panel', 'crear', 'proyectos', %s, NULL, %s,
+                        'Proyecto nuevo, creado desde el panel de proyectos')
+                RETURNING id
+                """, huella)
+        nuevo["log_id"] = (await cur.fetchone())["id"]
         return nuevo
 
 
@@ -2617,6 +2699,72 @@ def color_de_grupo(color) -> str:
     return color if isinstance(color, str) and _HEX.fullmatch(color) else COLOR_SIN_GRUPO
 
 
+# El tono de un grupo para el modo oscuro SALE DEL MISMO `areas.color`, no de una
+# lista escrita grupo por grupo: la regla es una línea. Se pasa el color a OKLCH
+# (claridad, color y tono), se conserva el TONO, la claridad sube a
+# `_OSCURO_CLARIDAD` (un color que ya es más claro se deja tal cual) y el color se
+# acota a [`_OSCURO_COLOR_MIN`, `_OSCURO_COLOR_MAX`]; un gris queda gris. Medido
+# el 1-oct-2026 contra los tres tonos claros de la maqueta aprobada
+# (#0f7c74 -> #3cc0b4, #b5611a -> #e59a55, #8a4a8f -> #c98ccf): la diferencia
+# mayor en un canal es 7 de 255 (`tests/test_pagina_proyectos_maqueta.py`). Un
+# color que al aclararlo se sale de la gama de la pantalla se recorta y su tono
+# puede correrse (medido en una rejilla de 864 colores, hasta unos 25 grados
+# de tono HSL); el contraste del resultado contra el fondo oscuro de la página
+# no baja de 6.6 contra 1 en esa rejilla; la prueba exige 4.5 o más.
+_OSCURO_CLARIDAD = 0.735
+_OSCURO_COLOR_MIN, _OSCURO_COLOR_MAX = 0.11, 0.125
+_OSCURO_GRIS = 0.02
+
+
+def _oklch_de(rgb: tuple) -> tuple:
+    def lineal(c):
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+    r, g, b = (lineal(c) for c in rgb)
+    l = (0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ** (1 / 3)
+    m = (0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ** (1 / 3)
+    s = (0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ** (1 / 3)
+    claridad = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s
+    a = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s
+    bb = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+    return claridad, math.hypot(a, bb), math.atan2(bb, a)
+
+
+def _rgb_de(claridad: float, croma: float, tono: float) -> tuple:
+    a, bb = croma * math.cos(tono), croma * math.sin(tono)
+    l = (claridad + 0.3963377774 * a + 0.2158037573 * bb) ** 3
+    m = (claridad - 0.1055613458 * a - 0.0638541728 * bb) ** 3
+    s = (claridad - 0.0894841775 * a - 1.2914855480 * bb) ** 3
+    lineales = (4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+                -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+                -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s)
+
+    def gamma(c):
+        c = min(1.0, max(0.0, c))
+        return 12.92 * c if c <= 0.0031308 else 1.055 * c ** (1 / 2.4) - 0.055
+    return tuple(gamma(c) for c in lineales)
+
+
+def color_oscuro_de_grupo(color) -> str:
+    """El tono del grupo para el fondo oscuro (ver arriba). Pasa por
+    `color_de_grupo`: lo que no es un hex se pinta con el gris, aclarado. Un hex
+    de largo raro (5 o 7 dígitos) no se puede leer y vuelve igual."""
+    color = color_de_grupo(color)
+    digitos = color[1:]
+    if len(digitos) in (3, 4):
+        digitos = "".join(c * 2 for c in digitos[:3])
+    elif len(digitos) in (6, 8):
+        digitos = digitos[:6]
+    else:
+        return color
+    claridad, croma, tono = _oklch_de(tuple(int(digitos[i:i + 2], 16) / 255 for i in (0, 2, 4)))
+    if claridad >= _OSCURO_CLARIDAD:
+        return "#" + digitos.lower()               # ya es clara: sobre el fondo oscuro se lee tal cual
+    if croma >= _OSCURO_GRIS:
+        croma = min(max(croma, _OSCURO_COLOR_MIN), _OSCURO_COLOR_MAX)
+    rgb = _rgb_de(_OSCURO_CLARIDAD, croma, tono)
+    return "#" + "".join(f"{round(c * 255):02x}" for c in rgb)
+
+
 def ultimo_movimiento(creado_en, huellas) -> datetime | None:
     """El más reciente entre la creación del proyecto y cada huella (ya sin las
     automáticas). `None` solo si no hay ni creación."""
@@ -2671,6 +2819,12 @@ def _fila_de_tarea(t: dict, hoy: date, nombres: dict, comentarios: dict) -> dict
         "responsable": nombres.get(t["responsable_chat_id"]),
         "comentarios": comentarios.get(t["id"], []),
         "de_proyecto_en_papelera": False,
+        # De dónde cuelga la tarea: lo necesita el renglón «¿sale una tarea
+        # nueva de ésta?» de la página (1-oct-2026) para decidir lo MISMO que
+        # decide /tareas — con proyecto, la nueva va al mismo proyecto y el
+        # grupo no se elige; suelta, se ofrece el grupo que ya tiene.
+        "proyecto_id": t["proyecto_id"],
+        "area": t["area"],
     }
 
 
@@ -2761,6 +2915,7 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
                       key=lambda m: m["nombre"].casefold())
         pend, otras = _repartir(sueltas_por_area.get(clave, []))
         return {"clave": clave, "color": color_de_grupo(color),
+                "color_oscuro": color_oscuro_de_grupo(color),
                 "abiertos": [m for m in mios if not m["cerrado"]],
                 "cerrados": [m for m in mios if m["cerrado"]],
                 "sueltas": {"pendientes": pend, "otras": otras,

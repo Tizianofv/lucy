@@ -45,7 +45,27 @@ class NoDeNegocio(ValueError):
     «Primero:» que no valen, proyecto cerrado, cita/tarea que ya existía…): un
     motivo pensado para leerse. Es lo ÚNICO que el botón de la tarjeta de
     Telegram enseña tal cual; cualquier otro `ValueError` es un fallo de
-    programación y sigue con su traceback y el aviso genérico."""
+    programación y sigue con su traceback y el aviso genérico.
+
+    DOS LECTORES, DOS TEXTOS. `str(e)` es lo que lee el MODELO (la herramienta
+    se lo devuelve en el `ERROR: …`): puede nombrar herramientas y hablar de
+    Tiziano en tercera persona. `para_la_persona` es lo que lee TIZIANO en la
+    tarjeta de Telegram, cuando el que pulsó ✅ fue él y no el modelo: una frase
+    corta, dirigida a él, entera y sin nombres de herramientas. Sin él, la
+    persona lee `str(e)`. Todo sitio que muestre un `NoDeNegocio` a una persona
+    lo hace con `lo_que_lee_la_persona(e)`, nunca con `str(e)`."""
+
+    def __init__(self, motivo: str, para_la_persona: str | None = None):
+        super().__init__(motivo)
+        self.para_la_persona = para_la_persona
+
+
+def lo_que_lee_la_persona(e: Exception) -> str:
+    """El texto de un `NoDeNegocio` para quien pulsó el botón: el suyo si lo
+    trae, y si no el motivo de siempre."""
+    if isinstance(e, NoDeNegocio) and e.para_la_persona:
+        return e.para_la_persona
+    return str(e)
 
 
 class FaltanDatos(Exception):
@@ -235,6 +255,136 @@ async def _duplicado_pendiente(
     return registro_id, (log_row[0] if log_row else None)
 
 
+async def los_grupos_y_los_responsables() -> str:
+    """Las dos listas que hacen falta para crear un proyecto, dichas como se
+    le dicen a Tiziano. UN SOLO SITIO lo arma, y lo usan los dos textos que
+    hablan de esto: la pregunta de `_la_pregunta_del_proyecto` (nombró un
+    proyecto que no existe) y el rechazo de la herramienta `crear_proyecto`
+    (le faltó el grupo o el responsable). Dos copias serían dos listas que un
+    día dicen cosas distintas.
+
+    LAS DOS LISTAS SE PIDEN A SU FUENTE, no se teclean acá. Escrito a mano
+    sería una lista que se separa de la realidad: el día que entre un grupo
+    nuevo —o una persona a `NOMBRES_POR_CHAT`— el texto seguiría ofreciendo
+    los viejos, y Tiziano elegiría entre opciones que ya no son las que hay.
+    El grupo sale de `db.areas()` (la misma que lee el panel y la que decide
+    `db.crear_proyecto`) y el responsable de `config.opciones_de_responsable()`
+    (de donde sale el valor que `db.crear_proyecto` acepta), saltando la
+    opción «sin responsable»: al CREAR no existe — Tiziano, 1-oct-2026:
+    «somos siempre Rosi, Yo o Code».
+
+    Sin ningún grupo declarado (la migración sin aplicar) se dice eso, y no
+    una lista vacía: «¿en cuál de estos?» seguido de nada es peor que admitir
+    que todavía no hay ninguno.
+    """
+    grupos = [a["clave"] for a in await db.areas()]
+    responsables = [etiqueta for valor, etiqueta
+                    in config.opciones_de_responsable() if valor]
+    de_grupos = ("uno de estos: " + ", ".join(grupos) if grupos
+                 else "un grupo, y todavía no hay ninguno declarado")
+    de_responsables = (", ".join(responsables) if responsables
+                       else "alguien con nombre en la casa")
+    return (f"en qué grupo va ({de_grupos}) y quién es el responsable "
+            f"({de_responsables})")
+
+
+async def crear_proyecto(nombre: str, grupo: str,
+                         responsable) -> tuple[dict, int | None]:
+    """El alta de un proyecto pedida por Telegram (E8, 1-oct-2026).
+
+    Devuelve `(fila, log_id)`: la fila con su `id`, su `area` y su
+    `responsable_chat_id`, y el asa para deshacer — la MISMA forma que
+    devuelven `guardar_lugar` y `guardar_preferencia`, que es lo que
+    `cerebro/agente.py` necesita para dejar el botón de deshacer.
+
+    TODO LO QUE DECIDE ESTÁ EN `db.crear_proyecto`, que es la puerta que ya
+    usa el panel: el nombre (`nombre_de_proyecto_que_vale`, y que no haya otro
+    vivo con ese nombre), el grupo (uno de `db.areas()`) y el responsable
+    (`config.puede_ser_responsable`). Acá NO hay una segunda copia de ninguno
+    de los tres criterios.
+
+    Lo que sí hace esta capa, y es lo único que hace:
+      · Traduce el RESPONSABLE, que llega por nombre («Rosi», «Tiziano»,
+        «Code») o como chat, con la MISMA puerta que usan `editar` y `deshacer`
+        para esa columna — `PUERTAS["proyectos"]["responsable_chat_id"]`. Un
+        nombre que no es de nadie de la casa se rechaza con el motivo de esa
+        puerta, que dice a quién sí.
+      · Traduce los RECHAZOS de la puerta a algo que el modelo pueda actuar.
+        `db.crear_proyecto` dice «ese grupo no existe» o «ese chat no puede ser
+        responsable», que es verdad y es corto pero no dice qué ofrecer; acá se
+        le agrega lo que hay (los grupos y los responsables de verdad, por
+        `los_grupos_y_los_responsables`) y, sobre todo, que el proyecto NO se
+        creó: sin eso el modelo podría creer que quedó a medias y reintentar.
+    """
+    # NO se comprueba acá si el responsable vino vacío: se traduce y se deja
+    # pasar `None`, que es lo que hace la ruta del panel. Quien decide si un
+    # proyecto puede nacer sin responsable es la puerta (`db.crear_proyecto`),
+    # y acá solo se traduce su «no». Una comprobación propia sería una segunda
+    # regla, y el día que la puerta cambiara habría dos opiniones.
+    try:
+        chat = PUERTAS["proyectos"]["responsable_chat_id"](responsable)
+    except ValueError as e:
+        raise NoDeNegocio(
+            f"No creé el proyecto: {e}. Pregúntale a Tiziano "
+            f"{await los_grupos_y_los_responsables()}.") from e
+    try:
+        nuevo = await db.crear_proyecto(
+            str(nombre or ""), str(grupo or "").strip(), chat, desde="lucy")
+    except db.ProyectoNoSeCrea as e:
+        if e.clave == "responsable":
+            raise NoDeNegocio(
+                "No creé el proyecto: le falta el responsable, y un proyecto "
+                "nace con uno. Pregúntale a Tiziano "
+                f"{await los_grupos_y_los_responsables()}.") from e
+        raise NoDeNegocio(
+            f"No creé el proyecto: el grupo «{str(grupo or '').strip()[:40]}» "
+            f"no existe. Pregúntale a Tiziano "
+            f"{await los_grupos_y_los_responsables()}.") from e
+    except db.NombreDeProyectoNoVale as e:
+        raise NoDeNegocio(f"No creé el proyecto: {e}.") from e
+    return nuevo, nuevo.get("log_id")
+
+
+# Lo que cabe en el aviso de una tarjeta de Telegram (el tope de Telegram es
+# 200 caracteres; 190 deja margen). Es un dato de Telegram, no medido en Lucy.
+LARGO_DEL_AVISO = 190
+
+
+async def _la_pregunta_del_proyecto(nombre: str) -> NoDeNegocio:
+    """El «no» de cuando se nombró un proyecto que NO existe, con sus DOS textos.
+
+    · Para el MODELO (`str(e)`): dice qué hacer y por qué herramienta.
+    · Para TIZIANO (`para_la_persona`, lo que enseña la tarjeta): la pregunta
+      del diseño §7 dirigida a él, con las dos listas puestas, ENTERA. Cabe en
+      `LARGO_DEL_AVISO`: lo que se acorta es el NOMBRE del proyecto (con «…»),
+      nunca la pregunta; y si ni con un nombre mínimo caben las listas (muchos
+      grupos), se pregunta sin ellas, que sigue siendo una frase completa.
+    """
+    dicho = nombre.strip()
+    listas = await los_grupos_y_los_responsables()
+    modelo = (f"No creé la tarea: el proyecto «{dicho[:60]}» no existe, "
+              f"y no lo creo por mi cuenta — nacería sin grupo y sin responsable. "
+              f"Pregúntale a Tiziano si lo crea, {listas}; cuando te lo diga, "
+              f"crealo con la herramienta `crear_proyecto` y vuelve a crear la "
+              f"tarea.")
+
+    def _frase(con_listas: bool, nombre_visible: str) -> str:
+        pide = (f"Dime {listas}" if con_listas
+                else "Dime en qué grupo va y quién es el responsable")
+        return (f"El proyecto «{nombre_visible}» no existe. {pide}, "
+                f"y lo creo.")
+
+    for con_listas in (True, False):
+        frase = _frase(con_listas, dicho)
+        if len(frase) <= LARGO_DEL_AVISO:
+            break
+        sobra = len(frase) - LARGO_DEL_AVISO
+        if len(dicho) - sobra - 1 >= 8:
+            frase = _frase(con_listas, dicho[:len(dicho) - sobra - 1] + "…")
+            break
+    return NoDeNegocio(modelo, para_la_persona=frase)
+
+
 async def crear_desde_interpretacion(
     bandeja_id: int, r: dict, motivo: str | None = None
 ) -> tuple[str, int, int]:
@@ -291,8 +441,27 @@ async def crear_desde_interpretacion(
     # meterlo adentro alargaría la transacción de la entidad sin ganar nada.
     persona_id = await db.buscar_o_crear_persona(
         str(r.get("persona") or ""), bandeja_id=bandeja_id)
-    proyecto_id = await db.buscar_o_crear_proyecto(
-        str(r.get("proyecto") or ""), bandeja_id=bandeja_id)
+    # EL PROYECTO NOMBRADO NO SE CREA (E8, 1-oct-2026). Hasta acá, nombrar un
+    # proyecto que no existía lo creaba al vuelo SIN GRUPO, SIN CLIENTE Y SIN
+    # RESPONSABLE, y en la página nueva ese proyecto caía en «Sin grupo».
+    # Tiziano (1-oct-2026, P11): «no todo necesita cliente» — lo que sí hace
+    # falta para que un proyecto sirva son las otras dos, así que un proyecto
+    # nace SOLO por `db.crear_proyecto` (nombre + grupo + responsable), que es
+    # la misma puerta que usa el panel. Acá solo se BUSCA.
+    #
+    # Y si Tiziano nombró uno que no existe, NO se crea la tarea sin proyecto
+    # como si no hubiera dicho nada: se corta entero y se le pregunta, que es
+    # exactamente el mismo trato que un responsable o un área que no valen
+    # (arriba). Callarlo dejaría la tarea suelta sin que nadie lo note.
+    #
+    # SOLO PARA TAREAS, como el responsable y el área: en una cita, una nota o
+    # un movimiento el proyecto es un enlace secundario, y cortar el registro
+    # —una cita, un gasto— porque un nombre no existe sería perder lo que sí
+    # importaba. Ahí simplemente no se enlaza y no se crea nada.
+    dicho = str(r.get("proyecto") or "").strip()
+    proyecto_id = await db.proyecto_vivo_por_nombre(dicho)
+    if clas == "tarea" and dicho and proyecto_id is None:
+        raise await _la_pregunta_del_proyecto(dicho)
 
     # UN PROYECTO CERRADO NO RECIBE TAREAS (pieza 2 del diseño «proyectos»), por
     # la MISMA puerta que el alta del panel y las derivadas. Se corta la
@@ -1605,6 +1774,24 @@ async def perfil(
 
         # ── No existía: nace con lo que se sepa hoy ──────────────────────
         if fila is None:
+            if tabla == "proyectos":
+                # UN PROYECTO NO NACE POR ACÁ (E8, 1-oct-2026). `perfil` anota
+                # lo que Lucy sabe de la gente y de los proyectos que YA
+                # existen; un proyecto nace solo por `db.crear_proyecto`, con
+                # grupo y responsable. Hasta acá, decirle a Lucy «el proyecto X
+                # es de un cliente de ACD» creaba X sin grupo, sin cliente y
+                # sin responsable — y en la página nueva caía en «Sin grupo»
+                # (diseño §7, P11).
+                #
+                # No se crea NADA y no se anota nada: media anotación sería
+                # peor, porque el modelo creería que el proyecto quedó hecho.
+                # El motivo dice qué hacer, igual que todos los `NoDeNegocio`.
+                raise NoDeNegocio(
+                    f"No creé el proyecto «{nombre.strip()[:60]}»: un proyecto "
+                    "nace con grupo y con responsable, y eso no me lo puedes "
+                    "inventar. Pregúntale a Tiziano en qué grupo va y quién es "
+                    "el responsable, créalo con `crear_proyecto` y después "
+                    "vuelve a anotar lo que te contó.")
             if tabla == "personas":
                 # `bandeja_id` (§E, 27-sep-2026): la misma marca de dueño
                 # que usa `db.buscar_o_crear_persona` -- acá SÍ hay de dónde
@@ -1639,14 +1826,11 @@ async def perfil(
                         (nombre, [a.strip() for a in (alias or []) if a.strip()],
                          (relacion or "").strip() or None, linea),
                     )
-            else:
-                # Por la misma puerta que un renombre (largo, vacío).
-                nombre = db.nombre_de_proyecto_que_vale(nombre)
-                cur = await conn.execute(
-                    """INSERT INTO proyectos (nombre, descripcion)
-                       VALUES (%s, %s) RETURNING id""",
-                    (nombre, (descripcion or "").strip() or linea),
-                )
+            # ── No queda una rama de `proyectos` acá, y es a propósito ────
+            # La que había insertaba `(nombre, descripcion)` y se borró con
+            # E8: dejarla sería un segundo camino que crea un proyecto sin
+            # grupo, alcanzable por cualquiera que llame a `perfil`. Un
+            # proyecto nace SOLO por `db.crear_proyecto`; arriba se corta.
             rid = (await cur.fetchone())[0]
             log_id = await _registrar(
                 conn, accion="crear", tabla=tabla, registro_id=rid,
