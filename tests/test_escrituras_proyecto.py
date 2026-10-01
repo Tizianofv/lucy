@@ -182,11 +182,13 @@ def test_el_titulo_se_edita_con_doble_clic_y_sin_javascript_hay_un_enlace(mundo)
     mundo.proyecto(1, "Mi proyecto", area="CDS")
     html = ver(mundo, p=1)
     assert '<h1 data-dbl="nombre" title="Doble clic para cambiar el nombre" >Mi proyecto</h1>' in html
-    assert re.search(r'<form class="renombrar" method="post" action="/proyectos/1/nombre" hidden>', html)
+    assert re.search(r'<form class="renombrar" method="post" action="/proyectos/1/nombre"[^>]* hidden>', html)
     assert '<noscript><a class="nota" href="/proyectos?p=1&amp;editar=nombre">Cambiar el nombre</a></noscript>' in html
     # Sin JavaScript el servidor dibuja el formulario abierto y esconde el título.
     abierto = ver(mundo, p=1, editar="nombre")
-    assert re.search(r'<form class="renombrar" method="post" action="/proyectos/1/nombre" >', abierto)
+    assert re.search(r'<form class="renombrar" method="post" action="/proyectos/1/nombre"[^>]*>', abierto)
+    assert " hidden" not in re.search(
+        r'<form class="renombrar" method="post" action="/proyectos/1/nombre"[^>]*>', abierto).group(0)
     assert re.search(r'<h1 data-dbl="nombre"[^>]*hidden>', abierto)
 
 
@@ -210,7 +212,18 @@ def test_renombrar_a_uno_repetido_o_vacio_se_rechaza(mundo):
     assert _fila(mundo, 1)["nombre"] == "Uno" and _huellas(mundo) == []
 
 
-# ── El script del doble clic, con JavaScriptCore de macOS ────────────────
+# ── El script de la página, con JavaScriptCore de macOS ───────────────────
+#
+# El `document` de mentira que ya existía, más un constructor de «sitios» que
+# arma cada formulario con LOS CAMPOS DE VERDAD del HTML renderizado: su
+# `action`, cada `name` y el valor con el que nace el control. Así lo que se
+# prueba es el script contra la página que se sirve, no contra un ejemplo
+# escrito a mano que puede dejar de parecerse.
+#
+# FRONTERA: NO es un navegador. No hay validación de `required`, ni envío de
+# verdad, ni foco, ni orden de eventos (un navegador dispara `focusout` Y
+# `change`; acá se dispara uno por vez). Lo que se prueba es qué formulario
+# manda el script y cuándo.
 
 def _script_de_la_pagina(mundo) -> str:
     mundo.proyecto(1, "P", area="CDS")
@@ -220,21 +233,78 @@ def _script_de_la_pagina(mundo) -> str:
     return guiones[0]
 
 
+_ARNES = """
+var oyentes = {};
+var evitado = 0;
+function ev(destino, extra) {
+  var e = {target: destino, preventDefault: function () { evitado++; }};
+  for (var k in extra) e[k] = extra[k];
+  return e;
+}
+/* Un sitio de mentira con los datos de UN formulario de verdad. */
+function sitioDeMentira(datos) {
+  var sitio = {};
+  var campos = [];
+  /* Cerrado, el formulario está escondido y el TEXTO se ve; abierto, al revés.
+     El texto es el enlace del título: `navego` cuenta las veces que el clic
+     siguió el `href` (lo que en un navegador sería irse a la otra página). */
+  var texto = {hidden: !datos.oculto, navego: 0,
+    /* Como un navegador: `click()` sobre el enlace VUELVE a disparar el evento
+       `click` en el documento (con el enlace de destino). Un guion que no se
+       proteja de eso se espera a sí mismo para siempre. */
+    click: function () { this.navego++; if (oyentes.click) oyentes.click(ev(this)); },
+    closest: function (s) {
+      if (s === "[data-dbl]" || s === "a[data-dbl]") return this;
+      return (s === "[data-edita]" && datos.edita) ? sitio : null; }};
+  var form = {
+    hidden: !!datos.oculto, action: datos.accion, enviados: 0,
+    dataset: datos.auto ? {auto: ""} : {},
+    requestSubmit: function () { enviarFormulario(this); },
+    closest: function (s) { return (s === "[data-edita]" && datos.edita) ? sitio : null; },
+    querySelector: function (s) {
+      return s === "[data-dbl]" ? texto : (s === "input, textarea" ? campos[0] : null); },
+    querySelectorAll: function (s) { return campos; }
+  };
+  (datos.campos || []).forEach(function (c) {
+    campos.push({
+      tagName: c.tag.toUpperCase(), name: c.name, value: c.valor, defaultValue: c.valor,
+      form: form, focos: 0, seleccionado: 0,
+      focus: function () { this.focos++; }, select: function () { this.seleccionado++; },
+      closest: function (s) { return (s === "form[data-auto]" && datos.auto) ? form : null; }
+    });
+  });
+  sitio.querySelector = function (s) {
+    return s === "form.renombrar" ? form : (s === "[data-dbl]" ? texto : null); };
+  return {sitio: sitio, form: form, campos: campos, texto: texto};
+}
+/* Un envío como lo hace un navegador (`requestSubmit`, o el clic en el botón):
+   dispara `submit` en el documento y solo cuenta si nadie lo cancela. */
+function enviarFormulario(form) {
+  var e = {target: form, prevenido: false, preventDefault: function () { this.prevenido = true; }};
+  if (oyentes.submit) oyentes.submit(e);
+  if (!e.prevenido) form.enviados++;
+}
+var otro = {closest: function () { return null; }};
+var document = {addEventListener: function (tipo, f) { oyentes[tipo] = f; }};
+/* Los temporizadores, de mentira: el escenario decide cuándo pasa el tiempo
+   (`correrTemporizadores()`), así que la prueba no espera de verdad. */
+var temporizadores = {}, siguienteT = 0;
+function setTimeout(f, ms) { siguienteT++; temporizadores[siguienteT] = f; return siguienteT; }
+function clearTimeout(id) { delete temporizadores[id]; }
+function cuantosTemporizadores() { return Object.keys(temporizadores).length; }
+function correrTemporizadores() {
+  var pendientes = [];
+  for (var id in temporizadores) pendientes.push({id: id, f: temporizadores[id]});
+  temporizadores = {};
+  pendientes.forEach(function (p) { p.f(); });
+}
+"""
+
+
 def _correr_en_jxa(script: str, escenario: str) -> dict:
     """Corre `script` con un `document` de mentira y el `escenario` (JS que lo
     ejercita y termina en una expresión JSON)."""
-    arnes = """
-var oyentes = {};
-var campo = {focos: 0, seleccionado: 0, focus: function () { this.focos++; }, select: function () { this.seleccionado++; }};
-var sitio = {};
-var form = {hidden: true, querySelector: function () { return campo; }, closest: function (s) { return s === "form.renombrar" ? this : s === "[data-edita]" ? sitio : null; }};
-var titulo = {hidden: false, closest: function (s) { return s === "[data-dbl]" ? this : s === "[data-edita]" ? sitio : null; }};
-sitio.querySelector = function (s) { return s === "form.renombrar" ? form : s === "[data-dbl]" ? titulo : null; };
-var otro = {closest: function () { return null; }};
-var document = {addEventListener: function (tipo, f) { oyentes[tipo] = f; }};
-var evitado = 0;
-function ev(destino, extra) { var e = {target: destino, preventDefault: function () { evitado++; }}; for (var k in extra) e[k] = extra[k]; return e; }
-""" + script + "\n" + escenario
+    arnes = _ARNES + script + "\n" + escenario
     r = subprocess.run(["osascript", "-l", "JavaScript", "-e", arnes], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout.strip() or r.stderr.strip())
@@ -242,40 +312,271 @@ function ev(destino, extra) { var e = {target: destino, preventDefault: function
 
 hay_osascript = pytest.mark.skipif(
     shutil.which("osascript") is None,
-    reason="no hay osascript (JavaScriptCore de macOS): el script del doble clic no se prueba aquí")
+    reason="no hay osascript (JavaScriptCore de macOS): el script de la página no se prueba aquí")
 
-_FOTO = "JSON.stringify({titulo: titulo.hidden, form: form.hidden, focos: campo.focos, sel: campo.seleccionado, evitado: evitado})"
+# Un formulario abierto con un texto editable, como el del nombre del proyecto.
+_SITIO = ('var S = sitioDeMentira({accion: "/proyectos/1/nombre", auto: true, edita: true,'
+          ' oculto: true, campos: [{tag: "input", name: "nombre", valor: "P"}]});')
+_FOTO = "JSON.stringify({texto: S.texto.hidden, form: S.form.hidden, focos: S.campos[0].focos, sel: S.campos[0].seleccionado, enviados: S.form.enviados})"
 
 
 @hay_osascript
 def test_js_el_doble_clic_en_el_titulo_muestra_el_formulario_y_enfoca_el_campo(mundo):
-    r = _correr_en_jxa(_script_de_la_pagina(mundo), 'oyentes.dblclick(ev(titulo));' + _FOTO)
-    assert r == {"titulo": True, "form": False, "focos": 1, "sel": 1, "evitado": 1}
+    r = _correr_en_jxa(_script_de_la_pagina(mundo), _SITIO + 'oyentes.dblclick(ev(S.texto));' + _FOTO)
+    assert r == {"texto": True, "form": False, "focos": 1, "sel": 1, "enviados": 0}
+
+
+@hay_osascript
+def test_js_un_clic_en_el_titulo_abre_el_detalle(mundo):
+    """El clic no se va derecho: espera al segundo. Cuando el tiempo pasa sin
+    que llegue nadie más, sigue el enlace del título —el `href` que escribió el
+    servidor— y NO abre el renombrar."""
+    guion = _script_de_la_pagina(mundo)
+    clic = _SITIO + "oyentes.click(ev(S.texto));"
+    antes = _correr_en_jxa(guion, clic + "JSON.stringify({navego: S.texto.navego,"
+                                          " esperando: cuantosTemporizadores(), evitado: evitado})")
+    assert antes == {"navego": 0, "esperando": 1, "evitado": 1}
+    # `enlace.click()` en un navegador VUELVE a disparar el clic; el guion no
+    # puede esperarse a sí mismo (otro temporizador) ni cancelar ese segundo
+    # clic (`evitado` sigue en 1: el segundo clic tiene que dejar seguir el enlace).
+    despues = _correr_en_jxa(guion, clic + "correrTemporizadores();"
+                                           "JSON.stringify({navego: S.texto.navego, form: S.form.hidden,"
+                                           " texto: S.texto.hidden, esperando: cuantosTemporizadores(),"
+                                           " evitado: evitado})")
+    assert despues == {"navego": 1, "form": True, "texto": False, "esperando": 0, "evitado": 1}
+
+
+@hay_osascript
+def test_js_dos_clics_separados_abren_el_detalle_las_dos_veces(mundo):
+    """El seguro contra el clic que el propio guion provoca se suelta al
+    terminar: si se quedara puesto, el segundo clic de la persona (otra tarea,
+    o la misma después) no abriría nada."""
+    escenario = (_SITIO + "oyentes.click(ev(S.texto));correrTemporizadores();"
+                 "oyentes.click(ev(S.texto));correrTemporizadores();"
+                 "JSON.stringify({navego: S.texto.navego, esperando: cuantosTemporizadores()})")
+    assert _correr_en_jxa(_script_de_la_pagina(mundo), escenario) == {"navego": 2, "esperando": 0}
+
+
+@hay_osascript
+def test_js_un_doble_clic_renombra_y_no_abre_el_detalle(mundo):
+    """Los dos clics y el doble clic, en el orden en que los manda un navegador:
+    el detalle NO se abre y el renombrar sí."""
+    guion = _script_de_la_pagina(mundo)
+    escenario = (_SITIO + "oyentes.click(ev(S.texto));oyentes.click(ev(S.texto));"
+                 "oyentes.dblclick(ev(S.texto));correrTemporizadores();"
+                 "JSON.stringify({navego: S.texto.navego, form: S.form.hidden,"
+                 " texto: S.texto.hidden, focos: S.campos[0].focos})")
+    assert _correr_en_jxa(guion, escenario) == {
+        "navego": 0, "form": False, "texto": True, "focos": 1}
+
+
+@hay_osascript
+def test_js_un_clic_fuera_del_titulo_no_abre_nada(mundo):
+    guion = _script_de_la_pagina(mundo)
+    r = _correr_en_jxa(guion, "oyentes.click(ev(otro));correrTemporizadores();"
+                              "JSON.stringify({esperando: cuantosTemporizadores(), evitado: evitado})")
+    assert r == {"esperando": 0, "evitado": 0}
 
 
 @hay_osascript
 def test_js_el_doble_clic_en_otra_parte_no_hace_nada(mundo):
-    r = _correr_en_jxa(_script_de_la_pagina(mundo), 'oyentes.dblclick(ev(otro));' + _FOTO)
-    assert r == {"titulo": False, "form": True, "focos": 0, "sel": 0, "evitado": 0}
+    r = _correr_en_jxa(_script_de_la_pagina(mundo), _SITIO + 'oyentes.dblclick(ev(otro));' + _FOTO)
+    assert r == {"texto": False, "form": True, "focos": 0, "sel": 0, "enviados": 0}
 
 
 @hay_osascript
-def test_js_escape_dentro_del_formulario_lo_esconde_y_otra_tecla_no(mundo):
+def test_js_escape_dentro_del_formulario_lo_esconde_sin_guardar_y_otra_tecla_no(mundo):
+    """Escape devuelve el campo a lo que decía, esconde el formulario y NO
+    envía; Enter envía; y Escape en otra parte no toca nada."""
     guion = _script_de_la_pagina(mundo)
-    abrir = "oyentes.dblclick(ev(titulo));"
-    escape = abrir + 'oyentes.keydown(ev(form, {key: "Escape"}));' + _FOTO
-    assert _correr_en_jxa(guion, escape) == {"titulo": False, "form": True, "focos": 1, "sel": 1, "evitado": 1}
-    enter = abrir + 'oyentes.keydown(ev(form, {key: "Enter"}));' + _FOTO
-    assert _correr_en_jxa(guion, enter)["form"] is False        # sigue abierto: Enter es el envío normal
+    abrir = _SITIO + "oyentes.dblclick(ev(S.texto));"
+    escape = (abrir + 'S.campos[0].value = "otro";'
+              'oyentes.keydown(ev(S.campos[0], {key: "Escape"}));' + _FOTO)
+    assert _correr_en_jxa(guion, escape) == {
+        "texto": False, "form": True, "focos": 1, "sel": 1, "enviados": 0}
+    # Y el campo quedó como estaba: lo que se escribió no viaja.
+    assert _correr_en_jxa(guion, abrir + 'S.campos[0].value = "otro";'
+                          'oyentes.keydown(ev(S.campos[0], {key: "Escape"}));'
+                          "JSON.stringify({v: S.campos[0].value, d: S.campos[0].defaultValue})") == {
+        "v": "P", "d": "P"}
     fuera = abrir + 'oyentes.keydown(ev(otro, {key: "Escape"}));' + _FOTO
     assert _correr_en_jxa(guion, fuera)["form"] is False
+    enter = abrir + 'oyentes.keydown(ev(S.campos[0], {key: "Enter"}));' + _FOTO
+    assert _correr_en_jxa(guion, enter)["enviados"] == 1        # Enter sí guarda
+
+
+@hay_osascript
+def test_js_un_texto_se_guarda_al_salir_del_campo_y_solo_si_cambio(mundo):
+    guion = _script_de_la_pagina(mundo)
+    abrir = _SITIO + "oyentes.dblclick(ev(S.texto));"
+    sin_cambio = abrir + "oyentes.focusout(ev(S.campos[0]));" + _FOTO
+    assert _correr_en_jxa(guion, sin_cambio)["enviados"] == 0
+    con_cambio = abrir + 'S.campos[0].value = "otro";oyentes.focusout(ev(S.campos[0]));' + _FOTO
+    assert _correr_en_jxa(guion, con_cambio)["enviados"] == 1
+
+
+@hay_osascript
+def test_js_un_cambio_en_el_select_envia_su_formulario(mundo):
+    sitio = ('var S = sitioDeMentira({accion: "/proyectos/1/area", auto: true,'
+             ' campos: [{tag: "select", name: "area", valor: "CDS"}]});')
+    r = _correr_en_jxa(_script_de_la_pagina(mundo),
+                       sitio + 'S.campos[0].value = "IA";oyentes.change(ev(S.campos[0]));' + _FOTO)
+    assert r["enviados"] == 1 and r["form"] is False
+
+
+@hay_osascript
+def test_js_un_comentario_vacio_no_envia_y_uno_escrito_si(mundo):
+    """Los DOS cuadros de verdad que sirve la página: el de comentar (nace
+    vacío) y el de editar (nace con el texto del comentario). Vacío no manda
+    nada en ninguno de los dos —también el que la persona VACÍA, que es el
+    único caso que la guarda de «no cambió» no cubre—; con texto, sí."""
+    guion = _script_de_la_pagina(mundo)          # ya deja el proyecto 1
+    mundo.tarea(10, "una", proyecto=1)
+    mundo.comentario(50, 10, config.CHAT_ID_DUENO, "primer comentario")
+    cerrado = ver(mundo, p=1, t=10)
+    crear = next(f for f in _formularios_de(cerrado) if f["accion"] == "/proyectos/tarea/10/comentar")
+    assert crear["clase"] == "comentar"
+    editar = next(f for f in _formularios_de(ver(mundo, p=1, t=10, editar_comentario=50))
+                  if f["accion"] == "/proyectos/tarea/10/comentario/50/editar")
+
+    vacio = _sitio_de_mentira(crear, edita=False) + "oyentes.focusout(ev(S.campos[0]));" + _FOTO
+    assert _correr_en_jxa(guion, vacio)["enviados"] == 0
+    escrito = (_sitio_de_mentira(crear, edita=False)
+               + 'S.campos[0].value = "un comentario";oyentes.focusout(ev(S.campos[0]));' + _FOTO)
+    r = _correr_en_jxa(guion, escrito)
+    assert r["enviados"] == 1 and r["form"] is False
+    # El de editar nace CON el texto del comentario: si lo borra, no se guarda.
+    borrado = (_sitio_de_mentira(editar, edita=True)
+               + 'S.campos[0].value = "";oyentes.focusout(ev(S.campos[0]));' + _FOTO)
+    assert _correr_en_jxa(guion, borrado)["enviados"] == 0
+    tocado = (_sitio_de_mentira(editar, edita=True)
+              + 'S.campos[0].value = "ya corregido";oyentes.focusout(ev(S.campos[0]));' + _FOTO)
+    assert _correr_en_jxa(guion, tocado)["enviados"] == 1
+
+
+def _formulario_de_comentar_de_verdad(mundo) -> dict:
+    mundo.tarea(10, "una", proyecto=1)
+    html = ver(mundo, p=1, t=10)
+    return next(f for f in _formularios_de(html) if f["accion"] == "/proyectos/tarea/10/comentar")
+
+
+@hay_osascript
+def test_js_enter_en_el_cuadro_de_comentarios_es_un_salto_de_linea_y_en_un_texto_envia(mundo):
+    """Enter en un `textarea` (el comentario) escribe un salto de línea: ni
+    envía ni se le cancela la tecla. Enter en un campo de una línea sí envía.
+    Los dos formularios son los del HTML de verdad."""
+    guion = _script_de_la_pagina(mundo)          # ya deja el proyecto 1
+    comentar = _formulario_de_comentar_de_verdad(mundo)
+    assert [c["tipo"] for c in comentar["campos"] if c["name"]] == ["textarea"]
+    foto = "JSON.stringify({enviados: S.form.enviados, evitado: evitado})"
+    en_textarea = (_sitio_de_mentira(comentar, edita=False)
+                   + 'S.campos[0].value = "linea uno";oyentes.keydown(ev(S.campos[0], {key: "Enter"}));' + foto)
+    assert _correr_en_jxa(guion, en_textarea) == {"enviados": 0, "evitado": 0}
+    # (el doble clic que abre el campo ya cancela su propio evento: 1; el Enter: 1 más)
+    en_linea = _SITIO + 'oyentes.dblclick(ev(S.texto));oyentes.keydown(ev(S.campos[0], {key: "Enter"}));' + foto
+    assert _correr_en_jxa(guion, en_linea) == {"enviados": 1, "evitado": 2}
+
+
+@hay_osascript
+def test_js_al_comentar_el_foco_y_el_clic_del_boton_no_envian_dos_veces(mundo):
+    """Lo que pasa de verdad al hacer clic en «Comentar» con el cuadro lleno:
+    primero el cuadro pierde el foco (se envía solo) y luego el clic del botón
+    envía el MISMO formulario. Llega un solo envío. Y pasado el par de segundos
+    (la página no se fue), el formulario se puede enviar otra vez."""
+    guion = _script_de_la_pagina(mundo)          # ya deja el proyecto 1
+    comentar = _formulario_de_comentar_de_verdad(mundo)
+    sitio = (_sitio_de_mentira(comentar, edita=False)
+             + 'S.campos[0].value = "un comentario";oyentes.focusout(ev(S.campos[0]));')
+    doble = sitio + "enviarFormulario(S.form);JSON.stringify({enviados: S.form.enviados})"
+    assert _correr_en_jxa(guion, doble) == {"enviados": 1}
+    pasado = sitio + "correrTemporizadores();enviarFormulario(S.form);JSON.stringify({enviados: S.form.enviados})"
+    assert _correr_en_jxa(guion, pasado) == {"enviados": 2}
+
+
+@hay_osascript
+def test_js_el_seguro_de_doble_envio_vale_para_todos_los_formularios_de_la_pagina(mundo, gente, monkeypatch):
+    """Hermanos: la lista de formularios sale del HTML renderizado de todas las
+    vistas (los del proyecto y los de la tarea); a cada uno se le manda un
+    envío doble y a todos les llega uno solo."""
+    import test_escrituras_tarea as _t
+    formas = {}
+    for m, consultas in ((_mundo_de_formularios(monkeypatch, gente), [c for c, _ in _VISTAS.values()]),
+                         (_t._mundo(monkeypatch, gente), [c for c, _ in _t._VISTAS_DE_TAREAS.values()])):
+        for consulta in consultas:
+            for f in _formularios_de(ver(m, **consulta)):
+                formas[f["accion"]] = "data-auto" in f["atributos"]
+    assert len(formas) >= 8, formas
+    escenario = (
+        "var acciones = " + json.dumps(sorted(formas)) + ";\n"
+        "JSON.stringify(acciones.map(function (a) {\n"
+        "  var S = sitioDeMentira({accion: a, auto: false, edita: false, oculto: false, campos: []});\n"
+        "  enviarFormulario(S.form); enviarFormulario(S.form);\n"
+        "  return {accion: a, enviados: S.form.enviados};\n"
+        "}))")
+    for dicho in _correr_en_jxa(_script_de_la_pagina(mundo), escenario):
+        assert dicho["enviados"] == 1, dicho
+
+
+@hay_osascript
+def test_js_el_comentario_que_se_vuelve_a_editar_va_a_la_ruta_de_editar(mundo):
+    """Con el formulario de verdad del comentario que se está editando: al
+    salir del cuadro, el script envía ESE formulario —el de editar— y no el de
+    crear. La ruta sale del HTML renderizado."""
+    guion = _script_de_la_pagina(mundo)          # ya deja el proyecto 1
+    mundo.tarea(10, "una", proyecto=1)
+    mundo.comentario(50, 10, config.CHAT_ID_DUENO, "primer comentario")
+    html = ver(mundo, p=1, t=10, editar_comentario=50)
+    form = next(f for f in _formularios_de(html)
+                if f["accion"] == "/proyectos/tarea/10/comentario/50/editar")
+    sitio = _sitio_de_mentira(form, edita=True, oculto=False)
+    escenario = (sitio + 'S.campos[0].value = "ya corregido";'
+                 'oyentes.focusout(ev(S.campos[0]));'
+                 "JSON.stringify({enviados: S.form.enviados, accion: S.form.action})")
+    assert _correr_en_jxa(guion, escenario) == {
+        "enviados": 1, "accion": "/proyectos/tarea/10/comentario/50/editar"}
+    # Y el cuadro de crear NO es el que se envía: son dos formularios distintos.
+    crear = next(f for f in _formularios_de(html) if f["accion"] == "/proyectos/tarea/10/comentar")
+    assert crear["accion"] != form["accion"]
 
 
 def test_el_script_no_decide_nada_de_negocio(mundo):
     guion = _script_de_la_pagina(mundo)
     codigo = re.sub(r"/\*.*?\*/", "", guion, flags=re.S)
     assert re.search(r"fetch\(|XMLHttpRequest|\.submit\(|FormData|localStorage|eval\(", codigo) is None
-    assert codigo.count("addEventListener") == 2
+    # Un oyente por evento y nada más: el clic (abrir el detalle, esperando al
+    # segundo), el doble clic, el teclado, el cambio de un desplegable, la
+    # salida de un campo y el envío (para no mandar dos veces el mismo).
+    assert sorted(re.findall(r'addEventListener\("(\w+)"', codigo)) == [
+        "change", "click", "dblclick", "focusout", "keydown", "submit"]
+
+
+def _valor_del_campo(c: dict) -> str:
+    """Con lo que nace un control en el HTML: el `value` del input, la opción
+    marcada del select o el texto que trae el textarea."""
+    if c["tipo"] == "select":
+        marcada = _la_marcada(c) or _primera_habilitada(c)
+        return _valor(marcada) if marcada is not None else ""
+    return c["value"] or ""
+
+
+def _campos_en_js(form: dict) -> str:
+    """Los controles CON NOMBRE de ese formulario del HTML, como literal de
+    JavaScript, con el valor con el que nacen. Los `hidden` no se miran: un
+    navegador no los enfoca ni los cambia."""
+    return ", ".join(
+        "{{tag: {!r}, name: {!r}, valor: {!r}}}".format(
+            "textarea" if c["tipo"] == "textarea" else c["tipo"], c["name"],
+            _valor_del_campo(c))
+        for c in form["campos"] if c["name"] and c["tipo"] != "hidden")
+
+
+def _sitio_de_mentira(form: dict, *, edita: bool, oculto: bool = False) -> str:
+    """El JavaScript que arma el sitio de mentira de ESE formulario del HTML
+    renderizado: su `action`, si lleva `data-auto`, y sus controles."""
+    return ("var S = sitioDeMentira({{accion: {!r}, auto: {}, edita: {}, oculto: {}, "
+            "campos: [{}]}});").format(
+        form["accion"], "true" if "data-auto" in form["atributos"] else "false",
+        "true" if edita else "false", "true" if oculto else "false", _campos_en_js(form))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -734,8 +1035,16 @@ _VACIOS = {"input", "br", "hr", "img", "meta", "link"}
 # tabla; NO que el navegador haga lo mismo que el lector (las hojas de estilo y
 # los ancestros fuera de la lista quedan sin vigilar: ver la FRONTERA de arriba).
 _ATRIBUTOS = {
-    "form": {"method", "action", "class"},
-    "input": {"type", "name", "value", "required", "maxlength", "placeholder", "aria-label"},
+    # `data-auto` (el encargo de la página, 1-oct-2026): marca los formularios
+    # que se guardan solos —los textos al salir del campo y los desplegables al
+    # escoger—, para que el script no tenga que llevar una lista de clases
+    # tecleada. Los que CREAN una fila con más de un campo (proyecto nuevo,
+    # tarea nueva) NO lo llevan: guardarían a medias.
+    "form": {"method", "action", "class", "data-auto"},
+    # `min` (1-oct-2026): el piso de fecha del campo de día y hora de la tarea
+    # nueva. Es una ayuda del navegador, no una guarda — lo que vale lo decide
+    # `_vence_con_hora_valido` en el servidor.
+    "input": {"type", "name", "value", "required", "maxlength", "placeholder", "aria-label", "min"},
     "select": {"id", "name", "required"},
     "option": {"value", "selected", "disabled"},
     # `title` y `aria-label` (E6): el botón redondo de marcar hecha (○ o ✓) no
@@ -743,7 +1052,11 @@ _ATRIBUTOS = {
     # y `title` es lo que dice al pasar el cursor. No cambian lo que envía.
     "button": {"class", "type", "title", "aria-label"},
     "label": {"for"},
-    "a": {"class", "href"},
+    # `title` y `aria-label` en el enlace (1-oct-2026): el `＋` que abre los
+    # renglones de «¿sale una tarea nueva de ésta?» no dice nada por su texto,
+    # y así lo dice al pasar el cursor y al leerlo en voz alta. No cambia a
+    # dónde lleva el enlace.
+    "a": {"class", "href", "title", "aria-label"},
     "div": {"class"},
     # E6 (Lucy 1.0), cada uno con su porqué: el cuadro de comentario y el de
     # editarlo son de varias líneas (`textarea`), y la fecha límite opcional de
@@ -751,7 +1064,10 @@ _ATRIBUTOS = {
     # texto `AAAA-MM-DD`, o vacío).
     "textarea": {"name", "required", "maxlength", "placeholder", "aria-label"},
 }
-_TIPOS_DE_INPUT = {"hidden", "text", "date"}
+# `datetime-local` (1-oct-2026): la fecha de la tarea que sale de otra es la
+# MISMA que ofrece /tareas en su renglón derivado, día y hora (`deriva_vence_`),
+# y la lee el mismo `_vence_con_hora_valido`.
+_TIPOS_DE_INPUT = {"hidden", "text", "date", "datetime-local"}
 # La ÚNICA excepción, por nombre: `form.renombrar` nace `hidden` y lo muestra el
 # JavaScript (doble clic) o el servidor (`?editar=nombre`); hay pruebas de las dos.
 _NACE_ESCONDIDO = {"renombrar"}
@@ -783,7 +1099,7 @@ class _LectorDeFormularios(HTMLParser):
         if tag == "form":
             metodo = (a.get("method") or "get").lower()
             f = {"metodo": metodo, "accion": a.get("action"), "clase": a.get("class") or "",
-                 "campos": [], "botones": [], "post": metodo == "post"}
+                 "atributos": set(nombres), "campos": [], "botones": [], "post": metodo == "post"}
             self.formularios.append(f)
             if f["post"]:
                 self._revisar_formulario(f, nombres)
@@ -916,7 +1232,7 @@ def _lo_que_manda_el_navegador(form: dict, escribir, escoger) -> dict:
                 datos[c["name"]] = _valor(op)
         elif c["tipo"] == "hidden":
             datos[c["name"]] = c["value"] or ""
-        elif c["tipo"] in ("text", "search", "date", "textarea"):
+        elif c["tipo"] in ("text", "search", "date", "datetime-local", "textarea"):
             datos[c["name"]] = escribir(c)
         else:
             # Un tipo de control que el lector conoce y este envío no sabe llenar
@@ -943,14 +1259,21 @@ def _todos(m) -> dict:
 
 
 FECHA_ESCRITA = "2026-10-20"
+# Lo que manda un `<input type="datetime-local">`: día Y hora, sin zona.
+FECHA_Y_HORA_ESCRITA = "2026-10-20T09:30"
 
 
 def _escrito(c):
     """Lo que la persona escribe en un campo: texto con el nombre del campo (si
     el nombre está mal, el efecto no aparece) y, en un campo de fecha, una fecha
-    REAL (`2026-10-20`, como la manda el navegador): una fecha opcional que se
-    envía vacía no prueba que el campo esté atado a la ruta."""
-    return FECHA_ESCRITA if c["tipo"] == "date" else f"Escrito en {c['name']}"
+    REAL (`2026-10-20`, o `2026-10-20T09:30` si pide hora, como las manda el
+    navegador): una fecha opcional que se envía vacía no prueba que el campo
+    esté atado a la ruta."""
+    if c["tipo"] == "date":
+        return FECHA_ESCRITA
+    if c["tipo"] == "datetime-local":
+        return FECHA_Y_HORA_ESCRITA
+    return f"Escrito en {c['name']}"
 
 
 def _otra_opcion(c):
@@ -1097,6 +1420,75 @@ _BUENO = ('<div style="display:contents;--color:#0f7c74"><form class="resp" meth
 def test_el_html_simple_bueno_no_da_problemas():
     assert _problemas_de_html_simple(_BUENO) == []
     assert _problemas_de_html_simple(_BUENO.replace("<button class", '<button type="submit" class')) == []
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# El guardado automático: el mismo criterio para TODOS los controles
+# ═══════════════════════════════════════════════════════════════════════
+#
+# LA LISTA SALE DEL HTML: se recorren las vistas de la página (las de este
+# archivo y las de `test_escrituras_tarea.py`) y de cada formulario POST se
+# sacan sus controles con nombre. Para cada uno se corre el script de verdad
+# —con su `action` y su valor de verdad— y se mira si envía su formulario.
+#
+# LA REGLA, EN UNA LÍNEA: un formulario con UN SOLO campo que la persona llena
+# se guarda solo (`data-auto`); con NINGUNO es de un clic (marcar hecha, la ×,
+# cerrar), y con VARIOS crea una fila y guardarla a medias sería peor que no
+# guardarla (proyecto nuevo, tarea nueva). La regla se COMPRUEBA contra el HTML
+# (el conteo de campos), no contra una lista escrita a mano.
+
+def _controles_de_la_pagina(monkeypatch, gente) -> list[dict]:
+    """Todos los controles que la persona puede tocar, en todas las vistas:
+    `[{vista, accion, auto, tag, name, valor, cuantos}]`, con `cuantos` = los
+    campos que la persona llena en ESE formulario."""
+    import test_escrituras_tarea as _t
+    casos = []
+
+    def recoger(m, consultas):
+        for consulta in consultas:
+            html = ver(m, **consulta)
+            for form in _formularios_de(html):
+                de_la_persona = [c for c in form["campos"]
+                                 if c["name"] and not c.get("disabled") and c["tipo"] != "hidden"]
+                for c in de_la_persona:
+                    casos.append({"vista": consulta, "accion": form["accion"],
+                                  "auto": "data-auto" in form["atributos"],
+                                  "tag": "textarea" if c["tipo"] == "textarea" else c["tipo"],
+                                  "name": c["name"], "valor": _valor_del_campo(c),
+                                  "cuantos": len(de_la_persona)})
+
+    # Cada mundo se recorre ANTES de armar el siguiente: el doble de la base se
+    # instala en `db.pool` y el segundo taparía al primero.
+    recoger(_mundo_de_formularios(monkeypatch, gente), [c for c, _ in _VISTAS.values()])
+    recoger(_t._mundo(monkeypatch, gente), [c for c, _ in _t._VISTAS_DE_TAREAS.values()])
+    return casos
+
+
+@hay_osascript
+def test_hermanos_todos_los_controles_de_la_pagina_siguen_el_mismo_criterio(mundo, gente, monkeypatch):
+    casos = _controles_de_la_pagina(monkeypatch, gente)
+    assert len(casos) >= 12 and len({c["accion"] for c in casos}) >= 8, casos
+    # El conteo de campos por formulario y el `data-auto` que trae el HTML: la
+    # regla de arriba, comprobada contra lo que se sirve.
+    por_accion: dict[str, set] = {}
+    for c in casos:
+        por_accion.setdefault(c["accion"], set()).add((c["cuantos"], c["auto"]))
+    for accion, formas in por_accion.items():
+        for cuantos, auto in formas:
+            assert auto == (cuantos == 1), (accion, cuantos, auto)
+    escenario = (
+        "var casos = " + json.dumps(casos) + ";\n"
+        "JSON.stringify(casos.map(function (caso) {\n"
+        "  var S = sitioDeMentira({accion: caso.accion, auto: caso.auto, edita: false, oculto: false,\n"
+        "    campos: [{tag: caso.tag, name: caso.name, valor: caso.valor}]});\n"
+        "  var c = S.campos[0];\n"
+        "  if (c.tagName === 'SELECT') { c.value = 'otro'; oyentes.change(ev(c)); }\n"
+        "  else { c.value = c.defaultValue + 'x'; oyentes.focusout(ev(c)); }\n"
+        "  return {accion: caso.accion, tag: c.tagName, auto: caso.auto, enviados: S.form.enviados};\n"
+        "}))")
+    salida = _correr_en_jxa(_script_de_la_pagina(mundo), escenario)
+    for dicho in salida:
+        assert dicho["enviados"] == (1 if dicho["auto"] else 0), dicho
 
 
 def _con(cambio_de, cambio_a, base=_BUENO):
