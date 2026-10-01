@@ -3239,7 +3239,7 @@ def _solo_columnas_reales(tabla: str, fila: dict) -> dict:
     otras). Los demás sitios de este archivo que unen tablas
     (`tareas_por_grupo`, `tarea_con_comentarios`, `tareas_de_code_pendientes`,
     `choques_de_evento`, `correos_por_marcar_leidos`,
-    `proyectos_con_tareas`) son de SOLO LECTURA: ninguno escribe
+    `pagina_de_proyectos`) son de SOLO LECTURA: ninguno escribe
     `log_acciones`.
     """
     columnas = set(columnas_declaradas().get(tabla, ()))

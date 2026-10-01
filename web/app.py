@@ -374,7 +374,7 @@ def _hace_dias(n) -> str:
 
 
 def _iniciales(nombre) -> str:
-    """«Rosi Romero» → «RR». Las dos primeras palabras; sin nombre, «?»."""
+    """«Ana Pérez» → «AP». Las dos primeras palabras; sin nombre, «?»."""
     partes = str(nombre or "").split()[:2]
     return "".join(p[0] for p in partes).upper() or "?"
 

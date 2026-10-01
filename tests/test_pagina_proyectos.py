@@ -148,7 +148,7 @@ class Mundo:
 def gente():
     permitidos, nombres = config.CHAT_IDS_PERMITIDOS, config.NOMBRES_POR_CHAT
     dueno, rosi = config.CHAT_ID_DUENO, 700100001
-    config.NOMBRES_POR_CHAT = {dueno: "Tiziano Fajardo", rosi: "Rosi Romero"}
+    config.NOMBRES_POR_CHAT = {dueno: "Persona Uno", rosi: "Persona Dos"}
     config.CHAT_IDS_PERMITIDOS = (dueno, rosi)
     yield types.SimpleNamespace(dueno=dueno, rosi=rosi)
     config.CHAT_IDS_PERMITIDOS, config.NOMBRES_POR_CHAT = permitidos, nombres
@@ -500,7 +500,7 @@ def test_si_falta_uno_de_los_dos_no_se_pinta_su_guion(mundo, gente):
     mundo.proyecto(1, "Solo responsable", area="CDS", responsable=gente.rosi)
     mundo.proyecto(2, "Solo cliente", area="CDS", cliente="Colegio")
     solo_responsable, solo_cliente = ver(mundo, p=1), ver(mundo, p=2)
-    assert "Responsable: <b>Rosi Romero</b>" in solo_responsable
+    assert "Responsable: <b>Persona Dos</b>" in solo_responsable
     assert "Cliente:" not in solo_responsable and "—" not in solo_responsable
     assert "Cliente: <b>Colegio</b>" in solo_cliente
     assert "Responsable:" not in solo_cliente and "—" not in solo_cliente
@@ -513,8 +513,8 @@ def test_cliente_y_responsable_salen_por_nombre_y_nunca_por_numero(mundo, gente)
     mundo.tarea(11, "de Code", proyecto=1, responsable=config.CHAT_ID_CODE)
     mundo.tarea(12, "de alguien sin nombre", proyecto=1, responsable=555000111)
     html = ver(mundo, p=1)
-    assert "Cliente: <b>Colegio San Juan</b>" in html and "Responsable: <b>Rosi Romero</b>" in html
-    assert 'title="Responsable: Tiziano Fajardo"' in html and 'title="Responsable: Code"' in html
+    assert "Cliente: <b>Colegio San Juan</b>" in html and "Responsable: <b>Persona Dos</b>" in html
+    assert 'title="Responsable: Persona Uno"' in html and 'title="Responsable: Code"' in html
     for pid in (1, 2):
         pagina = ver(mundo, p=pid)
         for numero in (str(gente.rosi), str(gente.dueno), "555000111"):
@@ -587,10 +587,19 @@ def test_los_comentarios_se_leen_con_nombre_fecha_y_marca_de_editado(mundo, gent
     mundo.comentario(52, 10, gente.dueno, "borrado, no sale", borrado=True)
     html = ver(mundo, p=1)
     assert "1 coment." not in html and "2 coment." in html
-    assert "<b>Rosi Romero</b>" in html and "Le escribí a Luis" in html
+    assert "<b>Persona Dos</b>" in html and "Le escribí a Luis" in html
     assert "borrado, no sale" not in html
     assert "Segundo <b>comentario</b>" not in html and "Segundo &lt;b&gt;comentario&lt;/b&gt;" in html
     assert html.count(" · editado") == 1
+
+
+def test_un_autor_de_comentario_sin_nombre_se_pinta_alguien_y_nunca_su_numero(mundo):
+    mundo.proyecto(1, "P", area="CDS")
+    mundo.tarea(10, "con comentario", proyecto=1)
+    mundo.comentario(50, 10, 555000222, "de alguien sin nombre")
+    html = ver(mundo, p=1)
+    assert "<b>Alguien</b>" in html and "de alguien sin nombre" in html
+    assert "555000222" not in html
 
 
 def test_lo_que_escribe_una_persona_sale_escapado(mundo):
