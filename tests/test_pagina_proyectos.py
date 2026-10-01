@@ -745,7 +745,8 @@ def test_todo_enlace_o_redireccion_a_un_proyecto_dice_cual_proyecto_es():
     de este archivo)."""
     eligen = ("p=", "nombre_guardado=", "area_guardada=", "creado=", "tarea_creada=")
     hallados = []
-    for archivo in sorted((g._ROOT / "web").rglob("*")):
+    for archivo in sorted(a for a in g._archivos_de_texto()
+                          if a.relative_to(g._ROOT).parts[0] == "web"):
         if archivo.suffix == ".html":
             for n, linea in enumerate(archivo.read_text(encoding="utf-8").splitlines(), 1):
                 hallados += [(archivo.name, n, m.group(0))
