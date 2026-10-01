@@ -226,13 +226,12 @@ def _correr_en_jxa(script: str, escenario: str) -> dict:
     arnes = """
 var oyentes = {};
 var campo = {focos: 0, seleccionado: 0, focus: function () { this.focos++; }, select: function () { this.seleccionado++; }};
-var form = {hidden: true, querySelector: function () { return campo; }, closest: function (s) { return s === "form.renombrar" ? this : null; }};
-var titulo = {hidden: false, closest: function (s) { return s === "h1[data-dbl]" ? this : null; }};
+var sitio = {};
+var form = {hidden: true, querySelector: function () { return campo; }, closest: function (s) { return s === "form.renombrar" ? this : s === "[data-edita]" ? sitio : null; }};
+var titulo = {hidden: false, closest: function (s) { return s === "[data-dbl]" ? this : s === "[data-edita]" ? sitio : null; }};
+sitio.querySelector = function (s) { return s === "form.renombrar" ? form : s === "[data-dbl]" ? titulo : null; };
 var otro = {closest: function () { return null; }};
-var document = {
-  addEventListener: function (tipo, f) { oyentes[tipo] = f; },
-  querySelector: function (s) { return s === "form.renombrar" ? form : s === "h1[data-dbl]" ? titulo : null; }
-};
+var document = {addEventListener: function (tipo, f) { oyentes[tipo] = f; }};
 var evitado = 0;
 function ev(destino, extra) { var e = {target: destino, preventDefault: function () { evitado++; }}; for (var k in extra) e[k] = extra[k]; return e; }
 """ + script + "\n" + escenario
@@ -346,7 +345,7 @@ def test_el_boton_de_cerrar_va_debajo_al_final_a_la_derecha(mundo):
     html = ver(mundo, p=1)
     boton = '<a class="btn-linea" href="/proyectos?p=1&amp;confirmar=cerrar">Cerrar proyecto</a>'
     assert html.count(boton) == 1
-    assert html.index("+ Agregar tarea a este proyecto") < html.index(boton)
+    assert html.index("+ Agregar tarea con más opciones") < html.index(boton)
     assert '<div class="acciones abajo">\n      ' + boton in html
     assert "justify-content:flex-end" in html.split(".acciones.abajo{", 1)[1].split("}", 1)[0]
 
@@ -490,10 +489,12 @@ def test_el_cliente_no_se_escribe_desde_la_pagina_todavia(mundo):
 # Los hermanos: quién más escribe un proyecto
 # ═══════════════════════════════════════════════════════════════════════
 
-def _rutas_post_de_proyectos():
+def _rutas_post_de_proyectos(con_tareas: bool = False):
     """Cada función `@app.post("/proyectos...")` de `web/app.py`, con lo que
     escribe: las llamadas a `crud.editar("proyectos", ...)` (con su `actor`) y a
-    `db.crear_proyecto`. LA LISTA SALE DEL ÁRBOL SINTÁCTICO, no de nombres."""
+    `db.crear_proyecto`. LA LISTA SALE DEL ÁRBOL SINTÁCTICO, no de nombres. Sin
+    `con_tareas` deja fuera las de la tarea (`/proyectos/tarea/...` y
+    `/proyectos/{pid}/tareas`), que son de `tests/test_escrituras_tarea.py`."""
     arbol = ast.parse((_ROOT / "web" / "app.py").read_text(encoding="utf-8"))
     salida = {}
     for f in arbol.body:
@@ -502,7 +503,9 @@ def _rutas_post_de_proyectos():
         for d in f.decorator_list:
             if (isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr == "post"
                     and d.args and isinstance(d.args[0], ast.Constant)
-                    and d.args[0].value.startswith("/proyectos")):
+                    and d.args[0].value.startswith("/proyectos")
+                    and (con_tareas or not (d.args[0].value.startswith("/proyectos/tarea/")
+                                            or d.args[0].value.endswith("/tareas")))):
                 escribe, pide_sesion = [], False
                 for n in ast.walk(f):
                     if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
@@ -730,12 +733,20 @@ _ATRIBUTOS = {
     "input": {"type", "name", "value", "required", "maxlength", "placeholder", "aria-label"},
     "select": {"id", "name", "required"},
     "option": {"value", "selected", "disabled"},
-    "button": {"class", "type"},
+    # `title` y `aria-label` (E6): el botón redondo de marcar hecha (○ o ✓) no
+    # tiene texto; su nombre para quien lo lee en voz alta viaja en `aria-label`,
+    # y `title` es lo que dice al pasar el cursor. No cambian lo que envía.
+    "button": {"class", "type", "title", "aria-label"},
     "label": {"for"},
     "a": {"class", "href"},
     "div": {"class"},
+    # E6 (Lucy 1.0), cada uno con su porqué: el cuadro de comentario y el de
+    # editarlo son de varias líneas (`textarea`), y la fecha límite opcional de
+    # una tarea nueva es un `<input type="date">` (lo manda el navegador como
+    # texto `AAAA-MM-DD`, o vacío).
+    "textarea": {"name", "required", "maxlength", "placeholder", "aria-label"},
 }
-_TIPOS_DE_INPUT = {"hidden", "text"}
+_TIPOS_DE_INPUT = {"hidden", "text", "date"}
 # La ÚNICA excepción, por nombre: `form.renombrar` nace `hidden` y lo muestra el
 # JavaScript (doble clic) o el servidor (`?editar=nombre`); hay pruebas de las dos.
 _NACE_ESCONDIDO = {"renombrar"}
@@ -756,7 +767,7 @@ class _LectorDeFormularios(HTMLParser):
         self.formularios = []
         self.problemas = []
         self._pila = []
-        self._f = self._sel = self._op = self._boton = None
+        self._f = self._sel = self._op = self._boton = self._ta = None
 
     def _mal(self, texto):
         self.problemas.append(texto)
@@ -786,7 +797,12 @@ class _LectorDeFormularios(HTMLParser):
             if n not in permitidos:
                 self._mal(f"{donde}: atributo no permitido {n!r}")
         for tag, atr in self._pila:
-            if tag in ("noscript", "template", "dialog", "details", "form"):
+            # `details` solo si es el que pliega las tareas hechas (E6): su
+            # `<summary>` lo abre con un clic, sin JavaScript, y adentro están
+            # las mismas filas con sus formularios. Cualquier otro `details`
+            # esconde el formulario y falla.
+            if tag in ("noscript", "template", "dialog", "form") or (
+                    tag == "details" and atr.get("class") != "plegar"):
                 self._mal(f"{donde}: dentro de <{tag}>")
             for n, v in atr.items():
                 if n in ("hidden", "inert") or n.startswith("on"):
@@ -810,6 +826,9 @@ class _LectorDeFormularios(HTMLParser):
         if tag == "input":
             f["campos"].append({"tipo": a.get("type", "text"), "name": a.get("name"),
                                 "value": a.get("value"), "disabled": "disabled" in a})
+        elif tag == "textarea":
+            self._ta = {"tipo": "textarea", "name": a.get("name"), "value": "", "disabled": "disabled" in a}
+            f["campos"].append(self._ta)
         elif tag == "select":
             self._sel = {"tipo": "select", "name": a.get("name"), "disabled": "disabled" in a, "opciones": []}
             f["campos"].append(self._sel)
@@ -826,8 +845,12 @@ class _LectorDeFormularios(HTMLParser):
             self._boton["texto"] += dato
         if self._op is not None:
             self._op["texto"] += dato
+        if self._ta is not None:
+            self._ta["value"] += dato
 
     def handle_endtag(self, tag):
+        if tag == "textarea":
+            self._ta = None
         if tag == "form":
             f = self._f
             if f is not None and f["post"]:
@@ -838,7 +861,7 @@ class _LectorDeFormularios(HTMLParser):
                 repetidos = sorted({n for n in nombres if nombres.count(n) > 1})
                 if repetidos:
                     self._mal(f"{donde}: nombre repetido {repetidos}")
-            self._f = self._sel = self._op = self._boton = None
+            self._f = self._sel = self._op = self._boton = self._ta = None
         elif tag == "select":
             self._sel = self._op = None
         elif tag == "option":
@@ -888,7 +911,7 @@ def _lo_que_manda_el_navegador(form: dict, escribir, escoger) -> dict:
                 datos[c["name"]] = _valor(op)
         elif c["tipo"] == "hidden":
             datos[c["name"]] = c["value"] or ""
-        elif c["tipo"] in ("text", "search"):
+        elif c["tipo"] in ("text", "search", "date", "textarea"):
             datos[c["name"]] = escribir(c)
     return datos
 
@@ -911,7 +934,9 @@ def _todos(m) -> dict:
 
 
 def _escrito(c):
-    return f"Escrito en {c['name']}"
+    """Lo que la persona escribe en un campo: texto con el nombre del campo
+    (si el nombre está mal, el efecto no aparece); la fecha opcional, vacía."""
+    return "" if c["tipo"] == "date" else f"Escrito en {c['name']}"
 
 
 def _otra_opcion(c):
@@ -929,6 +954,15 @@ def _primera_habilitada(c):
 
 
 # vista -> (consulta, acciones POST exactas que tiene que tener, página = proyecto)
+# Las escrituras de la tarea (`/proyectos/tarea/...`, `/proyectos/{pid}/tareas`)
+# son de `tests/test_escrituras_tarea.py`; acá, solo las del proyecto.
+_SOLO_PROYECTO = re.compile(r"/proyectos/(nuevo|\d+/(nombre|area|responsable|estado))")
+
+
+def _del_proyecto(formularios):
+    return [f for f in formularios if _SOLO_PROYECTO.fullmatch(f["accion"] or "")]
+
+
 _VISTAS = {
     "abierto": ({"p": 2}, ["/proyectos/2/area", "/proyectos/2/nombre", "/proyectos/2/responsable"]),
     "cerrado": ({"p": 4}, ["/proyectos/4/area", "/proyectos/4/estado", "/proyectos/4/nombre",
@@ -947,7 +981,7 @@ def test_cada_vista_tiene_exactamente_estos_formularios_de_escritura(mundo, gent
     consulta, esperadas = _VISTAS[vista]
     m = _mundo_de_formularios(monkeypatch, gente)
     html = ver(m, **consulta)
-    assert sorted(f["accion"] for f in _formularios_de(html)) == esperadas
+    assert sorted(f["accion"] for f in _del_proyecto(_formularios_de(html))) == esperadas
 
 
 @pytest.mark.parametrize("vista", sorted(_VISTAS))
@@ -960,7 +994,7 @@ def test_cada_formulario_enviado_como_el_navegador_escribe_en_el_proyecto_de_la_
         m = _mundo_de_formularios(monkeypatch, gente)
         html = ver(m, **consulta)
         assert _problemas_de_html_simple(html) == [], (vista, _problemas_de_html_simple(html))
-        form = _formularios_de(html)[i]
+        form = _del_proyecto(_formularios_de(html))[i]
         clase = form["clase"]
         escoger = _la_marcada
         if clase == "resp":
@@ -1037,7 +1071,7 @@ def test_los_formularios_de_cada_vista_cumplen_la_regla_de_html_simple(mundo, ge
     html = ver(m, **_VISTAS[vista][0])
     assert _problemas_de_html_simple(html) == []
     # Y la regla se aplica a TODO formulario post que haya, sin excepción de vista.
-    assert len(_formularios_de(html)) == len(_VISTAS[vista][1])
+    assert len(_del_proyecto(_formularios_de(html))) == len(_VISTAS[vista][1])
 
 
 _BUENO = ('<div style="display:contents;--color:#0f7c74"><form class="resp" method="post" '
@@ -1075,13 +1109,16 @@ _ATAQUES = {
     "x1_atributo_desconocido": _con("<button class", '<button data-x="1" class'),
     "x2_formaction": _con("<button class", '<button formaction="/otra" class'),
     "x3_form_que_apunta_a_otro": _con('<select id="r"', '<select form="otro" id="r"'),
-    "x4_elemento_desconocido": _con("<button class", '<textarea name="t"></textarea><button class'),
+    "x4_elemento_desconocido": _con("<button class", '<fieldset></fieldset><button class'),
     "x5_input_checkbox": _con("<button class", '<input type="checkbox" name="c"><button class'),
     "x6_input_submit": _con("<button class", '<input type="submit" name="c"><button class'),
     "x7_ancestro_escondido": "<div hidden>" + _BUENO + "</div>",
     "x8_ancestro_con_style": '<div style="display:none">' + _BUENO + "</div>",
     "x9_ancestro_con_onclick": '<div onclick="x()">' + _BUENO + "</div>",
     "x10_form_dentro_de_details": "<details>" + _BUENO + "</details>",
+    "x10b_details_con_otra_clase": '<details class="otra">' + _BUENO + "</details>",
+    "x13_textarea_con_atributo_raro": _con("<button class", '<textarea name="t" readonly></textarea><button class'),
+    "x14_input_date_con_atributo_raro": _con("<button class", '<input type="date" name="d" disabled><button class'),
     "x11_form_dentro_de_form": '<form method="post" action="/a"><button>x</button>' + _BUENO + "</form>",
     "x12_method_distinto_de_post_con_atributos": _con('method="post"', 'method="POST" target="_blank"'),
 }
@@ -1090,6 +1127,14 @@ _ATAQUES = {
 @pytest.mark.parametrize("ataque", sorted(_ATAQUES))
 def test_cada_ataque_escrito_a_mano_hace_fallar_la_regla(ataque):
     assert _problemas_de_html_simple(_ATAQUES[ataque]) != [], ataque
+
+
+def test_el_details_que_pliega_las_hechas_se_acepta_y_el_textarea_y_la_fecha_tambien():
+    plegado = '<details class="plegar">' + _BUENO + "</details>"
+    assert _problemas_de_html_simple(plegado) == []
+    con_texto = _con("<button class", '<textarea name="t" required maxlength="9" aria-label="x"></textarea>'
+                                       '<input type="date" name="d" aria-label="f"><button class')
+    assert _problemas_de_html_simple(con_texto) == []
 
 
 def test_un_ancestro_con_el_style_del_grupo_si_se_acepta_y_otro_no():
@@ -1102,8 +1147,11 @@ def test_solo_renombrar_puede_nacer_escondido_y_las_dos_formas_de_mostrarla_exis
     oculto = re.compile(r"<form\b[^>]*\bhidden\b[^>]*>")
     for vista in sorted(_VISTAS):
         html = ver(m, **_VISTAS[vista][0])
-        clases = [re.search(r'class="([^"]*)"', f).group(1) for f in oculto.findall(html)]
-        assert clases in ([], ["renombrar"]), (vista, clases)
-    # Sin JavaScript, el servidor la dibuja visible; con JavaScript, el doble clic
-    # le quita `hidden` (`test_js_el_doble_clic_en_el_titulo_muestra_el_formulario...`).
-    assert oculto.findall(ver(m, p=2)) != [] and oculto.findall(ver(m, p=2, editar="nombre")) == []
+        clases = {re.search(r'class="([^"]*)"', f).group(1) for f in oculto.findall(html)}
+        assert clases <= {"renombrar"}, (vista, clases)
+    # Sin JavaScript, el servidor dibuja visible el formulario del NOMBRE del
+    # proyecto; con JavaScript, el doble clic le quita `hidden`
+    # (`test_js_el_doble_clic_en_el_titulo_muestra_el_formulario...`).
+    del_nombre = re.compile(r'<form\b[^>]*action="/proyectos/2/nombre"[^>]*>')
+    assert " hidden" in del_nombre.search(ver(m, p=2)).group(0)
+    assert " hidden" not in del_nombre.search(ver(m, p=2, editar="nombre")).group(0)

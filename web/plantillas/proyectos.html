@@ -134,32 +134,93 @@ form.nuevo button,form.renombrar button.guardar{font:600 .88rem var(--texto);pad
 .nuevo-proy:hover{color:var(--tinta)}
 button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--color);outline-offset:2px}
 
+form.marcar,form.comentar,form.resp-tarea,form.nueva-tarea{display:inline-flex;margin:0;gap:.4rem;align-items:center;flex-wrap:wrap}
+form.marcar button.marca{all:unset;cursor:pointer;width:1.4rem;text-align:center;color:var(--suave);font-size:1.05rem;line-height:1}
+form.marcar button.marca.hecha-b{color:var(--ok)}
+form.marcar button.marca:focus-visible{outline:2px solid var(--color);outline-offset:2px;border-radius:50%}
+.fila .titulo[hidden],.comentario p[hidden]{display:none}
+.fila form.renombrar{flex:1 1 12rem;min-width:0}
+.fila form.renombrar input{font:inherit;font-weight:500;flex:1 1 10rem}
+form.renombrar textarea,form.comentar textarea{font:inherit;flex:1 1 14rem;min-width:0;min-height:2.6rem;resize:vertical;padding:.4rem .6rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
+form.comentar{width:100%;margin-top:.6rem}
+form.resp-tarea{margin-bottom:.4rem;font-size:.85rem;color:var(--suave)}
+form.resp-tarea select,form.nueva-tarea input{font:inherit;padding:.3rem .5rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0}
+form.nueva-tarea{margin-top:.8rem;width:100%}
+form.nueva-tarea input[name=titulo]{flex:1 1 12rem}
+form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar button.guardar{font:600 .85rem var(--texto);padding:.4rem .9rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
+.detalle-enlace{color:var(--suave);text-decoration:none;font-size:.85rem;padding:0 .3rem}
+.detalle-enlace:hover{color:var(--tinta)}
+.borrar-x{color:var(--suave);text-decoration:none;font-size:1.15rem;line-height:1;padding:.1rem .35rem;border-radius:6px;flex:none}
+.borrar-x:hover{color:var(--vencida);background:var(--vencida-fondo)}
+.detalle h4{margin:.6rem 0 .3rem;font:600 .78rem var(--texto);letter-spacing:.07em;text-transform:uppercase;color:var(--suave)}
 .tarea .de-papelera{font-size:.76rem;color:var(--suave);flex-basis:100%;margin-left:1.8rem}
 </style></head><body>
 
-{#- UNA FILA DE TAREA. Es de SOLO LECTURA: la casilla de la maqueta no está
-    (marcar hecha llega con E6) y el título lleva a la pantalla de la tarea, que
-    es donde hoy se cambia todo de ella. El responsable sale como nombre,
-    nunca como número de chat. -#}
+{#- UNA FILA DE TAREA (Lucy 1.0, E6). Cada acción es un `<form method="post">`
+    que funciona sin JavaScript: marcar hecha o desmarcar (el botón redondo), el
+    título (doble clic, o el enlace de `<noscript>`), el detalle (`?t=`), la ×
+    (con su confirmación que dibuja el servidor). El responsable sale como
+    nombre, nunca como número de chat. -#}
 {% macro fila_tarea(t) %}
+{% set u = vuelta %}
+{% set abierta = t_abierta == t.id %}
 <div class="tarea {{ 'hecha' if t.es_hecha }} {{ 'vencida' if t.vencida }}" id="tarea-{{ t.id }}" data-tarea="{{ t.id }}">
-  <div class="fila">
-    <span class="marca" role="img" aria-label="{{ 'hecha' if t.es_hecha else 'pendiente' if t.es_pendiente else t.estado }}">{{ '✓' if t.es_hecha else '○' if t.es_pendiente else '–' }}</span>
-    <a class="titulo" href="/tareas/{{ t.id }}">{{ t.titulo }}</a>
-    {% if t.comentarios %}<span class="vence" style="min-width:0">{{ t.comentarios|length }} coment.</span>{% endif %}
+  <div class="fila" data-edita>
+    {% if t.es_hecha %}
+    <form class="marcar" method="post" action="/proyectos/tarea/{{ t.id }}/reabrir"><button class="marca hecha-b" title="Desmarcar: vuelve a pendiente" aria-label="Desmarcar la tarea: vuelve a pendiente">✓</button></form>
+    {% elif t.es_pendiente %}
+    <form class="marcar" method="post" action="/proyectos/tarea/{{ t.id }}/hecha"><button class="marca" title="Marcar hecha" aria-label="Marcar la tarea como hecha">○</button></form>
+    {% else %}<span class="marca" role="img" aria-label="{{ t.estado }}">–</span>{% endif %}
+    <span class="titulo" data-dbl="titulo" title="Doble clic para cambiar el título" {% if editar_tarea == t.id %}hidden{% endif %}>{{ t.titulo }}</span>
+    <form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/titulo" {% if editar_tarea != t.id %}hidden{% endif %}>
+      <input name="titulo" type="text" required maxlength="{{ largo_titulo }}" value="{{ t.titulo }}" aria-label="Título de la tarea">
+      <button class="guardar">Guardar</button>
+      <a class="btn-linea" href="{{ u }}#tarea-{{ t.id }}">Cancelar</a>
+    </form>
+    <noscript><a class="nota" href="{{ u }}&amp;editar_tarea={{ t.id }}#tarea-{{ t.id }}">Cambiar el título</a></noscript>
+    <a class="detalle-enlace" href="{{ u }}{{ '' if abierta else '&t=' ~ t.id }}#tarea-{{ t.id }}" aria-label="{{ 'Cerrar' if abierta else 'Abrir' }} el detalle de la tarea" title="Responsable y comentarios">{{ '▾' if abierta else '▸' }}{% if t.comentarios %} {{ t.comentarios|length }}{% endif %}</a>
     {% if not t.es_pendiente and not t.es_hecha %}<span class="vence" style="min-width:0">{{ t.estado }}</span>{% endif %}
     {% if t.responsable %}<span class="ini" title="Responsable: {{ t.responsable }}">{{ t.responsable|iniciales }}</span>{% endif %}
     <span class="vence" {% if t.vence_en %}title="{{ t.vence_en|hora_rd }}"{% endif %}>{{ 'Venció el ' if t.vencida }}{{ t.dia|dia_corto }}</span>
+    {% if confirmar_borrar == t.id %}
+    <span class="confirmar">¿Borrarla?
+      <form class="en-linea" method="post" action="/proyectos/tarea/{{ t.id }}/borrar"><button class="btn-lleno">Sí</button></form>
+      <a class="btn-linea" href="{{ u }}#tarea-{{ t.id }}">No</a></span>
+    {% else %}<a class="borrar-x" href="{{ u }}&amp;confirmar_borrar={{ t.id }}#tarea-{{ t.id }}" aria-label="Borrar la tarea" title="Borrar tarea">×</a>{% endif %}
     {% if t.de_proyecto_en_papelera %}<span class="de-papelera">Era de un proyecto que está en la papelera.</span>{% endif %}
   </div>
-  {% if t.comentarios %}
-  <details class="detalle"><summary>Comentarios ({{ t.comentarios|length }})</summary>
+  {% if abierta %}
+  <div class="detalle">
+    <form class="resp-tarea" method="post" action="/proyectos/tarea/{{ t.id }}/responsable">
+      <label for="rt-{{ t.id }}">Responsable:</label>
+      <select id="rt-{{ t.id }}" name="responsable">
+        <option value="" {%- if not t.responsable %} selected{% endif %}>sin responsable</option>
+        {% if t.responsable and t.responsable not in nombres_responsable %}<option value="" selected disabled>{{ t.responsable }}</option>{% endif %}
+        {% for n in nombres_responsable %}<option value="{{ n }}" {%- if t.responsable == n %} selected{% endif %}>{{ n }}</option>{% endfor %}
+      </select>
+      <button class="btn-linea">Guardar</button>
+    </form>
+    <h4>Comentarios</h4>
     <div class="comentarios">
       {% for c in t.comentarios %}
-      <div class="comentario"><div class="de"><b>{{ c.autor }}</b> · {{ c.creado_en|hora_rd }}{{ ' · editado' if c.editado }}</div><p>{{ c.texto }}</p></div>
-      {% endfor %}
+      <div class="comentario" data-edita>
+        <div class="de"><b>{{ c.autor }}</b> · {{ c.creado_en|hora_rd }}{{ ' · editado' if c.editado }}</div>
+        <p data-dbl="texto" title="Doble clic para editar" {% if editar_comentario == c.id %}hidden{% endif %}>{{ c.texto }}</p>
+        <form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/comentario/{{ c.id }}/editar" {% if editar_comentario != c.id %}hidden{% endif %}>
+          <textarea name="texto" required maxlength="{{ largo_comentario }}" aria-label="Editar el comentario">{{ c.texto }}</textarea>
+          <button class="guardar">Guardar</button>
+          <a class="btn-linea" href="{{ u }}&amp;t={{ t.id }}#tarea-{{ t.id }}">Cancelar</a>
+        </form>
+        <noscript><a class="nota" href="{{ u }}&amp;t={{ t.id }}&amp;editar_comentario={{ c.id }}#tarea-{{ t.id }}">Editar el comentario</a></noscript>
+      </div>
+      {% else %}<p class="vacio">Sin comentarios todavía.</p>{% endfor %}
     </div>
-  </details>
+    <form class="comentar" method="post" action="/proyectos/tarea/{{ t.id }}/comentar">
+      <textarea name="texto" required maxlength="{{ largo_comentario }}" placeholder="Escribe un comentario…" aria-label="Comentario"></textarea>
+      <button class="guardar">Comentar</button>
+    </form>
+    <p class="nota"><a href="/tareas/{{ t.id }}">Abrir la pantalla de la tarea</a></p>
+  </div>
   {% endif %}
 </div>
 {% endmacro %}
@@ -246,11 +307,26 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
     {% elif error == 'nombre_invalido' %}<p class="aviso">Ese nombre no se puede guardar.</p>
     {% elif error == 'responsable' %}<p class="aviso">Ese responsable no vale: se escoge entre {{ nombres_responsable|join(', ') }}.</p>
     {% elif error == 'grupo' %}<p class="aviso">Ese grupo no existe.</p>
-    {% elif error == 'estado' %}<p class="aviso">No se pudo cambiar el estado del proyecto.</p>{% endif %}
+    {% elif error == 'estado' %}<p class="aviso">No se pudo cambiar el estado del proyecto.</p>
+    {% elif error == 'tarea' %}<p class="aviso">Esa tarea ya no está.</p>
+    {% elif error == 'tarea_igual' %}<p class="aviso">No cambió nada: ya estaba así, o ya no está.</p>
+    {% elif error == 'tarea_titulo' %}<p class="aviso">El título no puede quedar vacío ni pasar de {{ largo_titulo }} caracteres.</p>
+    {% elif error == 'tarea_fecha' %}<p class="aviso">No se entendió la fecha.</p>
+    {% elif error == 'tarea_comentario' %}<p class="aviso">El comentario no puede quedar vacío ni pasar de {{ largo_comentario }} caracteres.</p>
+    {% elif error == 'tarea_responsable' %}<p class="aviso">Ese responsable no vale: se escoge entre {{ nombres_responsable|join(', ') }}.</p>
+    {% elif error == 'tarea_rechazada' %}<p class="aviso">No se pudo crear la tarea.</p>
+    {% elif error == 'proyecto_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe tareas nuevas.</p>{% endif %}
     {% if hecho == 'proyecto_nuevo' %}<p class="aviso ok">Proyecto creado.</p>
     {% elif hecho == 'responsable' %}<p class="aviso ok">Responsable guardado.</p>
     {% elif hecho == 'cerrado' %}<p class="aviso ok">Proyecto cerrado. Está en «cerrados» en la lista de la izquierda.</p>
-    {% elif hecho == 'reabierto' %}<p class="aviso ok">Proyecto reabierto.</p>{% endif %}
+    {% elif hecho == 'reabierto' %}<p class="aviso ok">Proyecto reabierto.</p>
+    {% elif hecho == 'tarea_hecha' %}<p class="aviso ok">Tarea marcada como hecha.</p>
+    {% elif hecho == 'tarea_reabierta' %}<p class="aviso ok">Tarea desmarcada: vuelve a pendiente, con la misma fecha.</p>
+    {% elif hecho == 'tarea_titulo' %}<p class="aviso ok">Título guardado.</p>
+    {% elif hecho == 'tarea_borrada' %}<p class="aviso ok">Tarea borrada. Está en la papelera: de ahí se recupera.</p>
+    {% elif hecho == 'tarea_responsable' %}<p class="aviso ok">Responsable de la tarea guardado.</p>
+    {% elif hecho == 'comentario' %}<p class="aviso ok">Comentario guardado.</p>
+    {% elif hecho == 'comentario_editado' %}<p class="aviso ok">Comentario editado.</p>{% endif %}
     {% if nombre_guardado %}<p class="aviso ok">Nombre guardado.</p>{% endif %}
     {% if area_guardada %}<p class="aviso ok">Grupo guardado.</p>{% endif %}
     {% if creado %}<p class="aviso ok">Proyecto creado (#{{ creado }}), con la tarea que le dio origen ya archivada.</p>{% endif %}
@@ -261,7 +337,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
     {% set m = vista.proyecto %}
     {% set g = vista.grupo %}
     <div style="display:contents;--color:{{ g.color if g else '#6b6b6b' }}">
-    <div class="cabeza" id="proyecto-{{ m.id }}">
+    <div class="cabeza" id="proyecto-{{ m.id }}" data-edita>
       <div class="migas"><span><b>{{ g.clave if g else 'Sin grupo' }}</b> / Proyecto</span>
         <form class="cambiar-grupo" method="post" action="/proyectos/{{ m.id }}/area">
           <label for="grupo-{{ m.id }}">Mover a</label>
@@ -314,7 +390,12 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
       <div class="encabezado"><h2>Tareas</h2><span class="nota">Las vencidas arriba. El título de cada una lleva a su pantalla</span></div>
       {{ lista_de_tareas(m.pendientes, m.otras, m.n_hechas, m.n_otras, 'Sin tareas todavía.' if not m.n_total else 'No queda nada pendiente.') }}
       {% if not m.cerrado %}
-      <div class="acciones"><a class="btn-linea" href="/tareas/nueva?proyecto={{ m.id }}">+ Agregar tarea a este proyecto</a></div>
+      <form class="nueva-tarea" method="post" action="/proyectos/{{ m.id }}/tareas">
+        <input name="titulo" type="text" required maxlength="{{ largo_titulo }}" placeholder="Nueva tarea" aria-label="Nueva tarea">
+        <input name="vence" type="date" aria-label="Fecha límite (opcional)">
+        <button class="guardar">Agregar tarea</button>
+      </form>
+      <div class="acciones"><a class="btn-linea" href="/tareas/nueva?proyecto={{ m.id }}">+ Agregar tarea con más opciones</a></div>
       {% endif %}
     </section>
 
@@ -379,28 +460,31 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
   </main>
 </div>
 <script>
-/* Lo único que hace este script: mostrar el formulario de cambiar el nombre al
-   dar doble clic en el título, y esconderlo con Escape. No decide nada ni manda
-   nada: guardar es el envío normal del formulario, que también funciona sin
-   este script. */
+/* Lo único que hace este script: mostrar el formulario de edición en el sitio
+   (el nombre del proyecto, el título de una tarea, un comentario) al dar doble
+   clic en su texto, y esconderlo con Escape. No decide nada ni manda nada:
+   guardar es el envío normal del formulario, que también funciona sin este
+   script. */
 document.addEventListener("dblclick", function (e) {
-  var titulo = e.target.closest && e.target.closest("h1[data-dbl]");
-  var form = document.querySelector("form.renombrar");
-  if (!titulo || !form) return;
+  var texto = e.target.closest && e.target.closest("[data-dbl]");
+  var sitio = texto && texto.closest("[data-edita]");
+  var form = sitio && sitio.querySelector("form.renombrar");
+  if (!form) return;
   e.preventDefault();
-  titulo.hidden = true;
+  texto.hidden = true;
   form.hidden = false;
-  var campo = form.querySelector("input[name=nombre]");
+  var campo = form.querySelector("input, textarea");
   campo.focus();
   campo.select();
 });
 document.addEventListener("keydown", function (e) {
   if (e.key !== "Escape") return;
   var form = e.target.closest && e.target.closest("form.renombrar");
-  var titulo = document.querySelector("h1[data-dbl]");
-  if (!form || !titulo) return;
+  var sitio = form && form.closest("[data-edita]");
+  var texto = sitio && sitio.querySelector("[data-dbl]");
+  if (!texto) return;
   form.hidden = true;
-  titulo.hidden = false;
+  texto.hidden = false;
 });
 </script>
 </body></html>

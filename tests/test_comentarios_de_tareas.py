@@ -349,8 +349,15 @@ def test_nadie_reescribe_el_texto_de_un_comentario():
         updates += [(real.name, funcion, columnas)
                     for funcion, columnas in _updates_de_comentarios(arbol)]
     assert updates, "no se encontró el UPDATE del borrado: la guarda no mira nada"
+    # P6 (Tiziano, 1-oct-2026, Lucy 1.0 E6): cualquiera de los dos puede EDITAR
+    # un comentario desde el panel. Es UNA función declarada por nombre, y solo
+    # puede escribir el texto y la marca de editado; todo lo demás sigue siendo
+    # solo el borrado. El agente de Telegram sigue sin poder tocar la tabla.
+    permitidas = {"editar_comentario": {"texto", "editado_en"}}
+    assert any(f == "editar_comentario" for _, f, _ in updates), (
+        "no se encontró el UPDATE de editar_comentario: la guarda no lo mira")
     for archivo, funcion, columnas in updates:
-        assert columnas <= {"borrado_en", "borrado_por_chat_id"}, (
+        assert columnas <= permitidas.get(funcion, {"borrado_en", "borrado_por_chat_id"}), (
             f"{archivo}::{funcion} reescribe {columnas} de un comentario")
 
 

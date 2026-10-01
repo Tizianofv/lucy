@@ -918,18 +918,22 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
                     tarea_creada: int = 0, sala_no: int = 0,
                     p: int = 0, g: str = "", sin_grupo: int = 0, q: str = "",
                     hecho: str = "", nuevo: str = "", confirmar: str = "",
-                    editar: str = ""):
+                    editar: str = "", t: int = 0, editar_tarea: int = 0,
+                    confirmar_borrar: int = 0, editar_comentario: int = 0):
     """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
     (`?g=`), las de «Sin grupo» (`?sin_grupo=1`) o el formulario de un proyecto
     nuevo (`?nuevo=<grupo>`). `?q=` filtra la lista por el nombre del proyecto
     o del cliente.
 
-    ESTA RUTA SOLO LEE. Las escrituras del proyecto son POST aparte
-    (`/proyectos/nuevo`, `/{pid}/nombre`, `/{pid}/area`, `/{pid}/responsable`,
-    `/{pid}/estado`), cada una un `<form method="post">` de la plantilla. Los
-    parámetros `confirmar=cerrar` y `editar=nombre` solo hacen que el SERVIDOR
-    dibuje la confirmación de cerrar y el formulario del nombre, para que todo
+    ESTA RUTA SOLO LEE. Las escrituras son POST aparte, cada una un
+    `<form method="post">` de la plantilla: las del proyecto (`/proyectos/nuevo`,
+    `/{pid}/nombre`, `/{pid}/area`, `/{pid}/responsable`, `/{pid}/estado`) y las
+    de la tarea (`/{pid}/tareas`, y `/proyectos/tarea/{tid}/...`: hecha,
+    reabrir, titulo, borrar, responsable, comentar y editar un comentario). Los
+    parámetros `confirmar=cerrar`, `editar=nombre`, `t` (el detalle abierto de
+    una tarea), `editar_tarea`, `confirmar_borrar` y `editar_comentario` solo
+    hacen que el SERVIDOR dibuje la confirmación o el formulario, para que todo
     funcione también sin JavaScript. `hecho` y `error` son los avisos con los que
     vuelven los POST, junto con `p` (el proyecto del que hablan).
     """
@@ -956,11 +960,53 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
          "largo_nombre": db.LARGO_NOMBRE_PROYECTO,
          "dias_dormido": db.DIAS_DORMIDO, "hecho": hecho,
          "confirmar": confirmar, "editar": editar,
+         # Qué tarea tiene el detalle abierto o un formulario dibujado por el
+         # servidor, y la dirección base de lo que se está viendo (para que
+         # cada enlace de la tarea vuelva al mismo sitio).
+         "t_abierta": t, "editar_tarea": editar_tarea,
+         "confirmar_borrar": confirmar_borrar,
+         "editar_comentario": editar_comentario,
+         "vuelta": _direccion_de_la_vista(vista),
+         "largo_comentario": db.LARGO_COMENTARIO,
+         "largo_titulo": db.LARGO_TITULO_TAREA,
          # Solo los nombres, sin la opción «sin responsable»: no hay (Tiziano,
          # 1-oct-2026). Salen de `config.opciones_de_responsable()`, la misma
          # lista de los demás desplegables, y viajan por NOMBRE: el número de
          # chat no se escribe en la página.
          "nombres_responsable": [n for v, n in config.opciones_de_responsable() if v]})
+
+
+def _direccion_de_la_vista(vista: dict) -> str:
+    """La dirección de lo que se está viendo (el proyecto, o las tareas sueltas
+    de un grupo o de «Sin grupo»), sin avisos: a ella vuelven los enlaces de las
+    tareas."""
+    if vista["tipo"] == "proyecto":
+        return f"/proyectos?p={vista['proyecto']['id']}"
+    if vista["tipo"] == "grupo":
+        return f"/proyectos?g={quote(vista['grupo']['clave'], safe='')}"
+    if vista["tipo"] == "sin_grupo":
+        return "/proyectos?sin_grupo=1"
+    return "/proyectos?"
+
+
+async def _volver_a_la_tarea(tid: int, **parametros) -> str:
+    """Adónde vuelve un POST de tarea: al sitio donde ESTÁ la tarea (su proyecto,
+    las sueltas de su grupo o «Sin grupo»), calculado en el servidor desde la
+    base. NUNCA sale de un campo del formulario: no hay un destino elegible que
+    defender de un `//evil.com`. Los `parametros` (`hecho=`, `error=`, `t=`...)
+    van antes del ancla `#tarea-N`."""
+    donde = await db.donde_esta_la_tarea(tid)
+    if donde is None:
+        return "/proyectos?error=tarea"
+    if donde["proyecto_vivo"]:
+        base = f"/proyectos?p={donde['proyecto_id']}"
+    elif (donde["proyecto_id"] is None and donde["area"]
+          and donde["area"] in {a["clave"] for a in await db.areas()}):
+        base = f"/proyectos?g={quote(donde['area'], safe='')}"
+    else:
+        base = "/proyectos?sin_grupo=1"
+    extra = "".join(f"&{k}={quote(str(v), safe='')}" for k, v in parametros.items())
+    return f"{base}{extra}#tarea-{tid}"
 
 
 @app.post("/proyectos/nuevo")
@@ -1037,6 +1083,173 @@ async def cambiar_estado_de_proyecto(request: Request, pid: int):
     hecho = {db.ESTADO_PROYECTO_CERRADO: "cerrado", "activo": "reabierto"}.get(
         despues["estado"], "estado")
     return RedirectResponse(f"/proyectos?hecho={hecho}&p={pid}", status_code=303)
+
+
+@app.post("/proyectos/{pid}/tareas")
+async def agregar_tarea_al_proyecto(request: Request, pid: int):
+    """Agregar una tarea DENTRO de un proyecto (título y fecha opcional). Nace
+    con el responsable del proyecto (P10). Escribe por la MISMA puerta que el
+    formulario de `/tareas/nueva`: `db.crear_tarea_desde_el_panel`, que a su vez
+    vuelve a mirar que el proyecto admita tareas (un cerrado no las recibe). El
+    título pasa por `db.titulo_de_tarea_que_vale`. Si el responsable del
+    proyecto ya no puede serlo (salió del panel), la tarea nace sin responsable
+    en vez de no poder crearse. Quién la anotó sale de la sesión."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    formulario = await request.form()
+    base = f"/proyectos?p={pid}"
+    try:
+        proyecto = await db.proyecto_para_tareas(pid)
+    except db.ProyectoNoAdmiteTareas as e:
+        clave = "proyecto_cerrado" if e.clave == "cerrado" else "proyecto"
+        return RedirectResponse(f"{base}&error={clave}", status_code=303)
+    try:
+        titulo = db.titulo_de_tarea_que_vale(str(formulario.get("titulo", "")))
+    except ValueError:
+        return RedirectResponse(f"{base}&error=tarea_titulo", status_code=303)
+    ok, vence_en = _vence_valido(str(formulario.get("vence", "")))
+    if not ok:
+        return RedirectResponse(f"{base}&error=tarea_fecha", status_code=303)
+    responsable = await db.responsable_de_proyecto(pid)
+    if responsable is not None and not config.puede_ser_responsable(responsable):
+        responsable = None
+    try:
+        tid = await db.crear_tarea_desde_el_panel(
+            chat, titulo, vence_en, None, responsable, proyecto_id=pid)
+    except db.ProyectoNoAdmiteTareas as e:
+        clave = "proyecto_cerrado" if e.clave == "cerrado" else "proyecto"
+        return RedirectResponse(f"{base}&error={clave}", status_code=303)
+    except ValueError as e:
+        log.warning("Panel de proyectos: tarea rechazada por el escritor: %s", e)
+        return RedirectResponse(f"{base}&error=tarea_rechazada", status_code=303)
+    sala = ("&sala_no=1" if responsable == config.CHAT_ID_CODE
+            and not db.sala_ve(responsable, proyecto["area"]) else "")
+    return RedirectResponse(f"{base}&tarea_creada={tid}{sala}#tarea-{tid}", status_code=303)
+
+
+@app.post("/proyectos/tarea/{tid}/hecha")
+async def marcar_tarea_hecha_desde_proyectos(request: Request, tid: int):
+    """Marcar UNA tarea hecha: `db.marcar_tarea_hecha`, la de siempre (huella de
+    panel). Lo que ya estaba hecho no se reescribe y se dice."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    cambio = await db.marcar_tarea_hecha(tid)
+    return RedirectResponse(await _volver_a_la_tarea(
+        tid, **({"hecho": "tarea_hecha"} if cambio else {"error": "tarea_igual"})),
+        status_code=303)
+
+
+@app.post("/proyectos/tarea/{tid}/reabrir")
+async def reabrir_tarea_desde_proyectos(request: Request, tid: int):
+    """Desmarcar una tarea hecha (P5): `db.reabrir_tarea`. Vuelve a pendiente con
+    la misma fecha; si ya pasó, sale vencida."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    cambio = await db.reabrir_tarea(tid)
+    return RedirectResponse(await _volver_a_la_tarea(
+        tid, **({"hecho": "tarea_reabierta"} if cambio else {"error": "tarea_igual"})),
+        status_code=303)
+
+
+@app.post("/proyectos/tarea/{tid}/titulo")
+async def cambiar_titulo_de_tarea(request: Request, tid: int):
+    """Cambiar el título de una tarea (doble clic). POR LA MISMA PUERTA que
+    Telegram: `crud.editar("tareas", ...)`, con `crud.PUERTAS["tareas"]["titulo"]`
+    (no vacío, ni de más de `LARGO_TITULO`); la ruta no decide qué título vale."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    try:
+        despues, _log = await crud.editar(
+            "tareas", tid, {"titulo": str(formulario.get("titulo", ""))},
+            motivo="Título cambiado desde el panel de proyectos", actor="panel")
+    except ValueError as e:
+        log.warning("Panel de proyectos: título rechazado para la tarea #%s: %s", tid, e)
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, error="tarea_titulo", editar_tarea=tid), status_code=303)
+    if despues is None:
+        return RedirectResponse("/proyectos?error=tarea", status_code=303)
+    return RedirectResponse(await _volver_a_la_tarea(tid, hecho="tarea_titulo"), status_code=303)
+
+
+@app.post("/proyectos/tarea/{tid}/borrar")
+async def borrar_tarea_desde_proyectos(request: Request, tid: int):
+    """La × de una tarea: soft-delete por `crud.borrar` con `actor='panel'` (va a
+    la papelera, con huella, y se recupera con `deshacer` o desde la papelera)."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    donde = await _volver_a_la_tarea(tid, hecho="tarea_borrada")
+    log_id = await crud.borrar(
+        "tareas", tid, "Tarea borrada desde el panel de proyectos", actor="panel")
+    if log_id is None:
+        return RedirectResponse(
+            await _volver_a_la_tarea(tid, error="tarea_igual"), status_code=303)
+    return RedirectResponse(donde, status_code=303)
+
+
+@app.post("/proyectos/tarea/{tid}/responsable")
+async def cambiar_responsable_de_tarea_desde_proyectos(request: Request, tid: int):
+    """El responsable de una tarea (en su detalle, P10). El nombre elegido pasa a
+    chat con la puerta de traducción de `crud.PUERTAS` y escribe
+    `db.asignar_responsable`, que decide si vale. «Sin responsable» (vacío)
+    quita al responsable: para una tarea es un estado normal."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    try:
+        chat = crud.PUERTAS["tareas"]["responsable_chat_id"](
+            str(formulario.get("responsable", "")))
+    except ValueError:
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, error="tarea_responsable", t=tid), status_code=303)
+    if chat is not None and not config.puede_ser_responsable(chat):
+        # La MISMA puerta que vuelve a preguntar `db.asignar_responsable`: la
+        # ruta también la nombra (lo exige `tests/test_responsable.py`).
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, error="tarea_responsable", t=tid), status_code=303)
+    cambio = await db.asignar_responsable(tid, chat)
+    return RedirectResponse(await _volver_a_la_tarea(
+        tid, t=tid, **({"hecho": "tarea_responsable"} if cambio else {"error": "tarea_igual"})),
+        status_code=303)
+
+
+@app.post("/proyectos/tarea/{tid}/comentar")
+async def comentar_desde_proyectos(request: Request, tid: int):
+    """Comentar una tarea: `db.comentar_tarea`, la de siempre. Quién escribe sale
+    de la sesión, nunca de un campo del formulario."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    formulario = await request.form()
+    texto = db.texto_de_comentario(str(formulario.get("texto", "")))
+    if texto is None:
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, error="tarea_comentario", t=tid), status_code=303)
+    cid = await db.comentar_tarea(tid, chat, texto)
+    if cid is None:
+        return RedirectResponse(await _volver_a_la_tarea(tid, error="tarea_igual"), status_code=303)
+    return RedirectResponse(await _volver_a_la_tarea(
+        tid, t=tid, hecho="comentario"), status_code=303)
+
+
+@app.post("/proyectos/tarea/{tid}/comentario/{cid}/editar")
+async def editar_comentario_desde_proyectos(request: Request, tid: int, cid: int):
+    """Editar un comentario (P6: cualquiera de los dos edita cualquiera; queda
+    marcado «editado»). Lo decide `db.editar_comentario`, que exige que el
+    comentario sea de ESA tarea."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    formulario = await request.form()
+    try:
+        cambio = await db.editar_comentario(cid, tid, chat, str(formulario.get("texto", "")))
+    except db.ComentarioNoVale:
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, error="tarea_comentario", t=tid, editar_comentario=cid), status_code=303)
+    return RedirectResponse(await _volver_a_la_tarea(
+        tid, t=tid, **({"hecho": "comentario_editado"} if cambio else {"error": "tarea_igual"})),
+        status_code=303)
 
 
 @app.get("/logo-cds.png")
@@ -1855,11 +2068,11 @@ async def crear_tarea(request: Request):
     return RedirectResponse(f"/tareas?creada={tid}", status_code=303)
 
 
-# El largo máximo de un comentario. No es una regla de negocio: `texto` es TEXT
-# y no tiene tope, así que sin esto un POST hecho a mano puede guardar megabytes
-# que después hay que pintar y mandarle al modelo. Es la misma idea que
-# LARGO_TITULO, con más holgura porque un comentario es para escribir más.
-LARGO_COMENTARIO = 2000
+# El largo máximo de un comentario y la limpieza de su texto viven en `db`
+# (`db.LARGO_COMENTARIO`, `db.texto_de_comentario`): los usa también
+# `db.editar_comentario`, que decide una vez. Acá solo se les da el nombre de
+# siempre.
+LARGO_COMENTARIO = db.LARGO_COMENTARIO
 
 # El detalle de una tarea (`tareas.detalle`, texto libre que Lucy escribe por
 # Telegram): mismo tope que un comentario, por la misma razón.
@@ -1886,16 +2099,9 @@ def _id_escrito(crudo: str):
 
 
 def _texto_de_comentario(crudo: str) -> str | None:
-    """El cuadro de texto → el comentario a guardar, o None si no vale.
-
-    Los saltos de línea del navegador (\\r\\n) se guardan como \\n: así el mismo
-    comentario es el mismo texto, lo haya escrito quien lo haya escrito. Y
-    Lucy lo reconoce por su texto exacto (`cerebro.consultar`).
-    """
-    limpio = (crudo or "").replace("\r\n", "\n").replace("\r", "\n").strip()
-    if not limpio or len(limpio) > LARGO_COMENTARIO:
-        return None
-    return limpio
+    """El cuadro de texto → el comentario a guardar, o None si no vale (lo decide
+    `db.texto_de_comentario`)."""
+    return db.texto_de_comentario(crudo)
 
 
 @app.get("/tareas/{tid}", response_class=HTMLResponse)

@@ -446,7 +446,12 @@ class _Cur:
         self._cur = None
 
     async def execute(self, sql, params=()):
-        self._cur = self.con.execute(_hacia_sqlite(sql), tuple(params or ()))
+        # Un `int[]` de Postgres (los `anticipos_min` de una tarea nueva) viaja
+        # como lista; SQLite no la entiende y se guarda como texto JSON
+        # (imitación declarada, igual que las columnas JSON de más abajo).
+        params = tuple(json.dumps(x) if isinstance(x, (list, tuple)) else x
+                       for x in (params or ()))
+        self._cur = self.con.execute(_hacia_sqlite(sql), params)
         return self
 
     async def fetchone(self):

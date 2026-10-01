@@ -501,7 +501,9 @@ def test_cada_proyecto_trae_su_formulario_de_nombre_con_el_largo_y_escapado():
     for pid in (1, 2):
         html = _pintar(lista, p=pid)
         assert f'action="/proyectos/{pid}/nombre"' in html
-        assert html.count(f'maxlength="{LARGO}"') == 1
+        formulario = re.search(rf'<form class="renombrar"[^>]*action="/proyectos/{pid}/nombre".*?</form>',
+                               html, re.S).group(0)
+        assert formulario.count(f'maxlength="{LARGO}"') == 1
         assert "<script>alert(1)" not in html, "el nombre salió sin escapar"
     assert 'value="Uno"' in _pintar(lista, p=1)
 

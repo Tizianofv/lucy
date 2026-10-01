@@ -557,7 +557,8 @@ def test_una_pendiente_lleva_a_su_pantalla_y_lo_nuevo_es_un_enlace(mundo):
     mundo.proyecto(2, "Cerrado", area="CDS", estado="cerrado")
     mundo.tarea(10, "mi tarea", proyecto=1)
     html = ver(mundo, p=1)
-    assert 'href="/tareas/10"' in html
+    assert 'href="/tareas/10"' not in html                  # el detalle está cerrado
+    assert 'href="/tareas/10"' in ver(mundo, p=1, t=10)     # y de ahí se abre su pantalla
     assert 'href="/tareas/nueva?proyecto=1"' in html
     cerrado = ver(mundo, p=2)
     assert 'href="/tareas/nueva?proyecto=2"' not in cerrado
@@ -571,32 +572,28 @@ _JS_QUE_DECIDIRIA = re.compile(
 
 def test_la_pagina_no_promete_nada_que_no_hace(mundo):
     """Cada escritura es un `<form method="post">` a una de las rutas del
-    proyecto; no hay casillas, ×, cuadros de comentar. Y el JavaScript NO decide
-    nada de negocio: es un solo `<script>` que solo muestra o esconde el
-    formulario del nombre (no manda ni calcula nada)."""
+    proyecto o de la tarea; no hay casillas `<input type="checkbox">`. Y el
+    JavaScript NO decide nada de negocio: es un solo `<script>` que solo muestra
+    o esconde un formulario de edición (no manda ni calcula nada)."""
     _sembrar_los_casos(mundo)
     mundo.comentario(50, 10, config.CHAT_ID_DUENO, "un comentario")
-    abierto = ["/proyectos/1/area", "/proyectos/1/nombre", "/proyectos/1/responsable"]
-    # LA LISTA EXACTA de escrituras de cada vista (no un patrón que las acepte
-    # todas): una acción de más o de menos se pone roja.
-    esperadas = [({"p": 1}, abierto),
-                 ({"p": 3}, ["/proyectos/3/area", "/proyectos/3/estado",
-                             "/proyectos/3/nombre", "/proyectos/3/responsable"]),
-                 ({"g": "CDS"}, []), ({"sin_grupo": 1}, []),
-                 ({"nuevo": "CDS"}, ["/proyectos/nuevo"]), ({}, abierto)]
-    for consulta, acciones_esperadas in esperadas:
+    # TODA escritura es una de estas rutas (la lista EXACTA de cada vista está
+    # en `tests/test_escrituras_proyecto.py` y `tests/test_escrituras_tarea.py`).
+    permitidas = re.compile(
+        r"/proyectos/(nuevo|\d+/(nombre|area|responsable|estado|tareas)|"
+        r"tarea/\d+/(hecha|reabrir|titulo|borrar|responsable|comentar|comentario/\d+/editar))")
+    for consulta in ({"p": 1}, {"p": 3}, {"g": "CDS"}, {"sin_grupo": 1}, {"nuevo": "CDS"}, {},
+                     {"p": 1, "t": 10}):
         html = ver(mundo, **consulta)
-        for prohibido in ('type="checkbox"', "<textarea", "borrar-x", "data-hecha"):
+        for prohibido in ('type="checkbox"', "borrar-x\" type", "data-hecha"):
             assert prohibido not in html, (consulta, prohibido)
         guiones = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
         assert len(guiones) == 1 and not _JS_QUE_DECIDIRIA.search(guiones[0]), (consulta, guiones)
-        acciones = []
         for form in re.findall(r"<form[^>]*>", html):
             if 'method="post"' in form:
-                acciones.append(re.search(r'action="([^"]*)"', form).group(1))
+                assert permitidas.fullmatch(re.search(r'action="([^"]*)"', form).group(1)), (consulta, form)
             else:
                 assert 'action="/proyectos"' in form and 'method="get"' in form, (consulta, form)
-        assert sorted(acciones) == acciones_esperadas, (consulta, acciones)
 
 
 def test_se_siguen_pudiendo_cambiar_el_nombre_y_el_grupo_con_su_ruta_de_siempre(mundo):
@@ -616,8 +613,10 @@ def test_los_comentarios_se_leen_con_nombre_fecha_y_marca_de_editado(mundo, gent
     mundo.comentario(51, 10, gente.dueno, "Segundo <b>comentario</b>", cuando=_dia(0, 9),
                      editado=_dia(0, 10))
     mundo.comentario(52, 10, gente.dueno, "borrado, no sale", borrado=True)
-    html = ver(mundo, p=1)
-    assert "1 coment." not in html and "2 coment." in html
+    cerrado = ver(mundo, p=1)
+    assert "▸ 2</a>" in cerrado and "Le escribí a Luis" not in cerrado   # el detalle está cerrado
+    html = ver(mundo, p=1, t=10)
+    assert "▾ 2</a>" in html
     assert "<b>Persona Dos</b>" in html and "Le escribí a Luis" in html
     assert "borrado, no sale" not in html
     assert "Segundo <b>comentario</b>" not in html and "Segundo &lt;b&gt;comentario&lt;/b&gt;" in html
@@ -628,7 +627,7 @@ def test_un_autor_de_comentario_sin_nombre_se_pinta_alguien_y_nunca_su_numero(mu
     mundo.proyecto(1, "P", area="CDS")
     mundo.tarea(10, "con comentario", proyecto=1)
     mundo.comentario(50, 10, 555000222, "de alguien sin nombre")
-    html = ver(mundo, p=1)
+    html = ver(mundo, p=1, t=10)
     assert "<b>Alguien</b>" in html and "de alguien sin nombre" in html
     assert "555000222" not in html
 

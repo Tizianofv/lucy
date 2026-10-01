@@ -2691,7 +2691,7 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
     por_tarea: dict[int, list] = {}
     for c in comentarios:
         por_tarea.setdefault(c["tarea_id"], []).append({
-            "autor": nombres.get(c["autor_chat_id"]) or "Alguien",
+            "id": c["id"], "autor": nombres.get(c["autor_chat_id"]) or "Alguien",
             "creado_en": c["creado_en"], "texto": c["texto"],
             "editado": c.get("editado_en") is not None})
 
@@ -3209,6 +3209,81 @@ async def marcar_tarea_hecha(tarea_id: int) -> bool:
              json.dumps({"estado": ESTADO_HECHA}, ensure_ascii=False),
              antes.get("bandeja_id")))
         return True
+
+
+async def reabrir_tarea(tarea_id: int) -> bool:
+    """Desmarca UNA tarea hecha: vuelve a `pendiente`. Devuelve si cambió algo.
+    (Lucy 1.0, E6; P5 aprobada por Tiziano el 1-oct-2026: «sí; vuelve a
+    pendiente con la misma fecha, y si ya pasó, sale roja».)
+
+    `vence_en` no se toca (la misma fecha), y `completado_en` vuelve a NULL: ya
+    no está completada. Por eso, si la fecha ya pasó, la tarea sale vencida sin
+    que esta función haga nada: «vencida» la decide `grupo_de_tarea`.
+
+    SOLO REABRE LO HECHO. Una tarea pendiente, descartada o de otro estado, una
+    que no existe o una que está en la papelera: devuelve False sin escribir (una
+    huella de una edición que no pasó es basura en la tabla que ES el deshacer).
+    Una tarea de un proyecto CERRADO sí se puede reabrir: igual que seguir
+    editándola, no es «recibir» una tarea nueva.
+
+    Es la inversa de `marcar_tarea_hecha`, con la misma huella (`editar`, actor
+    'panel', la fila de antes entera para que `crud.deshacer` sepa volver) y en
+    la misma transacción que el UPDATE.
+    """
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, titulo, estado, vence_en, completado_en, bandeja_id "
+            "FROM tareas WHERE id = %s AND borrado_en IS NULL", (tarea_id,))
+        antes = await cur.fetchone()
+        if antes is None or antes.get("estado") != ESTADO_HECHA:
+            return False
+        await conn.execute(
+            "UPDATE tareas SET estado = %s, completado_en = NULL WHERE id = %s",
+            (ESTADO_PENDIENTE, tarea_id))
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo,
+               bandeja_id)
+            VALUES ('panel', 'editar', 'tareas', %s, %s, %s,
+                    'desmarcada (vuelve a pendiente) desde el panel de proyectos', %s)
+            """,
+            (tarea_id, json.dumps(antes, default=str, ensure_ascii=False),
+             json.dumps({"estado": ESTADO_PENDIENTE, "completado_en": None},
+                        ensure_ascii=False),
+             antes.get("bandeja_id")))
+        return True
+
+
+async def donde_esta_la_tarea(tarea_id: int) -> dict | None:
+    """`{proyecto_id, area, proyecto_vivo}` de una tarea, EN LA PAPELERA O NO, o
+    `None` si no existe. Lo usan las rutas de la página de proyectos para volver
+    al sitio de la tarea después de escribir (también después de borrarla).
+    `proyecto_vivo` es verdadero si tiene proyecto y ese proyecto no está en la
+    papelera. Solo lee."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT t.proyecto_id, t.area, "
+            "(p.id IS NOT NULL AND p.borrado_en IS NULL) AS proyecto_vivo "
+            "FROM tareas t LEFT JOIN proyectos p ON p.id = t.proyecto_id "
+            "WHERE t.id = %s", (tarea_id,))
+        fila = await cur.fetchone()
+        return None if fila is None else {**fila, "proyecto_vivo": bool(fila["proyecto_vivo"])}
+
+
+async def responsable_de_proyecto(proyecto_id: int) -> int | None:
+    """El chat responsable de un proyecto vivo, o `None` (sin responsable, o el
+    proyecto no existe). Una tarea nueva dentro del proyecto nace con él (P10).
+    Solo lee."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT responsable_chat_id FROM proyectos "
+            "WHERE id = %s AND borrado_en IS NULL", (proyecto_id,))
+        fila = await cur.fetchone()
+        return fila["responsable_chat_id"] if fila else None
 
 
 async def tareas_de_code_pendientes() -> list[dict]:
@@ -4134,6 +4209,91 @@ async def borrar_comentario(comentario_id: int, tarea_id: int,
             """,
             (comentario_id, json.dumps(antes, default=str, ensure_ascii=False),
              json.dumps({"borrado_por_chat_id": chat_id})))
+        return True
+
+
+# El largo máximo de un comentario. No es una regla de negocio: `texto` es TEXT
+# y no tiene tope, así que sin esto un POST hecho a mano puede guardar megabytes
+# que después hay que pintar y mandarle al modelo. Vive acá (y no en el panel)
+# para que lo decida UNA vez quien escribe: `comentar_tarea` desde la ruta y
+# `editar_comentario`.
+LARGO_COMENTARIO = 2000
+
+
+class ComentarioNoVale(ValueError):
+    """El texto de un comentario que no puede quedar: vacío o demasiado largo."""
+
+
+def texto_de_comentario(crudo) -> str | None:
+    """El cuadro de texto → el comentario a guardar, o None si no vale.
+
+    Los saltos de línea del navegador (\\r\\n) se guardan como \\n: así el mismo
+    comentario es el mismo texto, lo haya escrito quien lo haya escrito. Y
+    Lucy lo reconoce por su texto exacto (`cerebro.consultar`).
+    """
+    if not isinstance(crudo, str):
+        return None
+    limpio = crudo.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not limpio or len(limpio) > LARGO_COMENTARIO:
+        return None
+    return limpio
+
+
+async def editar_comentario(comentario_id: int, tarea_id: int, chat_id: int,
+                            texto: str) -> bool:
+    """Cambia el texto de UN comentario y lo marca editado. Devuelve si de
+    verdad cambió algo. (Lucy 1.0, E6; G8.)
+
+    P6, APROBADA por Tiziano el 1-oct-2026: CUALQUIERA DE LOS DOS (Tiziano o
+    Rosi) PUEDE EDITAR CUALQUIER COMENTARIO, igual que ya pasa al borrarlo: no se
+    compara `chat_id` con el autor. Sí se exige que `chat_id` pueda entrar al
+    panel (como `borrar_comentario`), y el texto pasa por `texto_de_comentario`:
+    vacío o de más de `LARGO_COMENTARIO` lanza `ComentarioNoVale` SIN escribir.
+    El autor y la fecha de creación no cambian; se llena `editado_en`.
+
+    EL COMENTARIO TIENE QUE SER DE ESA TAREA (G8): el `WHERE` lleva `tarea_id`,
+    y la tarea tiene que estar viva. Con el id de un comentario de OTRA tarea,
+    de uno borrado o de una tarea en la papelera, no se escribe nada (False).
+    Si el texto nuevo es igual al que ya tenía, tampoco (False, sin huella).
+
+    Deja su huella `editar` de actor 'panel' con la fila de ANTES y la de
+    DESPUÉS, en la misma transacción que el UPDATE. `comentarios_tarea` no está
+    en `crud.TABLAS` (nadie —ni Lucy— edita el comentario de otro por el chat):
+    esta es la única puerta.
+    """
+    from web.auth import puede_entrar
+
+    nuevo = texto_de_comentario(texto)
+    if nuevo is None:
+        raise ComentarioNoVale(
+            f"el comentario no puede quedar vacío ni pasar de {LARGO_COMENTARIO} caracteres")
+    if not puede_entrar(chat_id):
+        return False
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT c.id, c.tarea_id, c.autor_chat_id, c.creado_en, c.texto, "
+            "c.editado_en FROM comentarios_tarea c JOIN tareas t ON t.id = c.tarea_id "
+            "WHERE c.id = %s AND c.tarea_id = %s AND c.borrado_en IS NULL "
+            "AND t.borrado_en IS NULL", (comentario_id, tarea_id))
+        antes = await cur.fetchone()
+        if antes is None or antes["texto"] == nuevo:
+            return False
+        await cur.execute(
+            "UPDATE comentarios_tarea SET texto = %s, editado_en = now() "
+            "WHERE id = %s AND tarea_id = %s AND borrado_en IS NULL "
+            "RETURNING id, tarea_id, autor_chat_id, creado_en, texto, editado_en",
+            (nuevo, comentario_id, tarea_id))
+        despues = await cur.fetchone()
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo)
+            VALUES ('panel', 'editar', 'comentarios_tarea', %s, %s, %s,
+                    'comentario editado desde el panel de proyectos')
+            """,
+            (comentario_id, json.dumps(antes, default=str, ensure_ascii=False),
+             json.dumps(despues, default=str, ensure_ascii=False)))
         return True
 
 

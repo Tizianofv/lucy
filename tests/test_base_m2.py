@@ -99,8 +99,12 @@ def _base(participantes_desde: str = "schema") -> sqlite3.Connection:
     for tabla in ("tareas", "log_acciones"):
         columnas = []
         for c in declaradas[tabla]:
+            # (`estado` con su DEFAULT de `db/schema.sql`: una tarea creada sin
+            # decir estado nace pendiente, como en Postgres.)
             columnas.append("id INTEGER PRIMARY KEY" if c == "id" else
-                            "area TEXT REFERENCES areas(clave)" if c == "area" else c)
+                            "area TEXT REFERENCES areas(clave)" if c == "area" else
+                            "estado TEXT NOT NULL DEFAULT 'pendiente'"
+                            if (c == "estado" and tabla == "tareas") else c)
         con.execute(f"CREATE TABLE {tabla} ({', '.join(columnas)})")
     for tabla in ("proyectos", "comentarios_tarea"):
         for s in _ddl(schema, tabla):
