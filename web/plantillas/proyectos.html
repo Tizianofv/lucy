@@ -111,11 +111,27 @@ details.plegar > summary::before{content:"▸ "}
 details.plegar[open] > summary::before{content:"▾ "}
 .acciones{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:.8rem}
 .btn-linea{font:600 .82rem var(--texto);padding:.35rem .75rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta);cursor:pointer;text-decoration:none;display:inline-block}
-details.editar-proy > summary{cursor:pointer;color:var(--suave);font-size:.85rem}
-details.editar-proy form{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.6rem}
-details.editar-proy label{font-size:.85rem;color:var(--suave)}
-details.editar-proy input,details.editar-proy select{font:inherit;padding:.4rem .6rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0;flex:1 1 12rem;max-width:26rem}
-details.editar-proy button{font:600 .85rem var(--texto);padding:.4rem .9rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
+.acciones.abajo{justify-content:flex-end}
+.btn-lleno{font:600 .82rem var(--texto);padding:.35rem .75rem;border-radius:8px;border:0;background:var(--vencida);color:#fff;cursor:pointer}
+.confirmar{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.86rem}
+form.en-linea{display:inline-flex;margin:0}
+.aviso-cerrado{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap}
+.aviso-raro{background:var(--dormido-fondo);color:var(--dormido);border-radius:10px;padding:.6rem .8rem;font-size:.88rem}
+.migas{display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}
+form.cambiar-grupo,form.resp{display:inline-flex;gap:.35rem;align-items:center;margin:0;font-size:.82rem;color:var(--suave)}
+form.cambiar-grupo select,form.resp select,form.nuevo select,form.nuevo input,form.renombrar input{font:inherit;padding:.25rem .45rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0}
+form.resp select{font-size:.9rem}
+form.renombrar{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin:0}
+form.renombrar[hidden],h1[hidden]{display:none}
+form.renombrar input{font:700 clamp(1.4rem,3.4vw,2rem)/1.1 var(--display);flex:1 1 14rem;padding:.05rem .35rem;border-color:var(--color)}
+h1[data-dbl]{cursor:text}
+form.nuevo{display:flex;flex-direction:column;gap:.8rem;max-width:26rem}
+form.nuevo label{display:flex;flex-direction:column;gap:.25rem;font-size:.85rem;color:var(--suave)}
+form.nuevo input,form.nuevo select{padding:.5rem .65rem}
+form.nuevo .botones{display:flex;gap:.5rem;align-items:center}
+form.nuevo button,form.renombrar button.guardar{font:600 .88rem var(--texto);padding:.5rem 1rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
+.nuevo-proy{color:var(--suave);font-size:.85rem;padding:.35rem .6rem;text-decoration:none;display:block}
+.nuevo-proy:hover{color:var(--tinta)}
 button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--color);outline-offset:2px}
 
 .tarea .de-papelera{font-size:.76rem;color:var(--suave);flex-basis:100%;margin-left:1.8rem}
@@ -183,6 +199,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
     {% for m in g.cerrados %}{{ un_proyecto(m, actual, True) }}{% endfor %}
   </details>
   {% endif %}
+  {% if not es_sin_grupo and not q %}<a class="nuevo-proy" href="/proyectos?nuevo={{ g.clave|urlencode }}">+ Proyecto en {{ g.clave }}</a>{% endif %}
   {% if g.sueltas and g.sueltas.n_total %}
   <a class="proy sueltas" href="/proyectos?{{ 'sin_grupo=1' if es_sin_grupo else 'g=' ~ (g.clave|urlencode) }}"
      aria-current="{{ 'true' if vista.tipo in ('grupo', 'sin_grupo') and vista.grupo.clave == g.clave else 'false' }}">
@@ -226,7 +243,14 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
     {% elif error == 'nombre_largo' %}<p class="aviso">El nombre no puede pasar de {{ largo_nombre }} caracteres.</p>
     {% elif error == 'nombre_repetido' %}<p class="aviso">Ya hay otro proyecto con ese nombre. Cada proyecto se llama distinto.</p>
     {% elif error == 'nombre_igual' %}<p class="aviso">El nombre ya era ese: no cambió nada.</p>
-    {% elif error == 'nombre_invalido' %}<p class="aviso">Ese nombre no se puede guardar.</p>{% endif %}
+    {% elif error == 'nombre_invalido' %}<p class="aviso">Ese nombre no se puede guardar.</p>
+    {% elif error == 'responsable' %}<p class="aviso">Ese responsable no vale: se escoge entre {{ nombres_responsable|join(', ') }}.</p>
+    {% elif error == 'grupo' %}<p class="aviso">Ese grupo no existe.</p>
+    {% elif error == 'estado' %}<p class="aviso">No se pudo cambiar el estado del proyecto.</p>{% endif %}
+    {% if hecho == 'proyecto_nuevo' %}<p class="aviso ok">Proyecto creado.</p>
+    {% elif hecho == 'responsable' %}<p class="aviso ok">Responsable guardado.</p>
+    {% elif hecho == 'cerrado' %}<p class="aviso ok">Proyecto cerrado. Está en «cerrados» en la lista de la izquierda.</p>
+    {% elif hecho == 'reabierto' %}<p class="aviso ok">Proyecto reabierto.</p>{% endif %}
     {% if nombre_guardado %}<p class="aviso ok">Nombre guardado.</p>{% endif %}
     {% if area_guardada %}<p class="aviso ok">Grupo guardado.</p>{% endif %}
     {% if creado %}<p class="aviso ok">Proyecto creado (#{{ creado }}), con la tarea que le dio origen ya archivada.</p>{% endif %}
@@ -238,15 +262,39 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
     {% set g = vista.grupo %}
     <div style="display:contents;--color:{{ g.color if g else '#6b6b6b' }}">
     <div class="cabeza" id="proyecto-{{ m.id }}">
-      <div class="migas"><b>{{ g.clave if g else 'Sin grupo' }}</b> / Proyecto</div>
-      <h1>{{ m.nombre }}</h1>
+      <div class="migas"><span><b>{{ g.clave if g else 'Sin grupo' }}</b> / Proyecto</span>
+        <form class="cambiar-grupo" method="post" action="/proyectos/{{ m.id }}/area">
+          <label for="grupo-{{ m.id }}">Mover a</label>
+          <select id="grupo-{{ m.id }}" name="area">
+            {% if not m.area %}<option value="" selected>Sin grupo</option>{% endif %}
+            {% for a in areas %}<option value="{{ a.clave }}" {%- if m.area == a.clave %} selected{% endif %}>{{ a.clave }}</option>{% endfor %}
+          </select>
+          <button class="btn-linea">Mover</button>
+        </form>
+      </div>
+      {#- El nombre se cambia con doble clic (el script de abajo solo muestra el
+          formulario); sin JavaScript, el enlace de `<noscript>` abre el mismo
+          formulario desde el servidor. -#}
+      <h1 data-dbl="nombre" title="Doble clic para cambiar el nombre" {% if editar == 'nombre' %}hidden{% endif %}>{{ m.nombre }}</h1>
+      <form class="renombrar" method="post" action="/proyectos/{{ m.id }}/nombre" {% if editar != 'nombre' %}hidden{% endif %}>
+        <input name="nombre" type="text" required maxlength="{{ largo_nombre }}" value="{{ m.nombre }}" aria-label="Nombre del proyecto">
+        <button class="guardar">Guardar</button>
+        <a class="btn-linea" href="/proyectos?p={{ m.id }}">Cancelar</a>
+      </form>
+      <noscript><a class="nota" href="/proyectos?p={{ m.id }}&amp;editar=nombre">Cambiar el nombre</a></noscript>
       {% if m.descripcion %}<p class="descripcion">{{ m.descripcion }}</p>{% endif %}
-      {% if m.cliente or m.responsable %}
       <div class="quienes">
         {% if m.cliente %}<span>Cliente: <b>{{ m.cliente }}</b></span>{% endif %}
-        {% if m.responsable %}<span>Responsable: <b>{{ m.responsable }}</b></span>{% endif %}
+        <form class="resp" method="post" action="/proyectos/{{ m.id }}/responsable">
+          <label for="resp-{{ m.id }}">Responsable:</label>
+          <select id="resp-{{ m.id }}" name="responsable">
+            {% if not m.responsable %}<option value="" selected disabled>Escoge…</option>
+            {% elif m.responsable not in nombres_responsable %}<option value="" selected disabled>{{ m.responsable }}</option>{% endif %}
+            {% for n in nombres_responsable %}<option value="{{ n }}" {%- if m.responsable == n %} selected{% endif %}>{{ n }}</option>{% endfor %}
+          </select>
+          <button class="btn-linea">Guardar</button>
+        </form>
       </div>
-      {% endif %}
       <div class="meta">
         <span class="pastilla">{{ m.estado_calculado }}</span>
         <span class="pastilla {{ 'dormido' if m.dormido }}">Último movimiento: {{ m.dias_sin_movimiento|hace_dias }}</span>
@@ -257,7 +305,9 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
       <div class="avance"><div class="riel"><span style="width:{{ m.pct }}%"></span></div>{{ m.n_hechas }} de {{ m.n_total }} tareas hechas</div>
       {% endif %}
     </div>
-    {% if m.cerrado %}<div class="aviso-cerrado">Proyecto cerrado: no se le agregan tareas.</div>{% endif %}
+    {% if m.cerrado %}<div class="aviso-cerrado">Proyecto cerrado: no se le agregan tareas.
+      <form class="en-linea" method="post" action="/proyectos/{{ m.id }}/estado"><input type="hidden" name="estado" value="activo"><button class="btn-linea">Reabrir</button></form></div>{% endif %}
+    {% if not m.estado_conocido %}<div class="aviso-raro">Este proyecto tiene un estado que no es de la lista («{{ m.estado }}»). Al cerrarlo o reabrirlo se corrige.</div>{% endif %}
     {% if m.dormido %}<div class="aviso-dormido">Este proyecto lleva {{ m.dias_sin_movimiento }} días sin movimiento.</div>{% endif %}
 
     <section class="bloque">
@@ -268,23 +318,40 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
       {% endif %}
     </section>
 
+    {#- «Cerrar proyecto» va debajo, al final, a la derecha (lo pidió Tiziano en la
+        maqueta). La confirmación la dibuja el servidor (`?confirmar=cerrar`). -#}
+    {% if not m.cerrado %}
+    <div class="acciones abajo">
+      {% if confirmar == 'cerrar' %}
+      <div class="confirmar">¿Cerrar este proyecto?
+        {%- if m.n_pendientes == 1 %} Queda 1 pendiente y sigue abierta en <a href="/tareas">Tareas</a>.
+        {%- elif m.n_pendientes %} Quedan {{ m.n_pendientes }} pendientes y siguen abiertas en <a href="/tareas">Tareas</a>.{% endif %}
+        <form class="en-linea" method="post" action="/proyectos/{{ m.id }}/estado"><input type="hidden" name="estado" value="cerrado"><button class="btn-lleno">Sí, cerrar</button></form>
+        <a class="btn-linea" href="/proyectos?p={{ m.id }}">Cancelar</a></div>
+      {% else %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;confirmar=cerrar">Cerrar proyecto</a>{% endif %}
+    </div>
+    {% endif %}
+    </div>
+
+    {% elif vista.tipo == 'nuevo' %}
+    {% set g = vista.grupo %}
+    <div style="display:contents;--color:{{ g.color }}">
+    <div class="cabeza">
+      <div class="migas"><b>{{ g.clave }}</b> / Proyecto nuevo</div>
+      <h1>Proyecto nuevo en {{ g.clave }}</h1>
+    </div>
     <section class="bloque">
-      <details class="editar-proy">
-        <summary>Cambiar el nombre o el grupo</summary>
-        <form method="post" action="/proyectos/{{ m.id }}/nombre">
-          <label for="nombre-{{ m.id }}">Nombre</label>
-          <input id="nombre-{{ m.id }}" name="nombre" type="text" required maxlength="{{ largo_nombre }}" value="{{ m.nombre }}">
-          <button>Guardar</button>
-        </form>
-        <form method="post" action="/proyectos/{{ m.id }}/area">
-          <label for="area-{{ m.id }}">Grupo</label>
-          <select id="area-{{ m.id }}" name="area">
-            <option value="" {%- if not m.area %} selected{% endif %}>Sin grupo</option>
-            {% for a in areas %}<option value="{{ a.clave }}" {%- if m.area == a.clave %} selected{% endif %}>{{ a.clave }}</option>{% endfor %}
-          </select>
-          <button>Guardar</button>
-        </form>
-      </details>
+      <form class="nuevo" method="post" action="/proyectos/nuevo">
+        <label>Nombre del proyecto
+          <input name="nombre" type="text" required maxlength="{{ largo_nombre }}" placeholder="Ej. Grabación del sencillo"></label>
+        <label>Responsable
+          <select name="responsable" required>
+            <option value="" selected disabled>Escoge…</option>
+            {% for n in nombres_responsable %}<option value="{{ n }}">{{ n }}</option>{% endfor %}
+          </select></label>
+        <input type="hidden" name="area" value="{{ g.clave }}">
+        <div class="botones"><button>Crear proyecto</button><a class="btn-linea" href="/proyectos">Cancelar</a></div>
+      </form>
     </section>
     </div>
 
@@ -311,4 +378,29 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
     {% endif %}
   </main>
 </div>
+<script>
+/* Lo único que hace este script: mostrar el formulario de cambiar el nombre al
+   dar doble clic en el título, y esconderlo con Escape. No decide nada ni manda
+   nada: guardar es el envío normal del formulario, que también funciona sin
+   este script. */
+document.addEventListener("dblclick", function (e) {
+  var titulo = e.target.closest && e.target.closest("h1[data-dbl]");
+  var form = document.querySelector("form.renombrar");
+  if (!titulo || !form) return;
+  e.preventDefault();
+  titulo.hidden = true;
+  form.hidden = false;
+  var campo = form.querySelector("input[name=nombre]");
+  campo.focus();
+  campo.select();
+});
+document.addEventListener("keydown", function (e) {
+  if (e.key !== "Escape") return;
+  var form = e.target.closest && e.target.closest("form.renombrar");
+  var titulo = document.querySelector("h1[data-dbl]");
+  if (!form || !titulo) return;
+  form.hidden = true;
+  titulo.hidden = false;
+});
+</script>
 </body></html>

@@ -1449,6 +1449,63 @@ async def buscar_o_crear_proyecto(nombre: str, *,
     return await _buscar_o_crear("proyectos", nombre, bandeja_id=bandeja_id)
 
 
+async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int) -> dict:
+    """El diálogo «+ Proyecto en X» de la página de proyectos (Lucy 1.0, E5).
+    Crea un proyecto y devuelve su fila. ValueError con el motivo si no vale.
+
+    TODO LO QUE DECIDE ESTÁ AQUÍ, UNA VEZ, Y NO EN LA RUTA:
+      · el nombre, por `nombre_de_proyecto_que_vale` (no vacío, largo, sin
+        espacios de alrededor) y que no haya otro proyecto VIVO con ese nombre,
+        con `proyecto_vivo_con_nombre`: las mismas dos piezas que un renombre y
+        que los demás sitios que crean proyectos;
+      · el grupo, que tiene que ser uno de `areas()` (el proyecto nuevo nace
+        con grupo: sale del botón que se tocó);
+      · el responsable, por `puede_ser_responsable` (Rosi, Tiziano o Code): no
+        hay «sin responsable» al crear (Tiziano, 1-oct-2026: «somos siempre
+        Rosi, Yo o Code»). La ruta traduce el nombre elegido a chat con la
+        puerta de `crud.PUERTAS`; acá solo llega el chat.
+
+    NO lleva cliente: lo pone `poner_cliente` (E3), con la ficha releída de
+    Noco; nace sin cliente, que es un estado válido (es opcional).
+
+    UNA SOLA TRANSACCIÓN: el INSERT y su huella `crear` (con lo que quedó
+    guardado en `despues`, así que `crud.deshacer` la revierte con la rama
+    genérica de 'crear'). El actor es el literal `'panel'`: lo dispara un botón
+    del panel, y el guarda de `tests/test_proyectos_panel.py` no deja que el
+    actor viaje como variable fuera de `crud._registrar`. No se puede usar `crud._registrar` (`crud` importa este módulo): la fila de
+    `log_acciones` se escribe a mano con la misma forma que las otras
+    escrituras de este archivo.
+    """
+    nombre = nombre_de_proyecto_que_vale(nombre)
+    if area not in {a["clave"] for a in await areas()}:
+        raise ValueError("ese grupo no existe")
+    if (isinstance(responsable_chat_id, bool) or not isinstance(responsable_chat_id, int)
+            or not puede_ser_responsable(responsable_chat_id)):
+        raise ValueError("ese chat no puede ser responsable")
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        if await proyecto_vivo_con_nombre(cur, nombre) is not None:
+            raise NombreDeProyectoNoVale(
+                "repetido", "ya hay otro proyecto con ese nombre")
+        await cur.execute(
+            """
+            INSERT INTO proyectos (nombre, area, responsable_chat_id)
+            VALUES (%s, %s, %s)
+            RETURNING *
+            """,
+            (nombre, area, responsable_chat_id))
+        nuevo = await cur.fetchone()
+        await conn.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo)
+            VALUES ('panel', 'crear', 'proyectos', %s, NULL, %s,
+                    'Proyecto nuevo, creado desde el panel de proyectos')
+            """,
+            (nuevo["id"], json.dumps(nuevo, default=str, ensure_ascii=False)))
+        return nuevo
+
+
 async def convertir_tarea_en_proyecto(tarea_id: int) -> dict:
     """El botón «convertir en proyecto» (encargo 5). Una tarea SUELTA se
     convierte en un proyecto propio. Devuelve
@@ -2651,6 +2708,9 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
             "id": pid, "nombre": p["nombre"], "area": p["area"] if p["area"] in claves else None,
             "descripcion": p["descripcion"], "estado": p["estado"],
             "cerrado": p["estado"] == ESTADO_PROYECTO_CERRADO,
+            # Telegram pudo guardar un estado libre antes de que existiera la
+            # puerta (`crud.PUERTAS["proyectos"]["estado"]`): se ve, no se oculta.
+            "estado_conocido": p["estado"] in ESTADOS_PROYECTO,
             "estado_calculado": estado_calculado(p["estado"], resumen["n_hechas"]),
             "cliente": (p["cliente_nombre"] or None),
             "responsable": nombres.get(p["responsable_chat_id"]),

@@ -878,12 +878,16 @@ def _filtrar_por_busqueda(modelo: dict, q: str) -> dict:
 
 def _vista_de_proyectos(modelo: dict, visibles: dict, *, p: int, g: str,
                         sin_grupo: int, tarea_creada: int,
-                        buscando: bool = False) -> dict:
+                        buscando: bool = False, nuevo: str = "") -> dict:
     """Qué se enseña a la derecha: un proyecto, las tareas sueltas de un grupo
     o las de «Sin grupo». `{"tipo", ...}`; `tipo` es None si no hay nada que
     enseñar. Cuando la URL no dice (o dice algo que ya no existe) se enseña el
     primer proyecto de la lista; sin proyectos, lo primero que haya suelto."""
     proyectos = modelo["proyectos"]
+    if nuevo and not buscando:
+        grupo = next((x for x in modelo["grupos"] if x["clave"] == nuevo), None)
+        if grupo is not None:
+            return {"tipo": "nuevo", "grupo": grupo}
     if not p and tarea_creada:
         p = next((m["id"] for m in proyectos.values()
                   if any(t["id"] == tarea_creada for t in m["pendientes"] + m["otras"])), 0)
@@ -912,18 +916,22 @@ def _vista_de_proyectos(modelo: dict, visibles: dict, *, p: int, g: str,
 async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
                     error: str = "", nombre_guardado: int = 0,
                     tarea_creada: int = 0, sala_no: int = 0,
-                    p: int = 0, g: str = "", sin_grupo: int = 0, q: str = ""):
-    """La página de proyectos (Lucy 1.0, E4): los grupos y sus proyectos a la
+                    p: int = 0, g: str = "", sin_grupo: int = 0, q: str = "",
+                    hecho: str = "", nuevo: str = "", confirmar: str = "",
+                    editar: str = ""):
+    """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
-    (`?g=`) o las de «Sin grupo» (`?sin_grupo=1`). `?q=` filtra la lista por el
-    nombre del proyecto o del cliente.
+    (`?g=`), las de «Sin grupo» (`?sin_grupo=1`) o el formulario de un proyecto
+    nuevo (`?nuevo=<grupo>`). `?q=` filtra la lista por el nombre del proyecto
+    o del cliente.
 
-    SOLO LECTURA, con dos excepciones que ya existían y siguen: el nombre y el
-    grupo del proyecto se cambian con los formularios de «Cambiar el nombre o el
-    grupo», que postean a `/proyectos/{pid}/nombre` y `/proyectos/{pid}/area`.
-    Esas dos rutas, y los parámetros con los que vuelven (`error`,
-    `nombre_guardado`, `area_guardada`, `creado`, `tarea_creada`, `sala_no`),
-    no cambian: el proyecto del que hablan se elige con ellos.
+    ESTA RUTA SOLO LEE. Las escrituras del proyecto son POST aparte
+    (`/proyectos/nuevo`, `/{pid}/nombre`, `/{pid}/area`, `/{pid}/responsable`,
+    `/{pid}/estado`), cada una un `<form method="post">` de la plantilla. Los
+    parámetros `confirmar=cerrar` y `editar=nombre` solo hacen que el SERVIDOR
+    dibuje la confirmación de cerrar y el formulario del nombre, para que todo
+    funcione también sin JavaScript. `hecho` y `error` son los avisos con los que
+    vuelven los POST, junto con `p` (el proyecto del que hablan).
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
@@ -932,7 +940,7 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
     elegido = p or nombre_guardado or area_guardada or creado
     vista = _vista_de_proyectos(modelo, visibles, p=elegido, g=g,
                                 sin_grupo=sin_grupo, tarea_creada=tarea_creada,
-                                buscando=bool(q.strip()))
+                                buscando=bool(q.strip()), nuevo=nuevo)
     # Los enlaces de la barra salen del menú de verdad (`web/menu.py`). Un menú
     # ilegible NO se traga acá: el único sitio que lo hace es el armado del
     # prompt, y `base.html`, que es ese menú, también tumba las demás pantallas.
@@ -946,7 +954,89 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
          "sala_no": sala_no, "nombre_code": config.NOMBRE_CODE,
          "area_tecnica": db.AREA_TECNICA, "estado_cerrado": db.ESTADO_PROYECTO_CERRADO,
          "largo_nombre": db.LARGO_NOMBRE_PROYECTO,
-         "dias_dormido": db.DIAS_DORMIDO})
+         "dias_dormido": db.DIAS_DORMIDO, "hecho": hecho,
+         "confirmar": confirmar, "editar": editar,
+         # Solo los nombres, sin la opción «sin responsable»: no hay (Tiziano,
+         # 1-oct-2026). Salen de `config.opciones_de_responsable()`, la misma
+         # lista de los demás desplegables, y viajan por NOMBRE: el número de
+         # chat no se escribe en la página.
+         "nombres_responsable": [n for v, n in config.opciones_de_responsable() if v]})
+
+
+@app.post("/proyectos/nuevo")
+async def crear_proyecto_nuevo(request: Request):
+    """El formulario «+ Proyecto en X». Todo lo decide `db.crear_proyecto`;
+    esta ruta traduce el formulario y el rechazo. El responsable llega por
+    NOMBRE y se vuelve chat con la MISMA puerta que usan `crud.editar` y
+    `deshacer`. Un rechazo vuelve al formulario con una CLAVE en la URL (nunca
+    el nombre pedido)."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    nombre = str(formulario.get("nombre", ""))
+    area = str(formulario.get("area", "")).strip()
+    vuelta = f"/proyectos?nuevo={quote(area)}"
+    try:
+        responsable = crud.PUERTAS["proyectos"]["responsable_chat_id"](
+            str(formulario.get("responsable", "")))
+    except ValueError:
+        responsable = None
+    if responsable is None:
+        return RedirectResponse(f"{vuelta}&error=responsable", status_code=303)
+    try:
+        nuevo = await db.crear_proyecto(nombre, area, responsable)
+    except db.NombreDeProyectoNoVale as e:
+        log.warning("Panel de proyectos: proyecto nuevo rechazado (%s)", e.clave)
+        return RedirectResponse(f"{vuelta}&error=nombre_{e.clave}", status_code=303)
+    except ValueError as e:
+        log.warning("Panel de proyectos: proyecto nuevo rechazado: %s", e)
+        return RedirectResponse(f"{vuelta}&error=grupo", status_code=303)
+    return RedirectResponse(
+        f"/proyectos?hecho=proyecto_nuevo&p={nuevo['id']}", status_code=303)
+
+
+@app.post("/proyectos/{pid}/responsable")
+async def cambiar_responsable_de_proyecto(request: Request, pid: int):
+    """Cambiar el responsable de un proyecto. POR LA MISMA PUERTA que Telegram:
+    `crud.editar("proyectos", ...)`, que llama a
+    `crud.PUERTAS["proyectos"]["responsable_chat_id"]` (la de las tareas)."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    try:
+        despues, _log = await crud.editar(
+            "proyectos", pid,
+            {"responsable_chat_id": str(formulario.get("responsable", ""))},
+            motivo="Responsable cambiado desde el panel", actor="panel")
+    except ValueError as e:
+        log.warning("Panel de proyectos: responsable rechazado para #%s: %s", pid, e)
+        return RedirectResponse(f"/proyectos?error=responsable&p={pid}", status_code=303)
+    if despues is None:
+        return RedirectResponse("/proyectos?error=proyecto", status_code=303)
+    return RedirectResponse(f"/proyectos?hecho=responsable&p={pid}", status_code=303)
+
+
+@app.post("/proyectos/{pid}/estado")
+async def cambiar_estado_de_proyecto(request: Request, pid: int):
+    """Cerrar o reabrir un proyecto. POR LA MISMA PUERTA que Telegram:
+    `crud.editar("proyectos", ...)` con `crud.PUERTAS["proyectos"]["estado"]`
+    (vocabulario cerrado). La ruta no decide qué estado vale: lo que ofrece la
+    plantilla es `cerrado` y `activo`, y lo que la puerta no deje no se guarda."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    try:
+        despues, _log = await crud.editar(
+            "proyectos", pid, {"estado": str(formulario.get("estado", ""))},
+            motivo="Estado cambiado desde el panel", actor="panel")
+    except ValueError as e:
+        log.warning("Panel de proyectos: estado rechazado para #%s: %s", pid, e)
+        return RedirectResponse(f"/proyectos?error=estado&p={pid}", status_code=303)
+    if despues is None:
+        return RedirectResponse("/proyectos?error=proyecto", status_code=303)
+    hecho = {db.ESTADO_PROYECTO_CERRADO: "cerrado", "activo": "reabierto"}.get(
+        despues["estado"], "estado")
+    return RedirectResponse(f"/proyectos?hecho={hecho}&p={pid}", status_code=303)
 
 
 @app.get("/logo-cds.png")

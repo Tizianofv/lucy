@@ -176,6 +176,13 @@ def ver(mundo, **consulta) -> str:
     return r.text
 
 
+def titulo_de(html: str):
+    """El texto del título (`<h1>`) de la página, o None si no hay. El título
+    lleva atributos (`data-dbl`, `title`): se lee el contenido, no la etiqueta."""
+    m = re.search(r"<h1[^>]*>(.*?)</h1>", html.split("<main>", 1)[-1], re.S)
+    return m.group(1) if m else None
+
+
 def tareas_en(html: str) -> list[int]:
     return [int(x) for x in re.findall(r'data-tarea="(\d+)"', html)]
 
@@ -482,8 +489,10 @@ def test_el_avance_y_los_contadores(mundo):
 def test_un_proyecto_sin_cliente_ni_responsable_no_pinta_guiones(mundo):
     mundo.proyecto(1, "Interno", area="IA")
     html = ver(mundo, p=1)
-    assert "Cliente:" not in html and "Responsable:" not in html
+    assert "Cliente:" not in html
     assert "—" not in html and "Sin cliente" not in html
+    # Sin responsable no se inventa uno: el desplegable pide que se escoja.
+    assert '<option value="" selected disabled>Escoge…</option>' in html
 
 
 def test_la_descripcion_del_proyecto_se_ve_si_la_hay_y_sale_escapada(mundo):
@@ -500,10 +509,10 @@ def test_si_falta_uno_de_los_dos_no_se_pinta_su_guion(mundo, gente):
     mundo.proyecto(1, "Solo responsable", area="CDS", responsable=gente.rosi)
     mundo.proyecto(2, "Solo cliente", area="CDS", cliente="Colegio")
     solo_responsable, solo_cliente = ver(mundo, p=1), ver(mundo, p=2)
-    assert "Responsable: <b>Persona Dos</b>" in solo_responsable
+    assert '<option value="Persona Dos" selected>' in solo_responsable
     assert "Cliente:" not in solo_responsable and "—" not in solo_responsable
     assert "Cliente: <b>Colegio</b>" in solo_cliente
-    assert "Responsable:" not in solo_cliente and "—" not in solo_cliente
+    assert 'selected disabled>Escoge…' in solo_cliente and "—" not in solo_cliente
 
 
 def test_cliente_y_responsable_salen_por_nombre_y_nunca_por_numero(mundo, gente):
@@ -513,13 +522,13 @@ def test_cliente_y_responsable_salen_por_nombre_y_nunca_por_numero(mundo, gente)
     mundo.tarea(11, "de Code", proyecto=1, responsable=config.CHAT_ID_CODE)
     mundo.tarea(12, "de alguien sin nombre", proyecto=1, responsable=555000111)
     html = ver(mundo, p=1)
-    assert "Cliente: <b>Colegio San Juan</b>" in html and "Responsable: <b>Persona Dos</b>" in html
+    assert "Cliente: <b>Colegio San Juan</b>" in html and '<option value="Persona Dos" selected>' in html
     assert 'title="Responsable: Persona Uno"' in html and 'title="Responsable: Code"' in html
     for pid in (1, 2):
         pagina = ver(mundo, p=pid)
         for numero in (str(gente.rosi), str(gente.dueno), "555000111"):
             assert numero not in pagina, f"salió el número {numero} en /proyectos?p={pid}"
-    assert "Responsable:" not in ver(mundo, p=2)        # sin nombre conocido, no se pinta
+    assert "selected disabled>Escoge…" in ver(mundo, p=2)   # sin nombre conocido, no se pinta
 
 
 def test_la_lista_cuenta_cada_grupo_con_su_color_y_sus_proyectos(mundo):
@@ -555,17 +564,31 @@ def test_una_pendiente_lleva_a_su_pantalla_y_lo_nuevo_es_un_enlace(mundo):
     assert "Proyecto cerrado: no se le agregan tareas." in cerrado
 
 
+_JS_QUE_DECIDIRIA = re.compile(
+    r"fetch\(|XMLHttpRequest|sendBeacon|localStorage|sessionStorage|\.submit\(|"
+    r"location\s*[.=]|\.action|FormData|innerHTML|eval\(")
+
+
 def test_la_pagina_no_promete_nada_que_no_hace(mundo):
-    """Solo lectura: ni casillas, ni ×, ni cuadros de comentar, ni JavaScript.
-    Lo único que escribe son los dos formularios que ya existían."""
+    """Cada escritura es un `<form method="post">` a una de las rutas del
+    proyecto; no hay casillas, ×, cuadros de comentar. Y el JavaScript NO decide
+    nada de negocio: es un solo `<script>` que solo muestra o esconde el
+    formulario del nombre (no manda ni calcula nada)."""
     _sembrar_los_casos(mundo)
     mundo.comentario(50, 10, config.CHAT_ID_DUENO, "un comentario")
-    for consulta in ({"p": 1}, {"g": "CDS"}, {"sin_grupo": 1}, {}):
+    permitidas = re.compile(r"/proyectos/(nuevo|\d+/(nombre|area|responsable|estado))")
+    for consulta in ({"p": 1}, {"p": 3}, {"g": "CDS"}, {"sin_grupo": 1}, {"nuevo": "CDS"}, {}):
         html = ver(mundo, **consulta)
-        for prohibido in ("<script", 'type="checkbox"', "<textarea", "borrar-x", "data-hecha"):
+        for prohibido in ('type="checkbox"', "<textarea", "borrar-x", "data-hecha"):
             assert prohibido not in html, (consulta, prohibido)
-        acciones = re.findall(r'<form[^>]*method="post"[^>]*action="([^"]*)"', html)
-        assert sorted(acciones) in ([], ["/proyectos/1/area", "/proyectos/1/nombre"]), (consulta, acciones)
+        guiones = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
+        assert len(guiones) == 1 and not _JS_QUE_DECIDIRIA.search(guiones[0]), (consulta, guiones)
+        for form in re.findall(r"<form[^>]*>", html):
+            if 'method="post"' in form:
+                accion = re.search(r'action="([^"]*)"', form).group(1)
+                assert permitidas.fullmatch(accion), (consulta, form)
+            else:
+                assert 'action="/proyectos"' in form and 'method="get"' in form, (consulta, form)
 
 
 def test_se_siguen_pudiendo_cambiar_el_nombre_y_el_grupo_con_su_ruta_de_siempre(mundo):
@@ -634,14 +657,14 @@ def test_los_avisos_con_los_que_vuelven_las_rutas_que_escriben(mundo):
 def test_sin_decir_nada_se_enseña_el_primer_proyecto_de_la_lista(mundo):
     mundo.proyecto(1, "Zeta", area="ACD")
     mundo.proyecto(2, "Alfa", area="CDS")
-    assert "<h1>Alfa</h1>" in ver(mundo)          # CDS va antes que ACD en la lista
+    assert titulo_de(ver(mundo)) == "Alfa"          # CDS va antes que ACD en la lista
 
 
 def test_p_elige_el_proyecto_y_uno_que_no_existe_cae_al_primero(mundo):
     mundo.proyecto(1, "Uno", area="CDS")
     mundo.proyecto(2, "Dos", area="CDS")
-    assert "<h1>Uno</h1>" in ver(mundo, p=1) and "<h1>Dos</h1>" in ver(mundo, p=2)
-    assert "<h1>Dos</h1>" in ver(mundo, p=999)        # «Dos» va primero por nombre
+    assert titulo_de(ver(mundo, p=1)) == "Uno" and titulo_de(ver(mundo, p=2)) == "Dos"
+    assert titulo_de(ver(mundo, p=999)) == "Dos"        # «Dos» va primero por nombre
     assert 'aria-current="true"' in ver(mundo, p=2)
 
 
@@ -649,10 +672,10 @@ def test_las_rutas_que_vuelven_con_un_aviso_enseñan_el_proyecto_del_que_hablan(
     mundo.proyecto(1, "Alfa", area="CDS")             # el que se enseña si nada elige
     mundo.proyecto(2, "Zeta", area="CDS")
     mundo.tarea(20, "de Zeta", proyecto=2)
-    assert "<h1>Alfa</h1>" in ver(mundo)
+    assert titulo_de(ver(mundo)) == "Alfa"
     for consulta in ({"nombre_guardado": 2}, {"area_guardada": 2}, {"creado": 2},
                      {"tarea_creada": 20}):
-        assert "<h1>Zeta</h1>" in ver(mundo, **consulta), consulta
+        assert titulo_de(ver(mundo, **consulta)) == "Zeta", consulta
 
 
 def test_las_tareas_sueltas_de_un_grupo_y_de_sin_grupo(mundo):
@@ -685,7 +708,7 @@ def test_el_buscador_filtra_por_proyecto_o_cliente_sin_tildes_ni_mayusculas(mund
     assert "p=2" not in por_nombre and "p=3" not in por_nombre
     por_cliente = ver(mundo, q="colegio")
     assert "p=1&amp;" in por_cliente and "p=3&amp;" in por_cliente and "p=2&amp;" not in por_cliente
-    assert "<h1>Remodelación de la Sala</h1>" in por_cliente     # el primero que casa
+    assert titulo_de(por_cliente) == "Remodelación de la Sala"     # el primero que casa
 
 
 def test_el_buscador_esconde_los_grupos_vacios_y_los_apartados_de_sueltas(mundo):
@@ -700,7 +723,7 @@ def test_el_buscador_esconde_los_grupos_vacios_y_los_apartados_de_sueltas(mundo)
 def test_sin_coincidencias_lo_dice_y_no_enseña_un_proyecto_cualquiera(mundo):
     mundo.proyecto(1, "Uno", area="CDS")
     html = ver(mundo, q="zzz")
-    assert "Ningún proyecto ni cliente con «zzz»" in html and "<h1>" not in html
+    assert "Ningún proyecto ni cliente con «zzz»" in html and titulo_de(html) is None
 
 
 def test_lo_que_se_busca_se_escapa_y_se_conserva_en_los_enlaces(mundo):

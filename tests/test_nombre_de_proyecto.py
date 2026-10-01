@@ -578,7 +578,8 @@ def test_todo_lo_que_escribe_el_nombre_pasa_por_la_puerta_y_la_funcion_unica():
     legibles = censo["legibles"]
     # El censo VE a los escritores que se sabe que existen (si dejara de verlos,
     # estaría ciego, no arreglado).
-    for fn in (db._buscar_o_crear, db.convertir_tarea_en_proyecto, crud.perfil):
+    for fn in (db._buscar_o_crear, db.convertir_tarea_en_proyecto, crud.perfil,
+               db.crear_proyecto):
         assert tr._id_de(fn) in legibles, (
             f"el censo no ve a {tr._id_de(fn)}: dejó de ver")
     sin_puerta = sorted(q for q, f in legibles.items()
