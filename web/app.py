@@ -384,6 +384,11 @@ def _iniciales(nombre) -> str:
 plantillas.env.filters["dia_corto"] = _dia_corto
 plantillas.env.filters["hace_dias"] = _hace_dias
 plantillas.env.filters["iniciales"] = _iniciales
+# El buscador de la página de proyectos filtra EN VIVO en el navegador (1-oct-2026,
+# como la maqueta): cada proyecto de la lista lleva su nombre y su cliente ya
+# sin tildes ni mayúsculas (`data-n`, `data-c`), con la MISMA función con la que
+# filtra el servidor (`_sin_tildes`), y el guion solo busca el texto en ellos.
+plantillas.env.filters["sin_tildes"] = lambda t: _sin_tildes(t)
 
 
 def _sesion(request: Request) -> int | None:
@@ -922,7 +927,8 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
                     hecho: str = "", nuevo: str = "", confirmar: str = "",
                     editar: str = "", t: int = 0, editar_tarea: int = 0,
                     confirmar_borrar: int = 0, editar_comentario: int = 0,
-                    derivar: int = 0, derivadas: str = ""):
+                    derivar: int = 0, derivadas: str = "",
+                    pq: str = "", pdonde: str = ""):
     """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
     (`?g=`), las de «Sin grupo» (`?sin_grupo=1`) o el formulario de un proyecto
@@ -941,7 +947,10 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
     para que todo funcione también sin JavaScript. `hecho`, `error` y
     `derivadas` (los ids de las tareas que salieron de la que se cerró) son los
     avisos con los que vuelven los POST, junto con `p` (el proyecto del que
-    hablan).
+    hablan). `pq` y `pdonde` (`cliente`, `proyecto` o `tarea-<id>`) son la
+    búsqueda de una persona de Noco SIN JavaScript: el servidor pide a Noco las
+    coincidencias (solo LEE) y las dibuja como botones que envían el formulario
+    de ese sitio; con JavaScript las pide el navegador a `/personas/buscar`.
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
@@ -955,9 +964,10 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
     # ilegible NO se traga acá: el único sitio que lo hace es el armado del
     # prompt, y `base.html`, que es ese menú, también tumba las demás pantallas.
     pantallas = _menu.pantallas()
+    busqueda = await _buscar_personas_para_la_pagina(pq, pdonde)
     return plantillas.TemplateResponse(
         request, "proyectos.html",
-        {"modelo": modelo, "visibles": visibles, "vista": vista, "q": q,
+        {"busqueda": busqueda, "largo_rol": db.LARGO_ROL_PARTICIPANTE, "modelo": modelo, "visibles": visibles, "vista": vista, "q": q,
          "pantallas": pantallas, "areas": await db.areas(), "error": error,
          "area_guardada": area_guardada, "creado": creado,
          "nombre_guardado": nombre_guardado, "tarea_creada": tarea_creada,
@@ -985,6 +995,30 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
          # lista de los demás desplegables, y viajan por NOMBRE: el número de
          # chat no se escribe en la página.
          "nombres_responsable": [n for v, n in config.opciones_de_responsable() if v]})
+
+
+async def _buscar_personas_para_la_pagina(pq: str, pdonde: str) -> dict | None:
+    """La búsqueda de personas de Noco que se dibuja SIN JavaScript: `None` si no
+    hay nada que buscar. Es solo LECTURA de Noco (`noco_lectura.buscar_personas`);
+    si Noco no contesta se dice, y nunca se inventa una lista vacía que parezca
+    «esa persona no está»."""
+    texto = pq.strip()
+    if not texto or not re.fullmatch(r"cliente|proyecto|tarea-\d+", pdonde):
+        return None
+    try:
+        personas = await noco_lectura.buscar_personas(texto)
+    except noco_lectura.NocoNoContesta as e:
+        return {"donde": pdonde, "q": texto, "personas": [], "error": str(e)}
+    return {"donde": pdonde, "q": texto, "personas": personas, "error": ""}
+
+
+def _noco_id_de(formulario) -> tuple:
+    """`(vale, noco_id)` del campo `noco_id` del formulario: vacío es «ninguno»
+    (`None`, vale: es quitar), un entero es el Id, cualquier otra cosa no vale."""
+    crudo = str(formulario.get("noco_id", "")).strip()
+    if crudo == "":
+        return True, None
+    return (True, int(crudo)) if crudo.isdigit() else (False, None)
 
 
 def _direccion_de_la_vista(vista: dict) -> str:
@@ -1048,8 +1082,134 @@ async def crear_proyecto_nuevo(request: Request):
     except db.ProyectoNoSeCrea as e:
         log.warning("Panel de proyectos: proyecto nuevo rechazado (%s)", e.clave)
         return RedirectResponse(f"{vuelta}&error={e.clave}", status_code=303)
+    # EL CLIENTE ES OPCIONAL (Tiziano, 1-oct-2026: «no todos los proyectos tienen
+    # cliente»). Si la ventanita mandó uno, se pone DESPUÉS de crear el proyecto,
+    # por la única puerta del cliente (`db.poner_cliente`, que vuelve a leer la
+    # ficha de Noco): así el proyecto no depende de que Noco conteste, y si no
+    # contesta el proyecto queda creado SIN cliente y el aviso lo dice.
+    crudo = str(formulario.get("cliente", "")).strip()
+    if crudo:
+        try:
+            if not crudo.isdigit():
+                raise ValueError("cliente que no es un Id")
+            await db.poner_cliente(nuevo["id"], int(crudo), leer_persona=noco_lectura.persona)
+        except (ValueError, noco_lectura.NocoNoContesta) as e:
+            log.warning("Panel de proyectos: el proyecto #%s se creó sin cliente: %s", nuevo["id"], e)
+            return RedirectResponse(
+                f"/proyectos?hecho=proyecto_nuevo&error=cliente_nuevo&p={nuevo['id']}", status_code=303)
     return RedirectResponse(
         f"/proyectos?hecho=proyecto_nuevo&p={nuevo['id']}", status_code=303)
+
+
+@app.post("/proyectos/{pid}/cliente")
+async def poner_cliente_del_proyecto(request: Request, pid: int):
+    """Poner, cambiar o quitar el cliente de un proyecto. TODO LO DECIDE
+    `db.poner_cliente`: vuelve a pedirle la ficha a Noco (solo LEE) y guarda el
+    nombre que Noco devuelve, nunca uno del formulario. `noco_id` vacío quita el
+    cliente (es opcional). Esta ruta solo traduce y pide sesión."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    vale, noco_id = _noco_id_de(await request.form())
+    if not vale:
+        return RedirectResponse(f"/proyectos?error=cliente&p={pid}", status_code=303)
+    try:
+        cambio = await db.poner_cliente(pid, noco_id, leer_persona=noco_lectura.persona)
+    except noco_lectura.NocoNoContesta as e:
+        log.warning("Panel de proyectos: Noco no contestó al poner el cliente de #%s: %s", pid, e)
+        return RedirectResponse(f"/proyectos?error=cliente_noco&p={pid}", status_code=303)
+    except ValueError as e:
+        log.warning("Panel de proyectos: cliente rechazado para #%s: %s", pid, e)
+        return RedirectResponse(f"/proyectos?error=cliente&p={pid}", status_code=303)
+    if not cambio:
+        return RedirectResponse(f"/proyectos?error=cliente_igual&p={pid}", status_code=303)
+    hecho = "cliente_quitado" if noco_id is None else "cliente"
+    return RedirectResponse(f"/proyectos?hecho={hecho}&p={pid}", status_code=303)
+
+
+def _error_de_persona(e: Exception) -> str:
+    """La CLAVE del aviso con el que vuelve un rechazo de personas (nunca el texto
+    escrito por la persona)."""
+    if isinstance(e, noco_lectura.NocoNoContesta):
+        return "persona_noco"
+    if isinstance(e, db.ParticipanteNoVale):
+        return f"persona_{e.clave}"
+    return "persona_ficha"
+
+
+@app.post("/proyectos/{pid}/personas")
+async def agregar_persona_al_proyecto(request: Request, pid: int):
+    """Agregar una persona de Noco a un proyecto, con su «qué hace aquí». POR
+    `db.agregar_participante`: quién escribe sale de la sesión, y la ficha se
+    vuelve a leer de Noco. Agregar una persona NO es un movimiento del proyecto."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    formulario = await request.form()
+    vale, noco_id = _noco_id_de(formulario)
+    if not vale or noco_id is None:
+        # Sin persona escogida (el botón «Agregar» sin haber tocado un resultado) es
+        # otro aviso que un Id que no vale.
+        clave = "persona_ficha" if not vale else "persona_falta"
+        return RedirectResponse(f"/proyectos?error={clave}&p={pid}", status_code=303)
+    try:
+        await db.agregar_participante(("proyecto", pid), noco_id, str(formulario.get("rol", "")),
+                                      chat, leer_persona=noco_lectura.persona)
+    except (db.ParticipanteNoVale, noco_lectura.NocoNoContesta, ValueError) as e:
+        log.warning("Panel de proyectos: persona rechazada en el proyecto #%s: %s", pid, e)
+        return RedirectResponse(f"/proyectos?error={_error_de_persona(e)}&p={pid}", status_code=303)
+    return RedirectResponse(f"/proyectos?hecho=persona&p={pid}", status_code=303)
+
+
+@app.post("/proyectos/{pid}/personas/{xid}/quitar")
+async def quitar_persona_del_proyecto(request: Request, pid: int, xid: int):
+    """Quitar a una persona de un proyecto: `db.quitar_participante`, que exige
+    que la persona sea DE ESE proyecto."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    try:
+        await db.quitar_participante(xid, ("proyecto", pid), chat)
+    except db.ParticipanteNoVale as e:
+        log.warning("Panel de proyectos: persona #%s no se quitó del proyecto #%s: %s", xid, pid, e)
+        return RedirectResponse(f"/proyectos?error={_error_de_persona(e)}&p={pid}", status_code=303)
+    return RedirectResponse(f"/proyectos?hecho=persona_quitada&p={pid}", status_code=303)
+
+
+@app.post("/proyectos/tarea/{tid}/personas")
+async def agregar_persona_a_la_tarea(request: Request, tid: int):
+    """Lo mismo, para una tarea (`db.agregar_participante` con `("tarea", id)`)."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    formulario = await request.form()
+    vale, noco_id = _noco_id_de(formulario)
+    if not vale or noco_id is None:
+        clave = "persona_ficha" if not vale else "persona_falta"
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, error=clave, t=tid), status_code=303)
+    try:
+        await db.agregar_participante(("tarea", tid), noco_id, str(formulario.get("rol", "")),
+                                      chat, leer_persona=noco_lectura.persona)
+    except (db.ParticipanteNoVale, noco_lectura.NocoNoContesta, ValueError) as e:
+        log.warning("Panel de proyectos: persona rechazada en la tarea #%s: %s", tid, e)
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, error=_error_de_persona(e), t=tid), status_code=303)
+    return RedirectResponse(await _volver_a_la_tarea(tid, t=tid, hecho="persona"), status_code=303)
+
+
+@app.post("/proyectos/tarea/{tid}/personas/{xid}/quitar")
+async def quitar_persona_de_la_tarea(request: Request, tid: int, xid: int):
+    """Lo mismo, para una tarea (`db.quitar_participante` con `("tarea", id)`)."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    try:
+        await db.quitar_participante(xid, ("tarea", tid), chat)
+    except db.ParticipanteNoVale as e:
+        log.warning("Panel de proyectos: persona #%s no se quitó de la tarea #%s: %s", xid, tid, e)
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, error=_error_de_persona(e), t=tid), status_code=303)
+    return RedirectResponse(await _volver_a_la_tarea(tid, t=tid, hecho="persona_quitada"), status_code=303)
 
 
 @app.post("/proyectos/{pid}/responsable")

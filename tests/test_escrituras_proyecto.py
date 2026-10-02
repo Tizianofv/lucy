@@ -28,6 +28,7 @@ import json
 import re
 import shutil
 import subprocess
+import types
 
 import pytest
 
@@ -37,6 +38,54 @@ from test_pagina_proyectos import (_cliente, _dia, gente, mundo, titulo_de,  # n
 import acciones.crud as crud
 import config
 import db.db as db
+import noco_lectura
+
+
+FICHAS_DE_NOCO = {101: "Cliente Uno", 102: "Persona Dos de Noco", 103: "Persona Tres de Noco"}
+
+
+@pytest.fixture
+def noco(monkeypatch):
+    """Un Noco de mentira para las pruebas de la página, con la FORMA de lo que
+    devuelve `noco_lectura` (`persona(id) -> {id, nombre} | None`,
+    `buscar_personas(texto) -> [{id, nombre}]`, hasta 20): esa forma sale del propio
+    módulo y se comprueba en `test_el_noco_de_mentira_tiene_la_forma_del_real`.
+    Registra cada pedido (`pedidos`) y puede «caerse» (`noco.cae = True`: lanza
+    `NocoNoContesta`, como el real)."""
+    estado = types.SimpleNamespace(pedidos=[], cae=False, fichas=dict(FICHAS_DE_NOCO))
+
+    async def persona(noco_id):
+        estado.pedidos.append(("persona", noco_id))
+        if estado.cae:
+            raise noco_lectura.NocoNoContesta("Noco de mentira: no contesta")
+        n = estado.fichas.get(noco_id)
+        return {"id": noco_id, "nombre": n} if n else None
+
+    async def buscar_personas(texto):
+        estado.pedidos.append(("buscar", texto))
+        if estado.cae:
+            raise noco_lectura.NocoNoContesta("Noco de mentira: no contesta")
+        return [{"id": i, "nombre": n} for i, n in estado.fichas.items()
+                if texto.casefold() in n.casefold()][:20]
+
+    monkeypatch.setattr(noco_lectura, "persona", persona)
+    monkeypatch.setattr(noco_lectura, "buscar_personas", buscar_personas)
+    return estado
+
+
+def test_el_noco_de_mentira_tiene_la_forma_del_real(noco):
+    """El doble contesta lo que documenta el módulo real: la ficha que construye
+    `noco_lectura._ficha` a partir de una fila de Noco es `{id, nombre}` (y nada
+    más: ni teléfono ni correo, G16), y las funciones públicas son las que el
+    doble reemplaza."""
+    ficha = noco_lectura._ficha({"Id": 5, "nombre": "Alguien", "telefono": "809", "correo": "x"})
+    assert ficha == {"id": 5, "nombre": "Alguien"}
+    assert sorted(f for f in dir(noco_lectura) if not f.startswith("_")
+                  and callable(getattr(noco_lectura, f)) and f in ("persona", "buscar_personas")) == [
+        "buscar_personas", "persona"]
+    import asyncio
+    for i, n in FICHAS_DE_NOCO.items():
+        assert asyncio.new_event_loop().run_until_complete(noco_lectura.persona(i)) == {"id": i, "nombre": n}
 
 
 def mandar(ruta: str, campos: dict | None = None, *, chat="dueno"):
@@ -150,14 +199,19 @@ def test_sin_sesion_no_se_crea_nada(mundo):
     assert mundo.con.execute("SELECT count(*) FROM proyectos").fetchone()[0] == 0
 
 
-def test_el_formulario_de_proyecto_nuevo_pide_nombre_y_responsable_y_no_el_cliente(mundo, gente):
+def test_el_formulario_de_proyecto_nuevo_pide_nombre_y_responsable_y_el_cliente_va_en_la_ventanita(mundo, gente):
+    """La PÁGINA aparte (la de sin JavaScript) pide nombre y responsable: el cliente
+    es opcional y sin JavaScript se pone después, desde la cabecera. La
+    VENTANITA (que solo existe con JavaScript) trae además el campo del cliente."""
     html = ver(mundo, nuevo="ACD")
     assert titulo_de(html) == "Proyecto nuevo en ACD"
-    assert 'action="/proyectos/nuevo"' in html and '<input type="hidden" name="area" value="ACD">' in html
+    aparte = html.split("<h1>Proyecto nuevo en ACD</h1>", 1)[1].split("</section>", 1)[0]
+    assert 'action="/proyectos/nuevo"' in aparte and '<input type="hidden" name="area" value="ACD">' in aparte
     for opcion in ("Persona Uno", "Persona Dos", "Code"):
-        assert f'<option value="{opcion}">' in html
+        assert f'<option value="{opcion}">' in aparte
     assert "sin responsable" not in html.lower()
-    assert 'name="cliente' not in html and "Cliente" not in html
+    assert 'name="cliente' not in aparte and "Cliente" not in aparte
+    assert html.count('<input type="hidden" name="cliente"') == len(_pagina.AREAS)   # una por ventanita
 
 
 def test_cada_grupo_ofrece_su_boton_de_proyecto_nuevo_y_sin_grupo_no(mundo):
@@ -165,9 +219,10 @@ def test_cada_grupo_ofrece_su_boton_de_proyecto_nuevo_y_sin_grupo_no(mundo):
     html = ver(mundo)
     lista = html.split("<aside>", 1)[1].split("</aside>", 1)[0]
     for grupo in ("CDS", "ACD", "IA"):
-        assert f'href="/proyectos?nuevo={grupo}">+ Proyecto en {grupo}</a>' in lista
-    assert lista.count("+ Proyecto en") == 3
-    assert "+ Proyecto en" not in ver(mundo, q="sin").split("<aside>", 1)[1].split("</aside>", 1)[0]
+        assert (f'<a class="nuevo-proy mas" href="/proyectos?nuevo={grupo}" aria-label="Proyecto nuevo en {grupo}" '
+                f'title="Proyecto nuevo en {grupo}">+</a></h3>') in lista
+    assert lista.count('class="nuevo-proy mas"') == 3
+    assert 'class="nuevo-proy' not in ver(mundo, q="sin").split("<aside>", 1)[1].split("</aside>", 1)[0]
 
 
 def test_un_grupo_que_no_existe_no_abre_el_formulario(mundo):
@@ -418,8 +473,8 @@ def test_js_un_texto_se_guarda_al_salir_del_campo_y_solo_si_cambio(mundo):
 
 @hay_osascript
 def test_js_un_cambio_en_el_select_envia_su_formulario(mundo):
-    sitio = ('var S = sitioDeMentira({accion: "/proyectos/1/area", auto: true,'
-             ' campos: [{tag: "select", name: "area", valor: "CDS"}]});')
+    sitio = ('var S = sitioDeMentira({accion: "/proyectos/1/responsable", auto: true,'
+             ' campos: [{tag: "select", name: "responsable", valor: "Code"}]});')
     r = _correr_en_jxa(_script_de_la_pagina(mundo),
                        sitio + 'S.campos[0].value = "IA";oyentes.change(ev(S.campos[0]));' + _FOTO)
     assert r["enviados"] == 1 and r["form"] is False
@@ -540,15 +595,27 @@ def test_js_el_comentario_que_se_vuelve_a_editar_va_a_la_ruta_de_editar(mundo):
     assert crear["accion"] != form["accion"]
 
 
+def sin_el_unico_pedido_permitido(codigo: str) -> str:
+    """El script puede hacer UN pedido de red, y ninguno más: el GET que busca
+    personas de Noco para ofrecer coincidencias (`/personas/buscar?q=...`, sin
+    método, sin cuerpo y sin opciones: un `fetch` con un solo argumento es un GET).
+    Lo comprueba y devuelve el código SIN ese pedido, para que las demás
+    prohibiciones (otro `fetch`, `XMLHttpRequest`, `.submit(`...) se apliquen al
+    resto. (E7, 1-oct-2026: Lucy solo LEE de Noco.)"""
+    permitido = 'fetch("/personas/buscar?q=" + encodeURIComponent(q))'
+    assert codigo.count("fetch(") == 1 and codigo.count(permitido) == 1, "el único fetch tiene que ser el de buscar personas"
+    return codigo.replace(permitido, "")
+
+
 def test_el_script_no_decide_nada_de_negocio(mundo):
     guion = _script_de_la_pagina(mundo)
-    codigo = re.sub(r"/\*.*?\*/", "", guion, flags=re.S)
+    codigo = sin_el_unico_pedido_permitido(re.sub(r"/\*.*?\*/", "", guion, flags=re.S))
     assert re.search(r"fetch\(|XMLHttpRequest|\.submit\(|FormData|localStorage|eval\(", codigo) is None
     # Un oyente por evento y nada más: el clic (abrir el detalle, esperando al
     # segundo), el doble clic, el teclado, el cambio de un desplegable, la
     # salida de un campo y el envío (para no mandar dos veces el mismo).
     assert sorted(re.findall(r'addEventListener\("(\w+)"', codigo)) == [
-        "change", "click", "dblclick", "focusout", "keydown", "submit"]
+        "change", "click", "dblclick", "focusout", "input", "keydown", "load", "submit"]
 
 
 def _valor_del_campo(c: dict) -> str:
@@ -633,7 +700,8 @@ def test_el_selector_del_responsable_no_escribe_ningun_numero_de_chat(mundo, gen
     html = ver(mundo, p=1)
     for numero in (str(gente.rosi), str(gente.dueno)):
         assert numero not in html, numero
-    assert re.search(r'value="-?\d+"', html) is None, "una opción viaja con un número de chat"
+    # (Solo las OPCIONES: la página también lleva ids de proyecto en campos escondidos.)
+    assert re.search(r'<option value="-?\d+"', html) is None, "una opción viaja con un número de chat"
     # Ya tiene responsable: el selector del proyecto no lleva el marcador de «falta»
     # (la ventanita de «+ Proyecto» sí tiene el suyo, y no cuenta).
     quienes = html.split('<div class="quienes">', 1)[1].split("</form>", 1)[0]
@@ -650,7 +718,8 @@ def test_el_boton_de_cerrar_va_debajo_al_final_a_la_derecha(mundo):
     html = ver(mundo, p=1)
     boton = '<a class="btn-linea" href="/proyectos?p=1&amp;confirmar=cerrar">Cerrar proyecto</a>'
     assert html.count(boton) == 1
-    assert html.index("+ Agregar tarea con más opciones") < html.index(boton)
+    # (El «+ Agregar tarea con más opciones» se quitó de esta página: la maqueta no lo tiene.)
+    assert "más opciones" not in html and html.index("Agregar tarea</button>") < html.index(boton)
     assert '<div class="acciones abajo">\n      ' + boton in html
     assert "justify-content:flex-end" in html.split(".acciones.abajo{", 1)[1].split("}", 1)[0]
 
@@ -745,12 +814,16 @@ def test_el_esquema_no_impide_un_estado_libre_y_por_eso_la_pagina_lo_tolera():
 # Cambiar de grupo (P4)
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_el_selector_de_grupo_esta_arriba_junto_al_grupo_con_el_actual_marcado(mundo):
+def test_la_pagina_ya_no_ofrece_cambiar_de_grupo_porque_la_maqueta_no_lo_tiene(mundo):
+    """Decisión de Tiziano (1-oct-2026): la página tiene las mismas funciones que
+    la maqueta, y la maqueta no tiene «Mover a». Se quitó de ESTA página; la ruta
+    `/proyectos/{pid}/area` y su efecto siguen (las pruebas de abajo le mandan el
+    formulario directo)."""
     mundo.proyecto(1, "P", area="ACD")
     html = ver(mundo, p=1)
     migas = html.split('<div class="migas">', 1)[1].split("</div>", 1)[0]
-    assert "<b>ACD</b> / Proyecto" in migas and 'action="/proyectos/1/area"' in migas
-    assert '<option value="ACD" selected>' in migas and migas.count("<option") == 3
+    assert "<b>ACD</b> / Proyecto" in migas
+    assert "Mover a" not in html and "/proyectos/1/area" not in html and "cambiar-grupo" not in html
 
 
 def test_cambiar_de_grupo_lo_mueve_con_sus_tareas_y_deja_huella_de_panel(mundo):
@@ -776,18 +849,28 @@ def test_un_grupo_que_no_existe_no_se_guarda(mundo):
 # El cliente NO está en E5
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_el_cliente_no_se_escribe_desde_la_pagina_todavia(mundo):
+def test_el_cliente_se_lee_de_la_base_y_se_escribe_solo_por_poner_cliente_con_la_ficha_de_noco(mundo):
+    """El cliente de la cabecera sale de `proyectos.cliente_nombre`; se cambia con
+    el formulario de `/proyectos/{pid}/cliente`; y la ÚNICA puerta que lo escribe
+    es `db.poner_cliente`, llamada desde dos rutas (la del cliente y la de
+    «proyecto nuevo») SIEMPRE con `leer_persona=noco_lectura.persona`, para que el
+    nombre que se guarda sea el que Noco devuelve. SALE DEL ÁRBOL de `web/`."""
     mundo.proyecto(1, "P", area="CDS", cliente="Colegio")
     html = ver(mundo, p=1)
-    assert "Cliente: <b>Colegio</b>" in html                  # se LEE si lo hay
-    assert 'name="cliente' not in html
-    llamadas = []
+    assert '<label>Cliente <input class="campo-quien" type="text" name="pq" value="Colegio"' in html
+    assert 'action="/proyectos/1/cliente"' in html and "Quitar el cliente" in html
+    llamadas = {}
     for archivo in _archivos_de_texto():
         if archivo.suffix == ".py" and archivo.relative_to(_ROOT).parts[0] == "web":
-            for n in ast.walk(ast.parse(archivo.read_text(encoding="utf-8"))):
-                if isinstance(n, ast.Attribute) and n.attr == "poner_cliente":
-                    llamadas.append(archivo.name)
-    assert llamadas == [], "una ruta del panel llama a poner_cliente: es de E3"
+            for f in ast.walk(ast.parse(archivo.read_text(encoding="utf-8"))):
+                if isinstance(f, (ast.AsyncFunctionDef, ast.FunctionDef)):
+                    for n in ast.walk(f):
+                        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                                and n.func.attr == "poner_cliente"):
+                            llamadas[f.name] = {k.arg: ast.unparse(k.value) for k in n.keywords}
+    assert sorted(llamadas) == ["crear_proyecto_nuevo", "poner_cliente_del_proyecto"], llamadas
+    for nombre, kw in llamadas.items():
+        assert kw == {"leer_persona": "noco_lectura.persona"}, (nombre, kw)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -820,8 +903,9 @@ def _rutas_post_de_proyectos(con_tareas: bool = False):
                                  if k.arg == "actor" and isinstance(k.value, ast.Constant)]
                         escribe.append(("crud.editar", tuple(actor)))
                     if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                            and n.func.attr == "crear_proyecto"):
-                        escribe.append(("db.crear_proyecto", ()))
+                            and n.func.attr in ("crear_proyecto", "poner_cliente",
+                                                "agregar_participante", "quitar_participante")):
+                        escribe.append((f"db.{n.func.attr}", ()))
                     if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                             and n.func.attr == "puede_entrar"):
                         pide_sesion = True
@@ -831,16 +915,28 @@ def _rutas_post_de_proyectos(con_tareas: bool = False):
 
 def test_toda_ruta_post_de_proyectos_pide_sesion_y_escribe_por_una_puerta_con_actor_panel():
     rutas = _rutas_post_de_proyectos()
-    assert {r["ruta"] for r in rutas.values()} == {
-        "/proyectos/nuevo", "/proyectos/{pid}/nombre", "/proyectos/{pid}/area",
-        "/proyectos/{pid}/responsable", "/proyectos/{pid}/estado"}
+    # Cada ruta y las puertas por las que escribe (E7, 1-oct-2026: el cliente y las
+    # personas). «Proyecto nuevo» tiene dos: crea, y después pone el cliente si la
+    # ventanita mandó uno.
+    esperadas = {
+        "/proyectos/nuevo": {"db.crear_proyecto", "db.poner_cliente"},
+        "/proyectos/{pid}/nombre": {"crud.editar"},
+        "/proyectos/{pid}/area": {"crud.editar"},
+        "/proyectos/{pid}/responsable": {"crud.editar"},
+        "/proyectos/{pid}/estado": {"crud.editar"},
+        "/proyectos/{pid}/cliente": {"db.poner_cliente"},
+        "/proyectos/{pid}/personas": {"db.agregar_participante"},
+        "/proyectos/{pid}/personas/{xid}/quitar": {"db.quitar_participante"},
+    }
+    assert {r["ruta"] for r in rutas.values()} == set(esperadas)
     for nombre, r in rutas.items():
         assert r["sesion"], f"{nombre} no pide sesión"
-        assert len(r["escribe"]) == 1, f"{nombre} escribe por {r['escribe']}"
-        puerta, actor = r["escribe"][0]
-        assert puerta in ("crud.editar", "db.crear_proyecto")
-        if puerta == "crud.editar":
-            assert actor == ("panel",), f"{nombre}: actor {actor}"
+        assert {puerta for puerta, _ in r["escribe"]} == esperadas[r["ruta"]], (
+            f"{nombre} escribe por {r['escribe']}")
+        assert len(r["escribe"]) == len(esperadas[r["ruta"]]), f"{nombre}: una llamada por puerta"
+        for puerta, actor in r["escribe"]:
+            if puerta == "crud.editar":
+                assert actor == ("panel",), f"{nombre}: actor {actor}"
 
 
 def test_el_censo_de_rutas_ve_una_ruta_inventada(tmp_path, monkeypatch):
@@ -1044,17 +1140,33 @@ _ATRIBUTOS = {
     # escoger—, para que el script no tenga que llevar una lista de clases
     # tecleada. Los que CREAN una fila con más de un campo (proyecto nuevo,
     # tarea nueva) NO lo llevan: guardarían a medias.
-    "form": {"method", "action", "class", "data-auto"},
+    # `data-pide-persona` (1-oct-2026): el formulario de agregar una persona; le dice
+    # al script que NO lo envíe sin persona escogida. No cambia lo que se envía.
+    "form": {"method", "action", "class", "data-auto", "data-pide-persona"},
     # `min` (1-oct-2026): el piso de fecha del campo de día y hora de la tarea
     # nueva. Es una ayuda del navegador, no una guarda — lo que vale lo decide
     # `_vence_con_hora_valido` en el servidor.
-    "input": {"type", "name", "value", "required", "maxlength", "placeholder", "aria-label", "min"},
+    # `data-buscar-persona` y `autocomplete` (1-oct-2026, personas de Noco): la caja
+    # donde se escribe para buscar a una persona. `data-buscar-persona` le dice al
+    # script qué hacer con las coincidencias («enviar» el formulario o «elegir»
+    # copiando el Id a un campo escondido) y no cambia lo que se envía;
+    # `autocomplete="off"` solo apaga la ayuda del navegador.
+    "input": {"type", "name", "value", "required", "maxlength", "placeholder", "aria-label", "min",
+              "data-buscar-persona", "autocomplete",
+              # `data-elegida` (1-oct-2026): el campo escondido donde queda el Id de la
+              # persona o del cliente ESCOGIDOS en la ventanita; solo marca cuál es.
+              "data-elegida"},
     "select": {"id", "name", "required"},
     "option": {"value", "selected", "disabled"},
     # `title` y `aria-label` (E6): el botón redondo de marcar hecha (○ o ✓) no
     # tiene texto; su nombre para quien lo lee en voz alta viaja en `aria-label`,
     # y `title` es lo que dice al pasar el cursor. No cambian lo que envía.
-    "button": {"class", "type", "title", "aria-label"},
+    # `name` y `value` (1-oct-2026, personas de Noco): cada coincidencia de una
+    # búsqueda es un botón que envía su formulario con el Id de Noco
+    # (`noco_id`), y «Quitar el cliente» envía `noco_id` vacío. Un botón con
+    # nombre manda su par SOLO si es el que se pulsó: `_lo_que_manda_el_navegador`
+    # lo recibe por `boton=`.
+    "button": {"class", "type", "title", "aria-label", "name", "value"},
     "label": {"for"},
     # `title` y `aria-label` en el enlace (1-oct-2026): el `＋` que abre los
     # renglones de «¿sale una tarea nueva de ésta?» no dice nada por su texto,
@@ -1062,6 +1174,9 @@ _ATRIBUTOS = {
     # dónde lleva el enlace.
     "a": {"class", "href", "title", "aria-label"},
     "div": {"class"},
+    # Los mensajes de la lista de coincidencias («Nadie con … en Noco», el error
+    # de Noco) son un `<p class="vacio">` dentro del formulario: no envían nada.
+    "p": {"class"},
     # E6 (Lucy 1.0), cada uno con su porqué: el cuadro de comentario y el de
     # editarlo son de varias líneas (`textarea`), y la fecha límite opcional de
     # una tarea nueva es un `<input type="date">` (lo manda el navegador como
@@ -1172,8 +1287,10 @@ class _LectorDeFormularios(HTMLParser):
                         "disabled": "disabled" in a, "texto": ""}
             self._sel["opciones"].append(self._op)
         elif tag == "button":
-            self._boton = {"texto": "", "tipo": a.get("type")}
+            self._boton = {"texto": "", "tipo": a.get("type"), "name": a.get("name"), "value": a.get("value")}
             f["botones"].append(self._boton)
+        elif tag == "div" and "sugerencias" in (a.get("class") or "").split():
+            f["sugerencias"] = True
 
     def handle_data(self, dato):
         if self._boton is not None:
@@ -1190,7 +1307,12 @@ class _LectorDeFormularios(HTMLParser):
             f = self._f
             if f is not None and f["post"]:
                 donde = f"form {f['accion']}"
-                if not f["botones"]:
+                # Un formulario de personas de Noco (cliente, agregar una persona) no
+                # trae su botón de envío escrito: lo traen las COINCIDENCIAS de la
+                # búsqueda, que el servidor (sin JavaScript) o el navegador (con él)
+                # dibujan dentro de su `<div class="sugerencias">`. Ese contenedor
+                # cuenta como el lugar del botón; sin botón ni contenedor, falla.
+                if not f["botones"] and not f.get("sugerencias"):
                     self._mal(f"{donde}: no tiene un botón que envíe")
                 nombres = [c["name"] for c in f["campos"] if c["name"]]
                 repetidos = sorted({n for n in nombres if nombres.count(n) > 1})
@@ -1229,12 +1351,15 @@ def _valor(op: dict) -> str:
     return op["value"] if op["value"] is not None else op["texto"].strip()
 
 
-def _lo_que_manda_el_navegador(form: dict, escribir, escoger) -> dict:
+def _lo_que_manda_el_navegador(form: dict, escribir, escoger, boton: dict | None = None) -> dict:
     """Los pares nombre=valor que mandaría el navegador: hidden con su `value`,
     texto con lo que `escribir(campo)` devuelva, select con `escoger(campo)` (la
     opción que la persona deja o cambia); un control sin nombre, deshabilitado
     o una opción deshabilitada no viajan."""
     datos = {}
+    if boton is not None:                   # el botón PULSADO manda su par (los demás no)
+        assert boton in form["botones"] and boton["name"], boton
+        datos[boton["name"]] = boton["value"] or ""
     vistos = [c["name"] for c in form["campos"] if c["name"] and not c.get("disabled")]
     assert len(vistos) == len(set(vistos)), f"nombre repetido en {form['accion']}: un dict lo colapsaría"
     for c in form["campos"]:
@@ -1307,7 +1432,7 @@ def _primera_habilitada(c):
 # vista -> (consulta, acciones POST exactas que tiene que tener, página = proyecto)
 # Las escrituras de la tarea (`/proyectos/tarea/...`, `/proyectos/{pid}/tareas`)
 # son de `tests/test_escrituras_tarea.py`; acá, solo las del proyecto.
-_SOLO_PROYECTO = re.compile(r"/proyectos/(nuevo|\d+/(nombre|area|responsable|estado))")
+_SOLO_PROYECTO = re.compile(r"/proyectos/(nuevo|\d+/(nombre|area|responsable|estado|cliente|personas))")
 
 
 def _del_proyecto(formularios):
@@ -1320,14 +1445,22 @@ def _del_proyecto(formularios):
 _V = ["/proyectos/nuevo"] * len(_pagina.AREAS)
 
 _VISTAS = {
-    "abierto": ({"p": 2}, ["/proyectos/2/area", "/proyectos/2/nombre", "/proyectos/2/responsable"] + _V),
-    "cerrado": ({"p": 4}, ["/proyectos/4/area", "/proyectos/4/estado", "/proyectos/4/nombre",
-                           "/proyectos/4/responsable"] + _V),
+    # Sin `/proyectos/N/area`: el «Mover a» se quitó de esta página (la maqueta no
+    # lo tiene; la ruta sigue y se prueba aparte, enviándole el formulario directo).
+    # Con `/cliente` y `/personas` (1-oct-2026, E7): el cliente de la cabecera y el
+    # renglón de agregar una persona al proyecto son formularios de verdad.
+    "abierto": ({"p": 2}, ["/proyectos/2/nombre", "/proyectos/2/responsable",
+                           "/proyectos/2/cliente", "/proyectos/2/personas"] + _V),
+    "cerrado": ({"p": 4}, ["/proyectos/4/estado", "/proyectos/4/nombre",
+                           "/proyectos/4/responsable", "/proyectos/4/cliente",
+                           "/proyectos/4/personas"] + _V),
     "confirmar": ({"p": 2, "confirmar": "cerrar"},
-                  ["/proyectos/2/area", "/proyectos/2/estado", "/proyectos/2/nombre",
-                   "/proyectos/2/responsable"] + _V),
+                  ["/proyectos/2/estado", "/proyectos/2/nombre",
+                   "/proyectos/2/responsable", "/proyectos/2/cliente",
+                   "/proyectos/2/personas"] + _V),
     "editar_nombre": ({"p": 2, "editar": "nombre"},
-                      ["/proyectos/2/area", "/proyectos/2/nombre", "/proyectos/2/responsable"] + _V),
+                      ["/proyectos/2/nombre", "/proyectos/2/responsable",
+                       "/proyectos/2/cliente", "/proyectos/2/personas"] + _V),
     # La página aparte (`?nuevo=`) es un formulario MÁS, el de siempre.
     "nuevo": ({"nuevo": "CDS"}, ["/proyectos/nuevo"] + _V),
 }
@@ -1343,7 +1476,7 @@ def test_cada_vista_tiene_exactamente_estos_formularios_de_escritura(mundo, gent
 
 @pytest.mark.parametrize("vista", sorted(_VISTAS))
 def test_cada_formulario_enviado_como_el_navegador_escribe_en_el_proyecto_de_la_pagina(
-        mundo, gente, monkeypatch, vista):
+        mundo, gente, monkeypatch, vista, noco):
     consulta, esperadas = _VISTAS[vista]
     nombres = {n: c for c, n in config.nombres_con_code().items()}
     casos = 0
@@ -1356,11 +1489,16 @@ def test_cada_formulario_enviado_como_el_navegador_escribe_en_el_proyecto_de_la_
         escoger = _la_marcada
         if clase == "resp":
             escoger = _otra_opcion
-        elif clase == "cambiar-grupo":
-            escoger = _otra_opcion
         elif clase == "nuevo":
             escoger = _primera_habilitada
         datos = _lo_que_manda_el_navegador(form, _escrito, escoger)
+        # Los formularios de Noco se envían con el botón de la coincidencia que se
+        # eligió (`noco_id`): la persona hace clic en «Cliente Uno» / «Persona Dos
+        # de Noco», que son botones que la búsqueda dibuja.
+        if clase == "elegir-persona":
+            datos["noco_id"] = "101"
+        elif clase == "agregar":
+            datos["noco_id"] = "102"
         antes = _todos(m)
         pid = consulta.get("p")
         r = _cliente(config.CHAT_ID_DUENO).post(form["accion"], data=datos, follow_redirects=False)
@@ -1393,9 +1531,14 @@ def test_cada_formulario_enviado_como_el_navegador_escribe_en_el_proyecto_de_la_
         elif clase == "resp":
             elegido = _otra_opcion(next(c for c in form["campos"] if c["tipo"] == "select"))
             assert fila["responsable_chat_id"] == nombres[_valor(elegido)], (vista, fila)
-        elif clase == "cambiar-grupo":
-            elegido = _otra_opcion(next(c for c in form["campos"] if c["tipo"] == "select"))
-            assert fila["area"] == _valor(elegido) and fila["area"] != antes[pid]["area"], (vista, fila)
+        elif clase == "elegir-persona":
+            assert (fila["cliente_noco_id"], fila["cliente_nombre"]) == (101, "Cliente Uno"), (vista, fila)
+        elif clase == "agregar":
+            assert fila == antes[pid], (vista, "agregar una persona NO cambia el proyecto")
+            filas = [dict(f) for f in m.con.execute("SELECT * FROM participantes")]
+            assert len(filas) == 1 and (filas[0]["proyecto_id"], filas[0]["tarea_id"], filas[0]["noco_id"],
+                                        filas[0]["nombre"], filas[0]["rol"]) == (
+                pid, None, 102, "Persona Dos de Noco", "Escrito en rol"), (vista, filas)
         elif clase == "en-linea" and "Reabrir" in textos:
             assert fila["estado"] == "activo" and antes[pid]["estado"] == "cerrado", (vista, fila)
         elif clase == "en-linea" and "Sí, cerrar" in textos:
@@ -1478,7 +1621,8 @@ def _controles_de_la_pagina(monkeypatch, gente) -> list[dict]:
                                   "auto": "data-auto" in form["atributos"],
                                   "tag": "textarea" if c["tipo"] == "textarea" else c["tipo"],
                                   "name": c["name"], "valor": _valor_del_campo(c),
-                                  "cuantos": len(de_la_persona)})
+                                  "cuantos": len(de_la_persona),
+                                  "con_sugerencias": bool(form.get("sugerencias"))})
 
     # Cada mundo se recorre ANTES de armar el siguiente: el doble de la base se
     # instala en `db.pool` y el segundo taparía al primero.
@@ -1495,10 +1639,14 @@ def test_hermanos_todos_los_controles_de_la_pagina_siguen_el_mismo_criterio(mund
     # regla de arriba, comprobada contra lo que se sirve.
     por_accion: dict[str, set] = {}
     for c in casos:
-        por_accion.setdefault(c["accion"], set()).add((c["cuantos"], c["auto"]))
+        por_accion.setdefault(c["accion"], set()).add((c["cuantos"], c["auto"], c["con_sugerencias"]))
     for accion, formas in por_accion.items():
-        for cuantos, auto in formas:
-            assert auto == (cuantos == 1), (accion, cuantos, auto)
+        for cuantos, auto, con_sugerencias in formas:
+            # Un formulario con UN solo campo se guarda solo, SALVO el que se envía
+            # con el botón de una coincidencia de Noco (agregar una persona: el
+            # campo es el «qué hace aquí», y sin elegir a quién guardarlo a medias
+            # no tendría sentido).
+            assert auto == (cuantos == 1 and not con_sugerencias), (accion, cuantos, auto)
     escenario = (
         "var casos = " + json.dumps(casos) + ";\n"
         "JSON.stringify(casos.map(function (caso) {\n"

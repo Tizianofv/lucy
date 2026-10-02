@@ -36,8 +36,13 @@ from config import TZ
 # único que SÍ hace falta aparte es `crear_pasos`, más abajo: `crear_desde_
 # interpretacion` no sirve para esto (no hay una "clasificación" de micro-
 # paso, y un pedido de "divide X en 4 pasos" crea VARIAS filas de una vez).
+# `participantes` (las personas de un proyecto o de una tarea; Lucy 1.0, E7,
+# diseño §5.4) entra SOLO para `borrar` y `deshacer`: así la huella `crear` o
+# `borrar` que dejan `db.agregar_participante` y `db.quitar_participante` se puede
+# deshacer. `editar` NO la escribe (cambiar el rol es quitar y volver a agregar,
+# así que no hay una segunda puerta para el rol): `editar` la rechaza.
 TABLAS = ("tareas", "eventos", "notas", "movimientos", "personas", "proyectos",
-          "lugares", "preferencias", "micro_pasos")
+          "lugares", "preferencias", "micro_pasos", "participantes")
 
 
 class NoDeNegocio(ValueError):
@@ -1436,6 +1441,8 @@ async def editar(
     """
     if tabla not in TABLAS:
         raise ValueError(f"Tabla no permitida: {tabla}")
+    if tabla == "participantes":
+        raise ValueError("Las personas de un proyecto no se editan: se quitan y se vuelven a agregar.")
 
     campos = {k: _adaptar(v) for k, v in cambios.items() if k not in NO_EDITABLES}
     if not campos:
@@ -2046,6 +2053,11 @@ async def deshacer(log_id: int) -> str:
             que = "lo que había creado"
 
         elif huella["accion"] == "borrar":
+            # Una persona quitada solo vuelve si nadie más la volvió a agregar al
+            # mismo sitio (los índices únicos de `participantes` lo impedirían).
+            if tabla == "participantes" and await db.persona_ya_esta_ahi(
+                    cur, huella["antes"] or {}):
+                raise ValueError("No lo deshice: esa persona ya está ahí.")
             # Restaurar una tarea archivada la hace REAPARECER dentro de su
             # proyecto: también es «recibir».
             if tabla == "tareas":

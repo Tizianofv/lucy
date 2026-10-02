@@ -1,5 +1,7 @@
-"""La página de proyectos contra la maqueta aprobada (1-oct-2026): cinco
-diferencias que se cerraron, cada una con lo que se puede comprobar de ella.
+"""La página de proyectos contra la maqueta aprobada (1-oct-2026, versión 19):
+las diferencias que se cerraron, cada una con lo que se puede comprobar de ella.
+(La parte de las tres columnas, el menú, la lista y la cabecera de la versión 19
+está en `tests/test_pagina_proyectos_v19.py`.)
 
   1. Los comentarios llevan la bolita con la inicial y el globo con borde.
   2. «Fecha límite» queda alineada con las fechas, con el margen de la ×.
@@ -65,6 +67,14 @@ class _Nodo:
         h = self.padre.hijos
         i = h.index(self)
         return h[i + 1] if i + 1 < len(h) else None
+
+    def ancestro_clase(self, clase):
+        n = self.padre
+        while n is not None:
+            if clase in n.clases:
+                return n
+            n = n.padre
+        return None
 
     def ancestro(self, tag):
         n = self.padre
@@ -197,7 +207,7 @@ def test_fecha_limite_deja_sitio_a_la_x_y_comparte_la_columna_con_las_fechas(mun
     # La columna de las fechas y la del título miden y se alinean igual.
     titulo_span, fecha = _regla(html, ".col-fecha span"), _regla(html, ".vence")
     assert titulo_span["min-width"] == fecha["min-width"] == "6.5rem"
-    assert titulo_span["text-align"] == fecha["text-align"] == "right"
+    assert titulo_span["text-align"] == "right" and fecha["align-items"] == "flex-end"
     # El título de columna va justo antes de la lista, una sola vez, con ese texto.
     assert html.count('<div class="col-fecha"><span>Fecha límite</span></div>\n<div class="tareas">') == 1
 
@@ -206,10 +216,10 @@ def test_fecha_limite_deja_sitio_a_la_x_y_comparte_la_columna_con_las_fechas(mun
 # 3. El color de cada grupo en modo oscuro
 # ═══════════════════════════════════════════════════════════════════════
 
-# Los tres tonos de la maqueta aprobada (`disenos/lucy-proyectos/maqueta/
-# proyectos.html`, líneas 13-18), copiados: color de `areas.color` -> su tono
-# claro para el fondo oscuro.
-MAQUETA_OSCURO = {"#0f7c74": "#3cc0b4", "#b5611a": "#e59a55", "#8a4a8f": "#c98ccf"}
+# Los tres colores de la maqueta aprobada, versión 19 (`disenos/lucy-proyectos/
+# maqueta-v19.html`, líneas 9 y 15), copiados: color del grupo -> el suyo para el
+# fondo oscuro.
+MAQUETA_OSCURO = {"#c8102e": "#ff6b6b", "#ef6c00": "#ffa04a", "#8a4a8f": "#c98ccf"}
 FONDO_OSCURO = "#18201d"                      # `--papel` en modo oscuro (la hoja)
 
 
@@ -233,7 +243,7 @@ def _contraste(a: str, b: str) -> float:
 @pytest.mark.parametrize("claro,maqueta", sorted(MAQUETA_OSCURO.items()))
 def test_la_regla_aclara_los_colores_de_la_maqueta_casi_igual_que_ella(claro, maqueta):
     oscuro = db.color_oscuro_de_grupo(claro)
-    assert max(abs(a - b) for a, b in zip(_rgb(oscuro), _rgb(maqueta))) <= 8, (claro, oscuro, maqueta)
+    assert max(abs(a - b) for a, b in zip(_rgb(oscuro), _rgb(maqueta))) <= 6, (claro, oscuro, maqueta)
     assert oscuro != claro
 
 
@@ -361,7 +371,16 @@ def _enlaces_de_nuevo(raiz: _Nodo) -> list[_Nodo]:
     return raiz.buscar("a", "nuevo-proy")
 
 
-def test_cada_enlace_de_proyecto_nuevo_lleva_pegada_su_ventanita_con_el_formulario_de_su_grupo(mundo, gente):
+def _ventana_de(enlace: _Nodo) -> _Nodo:
+    """La ventanita de un «+»: la única `<dialog>` del MISMO grupo (es donde la
+    busca el script: `closest(".grupo").querySelector("dialog.ventana")`)."""
+    grupo = enlace.ancestro_clase("grupo")
+    ventanas = grupo.buscar("dialog", "ventana")
+    assert len(ventanas) == 1
+    return ventanas[0]
+
+
+def test_cada_mas_de_proyecto_nuevo_tiene_su_ventanita_en_su_grupo_con_el_formulario_de_su_grupo(mundo, gente):
     for consulta in _vistas(mundo):
         raiz = arbol(ver(mundo, **consulta))
         enlaces = _enlaces_de_nuevo(raiz)
@@ -370,9 +389,11 @@ def test_cada_enlace_de_proyecto_nuevo_lleva_pegada_su_ventanita_con_el_formular
             continue
         assert [e.attrs["href"] for e in enlaces] == [f"/proyectos?nuevo={a['clave']}" for a in AREAS], consulta
         for enlace, area in zip(enlaces, AREAS):
-            ventana = enlace.hermano_siguiente()
-            # Es lo que el script usa: `nextElementSibling` del enlace.
-            assert ventana is not None and ventana.tag == "dialog" and ventana.clases == ["ventana"], consulta
+            # El «+» vive en el nombre del grupo, con su texto y su nombre para quien lee en voz alta.
+            assert enlace.clases == ["nuevo-proy", "mas"] and enlace.todo_el_texto() == "+", consulta
+            assert enlace.padre.tag == "h3" and enlace.attrs["aria-label"] == f"Proyecto nuevo en {area['clave']}"
+            ventana = _ventana_de(enlace)
+            assert ventana.tag == "dialog" and ventana.clases == ["ventana"], consulta
             assert "open" not in ventana.attrs and "style" not in ventana.attrs
             assert ventana.attrs["aria-label"] == f"Proyecto nuevo en {area['clave']}"
             assert [h.todo_el_texto() for h in ventana.buscar("h2")] == [f"Proyecto nuevo en {area['clave']}"]
@@ -380,12 +401,17 @@ def test_cada_enlace_de_proyecto_nuevo_lleva_pegada_su_ventanita_con_el_formular
             assert len(forms) == 1 and forms[0].attrs["action"] == "/proyectos/nuevo"
             assert forms[0].attrs["method"] == "post" and forms[0].clases == ["nuevo"]
             campos = {c.attrs.get("name"): c for c in forms[0].buscar() if c.attrs.get("name")}
-            assert sorted(campos) == ["area", "nombre", "responsable"], consulta
+            assert sorted(campos) == ["area", "cliente", "nombre", "responsable"], consulta
+            # El cliente es OPCIONAL (Tiziano, 1-oct-2026): escondido y vacío hasta que se elige uno.
+            assert campos["cliente"].attrs["type"] == "hidden" and campos["cliente"].attrs["value"] == ""
+            buscador = [i for i in forms[0].buscar("input") if "data-buscar-persona" in i.attrs]
+            assert len(buscador) == 1 and buscador[0].attrs["data-buscar-persona"] == "elegir"
+            assert "name" not in buscador[0].attrs                           # la caja de buscar no se envía
             assert campos["area"].attrs["value"] == area["clave"]            # el grupo de SU enlace
             assert campos["nombre"].attrs["maxlength"] == str(db.LARGO_NOMBRE_PROYECTO)
             opciones = [o.attrs.get("value") for o in campos["responsable"].buscar("option")]
             assert opciones == ["", "Persona Uno", "Persona Dos", "Code"], opciones
-            assert "Cliente" not in ventana.todo_el_texto()                   # el cliente llega con otro trabajo
+            assert "Cliente (opcional)" in ventana.todo_el_texto()
 
 
 def test_sin_grupo_no_ofrece_ventanita_ni_enlace(mundo):
@@ -402,7 +428,8 @@ def test_sin_javascript_el_enlace_sigue_llevando_a_la_pagina_aparte(mundo, gente
     ahí con su formulario. Ninguno de los dos depende del script."""
     mundo.proyecto(1, "Uno", area="CDS")
     html = ver(mundo)
-    assert '<a class="nuevo-proy" href="/proyectos?nuevo=ACD">+ Proyecto en ACD</a>' in html
+    assert ('<a class="nuevo-proy mas" href="/proyectos?nuevo=ACD" aria-label="Proyecto nuevo en ACD" '
+            'title="Proyecto nuevo en ACD">+</a>') in html
     aparte = ver(mundo, nuevo="ACD")
     assert "<h1>Proyecto nuevo en ACD</h1>" in aparte
     forms = [f for f in arbol(aparte).buscar("form", "nuevo") if f.ancestro("dialog") is None]
@@ -421,11 +448,12 @@ def test_la_ventanita_y_la_pagina_aparte_envian_lo_mismo_a_la_misma_ruta(mundo, 
     formularios = [f for f in _formularios_de(html) if f["accion"] == "/proyectos/nuevo"]
     assert len(formularios) == len(AREAS) + 1
     enviados = []
+    # (Las ventanitas traen además el cliente, escondido y vacío: es opcional.)
     for f in formularios:
         datos = _lo_que_manda_el_navegador(f, lambda c: "Un proyecto", _primera_habilitada)
         enviados.append(tuple(sorted(datos)))
         assert datos["nombre"] == "Un proyecto" and datos["responsable"] == "Persona Uno"
-    assert set(enviados) == {("area", "nombre", "responsable")}
+    assert set(enviados) == {("area", "cliente", "nombre", "responsable"), ("area", "nombre", "responsable")}
     assert sorted(_lo_que_manda_el_navegador(f, lambda c: "x", _primera_habilitada)["area"]
                   for f in formularios) == sorted([a["clave"] for a in AREAS] + ["ACD"])
 
@@ -434,8 +462,8 @@ def test_enviar_cada_ventanita_crea_el_proyecto_en_su_grupo(mundo, gente):
     for area in AREAS:
         raiz = arbol(ver(mundo))
         enlace = next(e for e in _enlaces_de_nuevo(raiz) if e.attrs["href"].endswith("=" + area["clave"]))
-        form = enlace.hermano_siguiente().buscar("form")[0]
-        datos = {c.attrs["name"]: c.attrs.get("value", "") for c in form.buscar("input")}
+        form = _ventana_de(enlace).buscar("form")[0]
+        datos = {c.attrs["name"]: c.attrs.get("value", "") for c in form.buscar("input") if "name" in c.attrs}
         datos["nombre"] = "Desde la ventanita " + area["clave"]
         datos["responsable"] = "Persona Dos"
         r = _cliente(config.CHAT_ID_DUENO).post(form.attrs["action"], data=datos, follow_redirects=False)
@@ -468,10 +496,14 @@ def test_la_hoja_de_la_ventanita_es_la_de_la_maqueta(mundo):
 # ── El guion: abre y cierra, nada más ──────────────────────────────────────
 
 _FALSOS = """
-function enlaceDeMentira(clase, hermano, ventana) {
-  return {nextElementSibling: hermano,
-          closest: function (s) {
+/* El grupo del «+»: solo sabe contestar `querySelector("dialog.ventana")`. */
+function grupoDeMentira(ventana) {
+  return {querySelector: function (s) { return s === "dialog.ventana" ? ventana : null; }};
+}
+function enlaceDeMentira(clase, grupo, ventana) {
+  return {closest: function (s) {
             if (s === "a." + clase) return this;
+            if (s === ".grupo") return grupo || null;
             if (s === "dialog") return ventana || null;
             return null; }};
 }
@@ -499,7 +531,7 @@ def _jxa(mundo, escenario: str) -> dict:
 
 @hay_osascript
 def test_js_el_clic_en_proyecto_nuevo_abre_la_ventanita_y_no_sigue_el_enlace(mundo):
-    r = _jxa(mundo, "var V = ventanaDeMentira(true); var L = enlaceDeMentira('nuevo-proy', V);"
+    r = _jxa(mundo, "var V = ventanaDeMentira(true); var L = enlaceDeMentira('nuevo-proy', grupoDeMentira(V));"
                     "oyentes.click(ev(L));"
                     "JSON.stringify({abiertas: V.abiertas, cerradas: V.cerradas, evitado: evitado,"
                     " esperando: cuantosTemporizadores()})")
@@ -508,9 +540,10 @@ def test_js_el_clic_en_proyecto_nuevo_abre_la_ventanita_y_no_sigue_el_enlace(mun
 
 @hay_osascript
 def test_js_si_el_navegador_no_sabe_de_dialog_el_enlace_sigue_a_la_pagina_aparte(mundo):
-    r = _jxa(mundo, "var V = ventanaDeMentira(false); var L = enlaceDeMentira('nuevo-proy', V);"
-                    "oyentes.click(ev(L)); var N = enlaceDeMentira('nuevo-proy', null);"
-                    "oyentes.click(ev(N));"
+    r = _jxa(mundo, "var V = ventanaDeMentira(false); var L = enlaceDeMentira('nuevo-proy', grupoDeMentira(V));"
+                    "oyentes.click(ev(L)); var N = enlaceDeMentira('nuevo-proy', grupoDeMentira(null));"
+                    "oyentes.click(ev(N)); var M = enlaceDeMentira('nuevo-proy', null);"
+                    "oyentes.click(ev(M));"
                     "JSON.stringify({abiertas: V.abiertas, evitado: evitado})")
     assert r == {"abiertas": 0, "evitado": 0}
 
@@ -533,8 +566,7 @@ def test_js_el_clic_en_el_titulo_de_una_tarea_sigue_funcionando_con_lo_nuevo(mun
     `test_escrituras_proyecto.py`); acá, que un clic en un enlace de la ventanita
     NO deja un temporizador del título y que el del título no abre ninguna."""
     r = _jxa(mundo, "var V = ventanaDeMentira(true);"
-                    "var T = {closest: function (s) { return (s === 'a[data-dbl]') ? this : null; },"
-                    " nextElementSibling: V};"
+                    "var T = {closest: function (s) { return (s === 'a[data-dbl]') ? this : null; }};"
                     "oyentes.click(ev(T));"
                     "JSON.stringify({abiertas: V.abiertas, esperando: cuantosTemporizadores()})")
     assert r == {"abiertas": 0, "esperando": 1}
@@ -548,13 +580,13 @@ def test_js_con_la_estructura_de_la_pagina_cada_enlace_abre_su_ventanita(mundo):
     casos = []
     for consulta in _vistas(mundo):
         for enlace in _enlaces_de_nuevo(arbol(ver(mundo, **consulta))):
-            sig = enlace.hermano_siguiente()
-            casos.append({"href": enlace.attrs["href"], "dialog": sig is not None and sig.tag == "dialog"})
+            grupo = enlace.ancestro_clase("grupo")
+            casos.append({"href": enlace.attrs["href"], "dialog": len(grupo.buscar("dialog", "ventana")) == 1})
     assert len(casos) >= len(AREAS) * 5 and all(c["dialog"] for c in casos), casos
     escenario = ("var casos = " + json.dumps(casos) + ";"
                  "JSON.stringify(casos.map(function (c) {"
                  "  var V = c.dialog ? ventanaDeMentira(true) : {};"
-                 "  var L = enlaceDeMentira('nuevo-proy', V);"
+                 "  var L = enlaceDeMentira('nuevo-proy', grupoDeMentira(c.dialog ? V : null));"
                  "  oyentes.click(ev(L));"
                  "  return {href: c.href, abiertas: V.abiertas || 0};}))")
     for dicho in _jxa(mundo, escenario):
@@ -562,9 +594,10 @@ def test_js_con_la_estructura_de_la_pagina_cada_enlace_abre_su_ventanita(mundo):
 
 
 def test_el_guion_de_la_ventanita_no_escribe_ni_decide_nada(mundo):
-    guion = re.sub(r"/\*.*?\*/", "", _guion_de(mundo), flags=re.S)
+    from test_escrituras_proyecto import sin_el_unico_pedido_permitido
+    guion = sin_el_unico_pedido_permitido(re.sub(r"/\*.*?\*/", "", _guion_de(mundo), flags=re.S))
     assert "showModal()" in guion and ".close()" in guion
     assert re.search(r"fetch\(|XMLHttpRequest|\.submit\(|FormData|localStorage|\.action", guion) is None
     # Sigue habiendo un oyente por evento: la ventanita se cuelga del clic que ya había.
     assert sorted(re.findall(r'addEventListener\("(\w+)"', guion)) == [
-        "change", "click", "dblclick", "focusout", "keydown", "submit"]
+        "change", "click", "dblclick", "focusout", "input", "keydown", "load", "submit"]

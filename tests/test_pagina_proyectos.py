@@ -486,13 +486,22 @@ def test_el_avance_y_los_contadores(mundo):
     assert "<b>1 vencida</b> · 1/4" in html          # la lista de la izquierda
 
 
-def test_un_proyecto_sin_cliente_ni_responsable_no_pinta_guiones(mundo):
+def _cliente_de_la_cabecera(html: str):
+    """El valor del campo «Cliente» de la cabecera (como en la maqueta, un campo
+    con el nombre; buscar en él cambia el cliente), o None si el campo no está."""
+    m = re.search(r'<label>Cliente <input class="campo-quien" type="text" name="pq" value="([^"]*)"', html)
+    return m.group(1) if m else None
+
+
+def test_un_proyecto_sin_cliente_ni_responsable_lo_dice_como_la_maqueta(mundo):
     mundo.proyecto(1, "Interno", area="IA")
     html = ver(mundo, p=1)
-    assert "Cliente:" not in html
-    assert "—" not in html and "Sin cliente" not in html
-    # Sin responsable no se inventa uno: el desplegable pide que se escoja.
-    assert '<option value="" selected disabled>Escoge…</option>' in html
+    # El campo del cliente sale vacío (con su «Buscar en Noco… (sin cliente)») y
+    # la lista de la izquierda dice «Sin cliente», igual que la maqueta.
+    assert _cliente_de_la_cabecera(html) == ""
+    assert "(sin cliente)" in html and '<span class="sub">Sin cliente</span>' in html
+    # Sin responsable no se inventa uno: el desplegable muestra «—» y pide que se escoja.
+    assert '<option value="" selected disabled>—</option>' in html
 
 
 def test_la_descripcion_del_proyecto_se_ve_si_la_hay_y_sale_escapada(mundo):
@@ -510,9 +519,9 @@ def test_si_falta_uno_de_los_dos_no_se_pinta_su_guion(mundo, gente):
     mundo.proyecto(2, "Solo cliente", area="CDS", cliente="Colegio")
     solo_responsable, solo_cliente = ver(mundo, p=1), ver(mundo, p=2)
     assert '<option value="Persona Dos" selected>' in solo_responsable
-    assert "Cliente:" not in solo_responsable and "—" not in solo_responsable
-    assert "Cliente: <b>Colegio</b>" in solo_cliente
-    assert 'selected disabled>Escoge…' in solo_cliente and "—" not in solo_cliente
+    assert _cliente_de_la_cabecera(solo_responsable) == "" and "selected disabled>—" not in solo_responsable
+    assert _cliente_de_la_cabecera(solo_cliente) == "Colegio"
+    assert 'selected disabled>—' in solo_cliente
 
 
 def test_cliente_y_responsable_salen_por_nombre_y_nunca_por_numero(mundo, gente):
@@ -522,13 +531,14 @@ def test_cliente_y_responsable_salen_por_nombre_y_nunca_por_numero(mundo, gente)
     mundo.tarea(11, "de Code", proyecto=1, responsable=config.CHAT_ID_CODE)
     mundo.tarea(12, "de alguien sin nombre", proyecto=1, responsable=555000111)
     html = ver(mundo, p=1)
-    assert "Cliente: <b>Colegio San Juan</b>" in html and '<option value="Persona Dos" selected>' in html
+    assert _cliente_de_la_cabecera(html) == "Colegio San Juan" and '<option value="Persona Dos" selected>' in html
     assert 'title="Responsable: Persona Uno"' in html and 'title="Responsable: Code"' in html
     for pid in (1, 2):
         pagina = ver(mundo, p=pid)
         for numero in (str(gente.rosi), str(gente.dueno), "555000111"):
             assert numero not in pagina, f"salió el número {numero} en /proyectos?p={pid}"
-    assert "selected disabled>Escoge…" in ver(mundo, p=2)   # sin nombre conocido, no se pinta
+    assert "selected disabled>555000111" not in ver(mundo, p=2)
+    assert "selected disabled>—" in ver(mundo, p=2)   # sin nombre conocido, no se pinta
 
 
 def test_la_lista_cuenta_cada_grupo_con_su_color_y_sus_proyectos(mundo):
@@ -553,16 +563,19 @@ def test_las_hechas_salen_plegadas_y_no_en_la_lista_principal(mundo):
     assert "1 hecha<" in html or "1 hecha</summary>" in html
 
 
-def test_una_pendiente_lleva_a_su_pantalla_y_lo_nuevo_es_un_enlace(mundo):
+def test_la_pagina_no_manda_a_otras_pantallas_para_abrir_o_agregar_una_tarea(mundo):
+    """La maqueta abre la tarea ahí mismo y agrega la tarea con su renglón: la
+    página ya no lleva a `/tareas/<id>` ni a `/tareas/nueva` (se quitaron el
+    «Abrir la pantalla de la tarea» y el «+ Agregar tarea con más opciones», 1-oct-2026)."""
     mundo.proyecto(1, "Abierto", area="CDS")
     mundo.proyecto(2, "Cerrado", area="CDS", estado="cerrado")
     mundo.tarea(10, "mi tarea", proyecto=1)
     html = ver(mundo, p=1)
-    assert 'href="/tareas/10"' not in html                  # el detalle está cerrado
-    assert 'href="/tareas/10"' in ver(mundo, p=1, t=10)     # y de ahí se abre su pantalla
-    assert 'href="/tareas/nueva?proyecto=1"' in html
+    assert 'href="/tareas/10"' not in html and 'href="/tareas/10"' not in ver(mundo, p=1, t=10)
+    assert "/tareas/nueva" not in html and "Abrir la pantalla" not in ver(mundo, p=1, t=10)
+    assert 'name="titulo"' in html                             # el renglón de «Nueva tarea» sigue
     cerrado = ver(mundo, p=2)
-    assert 'href="/tareas/nueva?proyecto=2"' not in cerrado
+    assert 'name="titulo"' not in cerrado
     assert "Proyecto cerrado: no se le agregan tareas." in cerrado
 
 
@@ -581,15 +594,19 @@ def test_la_pagina_no_promete_nada_que_no_hace(mundo):
     # TODA escritura es una de estas rutas (la lista EXACTA de cada vista está
     # en `tests/test_escrituras_proyecto.py` y `tests/test_escrituras_tarea.py`).
     permitidas = re.compile(
-        r"/proyectos/(nuevo|\d+/(nombre|area|responsable|estado|tareas)|"
-        r"tarea/\d+/(hecha|reabrir|titulo|borrar|responsable|comentar|comentario/\d+/editar))")
+        r"/proyectos/(nuevo|\d+/(nombre|area|responsable|estado|tareas|cliente|personas(/\d+/quitar)?)|"
+        r"tarea/\d+/(hecha|reabrir|titulo|borrar|responsable|comentar|comentario/\d+/editar|"
+        r"personas(/\d+/quitar)?))")
     for consulta in ({"p": 1}, {"p": 3}, {"g": "CDS"}, {"sin_grupo": 1}, {"nuevo": "CDS"}, {},
                      {"p": 1, "t": 10}):
         html = ver(mundo, **consulta)
         for prohibido in ('type="checkbox"', "borrar-x\" type", "data-hecha"):
             assert prohibido not in html, (consulta, prohibido)
         guiones = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
-        assert len(guiones) == 1 and not _JS_QUE_DECIDIRIA.search(guiones[0]), (consulta, guiones)
+        assert len(guiones) == 1, (consulta, guiones)
+        # (Con el único pedido que se le permite: el GET que busca personas de Noco.)
+        from test_escrituras_proyecto import sin_el_unico_pedido_permitido
+        assert not _JS_QUE_DECIDIRIA.search(sin_el_unico_pedido_permitido(guiones[0])), (consulta, guiones)
         for form in re.findall(r"<form[^>]*>", html):
             if 'method="post"' in form:
                 assert permitidas.fullmatch(re.search(r'action="([^"]*)"', form).group(1)), (consulta, form)
@@ -597,14 +614,11 @@ def test_la_pagina_no_promete_nada_que_no_hace(mundo):
                 assert 'action="/proyectos"' in form and 'method="get"' in form, (consulta, form)
 
 
-def test_se_siguen_pudiendo_cambiar_el_nombre_y_el_grupo_con_su_ruta_de_siempre(mundo):
+def test_se_sigue_pudiendo_cambiar_el_nombre_con_su_ruta_de_siempre(mundo):
     mundo.proyecto(1, "Mi proyecto", area="CDS")
     html = ver(mundo, p=1)
-    assert 'action="/proyectos/1/nombre"' in html and 'action="/proyectos/1/area"' in html
+    assert 'action="/proyectos/1/nombre"' in html
     assert f'maxlength="{db.LARGO_NOMBRE_PROYECTO}"' in html
-    for grupo in ("CDS", "ACD", "IA"):
-        assert f'<option value="{grupo}"' in html
-    assert re.search(r'<option value="CDS" selected>', html)
 
 
 def test_los_comentarios_se_leen_con_nombre_fecha_y_marca_de_editado(mundo, gente):
@@ -615,9 +629,9 @@ def test_los_comentarios_se_leen_con_nombre_fecha_y_marca_de_editado(mundo, gent
                      editado=_dia(0, 10))
     mundo.comentario(52, 10, gente.dueno, "borrado, no sale", borrado=True)
     cerrado = ver(mundo, p=1)
-    assert "2 comentarios" in cerrado and "Le escribí a Luis" not in cerrado   # el detalle está cerrado
+    assert "2 coment." in cerrado and "Le escribí a Luis" not in cerrado   # el detalle está cerrado
     html = ver(mundo, p=1, t=10)
-    assert "2 comentarios" in html
+    assert "2 coment." in html
     assert "<b>Persona Dos</b>" in html and "Le escribí a Luis" in html
     assert "borrado, no sale" not in html
     assert "Segundo <b>comentario</b>" not in html and "Segundo &lt;b&gt;comentario&lt;/b&gt;" in html

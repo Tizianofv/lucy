@@ -31,6 +31,7 @@ import db.sin_preparadas  # noqa: F401
 # `puede_ser_responsable` viene de config por lo mismo: es LA puerta de quién
 # puede quedar con una tarea pendiente, y tiene que ser la misma para la ruta
 # del panel y para la escritura de acá. Dos copias del criterio se separan.
+import config as _config
 from config import (CHAT_ID_CODE, CHAT_ID_DUENO, DATABASE_URL, TZ,
                     nombres_con_code, puede_ser_responsable)
 
@@ -2701,19 +2702,18 @@ def color_de_grupo(color) -> str:
 
 # El tono de un grupo para el modo oscuro SALE DEL MISMO `areas.color`, no de una
 # lista escrita grupo por grupo: la regla es una línea. Se pasa el color a OKLCH
-# (claridad, color y tono), se conserva el TONO, la claridad sube a
-# `_OSCURO_CLARIDAD` (un color que ya es más claro se deja tal cual) y el color se
-# acota a [`_OSCURO_COLOR_MIN`, `_OSCURO_COLOR_MAX`]; un gris queda gris. Medido
-# el 1-oct-2026 contra los tres tonos claros de la maqueta aprobada
-# (#0f7c74 -> #3cc0b4, #b5611a -> #e59a55, #8a4a8f -> #c98ccf): la diferencia
-# mayor en un canal es 7 de 255 (`tests/test_pagina_proyectos_maqueta.py`). Un
-# color que al aclararlo se sale de la gama de la pantalla se recorta y su tono
-# puede correrse (medido en una rejilla de 864 colores, hasta unos 25 grados
-# de tono HSL); el contraste del resultado contra el fondo oscuro de la página
-# no baja de 6.6 contra 1 en esa rejilla; la prueba exige 4.5 o más.
-_OSCURO_CLARIDAD = 0.735
-_OSCURO_COLOR_MIN, _OSCURO_COLOR_MAX = 0.11, 0.125
-_OSCURO_GRIS = 0.02
+# (claridad, color y tono), se conservan el TONO y el COLOR, y la claridad sube
+# `_OSCURO_HACIA_BLANCO` del camino que le falta hasta el blanco, sin quedar por
+# debajo de `_OSCURO_PISO` (para que un color muy oscuro también se lea sobre el
+# fondo oscuro). Medido el 1-oct-2026 contra los tres tonos oscuros de la
+# maqueta aprobada, versión 19 (#c8102e -> #ff6b6b, #ef6c00 -> #ffa04a,
+# #8a4a8f -> #c98ccf): la diferencia mayor en un canal es 6 de 255
+# (`tests/test_pagina_proyectos_maqueta.py` la vuelve a medir). Un color que al
+# aclararlo se sale de la gama de la pantalla se recorta y su tono puede
+# correrse; el contraste del resultado contra el fondo oscuro de la página lo
+# exige la misma prueba en una rejilla de colores (4.5 o más).
+_OSCURO_HACIA_BLANCO = 0.44
+_OSCURO_PISO = 0.70
 
 
 def _oklch_de(rgb: tuple) -> tuple:
@@ -2757,11 +2757,8 @@ def color_oscuro_de_grupo(color) -> str:
     else:
         return color
     claridad, croma, tono = _oklch_de(tuple(int(digitos[i:i + 2], 16) / 255 for i in (0, 2, 4)))
-    if claridad >= _OSCURO_CLARIDAD:
-        return "#" + digitos.lower()               # ya es clara: sobre el fondo oscuro se lee tal cual
-    if croma >= _OSCURO_GRIS:
-        croma = min(max(croma, _OSCURO_COLOR_MIN), _OSCURO_COLOR_MAX)
-    rgb = _rgb_de(_OSCURO_CLARIDAD, croma, tono)
+    nueva = max(claridad + _OSCURO_HACIA_BLANCO * (1 - claridad), _OSCURO_PISO)
+    rgb = _rgb_de(nueva, croma, tono)
     return "#" + "".join(f"{round(c * 255):02x}" for c in rgb)
 
 
@@ -2853,7 +2850,7 @@ def _resumen(pendientes: list[dict], otras: list[dict]) -> dict:
 
 
 def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
-                 hoy: date) -> dict:
+                 hoy: date, participantes=()) -> dict:
     """El modelo de la página de proyectos, con todas las decisiones.
 
     `huellas` es `[(proyecto_id, accion, ts)]`; `comentarios`, las filas de
@@ -2863,6 +2860,17 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
     tiene grupo (o su proyecto está en la papelera) va a «Sin grupo»—. Nada se
     pierde por no encajar: el cubo que se ve es el último.
     """
+    # Las personas de cada proyecto y de cada tarea (`participantes`, ya sin las
+    # quitadas): por NOMBRE (el de Noco al agregarlas), nunca un número de chat.
+    personas_de_proyecto: dict[int, list] = {}
+    personas_de_tarea: dict[int, list] = {}
+    for x in participantes:
+        ficha = {"id": x["id"], "nombre": x["nombre"], "rol": x["rol"]}
+        if x["proyecto_id"] is not None:
+            personas_de_proyecto.setdefault(x["proyecto_id"], []).append(ficha)
+        else:
+            personas_de_tarea.setdefault(x["tarea_id"], []).append(ficha)
+
     por_tarea: dict[int, list] = {}
     for c in comentarios:
         por_tarea.setdefault(c["tarea_id"], []).append({
@@ -2880,6 +2888,7 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
     sueltas_por_area: dict = {}
     for t in tareas:
         fila = _fila_de_tarea(t, hoy, nombres, por_tarea)
+        fila["personas"] = personas_de_tarea.get(t["id"], [])
         pid = t["proyecto_id"]
         if pid in vivos:
             del_proyecto[pid].append(fila)
@@ -2904,6 +2913,7 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
             "estado_conocido": p["estado"] in ESTADOS_PROYECTO,
             "estado_calculado": estado_calculado(p["estado"], resumen["n_hechas"]),
             "cliente": (p["cliente_nombre"] or None),
+            "personas": personas_de_proyecto.get(pid, []),
             "responsable": nombres.get(p["responsable_chat_id"]),
             "pendientes": pendientes, "otras": otras, **resumen,
             "ultimo": ultimo, "dias_sin_movimiento": dias,
@@ -2932,7 +2942,7 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
 
 async def pagina_de_proyectos(hoy: date | None = None) -> dict:
     """Trae lo que hace falta de la base y lo entrega a `armar_pagina`. Cuatro
-    lecturas, ninguna escribe. (Necesita las columnas de la migración
+    lecturas (cinco con las personas), ninguna escribe. (Necesita las columnas de la migración
     `2026-10-02_proyectos_responsable_cliente_participantes.sql`, aplicada en
     producción el 1-oct-2026.)"""
     hoy = hoy or hoy_rd()
@@ -2985,8 +2995,16 @@ async def pagina_de_proyectos(hoy: date | None = None) -> dict:
              ORDER BY c.creado_en, c.id
             """)
         comentarios = list(await cur.fetchall())
+        await cur.execute(
+            """
+            SELECT id, proyecto_id, tarea_id, noco_id, nombre, rol
+              FROM participantes
+             WHERE borrado_en IS NULL
+             ORDER BY creado_en, id
+            """)
+        participantes = list(await cur.fetchall())
     return armar_pagina(grupos, proyectos, tareas, huellas, comentarios,
-                        nombres_con_code(), hoy)
+                        nombres_con_code(), hoy, participantes)
 
 
 async def derivaciones() -> dict[int, int]:
@@ -3889,6 +3907,24 @@ async def marcar_aviso_atraso_code(tarea_id: int) -> None:
             (tarea_id,))
 
 
+async def _ficha_de_noco_que_vale(noco_id, leer_persona, quien: str) -> tuple:
+    """`(id, nombre)` de la ficha de Noco con ese Id, VUELTA A LEER de Noco con
+    `leer_persona` (`noco_lectura.persona`): el nombre que se guarda es el que Noco
+    devuelve, nunca uno que haya mandado el navegador (diseño §4, G6). Es la pieza
+    común de `poner_cliente` y de `agregar_participante`. Una ficha que no existe,
+    o que vuelve con otro Id o sin nombre, es un ValueError y no se escribe nada;
+    si Noco no contesta, la excepción de `leer_persona` sube tal cual."""
+    if isinstance(noco_id, bool) or not isinstance(noco_id, int) or noco_id <= 0:
+        raise ValueError(f"{quien} tiene que ser el Id de una ficha de Noco")
+    ficha = await leer_persona(noco_id)
+    if not ficha:
+        raise ValueError("esa ficha no existe en Noco")
+    nombre = ficha.get("nombre")
+    if ficha.get("id") != noco_id or not isinstance(nombre, str) or not nombre.strip():
+        raise ValueError("Noco no devolvió una ficha que valga para ese Id")
+    return noco_id, nombre.strip()
+
+
 async def poner_cliente(proyecto_id: int, noco_id: int | None, *,
                         leer_persona) -> bool:
     """Pone (o quita) el cliente de UN proyecto. Devuelve si cambió algo.
@@ -3915,15 +3951,8 @@ async def poner_cliente(proyecto_id: int, noco_id: int | None, *,
         raise ValueError("ese proyecto no existe o ya no está")
     nuevo_id, nuevo_nombre = None, None
     if noco_id is not None:
-        if isinstance(noco_id, bool) or not isinstance(noco_id, int) or noco_id <= 0:
-            raise ValueError("el cliente tiene que ser el Id de una ficha de Noco")
-        ficha = await leer_persona(noco_id)
-        if not ficha:
-            raise ValueError("esa ficha no existe en Noco")
-        nombre = ficha.get("nombre")
-        if ficha.get("id") != noco_id or not isinstance(nombre, str) or not nombre.strip():
-            raise ValueError("Noco no devolvió una ficha que valga para ese Id")
-        nuevo_id, nuevo_nombre = noco_id, nombre.strip()
+        nuevo_id, nuevo_nombre = await _ficha_de_noco_que_vale(
+            noco_id, leer_persona, "el cliente")
 
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -3950,6 +3979,171 @@ async def poner_cliente(proyecto_id: int, noco_id: int | None, *,
              json.dumps({"cliente_noco_id": nuevo_id,
                          "cliente_nombre": nuevo_nombre}, ensure_ascii=False)))
         return True
+
+
+# LAS PERSONAS DE UN PROYECTO O DE UNA TAREA (Lucy 1.0, E7; diseño §5.4). Una sola
+# tabla (`participantes`) y DOS puertas, las únicas que la escriben:
+# `agregar_participante` y `quitar_participante`. El rol («qué hace aquí») es
+# texto libre de 1 a `LARGO_ROL_PARTICIPANTE` caracteres (el `CHECK` de la tabla
+# dice lo mismo; acá se rechaza antes con un motivo legible).
+LARGO_ROL_PARTICIPANTE = 80
+
+
+class ParticipanteNoVale(ValueError):
+    """Una persona que no se puede agregar o quitar. `clave` dice por qué
+    (`sitio`, `rol`, `repetida`, `no_esta`, `quien`) para que la pantalla lo
+    traduzca sin adivinar por el texto. Nunca repite lo que escribió la persona."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+def _sitio_de_participante(donde) -> tuple:
+    """`("proyecto"|"tarea", id)` o ParticipanteNoVale("sitio")."""
+    try:
+        sitio, sitio_id = donde
+    except (TypeError, ValueError):
+        raise ParticipanteNoVale("sitio", "esa persona va en un proyecto o en una tarea") from None
+    if (sitio not in ("proyecto", "tarea") or isinstance(sitio_id, bool)
+            or not isinstance(sitio_id, int)):
+        raise ParticipanteNoVale("sitio", "esa persona va en un proyecto o en una tarea")
+    return sitio, sitio_id
+
+
+def _quien_escribe(chat_id) -> int:
+    if (isinstance(chat_id, bool) or not isinstance(chat_id, int)
+            or chat_id not in _config.CHAT_IDS_PERMITIDOS):
+        raise ParticipanteNoVale("quien", "solo quien entra al panel puede cambiar las personas")
+    return chat_id
+
+
+async def agregar_participante(donde, noco_id: int, rol: str, chat_id: int, *,
+                               leer_persona) -> dict:
+    """Agrega UNA persona de Noco a un proyecto o a una tarea. Devuelve su fila.
+    (Lucy 1.0, E7, G7.)
+
+    `donde` es `("proyecto", id)` o `("tarea", id)`. TODO LO QUE DECIDE ESTÁ
+    AQUÍ, una vez:
+      · quién escribe: `chat_id` es de quien entra al panel (viene de la sesión,
+        nunca de un campo del formulario) y queda en `creado_por_chat_id`;
+      · la persona: el nombre se VUELVE A LEER de Noco con `leer_persona(noco_id)`
+        (sin valor por omisión, para que no haya camino que guarde sin leerla) y
+        se guarda el que Noco devuelve; Lucy solo LEE de Noco;
+      · el rol: no vacío y de a lo sumo `LARGO_ROL_PARTICIPANTE` caracteres;
+      · el sitio: el proyecto o la tarea tienen que estar VIVOS;
+      · la misma persona no entra dos veces en el mismo sitio (los índices únicos
+        de la tabla dicen lo mismo; acá se comprueba antes, con su motivo).
+    UNA TRANSACCIÓN: el `INSERT` y su huella `crear participantes`. Agregar una
+    persona NO cuenta como movimiento del proyecto (diseño §5.4): la huella es
+    de la tabla `participantes`, y el «último movimiento» solo mira proyectos,
+    tareas y comentarios.
+    """
+    sitio, sitio_id = _sitio_de_participante(donde)
+    chat_id = _quien_escribe(chat_id)
+    if not isinstance(rol, str) or not 1 <= len(rol.strip()) <= LARGO_ROL_PARTICIPANTE:
+        raise ParticipanteNoVale(
+            "rol", f"«qué hace aquí» va de 1 a {LARGO_ROL_PARTICIPANTE} caracteres")
+    rol = rol.strip()
+    noco_id, nombre = await _ficha_de_noco_que_vale(noco_id, leer_persona, "la persona")
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        if sitio == "proyecto":
+            await cur.execute("SELECT id FROM proyectos WHERE id = %s AND borrado_en IS NULL",
+                              (sitio_id,))
+        else:
+            await cur.execute("SELECT id FROM tareas WHERE id = %s AND borrado_en IS NULL",
+                              (sitio_id,))
+        if await cur.fetchone() is None:
+            raise ParticipanteNoVale("sitio", "ese proyecto o esa tarea ya no está")
+        if sitio == "proyecto":
+            await cur.execute(
+                "SELECT id FROM participantes WHERE proyecto_id = %s AND noco_id = %s "
+                "AND borrado_en IS NULL", (sitio_id, noco_id))
+        else:
+            await cur.execute(
+                "SELECT id FROM participantes WHERE tarea_id = %s AND noco_id = %s "
+                "AND borrado_en IS NULL", (sitio_id, noco_id))
+        if await cur.fetchone() is not None:
+            raise ParticipanteNoVale("repetida", "esa persona ya está ahí")
+        if sitio == "proyecto":
+            await cur.execute(
+                """
+                INSERT INTO participantes (proyecto_id, noco_id, nombre, rol, creado_por_chat_id)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING *
+                """, (sitio_id, noco_id, nombre, rol, chat_id))
+        else:
+            await cur.execute(
+                """
+                INSERT INTO participantes (tarea_id, noco_id, nombre, rol, creado_por_chat_id)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING *
+                """, (sitio_id, noco_id, nombre, rol, chat_id))
+        nueva = await cur.fetchone()
+        await cur.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo)
+            VALUES ('panel', 'crear', 'participantes', %s, NULL, %s,
+                    'persona agregada desde el panel de proyectos')
+            """,
+            (nueva["id"], json.dumps(nueva, default=str, ensure_ascii=False)))
+        return dict(nueva)
+
+
+async def persona_ya_esta_ahi(cur, antes: dict) -> bool:
+    """¿Hay otra fila VIVA de `participantes` con la misma persona de Noco en el
+    mismo sitio que la fila `antes`? (`crud.deshacer` la mira antes de devolver a
+    una persona quitada: los índices únicos de la tabla no dejan dos.)"""
+    if antes.get("proyecto_id") is not None:
+        await cur.execute(
+            "SELECT id FROM participantes WHERE noco_id = %s AND proyecto_id = %s "
+            "AND borrado_en IS NULL", (antes.get("noco_id"), antes["proyecto_id"]))
+    else:
+        await cur.execute(
+            "SELECT id FROM participantes WHERE noco_id = %s AND tarea_id = %s "
+            "AND borrado_en IS NULL", (antes.get("noco_id"), antes.get("tarea_id")))
+    return await cur.fetchone() is not None
+
+
+async def quitar_participante(participante_id: int, donde, chat_id: int) -> dict:
+    """Quita (soft-delete) a UNA persona de un proyecto o de una tarea y devuelve
+    su fila de antes. (Lucy 1.0, E7.) La PERTENENCIA la decide esta puerta: la
+    persona tiene que ser de ESE sitio (`donde`), así que el id de una persona de
+    otro proyecto, o de una tarea, no se puede quitar desde éste. Una ya quitada
+    es `ParticipanteNoVale("no_esta")`. Nunca hay `DELETE`: `borrado_en` y
+    `borrado_por_chat_id`, más la huella `borrar participantes` con el antes, en
+    la misma transacción. Tampoco cuenta como movimiento."""
+    sitio, sitio_id = _sitio_de_participante(donde)
+    chat_id = _quien_escribe(chat_id)
+    if isinstance(participante_id, bool) or not isinstance(participante_id, int):
+        raise ParticipanteNoVale("no_esta", "esa persona ya no está ahí")
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        if sitio == "proyecto":
+            await cur.execute(
+                "SELECT * FROM participantes WHERE id = %s AND proyecto_id = %s "
+                "AND borrado_en IS NULL", (participante_id, sitio_id))
+        else:
+            await cur.execute(
+                "SELECT * FROM participantes WHERE id = %s AND tarea_id = %s "
+                "AND borrado_en IS NULL", (participante_id, sitio_id))
+        antes = await cur.fetchone()
+        if antes is None:
+            raise ParticipanteNoVale("no_esta", "esa persona ya no está ahí")
+        await cur.execute(
+            "UPDATE participantes SET borrado_en = now(), borrado_por_chat_id = %s "
+            "WHERE id = %s", (chat_id, participante_id))
+        await cur.execute(
+            """
+            INSERT INTO log_acciones
+              (actor, accion, tabla, registro_id, antes, despues, motivo)
+            VALUES ('panel', 'borrar', 'participantes', %s, %s, NULL,
+                    'persona quitada desde el panel de proyectos')
+            """,
+            (participante_id, json.dumps(antes, default=str, ensure_ascii=False)))
+        return dict(antes)
 
 
 async def asignar_responsable(tarea_id: int, chat_id: int | None) -> bool:

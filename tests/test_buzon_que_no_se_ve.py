@@ -3981,14 +3981,23 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `tests/test_api_code_comentarios.py` (nuevo); VIGILADOS sin cambio: se
     # tocaron `db/db.py`, `web/api_code.py`, `web/app.py` y `config.py`, ya
     # vigilados. Junta con main (medida corriendo la prueba): 119 en disco, 74 EXENTOS, 45 VIGILADOS.
+    # 1-oct-2026, rama `trabajo/igual-maqueta` (la página igual a la maqueta
+    # v19): +1 en disco y +1 EXENTO por `tests/test_pagina_proyectos_v19.py`
+    # (nuevo); VIGILADOS sin cambio: se tocó `db/db.py`, ya vigilado. Medida
+    # corriendo la prueba: 119 en disco, 74 EXENTOS, 45 VIGILADOS.
+    # 1-oct-2026, rama `trabajo/igual-maqueta` (E7, personas y cliente): +1 en
+    # disco y +1 EXENTO por `tests/test_personas_y_cliente.py` (nuevo); VIGILADOS
+    # sin cambio: se tocaron `db/db.py` y `web/app.py`, ya vigilados. Medida
+    # corriendo la prueba: 120 en disco, 75 EXENTOS, 45 VIGILADOS.
+    # Junta de `trabajo/igual-maqueta` con main (medida corriendo la prueba): 121 en disco, 76 EXENTOS, 45 VIGILADOS.
     # 1-oct-2026, rama `trabajo/respaldo-destino`: +1 en disco y +1 EXENTO por
     # `tests/test_respaldo_una_sola_carpeta.py` (nuevo); VIGILADOS sin cambio:
-    # se tocaron `db/backup.py` y `tools/verificar_respaldo.py`. Medida
-    # corriendo la prueba: 120 en disco, 75 EXENTOS, 45 VIGILADOS.
-    assert medido == {"en disco": 120, "exentos": 75, "vigilados": 45}, (
+    # se tocaron `db/backup.py` y `tools/verificar_respaldo.py`.
+    # Junta de `trabajo/respaldo-destino` con main (medida corriendo la prueba): 122 en disco, 77 EXENTOS, 45 VIGILADOS.
+    assert medido == {"en disco": 122, "exentos": 77, "vigilados": 45}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "1-oct-2026 (rama respaldo-destino) era {'en disco': 120, "
-        "'exentos': 75, 'vigilados': 45}. La aserción de fondo —cero "
+        "1-oct-2026 (junta de respaldo-destino con main) era {'en disco': 122, "
+        "'exentos': 77, 'vigilados': 45}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "
