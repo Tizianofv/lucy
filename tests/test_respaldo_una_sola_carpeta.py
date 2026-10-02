@@ -343,8 +343,7 @@ def test_guion_con_respaldo_verificado_vacia_la_papelera(tmp_path):
 
 def test_guion_con_verificador_en_rojo_no_vacia_la_papelera(tmp_path):
     casa, res, marcas, *_ = _correr_guion(tmp_path, verificador=1)
-    assert not any(m.startswith("vacio_papelera") for m in marcas), marcas
-    assert "verifico" in marcas
+    assert marcas == ["recibio_url", "verifico"], marcas
     assert res.returncode == 1, (res.returncode, res.stderr)
 
 
@@ -363,8 +362,11 @@ def test_guion_no_deja_nada_en_el_home_falso_salvo_su_registro(tmp_path):
     LO QUE NO VE (frontera, medida por testigos, no se persigue):
       · la clave codificada o transformada DENTRO del registro, de stdout o de
         stderr (de ahí solo se vigila el texto literal de la clave y del host);
-      · el contenido de `lucy-respaldo.log` y `marcas.txt` más allá de eso
-        (`llamadas_railway.txt` y `marcas.txt` se comparan exactos aparte);
+      · el contenido de `lucy-respaldo.log` más allá de eso, y el modo
+        (permisos) de los tres archivos permitidos (`marcas.txt` y
+        `llamadas_railway.txt` se comparan exactos aparte, con el verificador
+        en 0 y en 1);
+      · la raíz del HOME falso en sí (su existencia y su modo);
       · una escritura con ruta absoluta fuera del HOME falso y de `TMPDIR`
         (un `/tmp/...` escrito a mano, `/var/...`, etc.);
       · el dueño y las fechas."""
