@@ -238,10 +238,11 @@ def opciones_de_responsable() -> tuple[tuple[str, str], ...]:
 # — un `:` DENTRO del permiso (`tareas:listar`) es parte del nombre, así que
 # el separador entre `quien` y su lista es `=`, no `:`:
 #
-#     PERMISOS_API_CODE="sala_mac=tareas:listar+tareas:cerrar+tareas:tomar, sala_nube=tareas:listar+tareas:cerrar+tareas:tomar, natalia=alertas:crear"
+#     PERMISOS_API_CODE="sala_mac=tareas:listar+tareas:cerrar+tareas:tomar+comentarios:leer+comentarios:escribir, sala_nube=tareas:listar+tareas:cerrar+tareas:tomar+comentarios:leer+comentarios:escribir, natalia=alertas:crear"
 #
-# Los permisos que YA EXISTEN en el código, hoy (parte 3 del plan): `tareas:
-# listar`, `tareas:cerrar` y `tareas:tomar` tienen una ruta que los pida
+# Los permisos que YA EXISTEN en el código, hoy (parte 3 del plan, más los
+# comentarios del 1-oct-2026): `tareas:listar`, `tareas:cerrar`, `tareas:tomar`,
+# `comentarios:leer` y `comentarios:escribir` tienen una ruta que los pida
 # (`web/api_code.py`). `alertas:crear` es un NOMBRE ya reservado para una
 # parte futura del mismo diseño (§B, crear/reusar alerta técnica) —
 # declararlo acá no abre ninguna ruta que no exista.

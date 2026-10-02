@@ -9,9 +9,10 @@ panel es para una persona con un chat de Telegram abriendo un navegador; la
 sala y Natalia son programas llamando una API, y no tienen ninguna de las
 dos cosas.
 
-RUTAS DE ESTA PARTE, y solo éstas: `GET /tareas` (listar) y
-`POST /tareas/{id}/cerrar`. NO hay ruta de "tomar" ni de "alertas": esas
-partes del diseño (§D, §B) todavía no se construyeron, y una ruta a medias
+RUTAS DE ESTA PARTE, y solo éstas: `GET /tareas` (listar),
+`POST /tareas/{id}/cerrar`, `POST /tareas/{id}/tomar` y (1-oct-2026) los
+comentarios de una tarea de Code: `GET`/`POST /tareas/{id}/comentarios`. NO
+hay ruta de "alertas": esa parte del diseño (§B) todavía no se construyó, y una ruta a medias
 —que exista pero siempre falle, o que acepte un permiso que nada usa— es
 peor que no tenerla: alguien podría configurarle una clave a Natalia con
 "alertas:crear" y pensar que ya funciona.
@@ -34,8 +35,10 @@ import asyncio
 import hmac
 import logging
 import time
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 
 import config
 import db.db as db
@@ -229,6 +232,66 @@ async def tomar_tarea(
             detail="no se tomó: no existe, no está pendiente, no es una "
                    "tarea del grupo IA asignada a Code, o ya estaba tomada")
     return {"tomada": True}
+
+
+# ── Los comentarios de una tarea de Code (1-oct-2026) ─────────────────────
+#
+# La sala lee y escribe SUS comentarios; Tiziano los lee en el panel de
+# Proyectos. Dos permisos propios (`comentarios:leer`, `comentarios:escribir`).
+# Quién decide que la tarea es de Code es `db.tarea_de_code`, la misma puerta
+# para leer y para escribir. NADA sale por Telegram: escribir un comentario no
+# avisa a nadie (ni en la base ni acá). El autor sale por NOMBRE, nunca un
+# número de chat.
+
+class _ComentarioNuevo(BaseModel):
+    texto: str
+
+
+def _fecha(valor) -> str | None:
+    return valor.isoformat() if isinstance(valor, datetime) else (
+        None if valor is None else str(valor))
+
+
+@router.get("/tareas/{tid}/comentarios")
+async def leer_comentarios(
+    tid: int, quien: str = Depends(requiere("comentarios:leer"))
+) -> dict:
+    filas = await db.comentarios_de_tarea_de_code(tid)
+    if filas is None:
+        raise HTTPException(
+            status_code=404,
+            detail="no es una tarea del grupo IA asignada a Code, o no existe")
+    nombres = config.nombres_con_code()
+    return {"comentarios": [
+        {"id": f["id"],
+         "autor": nombres.get(f["autor_chat_id"], "sin nombre"),
+         "creado_en": _fecha(f["creado_en"]),
+         "texto": f["texto"],
+         "editado": f["editado_en"] is not None}
+        for f in filas]}
+
+
+@router.post("/tareas/{tid}/comentarios")
+async def comentar_tarea_de_code(
+    tid: int, cuerpo: _ComentarioNuevo,
+    quien: str = Depends(requiere("comentarios:escribir"))
+) -> dict:
+    """Agrega un comentario de Code a la tarea `tid`. Mismo texto válido que
+    el panel (`db.texto_de_comentario`); el autor es siempre
+    `config.CHAT_ID_CODE`, nunca algo que mande quien llama."""
+    texto = db.texto_de_comentario(cuerpo.texto)
+    if texto is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"el texto no puede quedar vacío ni pasar de "
+                   f"{db.LARGO_COMENTARIO} caracteres")
+    cid = await db.comentar_tarea(tid, config.CHAT_ID_CODE, texto)
+    if cid is None:
+        raise HTTPException(
+            status_code=404,
+            detail="no se comentó: no es una tarea del grupo IA asignada a "
+                   "Code, o no existe")
+    return {"comentado": True, "id": cid}
 
 
 def rutas_registradas(app) -> list[tuple[str, str, str]]:
