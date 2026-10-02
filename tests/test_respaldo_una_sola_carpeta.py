@@ -21,6 +21,7 @@ import gzip
 import hashlib
 import os
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -303,7 +304,8 @@ def _correr_guion(tmp_path, verificador=0, railway_falla=False):
 def _foto(raiz):
     """Foto de un árbol por VALORES: por cada ruta (la lista la da `find`, no
     un barrido de Python), su tipo, su tamaño, el hash de su contenido si es
-    archivo y el destino si es enlace simbólico. {ruta relativa: valor}."""
+    archivo, el destino si es enlace simbólico y el modo (permisos).
+    {ruta relativa: valor}. NO guarda dueño ni fechas."""
     r = subprocess.run(["find", str(raiz), "-print0"], capture_output=True)
     assert r.returncode == 0, r.stderr
     foto = {}
@@ -313,11 +315,11 @@ def _foto(raiz):
         p = Path(ruta)
         rel = str(p.relative_to(raiz))
         if p.is_symlink():
-            foto[rel] = ("enlace", os.readlink(p))
+            foto[rel] = ("enlace", os.readlink(p), stat.S_IMODE(p.lstat().st_mode))
         elif p.is_dir():
-            foto[rel] = ("carpeta",)
+            foto[rel] = ("carpeta", stat.S_IMODE(p.stat().st_mode))
         else:
-            foto[rel] = ("archivo", p.stat().st_size,
+            foto[rel] = ("archivo", stat.S_IMODE(p.stat().st_mode), p.stat().st_size,
                          hashlib.sha256(p.read_bytes()).hexdigest())
     return foto
 
@@ -353,18 +355,31 @@ def test_guion_sin_url_de_railway_no_corre_nada(tmp_path):
 
 
 def test_guion_no_deja_nada_en_el_home_falso_salvo_su_registro(tmp_path):
-    """LA REGLA, por valores y no por buscar la clave: foto del HOME falso
-    entero (los dobles de `.local/bin` incluidos) antes y después; lo único
-    que puede aparecer o cambiar es el registro y las marcas de los dobles.
-    Cierra la clave escrita partida, codificada, invertida, en una ruta
-    inesperada o como enlace simbólico, sin enumerar formas.
-    LO QUE NO VE (frontera): una escritura con ruta absoluta fuera del HOME
-    falso y de `TMPDIR` (un `/tmp/...` escrito a mano, `/var/...`, etc.)."""
+    """LA REGLA: foto del HOME falso entero (los dobles de `.local/bin`
+    incluidos) antes y después, con tipo, tamaño, hash, modo (permisos) y
+    destino de enlaces; lo único que puede aparecer o cambiar es el registro
+    y las marcas de los dobles. Atrapa archivos o carpetas nuevos o cambiados
+    y enlaces simbólicos, sea cual sea el contenido.
+    LO QUE NO VE (frontera, medida por testigos, no se persigue):
+      · la clave codificada o transformada DENTRO del registro, de stdout o de
+        stderr (de ahí solo se vigila el texto literal de la clave y del host);
+      · el contenido de `lucy-respaldo.log` y `marcas.txt` más allá de eso
+        (`llamadas_railway.txt` y `marcas.txt` se comparan exactos aparte);
+      · una escritura con ruta absoluta fuera del HOME falso y de `TMPDIR`
+        (un `/tmp/...` escrito a mano, `/var/...`, etc.);
+      · el dueño y las fechas."""
     for verificador in (0, 1):
         casa, res, _, antes, despues, _, _ = _correr_guion(
             tmp_path / str(verificador), verificador=verificador)
         assert _diferencias_no_permitidas(antes, despues) == []
         assert "Library/Logs/lucy-respaldo.log" in despues
+
+
+def test_el_guion_le_pide_a_railway_exactamente_una_cosa(tmp_path):
+    for verificador in (0, 1):
+        casa, *_ = _correr_guion(tmp_path / str(verificador), verificador=verificador)
+        llamadas = (casa / "llamadas_railway.txt").read_text()
+        assert llamadas == "variables --service Postgres --json\n", llamadas
 
 
 def test_guion_no_toca_su_TMPDIR(tmp_path):
@@ -395,3 +410,6 @@ def test_la_foto_ve_lo_que_cambia(tmp_path):
     (c / "e").symlink_to("/nada")
     dif = _diferencias_no_permitidas(antes, _foto(c))
     assert dif == ["a/b", "a/b/c", "a/f", "e"], dif
+    antes = _foto(c)
+    os.chmod(c / "a" / "f", 0o600 if (c / "a" / "f").stat().st_mode & 0o777 != 0o600 else 0o644)
+    assert _diferencias_no_permitidas(antes, _foto(c)) == ["a/f"]
