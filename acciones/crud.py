@@ -909,6 +909,34 @@ async def olvidar_preferencia(bandeja_id: int, pref_id: int) -> int | None:
 # ponerla, ni al crear ni al editar.
 NO_EDITABLES = {"id", "bandeja_id", "creado_en", "borrado_en", "deriva_de_id"}
 
+# LAS COLUMNAS DE `tareas` SE CLASIFICAN UNA POR UNA (4-oct-2026). `NO_EDITABLES`
+# es una lista negra y por eso lo que no estaba en ella era editable «por
+# omisión»: así pudo el modelo de Lucy subir o bajar `grave` (la marca que solo
+# pone `db.crear_o_reusar_alerta_tecnica`) o reescribir `clave_tecnica`. Para
+# `tareas` la regla pasa a ser la contraria: se escribe por `editar`/`deshacer`
+# SOLO lo que está en `COLUMNAS_EDITABLES_DE_TAREAS`. Una columna nueva, de
+# sistema o no, queda NO editable hasta que alguien la clasifique;
+# `tests/test_columnas_de_sistema.py` exige que cada columna de `tareas` de
+# `db/schema.sql` esté en exactamente una de las tres listas.
+COLUMNAS_EDITABLES_DE_TAREAS = frozenset({
+    "titulo", "detalle", "vence_en", "recurrencia", "prioridad", "proyecto_id",
+    "persona_id", "responsable_chat_id", "estado", "pospuesta_veces",
+    "completado_en", "avisos_enviados", "anticipos_min", "area", "primero_id"})
+# Las que escriben otras puertas (`tomar_tarea_de_la_sala`,
+# `crear_o_reusar_alerta_tecnica`) y nada más.
+COLUMNAS_DE_SISTEMA_DE_TAREAS = frozenset({
+    "tomada_en", "clave_tecnica", "ultima_alarma_en", "grave"})
+
+
+def es_editable(tabla: str, columna: str) -> bool:
+    """¿Puede `editar`/`deshacer` escribir esta columna? LA ÚNICA decisión: las
+    dos la consultan, con el valor que están a punto de escribir."""
+    if columna in NO_EDITABLES:
+        return False
+    if tabla == "tareas":
+        return columna in COLUMNAS_EDITABLES_DE_TAREAS
+    return True
+
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}([T ]|$)")
 
 
@@ -1444,7 +1472,7 @@ async def editar(
     if tabla == "participantes":
         raise ValueError("Las personas de un proyecto no se editan: se quitan y se vuelven a agregar.")
 
-    campos = {k: _adaptar(v) for k, v in cambios.items() if k not in NO_EDITABLES}
+    campos = {k: _adaptar(v) for k, v in cambios.items() if es_editable(tabla, k)}
     if not campos:
         raise ValueError("No hay nada que cambiar.")
 
@@ -2079,7 +2107,7 @@ async def deshacer(log_id: int) -> str:
             #   Las columnas SIN puerta siguen como siempre: vuelven todas las
             # del `antes`, también las que esta edición no tocó. Eso vale para
             # todas las tablas y no se decidió en este cambio.
-            columnas = [c for c in antes if c not in NO_EDITABLES
+            columnas = [c for c in antes if es_editable(tabla, c)
                         and (c not in con_puerta
                              or (c in despues and despues[c] != antes[c]))]
             if not columnas:

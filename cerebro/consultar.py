@@ -160,6 +160,10 @@ NOTAS_DE_COLUMNA = {
     ("tareas", "estado"): "'pendiente'|'hecha'|'pospuesta'",
     ("tareas", "avisos_enviados"): "int[]: minutos-antes que ya se avisaron",
     ("tareas", "anticipos_min"): "int[]: minutos-antes a los que hay que avisar",
+    ("tareas", "grave"): "true = alerta técnica declarada GRAVE por quien la mandó "
+                         "(hoy, Natalia). La marca el sistema: Lucy la lee, no la cambia",
+    ("tareas", "clave_tecnica"): "identifica de qué falla técnica es la tarea; "
+                                 "la escribe el sistema, Lucy la lee, no la cambia",
     ("tareas", "primero_id"): "tareas.id de la tarea que tiene que estar HECHA "
                               "antes que ésta. NULL = no espera a nadie",
     ("comentarios_tarea", "autor_chat_id"): "quién lo escribió: el chat con el "

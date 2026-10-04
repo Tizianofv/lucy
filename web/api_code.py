@@ -321,7 +321,7 @@ LARGO_TITULO_ALERTA = db.LARGO_TITULO_TAREA
 LARGO_DETALLE_ALERTA = 4000
 LARGO_CLAVE_ALERTA = 120
 _CLAVE_VALIDA = re.compile(r"[A-Za-z0-9._:-]{1,%d}" % LARGO_CLAVE_ALERTA)
-_MARCA_RECORTE = "… [recortado]"
+_MARCA_RECORTE = db.MARCA_RECORTE
 
 
 class _AlertaNueva(BaseModel):
@@ -360,6 +360,21 @@ async def crear_alerta(
       · Cualquier otro fallo es un 500: tampoco se guardó nada que se pueda
         asegurar. Natalia decide qué hace; esta ruta no avisa a nadie.
     """
+    if quien != config.QUIEN_DE_NATALIA:
+        # La exclusión del aviso por Telegram se lee del prefijo `natalia:`;
+        # una clave con `alertas:crear` que se llame de otra forma guardaría
+        # otro prefijo y volvería a disparar el aviso. No se guarda nada.
+        log.error("puerta de Code: %s tiene alertas:crear pero la puerta de "
+                  "alertas solo acepta a %r", quien, config.QUIEN_DE_NATALIA)
+        raise HTTPException(
+            status_code=503,
+            detail="no se guardó: la clave con alertas:crear no se llama "
+                   f"{config.QUIEN_DE_NATALIA!r} en la configuración de Lucy. "
+                   "Avisale a la sala/Tiziano.")
+    for crudo in (cuerpo.clave, cuerpo.titulo, cuerpo.detalle):
+        if "\x00" in crudo:
+            raise HTTPException(status_code=422,
+                                detail="el texto no puede llevar caracteres nulos")
     clave = cuerpo.clave.strip()
     titulo = " ".join(cuerpo.titulo.split())
     if not _CLAVE_VALIDA.fullmatch(clave):
@@ -386,7 +401,23 @@ async def crear_alerta(
     return {"tarea_id": tid, "reusada": informe["reusada"],
             "grave": informe["grave"],
             "repeticion_omitida": informe["omitida"],
-            "recortado": titulo_recortado or detalle_recortado}
+            "recortado": (titulo_recortado or detalle_recortado
+                          or informe["recortada"])}
+
+
+def avisar_si_alertas_mal_nombradas() -> list[str]:
+    """Al arrancar: si la configuración trae un `quien` con `alertas:crear` que no
+    se llama `config.QUIEN_DE_NATALIA`, lo dice en voz alta (log de error) y
+    devuelve cuáles son. La ruta además se niega a atenderlos (503)."""
+    mal = config.quienes_con_alertas_fuera_de_nombre()
+    if mal:
+        log.error("CONFIGURACIÓN DE LA PUERTA DE CODE: %s tiene alertas:crear y "
+                  "no se llama %r: la puerta de alertas no los atiende",
+                  ", ".join(mal), config.QUIEN_DE_NATALIA)
+    return mal
+
+
+avisar_si_alertas_mal_nombradas()
 
 
 def rutas_registradas(app) -> list[tuple[str, str, str]]:

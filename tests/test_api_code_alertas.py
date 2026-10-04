@@ -58,6 +58,13 @@ CLIENTE_INVENTADO = "Marta Inventada 8095550000"   # dato de cliente de mentira
 
 # ── SQLite con el esquema que estas rutas tocan ───────────────────────────
 
+class _Fila(dict):
+    """Una fila que se deja leer como dict (`fila["id"]`) y como tupla
+    (`fila[0]`), igual que las dos formas en que el repo lee de la base."""
+    def __getitem__(self, k):
+        return list(self.values())[k] if isinstance(k, int) else super().__getitem__(k)
+
+
 class _ErrorSQL(Exception):
     def __init__(self, sqlstate):
         super().__init__(sqlstate)
@@ -70,6 +77,9 @@ class _Cur:
         self._filas: list[dict] = []
 
     async def execute(self, sql, params=None):
+        ORDEN.append((" ".join(sql.split()), tuple(params or ())))
+        if any(" ".join(sql.split()).startswith(f) for f in FALLAR_EN):
+            raise RuntimeError("fallo inyectado por la prueba")
         # `= ANY(%s)` es de Postgres: con una lista se emula con json_each.
         sql = sql.replace("= ANY(%s)", "IN (SELECT value FROM json_each(%s))")
         params = tuple(json.dumps(p) if isinstance(p, list) else p for p in (params or ()))
@@ -79,7 +89,7 @@ class _Cur:
             if "no such column" in str(e) or "no column named" in str(e):
                 raise _ErrorSQL("42703") from None
             raise
-        self._filas = [dict(f) for f in cur.fetchall()] if cur.description else []
+        self._filas = [_Fila(f) for f in cur.fetchall()] if cur.description else []
         return self
 
     async def fetchone(self):
@@ -89,11 +99,31 @@ class _Cur:
         return list(self._filas)
 
 
+ORDEN: list[tuple] = []        # (SQL, parámetros) en el orden en que corrieron (lo vacía `puerta`)
+FALLAR_EN: list[str] = []      # si un SQL empieza por alguno de estos textos, revienta (sin sqlstate)
+
+
 class _Tx:
+    """`conn.transaction()` de verdad: un SAVEPOINT que se deshace si el bloque falla."""
+    _n = 0
+
+    def __init__(self, con):
+        _Tx._n += 1
+        self._con, self._nombre = con, f"sp{_Tx._n}"
+
     async def __aenter__(self):
+        if not self._con.in_transaction:
+            # psycopg abre la transacción con la primera sentencia; SQLite solo
+            # con una escritura. Sin esto, el RELEASE del primer SAVEPOINT
+            # CONFIRMARÍA lo escrito y el pool ya no podría deshacerlo.
+            self._con.execute("BEGIN")
+        self._con.execute(f"SAVEPOINT {self._nombre}")
         return self
 
-    async def __aexit__(self, *e):
+    async def __aexit__(self, tipo, *e):
+        if tipo is not None:
+            self._con.execute(f"ROLLBACK TO {self._nombre}")
+        self._con.execute(f"RELEASE {self._nombre}")
         return False
 
 
@@ -105,7 +135,7 @@ class _Conn:
         return _Cur(self._con)
 
     def transaction(self):
-        return _Tx()
+        return _Tx(self._con)
 
     async def execute(self, sql, params=None):
         return await _Cur(self._con).execute(sql, params)
@@ -122,7 +152,13 @@ class _Pool:
             async def __aenter__(self):
                 return conn
 
-            async def __aexit__(self, *e):
+            async def __aexit__(self, tipo, *e):
+                # Como el pool de psycopg (no autocommit): se confirma al salir
+                # bien y se deshace TODO si salió con una excepción.
+                if tipo is not None:
+                    conn._con.rollback()
+                else:
+                    conn._con.commit()
                 return False
         return _CM()
 
@@ -131,6 +167,9 @@ def _base(sin_grave=False, sin_clave=False):
     con = sqlite3.connect(":memory:", check_same_thread=False)
     con.row_factory = sqlite3.Row
     con.create_function("now", 0, lambda: "2026-10-04 10:00:00")
+    # El bloqueo por clave es de Postgres: aquí solo deja constancia en ORDEN.
+    con.create_function("hashtextextended", 2, lambda s, n: s)
+    con.create_function("pg_advisory_xact_lock", 1, lambda k: None)
     columnas_nuevas = ""
     if not sin_clave:
         columnas_nuevas += ", clave_tecnica TEXT, ultima_alarma_en TEXT"
@@ -164,9 +203,12 @@ def puerta():
     api_code._intentos_malos.clear()
     api_code._pedidos_por_quien.clear()
     api_code._ultimo_aviso_abuso = 0.0
+    ORDEN.clear()
+    FALLAR_EN.clear()
 
     def poner_base(**opciones):
         con = _base(**opciones)
+        con.commit()
         db.pool = _Pool(con)
         api_code._pedidos_por_quien.clear()
         return con
@@ -737,3 +779,171 @@ def test_proyectos_sin_graves_se_ve_igual_que_antes(mundo):
     mundo.tarea(12, "C", proyecto=1, responsable=CODE)
     html = ver(mundo, p=1)
     assert tareas_en(html)[:3] == [11, 10, 12] and "🚨" not in html
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Vuelta del testigo (4-oct-2026): el tope, todo-o-nada, un bloqueo por clave,
+# NUL, el nombre de Natalia y lo grave solo entre las pendientes
+# ═══════════════════════════════════════════════════════════════════════
+
+def _largo_detalle(con):
+    return con.execute("SELECT length(detalle) FROM tareas").fetchone()[0]
+
+
+def test_sonda_del_testigo_el_detalle_nunca_pasa_del_tope_y_la_respuesta_lo_dice(puerta):
+    """La sonda del testigo: un detalle de 3990 y repeticiones de 4000."""
+    tope = api_code.LARGO_DETALLE_ALERTA
+    con = puerta()
+    CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="a" * (tope - 100)))
+    vistas = []
+    for _ in range(4):
+        r = CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="b" * tope)).json()
+        vistas.append((r["repeticion_omitida"], r["recortado"]))
+        assert _largo_detalle(con) <= tope
+    assert vistas[0] == (False, True)            # entró cortada, y lo dice
+    assert vistas[1:] == [(True, False)] * 3     # ya no cabe nada, y lo dice
+    assert _largo_detalle(con) == tope
+
+
+def test_sonda_del_testigo_con_el_hueco_de_10_caracteres_la_repeticion_se_omite_y_se_dice(puerta):
+    tope = api_code.LARGO_DETALLE_ALERTA
+    con = puerta()
+    CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="a" * (tope - 10)))
+    r = CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="b" * tope)).json()
+    assert (r["repeticion_omitida"], r["recortado"]) == (True, False)
+    assert _largo_detalle(con) == tope - 10
+
+
+def test_la_repeticion_que_cabe_justa_entra_entera_y_la_que_sobra_un_caracter_entra_cortada(puerta):
+    tope = api_code.LARGO_DETALLE_ALERTA
+    con = puerta()
+    CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="a"))
+    # La repetición añade «\n\n— Volvió a pasar (dd/mm hh:mm UTC): » (35 caracteres) + el detalle.
+    # Se mide el largo del bloque con una repetición de 1 caracter.
+    CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="x"))
+    bloque = _largo_detalle(con) - 1 - 1            # menos el «a» y el «x»
+    libre = tope - _largo_detalle(con)
+    justa = CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="y" * (libre - bloque))).json()
+    assert (justa["repeticion_omitida"], justa["recortado"]) == (False, False)
+    assert _largo_detalle(con) == tope
+
+
+def test_el_tope_no_toca_a_quien_no_lo_pide(puerta):
+    """Las alarmas de Lucy (`tope_detalle=None`) acumulan sin recorte, como siempre."""
+    con = puerta()
+    for i in range(60):
+        asyncio.run(db.crear_o_reusar_alerta_tecnica("backup", "Respaldo", "d" * 100))
+    assert _largo_detalle(con) > api_code.LARGO_DETALLE_ALERTA
+
+
+def _cliente_que_no_propaga():
+    return TestClient(panel.app, raise_server_exceptions=False)
+
+
+def test_reusar_con_grave_es_todo_o_nada_si_falla_el_detalle(puerta):
+    con = puerta()
+    CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="original", grave=False))
+    FALLAR_EN.append("UPDATE tareas SET detalle")
+    r = _cliente_que_no_propaga().post(RUTA, headers=_h(), json=_alerta(detalle="nueva", grave=True))
+    assert r.status_code == 500
+    FALLAR_EN.clear()
+    t = con.execute("SELECT grave, detalle FROM tareas").fetchone()
+    assert (t["grave"], t["detalle"]) == (0, "original")
+
+
+def test_reusar_con_grave_es_todo_o_nada_si_falla_la_marca(puerta):
+    con = puerta()
+    CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="original"))
+    FALLAR_EN.append("UPDATE tareas SET grave")
+    r = _cliente_que_no_propaga().post(RUTA, headers=_h(), json=_alerta(detalle="nueva", grave=True))
+    assert r.status_code == 500
+    FALLAR_EN.clear()
+    assert con.execute("SELECT detalle FROM tareas").fetchone()[0] == "original"
+
+
+def test_crear_es_todo_o_nada_si_falla_la_huella(puerta):
+    con = puerta()
+    FALLAR_EN.append("INSERT INTO log_acciones")
+    r = _cliente_que_no_propaga().post(RUTA, headers=_h(), json=_alerta(grave=True))
+    assert r.status_code == 500
+    FALLAR_EN.clear()
+    assert _n(con) == 0 and _n(con, "log_acciones") == 0
+
+
+def _bloqueos_y_lecturas():
+    """Posición, en el orden en que corrieron los SQL, del bloqueo y de la
+    primera lectura de `tareas` por clave."""
+    bloqueo = [i for i, (s, _) in enumerate(ORDEN) if "pg_advisory_xact_lock" in s]
+    lectura = [i for i, (s, _) in enumerate(ORDEN) if s.startswith("SELECT id, detalle FROM tareas")]
+    return bloqueo, lectura
+
+
+def test_el_bloqueo_por_clave_se_pide_antes_de_leer_y_con_la_clave_completa(puerta):
+    """FRONTERA: SQLite no tiene concurrencia que probar; esto prueba que el
+    bloqueo de Postgres se pide, con la clave guardada, ANTES de buscar la
+    tarea abierta, en las dos ramas (crear y reusar)."""
+    puerta()
+    for _ in range(2):                                   # 1.º crea, 2.º reusa
+        ORDEN.clear()
+        CLIENTE.post(RUTA, headers=_h(), json=_alerta(clave="k1"))
+        bloqueo, lectura = _bloqueos_y_lecturas()
+        assert len(bloqueo) == 1 and len(lectura) == 1 and bloqueo[0] < lectura[0]
+        assert ORDEN[bloqueo[0]][1] == ("natalia:k1",)
+
+
+def test_el_bloqueo_tambien_lo_pide_la_puerta_de_las_alarmas_de_lucy(puerta):
+    puerta()
+    asyncio.run(db.crear_o_reusar_alerta_tecnica("backup", "Respaldo", "d"))
+    bloqueo, lectura = _bloqueos_y_lecturas()
+    assert bloqueo and bloqueo[0] < lectura[0] and ORDEN[bloqueo[0]][1] == ("backup",)
+
+
+@pytest.mark.parametrize("campo", ["clave", "titulo", "detalle"])
+def test_un_caracter_nulo_es_422_y_no_escribe_nada(puerta, campo):
+    con = puerta()
+    cuerpo = _alerta()
+    cuerpo[campo] = cuerpo[campo] + "\u0000x"
+    r = CLIENTE.post(RUTA, headers=_h(), json=cuerpo)
+    assert r.status_code == 422
+    assert _n(con) == 0 and _n(con, "log_acciones") == 0
+
+
+def test_una_clave_con_alertas_crear_que_no_se_llama_natalia_se_rechaza_en_voz_alta(puerta, caplog):
+    import logging
+    con = puerta()
+    config.CLAVES_API_CODE = {"clave-de-prueba-otro-nombre": "natalia_prod"}
+    config.PERMISOS_API_CODE = {"natalia_prod": frozenset({"alertas:crear"})}
+    with caplog.at_level(logging.ERROR):
+        r = CLIENTE.post(RUTA, headers=_h("clave-de-prueba-otro-nombre"), json=_alerta())
+        assert r.status_code == 503 and "natalia" in r.json()["detail"]
+        assert _n(con) == 0
+        assert api_code.avisar_si_alertas_mal_nombradas() == ["natalia_prod"]
+    assert "natalia_prod" in " ".join(rec.getMessage() for rec in caplog.records)
+
+
+def test_con_la_configuracion_bien_el_arranque_no_grita(puerta, caplog):
+    import logging
+    puerta()
+    with caplog.at_level(logging.ERROR):
+        assert api_code.avisar_si_alertas_mal_nombradas() == []
+    assert not caplog.records
+
+
+def test_el_prefijo_que_excluye_el_aviso_sale_del_mismo_nombre_que_acepta_la_puerta(puerta):
+    """Una sola fuente: `config.QUIEN_DE_NATALIA`. Se cambia y las tres cosas
+    (lo que acepta la puerta, el prefijo guardado, lo que excluye el aviso) siguen."""
+    assert db.PREFIJO_ALERTAS_DE_NATALIA == f"{config.QUIEN_DE_NATALIA}:"
+    con = puerta()
+    CLIENTE.post(RUTA, headers=_h(), json=_alerta(clave="z"))
+    assert con.execute("SELECT clave_tecnica FROM tareas").fetchone()[0].startswith(
+        db.PREFIJO_ALERTAS_DE_NATALIA)
+
+
+def test_lo_grave_solo_cuenta_entre_las_pendientes_en_la_pagina():
+    from datetime import datetime, timezone
+    ahora = datetime.now(timezone.utc)
+    leve = _fila(1, "Hecha leve primera", False, estado="hecha")
+    grave = _fila(2, "Hecha grave segunda", True, estado="hecha")
+    leve["completado_en"] = grave["completado_en"] = ahora
+    html = _pagina([leve, grave])
+    assert html.index("Hecha leve primera") < html.index("Hecha grave segunda")

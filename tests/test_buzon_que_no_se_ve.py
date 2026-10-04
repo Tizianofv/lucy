@@ -3998,10 +3998,15 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `tests/test_api_code_alertas.py` (nuevo); VIGILADOS sin cambio: se
     # tocaron `db/db.py` y `web/api_code.py`, ya vigilados. Medida corriendo la
     # prueba: 123 en disco, 78 EXENTOS, 45 VIGILADOS.
-    assert medido == {"en disco": 123, "exentos": 78, "vigilados": 45}, (
+    # 4-oct-2026, vuelta del testigo de `trabajo/alertas-de-natalia`: +1 en disco
+    # y +1 EXENTO por `tests/test_columnas_de_sistema.py` (nuevo); VIGILADOS sin
+    # cambio: se tocaron `acciones/crud.py`, `db/db.py`, `config.py` y
+    # `web/api_code.py`, ya vigilados. Medida corriendo la prueba: 124 en disco,
+    # 79 EXENTOS, 45 VIGILADOS.
+    assert medido == {"en disco": 124, "exentos": 79, "vigilados": 45}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "4-oct-2026 (rama alertas-de-natalia) era {'en disco': 123, "
-        "'exentos': 78, 'vigilados': 45}. La aserción de fondo —cero "
+        "4-oct-2026 (vuelta del testigo de alertas-de-natalia) era {'en disco': 124, "
+        "'exentos': 79, 'vigilados': 45}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

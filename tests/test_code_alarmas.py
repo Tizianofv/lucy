@@ -86,6 +86,16 @@ class _ErrorSQL(Exception):
 # §B.2 — `db.crear_o_reusar_alerta_tecnica`: SQL real, dedupe contra la base
 # ═══════════════════════════════════════════════════════════════════════
 
+class _TransaccionDeMentira:
+    """`conn.transaction()` de los dobles: no hace nada (estos dobles no
+    prueban atomicidad; eso lo hace `tests/test_api_code_alertas.py`)."""
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *e):
+        return False
+
+
 class _CurAlerta:
     def __init__(self, conn):
         self._conn = conn
@@ -121,6 +131,9 @@ class _ConnAlerta:
 
     def cursor(self, row_factory=None):
         return _CurAlerta(self)
+
+    def transaction(self):
+        return _TransaccionDeMentira()
 
     async def execute(self, sql, params=None):
         return await _CurAlerta(self).execute(sql, params)
@@ -311,6 +324,9 @@ class _ConnAlertaReal:
     def cursor(self, row_factory=None):
         return _CurAlertaReal(self._con)
 
+    def transaction(self):
+        return _TransaccionDeMentira()
+
     async def execute(self, sql, params=None):
         return await _CurAlertaReal(self._con).execute(sql, params)
 
@@ -340,6 +356,9 @@ def _sqlite_para_alerta_real():
     # de determinista para esta prueba que Postgres (solo importa que
     # AVANCE, no la hora exacta).
     con.create_function("now", 0, lambda: datetime.now(timezone.utc).isoformat())
+    # El bloqueo por clave es de Postgres: aquí no hace nada (sin concurrencia).
+    con.create_function("hashtextextended", 2, lambda s, n: 0)
+    con.create_function("pg_advisory_xact_lock", 1, lambda k: None)
     con.execute("""
         CREATE TABLE tareas (
           id INTEGER PRIMARY KEY, titulo TEXT, detalle TEXT, area TEXT,

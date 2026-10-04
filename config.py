@@ -316,10 +316,24 @@ def _leer_permisos_api_code(crudo: str) -> tuple[dict[str, frozenset[str]], int]
     return permisos, malos
 
 
+# EL NOMBRE DE NATALIA EN `CLAVES_API_CODE`/`PERMISOS_API_CODE` (4-oct-2026): la
+# única fuente. De él sale el prefijo de las claves que guarda la puerta de
+# alertas (`natalia:<clave>`) y, con él, que esas alertas no disparen el aviso de
+# 6 horas por Telegram. Una clave con `alertas:crear` que se llame de otra forma
+# no entra: la puerta la rechaza (503) y `web/api_code.py` lo grita al arrancar.
+QUIEN_DE_NATALIA = "natalia"
+
 CLAVES_API_CODE, CLAVES_API_CODE_MAL_ESCRITAS = _leer_claves_api_code(
     os.environ.get("CLAVES_API_CODE", ""))
 PERMISOS_API_CODE, PERMISOS_API_CODE_MAL_ESCRITOS = _leer_permisos_api_code(
     os.environ.get("PERMISOS_API_CODE", ""))
+
+
+def quienes_con_alertas_fuera_de_nombre() -> list[str]:
+    """Los `quien` de `PERMISOS_API_CODE` que tienen `alertas:crear` y no se
+    llaman `QUIEN_DE_NATALIA`. Se calcula al llamar, de la configuración viva."""
+    return sorted(q for q, p in PERMISOS_API_CODE.items()
+                  if "alertas:crear" in p and q != QUIEN_DE_NATALIA)
 
 
 # ── COPIA AL DUEÑO ────────────────────────────────────────────────────────
