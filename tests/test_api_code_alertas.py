@@ -917,8 +917,10 @@ def test_una_clave_con_alertas_crear_que_no_se_llama_natalia_se_rechaza_en_voz_a
         r = CLIENTE.post(RUTA, headers=_h("clave-de-prueba-otro-nombre"), json=_alerta())
         assert r.status_code == 503 and "natalia" in r.json()["detail"]
         assert _n(con) == 0
+        caplog.clear()          # de aquí en adelante, solo lo que dice el ARRANQUE
         assert api_code.avisar_si_alertas_mal_nombradas() == ["natalia_prod"]
-    assert "natalia_prod" in " ".join(rec.getMessage() for rec in caplog.records)
+    texto = " ".join(rec.getMessage() for rec in caplog.records)
+    assert "CONFIGURACIÓN DE LA PUERTA DE CODE" in texto and "natalia_prod" in texto
 
 
 def test_con_la_configuracion_bien_el_arranque_no_grita(puerta, caplog):
