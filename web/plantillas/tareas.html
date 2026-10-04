@@ -231,10 +231,9 @@ aviso de Telegram que ya sonó.</p>
       {%- if t.tomada_en and t.estado == pendiente %}
       <br><span class="suave">🔧 en curso desde {{ t.tomada_en|hora_rd }}</span>
       {%- endif %}
-      {#- «GRAVE» (4-oct-2026): alerta técnica que Natalia declaró grave. Solo
-         mientras sigue pendiente; sale de `db.graves_de` (con la migración sin
+      {#- «GRAVE» (4-oct-2026): alerta técnica que Natalia declaró grave. `t.grave` ya viene como «grave Y pendiente» de `db.tareas_por_grupo`; sale de `db.graves_de` (con la migración sin
          aplicar viene `False` para todas y no se pinta nada). #}
-      {%- if t.grave and t.estado == pendiente %}
+      {%- if t.grave %}
       <br><strong style="color:#c0392b">🚨 GRAVE: la sala la atiende primero</strong>
       {%- endif %}
     </td>
