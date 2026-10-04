@@ -579,7 +579,7 @@ def _pagina(filas):
     class _CurG(_CurPanel):
         async def execute(self, sql, params=None):
             s = " ".join(sql.split())
-            if s.startswith("SELECT id FROM tareas WHERE id = ANY(%s) AND grave"):
+            if s.startswith("SELECT id FROM tareas WHERE grave AND borrado_en IS NULL"):
                 self._filas = [{"id": f["id"]} for f in self._conn.tareas
                                if f.get("grave")
                                and f.get("responsable_chat_id") == config.CHAT_ID_CODE]
@@ -636,7 +636,7 @@ def _detalle(estado, grave):
     class _CurD(_CurDetalle):
         async def execute(self, sql, params=None):
             s = " ".join(sql.split())
-            if s.startswith("SELECT id FROM tareas WHERE id = ANY(%s) AND grave"):
+            if s.startswith("SELECT id FROM tareas WHERE grave AND borrado_en IS NULL"):
                 t = self._conn.tarea
                 self._filas = [{"id": t["id"]}] if t.get("grave") else []
                 return self
@@ -665,3 +665,75 @@ def test_el_detalle_marca_la_grave_pendiente_y_no_la_leve_ni_la_hecha():
     assert "🚨 GRAVE" in _detalle("pendiente", True)
     assert "GRAVE" not in _detalle("pendiente", False)
     assert "GRAVE" not in _detalle("hecha", True)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# La página de PROYECTOS (la que lee Tiziano): `/proyectos` real, sobre la
+# base de SQLite con el esquema de verdad (`tests/test_pagina_proyectos.py`)
+# ═══════════════════════════════════════════════════════════════════════
+
+from test_pagina_proyectos import _dia, gente, mundo, tareas_en, ver  # noqa: E402,F401
+
+CODE = config.CHAT_ID_CODE
+
+
+def _grave(mundo, *ids):
+    for i in ids:
+        mundo.con.execute("UPDATE tareas SET grave = 1 WHERE id = ?", (i,))
+
+
+def test_proyectos_pone_la_grave_primero_y_la_marca(mundo):
+    mundo.proyecto(1, "Sala", area="IA")
+    mundo.tarea(10, "Leve uno", proyecto=1, responsable=CODE)
+    mundo.tarea(11, "Leve dos", proyecto=1, responsable=CODE)
+    mundo.tarea(12, "Grave tres", proyecto=1, responsable=CODE)
+    _grave(mundo, 12)
+    html = ver(mundo, p=1)
+    assert tareas_en(html)[:3] == [12, 10, 11]
+    assert html.count("🚨 grave") == 1
+    bloque = html.split('data-tarea="12"')[1].split('data-tarea="10"')[0]
+    assert "🚨 grave" in bloque
+
+
+def test_proyectos_la_grave_va_antes_que_la_vencida(mundo):
+    mundo.proyecto(1, "Sala", area="IA")
+    mundo.tarea(10, "Vencida leve", proyecto=1, responsable=CODE, vence=_dia(-3))
+    mundo.tarea(11, "Grave sin fecha", proyecto=1, responsable=CODE)
+    _grave(mundo, 11)
+    assert tareas_en(ver(mundo, p=1))[:2] == [11, 10]
+
+
+def test_proyectos_no_marca_una_grave_ya_hecha_ni_una_leve(mundo):
+    mundo.proyecto(1, "Sala", area="IA")
+    mundo.tarea(10, "Grave hecha", proyecto=1, responsable=CODE, estado="hecha",
+                completado=_dia(-1))
+    mundo.tarea(11, "Leve", proyecto=1, responsable=CODE)
+    _grave(mundo, 10)
+    html = ver(mundo, p=1)
+    assert "Grave hecha" in html and "🚨 grave" not in html
+
+
+def test_proyectos_no_marca_una_grave_que_se_reasigno_a_una_persona(mundo):
+    mundo.proyecto(1, "Sala", area="IA")
+    mundo.tarea(10, "Era grave de Code", proyecto=1, responsable=config.CHAT_ID_DUENO)
+    _grave(mundo, 10)
+    assert "🚨 grave" not in ver(mundo, p=1)
+
+
+def test_proyectos_tambien_las_sueltas_del_grupo_van_con_su_marca_y_primero(mundo):
+    mundo.proyecto(1, "Otro", area="IA")
+    mundo.tarea(10, "Suelta leve", area="IA", responsable=CODE)
+    mundo.tarea(11, "Suelta grave", area="IA", responsable=CODE)
+    _grave(mundo, 11)
+    html = ver(mundo, g="IA")
+    assert html.count("🚨 grave") == 1
+    assert tareas_en(html).index(11) < tareas_en(html).index(10)
+
+
+def test_proyectos_sin_graves_se_ve_igual_que_antes(mundo):
+    mundo.proyecto(1, "Sala", area="IA")
+    mundo.tarea(10, "A", proyecto=1, responsable=CODE, vence=_dia(2))
+    mundo.tarea(11, "B", proyecto=1, responsable=CODE, vence=_dia(-1))
+    mundo.tarea(12, "C", proyecto=1, responsable=CODE)
+    html = ver(mundo, p=1)
+    assert tareas_en(html)[:3] == [11, 10, 12] and "🚨" not in html

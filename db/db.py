@@ -2792,13 +2792,14 @@ def estado_calculado(estado, hechas: int) -> str:
 
 
 def _orden_de_pendientes(t: dict):
-    """Vencidas primero, después las de fecha más cercana y al final las sin
+    """Las graves primero (alertas técnicas que Natalia declaró graves, 4-oct-2026),
+    luego las vencidas, después las de fecha más cercana y al final las sin
     fecha (el `ordenar` de la maqueta). Empata por id."""
     futuro = datetime.max.replace(tzinfo=timezone.utc)
     cuando = t["vence_en"] if isinstance(t["vence_en"], datetime) else futuro
     if cuando.tzinfo is None:
         cuando = cuando.replace(tzinfo=timezone.utc)
-    return (not t["vencida"], t["vence_en"] is None, cuando, t["id"])
+    return (not t["grave"], not t["vencida"], t["vence_en"] is None, cuando, t["id"])
 
 
 def _fila_de_tarea(t: dict, hoy: date, nombres: dict, comentarios: dict) -> dict:
@@ -2822,6 +2823,9 @@ def _fila_de_tarea(t: dict, hoy: date, nombres: dict, comentarios: dict) -> dict
         # grupo no se elige; suelta, se ofrece el grupo que ya tiene.
         "proyecto_id": t["proyecto_id"],
         "area": t["area"],
+        # Grave y todavía pendiente: la misma regla que /tareas. Con la
+        # columna sin migrar nadie la trae y es False.
+        "grave": bool(t.get("grave")) and estado == ESTADO_PENDIENTE,
     }
 
 
@@ -3003,6 +3007,11 @@ async def pagina_de_proyectos(hoy: date | None = None) -> dict:
              ORDER BY creado_en, id
             """)
         participantes = list(await cur.fetchall())
+    # «GRAVE» (4-oct-2026): lectura aparte y en lote, tolerante a la columna
+    # sin migrar (`graves_de`), igual que /tareas.
+    graves = await graves_de([t["id"] for t in tareas])
+    for t in tareas:
+        t["grave"] = t["id"] in graves
     return armar_pagina(grupos, proyectos, tareas, huellas, comentarios,
                         nombres_con_code(), hoy, participantes)
 
@@ -3822,9 +3831,12 @@ async def graves_de(ids: list[int]) -> set[int]:
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         try:
+            # Todas las graves vivas de Code (son pocas: alertas técnicas) y se
+            # cruzan con `ids` acá: sin `= ANY(%s)`, así la misma lectura sirve
+            # para una lista de 500 filas y para la página entera de Proyectos.
             await cur.execute(
-                "SELECT id FROM tareas WHERE id = ANY(%s) AND grave "
-                "AND responsable_chat_id = %s", (ids, CHAT_ID_CODE))
+                "SELECT id FROM tareas WHERE grave AND borrado_en IS NULL "
+                "AND responsable_chat_id = %s", (CHAT_ID_CODE,))
             filas = await cur.fetchall()
         except Exception as e:
             try:
@@ -3834,7 +3846,7 @@ async def graves_de(ids: list[int]) -> set[int]:
             if sqlstate == "42703":
                 return set()
             raise
-    return {f["id"] for f in filas}
+    return {f["id"] for f in filas} & set(ids)
 
 
 async def crear_o_reusar_alerta_tecnica(
@@ -4005,6 +4017,18 @@ async def crear_o_reusar_alerta_tecnica(
         return fila["id"]
 
 
+# De dónde vino una alerta se lee del DATO ESCRITO, no del texto: la puerta HTTP
+# (`web/api_code.py::crear_alerta`) guarda `clave_tecnica` como
+# `f"{quien}:{clave}"`, y `quien` lo resuelve la autenticación de la clave de
+# Bearer (`config.CLAVES_API_CODE`), nunca el cuerpo del pedido. Las cinco
+# alarmas de Lucy escriben claves fijas (`backup`, `latido_cosecha`,
+# `canario:<remitente>:<señal>`) y nunca empiezan por este prefijo. Las de
+# Natalia no disparan el aviso de Telegram de `tareas_tecnicas_atrasadas`:
+# los graves ya le llegan a Tiziano por Telegram desde la propia Natalia, y
+# lo técnico va a Code, no a Telegram (Tiziano, 4-oct-2026).
+PREFIJO_ALERTAS_DE_NATALIA = "natalia:"
+
+
 async def tareas_tecnicas_atrasadas(umbral_horas: int = 6) -> list[dict]:
     """Las tareas técnicas de Code que llevan más de `umbral_horas` sin que
     la sala las TOME (`tomada_en`, §D) desde la última vez que la falla
@@ -4017,6 +4041,10 @@ async def tareas_tecnicas_atrasadas(umbral_horas: int = 6) -> list[dict]:
     reiniciar el proceso -- y sin perderse -- no depende de que el proceso
     seguido sea el mismo que detectó el atraso la primera vez.
 
+    LAS ALERTAS DE NATALIA NO ENTRAN (4-oct-2026): las tareas cuya
+    `clave_tecnica` empieza por `PREFIJO_ALERTAS_DE_NATALIA` se excluyen en el
+    `WHERE`, graves o no. Las cinco alarmas de Lucy siguen como estaban.
+
     SIN LA MIGRACIÓN (`clave_tecnica`/`ultima_alarma_en`/`tomada_en`
     ausentes, SQLSTATE 42703), devuelve `[]`: nada que revisar todavía,
     nunca revienta.
@@ -4028,6 +4056,7 @@ async def tareas_tecnicas_atrasadas(umbral_horas: int = 6) -> list[dict]:
            AND t.borrado_en IS NULL
            AND t.estado = %s
            AND t.tomada_en IS NULL
+           AND substr(t.clave_tecnica, 1, %s) <> %s
            AND COALESCE(t.ultima_alarma_en, t.creado_en)
                  < now() - make_interval(hours => %s)
            AND NOT EXISTS (
@@ -4039,7 +4068,9 @@ async def tareas_tecnicas_atrasadas(umbral_horas: int = 6) -> list[dict]:
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         try:
-            await cur.execute(consulta, (ESTADO_PENDIENTE, int(umbral_horas)))
+            await cur.execute(
+                consulta, (ESTADO_PENDIENTE, len(PREFIJO_ALERTAS_DE_NATALIA),
+                           PREFIJO_ALERTAS_DE_NATALIA, int(umbral_horas)))
             return list(await cur.fetchall())
         except Exception as e:
             try:

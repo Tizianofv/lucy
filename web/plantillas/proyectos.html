@@ -320,7 +320,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         clic que renombra. El `href` lo escribe el servidor: el guion no calcula
         a dónde va. -#}
     <a class="titulo" data-dbl="titulo" href="{{ u }}{{ '' if abierta else '&t=' ~ t.id }}#tarea-{{ t.id }}" title="Un clic abre el detalle; doble clic cambia el título" aria-label="{{ 'Cerrar' if abierta else 'Abrir' }} el detalle de la tarea" {% if editar_tarea == t.id %}hidden{% endif %}>{{ t.titulo }}</a>
-    {% if t.comentarios %}<span class="nota comentarios-n" title="Comentarios de la tarea">{{ t.comentarios|length }} coment.</span>{% endif %}
+    {% if t.grave %}<span class="nota" style="color:#c0392b;font-weight:600" title="Alerta técnica grave: la sala la atiende primero">🚨 grave</span>{% endif %}
+        {% if t.comentarios %}<span class="nota comentarios-n" title="Comentarios de la tarea">{{ t.comentarios|length }} coment.</span>{% endif %}
     <form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/titulo" data-auto {% if editar_tarea != t.id %}hidden{% endif %}>
       <input name="titulo" type="text" required maxlength="{{ largo_titulo }}" value="{{ t.titulo }}" aria-label="Título de la tarea">
       <button class="guardar">Guardar</button>
@@ -591,7 +592,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     <div class="cuerpo">
       <div class="centro">
     <section class="bloque">
-      <div class="encabezado"><h2>Tareas</h2><span class="nota">Las vencidas arriba. Toca el título de una tarea para ver su detalle y sus comentarios</span></div>
+      <div class="encabezado"><h2>Tareas</h2><span class="nota">Las graves y las vencidas arriba. Toca el título de una tarea para ver su detalle y sus comentarios</span></div>
       {{ lista_de_tareas(m.pendientes, m.otras, m.n_hechas, m.n_otras, 'Sin tareas todavía.' if not m.n_total else 'No queda nada pendiente.') }}
       {% if not m.cerrado %}
       <form class="nueva-tarea" method="post" action="/proyectos/{{ m.id }}/tareas">

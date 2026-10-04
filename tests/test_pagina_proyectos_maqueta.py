@@ -349,7 +349,7 @@ def test_el_texto_de_tareas_dice_lo_que_hace_el_titulo(mundo):
     mundo.tarea(10, "una", proyecto=1)
     html = ver(mundo, p=1)
     nota = [n.todo_el_texto() for n in arbol(html).buscar("span", "nota") if "vencidas arriba" in n.todo_el_texto()]
-    assert nota == ["Las vencidas arriba. Toca el título de una tarea para ver su detalle y sus comentarios"]
+    assert nota == ["Las graves y las vencidas arriba. Toca el título de una tarea para ver su detalle y sus comentarios"]
     assert "pantalla" not in nota[0]
     # Y es verdad: el título es el enlace que abre el detalle de ESA tarea.
     titulo = arbol(html).buscar("a", "titulo")[0]

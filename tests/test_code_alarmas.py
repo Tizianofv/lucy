@@ -932,7 +932,8 @@ def _corre_atrasadas_sqlite(filas: list[dict], marcas: list[int], umbral_horas: 
         "now() - make_interval(hours => %s)",
         "datetime('now', '-' || ? || ' hours')")
     sql = sql.replace("%s", "?")
-    cur = conn.execute(sql, (db.ESTADO_PENDIENTE, umbral_horas))
+    cur = conn.execute(sql, (db.ESTADO_PENDIENTE, len(db.PREFIJO_ALERTAS_DE_NATALIA),
+                             db.PREFIJO_ALERTAS_DE_NATALIA, umbral_horas))
     salida = [dict(r) for r in cur.fetchall()]
     conn.close()
     return salida
@@ -1085,3 +1086,138 @@ def test_el_bucle_real_si_el_aviso_revienta_el_respaldo_ya_corrio(monkeypatch):
     bot = _correr_el_bucle_real(monkeypatch, backup, alertas)
     backup.assert_awaited_once_with(bot)
     alertas.assert_awaited_once_with(bot)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 4-oct-2026: las alertas de Natalia NO disparan el aviso de Telegram de las
+# 6 horas (Tiziano: «si es técnico no debería llegar a telegram sino a code»;
+# los graves ya le llegan por Telegram desde la propia Natalia).
+# ═══════════════════════════════════════════════════════════════════════
+
+def _pool_sqlite_de_atrasadas(filas):
+    """Un pool que ejecuta de verdad el SQL de `db.tareas_tecnicas_atrasadas`
+    y `db.marcar_aviso_atraso_code` sobre SQLite (solo se traduce
+    `make_interval` y `%s`): para correr la función de PRODUCCIÓN entera."""
+    import sqlite3
+    con = sqlite3.connect(":memory:", check_same_thread=False)
+    con.row_factory = sqlite3.Row
+    con.execute(
+        "CREATE TABLE tareas (id INTEGER PRIMARY KEY, titulo TEXT, clave_tecnica TEXT, "
+        "estado TEXT, borrado_en TEXT, tomada_en TEXT, ultima_alarma_en TEXT, creado_en TEXT)")
+    con.execute("CREATE TABLE log_acciones (id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT, "
+                "accion TEXT, tabla TEXT, registro_id INTEGER, antes TEXT, despues TEXT, "
+                "motivo TEXT, bandeja_id INTEGER)")
+    for f in filas:
+        con.execute("INSERT INTO tareas (id, titulo, clave_tecnica, estado, creado_en) "
+                    "VALUES (?, ?, ?, 'pendiente', ?)",
+                    (f["id"], f"tarea {f['id']}", f["clave_tecnica"], _hace(7)))
+
+    class _C:
+        async def execute(self, sql, params=None):
+            sql = sql.replace("now() - make_interval(hours => %s)",
+                              "datetime('now', '-' || ? || ' hours')").replace("%s", "?")
+            self._cur = con.execute(sql, tuple(params or ()))
+            return self
+
+        async def fetchall(self):
+            return [dict(r) for r in self._cur.fetchall()]
+
+    class _Conn:
+        def cursor(self, row_factory=None):
+            return _C()
+
+        async def execute(self, sql, params=None):
+            return await _C().execute(sql, params)
+
+    class _P:
+        def connection(self):
+            class _CM:
+                async def __aenter__(self):
+                    return _Conn()
+
+                async def __aexit__(self, *e):
+                    return False
+            return _CM()
+    return _P()
+
+
+def test_el_aviso_de_6_horas_corre_entero_sin_avisar_las_de_natalia_y_si_las_de_lucy():
+    claves = ["backup", "latido_cosecha", "canario:algunbanco:sin_ruta",
+              "natalia:whatsapp_caido", "natalia:nocodb", "natalia:x:y"]
+    filas = [{"id": i + 1, "clave_tecnica": c} for i, c in enumerate(claves)]
+    guardado, g_aviso = db.pool, db.registrar_aviso
+
+    async def _registro_de_mentira(*a, **k):      # `_avisar` lo anota; no es lo que se vigila
+        return 1
+    db.pool = _pool_sqlite_de_atrasadas(filas)
+    db.registrar_aviso = _registro_de_mentira
+    bot = FakeBot()
+    try:
+        n = _correr(despertador.revisar_alertas_tecnicas_sin_tomar(bot))
+    finally:
+        db.pool, db.registrar_aviso = guardado, g_aviso
+    assert n == 3 and len(bot.mensajes) == 3
+    avisadas = " ".join(bot.mensajes)
+    for c in claves[:3]:
+        assert f"«{c}»" in avisadas
+    assert "natalia:" not in avisadas
+
+
+def test_el_sql_real_de_atrasadas_deja_fuera_toda_clave_que_empieza_por_natalia():
+    filas = _corre_atrasadas_sqlite(
+        [{"id": 1, "clave_tecnica": "natalia:a", "creado_en": _hace(7)},
+         {"id": 2, "clave_tecnica": "natalia:", "creado_en": _hace(7)},
+         {"id": 3, "clave_tecnica": "Natalia:a", "creado_en": _hace(7)},   # otra cosa: otra clave
+         {"id": 4, "clave_tecnica": "xnatalia:a", "creado_en": _hace(7)},
+         {"id": 5, "clave_tecnica": "backup", "creado_en": _hace(7)}], marcas=[])
+    assert sorted(f["id"] for f in filas) == [3, 4, 5]
+
+
+def test_el_prefijo_lo_escribe_la_autenticacion_y_es_el_de_la_constante():
+    """De dónde vino la alerta es el dato escrito: `clave_tecnica` de la
+    puerta HTTP = `f"{quien}:{clave}"`, con `quien` salido de la clave Bearer
+    (`config.CLAVES_API_CODE`), nunca del cuerpo."""
+    fuente = inspect.getsource(api_code_modulo().crear_alerta)
+    assert 'f"{quien}:{clave}"' in fuente
+    assert db.PREFIJO_ALERTAS_DE_NATALIA == "natalia:"
+
+
+def api_code_modulo():
+    import web.api_code as m
+    return m
+
+
+def test_ninguna_alarma_de_lucy_escribe_una_clave_que_empiece_por_el_prefijo_de_natalia():
+    """Las claves de las alarmas propias salen de los sitios que llaman a la
+    puerta (`crear_o_reusar_alerta_tecnica`, `_alertar`), leídos del código:
+    ninguna arranca con el prefijo. FRONTERA: una clave armada con una variable
+    que no sea la propia `clave` de `_alertar` no se puede leer y rompe la
+    prueba (no se acepta en silencio)."""
+    from pathlib import Path
+    from test_buzon_que_no_se_ve import _py_en_disco   # la ÚNICA puerta de «los .py del repo»
+    raiz = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    vistas, opacas = [], []
+    for py in _py_en_disco(raiz):
+        ruta = str(py)
+        if "tests" in py.relative_to(raiz).parts or ruta.endswith(os.path.join("web", "api_code.py")):
+            continue
+        for n in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
+            if not (isinstance(n, ast.Call) and n.args):
+                continue
+            f = n.func
+            nombre = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", "")
+            if nombre not in ("crear_o_reusar_alerta_tecnica", "_alertar"):
+                continue
+            a0 = n.args[0]
+            if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
+                vistas.append(a0.value)
+            elif isinstance(a0, ast.JoinedStr):
+                cab = a0.values[0]
+                vistas.append(cab.value if isinstance(cab, ast.Constant) else "")
+            elif isinstance(a0, ast.Name) and a0.id == "clave":
+                pass
+            else:
+                opacas.append(f"{py.relative_to(raiz)}:{n.lineno}")
+    assert len(vistas) >= 5, vistas      # el respaldo, el latido y las 3 señales del canario
+    assert not opacas, opacas
+    assert not [v for v in vistas if v.startswith(db.PREFIJO_ALERTAS_DE_NATALIA)], vistas
