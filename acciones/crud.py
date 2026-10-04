@@ -928,6 +928,47 @@ COLUMNAS_DE_SISTEMA_DE_TAREAS = frozenset({
     "tomada_en", "clave_tecnica", "ultima_alarma_en", "grave"})
 
 
+# LO QUE `deshacer` PUEDE DEVOLVER DE LAS COLUMNAS DE SISTEMA (4-oct-2026).
+# Antes de este cambio `deshacer` devolvía toda columna del `antes` que no
+# estuviera en `NO_EDITABLES`, y así deshacer un «tomar» de la sala dejaba
+# `tomada_en` en NULL. Cerrar el hueco de `grave`/`clave_tecnica` con
+# `es_editable` solo dejó de devolver también `tomada_en`, y `deshacer` seguía
+# diciendo «deshecho». La regla es esta:
+#   · Una columna de sistema vuelve SOLO si está en `DESHACER_DEVUELVE_DE_SISTEMA`
+#     (las que el propio sistema mueve con una acción que deja huella y que no
+#     dañan nada al volver: hoy `tomada_en`, que escribe `tomar_tarea_de_la_sala`)
+#     Y la huella dice que ESA acción la cambió (`despues` la trae con otro valor
+#     que `antes`). Vuelve al valor de la huella, nunca a uno que se pida.
+#   · Las demás columnas de sistema (`grave`, `clave_tecnica`, `ultima_alarma_en`)
+#     no vuelven NUNCA. Si una huella dice que su acción las cambió, `deshacer`
+#     NO escribe nada y lo dice (`ValueError`), en vez de contestar «deshecho».
+DESHACER_DEVUELVE_DE_SISTEMA = {"tareas": frozenset({"tomada_en"})}
+
+
+def _cambiada_por(huella_antes: dict, huella_despues: dict, columna: str) -> bool:
+    return columna in huella_despues and huella_despues[columna] != huella_antes.get(columna)
+
+
+def columnas_de_sistema_que_no_vuelven(tabla: str, antes: dict, despues: dict) -> list[str]:
+    """Las columnas de sistema que la huella dice que su acción cambió y que
+    `deshacer` NO puede devolver (ver `DESHACER_DEVUELVE_DE_SISTEMA`)."""
+    if tabla != "tareas":
+        return []
+    return sorted(c for c in COLUMNAS_DE_SISTEMA_DE_TAREAS
+                  if c not in DESHACER_DEVUELVE_DE_SISTEMA[tabla]
+                  and _cambiada_por(antes, despues, c))
+
+
+def deshacer_la_devuelve(tabla: str, columna: str, antes: dict, despues: dict) -> bool:
+    """¿`deshacer` escribe esta columna del `antes` de una huella? LA ÚNICA
+    decisión: lo editable vuelve como siempre; lo de sistema, solo lo que
+    declara `DESHACER_DEVUELVE_DE_SISTEMA` y solo si esa acción lo cambió."""
+    if es_editable(tabla, columna):
+        return True
+    return (columna in DESHACER_DEVUELVE_DE_SISTEMA.get(tabla, ())
+            and _cambiada_por(antes, despues, columna))
+
+
 def es_editable(tabla: str, columna: str) -> bool:
     """¿Puede `editar`/`deshacer` escribir esta columna? LA ÚNICA decisión: las
     dos la consultan, con el valor que están a punto de escribir."""
@@ -2107,7 +2148,13 @@ async def deshacer(log_id: int) -> str:
             #   Las columnas SIN puerta siguen como siempre: vuelven todas las
             # del `antes`, también las que esta edición no tocó. Eso vale para
             # todas las tablas y no se decidió en este cambio.
-            columnas = [c for c in antes if es_editable(tabla, c)
+            no_vuelven = columnas_de_sistema_que_no_vuelven(tabla, antes, despues)
+            if no_vuelven:
+                raise ValueError(
+                    "No lo deshice: esa acción cambió "
+                    f"{', '.join(no_vuelven)}, que solo escribe el sistema y no "
+                    "se devuelve desde una huella.")
+            columnas = [c for c in antes if deshacer_la_devuelve(tabla, c, antes, despues)
                         and (c not in con_puerta
                              or (c in despues and despues[c] != antes[c]))]
             if not columnas:

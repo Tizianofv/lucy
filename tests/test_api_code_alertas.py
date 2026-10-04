@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sqlite3
 import sys
 import types
@@ -71,6 +72,33 @@ class _ErrorSQL(Exception):
         self.sqlstate = sqlstate
 
 
+def _como_jsonb(fila: dict) -> dict:
+    """psycopg entrega `jsonb` como dict; SQLite lo guardó como texto."""
+    for k in ("antes", "despues"):
+        if isinstance(fila.get(k), str):
+            fila[k] = json.loads(fila[k])
+    return fila
+
+
+def _emular_deshacer(con, sql, params):
+    """`UPDATE <tabla> t SET c = r.c ... FROM jsonb_populate_record(null::<tabla>, %s) r
+    WHERE t.id = %s` es de Postgres: se emula con Python (mismo patrón que
+    `tests/test_nombre_de_proyecto.py`). Devuelve None si no es esa sentencia."""
+    m = re.search(r"UPDATE (\w+) t SET (.+?) FROM jsonb_populate_record",
+                  " ".join(sql.split()))
+    if not m:
+        return None
+    columnas = [c.split("=")[0].strip() for c in m.group(2).split(",")]
+    datos = json.loads(params[0])
+    ESCRITURAS_DESHACER.append((m.group(1), tuple(columnas)))
+    return con.execute(
+        f"UPDATE {m.group(1)} SET " + ", ".join(f"{c} = ?" for c in columnas)
+        + " WHERE id = ?", [datos[c] for c in columnas] + [params[1]])
+
+
+ESCRITURAS_DESHACER: list[tuple] = []   # (tabla, columnas) de cada deshacer corrido
+
+
 class _Cur:
     def __init__(self, con):
         self._con = con
@@ -80,6 +108,10 @@ class _Cur:
         ORDEN.append((" ".join(sql.split()), tuple(params or ())))
         if any(" ".join(sql.split()).startswith(f) for f in FALLAR_EN):
             raise RuntimeError("fallo inyectado por la prueba")
+        emulado = _emular_deshacer(self._con, sql, params)
+        if emulado is not None:
+            self._filas = []
+            return self
         # `= ANY(%s)` es de Postgres: con una lista se emula con json_each.
         sql = sql.replace("= ANY(%s)", "IN (SELECT value FROM json_each(%s))")
         params = tuple(json.dumps(p) if isinstance(p, list) else p for p in (params or ()))
@@ -89,7 +121,7 @@ class _Cur:
             if "no such column" in str(e) or "no column named" in str(e):
                 raise _ErrorSQL("42703") from None
             raise
-        self._filas = [_Fila(f) for f in cur.fetchall()] if cur.description else []
+        self._filas = [_Fila(_como_jsonb(dict(f))) for f in cur.fetchall()] if cur.description else []
         return self
 
     async def fetchone(self):
@@ -205,6 +237,7 @@ def puerta():
     api_code._ultimo_aviso_abuso = 0.0
     ORDEN.clear()
     FALLAR_EN.clear()
+    ESCRITURAS_DESHACER.clear()
 
     def poner_base(**opciones):
         con = _base(**opciones)
@@ -949,3 +982,91 @@ def test_lo_grave_solo_cuenta_entre_las_pendientes_en_la_pagina():
     leve["completado_en"] = grave["completado_en"] = ahora
     html = _pagina([leve, grave])
     assert html.index("Hecha leve primera") < html.index("Hecha grave segunda")
+
+
+# ── Los bordes del tope (vuelta del testigo sobre `d0fbb47`) ──────────────
+
+def _bloque_de_repeticion(puerta):
+    """(con, largo del encabezado «\\n\\n— Volvió a pasar (…): » que lleva toda
+    repetición), medido corriendo la ruta y no tecleado."""
+    con = puerta()
+    CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="a"))
+    CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="x"))
+    return con, _largo_detalle(con) - 2
+
+
+def test_borde_del_tope_la_repeticion_que_sobra_un_caracter_entra_cortada_con_su_marca(puerta):
+    tope = api_code.LARGO_DETALLE_ALERTA
+    con, bloque = _bloque_de_repeticion(puerta)
+    libre = tope - _largo_detalle(con)
+    r = CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="y" * (libre - bloque + 1))).json()
+    assert (r["repeticion_omitida"], r["recortado"]) == (False, True)
+    detalle = con.execute("SELECT detalle FROM tareas").fetchone()[0]
+    assert len(detalle) == tope
+    assert detalle.endswith(db.MARCA_RECORTE), "la repetición cortada no lleva su marca"
+
+
+def test_borde_del_tope_la_repeticion_que_cabe_justa_entra_entera_sin_marca(puerta):
+    tope = api_code.LARGO_DETALLE_ALERTA
+    con, bloque = _bloque_de_repeticion(puerta)
+    libre = tope - _largo_detalle(con)
+    r = CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="y" * (libre - bloque))).json()
+    assert (r["repeticion_omitida"], r["recortado"]) == (False, False)
+    detalle = con.execute("SELECT detalle FROM tareas").fetchone()[0]
+    assert len(detalle) == tope and not detalle.endswith(db.MARCA_RECORTE)
+
+
+def test_la_repeticion_cortada_dice_lo_que_dice_la_marca_y_se_lee_al_final(puerta):
+    tope = api_code.LARGO_DETALLE_ALERTA
+    con = puerta()
+    CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="a" * (tope - 100)))
+    CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="z" * 500))
+    detalle = con.execute("SELECT detalle FROM tareas").fetchone()[0]
+    assert len(detalle) == tope and detalle.endswith("… [recortado]")
+    assert "Volvió a pasar" in detalle[-100:]
+
+
+@pytest.mark.parametrize("libre,esperado", [
+    (len(db.MARCA_RECORTE), (True, False, 0)),        # cabe solo la marca: no entra
+    (len(db.MARCA_RECORTE) - 1, (True, False, 0)),
+    (len(db.MARCA_RECORTE) + 1, (False, True, 1)),    # cabe 1 caracter + la marca: entra cortada
+])
+def test_borde_del_hueco_minimo_omite_o_corta(puerta, libre, esperado):
+    omitida, recortada, cuanto_entra = esperado
+    tope = api_code.LARGO_DETALLE_ALERTA
+    con = puerta()
+    CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="a" * (tope - libre)))
+    r = CLIENTE.post(RUTA, headers=_h(), json=_alerta(detalle="b" * 200)).json()
+    assert (r["repeticion_omitida"], r["recortado"]) == (omitida, recortada)
+    largo = _largo_detalle(con)
+    assert largo == (tope - libre if omitida else tope)
+
+
+# ── El arranque llama a la comprobación del nombre ────────────────────────
+
+def _arrancar_una_copia_del_modulo():
+    """Ejecuta de nuevo el código de `web/api_code.py` (como al arrancar el
+    proceso), sin tocar el módulo ya montado en la app."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("api_code_recien_arrancado", api_code.__file__)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+
+def test_el_arranque_del_modulo_grita_si_la_configuracion_trae_otro_nombre(puerta, caplog):
+    import logging
+    puerta()
+    config.CLAVES_API_CODE = {"clave-de-prueba-arranque": "natalia_prod"}
+    config.PERMISOS_API_CODE = {"natalia_prod": frozenset({"alertas:crear"})}
+    with caplog.at_level(logging.ERROR):
+        _arrancar_una_copia_del_modulo()
+    texto = " ".join(r.getMessage() for r in caplog.records)
+    assert "CONFIGURACIÓN DE LA PUERTA DE CODE" in texto and "natalia_prod" in texto
+
+
+def test_el_arranque_del_modulo_no_grita_con_la_configuracion_bien(puerta, caplog):
+    import logging
+    puerta()
+    with caplog.at_level(logging.ERROR):
+        _arrancar_una_copia_del_modulo()
+    assert not caplog.records
