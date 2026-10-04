@@ -10,12 +10,12 @@ sala y Natalia son programas llamando una API, y no tienen ninguna de las
 dos cosas.
 
 RUTAS DE ESTA PARTE, y solo éstas: `GET /tareas` (listar),
-`POST /tareas/{id}/cerrar`, `POST /tareas/{id}/tomar` y (1-oct-2026) los
-comentarios de una tarea de Code: `GET`/`POST /tareas/{id}/comentarios`. NO
-hay ruta de "alertas": esa parte del diseño (§B) todavía no se construyó, y una ruta a medias
-—que exista pero siempre falle, o que acepte un permiso que nada usa— es
-peor que no tenerla: alguien podría configurarle una clave a Natalia con
-"alertas:crear" y pensar que ya funciona.
+`POST /tareas/{id}/cerrar`, `POST /tareas/{id}/tomar`, (1-oct-2026) los
+comentarios de una tarea de Code: `GET`/`POST /tareas/{id}/comentarios`, y
+(4-oct-2026) `POST /alertas`, la ÚNICA ruta de Natalia (permiso
+`alertas:crear`). Una ruta a medias —que exista pero siempre falle, o que
+acepte un permiso que nada usa— es peor que no tenerla: por eso `alertas:
+crear` no tuvo ruta hasta que esta estuvo completa.
 
 EL REPO ES PÚBLICO. Ninguna clave real vive acá ni en ningún archivo del
 repo — las variables `CLAVES_API_CODE`/`PERMISOS_API_CODE` las pone la sala
@@ -34,11 +34,12 @@ from __future__ import annotations
 import asyncio
 import hmac
 import logging
+import re
 import time
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
 
 import config
 import db.db as db
@@ -292,6 +293,100 @@ async def comentar_tarea_de_code(
             detail="no se comentó: no es una tarea del grupo IA asignada a "
                    "Code, o no existe")
     return {"comentado": True, "id": cid}
+
+
+# ── La alerta técnica de Natalia (4-oct-2026) ─────────────────────────────
+#
+# Tiziano: los letreros técnicos de Natalia van a Code, no a Telegram; los
+# graves, a Telegram Y a Code «con un aviso de grave para que lo atienda
+# primero». Esta ruta es la mitad de Lucy: deja (o reusa) una tarea de Code.
+# De Telegram se ocupa Natalia por su lado; esta ruta NO manda nada por
+# Telegram.
+#
+# LA CLAVE LA PREFIJA LA AUTENTICACIÓN: lo que llega en `clave` se guarda como
+# `f"{quien}:{clave}"`. Así el dedupe de Natalia no puede pisar el de otro
+# llamador ni el de las alarmas de Lucy (`backup`, `latido_cosecha`,
+# `canario:...`, que nunca llevan `natalia:` delante).
+#
+# EL DETALLE PUEDE TRAER DATOS DE CLIENTES (nombres, teléfonos): queda en
+# `tareas.detalle`, en la base de Lucy, y lo ven quien entra al panel (Tiziano
+# y Rosi), la sala por `GET /api/code/tareas` y el modelo de Lucy cuando
+# consulta sus tablas. NUNCA se escribe en un log de este código (ni el
+# título, ni el detalle, ni la clave), y la huella de `log_acciones` lleva
+# solo la clave y el título.
+LARGO_TITULO_ALERTA = db.LARGO_TITULO_TAREA
+# Elegido, no medido: lo que la tarea guarda de UNA alerta, y lo que puede
+# crecer el `detalle` de una tarea reusada antes de dejar de agregar
+# repeticiones.
+LARGO_DETALLE_ALERTA = 4000
+LARGO_CLAVE_ALERTA = 120
+_CLAVE_VALIDA = re.compile(r"[A-Za-z0-9._:-]{1,%d}" % LARGO_CLAVE_ALERTA)
+_MARCA_RECORTE = "… [recortado]"
+
+
+class _AlertaNueva(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    clave: StrictStr
+    titulo: StrictStr
+    detalle: StrictStr = ""
+    grave: StrictBool = False
+
+
+def _recortar(texto: str, tope: int) -> tuple[str, bool]:
+    if len(texto) <= tope:
+        return texto, False
+    return texto[: tope - len(_MARCA_RECORTE)] + _MARCA_RECORTE, True
+
+
+@router.post("/alertas")
+async def crear_alerta(
+    cuerpo: _AlertaNueva, quien: str = Depends(requiere("alertas:crear"))
+) -> dict:
+    """Crea una alerta técnica como tarea de Code, o la reusa si ya hay una
+    abierta con la misma clave (`db.crear_o_reusar_alerta_tecnica`, la misma
+    puerta de las alarmas de Lucy).
+
+    RESPUESTAS, todas dicen la verdad:
+      · 200 `{"tarea_id", "reusada", "grave", "repeticion_omitida",
+        "recortado"}`. `reusada: false` = nació una tarea; `true` = ya había
+        una abierta y se le agregó esta repetición. `grave` = cómo quedó la
+        tarea (una grave no baja). `recortado: true` = el título o el detalle
+        pasaron el tope y se guardaron cortados. `repeticion_omitida: true` =
+        la tarea ya llegó al tope de detalle y esta repetición no se escribió
+        (solo se anotó que la falla sigue sonando).
+      · 422: clave/título vacíos o mal formados. NO se guardó nada.
+      · 503: falta una migración de la base. NO se guardó nada.
+      · 401/403/429: la puerta de siempre. NO se guardó nada.
+      · Cualquier otro fallo es un 500: tampoco se guardó nada que se pueda
+        asegurar. Natalia decide qué hace; esta ruta no avisa a nadie.
+    """
+    clave = cuerpo.clave.strip()
+    titulo = " ".join(cuerpo.titulo.split())
+    if not _CLAVE_VALIDA.fullmatch(clave):
+        raise HTTPException(
+            status_code=422,
+            detail=f"la clave debe tener de 1 a {LARGO_CLAVE_ALERTA} caracteres "
+                   "entre letras, números y . _ : -")
+    if not titulo:
+        raise HTTPException(status_code=422, detail="el título no puede quedar vacío")
+    titulo, titulo_recortado = _recortar(titulo, LARGO_TITULO_ALERTA)
+    detalle, detalle_recortado = _recortar(cuerpo.detalle.strip(), LARGO_DETALLE_ALERTA)
+    informe: dict = {}
+    tid = await db.crear_o_reusar_alerta_tecnica(
+        f"{quien}:{clave}", titulo, detalle, grave=cuerpo.grave,
+        informe=informe, tope_detalle=LARGO_DETALLE_ALERTA)
+    if tid is None:
+        log.error("puerta de Code: /alertas sin las columnas que necesita -- "
+                  "falta aplicar db/migrations/2026-09-26_alertas_tecnicas.sql "
+                  "(y 2026-10-04_tarea_grave.sql si la alerta es grave)")
+        raise HTTPException(
+            status_code=503,
+            detail="no se guardó: falta una migración de la base de Lucy. "
+                   "Avisale a la sala/Tiziano.")
+    return {"tarea_id": tid, "reusada": informe["reusada"],
+            "grave": informe["grave"],
+            "repeticion_omitida": informe["omitida"],
+            "recortado": titulo_recortado or detalle_recortado}
 
 
 def rutas_registradas(app) -> list[tuple[str, str, str]]:

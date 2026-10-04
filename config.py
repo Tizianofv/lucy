@@ -243,9 +243,11 @@ def opciones_de_responsable() -> tuple[tuple[str, str], ...]:
 # Los permisos que YA EXISTEN en el código, hoy (parte 3 del plan, más los
 # comentarios del 1-oct-2026): `tareas:listar`, `tareas:cerrar`, `tareas:tomar`,
 # `comentarios:leer` y `comentarios:escribir` tienen una ruta que los pida
-# (`web/api_code.py`). `alertas:crear` es un NOMBRE ya reservado para una
-# parte futura del mismo diseño (§B, crear/reusar alerta técnica) —
-# declararlo acá no abre ninguna ruta que no exista.
+# (`web/api_code.py`). `alertas:crear` (la clave de Natalia, la única ruta que
+# puede llamar: `POST /api/code/alertas`, desde el 4-oct-2026) también tiene
+# su ruta. La clave de Natalia se agrega a `CLAVES_API_CODE` como
+# `natalia:<clave larga>` y su permiso a `PERMISOS_API_CODE` como
+# `natalia=alertas:crear`.
 #
 # CERRADO POR DEFECTO, en dos niveles independientes:
 #   · Si `CLAVES_API_CODE` no está puesta (o no tiene ninguna pieza legible),

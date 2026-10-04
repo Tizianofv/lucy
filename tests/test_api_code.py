@@ -229,7 +229,8 @@ def test_clave_de_sala_puede_listar_y_cerrar():
                          headers={"Authorization": f"Bearer {SALA_CLAVE}"})
         assert r1.status_code == 200
         assert r1.json() == {"tareas": [
-            {"id": 5, "titulo": "Arreglar el canario", "tomada_en": None}]}
+            {"id": 5, "titulo": "Arreglar el canario", "tomada_en": None,
+             "grave": False}]}
 
         r2 = CLIENTE.post("/api/code/tareas/5/cerrar",
                           headers={"Authorization": f"Bearer {SALA_CLAVE}"})
@@ -361,18 +362,19 @@ def test_cada_ruta_de_la_puerta_declara_un_permiso_distinto_de_las_demas():
         "_PERMISOS_COMPARTIDOS_A_PROPOSITO con el porqué")
 
 
-def test_no_existe_ruta_de_alertas():
-    """«Mejor ausente que a medias»: `POST /api/code/alertas` es de una
-    parte futura del diseño (§B, crear/reusar alerta técnica) y no se
-    construye todavía, aunque el permiso `alertas:crear` ya esté reservado
-    en el formato de `PERMISOS_API_CODE`. `/tareas/{id}/tomar` SÍ existe
-    desde esta parte (§D, parte 3) -- se prueba aparte, no acá."""
+def test_la_unica_ruta_de_alertas_es_el_post_y_otras_no_existen():
+    """ANTES (parte 2) esta prueba exigía que `POST /api/code/alertas` fuera
+    404: «mejor ausente que a medias». Desde el 4-oct-2026 la ruta existe y
+    está completa (`tests/test_api_code_alertas.py`), así que lo que se
+    vigila ahora es que NO haya otra cosa colgada de `/alertas`: ni un GET
+    que lea alertas, ni subrutas. Natalia no puede leer nada."""
     restaurar = _con_sala_y_natalia()
     _limpiar_contadores_de_abuso()
     try:
-        r = CLIENTE.post("/api/code/alertas",
-                         headers={"Authorization": f"Bearer {NATALIA_CLAVE}"})
-        assert r.status_code == 404
+        h = {"Authorization": f"Bearer {NATALIA_CLAVE}"}
+        assert CLIENTE.get("/api/code/alertas", headers=h).status_code == 405
+        assert CLIENTE.post("/api/code/alertas/1", headers=h).status_code == 404
+        assert CLIENTE.get("/api/code/alertas/1", headers=h).status_code == 404
     finally:
         restaurar()
 

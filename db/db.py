@@ -3276,8 +3276,12 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
     # filas. Cada fila que la sala ya tomó lleva su `tomada_en`; el resto,
     # `None`.
     tomada_en_de = await tomadas_de([f["id"] for f in filas])
+    # «GRAVE» (4-oct-2026): igual, una consulta aparte y en lote (ver
+    # `graves_de`); las graves se ordenan primero dentro de su grupo.
+    graves = await graves_de([f["id"] for f in filas])
     for f in filas:
         f["tomada_en"] = tomada_en_de.get(f["id"])
+        f["grave"] = f["id"] in graves
     siguio_de: dict[int, list[dict]] = {}
     for hija_id, madre_id in hijas_de.items():
         siguio_de.setdefault(madre_id, []).append(
@@ -3343,6 +3347,8 @@ async def tareas_por_grupo(limite: int = TOPE_TAREAS, hoy: date | None = None) -
     # vez de desaparecer. Hoy `grupo_de_tarea` no puede devolver otra cosa —
     # pero "hoy no puede" es exactamente lo que se creía de la lista de estados
     # de db/schema.sql antes de que apareciera 'descartado' en producción.
+    for fs in por_clave.values():
+        fs.sort(key=lambda f: not f["grave"])      # estable: solo sube las graves
     grupos = [{"clave": c, "titulo": t, "filas": por_clave.pop(c)}
               for c, t in GRUPOS_DE_TAREAS if por_clave.get(c)]
     grupos += [{"clave": c, "titulo": c, "filas": fs}
@@ -3495,6 +3501,11 @@ async def tareas_de_code_pendientes() -> list[dict]:
     otra debería ofrecérsele a la sala es un refinamiento que el diseño deja
     fuera a propósito (§6 del documento).
 
+    ORDEN (4-oct-2026): las GRAVES primero (`t.grave DESC`; alertas que Natalia
+    declaró graves), y dentro de cada grupo el orden de siempre. Cada fila
+    trae `grave` (bool). Sin la columna, cae a la consulta de antes y todas
+    salen `grave: false`.
+
     `tomada_en` (26-sep-2026, §D, parte 3): cuándo la sala EMPEZÓ esta tarea
     (`db.tomar_tarea_de_la_sala`), para que la lista -- y el panel -- puedan
     decir «en curso» en vez de solo «pendiente». SI LA COLUMNA TODAVÍA NO
@@ -3502,6 +3513,21 @@ async def tareas_de_code_pendientes() -> list[dict]:
     `primero_id`), esto cae -- con un SAVEPOINT -- a la consulta de ANTES de
     esta parte: la lista sigue sirviendo, cada fila con `tomada_en: None`.
     """
+    # LAS GRAVES PRIMERO (4-oct-2026): `con_grave` es `con_tomada` más
+    # `t.grave` y el orden `grave DESC`. Si la columna `grave` no existe
+    # todavía (42703) se cae a `con_tomada`, y de ahí a `sin_tomada`: tres
+    # peldaños, cada uno la consulta de antes.
+    con_grave = """
+        SELECT t.id, t.titulo, t.detalle, t.vence_en, t.creado_en,
+               t.primero_id, t.tomada_en, t.grave, p.nombre AS proyecto
+          FROM tareas t
+          LEFT JOIN proyectos p ON p.id = t.proyecto_id
+         WHERE t.borrado_en IS NULL
+           AND t.estado = %s
+           AND t.responsable_chat_id = %s
+           AND COALESCE(t.area, p.area) = %s
+         ORDER BY t.grave DESC, t.vence_en NULLS LAST, t.id
+        """
     con_tomada = """
         SELECT t.id, t.titulo, t.detalle, t.vence_en, t.creado_en,
                t.primero_id, t.tomada_en, p.nombre AS proyecto
@@ -3529,7 +3555,7 @@ async def tareas_de_code_pendientes() -> list[dict]:
         try:
             async with conn.transaction():
                 await cur.execute(
-                    con_tomada, (ESTADO_PENDIENTE, CHAT_ID_CODE, AREA_TECNICA))
+                    con_grave, (ESTADO_PENDIENTE, CHAT_ID_CODE, AREA_TECNICA))
                 filas = await cur.fetchall()
         except Exception as e:
             try:
@@ -3539,12 +3565,26 @@ async def tareas_de_code_pendientes() -> list[dict]:
             if sqlstate != "42703":
                 raise
             cur = conn.cursor(row_factory=dict_row)
-            await cur.execute(
-                sin_tomada, (ESTADO_PENDIENTE, CHAT_ID_CODE, AREA_TECNICA))
-            filas = await cur.fetchall()
+            try:
+                async with conn.transaction():
+                    await cur.execute(
+                        con_tomada, (ESTADO_PENDIENTE, CHAT_ID_CODE, AREA_TECNICA))
+                    filas = await cur.fetchall()
+            except Exception as e2:
+                try:
+                    sqlstate = e2.sqlstate
+                except AttributeError:
+                    raise e2 from None
+                if sqlstate != "42703":
+                    raise
+                cur = conn.cursor(row_factory=dict_row)
+                await cur.execute(
+                    sin_tomada, (ESTADO_PENDIENTE, CHAT_ID_CODE, AREA_TECNICA))
+                filas = await cur.fetchall()
     filas = list(filas)
     for f in filas:
         f.setdefault("tomada_en", None)
+        f["grave"] = bool(f.get("grave", False))
     return filas
 
 
@@ -3753,7 +3793,54 @@ async def tomar_tarea_de_la_sala(tarea_id: int) -> bool | None:
         return True
 
 
-async def crear_o_reusar_alerta_tecnica(clave: str, titulo: str, detalle: str) -> int | None:
+async def _es_grave(conn, tarea_id: int) -> bool:
+    """¿La tarea está marcada grave? Con la columna sin migrar, False."""
+    try:
+        async with conn.transaction():
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute("SELECT grave FROM tareas WHERE id = %s", (tarea_id,))
+            fila = await cur.fetchone()
+    except Exception as e:
+        try:
+            sqlstate = e.sqlstate
+        except AttributeError:
+            raise e from None
+        if sqlstate == "42703":
+            return False
+        raise
+    return bool(fila and fila["grave"])
+
+
+async def graves_de(ids: list[int]) -> set[int]:
+    """Los `ids` (de los que se le pasan) que son tareas GRAVES de Code
+    (`tareas.grave`, 4-oct-2026). Misma forma que `tomadas_de`: una lectura
+    aparte, en lote, que con la columna sin migrar devuelve el conjunto vacío
+    (nada se pinta grave) en vez de reventar. Solo cuenta las que SIGUEN
+    siendo de Code, por lo mismo que `tomadas_de`."""
+    if not ids:
+        return set()
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(
+                "SELECT id FROM tareas WHERE id = ANY(%s) AND grave "
+                "AND responsable_chat_id = %s", (ids, CHAT_ID_CODE))
+            filas = await cur.fetchall()
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate == "42703":
+                return set()
+            raise
+    return {f["id"] for f in filas}
+
+
+async def crear_o_reusar_alerta_tecnica(
+        clave: str, titulo: str, detalle: str, grave: bool = False,
+        informe: dict | None = None,
+        tope_detalle: int | None = None) -> int | None:
     """Convierte una alarma técnica de Lucy en una tarea de Code -- o, si ya
     hay una abierta para el MISMO problema, le agrega esta ocurrencia en vez
     de crear otra (§B, parte 4 del plan de construcción, 26-sep-2026).
@@ -3779,6 +3866,21 @@ async def crear_o_reusar_alerta_tecnica(clave: str, titulo: str, detalle: str) -
     con la clave puesta, y su propia huella en `log_acciones` (`actor=
     'lucy'`, porque es Lucy quien la crea sola, sin que nadie se lo pida
     en ese momento).
+
+    PARÁMETROS DE LA PUERTA DE NATALIA (4-oct-2026; las cinco alarmas de
+    Lucy no pasan ninguno y se comportan exactamente como antes):
+      · `grave=True` marca la tarea (`tareas.grave`) -- al crearla o, si ya
+        había una abierta, al reusarla. NUNCA baja una marca: `grave=False`
+        sobre una tarea grave la deja grave. Con `grave=True` y la columna
+        sin migrar devuelve `None` (no guarda una alerta grave sin poder
+        decir que lo es). Con `grave=False` ni nombra la columna.
+      · `informe`, un dict que esta función llena con lo que pasó, para quien
+        necesita decirlo con verdad: `reusada` (bool) y `grave` (cómo quedó
+        la tarea). Si devuelve `None`, no lo llena.
+      · `tope_detalle`: si la tarea reusada ya tiene `detalle` de ese largo o
+        más, la repetición NO se agrega (solo se actualiza `ultima_alarma_en`)
+        -- una falla que suena sin parar desde afuera no puede hacer crecer
+        una fila sin fin. Es un valor que pone quien llama, no medido.
     """
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -3802,11 +3904,39 @@ async def crear_o_reusar_alerta_tecnica(clave: str, titulo: str, detalle: str) -
             return None
 
         if existente is not None:
+            if grave:
+                # Primero la marca, en su propio SAVEPOINT: si la columna no
+                # existe no se escribe NADA (ni el detalle) y se devuelve None.
+                try:
+                    async with conn.transaction():
+                        await conn.execute(
+                            "UPDATE tareas SET grave = true WHERE id = %s",
+                            (existente["id"],))
+                except Exception as e:
+                    try:
+                        sqlstate = e.sqlstate
+                    except AttributeError:
+                        raise e from None
+                    if sqlstate != "42703":
+                        raise
+                    log.warning(
+                        "crear_o_reusar_alerta_tecnica: falta tareas.grave "
+                        "(falta la migracion db/migrations/2026-10-04_tarea_grave.sql)"
+                        " -- clave=%s", clave)
+                    return None
             ahora = f"\n\n— Volvió a pasar ({datetime.now(timezone.utc):%d/%m %H:%M} UTC): {detalle}"
+            omitida = (tope_detalle is not None
+                       and len(existente["detalle"] or "") >= tope_detalle)
+            if omitida:
+                ahora = ""
             await conn.execute(
                 "UPDATE tareas SET detalle = COALESCE(detalle, '') || %s, "
                 "ultima_alarma_en = now() WHERE id = %s",
                 (ahora, existente["id"]))
+            if informe is not None:
+                informe["reusada"] = True
+                informe["omitida"] = omitida
+                informe["grave"] = bool(grave) or await _es_grave(conn, existente["id"])
             return existente["id"]
 
         # LA MISMA PUERTA que cualquier otro escritor de `responsable_chat_id`
@@ -3822,16 +3952,46 @@ async def crear_o_reusar_alerta_tecnica(clave: str, titulo: str, detalle: str) -
             raise ValueError(
                 "CHAT_ID_CODE ya no pasa por puede_ser_responsable -- no "
                 "debería pasar nunca, revisar config.puede_ser_responsable")
-        await cur.execute(
-            """
-            INSERT INTO tareas
-              (titulo, detalle, area, responsable_chat_id, clave_tecnica,
-               ultima_alarma_en)
-            VALUES (%s, %s, %s, %s, %s, now())
-            RETURNING id
-            """,
-            (titulo, detalle, AREA_TECNICA, CHAT_ID_CODE, clave))
-        fila = await cur.fetchone()
+        if grave:
+            try:
+                async with conn.transaction():
+                    await cur.execute(
+                        """
+                        INSERT INTO tareas
+                          (titulo, detalle, area, responsable_chat_id,
+                           clave_tecnica, ultima_alarma_en, grave)
+                        VALUES (%s, %s, %s, %s, %s, now(), true)
+                        RETURNING id
+                        """,
+                        (titulo, detalle, AREA_TECNICA, CHAT_ID_CODE, clave))
+                    fila = await cur.fetchone()
+            except Exception as e:
+                try:
+                    sqlstate = e.sqlstate
+                except AttributeError:
+                    raise e from None
+                if sqlstate != "42703":
+                    raise
+                log.warning(
+                    "crear_o_reusar_alerta_tecnica: falta tareas.grave "
+                    "(falta la migracion db/migrations/2026-10-04_tarea_grave.sql)"
+                    " -- clave=%s", clave)
+                return None
+        else:
+            await cur.execute(
+                """
+                INSERT INTO tareas
+                  (titulo, detalle, area, responsable_chat_id, clave_tecnica,
+                   ultima_alarma_en)
+                VALUES (%s, %s, %s, %s, %s, now())
+                RETURNING id
+                """,
+                (titulo, detalle, AREA_TECNICA, CHAT_ID_CODE, clave))
+            fila = await cur.fetchone()
+        if informe is not None:
+            informe["reusada"] = False
+            informe["omitida"] = False
+            informe["grave"] = bool(grave)
         await conn.execute(
             """
             INSERT INTO log_acciones
@@ -4448,6 +4608,7 @@ async def tarea_con_comentarios(tarea_id: int) -> dict | None:
     # `tomadas_de` en `tareas_por_grupo` -- una consulta aparte, tolerante a
     # la columna ausente, en vez de un cuarto nivel de cascada acá.
     tarea["tomada_en"] = (await tomadas_de([tarea_id])).get(tarea_id)
+    tarea["grave"] = tarea_id in await graves_de([tarea_id])
     # LOS MICRO-PASOS (encargo 7): `pasos_de_tarea` ya tolera la tabla
     # ausente por su cuenta (devuelve `[]`), así que no hace falta otro
     # SAVEPOINT acá -- es una consulta APARTE, no un tercer JOIN.

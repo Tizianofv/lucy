@@ -284,6 +284,13 @@ CREATE TABLE tareas (
   -- "venza" antes de tiempo mientras la sala todavía no lo mira.
   ultima_alarma_en TIMESTAMPTZ,
 
+  -- «Grave» (4-oct-2026, migración 2026-10-04_tarea_grave.sql): la alerta
+  -- técnica que originó esta tarea se declaró grave (hoy, las que manda
+  -- Natalia por `POST /api/code/alertas`). La sube SOLO
+  -- `db.crear_o_reusar_alerta_tecnica` y nunca la baja. La sala atiende
+  -- primero las graves (`GET /api/code/tareas`) y `/tareas` las marca.
+  grave           BOOLEAN NOT NULL DEFAULT false,
+
   -- «Una tarea dentro de un proyecto nunca tiene un área propia distinta»
   -- (decisión de Tiziano: el área sale del proyecto, nadie la elige aparte).
   -- El caso queda IRREPRESENTABLE, no validado en cada escritura: con

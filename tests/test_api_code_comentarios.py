@@ -138,7 +138,8 @@ def _base(tareas: list[dict], comentarios: list[dict] = ()):
           id INTEGER PRIMARY KEY, titulo TEXT, detalle TEXT, estado TEXT,
           vence_en TEXT, creado_en TEXT, primero_id INTEGER, tomada_en TEXT,
           completado_en TEXT, bandeja_id INTEGER, responsable_chat_id INTEGER,
-          area TEXT, proyecto_id INTEGER, borrado_en TEXT);
+          area TEXT, proyecto_id INTEGER, borrado_en TEXT,
+          grave INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE comentarios_tarea (
           id INTEGER PRIMARY KEY AUTOINCREMENT, tarea_id INTEGER NOT NULL,
           autor_chat_id INTEGER NOT NULL,

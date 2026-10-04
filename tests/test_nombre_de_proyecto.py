@@ -79,7 +79,7 @@ class _Cur:
             self._cur = self._b.con.execute(s, conv)
         except sqlite3.OperationalError as e:
             # Lo que Postgres diría de una columna que no existe.
-            if "no column named" in str(e):
+            if "no column named" in str(e) or "no such column" in str(e):
                 e.sqlstate = "42703"
             raise
         return self

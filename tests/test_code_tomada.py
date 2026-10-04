@@ -825,7 +825,8 @@ def test_listar_sin_la_columna_no_revienta():
                         headers={"Authorization": f"Bearer {SALA_CLAVE}"})
         assert r.status_code == 200
         assert r.json() == {"tareas": [
-            {"id": 5, "titulo": "Arreglar el canario", "tomada_en": None}]}
+            {"id": 5, "titulo": "Arreglar el canario", "tomada_en": None,
+             "grave": False}]}
     finally:
         db.pool = guardado
         restaurar()
