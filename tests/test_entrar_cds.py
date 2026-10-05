@@ -386,10 +386,17 @@ def test_G2_9_el_303_va_a_proyectos_a_secas(app_registro, nivel):
 # El registro no guarda el boleto ni el chat
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_el_registro_de_lucy_no_lleva_el_boleto_ni_el_numero_de_chat(app_registro, caplog):
+def test_el_registro_de_lucy_no_lleva_el_boleto_ni_el_numero_de_chat(
+        app_registro, caplog, monkeypatch):
     caplog.set_level(logging.DEBUG)
-    buenos = [app_registro.emitir("total", DUENO), app_registro.emitir("total", AJENO),
-              app_registro.emitir("ver", OTRA_DE_LA_CASA)]
+    # Números de chat propios de esta prueba, largos a propósito: `CHAT_ID_DUENO`
+    # lo fija el primer módulo de prueba que importa `config` (puede ser un número
+    # corto) y uno corto aparece por casualidad en cualquier registro (direcciones
+    # de memoria, puertos). Medido: así falló una vez de cada ocho corridas.
+    casa, ajeno, otra = 7364528190, 6152937408, 8405162739
+    monkeypatch.setattr(config, "CHAT_IDS_PERMITIDOS", (DUENO, casa, otra))
+    buenos = [app_registro.emitir("total", casa), app_registro.emitir("total", ajeno),
+              app_registro.emitir("ver", otra)]
     for b in buenos:
         entrar(cliente(), b)
     entrar(cliente(), "Z" * 43)                       # un boleto que no existe
@@ -399,6 +406,8 @@ def test_el_registro_de_lucy_no_lleva_el_boleto_ni_el_numero_de_chat(app_registr
     # (`testserver`), que repite la dirección que él mismo pidió, con el código.
     texto = "\n".join(r.getMessage() for r in caplog.records
                       if "testserver" not in r.getMessage())
-    assert "/entrar-cds" in texto, "la prueba no vio el registro de la puerta"
-    for secreto in [*buenos, "Z" * 43, "Y" * 43, str(DUENO), str(AJENO), str(OTRA_DE_LA_CASA)]:
-        assert secreto not in texto, "el registro lleva un boleto o un número de chat"
+    assert "/entrar-cds" in texto, f"la prueba no vio el registro de la puerta: {texto[:600]!r}"
+    for secreto in [*buenos, "Z" * 43, "Y" * 43, str(casa), str(ajeno), str(otra)]:
+        i = texto.find(secreto)
+        assert i < 0, ("el registro lleva un boleto o un número de chat, en: "
+                       + repr(texto[max(0, i - 80): i + 80]))

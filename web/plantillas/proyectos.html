@@ -589,7 +589,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     </div>
     {% if m.cerrado %}<div class="aviso-cerrado">Proyecto cerrado: no se le agregan tareas.
       {% if not solo_ver %}<form class="en-linea" method="post" action="/proyectos/{{ m.id }}/estado"><input type="hidden" name="estado" value="activo"><button class="btn-linea">Reabrir</button></form>{% endif %}</div>{% endif %}
-    {% if not m.estado_conocido %}<div class="aviso-raro">Este proyecto tiene un estado que no es de la lista («{{ m.estado }}»). Al cerrarlo o reabrirlo se corrige.</div>{% endif %}
+    {% if not m.estado_conocido and not solo_ver %}<div class="aviso-raro">Este proyecto tiene un estado que no es de la lista («{{ m.estado }}»). Al cerrarlo o reabrirlo se corrige.</div>{% endif %}
 
     <div class="cuerpo">
       <div class="centro">

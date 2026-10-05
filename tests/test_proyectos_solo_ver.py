@@ -299,7 +299,7 @@ def controles_que_sobran(html: str, enlace_a_la_app: str = "") -> list[str]:
 # Consultas de lectura reales de la página y las armadas a mano para hacerla
 # dibujar formularios, confirmaciones o avisos.
 VISTAS = [
-    {}, {"p": 1}, {"p": 2}, {"p": 3}, {"g": "CDS"}, {"sin_grupo": 1}, {"q": "disco"}, {"q": "zzz"},
+    {}, {"p": 1}, {"p": 2}, {"p": 3}, {"p": 4}, {"g": "CDS"}, {"sin_grupo": 1}, {"q": "disco"}, {"q": "zzz"},
     {"p": 1, "t": 10}, {"p": 1, "t": 11},
 ]
 A_MANO = {
@@ -427,3 +427,18 @@ def test_la_pagina_de_ver_no_dice_que_se_guardo_algo_que_no_se_guardo():
     todo = _pintar("ver", p=1, **AVISOS_A_MANO)
     for texto in de_la_casa:
         assert texto not in re.sub(r"<[^>]+>", "", todo), texto
+
+
+def test_la_pagina_de_ver_no_promete_cambios_que_no_ofrece():
+    """Los títulos y ayudas que explican CÓMO se cambia algo («doble clic para
+    cambiar el nombre»…) están en la página completa y NO en la de ver: decirlo
+    sin poder hacerlo es una frase que promete más de lo que la página hace."""
+    assert "oble clic" in _pintar("casa", p=1, t=10)         # la prueba ve la frase de verdad
+    assert "Al cerrarlo o reabrirlo" in _pintar("casa", p=4)
+    for consulta in VISTAS + list(A_MANO.values()):
+        html = _pintar("ver", **consulta)
+        assert "oble clic" not in html, consulta
+        for frase in ("Cambiar el nombre", "Cambiar el título", "Editar el comentario",
+                      "Escribe un comentario", "Nueva tarea", "Cerrar proyecto", "Borrar",
+                      "Al cerrarlo o reabrirlo"):
+            assert frase not in html, (consulta, frase)

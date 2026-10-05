@@ -13,7 +13,8 @@ import web.app as panel
 def modelo() -> dict:
     pr = [dict(id=1, nombre="Disco Uno", area="CDS", estado="activo", cliente_nombre="Cliente X"),
           dict(id=2, nombre="Cerrado Dos", area="CDS", estado="cerrado"),
-          dict(id=3, nombre="Sin area", area=None)]
+          dict(id=3, nombre="Sin area", area=None),
+          dict(id=4, nombre="Estado raro", area="CDS", estado="estado-que-nadie-conoce")]
     ta = [dict(id=10, titulo="Pendiente A", proyecto_id=1, vence_en=tp._dia(1)),
           dict(id=11, titulo="Hecha B", proyecto_id=1, estado="hecha", completado_en=tp._dia(-1)),
           dict(id=12, titulo="Suelta C", area="CDS"),
