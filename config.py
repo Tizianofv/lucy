@@ -58,6 +58,12 @@ GOOGLE_SA_KEY = os.environ.get("GOOGLE_SA_KEY", "")
 # de mandar un enlace roto.
 PANEL_URL = os.environ.get("PANEL_URL", "").rstrip("/")
 
+# Dónde vive la App de registro (la dirección pública, sin barra al final). Es
+# la ÚNICA fuente de a quién le canjea Lucy el boleto de `/entrar-cds`: ni el
+# pedido, ni una cabecera, ni la URL del enlace la cambian. No es un secreto.
+# Vacía = la puerta `/entrar-cds` queda cerrada (todo pedido es 401).
+REGISTRO_URL = os.environ.get("REGISTRO_URL", "").strip().rstrip("/")
+
 # Candado de seguridad (pilar): Lucy SOLO le responde a este chat.
 # Cualquier otro que le escriba es ignorado sin más.
 CHAT_ID_DUENO = int(os.environ["CHAT_ID_DUENO"])

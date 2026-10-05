@@ -4003,10 +4003,16 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # cambio: se tocaron `acciones/crud.py`, `db/db.py`, `config.py` y
     # `web/api_code.py`, ya vigilados. Medida corriendo la prueba: 124 en disco,
     # 79 EXENTOS, 45 VIGILADOS.
-    assert medido == {"en disco": 124, "exentos": 79, "vigilados": 45}, (
+    # 5-oct-2026, rama `trabajo/entrar-cds` (entrada a Proyectos desde la App):
+    # +4 en disco y +4 EXENTOS por `tests/test_entrar_cds.py`,
+    # `tests/test_proyectos_solo_ver.py`, `tests/_app_de_registro.py` y
+    # `tests/_proyectos_de_prueba.py` (nuevos); VIGILADOS sin cambio: se
+    # tocaron `config.py`, `web/app.py` y `web/auth.py`, ya vigilados. Medida
+    # corriendo la prueba: 128 en disco, 83 EXENTOS, 45 VIGILADOS.
+    assert medido == {"en disco": 128, "exentos": 83, "vigilados": 45}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "4-oct-2026 (vuelta del testigo de alertas-de-natalia) era {'en disco': 124, "
-        "'exentos': 79, 'vigilados': 45}. La aserción de fondo —cero "
+        "5-oct-2026 (entrar-cds) era {'en disco': 128, "
+        "'exentos': 83, 'vigilados': 45}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

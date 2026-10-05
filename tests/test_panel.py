@@ -136,7 +136,12 @@ def test_todas_las_rutas_estan_protegidas():
         fn = getattr(ruta, "endpoint", None)
         nombre = getattr(fn, "__name__", "")
         path = getattr(ruta, "path", "?")
-        if not fn or nombre == "entrar":       # la puerta valida aparte
+        # Las puertas de entrada (`/entrar` con el enlace de Telegram, `/entrar-cds`
+        # con el boleto de la App) validan aparte. Se las reconoce por lo que
+        # DECLARAN (`@auth.puerta(auth.PUERTA_ENTRADA)`), no por el nombre de la
+        # función; `tests/test_proyectos_solo_ver.py` exige que toda ruta declare
+        # su puerta y se porte como declara.
+        if not fn or getattr(fn, "puerta", None) == auth.PUERTA_ENTRADA:
             continue
         if path.startswith(api_code.router.prefix):
             for metodo in sorted((getattr(ruta, "methods", None) or set()) - {"HEAD"}):

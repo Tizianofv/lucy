@@ -39,6 +39,7 @@ proyecto de mantenimiento, y el tiempo es justo lo que este proyecto no tiene.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from pathlib import Path
@@ -46,6 +47,7 @@ from urllib.parse import quote
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                RedirectResponse)
@@ -71,6 +73,9 @@ app.include_router(api_code_router)
 plantillas = Jinja2Templates(directory="web/plantillas")
 
 COOKIE = "lucy_panel"
+# La sesión de «solo ver» (entrada desde la App de registro): cookie APARTE, que
+# solo abre las rutas declaradas `PUERTA_VER`. `_sesion` no la lee (ver `web/auth.py`).
+COOKIE_VER = "lucy_ver"
 
 
 def _pesos(v) -> str:
@@ -401,6 +406,7 @@ def _fuera(request: Request) -> HTMLResponse:
 
 
 @app.get("/entrar", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_ENTRADA)
 async def entrar(request: Request, t: str = ""):
     """La puerta. El token del enlace mágico se cambia por una cookie de sesión.
 
@@ -419,7 +425,102 @@ async def entrar(request: Request, t: str = ""):
     return r
 
 
+# ── La puerta desde la App de registro (`/entrar-cds`) ────────────────────────
+# Diseño aprobado por Tiziano el 1-oct-2026. La App le da a la persona un boleto
+# de un solo uso (un código al azar de 256 bits, 60 s de vida) y la manda acá con
+# `?c=<boleto>`. Lucy NO verifica una firma: le pregunta a la App, de servidor a
+# servidor, «¿este boleto es bueno y de quién es?», y la App lo rompe al contestar.
+#
+# EL CONTRATO DEL OTRO LADO (lo fija `tests/test_pase_proyectos.py` de la App y
+# lo implementa su `canjear_pase`): `POST <App>/api/pase/canjear` con
+# `{"codigo": ...}` contesta 200 `{"nivel", "chat", "tecnico_id"}`, o 404
+# `{"error": "no"}` por cualquier motivo sin decir cuál. `nivel` es `total` o
+# `ver`; `chat` es texto con el número de Telegram de la ficha, o vacío.
+#
+# TRES REGLAS QUE ESTA PUERTA CUMPLE Y UNA PRUEBA POR CADA UNA:
+#   · la dirección de la App sale de `config.REGISTRO_URL` y de nada más;
+#   · un código que no tiene la forma de un boleto no llega a la App;
+#   · si el canje falla de cualquier manera, no se pone ninguna cookie.
+TOPE_CANJE_S = 5.0
+# `secrets.token_urlsafe(32)`: 43 caracteres del alfabeto URL-seguro.
+_FORMA_BOLETO = re.compile(r"[A-Za-z0-9_-]{43}")
+_LARGO_MAX_RESPUESTA = 4096
+
+
+def _chat_del_canje(crudo) -> int | None:
+    """El número de chat de lo que contestó la App (texto de dígitos), o None."""
+    if isinstance(crudo, bool) or not isinstance(crudo, (str, int)):
+        return None
+    texto = str(crudo).strip()
+    return int(texto) if texto.isascii() and texto.isdigit() and len(texto) <= 18 else None
+
+
+async def _canjear_boleto(codigo: str) -> tuple[str, int | None] | None:
+    """`(nivel, chat)` si la App dice que el boleto es bueno; None si no sirve
+    por cualquier motivo (sin dirección, App caída, tiempo, 404, respuesta
+    rara). No devuelve la razón: nada de lo que pasó se le cuenta a quien llegó."""
+    base = config.REGISTRO_URL
+    if not base.startswith(("http://", "https://")):
+        log.warning("/entrar-cds: REGISTRO_URL sin configurar")
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=TOPE_CANJE_S,
+                                     follow_redirects=False) as cliente:
+            r = await asyncio.wait_for(
+                cliente.post(f"{base}/api/pase/canjear", json={"codigo": codigo}),
+                timeout=TOPE_CANJE_S)
+    except Exception as e:                                    # noqa: BLE001
+        log.warning("/entrar-cds: el canje no se pudo hacer (%s)", type(e).__name__)
+        return None
+    if r.status_code != 200 or len(r.content) > _LARGO_MAX_RESPUESTA:
+        log.info("/entrar-cds: la App no dio el boleto por bueno (HTTP %s)", r.status_code)
+        return None
+    try:
+        datos = r.json()
+    except ValueError:
+        log.warning("/entrar-cds: la App contestó algo que no es JSON")
+        return None
+    nivel = datos.get("nivel") if isinstance(datos, dict) else None
+    if nivel not in (auth.NIVEL_TOTAL, auth.NIVEL_VER):
+        log.warning("/entrar-cds: la App contestó un nivel que no conozco")
+        return None
+    return nivel, _chat_del_canje(datos.get("chat"))
+
+
+@app.get("/entrar-cds", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_ENTRADA)
+async def entrar_cds(request: Request, c: str = ""):
+    """El boleto de la App se cambia por una cookie y se va a Proyectos. Ver el
+    bloque de arriba."""
+    def _no():
+        return plantillas.TemplateResponse(
+            request, "entrar.html",
+            {"chat": config.CHAT_ID_DUENO, "desde_la_app": True}, status_code=401)
+
+    if not _FORMA_BOLETO.fullmatch(c):
+        return _no()
+    canje = await _canjear_boleto(c)
+    if canje is None:
+        return _no()
+    nivel, chat = canje
+    sesion = auth.sesion_para(nivel, chat)
+    if nivel == auth.NIVEL_TOTAL and sesion != auth.SESION_CASA:
+        log.warning("/entrar-cds: la App dio acceso total pero Lucy no conoce a "
+                    "esa persona: entra solo a ver")
+    log.info("/entrar-cds: entra con la sesión %s", sesion)
+    r = RedirectResponse("/proyectos", status_code=303)
+    # Sin `max_age`: la cookie muere al cerrar el navegador, como la sesión de la
+    # App, y la vida de 12 h va escrita dentro del token.
+    if sesion == auth.SESION_CASA:
+        nombre, token = COOKIE, auth.crear_token(chat, auth.VIDA_SESION_CDS)
+    else:
+        nombre, token = COOKIE_VER, auth.crear_token_ver(auth.VIDA_SESION_CDS)
+    r.set_cookie(nombre, token, httponly=True, samesite="lax", secure=True)
+    return r
+
+
 @app.get("/", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def resumen(request: Request, mes: str = ""):
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
@@ -462,6 +563,7 @@ async def resumen(request: Request, mes: str = ""):
 
 
 @app.get("/sin-clasificar", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def cola(request: Request, guardados: int = 0):
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
@@ -480,6 +582,7 @@ async def cola(request: Request, guardados: int = 0):
 
 
 @app.post("/categorias")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def categorias(request: Request):
     """Guardar las categorías corregidas. Queda en log_acciones como todo lo demás.
 
@@ -562,6 +665,7 @@ async def categorias(request: Request):
 
 
 @app.get("/movimientos", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def movimientos(request: Request, desde: str = "", hasta: str = "",
                       tipo: str = "", categoria: str = "", banco: str = "",
                       codigo: str = "", guardados: int = 0):
@@ -600,6 +704,7 @@ async def movimientos(request: Request, desde: str = "", hasta: str = "",
 
 
 @app.post("/efectivo")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def efectivo(request: Request):
     """Un gasto en efectivo, escrito a mano. La segunda escritura del panel.
 
@@ -657,6 +762,7 @@ async def efectivo(request: Request):
 
 
 @app.post("/borrar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def borrar(request: Request):
     """A la papelera, no al vacío. Sale de las listas y vuelve si hace falta."""
     if not auth.puede_entrar(_sesion(request)):
@@ -673,6 +779,7 @@ async def borrar(request: Request):
 
 
 @app.post("/restaurar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def restaurar(request: Request):
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
@@ -686,6 +793,7 @@ async def restaurar(request: Request):
 
 
 @app.get("/papelera", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def papelera(request: Request, restaurado: int = 0):
     """Lo borrado, con los días que le quedan.
 
@@ -702,6 +810,7 @@ async def papelera(request: Request, restaurado: int = 0):
 
 
 @app.get("/tareas", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
                  asignadas: int = 0, movidas: int = 0, derivadas: int = 0,
                  derivadas_ids: str = "", responsable: str = "",
@@ -825,6 +934,7 @@ async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
 
 
 @app.get("/tareas/historial", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def tareas_historial(request: Request):
     """Las tareas cerradas hace `db.DIAS_HISTORIAL` días o más.
 
@@ -920,6 +1030,7 @@ def _vista_de_proyectos(modelo: dict, visibles: dict, *, p: int, g: str,
 
 
 @app.get("/proyectos", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_VER)
 async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
                     error: str = "", nombre_guardado: int = 0,
                     tarea_creada: int = 0, sala_no: int = 0,
@@ -952,8 +1063,20 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
     coincidencias (solo LEE) y las dibuja como botones que envían el formulario
     de ese sitio; con JavaScript las pide el navegador a `/personas/buscar`.
     """
-    if not auth.puede_entrar(_sesion(request)):
+    de_la_casa = auth.puede_entrar(_sesion(request))
+    solo_ver = not de_la_casa
+    if solo_ver and not auth.validar_ver(request.cookies.get(COOKIE_VER)):
         return _fuera(request)
+    if solo_ver:
+        # SOLO VER (entrada desde la App con nivel `ver`, o sin conocer a la
+        # persona): todo lo que haría dibujar un formulario, una confirmación o
+        # un aviso de «se guardó» se apaga ANTES de armar la página, para que ni
+        # una dirección escrita a mano lo muestre. La plantilla no dibuja nada
+        # que cambie algo con `solo_ver`, y las rutas que escriben le dan 401 a
+        # esta sesión: esto es lo que se ve, aquello es lo que se impide.
+        area_guardada = creado = nombre_guardado = tarea_creada = sala_no = 0
+        editar_tarea = confirmar_borrar = editar_comentario = derivar = 0
+        error = hecho = nuevo = confirmar = editar = derivadas = pq = pdonde = ""
     modelo = await db.pagina_de_proyectos()
     visibles = _filtrar_por_busqueda(modelo, q)
     elegido = p or nombre_guardado or area_guardada or creado
@@ -967,7 +1090,10 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
     busqueda = await _buscar_personas_para_la_pagina(pq, pdonde)
     return plantillas.TemplateResponse(
         request, "proyectos.html",
-        {"busqueda": busqueda, "largo_rol": db.LARGO_ROL_PARTICIPANTE, "modelo": modelo, "visibles": visibles, "vista": vista, "q": q,
+        {"solo_ver": solo_ver,
+         "volver_a_la_app": (config.REGISTRO_URL + "/") if config.REGISTRO_URL.startswith(
+             ("http://", "https://")) else "",
+         "busqueda": busqueda, "largo_rol": db.LARGO_ROL_PARTICIPANTE, "modelo": modelo, "visibles": visibles, "vista": vista, "q": q,
          "pantallas": pantallas, "areas": await db.areas(), "error": error,
          "area_guardada": area_guardada, "creado": creado,
          "nombre_guardado": nombre_guardado, "tarea_creada": tarea_creada,
@@ -1055,6 +1181,7 @@ async def _volver_a_la_tarea(tid: int, **parametros) -> str:
 
 
 @app.post("/proyectos/nuevo")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def crear_proyecto_nuevo(request: Request):
     """El formulario «+ Proyecto en X». Todo lo decide `db.crear_proyecto`
     (nombre, grupo y responsable); esta ruta solo traduce el formulario y el
@@ -1102,6 +1229,7 @@ async def crear_proyecto_nuevo(request: Request):
 
 
 @app.post("/proyectos/{pid}/cliente")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def poner_cliente_del_proyecto(request: Request, pid: int):
     """Poner, cambiar o quitar el cliente de un proyecto. TODO LO DECIDE
     `db.poner_cliente`: vuelve a pedirle la ficha a Noco (solo LEE) y guarda el
@@ -1137,6 +1265,7 @@ def _error_de_persona(e: Exception) -> str:
 
 
 @app.post("/proyectos/{pid}/personas")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def agregar_persona_al_proyecto(request: Request, pid: int):
     """Agregar una persona de Noco a un proyecto, con su «qué hace aquí». POR
     `db.agregar_participante`: quién escribe sale de la sesión, y la ficha se
@@ -1161,6 +1290,7 @@ async def agregar_persona_al_proyecto(request: Request, pid: int):
 
 
 @app.post("/proyectos/{pid}/personas/{xid}/quitar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def quitar_persona_del_proyecto(request: Request, pid: int, xid: int):
     """Quitar a una persona de un proyecto: `db.quitar_participante`, que exige
     que la persona sea DE ESE proyecto."""
@@ -1176,6 +1306,7 @@ async def quitar_persona_del_proyecto(request: Request, pid: int, xid: int):
 
 
 @app.post("/proyectos/tarea/{tid}/personas")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def agregar_persona_a_la_tarea(request: Request, tid: int):
     """Lo mismo, para una tarea (`db.agregar_participante` con `("tarea", id)`)."""
     chat = _sesion(request)
@@ -1198,6 +1329,7 @@ async def agregar_persona_a_la_tarea(request: Request, tid: int):
 
 
 @app.post("/proyectos/tarea/{tid}/personas/{xid}/quitar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def quitar_persona_de_la_tarea(request: Request, tid: int, xid: int):
     """Lo mismo, para una tarea (`db.quitar_participante` con `("tarea", id)`)."""
     chat = _sesion(request)
@@ -1213,6 +1345,7 @@ async def quitar_persona_de_la_tarea(request: Request, tid: int, xid: int):
 
 
 @app.post("/proyectos/{pid}/responsable")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def cambiar_responsable_de_proyecto(request: Request, pid: int):
     """Cambiar el responsable de un proyecto. POR LA MISMA PUERTA que Telegram:
     `crud.editar("proyectos", ...)`, que llama a
@@ -1234,6 +1367,7 @@ async def cambiar_responsable_de_proyecto(request: Request, pid: int):
 
 
 @app.post("/proyectos/{pid}/estado")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def cambiar_estado_de_proyecto(request: Request, pid: int):
     """Cerrar o reabrir un proyecto. POR LA MISMA PUERTA que Telegram:
     `crud.editar("proyectos", ...)` con `crud.PUERTAS["proyectos"]["estado"]`
@@ -1257,6 +1391,7 @@ async def cambiar_estado_de_proyecto(request: Request, pid: int):
 
 
 @app.post("/proyectos/{pid}/tareas")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def agregar_tarea_al_proyecto(request: Request, pid: int):
     """Agregar una tarea DENTRO de un proyecto (título y fecha opcional). Nace
     con el responsable del proyecto (P10). Escribe por la MISMA puerta que el
@@ -1300,6 +1435,7 @@ async def agregar_tarea_al_proyecto(request: Request, pid: int):
 
 
 @app.post("/proyectos/tarea/{tid}/hecha")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def marcar_tarea_hecha_desde_proyectos(request: Request, tid: int):
     """Marcar UNA tarea hecha desde la página de Proyectos — y, si la persona
     escribió la tarea que sale de ella, crearla en el MISMO gesto.
@@ -1358,6 +1494,7 @@ async def marcar_tarea_hecha_desde_proyectos(request: Request, tid: int):
 
 
 @app.post("/proyectos/tarea/{tid}/reabrir")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def reabrir_tarea_desde_proyectos(request: Request, tid: int):
     """Desmarcar una tarea hecha (P5): `db.reabrir_tarea`. Vuelve a pendiente con
     la misma fecha; si ya pasó, sale vencida."""
@@ -1370,6 +1507,7 @@ async def reabrir_tarea_desde_proyectos(request: Request, tid: int):
 
 
 @app.post("/proyectos/tarea/{tid}/titulo")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def cambiar_titulo_de_tarea(request: Request, tid: int):
     """Cambiar el título de una tarea (doble clic). POR LA MISMA PUERTA que
     Telegram: `crud.editar("tareas", ...)`, con `crud.PUERTAS["tareas"]["titulo"]`
@@ -1391,6 +1529,7 @@ async def cambiar_titulo_de_tarea(request: Request, tid: int):
 
 
 @app.post("/proyectos/tarea/{tid}/borrar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def borrar_tarea_desde_proyectos(request: Request, tid: int):
     """La × de una tarea: soft-delete por `crud.borrar` con `actor='panel'` (va a
     la papelera, con huella, y se recupera con `deshacer` o desde la papelera)."""
@@ -1406,6 +1545,7 @@ async def borrar_tarea_desde_proyectos(request: Request, tid: int):
 
 
 @app.post("/proyectos/tarea/{tid}/responsable")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def cambiar_responsable_de_tarea_desde_proyectos(request: Request, tid: int):
     """El responsable de una tarea (en su detalle, P10). El nombre elegido pasa a
     chat con la puerta de traducción de `crud.PUERTAS` y escribe
@@ -1432,6 +1572,7 @@ async def cambiar_responsable_de_tarea_desde_proyectos(request: Request, tid: in
 
 
 @app.post("/proyectos/tarea/{tid}/comentar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def comentar_desde_proyectos(request: Request, tid: int):
     """Comentar una tarea: `db.comentar_tarea`, la de siempre. Quién escribe sale
     de la sesión, nunca de un campo del formulario."""
@@ -1451,6 +1592,7 @@ async def comentar_desde_proyectos(request: Request, tid: int):
 
 
 @app.post("/proyectos/tarea/{tid}/comentario/{cid}/editar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def editar_comentario_desde_proyectos(request: Request, tid: int, cid: int):
     """Editar un comentario (P6: cualquiera de los dos edita cualquiera; queda
     marcado «editado»). Lo decide `db.editar_comentario`, que exige que el
@@ -1470,16 +1612,20 @@ async def editar_comentario_desde_proyectos(request: Request, tid: int, cid: int
 
 
 @app.get("/logo-cds.png")
+@auth.puerta(auth.PUERTA_VER)
 async def logo_cds(request: Request):
     """El logo de la barra de la página de proyectos, el mismo de la App. Va
-    por una ruta propia: el panel no sirve archivos estáticos."""
-    if not auth.puede_entrar(_sesion(request)):
+    por una ruta propia: el panel no sirve archivos estáticos. La ven las dos
+    sesiones (la de la casa y la de solo ver): es la imagen de la barra."""
+    if not (auth.puede_entrar(_sesion(request))
+            or auth.validar_ver(request.cookies.get(COOKIE_VER))):
         return _fuera(request)
     return FileResponse(LOGO_CDS, media_type="image/png",
                         headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.get("/personas/buscar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def buscar_personas_en_noco(request: Request, q: str = ""):
     """El buscador de personas de Noco, en JSON (Lucy 1.0, E3).
 
@@ -1513,6 +1659,7 @@ async def buscar_personas_en_noco(request: Request, q: str = ""):
 
 
 @app.post("/proyectos/{pid}/area")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def cambiar_area_de_proyecto(request: Request, pid: int):
     """Cambiar el área de un proyecto (pedido de Tiziano: "no veo las
     posibilidades de cambiarlo", encargo 5).
@@ -1544,6 +1691,7 @@ async def cambiar_area_de_proyecto(request: Request, pid: int):
 
 
 @app.post("/proyectos/{pid}/nombre")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def cambiar_nombre_de_proyecto(request: Request, pid: int):
     """Cambiar el NOMBRE de un proyecto (pedido de Tiziano, 29-sep-2026:
     «poder editar los titulos de los proyectos»).
@@ -1586,6 +1734,7 @@ async def cambiar_nombre_de_proyecto(request: Request, pid: int):
 
 
 @app.post("/tareas/{tid}/area")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def cambiar_area_de_tarea(request: Request, tid: int):
     """Cambiar el área de UNA tarea suelta (sin proyecto) desde el panel.
 
@@ -1616,6 +1765,7 @@ async def cambiar_area_de_tarea(request: Request, tid: int):
 
 
 @app.post("/tareas/{tid}/primero")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def cambiar_primero_de_tarea(request: Request, tid: int):
     """Elegir cuál tarea va «Primero:» (encargo 6). Vacío = no espera a nadie.
 
@@ -1644,6 +1794,7 @@ async def cambiar_primero_de_tarea(request: Request, tid: int):
 
 
 @app.post("/tareas/{tid}/convertir-en-proyecto")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def convertir_en_proyecto(request: Request, tid: int):
     """El botón «convertir en proyecto» (encargo 5, requisito 2).
 
@@ -1921,6 +2072,7 @@ def _derivadas_pedidas(formulario, tid: int, claves_area_validas: set[str],
 
 
 @app.post("/tareas")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def guardar_tareas(request: Request):
     """Cerrar VARIAS tareas de una vez y cambiarles el responsable.
 
@@ -2121,6 +2273,7 @@ async def guardar_tareas(request: Request):
 
 
 @app.get("/tareas/nueva", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def tarea_nueva(request: Request, error: str = "",
                       responsable: str = "", proyecto: str = ""):
     """El formulario para escribir una tarea a mano.
@@ -2188,6 +2341,7 @@ async def tarea_nueva(request: Request, error: str = "",
 
 
 @app.post("/tareas/nueva")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def crear_tarea(request: Request):
     """Escribir una tarea a mano. La cuarta escritura del panel.
 
@@ -2388,6 +2542,7 @@ def _texto_de_comentario(crudo: str) -> str | None:
 
 
 @app.get("/tareas/{tid}", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def tarea_detalle(request: Request, tid: int, error: str = "",
                         comentado: int = 0, borrado: int = 0,
                         area_guardada: int = 0, primero_guardado: int = 0,
@@ -2449,6 +2604,7 @@ async def tarea_detalle(request: Request, tid: int, error: str = "",
 
 
 @app.post("/tareas/{tid}/pasos")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def agregar_pasos(request: Request, tid: int):
     """Agregar uno o varios micro-pasos a una tarea (encargo 7).
 
@@ -2476,6 +2632,7 @@ async def agregar_pasos(request: Request, tid: int):
 
 
 @app.post("/tareas/{tid}/pasos/{pid}/hecho")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def marcar_paso(request: Request, tid: int, pid: int):
     """Marcar (o desmarcar) UN micro-paso (encargo 7).
 
@@ -2507,6 +2664,7 @@ async def marcar_paso(request: Request, tid: int, pid: int):
 
 
 @app.post("/tareas/{tid}/pasos/{pid}/borrar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def quitar_paso(request: Request, tid: int, pid: int):
     """Quitar UN micro-paso (encargo 7). `crud.borrar` -- ya gratis, `micro_
     pasos` está en `crud.TABLAS`, así que esto es soft-delete + huella +
@@ -2531,6 +2689,7 @@ async def quitar_paso(request: Request, tid: int, pid: int):
 
 
 @app.post("/tareas/{tid}/pasos/{pid}/mover")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def mover_paso_de_tarea(request: Request, tid: int, pid: int):
     """Subir o bajar UN micro-paso (encargo 7). `db.mover_paso` intercambia
     el `orden` con el vecino -- no hay `<select>` de orden libre, dos
@@ -2545,6 +2704,7 @@ async def mover_paso_de_tarea(request: Request, tid: int, pid: int):
 
 
 @app.post("/tareas/{tid}/comentarios")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def comentar(request: Request, tid: int):
     """Escribir un comentario en una tarea.
 
@@ -2574,6 +2734,7 @@ async def comentar(request: Request, tid: int):
 
 
 @app.post("/tareas/{tid}/comentarios/{cid}/borrar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def borrar_comentario_de_tarea(request: Request, tid: int, cid: int):
     """Borrar un comentario. Cualquiera de los dos puede borrar cualquiera, por
     decisión de Tiziano. Quién lo borró sale de la sesión y queda guardado."""
@@ -2589,6 +2750,7 @@ async def borrar_comentario_de_tarea(request: Request, tid: int, cid: int):
 
 
 @app.get("/salud", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_SIEMPRE)
 async def salud(request: Request):
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)

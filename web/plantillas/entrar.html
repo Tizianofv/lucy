@@ -9,6 +9,7 @@
 </style></head><body><div class="caja">
 <h1>Panel de finanzas</h1>
 {% if error %}<p class="mal">Ese enlace ya venció o no es válido.</p>{% endif %}
+{% if desde_la_app %}<p class="mal">No se pudo abrir Proyectos desde la App: el acceso ya se usó, venció o no es válido. Vuelve a la App y toca Proyectos otra vez.</p>{% endif %}
 <p>Pedile el enlace a Lucy por Telegram escribiéndole <b>«dame el panel»</b>.</p>
 <p style="color:#6b6b6b;font-size:.9rem">Los enlaces duran 10 minutos.
 No hay contraseña que recordar: quien puede preguntarle a Lucy cuánto gastó es

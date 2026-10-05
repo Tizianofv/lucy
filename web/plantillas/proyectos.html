@@ -273,11 +273,11 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 
 {% macro ficha_persona(x, quitar) %}<div class="persona"><span class="ini" title="{{ x.nombre }}">{{ x.nombre|iniciales }}</span>
   <span class="quien"><b>{{ x.nombre }}</b><span>{{ x.rol }}</span></span>
-  <form class="en-linea" method="post" action="{{ quitar }}"><button class="quitar" aria-label="Quitar a {{ x.nombre }}" title="Quitar a {{ x.nombre }}">×</button></form></div>{% endmacro %}
+  {% if not solo_ver %}<form class="en-linea" method="post" action="{{ quitar }}"><button class="quitar" aria-label="Quitar a {{ x.nombre }}" title="Quitar a {{ x.nombre }}">×</button></form>{% endif %}</div>{% endmacro %}
 
 {#- El renglón de agregar una persona (de un proyecto o de una tarea): buscar, y
     elegir con un clic; el «qué hace aquí» es obligatorio. -#}
-{% macro agregar_persona(donde, accion) %}
+{% macro agregar_persona(donde, accion) %}{% if not solo_ver %}
 <div class="persona-campo">
   <form class="buscar-persona" method="get" action="/proyectos" role="search">
     <input type="text" name="pq" placeholder="Escoge de las personas de Noco…" aria-label="Escoge a una persona de Noco" data-buscar-persona="elegir" autocomplete="off"{% if busqueda and busqueda.donde == donde %} value="{{ busqueda.q }}"{% endif %}>
@@ -294,14 +294,16 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     <input name="rol" type="text" required maxlength="{{ largo_rol }}" placeholder="¿Qué hace aquí?" aria-label="Qué hace esta persona">
     <button class="guardar">Agregar</button>
   </form>
-</div>{% endmacro %}
+</div>{% endif %}{% endmacro %}
 
 {% macro fila_tarea(t) %}
 {% set u = vuelta %}
 {% set abierta = t_abierta == t.id %}
 <div class="tarea {{ 'hecha' if t.es_hecha }} {{ 'vencida' if t.vencida }}" id="tarea-{{ t.id }}" data-tarea="{{ t.id }}">
   <div class="fila" data-edita>
-    {% if t.es_hecha %}
+    {% if solo_ver and t.es_hecha %}<span class="marca hecha-b" role="img" aria-label="Hecha">✓</span>
+    {% elif solo_ver and t.es_pendiente %}<span class="marca" role="img" aria-label="Pendiente">○</span>
+    {% elif t.es_hecha %}
     <form class="marcar" method="post" action="/proyectos/tarea/{{ t.id }}/reabrir"><button class="marca hecha-b" title="Desmarcar: vuelve a pendiente" aria-label="Desmarcar la tarea: vuelve a pendiente">✓</button></form>
     {% elif t.es_pendiente %}
     {#- MARCAR HECHA ES DE UN CLIC: el botón (dibujado como la casilla de la
@@ -319,19 +321,19 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         primer clic espera un momento por si llega el segundo, que es el doble
         clic que renombra. El `href` lo escribe el servidor: el guion no calcula
         a dónde va. -#}
-    <a class="titulo" data-dbl="titulo" href="{{ u }}{{ '' if abierta else '&t=' ~ t.id }}#tarea-{{ t.id }}" title="Un clic abre el detalle; doble clic cambia el título" aria-label="{{ 'Cerrar' if abierta else 'Abrir' }} el detalle de la tarea" {% if editar_tarea == t.id %}hidden{% endif %}>{{ t.titulo }}</a>
+    <a class="titulo" {% if not solo_ver %}data-dbl="titulo" {% endif %}href="{{ u }}{{ '' if abierta else '&t=' ~ t.id }}#tarea-{{ t.id }}" title="{{ 'Un clic abre el detalle' if solo_ver else 'Un clic abre el detalle; doble clic cambia el título' }}" aria-label="{{ 'Cerrar' if abierta else 'Abrir' }} el detalle de la tarea" {% if editar_tarea == t.id %}hidden{% endif %}>{{ t.titulo }}</a>
     {% if t.grave %}<span class="nota" style="color:#c0392b;font-weight:600" title="Alerta técnica grave: la sala la atiende primero">🚨 grave</span>{% endif %}
         {% if t.comentarios %}<span class="nota comentarios-n" title="Comentarios de la tarea">{{ t.comentarios|length }} coment.</span>{% endif %}
-    <form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/titulo" data-auto {% if editar_tarea != t.id %}hidden{% endif %}>
+    {% if not solo_ver %}<form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/titulo" data-auto {% if editar_tarea != t.id %}hidden{% endif %}>
       <input name="titulo" type="text" required maxlength="{{ largo_titulo }}" value="{{ t.titulo }}" aria-label="Título de la tarea">
       <button class="guardar">Guardar</button>
       <a class="btn-linea" href="{{ u }}#tarea-{{ t.id }}">Cancelar</a>
     </form>
-    <noscript><a class="nota" href="{{ u }}&amp;editar_tarea={{ t.id }}#tarea-{{ t.id }}">Cambiar el título</a></noscript>
+    <noscript><a class="nota" href="{{ u }}&amp;editar_tarea={{ t.id }}#tarea-{{ t.id }}">Cambiar el título</a></noscript>{% endif %}
     {% if not t.es_pendiente and not t.es_hecha %}<span class="vence" style="min-width:0">{{ t.estado }}</span>{% endif %}
     <span class="caritas">{% if t.responsable %}<span class="ini" title="Responsable: {{ t.responsable }}">{{ t.responsable|iniciales }}</span>{% endif %}{% for x in t.personas %}<span class="ini" title="{{ x.nombre }} · {{ x.rol }}">{{ x.nombre|iniciales }}</span>{% endfor %}</span>
     <span class="vence" {% if t.vence_en %}title="{{ t.vence_en|hora_rd }}"{% endif %}>{{ 'Venció el ' if t.vencida }}{{ t.dia|dia_corto }}</span>
-    {% if confirmar_borrar == t.id %}
+    {% if solo_ver %}{% elif confirmar_borrar == t.id %}
     <span class="confirmar">¿Borrarla?
       <form class="en-linea" method="post" action="/proyectos/tarea/{{ t.id }}/borrar"><button class="btn-lleno">Sí</button></form>
       <a class="btn-linea" href="{{ u }}#tarea-{{ t.id }}">No</a></span>
@@ -357,21 +359,21 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         <span class="ini" title="{{ c.autor }}">{{ c.autor|iniciales }}</span>
         <div class="globo">
           <div class="de"><b>{{ c.autor }}</b> · {{ c.creado_en|hora_rd }}{{ ' · editado' if c.editado }}</div>
-          <p data-dbl="texto" title="Doble clic para editar" {% if editar_comentario == c.id %}hidden{% endif %}>{{ c.texto }}</p>
-          <form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/comentario/{{ c.id }}/editar" data-auto {% if editar_comentario != c.id %}hidden{% endif %}>
+          <p {% if not solo_ver %}data-dbl="texto" title="Doble clic para editar" {% endif %}{% if editar_comentario == c.id %}hidden{% endif %}>{{ c.texto }}</p>
+          {% if not solo_ver %}<form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/comentario/{{ c.id }}/editar" data-auto {% if editar_comentario != c.id %}hidden{% endif %}>
             <textarea name="texto" required maxlength="{{ largo_comentario }}" aria-label="Editar el comentario">{{ c.texto }}</textarea>
             <button class="guardar">Guardar</button>
             <a class="btn-linea" href="{{ u }}&amp;t={{ t.id }}#tarea-{{ t.id }}">Cancelar</a>
           </form>
-          <noscript><a class="nota" href="{{ u }}&amp;t={{ t.id }}&amp;editar_comentario={{ c.id }}#tarea-{{ t.id }}">Editar el comentario</a></noscript>
+          <noscript><a class="nota" href="{{ u }}&amp;t={{ t.id }}&amp;editar_comentario={{ c.id }}#tarea-{{ t.id }}">Editar el comentario</a></noscript>{% endif %}
         </div>
       </div>
       {% else %}<p class="vacio">Sin comentarios todavía.</p>{% endfor %}
     </div>
-    <form class="comentar" method="post" action="/proyectos/tarea/{{ t.id }}/comentar" data-auto>
+    {% if not solo_ver %}<form class="comentar" method="post" action="/proyectos/tarea/{{ t.id }}/comentar" data-auto>
       <textarea name="texto" required maxlength="{{ largo_comentario }}" placeholder="Escribe un comentario…" aria-label="Comentario"></textarea>
       <button class="guardar">Comentar</button>
-    </form>
+    </form>{% endif %}
   </div>
   {% endif %}
 </div>
@@ -403,7 +405,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 {% macro bloque_grupo(g, es_sin_grupo, vista) %}
 {% set actual = vista.proyecto if vista.tipo == 'proyecto' else none %}
 <div class="grupo gc" data-g="{{ 'sin-grupo' if es_sin_grupo else g.clave|lower }}" style="--claro:{{ g.color }};--oscuro:{{ g.color_oscuro }}">
-  <h3><i></i>{{ 'Sin grupo' if es_sin_grupo else g.clave }}{% if not es_sin_grupo and not q %}<a class="nuevo-proy mas" href="/proyectos?nuevo={{ g.clave|urlencode }}" aria-label="Proyecto nuevo en {{ g.clave }}" title="Proyecto nuevo en {{ g.clave }}">+</a>{% endif %}</h3>
+  <h3><i></i>{{ 'Sin grupo' if es_sin_grupo else g.clave }}{% if not es_sin_grupo and not q and not solo_ver %}<a class="nuevo-proy mas" href="/proyectos?nuevo={{ g.clave|urlencode }}" aria-label="Proyecto nuevo en {{ g.clave }}" title="Proyecto nuevo en {{ g.clave }}">+</a>{% endif %}</h3>
   {% for m in g.abiertos %}{{ un_proyecto(m, actual) }}
   {% else %}{% if not es_sin_grupo and not q %}<p class="vacio vacio-grupo" style="padding:.3rem .6rem">Sin proyectos abiertos.</p>{% endif %}{% endfor %}
   {% if g.cerrados %}
@@ -412,7 +414,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% for m in g.cerrados %}{{ un_proyecto(m, actual, True) }}{% endfor %}
   </details>
   {% endif %}
-  {% if not es_sin_grupo and not q %}
+  {% if not es_sin_grupo and not q and not solo_ver %}
   {#- LA VENTANITA: el servidor la escribe completa, con su grupo y su
       responsable, en el mismo grupo que su «+». Sin JavaScript no se ve nunca (un
       `<dialog>` cerrado no se pinta) y el enlace lleva a la página aparte
@@ -452,7 +454,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
   <img class="logo" src="/logo-cds.png" alt="Caribbean Dream Studios">
   <span class="barra-tag">PROYECTOS</span>
   <nav class="menu" aria-label="Lucy">
-    {% for a in pantallas %}<a href="{{ a.ruta }}"{% if a.ruta == '/proyectos' %} aria-current="page"{% endif %}>{{ a.nombre }}</a>{% endfor %}
+    {% if solo_ver %}{% if volver_a_la_app %}<a href="{{ volver_a_la_app }}">Volver al inicio</a>{% endif %}{% else %}{% for a in pantallas %}<a href="{{ a.ruta }}"{% if a.ruta == '/proyectos' %} aria-current="page"{% endif %}>{{ a.nombre }}</a>{% endfor %}{% endif %}
   </nav>
 </div></header>
 
@@ -539,17 +541,17 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {#- El nombre se cambia con doble clic (el script de abajo solo muestra el
           formulario); sin JavaScript, el enlace de `<noscript>` abre el mismo
           formulario desde el servidor. -#}
-      <h1 data-dbl="nombre" title="Doble clic para cambiar el nombre" {% if editar == 'nombre' %}hidden{% endif %}>{{ m.nombre }}</h1>
-      <form class="renombrar" method="post" action="/proyectos/{{ m.id }}/nombre" data-auto {% if editar != 'nombre' %}hidden{% endif %}>
+      <h1 {% if not solo_ver %}data-dbl="nombre" title="Doble clic para cambiar el nombre" {% endif %}{% if editar == 'nombre' %}hidden{% endif %}>{{ m.nombre }}</h1>
+      {% if not solo_ver %}<form class="renombrar" method="post" action="/proyectos/{{ m.id }}/nombre" data-auto {% if editar != 'nombre' %}hidden{% endif %}>
         <input name="nombre" type="text" required maxlength="{{ largo_nombre }}" value="{{ m.nombre }}" aria-label="Nombre del proyecto">
         <button class="guardar">Guardar</button>
         <a class="btn-linea" href="/proyectos?p={{ m.id }}">Cancelar</a>
       </form>
-      <noscript><a class="nota" href="/proyectos?p={{ m.id }}&amp;editar=nombre">Cambiar el nombre</a></noscript>
+      <noscript><a class="nota" href="/proyectos?p={{ m.id }}&amp;editar=nombre">Cambiar el nombre</a></noscript>{% endif %}
       {#- El aviso va justo debajo del título, como en la maqueta. -#}
       {% if m.dormido %}<div class="aviso-dormido">Este proyecto lleva {{ m.dias_sin_movimiento }} días sin movimiento: ni tareas hechas ni comentarios.</div>{% endif %}
       {% if m.descripcion %}<p class="descripcion">{{ m.descripcion }}</p>{% endif %}
-      <div class="quienes">
+      <div class="quienes">{% if solo_ver %}<span class="nota">Cliente: <b>{{ m.cliente or 'Sin cliente' }}</b></span> <span class="nota">Responsable: <b>{{ m.responsable or '—' }}</b></span>{% else %}
         {#- EL CLIENTE se busca entre las personas de Noco (opcional: se puede
             quitar). Con JavaScript, escribir ofrece coincidencias y elegir
             guarda; vaciar la caja quita el cliente. Sin JavaScript: «Buscar»
@@ -573,7 +575,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
             {% for n in nombres_responsable %}<option value="{{ n }}" {%- if m.responsable == n %} selected{% endif %}>{{ n }}</option>{% endfor %}
           </select>
           <button class="btn-linea">Guardar</button>
-        </form>
+        </form>{% endif %}
       </div>
       <div class="meta">
         <span class="pastilla">{{ m.estado_calculado }}</span>
@@ -586,7 +588,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {% endif %}
     </div>
     {% if m.cerrado %}<div class="aviso-cerrado">Proyecto cerrado: no se le agregan tareas.
-      <form class="en-linea" method="post" action="/proyectos/{{ m.id }}/estado"><input type="hidden" name="estado" value="activo"><button class="btn-linea">Reabrir</button></form></div>{% endif %}
+      {% if not solo_ver %}<form class="en-linea" method="post" action="/proyectos/{{ m.id }}/estado"><input type="hidden" name="estado" value="activo"><button class="btn-linea">Reabrir</button></form>{% endif %}</div>{% endif %}
     {% if not m.estado_conocido %}<div class="aviso-raro">Este proyecto tiene un estado que no es de la lista («{{ m.estado }}»). Al cerrarlo o reabrirlo se corrige.</div>{% endif %}
 
     <div class="cuerpo">
@@ -594,7 +596,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     <section class="bloque">
       <div class="encabezado"><h2>Tareas</h2><span class="nota">Las graves y las vencidas arriba. Toca el título de una tarea para ver su detalle y sus comentarios</span></div>
       {{ lista_de_tareas(m.pendientes, m.otras, m.n_hechas, m.n_otras, 'Sin tareas todavía.' if not m.n_total else 'No queda nada pendiente.') }}
-      {% if not m.cerrado %}
+      {% if not m.cerrado and not solo_ver %}
       <form class="nueva-tarea" method="post" action="/proyectos/{{ m.id }}/tareas">
         <input name="titulo" type="text" required maxlength="{{ largo_titulo }}" placeholder="Nueva tarea" aria-label="Nueva tarea">
         <input name="vence" type="date" aria-label="Fecha límite (opcional)">
@@ -605,7 +607,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 
     {#- «Cerrar proyecto» va debajo, al final, a la derecha (lo pidió Tiziano en la
         maqueta). La confirmación la dibuja el servidor (`?confirmar=cerrar`). -#}
-    {% if not m.cerrado %}
+    {% if not m.cerrado and not solo_ver %}
     <div class="acciones abajo">
       {% if confirmar == 'cerrar' %}
       <div class="confirmar">¿Cerrar este proyecto?
@@ -637,7 +639,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       <h1>Proyecto nuevo en {{ g.clave }}</h1>
     </div>
     <section class="bloque">
-      <form class="nuevo" method="post" action="/proyectos/nuevo">
+      {% if not solo_ver %}<form class="nuevo" method="post" action="/proyectos/nuevo">
         <label>Nombre del proyecto
           <input name="nombre" type="text" required maxlength="{{ largo_nombre }}" placeholder="Ej. Grabación del sencillo"></label>
         <label>Responsable
@@ -647,7 +649,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
           </select></label>
         <input type="hidden" name="area" value="{{ g.clave }}">
         <div class="botones"><button>Crear proyecto</button><a class="btn-linea" href="/proyectos">Cancelar</a></div>
-      </form>
+      </form>{% endif %}
     </section>
     </div>
 
@@ -664,7 +666,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       </div>
     </div>
     <section class="bloque">
-      <div class="encabezado"><h2>Tareas</h2><span class="nota">Las mismas de <a href="/tareas">Tareas</a>: acá van las que no están dentro de un proyecto</span></div>
+      <div class="encabezado"><h2>Tareas</h2><span class="nota">Las mismas de {% if not solo_ver %}<a href="/tareas">{% endif %}Tareas{% if not solo_ver %}</a>{% endif %}: acá van las que no están dentro de un proyecto</span></div>
       {{ lista_de_tareas(s.pendientes, s.otras, s.n_hechas, s.n_otras, 'No queda nada pendiente.') }}
     </section>
     </div>
@@ -674,7 +676,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% endif %}
   </main>
 </div>
-<script>
+{% if not solo_ver %}<script>
 /* Lo que hace este script, y nada más:
    · el doble clic abre el formulario de edición del sitio (el nombre del
      proyecto, el título de una tarea, un comentario) y Escape lo cierra SIN
@@ -981,5 +983,5 @@ document.addEventListener("focusout", function (e) {
   if (campo.value === campo.defaultValue) return;          // no cambió: no hay nada que guardar
   form.requestSubmit();
 });
-</script>
+</script>{% endif %}
 </body></html>
