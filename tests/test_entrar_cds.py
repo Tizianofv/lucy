@@ -20,6 +20,9 @@ import logging
 import os
 import time
 
+import urllib.error
+import urllib.request
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -190,6 +193,8 @@ def _forzar(estado, cuerpo=b"", tipo="application/json", demora=0.0):
     return lambda a: setattr(a, "forzada", (estado, cuerpo, tipo, demora))
 
 
+_CUERPO_BUENO = ('{"nivel": "total", "chat": "%s", "tecnico_id": 1}' % DUENO).encode()
+
 FALLAS = {
     "la App devuelve 500": _forzar(500, b'{"error": "boom"}'),
     "404 de la App": _forzar(404, b'{"error": "no"}'),
@@ -203,6 +208,13 @@ FALLAS = {
     "200 con cuerpo gigante": _forzar(
         200, b'{"nivel": "total", "chat": "424242", "x": "' + b"a" * 9000 + b'"}'),
     "redirección": _forzar(302, b"", "text/html"),
+    # Un no-200 con un cuerpo que, leído solo, DICE `total`: el código de estado
+    # tiene que bastar para cerrar la puerta (no solo que falte el campo `nivel`).
+    "500 con un cuerpo de total": _forzar(500, _CUERPO_BUENO),
+    "404 con un cuerpo de total": _forzar(404, _CUERPO_BUENO),
+    "201 con un cuerpo de total": _forzar(201, _CUERPO_BUENO),
+    "202 con un cuerpo de total": _forzar(202, _CUERPO_BUENO),
+    "403 con un cuerpo de total": _forzar(403, _CUERPO_BUENO),
 }
 
 
@@ -341,14 +353,38 @@ def test_G2_7_nada_del_pedido_cambia_a_quien_se_le_canjea(app_registro):
         ajena.cerrar()
 
 
+@pytest.mark.parametrize("estado", [301, 302, 303, 307, 308])
+def test_G2_7_una_redireccion_de_la_App_no_se_sigue(app_registro, estado):
+    """Si la App contestara con una redirección CON `Location` hacia otra dirección,
+    Lucy no va: el canje solo se hace contra `REGISTRO_URL`. La otra dirección
+    anota cualquier método que le llegue (POST de 307/308, GET de 301/302/303), y
+    aun si respondiera «total» no entra nadie."""
+    ajena = AppDeRegistro()
+    try:
+        codigo = app_registro.emitir("total", DUENO)
+        ajena.boletos[codigo] = {"nivel": "total", "chat": str(DUENO), "tecnico_id": 1}
+        app_registro.forzada = (estado, b"", "text/plain", 0,
+                                {"Location": ajena.url + "/api/pase/canjear"})
+        c = cliente()
+        _es_la_pagina_de_entrar_sin_cookie(entrar(c, codigo), c)
+        assert ajena.pedidos == [], "Lucy siguió una redirección hacia otra dirección"
+        assert len(app_registro.pedidos) == 1
+        # Control positivo: la otra dirección SÍ registra lo que le llega.
+        try:         # urllib y no httpx: otras pruebas del repo sustituyen `httpx.get`
+            urllib.request.urlopen(ajena.url + "/x", timeout=3)
+        except urllib.error.HTTPError:
+            pass
+        assert len(ajena.pedidos) == 1
+    finally:
+        ajena.cerrar()
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # G2-8 — la cookie
 # ═══════════════════════════════════════════════════════════════════════
 
-@pytest.mark.parametrize("nivel,chat,cookie", [("total", DUENO, panel.COOKIE),
-                                               ("ver", DUENO, panel.COOKIE_VER)],
-                         ids=["la de la casa", "la de solo ver"])
-def test_G2_8_banderas_y_vida_de_la_cookie(app_registro, nivel, chat, cookie):
+def test_G2_8_banderas_y_vida_de_la_cookie_de_solo_ver(app_registro):
+    nivel, chat, cookie = "ver", DUENO, panel.COOKIE_VER
     r = entrar(cliente(), app_registro.emitir(nivel, chat))
     (crudo,) = r.headers.get_list("set-cookie")
     atributos = [a.strip().lower() for a in crudo.split(";")[1:]]
@@ -365,6 +401,41 @@ def test_G2_8_banderas_y_vida_de_la_cookie(app_registro, nivel, chat, cookie):
     vence = int(token.split(".")[1])
     assert 12 * 3600 - 30 <= vence - time.time() <= 12 * 3600 + 1
     assert auth.VIDA_SESION_CDS == 12 * 3600
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# La sesión de la casa por `/entrar-cds` es la MISMA que da `/entrar`
+# (Tiziano, 5-oct-2026, «igual que ahora»)
+# ═══════════════════════════════════════════════════════════════════════
+
+def _cookie_de_la_casa_por_telegram():
+    r = cliente().get("/entrar", params={"t": auth.crear_token(DUENO)}, follow_redirects=False)
+    assert r.status_code == 303
+    (crudo,) = r.headers.get_list("set-cookie")
+    return crudo
+
+
+def _forma(crudo: str):
+    """Todo lo de una cookie menos su valor y su fecha: nombre, banderas, Max-Age."""
+    nombre = crudo.split("=", 1)[0]
+    atributos = sorted(a.strip().lower() for a in crudo.split(";")[1:]
+                       if not a.strip().lower().startswith("expires="))
+    return nombre, atributos
+
+
+def test_la_sesion_de_la_casa_por_la_App_es_indistinguible_de_la_de_Telegram(app_registro):
+    por_telegram = _cookie_de_la_casa_por_telegram()
+    r = entrar(cliente(), app_registro.emitir("total", DUENO))
+    (por_la_app,) = r.headers.get_list("set-cookie")
+    assert _forma(por_la_app) == _forma(por_telegram)
+    assert f"max-age={auth.VIDA_SESION}" in _forma(por_telegram)[1]       # y no es una cifra tecleada aquí
+    # La vida escrita dentro del token es la misma (`auth.VIDA_SESION`), con segundos de tolerancia.
+    vence = lambda c: int(c.split(";")[0].split("=", 1)[1].split(".")[1])      # noqa: E731
+    assert abs(vence(por_la_app) - vence(por_telegram)) <= 5
+    assert auth.VIDA_SESION - 30 <= vence(por_la_app) - time.time() <= auth.VIDA_SESION + 1
+    # Y la valida el mismo `validar`: es de la casa, con el chat de la persona.
+    token = por_la_app.split(";")[0].split("=", 1)[1]
+    assert auth.validar(token) == DUENO
 
 
 # ═══════════════════════════════════════════════════════════════════════

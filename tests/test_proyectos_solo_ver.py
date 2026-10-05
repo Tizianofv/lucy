@@ -24,6 +24,7 @@ Correr:  python3 -m pytest tests/test_proyectos_solo_ver.py -q
 """
 from __future__ import annotations
 
+import html as html_lib
 import os
 import re
 from html.parser import HTMLParser
@@ -442,3 +443,135 @@ def test_la_pagina_de_ver_no_promete_cambios_que_no_ofrece():
                       "Escribe un comentario", "Nueva tarea", "Cerrar proyecto", "Borrar",
                       "Al cerrarlo o reabrirlo"):
             assert frase not in html, (consulta, frase)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# El modelo de prueba hace correr TODOS los controles de la plantilla
+# ═══════════════════════════════════════════════════════════════════════
+#
+# El hueco que esto cierra (lo encontró un testigo): el modelo de prueba no traía
+# personas, así que las macros que dibujan la ✕ de quitar y «Agregar» NUNCA
+# corrían, y «la página de ver no ofrece nada» salía verde sin haberlas visto. Una
+# prueba que mira lo pintado solo vale por las ramas que el modelo hace pintar.
+#
+# CÓMO SE MIDE: de la plantilla REAL (`proyectos.html`, sin comentarios ni
+# etiquetas de Jinja) se sacan todas las etiquetas que son un control o un
+# destino (`form`, `a`, `button`, `input`, `textarea`, `select`, `dialog`), cada
+# una con su atributo identificador (`action`, `href`, `name` o `class`, con los
+# huecos `{{ … }}` como comodín). Con la sesión de la CASA se pinta la página en
+# todas las vistas y consultas conocidas, y cada etiqueta de la plantilla tiene
+# que aparecer en alguna página pintada. Una que no aparece = el modelo no la
+# hace correr = rojo.
+#
+# LA FRONTERA, dicha: se compara por etiqueta + sus atributos identificadores
+# (`action`, `href`, `name`, `class`), no por la línea de la plantilla. Dos sitios
+# con la MISMA etiqueta y los MISMOS atributos (p. ej. el formulario de «proyecto
+# nuevo» de la ventanita y el de la página aparte, ambos a `/proyectos/nuevo`) se
+# dan por cubiertos si aparece uno. Un control cuyos atributos son todo comodín y
+# no tiene clase se da por cubierto con cualquiera de su etiqueta. Lo que sí cae
+# seguro: formulario, enlace o campo con un destino, un nombre o una clase que
+# ninguna página pintada trae. Solo ve etiquetas de la lista `_ETIQUETAS_DE_CONTROL`.
+
+_ETIQUETAS_DE_CONTROL = ("form", "a", "button", "input", "textarea", "select", "dialog")
+_HUECO = "\x00"
+
+
+def _fuente_sin_jinja() -> str:
+    fuente = open("web/plantillas/proyectos.html", encoding="utf-8").read()
+    fuente = re.sub(r"\{#.*?#\}", "", fuente, flags=re.S)
+    fuente = re.sub(r"\{%.*?%\}", "", fuente, flags=re.S)
+    return re.sub(r"\{\{.*?\}\}", _HUECO, fuente, flags=re.S)
+
+
+_ATRIBUTOS_QUE_IDENTIFICAN = ("action", "href", "name", "class")
+
+
+def _sitios(fuente: str) -> list[tuple[str, dict]]:
+    """(etiqueta, {atributo: valor con huecos}) de cada control de la plantilla,
+    con los atributos que lo identifican."""
+    sitios = []
+    for m in re.finditer(r"<(%s)\b([^>]*)>" % "|".join(_ETIQUETAS_DE_CONTROL), fuente, flags=re.S):
+        attrs = dict(re.findall(r'([\w-]+)="([^"]*)"', m.group(2)))
+        attrs = {k: html_lib.unescape(v) for k, v in attrs.items()}     # `&amp;` → `&`, como lo lee el navegador
+        sitios.append((m.group(1), {k: v for k, v in attrs.items()
+                                    if k in _ATRIBUTOS_QUE_IDENTIFICAN}))
+    return sitios
+
+
+class _Pintado(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=False)
+        self.elementos: list[tuple[str, dict]] = []
+
+    def handle_starttag(self, tag, attrs):
+        self.elementos.append((tag, {k: (v or "") for k, v in attrs}))
+
+
+def _regex_de(valor: str):
+    return re.compile(".*".join(re.escape(x) for x in valor.split(_HUECO)), re.S)
+
+
+def sitios_sin_cubrir(fuente: str, paginas: list[str]) -> list[str]:
+    """Los controles de la plantilla que NINGUNA de las páginas pintadas trae: mismo
+    tipo de etiqueta y TODOS sus atributos identificadores (los que no son puro
+    hueco) iguales."""
+    elementos: list[tuple[str, dict]] = []
+    for html in paginas:
+        p = _Pintado()
+        p.feed(html)
+        elementos += p.elementos
+    sin = []
+    for tag, attrs in _sitios(fuente):
+        reglas = {k: _regex_de(v.strip()) for k, v in attrs.items()
+                  if k != "class" and v.replace(_HUECO, "").strip()}
+        # La clase se compara por PALABRAS (`quitar` no es `quitar-cliente`); las
+        # palabras con hueco adentro (`{{ … }}`) no cuentan.
+        clases = {w for w in attrs.get("class", "").split() if _HUECO not in w}
+
+        def _es(t, a):
+            return (t == tag and clases <= set(a.get("class", "").split())
+                    and all(k in a and rx.search(a[k].strip()) for k, rx in reglas.items()))
+        if not any(_es(t, a) for t, a in elementos):
+            sin.append(f"<{tag} {attrs}>")
+    return sorted(set(sin))
+
+
+# Consultas para pintar TODO lo que la plantilla puede dibujar con la sesión de la casa.
+COBERTURA = (VISTAS + list(A_MANO.values()) + [
+    {"p": 1, "t": 11}, {"p": 1, "t": 10, "pq": "ab", "pdonde": "tarea-10"},
+    {"p": 1, "pq": "ab", "pdonde": "proyecto"}, {"p": 1, "pq": "ab", "pdonde": "cliente"},
+    {"p": 2, "confirmar": "cerrar"}, {"g": "CDS", "t": 12}, {"sin_grupo": 1, "t": 13},
+])
+
+
+def _paginas_de_la_casa(consultas=COBERTURA) -> list[str]:
+    return [_pintar("casa", **c) for c in consultas]
+
+
+def test_el_modelo_de_prueba_hace_correr_todos_los_controles_de_la_plantilla():
+    fuente = _fuente_sin_jinja()
+    assert len(_sitios(fuente)) >= 40, "el extractor no está viendo la plantilla"
+    sin = sitios_sin_cubrir(fuente, _paginas_de_la_casa())
+    assert sin == [], ("la plantilla dibuja controles que ninguna página de prueba pinta: "
+                       "el modelo no los hace correr, y la prueba de solo ver no los ve: " + str(sin))
+
+
+def test_el_extractor_ve_los_controles_y_el_hueco_del_testigo(monkeypatch):
+    """Que el verde de arriba signifique algo: sin personas en el modelo (como estaba)
+    la ✕ de quitar cae en rojo; y un control inventado en la plantilla
+    cae también."""
+    fuente = _fuente_sin_jinja()
+    original = pp.modelo
+    monkeypatch.setattr(pp, "modelo", lambda: original(con_personas=False))
+    sin = sitios_sin_cubrir(fuente, _paginas_de_la_casa())
+    monkeypatch.undo()
+    assert any("quitar" in s for s in sin), sin
+    assert len(sin) == 1, sin       # solo la ✕: «Agregar» corre aunque no haya personas
+    paginas = _paginas_de_la_casa()
+    for inventado in ('<form method="post" action="/proyectos/algo-nuevo"><button>x</button></form>',
+                      '<a href="/proyectos/otra-cosa-nueva">x</a>',
+                      '<input name="campo_nuevo">', '<textarea name="otro_campo_nuevo"></textarea>',
+                      '<select name="elige_nuevo"></select>',
+                      '<button class="boton-que-nadie-pinta">x</button>'):
+        assert sitios_sin_cubrir(fuente + inventado, paginas), inventado
+    assert sitios_sin_cubrir(fuente, paginas) == []

@@ -405,6 +405,17 @@ def _fuera(request: Request) -> HTMLResponse:
         request, "entrar.html", {"chat": config.CHAT_ID_DUENO}, status_code=401)
 
 
+def _poner_sesion_de_la_casa(r, chat: int) -> None:
+    """LA sesión de la casa (`lucy_panel`): la misma vida (`auth.VIDA_SESION`) y la
+    misma forma de cookie para quien entra con el enlace de Telegram (`/entrar`) y
+    para quien entra desde la App con nivel `total` (`/entrar-cds`). Es UNA función
+    a propósito, y una prueba exige que las dos puertas den cookies indistinguibles
+    (Tiziano, 5-oct-2026: «igual que ahora»)."""
+    r.set_cookie(COOKIE, auth.crear_token(chat, auth.VIDA_SESION),
+                 max_age=auth.VIDA_SESION, httponly=True, samesite="lax",
+                 secure=True)
+
+
 @app.get("/entrar", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_ENTRADA)
 async def entrar(request: Request, t: str = ""):
@@ -419,9 +430,7 @@ async def entrar(request: Request, t: str = ""):
             request, "entrar.html",
             {"chat": config.CHAT_ID_DUENO, "error": bool(t)}, status_code=401)
     r = RedirectResponse("/", status_code=303)
-    r.set_cookie(COOKIE, auth.crear_token(chat, auth.VIDA_SESION),
-                 max_age=auth.VIDA_SESION, httponly=True, samesite="lax",
-                 secure=True)
+    _poner_sesion_de_la_casa(r, chat)
     return r
 
 
@@ -509,13 +518,13 @@ async def entrar_cds(request: Request, c: str = ""):
                     "esa persona: entra solo a ver")
     log.info("/entrar-cds: entra con la sesión %s", sesion)
     r = RedirectResponse("/proyectos", status_code=303)
-    # Sin `max_age`: la cookie muere al cerrar el navegador, como la sesión de la
-    # App, y la vida de 12 h va escrita dentro del token.
     if sesion == auth.SESION_CASA:
-        nombre, token = COOKIE, auth.crear_token(chat, auth.VIDA_SESION_CDS)
+        _poner_sesion_de_la_casa(r, chat)         # la misma que da `/entrar`
     else:
-        nombre, token = COOKIE_VER, auth.crear_token_ver(auth.VIDA_SESION_CDS)
-    r.set_cookie(nombre, token, httponly=True, samesite="lax", secure=True)
+        # Solo ver: sin `max_age`, la cookie muere al cerrar el navegador (como la
+        # sesión de la App) y la vida de 12 h va escrita dentro del token.
+        r.set_cookie(COOKIE_VER, auth.crear_token_ver(auth.VIDA_SESION_CDS),
+                     httponly=True, samesite="lax", secure=True)
     return r
 
 

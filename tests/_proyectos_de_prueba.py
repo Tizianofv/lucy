@@ -4,13 +4,14 @@ proyecto cerrado) y la base de mentira para pintarla por la ruta real."""
 from __future__ import annotations
 
 import contextlib
+import re
 
 import db.db as db
 import test_pagina_proyectos as tp
 import web.app as panel
 
 
-def modelo() -> dict:
+def modelo(con_personas: bool = True) -> dict:
     pr = [dict(id=1, nombre="Disco Uno", area="CDS", estado="activo", cliente_nombre="Cliente X"),
           dict(id=2, nombre="Cerrado Dos", area="CDS", estado="cerrado"),
           dict(id=3, nombre="Sin area", area=None),
@@ -21,7 +22,25 @@ def modelo() -> dict:
           dict(id=13, titulo="Suelta sin grupo")]
     co = [dict(id=100, tarea_id=10, autor_chat_id=424242, creado_en=tp.CREADO,
                texto="hola comentario")]
-    return tp.modelo_de_filas(pr, ta, comentarios=co, nombres={424242: "Dueño"})
+    # Personas (de Noco) en un proyecto y en una tarea: sin ellas las macros
+    # `ficha_persona` y `agregar_persona` de la plantilla no corren nunca y una
+    # prueba sobre «lo que pinta» no vería la ✕ de quitar ni «Agregar».
+    personas = [dict(id=500, nombre="Persona Uno", rol="productor", proyecto_id=1, tarea_id=None),
+                dict(id=501, nombre="Persona Dos", rol="mezcla", proyecto_id=None, tarea_id=10),
+                dict(id=502, nombre="Persona Tres", rol="edicion", proyecto_id=None, tarea_id=11)]
+    return _armar(pr, ta, co, personas if con_personas else [])
+
+
+def _armar(pr, ta, co, personas):
+    """`tp.modelo_de_filas` con participantes (esa función no los recibe): los mismos
+    rellenos, y `db.armar_pagina` de verdad."""
+    pr = [{"creado_en": tp.CREADO, "descripcion": None, "estado": "activo", "area": None,
+           "responsable_chat_id": None, "cliente_nombre": None, **p} for p in pr]
+    ta = [{"proyecto_id": None, "area": None, "vence_en": None, "completado_en": None,
+           "creado_en": tp.CREADO, "responsable_chat_id": None, "estado": "pendiente", **t}
+          for t in ta]
+    return db.armar_pagina(list(tp.AREAS), pr, ta, [], list(co), {424242: "Dueño"}, tp.HOY,
+                           participantes=personas)
 
 
 class BaseQueNoSeToca:
@@ -50,7 +69,12 @@ def pagina_sin_base():
     guardado = panel.db, panel._buscar_personas_para_la_pagina
 
     async def _sin_busqueda(pq, pdonde):
-        return None
+        # Como la real: sin texto o con un «dónde» que no vale, nada; con ellos, las
+        # coincidencias (de mentira) para que se dibujen los botones de elegir.
+        if not pq.strip() or not re.fullmatch(r"cliente|proyecto|tarea-\d+", pdonde):
+            return None
+        return {"donde": pdonde, "q": pq.strip(), "error": "",
+                "personas": [{"id": 900, "nombre": "Coincidencia Uno"}]}
     panel.db = BaseQueNoSeToca()
     panel._buscar_personas_para_la_pagina = _sin_busqueda
     try:

@@ -158,7 +158,9 @@ def test_todas_las_rutas_estan_protegidas():
 def test_la_cookie_no_es_accesible_por_javascript():
     import inspect
     import web.app as panel
-    fuente = inspect.getsource(panel.entrar)
+    # La cookie se pone en `_poner_sesion_de_la_casa`, que usan `/entrar` y `/entrar-cds`.
+    assert "_poner_sesion_de_la_casa(" in inspect.getsource(panel.entrar)
+    fuente = inspect.getsource(panel._poner_sesion_de_la_casa)
     assert "httponly=True" in fuente, "la cookie de sesión tiene que ser httponly"
     assert "secure=True" in fuente, "la cookie no puede viajar en claro"
     assert 'samesite="lax"' in fuente or "samesite='lax'" in fuente

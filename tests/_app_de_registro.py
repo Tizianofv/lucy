@@ -32,7 +32,7 @@ class AppDeRegistro:
         self.boletos: dict[str, dict] = {}
         self.pedidos: list[dict] = []       # lo que le llegó, para que la prueba lo mire
         # Para imitar fallas que la App de verdad no tiene hoy (500, basura, lentitud):
-        self.forzada: tuple[int, bytes, str, float] | None = None   # (HTTP, cuerpo, tipo, demora)
+        self.forzada: tuple | None = None   # (HTTP, cuerpo, tipo, demora[, {cabeceras}])
         self._lock = threading.Lock()
         doble = self
 
@@ -48,10 +48,10 @@ class AppDeRegistro:
                                           "cabeceras": dict(self.headers)})
                     forzada = doble.forzada
                 if forzada is not None:
-                    estado, cuerpo, tipo, demora = forzada
+                    estado, cuerpo, tipo, demora, *resto = forzada
                     if demora:
                         time.sleep(demora)
-                    return self._responder(estado, cuerpo, tipo)
+                    return self._responder(estado, cuerpo, tipo, resto[0] if resto else {})
                 if self.path != "/api/pase/canjear":
                     return self._responder(404, b'{"error": "no"}')
                 try:
@@ -65,8 +65,15 @@ class AppDeRegistro:
                     return self._responder(404, b'{"error": "no"}')
                 return self._responder(200, json.dumps(b).encode())
 
-            def _responder(self, estado, cuerpo, tipo="application/json"):
+            def do_GET(self):               # a la App solo se le hace POST: cualquier otro
+                with doble._lock:           # método que llegue se anota para que la prueba lo vea
+                    doble.pedidos.append({"ruta": self.path, "metodo": "GET", "cuerpo": b""})
+                self._responder(404, b'{"error": "no"}')
+
+            def _responder(self, estado, cuerpo, tipo="application/json", cabeceras=None):
                 self.send_response(estado)
+                for k, v in (cabeceras or {}).items():
+                    self.send_header(k, v)
                 self.send_header("Content-Type", tipo)
                 self.send_header("Content-Length", str(len(cuerpo)))
                 self.end_headers()
