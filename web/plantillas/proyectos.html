@@ -49,12 +49,16 @@ a{color:inherit}
 .envoltura{display:grid;grid-template-columns:17rem minmax(0,1fr);gap:3.5rem;max-width:96rem;margin:0 auto;padding-inline:16px;padding-block:1.6rem 4rem}
 .cuerpo{display:grid;grid-template-columns:minmax(0,1fr) 17rem;gap:2rem;align-items:start}
 .centro{display:flex;flex-direction:column;gap:1.2rem;min-width:0}
-.lado-der{position:sticky;top:1rem}
-@media (max-width:1100px){.cuerpo{grid-template-columns:minmax(0,1fr)}.lado-der{position:static}}
+.lado-der{position:static}
+@media (max-width:1100px){.cuerpo{grid-template-columns:minmax(0,1fr)}}
 .envoltura > aside{background:var(--papel);border:1px solid var(--linea);border-radius:16px;padding:1.2rem 1.1rem;align-self:start}
-.envoltura > aside{position:sticky;top:1rem;max-height:calc(100vh - 2rem);overflow-y:auto;overscroll-behavior:contain}
-.envoltura > main{position:sticky;top:1rem;max-height:calc(100vh - 2rem);overflow-y:auto;overscroll-behavior:contain;padding-right:.4rem}
-@media (max-width:760px){.envoltura{grid-template-columns:minmax(0,1fr);gap:1.6rem}.envoltura > aside,.envoltura > main{position:static;max-height:none;overflow:visible}}
+.envoltura > main{padding-right:.4rem}
+@media (max-width:760px){.envoltura{grid-template-columns:minmax(0,1fr);gap:1.6rem}}
+/* Las columnas no tienen desplazamiento propio: la página entera baja (6-oct-2026,
+   Tiziano: «la columna se corta en un punto y da la impresion que mas abajo no hay
+   nada»). La barra de arriba es fija y mide 58 px, hasta ~94 si se parte en dos
+   líneas: un enlace con ancla (`#tarea-N`) no queda tapado por ella. */
+html{scroll-padding-top:6.5rem}
 .buscador{display:flex;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem}
 .buscar{flex:1 1 9rem;min-width:0;width:100%;font:inherit;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
 .buscar:focus-visible{outline:2px solid var(--marca);outline-offset:1px}

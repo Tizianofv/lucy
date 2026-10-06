@@ -219,17 +219,26 @@ def test_la_hoja_tiene_el_reparto_de_la_maqueta(mundo):
     cuerpo = _regla(html, ".cuerpo")
     assert cuerpo["grid-template-columns"] == "minmax(0,1fr) 17rem" and cuerpo["gap"] == "2rem"
     primera = re.search(r"(?:^|[};])\s*\.lado-der\s*\{([^}]*)\}", _css(html), re.M).group(1)
-    assert primera == "position:sticky;top:1rem"
+    assert primera == "position:static"
     css = _css(html).replace("\n", "")
-    assert "@media (max-width:1100px){.cuerpo{grid-template-columns:minmax(0,1fr)}.lado-der{position:static}}" in css
+    assert "@media (max-width:1100px){.cuerpo{grid-template-columns:minmax(0,1fr)}}" in css
     tarjeta = _regla(html, ".envoltura > aside")                # la primera regla: la tarjeta
     assert tarjeta["border-radius"] == "16px" and tarjeta["padding"] == "1.2rem 1.1rem"
-    for lado in (".envoltura > aside", ".envoltura > main"):
-        cuerpos = re.findall(r"(?:^|[};])\s*" + re.escape(lado) + r"\s*\{([^}]*)\}", _css(html), re.M)
-        assert any("position:sticky" in c and "max-height:calc(100vh - 2rem)" in c and "overflow-y:auto" in c
-                   and "overscroll-behavior:contain" in c for c in cuerpos), lado
-    assert ("@media (max-width:760px){.envoltura{grid-template-columns:minmax(0,1fr);gap:1.6rem}"
-            ".envoltura > aside,.envoltura > main{position:static;max-height:none;overflow:visible}}") in css
+    # 6-oct-2026 (Tiziano: «la columna se corta en un punto y da la impresion que
+    # mas abajo no hay nada»): las columnas NO tienen desplazamiento propio; la
+    # página entera baja. Se mira TODA regla de la hoja (también dentro de un
+    # `@media`) cuyo selector sea una de las columnas o el panel de personas.
+    for regla in re.finditer(r"([^{}]+)\{([^{}]*)\}", _css(html)):
+        selector, cuerpo = regla.group(1), regla.group(2)
+        if any(c in selector for c in (".envoltura > aside", ".envoltura > main", ".lado-der")):
+            for prohibido in ("position:sticky", "max-height", "overflow-y", "overflow:auto", "overflow:scroll",
+                              "height:calc(100vh", "overscroll-behavior"):
+                assert prohibido not in cuerpo.replace(" ", "") or prohibido == "max-height" and "max-height:none" in cuerpo, (selector, cuerpo)
+    assert ("@media (max-width:760px){.envoltura{grid-template-columns:minmax(0,1fr);gap:1.6rem}}") in css
+    # Y la barra de arriba (fija, 58 px; hasta ~94 px en dos líneas, medido en el
+    # navegador) no tapa el sitio al que llevan los enlaces con ancla (`#tarea-N`).
+    pad = re.search(r"(?:^|[};])\s*html\s*\{scroll-padding-top:([\d.]+)rem\}", _css(html), re.M)
+    assert pad and float(pad.group(1)) * 16 >= 94, pad
 
 
 def test_el_proyecto_va_en_tres_columnas_las_tareas_al_centro_y_las_personas_a_la_derecha(mundo):
