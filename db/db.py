@@ -6,12 +6,14 @@ a salvo aquí.
 """
 from __future__ import annotations
 
+import colorsys
 import hashlib
 import json
 import logging
 import math
 import os
 import re
+import unicodedata
 from datetime import date, datetime, timezone
 
 import psycopg
@@ -2646,6 +2648,211 @@ async def areas() -> list[dict]:
             if sqlstate == "42P01":
                 return []
             raise
+
+
+# ═══ Agregar y quitar grupos (Tiziano, 6-oct-2026: «quiero tambien poder agregar
+# y quitar grupos») ═══════════════════════════════════════════════════════════
+#
+# UN GRUPO ES UNA FILA DE `areas` (clave = el nombre que se ve, color, orden), y
+# lo que apunta a él son DOS columnas con llave foránea SIN `ON DELETE`
+# (`proyectos.area`, `tareas.area`; medido en producción el 6-oct-2026:
+# `proyectos_area_fkey` y `tareas_area_fkey`, ambas «NO ACTION»). Por nombre, no
+# por id. Eso hace que «vacío» tenga una sola definición posible: NINGUNA fila de
+# esas dos tablas apunta al grupo, de cualquier estado y también las de la
+# papelera, porque la base no deja borrar un grupo mientras alguna lo nombre.
+#
+# `AREA_TECNICA` es el único nombre que el código da por fijo (las tareas de Code
+# nacen ahí): ese grupo no se quita aunque esté vacío.
+#
+# QUÉ GARANTIZA QUÉ. Un bloqueo de transacción de Postgres
+# (`pg_advisory_xact_lock`) pone EN FILA a quien crea o quita un grupo: la segunda
+# petición espera a la primera y ve lo que ésta dejó. La comparación de nombres
+# «sin distinguir mayúsculas, acentos ni espacios» se hace en Python sobre las
+# claves que hay y por eso NECESITA ese bloqueo; la clave exacta repetida la
+# frena además la llave primaria. Quitar usa UNA sentencia `DELETE ... WHERE NOT
+# EXISTS (...)` y, por si un pedido le mete un proyecto o una tarea al grupo entre
+# la lectura y el borrado, la llave foránea: o falla la inserción o falla el
+# borrado (SQLSTATE 23503), nunca queda una fila apuntando a un grupo que no está.
+# FRONTERA: el bloqueo y la llave de Postgres no se ejercitan con las pruebas
+# (usan SQLite, que no tiene el bloqueo: se prueba la secuencia, no la carrera).
+
+LARGO_NOMBRE_GRUPO = 30
+NOMBRE_RESERVADO_DE_GRUPO = "Sin grupo"      # el cubo de lo que no tiene grupo
+
+# Colores para un grupo nuevo, en este orden, saltando los que ya están. Uno
+# solo pide decidirse en la pantalla (Tiziano no escoge color): lo decide el
+# sistema. Cuando se acaban, `color_para_un_grupo_nuevo` calcula uno por el
+# ángulo áureo, que no se repite.
+PALETA_DE_GRUPOS = ("#c0392b", "#2f8f4e", "#8c6d1f", "#5a5fb0", "#b83a8a", "#2a7f9e",
+                    "#7a5230", "#6f8f1f")
+
+
+class GrupoNoVale(ValueError):
+    """Un nombre de grupo que no puede quedar. `clave`: `vacio`, `largo`,
+    `caracteres`, `reservado` o `repetido`. El mensaje no repite el nombre."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+class GrupoNoSeQuita(ValueError):
+    """Un grupo que no se puede quitar. `clave`: `fijo` (el que el código da por
+    fijo), `no_existe` o `con_cosas` (en ese caso `contenido` trae las cuentas
+    medidas en ese momento)."""
+
+    def __init__(self, clave: str, mensaje: str, contenido: dict | None = None):
+        super().__init__(mensaje)
+        self.clave = clave
+        self.contenido = contenido
+
+
+def nombre_de_grupo_que_vale(valor) -> str:
+    """El nombre limpio (sin espacios de alrededor, con uno solo entre palabras)
+    o `GrupoNoVale`. Sin letras de control ni saltos de línea."""
+    if not isinstance(valor, str) or not valor.strip():
+        raise GrupoNoVale("vacio", "el nombre del grupo no puede quedar vacío")
+    if any(ord(c) < 32 or ord(c) == 127 for c in valor):
+        raise GrupoNoVale("caracteres", "el nombre del grupo lleva caracteres que no se pueden guardar")
+    limpio = " ".join(valor.split())
+    if len(limpio) > LARGO_NOMBRE_GRUPO:
+        raise GrupoNoVale("largo", f"el nombre del grupo no puede pasar de {LARGO_NOMBRE_GRUPO} caracteres")
+    if clave_comparable_de_grupo(limpio) == clave_comparable_de_grupo(NOMBRE_RESERVADO_DE_GRUPO):
+        raise GrupoNoVale("reservado", "ese nombre ya lo usa «Sin grupo»")
+    return limpio
+
+
+def clave_comparable_de_grupo(nombre: str) -> str:
+    """LA comparación de nombres de grupo: sin tildes, sin mayúsculas y con los
+    espacios de sobra colapsados. Dos nombres que den lo mismo acá son el mismo
+    grupo."""
+    sin_tildes = "".join(c for c in unicodedata.normalize("NFD", nombre)
+                         if not unicodedata.combining(c))
+    return " ".join(sin_tildes.casefold().split())
+
+
+def color_para_un_grupo_nuevo(usados) -> str:
+    """El primer color de `PALETA_DE_GRUPOS` que ningún grupo tiene; si ya se
+    usaron todos, uno calculado por el ángulo áureo según cuántos hay (siempre
+    distinto de la paleta y de los anteriores). Siempre un hex de 6 dígitos."""
+    en_uso = {str(c).lower() for c in usados}
+    for c in PALETA_DE_GRUPOS:
+        if c not in en_uso:
+            return c
+    n = len(en_uso)
+    while True:
+        h = (n * 137.508) % 360
+        c = colorsys.hls_to_rgb(h / 360, 0.38, 0.55)
+        hexa = "#" + "".join(f"{round(x * 255):02x}" for x in c)
+        if hexa not in en_uso:
+            return hexa
+        n += 1
+
+
+async def crear_grupo(nombre) -> dict:
+    """Crea un grupo al final de la lista, con color que asigna el sistema, y
+    devuelve `{clave, color, orden}` LEÍDO de la base. `GrupoNoVale` si el nombre
+    no vale o ya hay un grupo así (sin distinguir mayúsculas, tildes ni espacios).
+    Todo en UNA transacción y bajo el bloqueo de grupos (ver arriba)."""
+    limpio = nombre_de_grupo_que_vale(nombre)
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", ("grupos", ))
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute("SELECT clave, color, orden FROM areas")
+            hay = await cur.fetchall()
+            mio = clave_comparable_de_grupo(limpio)
+            if any(clave_comparable_de_grupo(a["clave"]) == mio for a in hay):
+                raise GrupoNoVale("repetido", "ya hay un grupo con ese nombre")
+            color = color_para_un_grupo_nuevo([a["color"] for a in hay])
+            orden = max([a["orden"] for a in hay] or [0]) + 1
+            try:
+                await cur.execute(
+                    "INSERT INTO areas (clave, color, orden) VALUES (%s, %s, %s) "
+                    "RETURNING clave, color, orden", (limpio, color, orden))
+            except Exception as e:
+                if _es_violacion(e, "23505"):      # la llave primaria: el mismo nombre, exacto
+                    raise GrupoNoVale("repetido", "ya hay un grupo con ese nombre") from None
+                raise
+            return await cur.fetchone()
+
+
+def _es_violacion(e: Exception, sqlstate: str) -> bool:
+    """¿Es este error de la base una violación de ese SQLSTATE? (SQLite, que usan
+    las pruebas, no trae SQLSTATE: se reconoce por su clase.)"""
+    try:
+        return e.sqlstate == sqlstate
+    except AttributeError:
+        return type(e).__name__ == "IntegrityError"
+
+
+async def _contenido_de_grupo(cur, clave: str) -> dict:
+    """Cuántas filas apuntan a ese grupo, por clase, medidas AHORA. `total` es la
+    suma: cero es el único «vacío» (cualquier fila, también la de la papelera,
+    impide borrar el grupo)."""
+    await cur.execute(
+        "SELECT count(*) FILTER (WHERE borrado_en IS NULL AND estado <> %s) AS proyectos_abiertos, "
+        "count(*) FILTER (WHERE borrado_en IS NULL AND estado = %s) AS proyectos_cerrados, "
+        "count(*) FILTER (WHERE borrado_en IS NOT NULL) AS proyectos_papelera "
+        "FROM proyectos WHERE area = %s",
+        (ESTADO_PROYECTO_CERRADO, ESTADO_PROYECTO_CERRADO, clave))
+    cuentas = dict(await cur.fetchone())
+    await cur.execute(
+        "SELECT count(*) FILTER (WHERE borrado_en IS NULL AND estado = %s) AS tareas_pendientes, "
+        "count(*) FILTER (WHERE borrado_en IS NULL AND estado = %s) AS tareas_hechas, "
+        "count(*) FILTER (WHERE borrado_en IS NULL AND estado NOT IN (%s, %s)) AS tareas_otras, "
+        "count(*) FILTER (WHERE borrado_en IS NOT NULL) AS tareas_papelera "
+        "FROM tareas WHERE area = %s",
+        (ESTADO_PENDIENTE, ESTADO_HECHA, ESTADO_PENDIENTE, ESTADO_HECHA, clave))
+    cuentas.update(dict(await cur.fetchone()))
+    cuentas["total"] = sum(cuentas.values())
+    return cuentas
+
+
+async def contenido_de_grupo(clave: str) -> dict | None:
+    """Lo que tiene un grupo hoy (ver `_contenido_de_grupo`), o `None` si no hay
+    un grupo con esa clave."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute("SELECT 1 AS x FROM areas WHERE clave = %s", (clave,))
+        if await cur.fetchone() is None:
+            return None
+        return await _contenido_de_grupo(cur, clave)
+
+
+async def quitar_grupo(clave: str) -> None:
+    """Quita un grupo VACÍO. `GrupoNoSeQuita` si es el fijo (`AREA_TECNICA`), si
+    no existe o si tiene cosas (con las cuentas medidas en la misma transacción).
+    Una sola sentencia borra solo si nada lo nombra; la llave foránea cubre a quien
+    le meta algo entre medias (ver arriba)."""
+    if clave == AREA_TECNICA:
+        raise GrupoNoSeQuita("fijo", "ese grupo no se puede quitar: Lucy y Code lo usan")
+    async with pool.connection() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", ("grupos", ))
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute("SELECT 1 AS x FROM areas WHERE clave = %s", (clave,))
+            if await cur.fetchone() is None:
+                raise GrupoNoSeQuita("no_existe", "ese grupo ya no está")
+            try:
+                # Un punto de guardado propio: si la llave foránea rechaza el
+                # borrado, la transacción de afuera sigue sirviendo para contar.
+                async with conn.transaction():
+                    await cur.execute(
+                        "DELETE FROM areas WHERE clave = %s "
+                        "AND NOT EXISTS (SELECT 1 FROM proyectos WHERE proyectos.area = areas.clave) "
+                        "AND NOT EXISTS (SELECT 1 FROM tareas WHERE tareas.area = areas.clave) "
+                        "RETURNING clave", (clave,))
+                    borrado = await cur.fetchone()
+            except Exception as e:
+                if not _es_violacion(e, "23503"):    # alguien le metió algo justo ahora
+                    raise
+                borrado = None
+            if borrado is None:
+                contenido = await _contenido_de_grupo(cur, clave)
+                raise GrupoNoSeQuita("con_cosas", "ese grupo tiene cosas: no se quita", contenido)
 
 
 async def proyectos_vivos() -> list[dict]:

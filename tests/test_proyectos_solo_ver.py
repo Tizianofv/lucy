@@ -549,6 +549,9 @@ COBERTURA = (VISTAS + list(A_MANO.values()) + [
     {"p": 1, "t": 11}, {"p": 1, "t": 10, "pq": "ab", "pdonde": "tarea-10"},
     {"p": 1, "pq": "ab", "pdonde": "proyecto"}, {"p": 1, "pq": "ab", "pdonde": "cliente"},
     {"p": 2, "confirmar": "cerrar"}, {"g": "CDS", "t": 12}, {"sin_grupo": 1, "t": 13},
+    # Agregar y quitar grupos (6-oct-2026): el formulario del nombre, la pregunta de un
+    # grupo vacío y la explicación de uno con cosas.
+    {"nuevo_grupo": 1}, {"quitar_grupo": "ACD"}, {"quitar_grupo": "CDS"},
 ])
 
 

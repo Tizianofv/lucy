@@ -1048,7 +1048,8 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
                     editar: str = "", t: int = 0, editar_tarea: int = 0,
                     confirmar_borrar: int = 0, editar_comentario: int = 0,
                     derivar: int = 0, derivadas: str = "",
-                    pq: str = "", pdonde: str = ""):
+                    pq: str = "", pdonde: str = "",
+                    nuevo_grupo: int = 0, quitar_grupo: str = "", grupo: str = ""):
     """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
     (`?g=`), las de «Sin grupo» (`?sin_grupo=1`) o el formulario de un proyecto
@@ -1086,6 +1087,8 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
         area_guardada = creado = nombre_guardado = tarea_creada = sala_no = 0
         editar_tarea = confirmar_borrar = editar_comentario = derivar = 0
         error = hecho = nuevo = confirmar = editar = derivadas = pq = pdonde = ""
+        nuevo_grupo = 0
+        quitar_grupo = grupo = ""
     modelo = await db.pagina_de_proyectos()
     visibles = _filtrar_por_busqueda(modelo, q)
     elegido = p or nombre_guardado or area_guardada or creado
@@ -1097,9 +1100,17 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
     # prompt, y `base.html`, que es ese menú, también tumba las demás pantallas.
     pantallas = _menu.pantallas()
     busqueda = await _buscar_personas_para_la_pagina(pq, pdonde)
+    # GRUPOS (agregar y quitar): lo que se dibuja sale de la base. La cuenta de lo
+    # que tiene un grupo se mide AL PINTAR (solo si se pidió la confirmación); y
+    # «creado»/«quitado» solo se dicen si el grupo de verdad está / ya no está.
+    claves_de_grupos = {a["clave"] for a in await db.areas()}
+    contenido_quitar = await db.contenido_de_grupo(quitar_grupo) if quitar_grupo else None
     return plantillas.TemplateResponse(
         request, "proyectos.html",
         {"solo_ver": solo_ver,
+         "nuevo_grupo": nuevo_grupo, "quitar_grupo": quitar_grupo, "grupo": grupo,
+         "grupo_existe": grupo in claves_de_grupos, "contenido_quitar": contenido_quitar,
+         "largo_grupo": db.LARGO_NOMBRE_GRUPO,
          "volver_a_la_app": (config.REGISTRO_URL + "/") if config.REGISTRO_URL.startswith(
              ("http://", "https://")) else "",
          "busqueda": busqueda, "largo_rol": db.LARGO_ROL_PARTICIPANTE, "modelo": modelo, "visibles": visibles, "vista": vista, "q": q,
@@ -1397,6 +1408,47 @@ async def cambiar_estado_de_proyecto(request: Request, pid: int):
     hecho = {db.ESTADO_PROYECTO_CERRADO: "cerrado", "activo": "reabierto"}.get(
         despues["estado"], "estado")
     return RedirectResponse(f"/proyectos?hecho={hecho}&p={pid}", status_code=303)
+
+
+@app.post("/proyectos/grupos")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def crear_grupo_de_proyectos(request: Request):
+    """«+ Nuevo grupo» (Tiziano, 6-oct-2026). Todo lo decide `db.crear_grupo`
+    (nombre, repetido sin distinguir mayúsculas, tildes ni espacios, color y
+    lugar al final): la ruta solo traduce el rechazo a una CLAVE en la URL, nunca
+    el nombre pedido. El aviso de «creado» lo dibuja la página SOLO si el grupo
+    está de verdad en `db.areas()`."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    try:
+        nuevo = await db.crear_grupo(str(formulario.get("nombre", "")))
+    except db.GrupoNoVale as e:
+        return RedirectResponse(f"/proyectos?nuevo_grupo=1&error=grupo_{e.clave}", status_code=303)
+    return RedirectResponse(
+        f"/proyectos?hecho=grupo_creado&grupo={quote(nuevo['clave'], safe='')}", status_code=303)
+
+
+@app.post("/proyectos/grupos/quitar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def quitar_grupo_de_proyectos(request: Request):
+    """Quitar un grupo VACÍO. La confirmación («¿Quitar el grupo X?») la dibuja
+    el servidor con `?quitar_grupo=` (ver `proyectos`); esta ruta es lo que
+    envía su botón. `db.quitar_grupo` decide: solo borra si nada apunta al grupo
+    y nunca el fijo. Un grupo con cosas vuelve a la misma explicación, con las
+    cuentas medidas al pintar. El «quitado» lo dibuja la página SOLO si el grupo
+    de verdad ya no está."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    clave = str(formulario.get("clave", ""))
+    try:
+        await db.quitar_grupo(clave)
+    except db.GrupoNoSeQuita as e:
+        return RedirectResponse(
+            f"/proyectos?error=grupo_{e.clave}&quitar_grupo={quote(clave, safe='')}", status_code=303)
+    return RedirectResponse(
+        f"/proyectos?hecho=grupo_quitado&grupo={quote(clave, safe='')}", status_code=303)
 
 
 @app.post("/proyectos/{pid}/tareas")

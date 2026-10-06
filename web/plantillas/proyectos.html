@@ -211,6 +211,18 @@ form.nuevo button,form.renombrar button.guardar{font:600 .88rem var(--texto);pad
 .nuevo-proy{cursor:pointer;color:var(--suave);font-size:.85rem;padding:.35rem .6rem;text-decoration:none}
 .nuevo-proy:hover{color:var(--tinta)}
 .nuevo-proy.mas{margin-left:auto;font-size:1.15rem;font-weight:600;line-height:1;padding:.1rem .45rem;border-radius:6px;color:var(--color);letter-spacing:0}
+.quitar-grupo{font-size:1rem;font-weight:600;line-height:1;padding:.1rem .4rem;border-radius:6px;color:var(--suave);letter-spacing:0;text-decoration:none}
+a.quitar-grupo:hover{background:color-mix(in srgb, var(--vencida) 14%, transparent);color:var(--vencida)}
+.nuevo-proy.mas + .quitar-grupo{margin-left:0}
+.quitar-aviso{background:var(--papel);border:1px dashed var(--linea);border-radius:10px;padding:.6rem .7rem;margin:0 0 .6rem;font-size:.86rem}
+.quitar-aviso p{margin:0 0 .5rem}
+.quitar-aviso .botones{display:flex;gap:.5rem}
+a.nuevo-grupo{display:inline-block;font-size:.86rem;color:var(--suave);text-decoration:none;padding:.3rem .6rem;border-radius:8px}
+a.nuevo-grupo:hover{color:var(--tinta);background:color-mix(in srgb, var(--suave) 12%, transparent)}
+.nuevo-grupo-form{display:flex;flex-direction:column;gap:.6rem;font-size:.86rem}
+.nuevo-grupo-form label{display:flex;flex-direction:column;gap:.25rem}
+.nuevo-grupo-form input{font:inherit;padding:.5rem .7rem;border-radius:9px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
+.nuevo-grupo-form .botones{display:flex;gap:.5rem;align-items:center}
 .nuevo-proy.mas:hover{background:color-mix(in srgb, var(--color) 14%, transparent)}
 /* El «+» abre esta ventana encima de la página (con JavaScript); sin
    JavaScript la ventana nunca se ve y el enlace lleva a la página aparte. */
@@ -423,10 +435,39 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 </a>
 {% endmacro %}
 
+{#- QUITAR UN GRUPO (6-oct-2026): la pregunta o la explicación, dibujadas por el
+    servidor (`?quitar_grupo=`). Las cuentas salen de `db.contenido_de_grupo`,
+    medidas al pintar. Solo un grupo con CERO filas (de cualquier estado, también
+    la papelera) se puede quitar: la base no deja borrar uno que algo nombra. -#}
+{% macro quitar_este_grupo(g) %}
+{% set c = contenido_quitar %}
+<div class="quitar-aviso">
+  {% if g.clave == area_tecnica %}<p>Ese grupo no se puede quitar: Lucy y Code lo usan.</p>
+  {% elif c and c.total %}
+  <p>No se puede quitar «{{ g.clave }}»: todavía tiene
+    {%- set partes = [] %}
+    {%- if c.proyectos_abiertos %}{% set _ = partes.append(c.proyectos_abiertos ~ (' proyecto abierto' if c.proyectos_abiertos == 1 else ' proyectos abiertos')) %}{% endif %}
+    {%- if c.proyectos_cerrados %}{% set _ = partes.append(c.proyectos_cerrados ~ (' proyecto cerrado' if c.proyectos_cerrados == 1 else ' proyectos cerrados')) %}{% endif %}
+    {%- if c.proyectos_papelera %}{% set _ = partes.append(c.proyectos_papelera ~ (' proyecto en la papelera' if c.proyectos_papelera == 1 else ' proyectos en la papelera')) %}{% endif %}
+    {%- if c.tareas_pendientes %}{% set _ = partes.append(c.tareas_pendientes ~ (' tarea suelta pendiente' if c.tareas_pendientes == 1 else ' tareas sueltas pendientes')) %}{% endif %}
+    {%- if c.tareas_hechas %}{% set _ = partes.append(c.tareas_hechas ~ (' tarea suelta hecha' if c.tareas_hechas == 1 else ' tareas sueltas hechas')) %}{% endif %}
+    {%- if c.tareas_otras %}{% set _ = partes.append(c.tareas_otras ~ (' tarea suelta con otro estado' if c.tareas_otras == 1 else ' tareas sueltas con otro estado')) %}{% endif %}
+    {%- if c.tareas_papelera %}{% set _ = partes.append(c.tareas_papelera ~ (' tarea suelta en la papelera' if c.tareas_papelera == 1 else ' tareas sueltas en la papelera')) %}{% endif %}
+    {{ partes|join(', ') }}. Un grupo solo se quita cuando no queda nada en él: mueve esos proyectos y tareas a otro grupo primero.</p>
+  <div class="botones"><a class="btn-linea" href="/proyectos">Entendido</a></div>
+  {% elif c %}
+  <form class="confirmar" method="post" action="/proyectos/grupos/quitar">¿Quitar el grupo «{{ g.clave }}»? Está vacío.
+    <input type="hidden" name="clave" value="{{ g.clave }}">
+    <button>Sí, quitarlo</button> <a class="btn-linea" href="/proyectos">No</a></form>
+  {% else %}<p>Ese grupo ya no está.</p>{% endif %}
+</div>
+{% endmacro %}
+
 {% macro bloque_grupo(g, es_sin_grupo, vista) %}
 {% set actual = vista.proyecto if vista.tipo == 'proyecto' else none %}
 <div class="grupo gc" data-g="{{ 'sin-grupo' if es_sin_grupo else g.clave|lower }}" style="--claro:{{ g.color }};--oscuro:{{ g.color_oscuro }}">
-  <h3><i></i>{{ 'Sin grupo' if es_sin_grupo else g.clave }}{% if not es_sin_grupo and not q and not solo_ver %}<a class="nuevo-proy mas" href="/proyectos?nuevo={{ g.clave|urlencode }}" aria-label="Proyecto nuevo en {{ g.clave }}" title="Proyecto nuevo en {{ g.clave }}">+</a>{% endif %}</h3>
+  <h3><i></i>{{ 'Sin grupo' if es_sin_grupo else g.clave }}{% if not es_sin_grupo and not q and not solo_ver %}<a class="nuevo-proy mas" href="/proyectos?nuevo={{ g.clave|urlencode }}" aria-label="Proyecto nuevo en {{ g.clave }}" title="Proyecto nuevo en {{ g.clave }}">+</a>{% if g.clave == area_tecnica %}<span class="quitar-grupo" aria-hidden="true" style="visibility:hidden">×</span>{% else %}<a class="quitar-grupo" href="/proyectos?quitar_grupo={{ g.clave|urlencode }}" aria-label="Quitar el grupo {{ g.clave }}" title="Quitar el grupo {{ g.clave }}">×</a>{% endif %}{% endif %}</h3>
+  {% if quitar_grupo == g.clave and not es_sin_grupo and not q and not solo_ver %}{{ quitar_este_grupo(g) }}{% endif %}
   {% for m in g.abiertos %}{{ un_proyecto(m, actual) }}
   {% else %}{% if not es_sin_grupo and not q %}<p class="vacio vacio-grupo" style="padding:.3rem .6rem">Sin proyectos abiertos.</p>{% endif %}{% endfor %}
   {% if g.cerrados %}
@@ -490,6 +531,15 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {% for g in visibles.grupos %}{{ bloque_grupo(g, False, vista) }}{% endfor %}
       {% set sg = visibles.sin_grupo %}
       {% if sg.abiertos or sg.cerrados or (sg.sueltas and sg.sueltas.n_total) %}{{ bloque_grupo(sg, True, vista) }}{% endif %}
+      {% if not q and not solo_ver %}
+      {% if nuevo_grupo %}
+      <form class="nuevo-grupo-form" method="post" action="/proyectos/grupos">
+        <label>Nombre del grupo
+          <input name="nombre" type="text" required maxlength="{{ largo_grupo }}" placeholder="Ej. Hogar" autofocus></label>
+        <div class="botones"><a class="btn-linea" href="/proyectos">Cancelar</a><button>Crear grupo</button></div>
+      </form>
+      {% else %}<a class="nuevo-grupo" href="/proyectos?nuevo_grupo=1">+ Nuevo grupo</a>{% endif %}
+      {% endif %}
       {#- El mensaje de «no hay nada» es UNO, y el guion lo muestra y lo escribe al
           filtrar en vivo; el servidor lo deja a la vista cuando `?q=` no encontró nada. -#}
       <p class="vacio" data-sin-resultados{% if not (q and not visibles.grupos and not (visibles.sin_grupo.abiertos or visibles.sin_grupo.cerrados)) %} hidden{% endif %}>Ningún proyecto ni cliente con «{{ q }}».</p>
@@ -531,8 +581,18 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'persona_sitio' %}<p class="aviso">Ese proyecto o esa tarea ya no está.</p>
     {% elif error == 'persona_no_esta' %}<p class="aviso">Esa persona ya no estaba ahí.</p>
     {% elif error == 'persona_quien' %}<p class="aviso">Solo quien entra al panel puede cambiar las personas.</p>
+    {% elif error == 'grupo_vacio' %}<p class="aviso">El nombre del grupo no puede quedar vacío.</p>
+    {% elif error == 'grupo_largo' %}<p class="aviso">El nombre del grupo no puede pasar de {{ largo_grupo }} caracteres.</p>
+    {% elif error == 'grupo_caracteres' %}<p class="aviso">El nombre del grupo lleva caracteres que no se pueden guardar.</p>
+    {% elif error == 'grupo_reservado' %}<p class="aviso">«Sin grupo» ya es el nombre de lo que no tiene grupo: escoge otro nombre.</p>
+    {% elif error == 'grupo_repetido' %}<p class="aviso">Ya hay un grupo con ese nombre (no cuenta si cambian las mayúsculas, las tildes o los espacios). El grupo NO se creó.</p>
+    {% elif error == 'grupo_fijo' %}<p class="aviso">Ese grupo no se puede quitar: Lucy y Code lo usan.</p>
+    {% elif error == 'grupo_no_existe' %}<p class="aviso">Ese grupo ya no está.</p>
+    {% elif error == 'grupo_con_cosas' %}<p class="aviso">El grupo NO se quitó: todavía tiene cosas (se dice a la izquierda).</p>
     {% elif error == 'proyecto_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe tareas nuevas.</p>{% endif %}
     {% if hecho == 'proyecto_nuevo' %}<p class="aviso ok">Proyecto creado.</p>
+    {% elif hecho == 'grupo_creado' and grupo_existe %}<p class="aviso ok">Grupo «{{ grupo }}» creado. Está al final de la lista de la izquierda.</p>
+    {% elif hecho == 'grupo_quitado' and grupo and not grupo_existe %}<p class="aviso ok">Grupo «{{ grupo }}» quitado.</p>
     {% elif hecho == 'responsable' %}<p class="aviso ok">Responsable guardado.</p>
     {% elif hecho == 'cerrado' %}<p class="aviso ok">Proyecto cerrado. Está en «cerrados» en la lista de la izquierda.</p>
     {% elif hecho == 'cliente' %}<p class="aviso ok">Cliente guardado.</p>

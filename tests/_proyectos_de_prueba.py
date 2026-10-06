@@ -53,6 +53,19 @@ class BaseQueNoSeToca:
             async def _pagina(hoy=None):
                 return modelo()
             return _pagina
+        if nombre == "contenido_de_grupo":
+            # FINGIDO, declarado: lo que `db.contenido_de_grupo` mediría. Un grupo que
+            # no está en `AREAS` da `None`; «CDS» (el del modelo, con proyectos y
+            # tareas) da cuentas distintas de cero; los demás, vacíos.
+            async def _contenido(clave):
+                if clave not in {a["clave"] for a in tp.AREAS}:
+                    return None
+                ceros = dict(proyectos_abiertos=0, proyectos_cerrados=0, proyectos_papelera=0,
+                             tareas_pendientes=0, tareas_hechas=0, tareas_otras=0, tareas_papelera=0)
+                if clave == "CDS":
+                    ceros.update(proyectos_abiertos=2, proyectos_cerrados=1, tareas_pendientes=1)
+                return {**ceros, "total": sum(ceros.values())}
+            return _contenido
         if nombre == "areas":
             async def _areas():
                 return list(tp.AREAS)

@@ -220,8 +220,11 @@ def test_cada_grupo_ofrece_su_boton_de_proyecto_nuevo_y_sin_grupo_no(mundo):
     lista = html.split("<aside>", 1)[1].split("</aside>", 1)[0]
     for grupo in ("CDS", "ACD", "IA"):
         assert (f'<a class="nuevo-proy mas" href="/proyectos?nuevo={grupo}" aria-label="Proyecto nuevo en {grupo}" '
-                f'title="Proyecto nuevo en {grupo}">+</a></h3>') in lista
+                f'title="Proyecto nuevo en {grupo}">+</a>') in lista
     assert lista.count('class="nuevo-proy mas"') == 3
+    # La × de «quitar el grupo» (6-oct-2026): una por grupo MENOS el fijo (IA), que deja su sitio reservado.
+    assert lista.count('<a class="quitar-grupo"') == 2 and 'href="/proyectos?quitar_grupo=IA"' not in lista
+    assert lista.count('<span class="quitar-grupo" aria-hidden="true"') == 1
     assert 'class="nuevo-proy' not in ver(mundo, q="sin").split("<aside>", 1)[1].split("</aside>", 1)[0]
 
 
@@ -924,7 +927,8 @@ def _rutas_post_de_proyectos(con_tareas: bool = False):
                         escribe.append(("crud.editar", tuple(actor)))
                     if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                             and n.func.attr in ("crear_proyecto", "poner_cliente",
-                                                "agregar_participante", "quitar_participante")):
+                                                "agregar_participante", "quitar_participante",
+                                                "crear_grupo", "quitar_grupo")):
                         escribe.append((f"db.{n.func.attr}", ()))
                     if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                             and n.func.attr == "puede_entrar"):
@@ -947,6 +951,8 @@ def test_toda_ruta_post_de_proyectos_pide_sesion_y_escribe_por_una_puerta_con_ac
         "/proyectos/{pid}/cliente": {"db.poner_cliente"},
         "/proyectos/{pid}/personas": {"db.agregar_participante"},
         "/proyectos/{pid}/personas/{xid}/quitar": {"db.quitar_participante"},
+        "/proyectos/grupos": {"db.crear_grupo"},               # 6-oct-2026: agregar y quitar grupos
+        "/proyectos/grupos/quitar": {"db.quitar_grupo"},
     }
     assert {r["ruta"] for r in rutas.values()} == set(esperadas)
     for nombre, r in rutas.items():
