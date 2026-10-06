@@ -615,7 +615,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     <div class="cuerpo">
       <div class="centro">
     <section class="bloque">
-      <div class="encabezado"><h2>Tareas</h2><span class="nota">Las graves y las vencidas arriba. Toca el título de una tarea para ver su detalle y sus comentarios</span></div>
+      <div class="encabezado"><h2>Tareas</h2></div>
       {{ lista_de_tareas(m.pendientes, m.otras, m.n_hechas, m.n_otras, 'Sin tareas todavía.' if not m.n_total else 'No queda nada pendiente.') }}
       {% if not m.cerrado and not solo_ver %}
       <form class="nueva-tarea" method="post" action="/proyectos/{{ m.id }}/tareas">
