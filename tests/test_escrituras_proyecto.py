@@ -595,13 +595,32 @@ def test_js_el_comentario_que_se_vuelve_a_editar_va_a_la_ruta_de_editar(mundo):
     assert crear["accion"] != form["accion"]
 
 
+def la_funcion_de_marcar(codigo: str) -> tuple[str, str]:
+    """(el texto de `function marcarSinSaltar(form) {...}`, el código SIN ella).
+    Es el SEGUNDO pedido de red que el script puede hacer (6-oct-2026, Tiziano:
+    marcar una tarea no puede mover la página): se envía el mismo formulario
+    `form.marcar` y se vuelve a pedir la misma página. Se saca entera, con las llaves
+    emparejadas, y se vigila aparte (`tests/test_marcar_sin_saltar.py`)."""
+    m = re.search(r"function marcarSinSaltar\(form\) \{", codigo)
+    assert m, "no está la función que marca sin recargar"
+    nivel, k = 0, m.end() - 1
+    while True:
+        nivel += {"{": 1, "}": -1}.get(codigo[k], 0)
+        if nivel == 0:
+            break
+        k += 1
+    return codigo[m.start():k + 1], codigo[:m.start()] + codigo[k + 1:]
+
+
 def sin_el_unico_pedido_permitido(codigo: str) -> str:
-    """El script puede hacer UN pedido de red, y ninguno más: el GET que busca
-    personas de Noco para ofrecer coincidencias (`/personas/buscar?q=...`, sin
-    método, sin cuerpo y sin opciones: un `fetch` con un solo argumento es un GET).
-    Lo comprueba y devuelve el código SIN ese pedido, para que las demás
-    prohibiciones (otro `fetch`, `XMLHttpRequest`, `.submit(`...) se apliquen al
-    resto. (E7, 1-oct-2026: Lucy solo LEE de Noco.)"""
+    """Fuera de la función de marcar (que se vigila aparte), el script puede hacer
+    UN pedido de red, y ninguno más: el GET que busca personas de Noco para
+    ofrecer coincidencias (`/personas/buscar?q=...`, sin método, sin cuerpo y sin
+    opciones: un `fetch` con un solo argumento es un GET). Lo comprueba y devuelve
+    el código SIN ese pedido NI esa función, para que las demás prohibiciones
+    (otro `fetch`, `XMLHttpRequest`, `.submit(`...) se apliquen al resto.
+    (E7, 1-oct-2026: Lucy solo LEE de Noco.)"""
+    _, codigo = la_funcion_de_marcar(codigo)
     permitido = 'fetch("/personas/buscar?q=" + encodeURIComponent(q))'
     assert codigo.count("fetch(") == 1 and codigo.count(permitido) == 1, "el único fetch tiene que ser el de buscar personas"
     return codigo.replace(permitido, "")

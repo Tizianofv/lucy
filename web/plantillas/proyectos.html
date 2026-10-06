@@ -973,9 +973,84 @@ document.addEventListener("change", function (e) {
    esto llegarían dos comentarios iguales. Un formulario que acaba de enviarse
    no se reenvía durante un par de segundos (la página ya se está yendo); el
    servidor sigue decidiendo qué hacer con lo que llega. */
+/* MARCAR O DESMARCAR UNA TAREA NO MUEVE LA PÁGINA. El formulario del círculo
+   (`form.marcar`) se envía igual (POST a la misma ruta, que escribe y contesta
+   con la misma redirección de siempre), pero sin dejar la página: se pide
+   de nuevo LA MISMA PÁGINA que la persona está viendo (misma dirección, con el
+   aviso `hecho`/`error` que trajo la redirección) y se cambian la columna de la
+   izquierda y el centro por lo que el servidor devolvió. Lo que se ve sale del
+   servidor, no se calcula aquí: contadores, dónde queda la tarea y el aviso son
+   los de siempre. Se guardan y se devuelven el desplazamiento de las dos
+   columnas y de la ventana, los `<details>` abiertos y lo escrito en el
+   buscador. Si algo falla (red, sesión caducada, una página que no es la de
+   Proyectos), se envía el formulario como siempre y se ve lo que diga el
+   servidor: nunca queda una tarea dibujada como hecha sin que lo esté. */
+function marcarSinSaltar(form) {
+  var boton = form.querySelector("button");
+  if (boton) boton.disabled = true;
+  var clavesDelAviso = ["hecho", "error", "derivadas", "derivar"];
+  var normal = function () { if (boton) boton.disabled = false; form.submit(); };
+  fetch(form.action, {method: "POST", body: new URLSearchParams(new FormData(form)), credentials: "same-origin"})
+    .then(function (r) {
+      if (!r.ok) throw new Error("POST " + r.status);
+      var vuelta = new URL(r.url), aqui = new URL(location.href);
+      for (var i = 0; i < clavesDelAviso.length; i++) {
+        aqui.searchParams.delete(clavesDelAviso[i]);
+        if (vuelta.searchParams.has(clavesDelAviso[i])) aqui.searchParams.set(clavesDelAviso[i], vuelta.searchParams.get(clavesDelAviso[i]));
+      }
+      aqui.hash = "";
+      return fetch(aqui.href, {credentials: "same-origin"}).then(function (p) {
+        if (!p.ok) throw new Error("GET " + p.status);
+        return p.text().then(function (texto) { return [aqui, texto]; });
+      });
+    })
+    .then(function (par) {
+      var nuevo = new DOMParser().parseFromString(par[1], "text/html");
+      var nAside = nuevo.querySelector(".envoltura > aside"), nMain = nuevo.querySelector(".envoltura > main");
+      var aside = document.querySelector(".envoltura > aside"), main = document.querySelector(".envoltura > main");
+      if (!nAside || !nMain || !aside || !main) throw new Error("no es Proyectos");
+      var buscador = aside.querySelector("input.buscar"), escrito = buscador ? buscador.value : "";
+      var abiertos = [].map.call(document.querySelectorAll(".envoltura details"), function (d) { return d.open; });
+      var y = window.pageYOffset, x = window.pageXOffset, a = aside.scrollTop, m = main.scrollTop;
+      /* El punto de referencia: la primera tarea (que no sea la tocada) que se ve
+         arriba del centro; al final se deja exactamente donde estaba (el aviso
+         de arriba y la fila que se va empujarían todo lo demás). */
+      var tocada = form.closest(".tarea"), tope = main.getBoundingClientRect().top, ancla = null, anclaY = 0;
+      var filas = main.querySelectorAll(".tarea[id]");
+      for (var f = 0; f < filas.length && !ancla; f++) {
+        var rf = filas[f].getBoundingClientRect();
+        if (filas[f] !== tocada && rf.height > 0 && rf.bottom > tope + 4) { ancla = filas[f].id; anclaY = rf.top; }
+      }
+      aside.replaceWith(document.importNode(nAside, true));
+      main.replaceWith(document.importNode(nMain, true));
+      aside = document.querySelector(".envoltura > aside"); main = document.querySelector(".envoltura > main");
+      var detalles = document.querySelectorAll(".envoltura details");
+      if (detalles.length === abiertos.length) for (var k = 0; k < detalles.length; k++) detalles[k].open = abiertos[k];
+      var nuevoBuscador = aside.querySelector("input.buscar");
+      if (nuevoBuscador && escrito !== nuevoBuscador.value) { nuevoBuscador.value = escrito; filtrarLista(escrito); }
+      aside.scrollTop = a; main.scrollTop = m; window.scrollTo(x, y);
+      var puesta = ancla && main.querySelector(".tarea[id='" + ancla + "']");
+      if (puesta && puesta.getBoundingClientRect().height > 0) {
+        var corre = puesta.getBoundingClientRect().top - anclaY;
+        if (main.scrollHeight > main.clientHeight) main.scrollTop += corre;   // pantalla ancha: el centro tiene su desplazamiento
+        else window.scrollTo(window.pageXOffset, window.pageYOffset + corre); // pantalla angosta: es la ventana
+      }
+      history.replaceState(null, "", par[0].pathname + par[0].search);
+    })
+    .catch(normal);
+}
 document.addEventListener("submit", function (e) {
   var form = e.target;
   if (!form || !form.dataset) return;
+  if (form.classList && form.classList.contains("marcar") && typeof window !== "undefined" && window.fetch
+      && window.URLSearchParams && window.DOMParser) {
+    e.preventDefault();
+    if (form.dataset.enviado === undefined) {
+      form.dataset.enviado = "";
+      marcarSinSaltar(form);
+    }
+    return;
+  }
   /* «Agregar» sin persona escogida no se envía, y dice por qué. (Un botón de
      resultado de la búsqueda sin JavaScript sí: trae su `noco_id`.) */
   if (form.dataset.pidePersona !== undefined) {
