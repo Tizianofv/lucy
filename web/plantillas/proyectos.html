@@ -999,9 +999,9 @@ function marcarSinSaltar(form) {
     if (!nAside || !nMain || !aside || !main) throw new Error("no es Proyectos");
     var y = window.pageYOffset, x = window.pageXOffset, a = aside.scrollTop, m = main.scrollTop;
     /* El punto de referencia: la primera tarea (que no sea la tocada) que se ve
-       arriba del centro; al final se deja exactamente donde estaba (el aviso
+       arriba de lo que se ve (en pantalla angosta el centro empieza muy arriba de la ventana); al final se deja exactamente donde estaba (el aviso
        de arriba y la fila que se va empujarían todo lo demás). */
-    var tocada = form.closest(".tarea"), tope = main.getBoundingClientRect().top, ancla = null, anclaY = 0;
+    var tocada = form.closest(".tarea"), tope = Math.max(main.getBoundingClientRect().top, 0), ancla = null, anclaY = 0;
     var filas = main.querySelectorAll(".tarea[id]");
     for (var f = 0; f < filas.length && !ancla; f++) {
       var rf = filas[f].getBoundingClientRect();
