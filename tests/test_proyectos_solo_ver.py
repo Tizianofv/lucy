@@ -555,7 +555,9 @@ def _paginas_de_la_casa(consultas=COBERTURA) -> list[str]:
     return [_pintar("casa", **c) for c in consultas]
 
 
-def test_el_modelo_de_prueba_hace_correr_todos_los_controles_de_la_plantilla():
+def test_el_modelo_de_prueba_hace_correr_todos_los_controles_de_la_plantilla(monkeypatch):
+    # Con la dirección de la App puesta, que es cuando el logo es un enlace.
+    monkeypatch.setattr(config, "REGISTRO_URL", "https://registro.example.test")
     fuente = _fuente_sin_jinja()
     assert len(_sitios(fuente)) >= 40, "el extractor no está viendo la plantilla"
     sin = sitios_sin_cubrir(fuente, _paginas_de_la_casa())
@@ -569,9 +571,11 @@ def test_el_extractor_ve_los_controles_y_el_hueco_del_testigo(monkeypatch):
     cae también."""
     fuente = _fuente_sin_jinja()
     original = pp.modelo
+    monkeypatch.setattr(config, "REGISTRO_URL", "https://registro.example.test")
     monkeypatch.setattr(pp, "modelo", lambda: original(con_personas=False))
     sin = sitios_sin_cubrir(fuente, _paginas_de_la_casa())
     monkeypatch.undo()
+    monkeypatch.setattr(config, "REGISTRO_URL", "https://registro.example.test")
     assert any("quitar" in s for s in sin), sin
     assert len(sin) == 1, sin       # solo la ✕: «Agregar» corre aunque no haya personas
     paginas = _paginas_de_la_casa()
