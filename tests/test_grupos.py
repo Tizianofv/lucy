@@ -491,6 +491,36 @@ def test_deshacer_un_cambio_de_grupo_cuyo_grupo_existe_sigue_igual():
     assert b.con.execute("SELECT area FROM proyectos WHERE id = 1").fetchone()[0] == "Hogar"
 
 
+def _deshacer_con_error_de_psycopg(error, grupo_sigue):
+    """`deshacer` con el `UPDATE` rechazado por un error con la FORMA de psycopg (`.sqlstate`)."""
+    t, b = _mundo_de_deshacer()
+    if not grupo_sigue:
+        t._correr(b, lambda: db.quitar_grupo("Hogar"))
+
+    def lanza(self, sql, params):
+        if "UPDATE proyectos t SET" in " ".join(sql.split()):
+            raise error()
+        return None
+    original = t._Cur._emular_deshacer
+    t._Cur._emular_deshacer = lanza
+    try:
+        return t._rechazo(b, lambda: __import__("acciones.crud", fromlist=["x"]).deshacer(7)), b
+    except Exception as e:          # un error que NO es ValueError sale tal cual
+        return e, b
+    finally:
+        t._Cur._emular_deshacer = original
+
+
+def test_deshacer_traduce_solo_la_llave_foranea_de_un_grupo_que_ya_no_esta():
+    FK, OTRO = _ViolacionDeLlaveForanea, _OtroErrorDeLaBase
+    e, _ = _deshacer_con_error_de_psycopg(FK, grupo_sigue=False)
+    assert isinstance(e, ValueError) and str(e) == "No lo deshice: el grupo «Hogar» ya no existe."
+    e, _ = _deshacer_con_error_de_psycopg(OTRO, grupo_sigue=False)          # otro error: se deja pasar crudo
+    assert type(e).__name__ == "_OtroErrorDeLaBase"
+    e, _ = _deshacer_con_error_de_psycopg(FK, grupo_sigue=True)             # la llave falló por otra cosa: no se disfraza
+    assert type(e).__name__ == "_ViolacionDeLlaveForanea"
+
+
 # ── Lo de Postgres que sí se puede vigilar sin Postgres ─────────────────────
 # Qué mide cada prueba y qué NO (la lista de lo que nadie ha comprobado está en la cabecera
 # de `db.crear_grupo`): la FORMA del error (clases reales de psycopg, en un subproceso, porque
