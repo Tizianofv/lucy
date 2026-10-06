@@ -40,6 +40,8 @@ a{color:inherit}
 .menu a:hover{color:var(--tinta)}
 .menu a[aria-current="page"]{color:var(--tinta);font-weight:600;border-bottom-color:var(--marca,#eb2129)}
 .barra-marca .logo{height:17px;width:auto;max-width:70vw;display:block}
+.btn-fantasma{background:none;border:none;color:var(--marca);font-size:16px;font-weight:600;cursor:pointer;padding:8px 10px;border-radius:10px;text-decoration:none;margin-block:-8px}
+.btn-fantasma:active{background:rgba(235,33,41,0.08)}
 .barra-tag{background:#eb2129;color:#fff;font:700 11px var(--texto);letter-spacing:.8px;padding:3px 8px;border-radius:7px}
 /* Tres columnas, como la maqueta: la lista de grupos (izquierda, una tarjeta que
    baja sola), el proyecto (centro, también baja solo) y, dentro del centro, las
@@ -466,7 +468,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 {% endmacro %}
 
 <header class="barra-marca"><div class="barra-dentro">
-  {% if volver_a_la_app %}<a class="logo-enlace" href="{{ volver_a_la_app }}" style="display:block;line-height:0">{% endif %}<img class="logo" src="/logo-cds.png" alt="Caribbean Dream Studios">{% if volver_a_la_app %}</a>{% endif %}
+  {% if volver_a_la_app %}<a id="btn-inicio" class="btn-fantasma" href="{{ volver_a_la_app }}" title="Volver a la página de inicio">‹ Inicio</a>{% endif %}<img class="logo" src="/logo-cds.png" alt="Caribbean Dream Studios">
   <span class="barra-tag">PROYECTOS</span>
   <nav class="menu" aria-label="Lucy">
     {% if solo_ver %}{% if volver_a_la_app %}<a href="{{ volver_a_la_app }}">Volver al inicio</a>{% endif %}{% else %}{% for a in pantallas %}<a href="{{ a.ruta }}"{% if a.ruta == '/proyectos' %} aria-current="page"{% endif %}>{{ a.nombre }}</a>{% endfor %}{% endif %}

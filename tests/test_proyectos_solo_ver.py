@@ -346,10 +346,11 @@ def test_la_pagina_de_ver_dice_lo_que_hay_pero_no_lo_que_se_puede_hacer(monkeypa
         assert f'href="{href}' not in html, href
 
 
-def test_en_ver_el_logo_tambien_lleva_al_inicio(monkeypatch):
+def test_en_ver_sale_el_inicio_antes_del_logo_y_el_logo_no_es_enlace(monkeypatch):
     monkeypatch.setattr(config, "REGISTRO_URL", "https://registro.example.test")
     html = _pintar("ver", p=1)
-    assert re.search(r'<a class="logo-enlace" href="https://registro.example.test/"[^>]*>\s*<img class="logo"', html)
+    m = re.search(r'<a id="btn-inicio" class="btn-fantasma" href="https://registro.example.test/"[^>]*>‹ Inicio</a>\s*<img class="logo"', html)
+    assert m and "Volver al inicio" in html
 
 
 def test_sin_direccion_de_la_App_no_se_dibuja_un_enlace_roto(monkeypatch):

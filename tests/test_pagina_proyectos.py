@@ -756,23 +756,41 @@ def test_lo_que_se_busca_se_escapa_y_se_conserva_en_los_enlaces(mundo):
 
 # ── La barra y el logo ──────────────────────────────────────────────────
 
-def _logo_con_su_enlace(html: str):
-    """(href del enlace que envuelve al logo o None, si el logo está)."""
-    m = re.search(r'(?:<a class="logo-enlace" href="([^"]*)"[^>]*>)?\s*<img class="logo" src="/logo-cds.png"', html)
-    return (m.group(1) if m else None), m is not None
+def _barra(html: str) -> str:
+    return re.search(r'<header class="barra-marca">.*?</header>', html, re.S).group(0)
 
 
-def test_el_logo_lleva_a_la_pagina_de_inicio_de_la_App(mundo, monkeypatch):
+def test_el_inicio_sale_antes_del_logo_y_apunta_a_la_App(mundo, monkeypatch):
     monkeypatch.setattr(config, "REGISTRO_URL", "https://registro.example.test")
-    href, hay_logo = _logo_con_su_enlace(ver(mundo))
-    assert hay_logo and href == "https://registro.example.test/"
+    barra = _barra(ver(mundo))
+    m = re.search(r'<a id="btn-inicio" class="btn-fantasma" href="([^"]*)"[^>]*>‹ Inicio</a>', barra)
+    assert m and m.group(1) == "https://registro.example.test/"
+    assert m.start() < barra.index('<img class="logo"') < barra.index('class="barra-tag"')
 
 
-def test_sin_direccion_de_la_App_el_logo_sigue_sin_enlace(mundo, monkeypatch):
+def test_el_logo_nunca_es_un_enlace(mundo, monkeypatch):
+    for url in ("https://registro.example.test", ""):
+        monkeypatch.setattr(config, "REGISTRO_URL", url)
+        barra = _barra(ver(mundo))
+        assert '<img class="logo" src="/logo-cds.png"' in barra
+        assert not re.search(r'<a\b[^>]*>\s*<img class="logo"', barra), url
+
+
+def test_sin_direccion_de_la_App_no_sale_el_inicio(mundo, monkeypatch):
     monkeypatch.setattr(config, "REGISTRO_URL", "")
-    html = ver(mundo)
-    href, hay_logo = _logo_con_su_enlace(html)
-    assert hay_logo and href is None and "logo-enlace" not in html
+    assert "btn-inicio" not in _barra(ver(mundo))
+
+
+def test_el_inicio_no_agranda_la_barra(mundo):
+    """Mide TEXTO, no pixeles: el enlace pesa 16px de letra + 8px de relleno arriba
+    y abajo, y la barra solo se queda igual si un margen negativo del mismo tamano
+    se come ese relleno. Que el alto real no cambie se comprueba en un navegador."""
+    css = ver(mundo)
+    regla = re.search(r"\.btn-fantasma\{([^}]*)\}", css).group(1)
+    pad = re.search(r"padding:(\d+)px \d+px", regla)
+    margen = re.search(r"margin-block:-(\d+)px", regla)
+    assert pad and margen and pad.group(1) == margen.group(1), regla
+    assert "font-size:16px" in regla and "color:var(--marca)" in regla
 
 
 def test_la_barra_lleva_el_logo_y_proyectos_y_los_enlaces_del_menu(mundo):
