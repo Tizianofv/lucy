@@ -756,6 +756,25 @@ def test_lo_que_se_busca_se_escapa_y_se_conserva_en_los_enlaces(mundo):
 
 # ── La barra y el logo ──────────────────────────────────────────────────
 
+def _logo_con_su_enlace(html: str):
+    """(href del enlace que envuelve al logo o None, si el logo está)."""
+    m = re.search(r'(?:<a class="logo-enlace" href="([^"]*)"[^>]*>)?\s*<img class="logo" src="/logo-cds.png"', html)
+    return (m.group(1) if m else None), m is not None
+
+
+def test_el_logo_lleva_a_la_pagina_de_inicio_de_la_App(mundo, monkeypatch):
+    monkeypatch.setattr(config, "REGISTRO_URL", "https://registro.example.test")
+    href, hay_logo = _logo_con_su_enlace(ver(mundo))
+    assert hay_logo and href == "https://registro.example.test/"
+
+
+def test_sin_direccion_de_la_App_el_logo_sigue_sin_enlace(mundo, monkeypatch):
+    monkeypatch.setattr(config, "REGISTRO_URL", "")
+    html = ver(mundo)
+    href, hay_logo = _logo_con_su_enlace(html)
+    assert hay_logo and href is None and "logo-enlace" not in html
+
+
 def test_la_barra_lleva_el_logo_y_proyectos_y_los_enlaces_del_menu(mundo):
     html = ver(mundo)
     assert '<img class="logo" src="/logo-cds.png"' in html

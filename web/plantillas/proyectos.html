@@ -466,7 +466,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 {% endmacro %}
 
 <header class="barra-marca"><div class="barra-dentro">
-  <img class="logo" src="/logo-cds.png" alt="Caribbean Dream Studios">
+  {% if volver_a_la_app %}<a class="logo-enlace" href="{{ volver_a_la_app }}" style="display:block;line-height:0">{% endif %}<img class="logo" src="/logo-cds.png" alt="Caribbean Dream Studios">{% if volver_a_la_app %}</a>{% endif %}
   <span class="barra-tag">PROYECTOS</span>
   <nav class="menu" aria-label="Lucy">
     {% if solo_ver %}{% if volver_a_la_app %}<a href="{{ volver_a_la_app }}">Volver al inicio</a>{% endif %}{% else %}{% for a in pantallas %}<a href="{{ a.ruta }}"{% if a.ruta == '/proyectos' %} aria-current="page"{% endif %}>{{ a.nombre }}</a>{% endfor %}{% endif %}
