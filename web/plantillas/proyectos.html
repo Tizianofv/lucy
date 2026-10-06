@@ -367,7 +367,11 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       <label for="meter-{{ t.id }}">Meter en un proyecto</label>
       <select id="meter-{{ t.id }}" name="proyecto" required>
         <option value="" selected disabled>Escoge un proyecto…</option>
-        {% for m in modelo.proyectos.values()|rejectattr('cerrado')|sort(attribute='nombre') %}<option value="{{ m.id }}">{{ m.nombre }}{% if m.area %} · {{ m.area }}{% endif %}</option>{% endfor %}
+        {#- «grupo · proyecto», por grupo (en el orden de la columna de la izquierda: `modelo.grupos`)
+            y, dentro de cada uno, por nombre; los proyectos sin grupo, al final y sin separador. -#}
+        {% set abiertos = modelo.proyectos.values()|rejectattr('cerrado')|list %}
+        {% for gr in modelo.grupos %}{% for m in abiertos|selectattr('area', 'equalto', gr.clave)|sort(attribute='nombre') %}<option value="{{ m.id }}">{{ gr.clave }} · {{ m.nombre }}</option>{% endfor %}{% endfor %}
+        {% for m in abiertos|rejectattr('area')|sort(attribute='nombre') %}<option value="{{ m.id }}">{{ m.nombre }}</option>{% endfor %}
       </select>
       <button class="btn-linea">Meter</button>
     </form>

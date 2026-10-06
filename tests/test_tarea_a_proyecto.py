@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 import os
 
+import re
+
 import pytest
 
 os.environ.setdefault("TELEGRAM_TOKEN", "token-de-prueba-123")
@@ -206,7 +208,34 @@ def test_el_detalle_de_una_tarea_suelta_ofrece_solo_proyectos_vivos_y_abiertos(m
     assert 'value="2"' in f and 'value="1"' in f and 'value="4"' in f and 'value="6"' in f
     assert 'value="3"' not in f          # cerrado
     assert 'value="5"' not in f          # en la papelera
-    assert "El de la página · CDS" in f
+    assert "CDS · El de la página" in f and "El de la página · CDS" not in f      # el grupo primero (6-oct-2026)
+
+
+def test_el_selector_va_por_grupo_en_el_orden_de_la_izquierda_y_por_nombre_dentro_de_cada_uno(ms):
+    """«grupo · proyecto», agrupado como la columna de la izquierda (el orden sale de la
+    PÁGINA, no se teclea) y por nombre dentro de cada grupo; sin grupo, al final y sin
+    separador. Los `value` son los ids de siempre."""
+    ms.proyecto(7, "Zeta suelto", area=None)
+    ms.proyecto(8, "aaa suelto", area=None)
+    ms.proyecto(9, "Beta", area="CDS")
+    ms.con.commit()
+    html = ver(ms, g="CDS", t=30)
+    f = _formulario(html, 30)
+    opciones = re.findall(r'<option value="(\d+)">([^<]*)</option>', f)
+    izquierda = [x for x in re.findall(r'<div class="grupo gc" data-g="([^"]*)"',
+                                       html.split("<aside>", 1)[1].split("</aside>", 1)[0]) if x != "sin-grupo"]
+    nombres = {r[0].lower(): r[0] for r in ms.con.execute("SELECT clave FROM areas")}
+    orden_de_grupos = [nombres[x] for x in izquierda]
+    textos = [t for _, t in opciones]
+    con_grupo = [t.split(" · ", 1) for t in textos if " · " in t]
+    sin_grupo = [t for t in textos if " · " not in t]
+    assert [g for g, _ in con_grupo] == sorted([g for g, _ in con_grupo], key=orden_de_grupos.index)
+    for g in set(g for g, _ in con_grupo):
+        nombres_del_grupo = [n for gg, n in con_grupo if gg == g]
+        assert nombres_del_grupo == sorted(nombres_del_grupo, key=str.lower), g
+    assert textos[:len(con_grupo)] == [" · ".join(x) for x in con_grupo]      # los sin grupo, DESPUÉS de todos
+    assert sin_grupo == ["aaa suelto", "Zeta suelto"]
+    assert [i for i, t in opciones if t == "CDS · Beta"] == ["9"]
 
 
 def test_sin_grupo_tambien_lo_ofrece(ms):
