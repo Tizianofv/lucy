@@ -259,9 +259,9 @@ def test_la_pagina_ofrece_nuevo_grupo_y_crear_lo_pinta_al_final_con_su_aviso(bas
     q = _va_a(r)
     assert q == {"hecho": "grupo_creado", "grupo": "Taller"}
     html = ver(base, **q)
-    assert _avisos(html)[0] == "Grupo «Taller» creado. Está al final de la lista de la izquierda."
+    assert _avisos(html)[0] == "El grupo «Taller» está al final de la lista de la izquierda."
     nombres = re.findall(r'<div class="grupo gc" data-g="([^"]*)"', _lista(html))
-    assert nombres[-2:] == ["hogar", "taller"] or nombres[-1] == "taller", nombres
+    assert nombres[-1] == "taller", nombres
     assert [a["clave"] for a in db_areas(base)][-1] == "Taller"
 
 
@@ -295,7 +295,7 @@ def test_quitar_pregunta_primero_y_un_grupo_vacio_se_quita(base):
     assert q == {"hecho": "grupo_quitado", "grupo": "Hogar"}
     assert "Hogar" not in [a[0] for a in _grupos(base)]
     html = ver(base, **q)
-    assert _avisos(html)[0] == "Grupo «Hogar» quitado." and 'data-g="hogar"' not in html
+    assert _avisos(html)[0] == "El grupo «Hogar» ya no está en la lista de la izquierda." and 'data-g="hogar"' not in html
 
 
 def test_un_grupo_con_cosas_dice_cuantas_y_no_ofrece_quitarlo(base):
@@ -338,13 +338,29 @@ def test_quitar_un_grupo_que_ya_no_esta_lo_dice(base):
     assert _avisos(ver(base, **q))[0] == "Ese grupo ya no está."
 
 
-def test_los_avisos_de_creado_y_quitado_salen_de_la_base_no_de_la_direccion(base):
-    """Una dirección escrita a mano no puede hacer decir «creado» de un grupo que no está
-    ni «quitado» de uno que sigue."""
-    assert not [a for a in _avisos(ver(base, hecho="grupo_creado", grupo="Inventado")) if "creado" in a]
-    assert not [a for a in _avisos(ver(base, hecho="grupo_quitado", grupo="CDS")) if "quitado" in a]
-    assert _avisos(ver(base, hecho="grupo_quitado", grupo="Inventado")) == ["Grupo «Inventado» quitado."]   # no está: es verdad
-    assert [a for a in _avisos(ver(base, hecho="grupo_creado", grupo="CDS")) if "creado" in a]            # está: es verdad
+URLS_A_MANO = [{"hecho": "grupo_creado", "grupo": "Inventado"}, {"hecho": "grupo_creado", "grupo": "CDS"},
+               {"hecho": "grupo_quitado", "grupo": "Fantasma"}, {"hecho": "grupo_quitado", "grupo": "CDS"},
+               {"hecho": "grupo_creado"}, {"hecho": "grupo_quitado"}]
+
+
+@pytest.mark.parametrize("consulta", URLS_A_MANO, ids=str)
+def test_una_direccion_escrita_a_mano_no_hace_decir_creado_ni_quitado(base, consulta):
+    """GARANTÍA 3. Una dirección no puede probar que algo pasó, así que la página
+    NUNCA afirma la acción («creado», «quitado»): solo dice un ESTADO que comprueba en la
+    base. Sondeado con los cuatro pares que mintieron antes de este arreglo."""
+    for aviso in _avisos(ver(base, **consulta)):
+        assert "creado" not in aviso and "quitado" not in aviso, (consulta, aviso)
+
+
+def test_lo_que_el_aviso_dice_es_un_estado_comprobado(base):
+    ultimo = [a["clave"] for a in db_areas(base)][-1]
+    assert _avisos(ver(base, hecho="grupo_creado", grupo=ultimo)) == [
+        f"El grupo «{ultimo}» está al final de la lista de la izquierda."]
+    assert _avisos(ver(base, hecho="grupo_creado", grupo="CDS")) == []             # está, pero no al final
+    assert _avisos(ver(base, hecho="grupo_creado", grupo="Inventado")) == []       # no está
+    assert _avisos(ver(base, hecho="grupo_quitado", grupo="CDS")) == []            # sigue en la lista
+    assert _avisos(ver(base, hecho="grupo_quitado", grupo="Fantasma")) == [
+        "El grupo «Fantasma» ya no está en la lista de la izquierda."]             # es verdad: no está
 
 
 def test_el_nombre_en_un_aviso_se_escapa(base):
@@ -423,3 +439,207 @@ def test_el_censo_de_nombres_fijos_ve_uno_inventado(tmp_path):
     (tmp_path / "x.py").write_text("GRUPOS = ['CDS']\n")
     visto = {n.value for n in ast.walk(ast.parse((tmp_path / "x.py").read_text())) if isinstance(n, ast.Constant)}
     assert "CDS" in visto
+
+
+# ── Sin «Sin grupo» ni su data-g ────────────────────────────────────────────
+
+@pytest.mark.parametrize("pedido", ["Sin-grupo", "SIN-GRUPO", " sin-Grupo "])
+async def test_un_grupo_no_puede_chocar_con_el_data_g_del_cubo_sin_grupo(base, pedido):
+    with pytest.raises(db.GrupoNoVale) as e:
+        await db.crear_grupo(pedido)
+    assert e.value.clave == "reservado"
+
+
+# ── deshacer con un grupo que ya se quitó ───────────────────────────────────
+
+def _mundo_de_deshacer():
+    """La base de `tests/test_nombre_de_proyecto.py` (SQLite que ejecuta el SQL de `crud`,
+    con el `UPDATE ... jsonb_populate_record` emulado) con la tabla `areas` y la llave
+    foránea ENCENDIDA en `proyectos.area`."""
+    import test_nombre_de_proyecto as t
+    b = t.Base()
+    b.con.executescript("""
+        DROP TABLE proyectos;
+        CREATE TABLE areas (clave TEXT PRIMARY KEY, color TEXT, orden INTEGER);
+        INSERT INTO areas VALUES ('CDS', '#1', 1), ('Hogar', '#2', 2);
+        CREATE TABLE proyectos (id INTEGER PRIMARY KEY, creado_en, nombre TEXT NOT NULL, descripcion,
+          estado TEXT DEFAULT 'activo', area TEXT REFERENCES areas(clave), borrado_en, bandeja_id);
+        INSERT INTO proyectos (id, nombre, area) VALUES (1, 'Uno', 'CDS');
+        INSERT INTO log_acciones (id, actor, accion, tabla, registro_id, antes, despues)
+          VALUES (7, 'panel', 'editar', 'proyectos', 1, '{"area": "Hogar"}', '{"area": "CDS"}');
+        PRAGMA foreign_keys = ON;
+    """)
+    b.con.create_function("pg_advisory_xact_lock", 1, lambda x: None)
+    b.con.create_function("hashtextextended", 2, lambda a, c: 0)
+    return t, b
+
+
+def test_deshacer_un_cambio_de_grupo_cuyo_grupo_ya_no_existe_no_se_hace_y_se_dice_claro():
+    t, b = _mundo_de_deshacer()
+    t._correr(b, lambda: db.quitar_grupo("Hogar"))                 # el grupo al que volvería se quitó
+    antes = b.con.execute("SELECT id, area FROM proyectos").fetchall()
+    e = t._rechazo(b, lambda: __import__("acciones.crud", fromlist=["x"]).deshacer(7))
+    assert e is not None and str(e) == "No lo deshice: el grupo «Hogar» ya no existe."
+    assert b.con.execute("SELECT id, area FROM proyectos").fetchall() == antes          # nada a medias
+    assert b.con.execute("SELECT count(*) FROM log_acciones WHERE accion = 'deshacer'").fetchone()[0] == 0
+
+
+def test_deshacer_un_cambio_de_grupo_cuyo_grupo_existe_sigue_igual():
+    t, b = _mundo_de_deshacer()
+    b.con.execute("UPDATE proyectos SET area = 'CDS'")
+    t._correr(b, lambda: __import__("acciones.crud", fromlist=["x"]).deshacer(7))
+    assert b.con.execute("SELECT area FROM proyectos WHERE id = 1").fetchone()[0] == "Hogar"
+
+
+# ── Lo de Postgres que sí se puede vigilar sin Postgres ─────────────────────
+# Qué mide cada prueba y qué NO (la lista de lo que nadie ha comprobado está en la cabecera
+# de `db.crear_grupo`): la FORMA del error (clases reales de psycopg, en un subproceso, porque
+# otras pruebas de este repo falsean `psycopg` en su proceso) y el ORDEN y la PROFUNDIDAD de las
+# sentencias con dobles que lanzan lo mismo que lanza psycopg. NO miden que Postgres haga lo que
+# estos dobles suponen.
+
+def test_el_codigo_reconoce_los_errores_de_psycopg_por_su_sqlstate():
+    import subprocess
+    import sys
+    guion = (
+        "import psycopg.errors as E, db.db as db\n"
+        "fk, pk, otro = E.ForeignKeyViolation(), E.UniqueViolation(), E.SerializationFailure()\n"
+        "print(fk.sqlstate, pk.sqlstate, otro.sqlstate)\n"
+        "print(db._es_violacion(fk, '23503'), db._es_violacion(pk, '23503'), db._es_violacion(otro, '23503'),\n"
+        "      db._es_violacion(pk, '23505'), db._es_violacion(fk, '23505'), db._es_violacion(ValueError(), '23505'))\n")
+    entorno = {**__import__("os").environ, "TELEGRAM_TOKEN": "1:x", "DATABASE_URL": "postgresql://x/x",
+               "CHAT_ID_DUENO": "111", "SESSION_SECRET": "x" * 40, "PYTHONPATH": str(_ROOT)}
+    r = subprocess.run([sys.executable, "-c", guion], capture_output=True, text=True, cwd=_ROOT, env=entorno)
+    assert r.returncode == 0, r.stderr[-600:]
+    assert r.stdout.split("\n")[:2] == ["23503 23505 40001", "True False False True False False"]
+
+
+class _ViolacionDeLlaveForanea(Exception):
+    """Lo que lanza psycopg (`ForeignKeyViolation`): una excepción con `.sqlstate` = «23503»."""
+    sqlstate = "23503"
+
+
+class _ViolacionDeLlavePrimaria(Exception):
+    sqlstate = "23505"
+
+
+class _OtroErrorDeLaBase(Exception):
+    sqlstate = "40001"
+
+
+class _Registro:
+    """Un `pool` de mentira que RECUERDA cada sentencia con la profundidad de transacción en
+    que corrió (`conn.transaction()` anidado = punto de guardado en psycopg)."""
+
+    def __init__(self, falla_en=None, error=None, filas=None):
+        self.falla_en, self.error, self.filas = falla_en, error, filas or {}
+        self.hechos, self.profundidad = [], 0
+
+    def connection(self):
+        registro = self
+
+        class _CM:
+            async def __aenter__(s):
+                return _Conn(registro)
+
+            async def __aexit__(s, *e):
+                return False
+        return _CM()
+
+
+class _Conn:
+    def __init__(self, r):
+        self.r = r
+
+    def transaction(self):
+        r = self.r
+
+        class _T:
+            async def __aenter__(s):
+                r.profundidad += 1
+
+            async def __aexit__(s, *e):
+                r.profundidad -= 1
+                return False
+        return _T()
+
+    async def execute(self, sql, params=()):
+        return await _Cur(self.r).execute(sql, params)
+
+    def cursor(self, row_factory=None):
+        return _Cur(self.r)
+
+
+class _Cur:
+    def __init__(self, r):
+        self.r, self.sql = r, ""
+
+    async def execute(self, sql, params=()):
+        self.sql = " ".join(sql.split())
+        self.r.hechos.append((self.r.profundidad, self.sql, tuple(params)))
+        if self.r.falla_en and self.sql.startswith(self.r.falla_en):
+            raise self.r.error()
+        return self
+
+    async def fetchone(self):
+        for prefijo, fila in self.r.filas.items():
+            if self.sql.startswith(prefijo):
+                return fila
+        if self.sql.startswith("SELECT count") and "FROM proyectos" in self.sql:
+            return {"proyectos_abiertos": 1, "proyectos_cerrados": 0, "proyectos_papelera": 0}
+        if self.sql.startswith("SELECT count"):
+            return {"tareas_pendientes": 0, "tareas_hechas": 0, "tareas_otras": 0, "tareas_papelera": 0}
+        return {"x": 1, "clave": "G", "color": "#1", "orden": 9}
+
+    async def fetchall(self):
+        return [{"clave": "A", "color": "#1", "orden": 1}]
+
+
+LOCK = "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))"
+
+
+async def test_quitar_pone_el_bloqueo_primero_y_el_delete_dentro_de_su_punto_de_guardado(monkeypatch):
+    r = _Registro(falla_en="DELETE FROM areas", error=_ViolacionDeLlaveForanea)
+    monkeypatch.setattr(db, "pool", r)
+    with pytest.raises(db.GrupoNoSeQuita) as e:
+        await db.quitar_grupo("G")
+    assert e.value.clave == "con_cosas" and e.value.contenido["proyectos_abiertos"] == 1
+    assert r.hechos[0] == (1, LOCK, ("grupos",))                      # el bloqueo, lo primero, en la transacción
+    delete = [h for h in r.hechos if h[1].startswith("DELETE FROM areas")]
+    assert [h[0] for h in delete] == [2]                              # el DELETE, un nivel más adentro (punto de guardado)
+    cuentas = [h for h in r.hechos if h[1].startswith("SELECT count")]
+    assert cuentas and {h[0] for h in cuentas} == {1}                 # y se cuenta DESPUÉS de salir de él, ya con la transacción de afuera sana
+    assert r.profundidad == 0
+
+
+async def test_quitar_no_se_traga_otros_errores_de_la_base(monkeypatch):
+    r = _Registro(falla_en="DELETE FROM areas", error=_OtroErrorDeLaBase)
+    monkeypatch.setattr(db, "pool", r)
+    with pytest.raises(_OtroErrorDeLaBase):
+        await db.quitar_grupo("G")
+
+
+async def test_crear_pone_el_bloqueo_antes_de_leer_y_dice_repetido_ante_la_llave_primaria(monkeypatch):
+    r = _Registro(falla_en="INSERT INTO areas", error=_ViolacionDeLlavePrimaria)
+    monkeypatch.setattr(db, "pool", r)
+    with pytest.raises(db.GrupoNoVale) as e:
+        await db.crear_grupo("Nuevo")
+    assert e.value.clave == "repetido"
+    assert r.hechos[0] == (1, LOCK, ("grupos",))
+    assert r.hechos[1][1].startswith("SELECT clave, color, orden FROM areas")        # leer, después del bloqueo
+    assert [h for h in r.hechos if h[1].startswith("INSERT INTO areas")][0][0] == 1
+
+
+async def test_crear_no_se_traga_otros_errores_de_la_base(monkeypatch):
+    r = _Registro(falla_en="INSERT INTO areas", error=_OtroErrorDeLaBase)
+    monkeypatch.setattr(db, "pool", r)
+    with pytest.raises(_OtroErrorDeLaBase):
+        await db.crear_grupo("Nuevo")
+
+
+def test_el_aviso_de_que_el_grupo_tiene_cosas_solo_sale_si_las_tiene(base):
+    """Un grupo vacío con `?error=grupo_con_cosas` a mano no hace decir que tiene cosas."""
+    assert [a for a in _avisos(ver(base, error="grupo_con_cosas", quitar_grupo="ACD")) if "NO se quitó" in a] == []
+    base.proyecto(1, "Algo", area="Hogar")
+    base.con.commit()
+    assert [a for a in _avisos(ver(base, error="grupo_con_cosas", quitar_grupo="Hogar")) if "NO se quitó" in a]

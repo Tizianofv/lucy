@@ -592,11 +592,11 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'grupo_repetido' %}<p class="aviso">Ya hay un grupo con ese nombre (no cuenta si cambian las mayúsculas, las tildes o los espacios). El grupo NO se creó.</p>
     {% elif error == 'grupo_fijo' %}<p class="aviso">Ese grupo no se puede quitar: Lucy y Code lo usan.</p>
     {% elif error == 'grupo_no_existe' %}<p class="aviso">Ese grupo ya no está.</p>
-    {% elif error == 'grupo_con_cosas' %}<p class="aviso">El grupo NO se quitó: todavía tiene cosas (se dice a la izquierda).</p>
+    {% elif error == 'grupo_con_cosas' and contenido_quitar and contenido_quitar.total %}<p class="aviso">El grupo NO se quitó: todavía tiene cosas (se dice a la izquierda).</p>
     {% elif error == 'proyecto_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe tareas nuevas.</p>{% endif %}
     {% if hecho == 'proyecto_nuevo' %}<p class="aviso ok">Proyecto creado.</p>
-    {% elif hecho == 'grupo_creado' and grupo_existe %}<p class="aviso ok">Grupo «{{ grupo }}» creado. Está al final de la lista de la izquierda.</p>
-    {% elif hecho == 'grupo_quitado' and grupo and not grupo_existe %}<p class="aviso ok">Grupo «{{ grupo }}» quitado.</p>
+    {% elif hecho == 'grupo_creado' and grupo_existe and grupo_es_el_ultimo %}<p class="aviso ok">El grupo «{{ grupo }}» está al final de la lista de la izquierda.</p>
+    {% elif hecho == 'grupo_quitado' and grupo and not grupo_existe %}<p class="aviso ok">El grupo «{{ grupo }}» ya no está en la lista de la izquierda.</p>
     {% elif hecho == 'responsable' %}<p class="aviso ok">Responsable guardado.</p>
     {% elif hecho == 'cerrado' %}<p class="aviso ok">Proyecto cerrado. Está en «cerrados» en la lista de la izquierda.</p>
     {% elif hecho == 'cliente' %}<p class="aviso ok">Cliente guardado.</p>

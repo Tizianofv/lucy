@@ -2673,11 +2673,23 @@ async def areas() -> list[dict]:
 # EXISTS (...)` y, por si un pedido le mete un proyecto o una tarea al grupo entre
 # la lectura y el borrado, la llave foránea: o falla la inserción o falla el
 # borrado (SQLSTATE 23503), nunca queda una fila apuntando a un grupo que no está.
-# FRONTERA: el bloqueo y la llave de Postgres no se ejercitan con las pruebas
-# (usan SQLite, que no tiene el bloqueo: se prueba la secuencia, no la carrera).
+# FRONTERA, completa. NO se ejercita contra un Postgres de verdad (no lo hay en
+# esta Mac; las pruebas usan SQLite y dobles), y por eso NADIE ha comprobado que
+# Postgres: (1) acepte `SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))` con el
+# texto «grupos» como parámetro (la misma forma ya corre en producción en
+# `crear_o_reusar_alerta_tecnica`); (2) ponga EN FILA a dos pedidos con ese bloqueo;
+# (3) rechace el `DELETE` con SQLSTATE «23503» (llave foránea) y el `INSERT` con
+# «23505» (llave primaria) tal como aquí se reconocen; (4) deje la transacción de
+# afuera usable después de un rechazo gracias al punto de guardado
+# (`conn.transaction()` anidado) de `quitar_grupo`. Lo que SÍ se vigila sin Postgres
+# (`tests/test_grupos.py`): que el código reconozca esos errores por su SQLSTATE
+# (clases reales de psycopg, en un subproceso), que el bloqueo sea lo primero que
+# corre dentro de la transacción y que el `DELETE` corra dentro del punto de
+# guardado, con dobles que lanzan lo mismo que lanza psycopg.
 
 LARGO_NOMBRE_GRUPO = 30
 NOMBRE_RESERVADO_DE_GRUPO = "Sin grupo"      # el cubo de lo que no tiene grupo
+DATA_G_RESERVADO = "sin-grupo"              # el `data-g` que la plantilla le da al cubo («Sin grupo»)
 
 # Colores para un grupo nuevo, en este orden, saltando los que ya están. Uno
 # solo pide decidirse en la pantalla (Tiziano no escoge color): lo decide el
@@ -2717,7 +2729,8 @@ def nombre_de_grupo_que_vale(valor) -> str:
     limpio = " ".join(valor.split())
     if len(limpio) > LARGO_NOMBRE_GRUPO:
         raise GrupoNoVale("largo", f"el nombre del grupo no puede pasar de {LARGO_NOMBRE_GRUPO} caracteres")
-    if clave_comparable_de_grupo(limpio) == clave_comparable_de_grupo(NOMBRE_RESERVADO_DE_GRUPO):
+    if (clave_comparable_de_grupo(limpio) == clave_comparable_de_grupo(NOMBRE_RESERVADO_DE_GRUPO)
+            or limpio.lower() == DATA_G_RESERVADO):
         raise GrupoNoVale("reservado", "ese nombre ya lo usa «Sin grupo»")
     return limpio
 

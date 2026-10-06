@@ -2182,10 +2182,21 @@ async def deshacer(log_id: int) -> str:
             if tabla == "tareas" and "proyecto_id" in columnas:
                 await _recibir_al_deshacer(cur, registro_id, antes.get("proyecto_id"))
             asignaciones = ", ".join(f"{c} = r.{c}" for c in columnas)
-            await conn.execute(
-                f"UPDATE {tabla} t SET {asignaciones} "
-                f"FROM jsonb_populate_record(null::{tabla}, %s) r WHERE t.id = %s",
-                (json.dumps(antes, default=str, ensure_ascii=False), registro_id))
+            try:
+                await conn.execute(
+                    f"UPDATE {tabla} t SET {asignaciones} "
+                    f"FROM jsonb_populate_record(null::{tabla}, %s) r WHERE t.id = %s",
+                    (json.dumps(antes, default=str, ensure_ascii=False), registro_id))
+            except Exception as e:
+                # Devolver un grupo (`area`) que ya se quitó choca con la llave
+                # foránea: la transacción se revierte y no queda nada a medias; lo
+                # único que cambia es que se dice en claro por qué no se pudo.
+                if ("area" in columnas and antes.get("area") is not None
+                        and db._es_violacion(e, "23503")
+                        and antes["area"] not in {a["clave"] for a in await db.areas()}):
+                    raise ValueError(
+                        f"No lo deshice: el grupo «{antes['area']}» ya no existe.") from e
+                raise
             que = "el cambio"
 
         else:

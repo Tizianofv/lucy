@@ -1101,15 +1101,21 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
     pantallas = _menu.pantallas()
     busqueda = await _buscar_personas_para_la_pagina(pq, pdonde)
     # GRUPOS (agregar y quitar): lo que se dibuja sale de la base. La cuenta de lo
-    # que tiene un grupo se mide AL PINTAR (solo si se pidió la confirmación); y
-    # «creado»/«quitado» solo se dicen si el grupo de verdad está / ya no está.
-    claves_de_grupos = {a["clave"] for a in await db.areas()}
+    # que tiene un grupo se mide AL PINTAR (solo si se pidió la confirmación). Los
+    # avisos de `hecho=grupo_creado|grupo_quitado` NO afirman la acción (una
+    # dirección escrita a mano no puede probarla): dicen el ESTADO, que aquí se
+    # comprueba: «está al final de la lista» (solo si es el último de la base) y
+    # «ya no está en la lista» (solo si no está).
+    todos_los_grupos = [a["clave"] for a in await db.areas()]
+    claves_de_grupos = set(todos_los_grupos)
     contenido_quitar = await db.contenido_de_grupo(quitar_grupo) if quitar_grupo else None
     return plantillas.TemplateResponse(
         request, "proyectos.html",
         {"solo_ver": solo_ver,
          "nuevo_grupo": nuevo_grupo, "quitar_grupo": quitar_grupo, "grupo": grupo,
-         "grupo_existe": grupo in claves_de_grupos, "contenido_quitar": contenido_quitar,
+         "grupo_existe": grupo in claves_de_grupos,
+         "grupo_es_el_ultimo": bool(todos_los_grupos) and grupo == todos_los_grupos[-1],
+         "contenido_quitar": contenido_quitar,
          "largo_grupo": db.LARGO_NOMBRE_GRUPO,
          "volver_a_la_app": (config.REGISTRO_URL + "/") if config.REGISTRO_URL.startswith(
              ("http://", "https://")) else "",
@@ -1416,8 +1422,8 @@ async def crear_grupo_de_proyectos(request: Request):
     """«+ Nuevo grupo» (Tiziano, 6-oct-2026). Todo lo decide `db.crear_grupo`
     (nombre, repetido sin distinguir mayúsculas, tildes ni espacios, color y
     lugar al final): la ruta solo traduce el rechazo a una CLAVE en la URL, nunca
-    el nombre pedido. El aviso de «creado» lo dibuja la página SOLO si el grupo
-    está de verdad en `db.areas()`."""
+    el nombre pedido. La página NO afirma «creado» (una dirección puede escribirse
+    a mano): dice que el grupo está al final de la lista, y solo si lo está."""
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     formulario = await request.form()
@@ -1436,8 +1442,8 @@ async def quitar_grupo_de_proyectos(request: Request):
     el servidor con `?quitar_grupo=` (ver `proyectos`); esta ruta es lo que
     envía su botón. `db.quitar_grupo` decide: solo borra si nada apunta al grupo
     y nunca el fijo. Un grupo con cosas vuelve a la misma explicación, con las
-    cuentas medidas al pintar. El «quitado» lo dibuja la página SOLO si el grupo
-    de verdad ya no está."""
+    cuentas medidas al pintar. La página NO afirma «quitado»: dice que el grupo ya
+    no está en la lista, y solo si es verdad."""
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     formulario = await request.form()
