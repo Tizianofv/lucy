@@ -599,8 +599,9 @@ def la_funcion_de_marcar(codigo: str) -> tuple[str, str]:
     """(el texto de `function marcarSinSaltar(form) {...}`, el código SIN ella).
     Es el SEGUNDO pedido de red que el script puede hacer (6-oct-2026, Tiziano:
     marcar una tarea no puede mover la página): se envía el mismo formulario
-    `form.marcar` y se vuelve a pedir la misma página. Se saca entera, con las llaves
-    emparejadas, y se vigila aparte (`tests/test_marcar_sin_saltar.py`)."""
+    `form.marcar` y se pinta la página que contesta el servidor. Se saca entera, con
+    las llaves emparejadas, y se le aplican las MISMAS prohibiciones que al resto
+    del guion, salvo ese POST (`tests/test_marcar_sin_saltar.py`)."""
     m = re.search(r"function marcarSinSaltar\(form\) \{", codigo)
     assert m, "no está la función que marca sin recargar"
     nivel, k = 0, m.end() - 1
