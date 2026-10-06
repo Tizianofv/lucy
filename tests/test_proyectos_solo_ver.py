@@ -302,6 +302,7 @@ def controles_que_sobran(html: str, enlace_a_la_app: str = "") -> list[str]:
 VISTAS = [
     {}, {"p": 1}, {"p": 2}, {"p": 3}, {"p": 4}, {"g": "CDS"}, {"sin_grupo": 1}, {"q": "disco"}, {"q": "zzz"},
     {"p": 1, "t": 10}, {"p": 1, "t": 11},
+    {"g": "CDS", "t": 12}, {"sin_grupo": 1, "t": 13},      # el detalle de una tarea suelta («Meter en un proyecto»)
 ]
 A_MANO = {
     "nuevo=CDS": {"nuevo": "CDS"},

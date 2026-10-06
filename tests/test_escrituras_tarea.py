@@ -583,6 +583,10 @@ _VISTAS_DE_TAREAS = {
                            "/proyectos/3/personas", "/proyectos/tarea/40/reabrir",
                            "/proyectos/tarea/40/titulo"] + _V),
     "sueltas": ({"g": "CDS"}, ["/proyectos/tarea/30/hecha", "/proyectos/tarea/30/titulo"] + _V),
+    # El detalle de una tarea suelta: además de lo de siempre, «Meter en un proyecto».
+    "detalle_suelta": ({"g": "CDS", "t": 30}, ["/proyectos/tarea/30/hecha", "/proyectos/tarea/30/titulo",
+                                               "/proyectos/tarea/30/comentar", "/proyectos/tarea/30/personas",
+                                               "/proyectos/tarea/30/proyecto"] + _V),
     "sin_grupo": ({"sin_grupo": 1}, ["/proyectos/tarea/31/hecha", "/proyectos/tarea/31/titulo"] + _V),
     "nuevo": ({"nuevo": "CDS"}, ["/proyectos/nuevo"] + _V),
     # (Las vistas `derivada` y `derivada_suelta`, que abrían los renglones de «¿sale
@@ -627,7 +631,7 @@ def test_cada_formulario_de_tarea_enviado_como_el_navegador_escribe_en_la_tarea_
         form = forms[i]
         if not _ES_DE_TAREA.fullmatch(form["accion"]):
             continue                          # los del proyecto: `tests/test_escrituras_proyecto.py`
-        escoger = _otra_opcion if form["accion"].endswith("/responsable") else _la_marcada
+        escoger = _otra_opcion if form["accion"].endswith(("/responsable", "/proyecto")) else _la_marcada
         if form["accion"].endswith("/hecha") and _lleva_derivada(form):
             # El responsable de la tarea nueva lo CAMBIA la persona: así, un
             # `name` mal escrito (la hija nacería sin responsable) se nota.
@@ -716,6 +720,9 @@ def test_cada_formulario_de_tarea_enviado_como_el_navegador_escribe_en_la_tarea_
                 assert t["titulo"] == "Escrito en titulo", donde
             elif accion == "borrar":
                 assert t["borrado_en"] is not None, donde
+            elif accion == "proyecto":
+                elegido = _otra_opcion(next(c for c in form["campos"] if c["tipo"] == "select"))
+                assert (t["proyecto_id"], t["area"]) == (int(_valor(elegido)), None), donde
             elif accion == "responsable":
                 elegido = _otra_opcion(next(c for c in form["campos"] if c["tipo"] == "select"))
                 assert t["responsable_chat_id"] == chat_de[_valor(elegido)], donde
@@ -919,7 +926,9 @@ def test_toda_ruta_post_de_tarea_pide_sesion_y_escribe_por_una_puerta_con_actor_
         "/proyectos/tarea/{tid}/responsable", "/proyectos/tarea/{tid}/comentar",
         "/proyectos/tarea/{tid}/comentario/{cid}/editar",
         # E7 (1-oct-2026): las personas de la tarea.
-        "/proyectos/tarea/{tid}/personas", "/proyectos/tarea/{tid}/personas/{xid}/quitar"}
+        "/proyectos/tarea/{tid}/personas", "/proyectos/tarea/{tid}/personas/{xid}/quitar",
+        # Meter una tarea suelta en un proyecto (5-oct-2026): por `crud.editar`.
+        "/proyectos/tarea/{tid}/proyecto"}
     for nombre, r in rutas.items():
         assert r["sesion"], f"{nombre} no pide sesión"
         assert len(r["escribe"]) == 1, f"{nombre} escribe por {r['escribe']}"

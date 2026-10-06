@@ -351,6 +351,21 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {%- for x in t.personas %}{{ ficha_persona(x, '/proyectos/tarea/' ~ t.id ~ '/personas/' ~ x.id ~ '/quitar') }}{% endfor %}
       {%- if not t.responsable and not t.personas %}<p class="vacio">Nadie asignado.</p>{% endif %}</div>
     {{ agregar_persona('tarea-' ~ t.id, '/proyectos/tarea/' ~ t.id ~ '/personas') }}
+    {#- METER LA TAREA EN UN PROYECTO: solo en las tareas sueltas (las vistas de
+        grupo y de «Sin grupo»), solo para quien puede escribir, y solo a los
+        proyectos que no están cerrados. Es un formulario de UN campo: se guarda al escoger, como
+        los demás desplegables de la página (el botón sigue ahí y sin JavaScript
+        se guarda con él). -#}
+    {% if not solo_ver and vista.tipo != 'proyecto' %}
+    <form class="resp" method="post" action="/proyectos/tarea/{{ t.id }}/proyecto" data-auto>
+      <label for="meter-{{ t.id }}">Meter en un proyecto</label>
+      <select id="meter-{{ t.id }}" name="proyecto" required>
+        <option value="" selected disabled>Escoge un proyecto…</option>
+        {% for m in modelo.proyectos.values()|rejectattr('cerrado')|sort(attribute='nombre') %}<option value="{{ m.id }}">{{ m.nombre }}{% if m.area %} · {{ m.area }}{% endif %}</option>{% endfor %}
+      </select>
+      <button class="btn-linea">Meter</button>
+    </form>
+    {% endif %}
     <div class="separa"></div>
     <h4>Comentarios</h4>
     <div class="comentarios">
@@ -492,6 +507,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'tarea_titulo' %}<p class="aviso">El título no puede quedar vacío ni pasar de {{ largo_titulo }} caracteres.</p>
     {% elif error == 'tarea_fecha' %}<p class="aviso">No se entendió la fecha.</p>
     {% elif error == 'tarea_comentario' %}<p class="aviso">El comentario no puede quedar vacío ni pasar de {{ largo_comentario }} caracteres.</p>
+    {% elif error == 'tarea_proyecto' %}<p class="aviso">Ese proyecto ya no existe o está en la papelera: la tarea NO se movió.</p>
+    {% elif error == 'tarea_con_proyecto' %}<p class="aviso">Esa tarea ya está en un proyecto: no se movió.</p>
     {% elif error == 'tarea_responsable' %}<p class="aviso">Ese responsable no vale: se escoge entre {{ nombres_responsable|join(', ') }}.</p>
     {% elif error == 'tarea_rechazada' %}<p class="aviso">No se pudo crear la tarea.</p>
     {% elif error == 'tarea_derivada' %}<p class="aviso">La tarea nueva no se pudo crear (revisa el título, la fecha o el responsable): la tarea NO se marcó hecha.</p>
@@ -521,6 +538,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif hecho == 'tarea_reabierta' %}<p class="aviso ok">Tarea desmarcada: vuelve a pendiente, con la misma fecha.</p>
     {% elif hecho == 'tarea_titulo' %}<p class="aviso ok">Título guardado.</p>
     {% elif hecho == 'tarea_borrada' %}<p class="aviso ok">Tarea borrada. Está en la papelera: de ahí se recupera.</p>
+    {% elif hecho == 'tarea_proyecto' %}<p class="aviso ok">Tarea metida en el proyecto.</p>{% if sala_no %}
+    <p class="aviso">Es de {{ nombre_code }}, pero el proyecto no es del grupo «{{ area_tecnica }}»: la sala de control NO la verá.</p>{% endif %}
     {% elif hecho == 'tarea_responsable' %}<p class="aviso ok">Responsable de la tarea guardado.</p>
     {% elif hecho == 'comentario' %}<p class="aviso ok">Comentario guardado.</p>
     {% elif hecho == 'comentario_editado' %}<p class="aviso ok">Comentario editado.</p>{% endif %}

@@ -4009,10 +4009,14 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `tests/_proyectos_de_prueba.py` (nuevos); VIGILADOS sin cambio: se
     # tocaron `config.py`, `web/app.py` y `web/auth.py`, ya vigilados. Medida
     # corriendo la prueba: 128 en disco, 83 EXENTOS, 45 VIGILADOS.
-    assert medido == {"en disco": 128, "exentos": 83, "vigilados": 45}, (
+    # 5-oct-2026, rama `trabajo/tarea-a-proyecto` (meter una tarea suelta en un
+    # proyecto): +1 en disco y +1 EXENTO por `tests/test_tarea_a_proyecto.py`
+    # (nuevo); VIGILADOS sin cambio: se tocó `web/app.py`, ya vigilado. Medida
+    # corriendo la prueba: 129 en disco, 84 EXENTOS, 45 VIGILADOS.
+    assert medido == {"en disco": 129, "exentos": 84, "vigilados": 45}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "5-oct-2026 (entrar-cds) era {'en disco': 128, "
-        "'exentos': 83, 'vigilados': 45}. La aserción de fondo —cero "
+        "5-oct-2026 (tarea-a-proyecto) era {'en disco': 129, "
+        "'exentos': 84, 'vigilados': 45}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

@@ -1620,6 +1620,68 @@ async def editar_comentario_desde_proyectos(request: Request, tid: int, cid: int
         status_code=303)
 
 
+@app.post("/proyectos/tarea/{tid}/proyecto")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def meter_tarea_en_un_proyecto(request: Request, tid: int):
+    """Meter en un proyecto una tarea que no tiene (o cuyo proyecto está en la
+    papelera): el desplegable del detalle de las tareas sueltas.
+
+    NO HAY UNA PUERTA NUEVA: escribe `crud.editar("tareas", tid, {"proyecto_id":
+    N})`, la misma que usa Telegram para «pon esta tarea en el proyecto X». Ella
+    decide que el proyecto exista, no esté en la papelera ni cerrado
+    (`db.proyecto_admite_tareas`), limpia el grupo propio de la tarea (con
+    proyecto, el grupo es el del proyecto, igual que al crear una tarea dentro
+    de uno), deja la huella `editar` de `log_acciones` con `actor='panel'` y por
+    eso `crud.deshacer` la revierte. Esta ruta solo traduce el formulario, mira
+    que la tarea de verdad esté suelta y dice la verdad en el aviso.
+
+    SOLO SUELTAS: una tarea que ya está en un proyecto vivo se rechaza
+    (`tarea_con_proyecto`) y no escribe, también al segundo envío del mismo
+    formulario. FRONTERA: esa mirada y la escritura son dos pasos; dos envíos
+    exactamente a la vez podrían dejar dos huellas del mismo cambio (la tarea
+    queda bien: en el proyecto pedido).
+
+    El proyecto llega por su número, y NUNCA se confía en el destino de la
+    vuelta: sale de `_volver_a_la_tarea`, desde la base."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    donde = await db.donde_esta_la_tarea(tid)
+    if donde is None:
+        return RedirectResponse("/proyectos?error=tarea", status_code=303)
+    if donde["proyecto_vivo"]:
+        return RedirectResponse(
+            await _volver_a_la_tarea(tid, error="tarea_con_proyecto", t=tid), status_code=303)
+    formulario = await request.form()
+    crudo = str(formulario.get("proyecto", "")).strip()
+    if not crudo.isdigit():
+        return RedirectResponse(
+            await _volver_a_la_tarea(tid, error="tarea_proyecto", t=tid), status_code=303)
+    pid = int(crudo)
+    try:
+        proyecto = await db.proyecto_para_tareas(pid)
+    except db.ProyectoNoAdmiteTareas as e:
+        clave = "proyecto_cerrado" if e.clave == "cerrado" else "tarea_proyecto"
+        return RedirectResponse(
+            await _volver_a_la_tarea(tid, error=clave, t=tid), status_code=303)
+    try:
+        despues, _log_id = await crud.editar(
+            "tareas", tid, {"proyecto_id": pid},
+            motivo="Tarea metida en un proyecto desde el panel de proyectos",
+            actor="panel")
+    except ValueError as e:
+        log.warning("Panel de proyectos: tarea #%s no entró al proyecto #%s: %s", tid, pid, e)
+        return RedirectResponse(
+            await _volver_a_la_tarea(tid, error="tarea_proyecto", t=tid), status_code=303)
+    if despues is None or despues["proyecto_id"] != pid:
+        return RedirectResponse(
+            await _volver_a_la_tarea(tid, error="tarea_igual"), status_code=303)
+    sala = {"sala_no": 1} if (despues["responsable_chat_id"] == config.CHAT_ID_CODE
+                              and not db.sala_ve(config.CHAT_ID_CODE, proyecto["area"])) else {}
+    return RedirectResponse(
+        await _volver_a_la_tarea(tid, hecho="tarea_proyecto", **sala), status_code=303)
+
+
 @app.get("/logo-cds.png")
 @auth.puerta(auth.PUERTA_VER)
 async def logo_cds(request: Request):
