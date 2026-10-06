@@ -457,7 +457,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {%- if c.tareas_hechas %}{% set _ = partes.append(c.tareas_hechas ~ (' tarea suelta hecha' if c.tareas_hechas == 1 else ' tareas sueltas hechas')) %}{% endif %}
     {%- if c.tareas_otras %}{% set _ = partes.append(c.tareas_otras ~ (' tarea suelta con otro estado' if c.tareas_otras == 1 else ' tareas sueltas con otro estado')) %}{% endif %}
     {%- if c.tareas_papelera %}{% set _ = partes.append(c.tareas_papelera ~ (' tarea suelta en la papelera' if c.tareas_papelera == 1 else ' tareas sueltas en la papelera')) %}{% endif %}
-    {{ partes|join(', ') }}. Un grupo solo se quita cuando no queda nada en él: mueve esos proyectos y tareas a otro grupo primero.</p>
+    {{ partes|join(', ') }}. Un grupo solo se quita cuando no queda nada en él: cuenta todo, también lo cerrado y lo que está en la papelera. Mueve esos proyectos y tareas a otro grupo primero.</p>
   <div class="botones"><a class="btn-linea" href="/proyectos">Entendido</a></div>
   {% elif c %}
   <form class="confirmar" method="post" action="/proyectos/grupos/quitar">¿Quitar el grupo «{{ g.clave }}»? Está vacío.

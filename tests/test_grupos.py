@@ -312,7 +312,8 @@ def test_un_grupo_con_cosas_dice_cuantas_y_no_ofrece_quitarlo(base):
     assert ("No se puede quitar «Hogar»: todavía tiene 2 proyectos abiertos, 1 proyecto cerrado, "
             "1 proyecto en la papelera, 1 tarea suelta pendiente, 1 tarea suelta hecha, "
             "1 tarea suelta en la papelera. Un grupo solo se quita cuando no queda nada en él: "
-            "mueve esos proyectos y tareas a otro grupo primero.") in texto
+            "cuenta todo, también lo cerrado y lo que está en la papelera. "
+            "Mueve esos proyectos y tareas a otro grupo primero.") in texto
     assert 'action="/proyectos/grupos/quitar"' not in html and ">Sí, quitarlo<" not in html
     antes = (_grupos(base), _fotos(base))
     q = _va_a(_casa(base).post("/proyectos/grupos/quitar", data={"clave": "Hogar"}, follow_redirects=False))
