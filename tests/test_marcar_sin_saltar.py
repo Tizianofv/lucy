@@ -170,12 +170,12 @@ function URL(u) {
     delete: function (k) { delete q[k]; orden = orden.filter(function (x) { return x !== k; }); }};
   Object.defineProperty(this, "search", {get: function () {
     return "?" + orden.filter(function (k) { return k in q; }).map(function (k) { return k + "=" + q[k]; }).join("&"); }});
-  Object.defineProperty(this, "href", {get: function () { return "http://x.test" + self.pathname + self.search; }});
-  this.hash = "";
+  Object.defineProperty(this, "href", {get: function () { return "http://x.test" + self.pathname + self.search + self.hash; }});
+  this.hash = u.indexOf("#") >= 0 ? u.slice(u.indexOf("#")) : "";
 }
 function FormData(f) {}
 function URLSearchParams(x) {}
-var location = {href: "http://x.test/proyectos?p=2&hecho=tarea_creada"};
+var location = {href: "http://x.test/proyectos?p=2&hecho=tarea_creada#tarea-10"};   // con ancla, como tras una recarga normal
 var llamadas = {posts: [], gets: [], submit: 0, replace: [], scrollTo: [], evitado: 0};
 var modo = "ok";
 var vivos = {};
