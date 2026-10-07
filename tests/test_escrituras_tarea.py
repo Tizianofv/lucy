@@ -557,9 +557,9 @@ async def test_la_puerta_de_borrar_directo_deja_el_actor_que_se_le_pide(mt):
 # que cambió LA TAREA DE LA PÁGINA y nada más (ni otra tarea, ni otro
 # comentario, ni otro proyecto).
 
-# Sin `/proyectos/N/area` ni `/proyectos/tarea/N/responsable`: el «Mover a» y el
-# «Responsable» del detalle se quitaron de la página (1-oct-2026, decisión de
-# Tiziano: la maqueta no los tiene). Las rutas siguen y se prueban directo.
+# Sin `/proyectos/N/area`: el «Mover a» del detalle se quitó de la página (1-oct-2026,
+# decisión de Tiziano: la maqueta no lo tiene); la ruta sigue y se prueba directo.
+# El «Responsable» de la tarea VOLVIÓ al detalle el 7-oct-2026 (ver `_DETALLE_10`).
 _A = ["/proyectos/2/nombre", "/proyectos/2/responsable",
       # E7 (1-oct-2026): el cliente y las personas del proyecto son formularios.
       "/proyectos/2/cliente", "/proyectos/2/personas"]
@@ -567,7 +567,7 @@ _TAREAS_DE_2 = ["/proyectos/tarea/10/hecha", "/proyectos/tarea/10/titulo",
                 "/proyectos/tarea/11/reabrir", "/proyectos/tarea/11/titulo",
                 "/proyectos/tarea/12/hecha", "/proyectos/tarea/12/titulo", "/proyectos/2/tareas"]
 _DETALLE_10 = ["/proyectos/tarea/10/comentar", "/proyectos/tarea/10/comentario/50/editar",
-               "/proyectos/tarea/10/personas"]
+               "/proyectos/tarea/10/personas", "/proyectos/tarea/10/responsable"]
 
 # La ventanita de «+ Proyecto en X» (1-oct-2026) la escribe el servidor en CADA
 # vista, una por grupo de la lista de la izquierda: un formulario
@@ -591,7 +591,8 @@ _VISTAS_DE_TAREAS = {
     # El detalle de una tarea suelta: además de lo de siempre, «Meter en un proyecto».
     "detalle_suelta": ({"g": "CDS", "t": 30}, ["/proyectos/tarea/30/hecha", "/proyectos/tarea/30/titulo",
                                                "/proyectos/tarea/30/comentar", "/proyectos/tarea/30/personas",
-                                               "/proyectos/tarea/30/proyecto"] + _V),
+                                               "/proyectos/tarea/30/proyecto",
+                                               "/proyectos/tarea/30/responsable"] + _V),
     "sin_grupo": ({"sin_grupo": 1}, ["/proyectos/tarea/31/hecha", "/proyectos/tarea/31/titulo"] + _V),
     "nuevo": ({"nuevo": "CDS"}, ["/proyectos/nuevo"] + _V),
     # (Las vistas `derivada` y `derivada_suelta`, que abrían los renglones de «¿sale
@@ -840,15 +841,23 @@ def test_ninguna_vista_de_tareas_escribe_un_numero_de_chat(mt, gente):
         assert re.search(r'value="-?\d{4,}"', html) is None, consulta
 
 
-def test_el_detalle_ya_no_trae_el_selector_de_responsable_ni_la_pantalla_de_la_tarea(mt):
-    """Decisión de Tiziano (1-oct-2026): mismas funciones que la maqueta. El detalle
-    de la maqueta no tiene el desplegable «Responsable» ni el enlace «Abrir la
-    pantalla de la tarea»; la ruta `/proyectos/tarea/N/responsable` y la pantalla
-    `/tareas/N` siguen (se prueban directo)."""
+def test_el_detalle_trae_el_selector_de_responsable_y_sigue_sin_la_pantalla_de_la_tarea(mt):
+    """Dos decisiones de Tiziano, una encima de la otra.
+
+    1-oct-2026: mismas funciones que la maqueta. El detalle de la maqueta no tiene
+    el enlace «Abrir la pantalla de la tarea»: eso SIGUE así y se vigila aquí.
+
+    7-oct-2026: «En las tareas, tambien quiero poder cambiar el resposable.» y,
+    preguntado si era en Proyectos, al abrir una tarea: «Si, exacto» (y que Lucy NO
+    le avise por Telegram a nadie: «No»). Eso CONTRADICE lo que esta prueba exigía
+    del desplegable «Responsable» (que NO estuviera), así que esa parte se cambió:
+    ahora el detalle abierto lo trae, y solo el detalle abierto."""
     html = ver(mt, p=2, t=10)
-    assert 'id="rt-10"' not in html and "resp-tarea" not in html
-    assert "/proyectos/tarea/10/responsable" not in html
+    assert 'id="rt-10"' in html and 'action="/proyectos/tarea/10/responsable"' in html
+    assert "resp-tarea" not in html            # la clase vieja, la de antes del 1-oct
     assert "Abrir la pantalla" not in html and 'href="/tareas/10"' not in html
+    # Cerrado el detalle, ninguna tarea trae el desplegable.
+    assert "/responsable" not in ver(mt, p=2).replace('action="/proyectos/2/responsable"', "")
 
 
 # ── La × y el botón de marcar son lo que dice la maqueta ─────────────────

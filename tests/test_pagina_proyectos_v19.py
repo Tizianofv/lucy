@@ -372,9 +372,11 @@ def test_con_javascript_cada_campo_que_se_guarda_solo_pierde_su_boton_salvo_come
             if "data-auto" in f["atributos"]:
                 vistos[f["clase"]] = {b["tipo"] for b in f["botones"]}
     # (Sin `cambiar-grupo` ni `resp-tarea`: se quitaron de la página el 1-oct-2026.)
-    assert set(vistos) == {"resp", "renombrar", "comentar"}, vistos
+    # `resp marcar` es el responsable de la tarea (7-oct-2026): guarda sin mover la
+    # página (`form.marcar`) y su botón lo esconde la misma regla `form.resp`.
+    assert set(vistos) == {"resp", "resp marcar", "renombrar", "comentar"}, vistos
     for clase in sorted(vistos):
-        esconde = _lo_esconde(selectores, clase, "guardar")
+        esconde = any(_lo_esconde(selectores, c, "guardar") for c in clase.split())
         assert esconde == (clase != "comentar"), (clase, selectores)
     assert ".js .buscador button" in selectores
 

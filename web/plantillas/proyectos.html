@@ -361,14 +361,35 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
   {% if abierta %}
   <div class="detalle">
     {#- LAS PERSONAS DE LA TAREA, como en la maqueta. El responsable de la tarea
-        (lo que Lucy ya guardaba) sale primero con el rol «Responsable» y no se
-        quita desde aquí; las demás se agregan y se quitan con su formulario. -#}
+        (lo que Lucy ya guardaba) sale primero con el rol «Responsable»; se
+        cambia con el desplegable de abajo, no con el botón de quitar de una
+        persona; las demás se agregan y se quitan con su formulario. -#}
     <h4>Personas de esta tarea</h4>
     <div class="personas">{% if t.responsable %}<div class="persona"><span class="ini">{{ t.responsable|iniciales }}</span>
       <span class="quien"><b>{{ t.responsable }}</b><span>Responsable</span></span></div>{% endif %}
       {%- for x in t.personas %}{{ ficha_persona(x, '/proyectos/tarea/' ~ t.id ~ '/personas/' ~ x.id ~ '/quitar') }}{% endfor %}
       {%- if not t.responsable and not t.personas %}<p class="vacio">Nadie asignado.</p>{% endif %}</div>
     {{ agregar_persona('tarea-' ~ t.id, '/proyectos/tarea/' ~ t.id ~ '/personas') }}
+    {#- EL RESPONSABLE DE LA TAREA se cambia aquí mismo (Tiziano, 7-oct-2026: «En
+        las tareas, tambien quiero poder cambiar el resposable.»; y que sea en
+        Proyectos, sin avisar por Telegram a nadie). Solo para quien puede
+        escribir. Las opciones son las de `/tareas` (`config.opciones_de_
+        responsable`, por NOMBRE: aquí nadie lee ni envía un número de chat), y
+        la ruta la decide la misma puerta que ya existía
+        (`cambiar_responsable_de_tarea_desde_proyectos` → `db.asignar_responsable`).
+        Es `form.marcar` para que guardar no mueva la página (la misma pieza
+        que marcar hecha) y `data-auto` para que se guarde al escoger. -#}
+    {% if not solo_ver %}
+    <form class="resp marcar" method="post" action="/proyectos/tarea/{{ t.id }}/responsable" data-auto>
+      <label for="rt-{{ t.id }}">Responsable</label>
+      <select id="rt-{{ t.id }}" name="responsable">
+        <option value="" {%- if not t.responsable %} selected{% endif %}>sin responsable</option>
+        {% if t.responsable and t.responsable not in nombres_responsable %}<option value="" selected disabled>{{ t.responsable }}</option>{% endif %}
+        {% for n in nombres_responsable %}<option value="{{ n }}" {%- if t.responsable == n %} selected{% endif %}>{{ n }}</option>{% endfor %}
+      </select>
+      <button class="btn-linea">Guardar</button>
+    </form>
+    {% endif %}
     {#- METER LA TAREA EN UN PROYECTO: solo en las tareas sueltas (las vistas de
         grupo y de «Sin grupo»), solo para quien puede escribir, y solo a los
         proyectos que no están cerrados. Es un formulario de UN campo: se guarda al escoger, como
