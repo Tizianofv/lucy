@@ -24,7 +24,7 @@ import pytest
 
 import test_grupos as tg  # pone el entorno antes de importar `config`
 from test_grupos import base  # noqa: F401
-from test_pagina_proyectos import _dia, gente, mundo, ver  # noqa: F401
+from test_pagina_proyectos import _dia, gente, mundo, ver, ver_r  # noqa: F401
 from test_borrar_proyecto_y_grupo import (ESPERADO_HOGAR, _avisos, _borrada, _casa, _corre, _filas, _huellas,
                                           _sembrar, _texto)
 from test_papelera_de_proyectos import _papelera, pap  # noqa: F401
@@ -89,33 +89,34 @@ def _aviso_en(html: str, trozo: str) -> bool:
 
 def test_el_aviso_de_grupo_borrado_no_sale_si_el_grupo_se_volvio_a_crear_con_ese_nombre(base):
     """El hueco que vio el testigo: se borra «Hogar», se vuelve a crear, y la dirección escrita a mano
-    NO puede decir «ya no está»; sin esa guarda, nada se ponía rojo."""
+    NO puede decir «ya no está»; sin esa guarda, nada se ponía rojo. Aquí con el recibo puesto (como si
+    un POST hubiera mandado a esa dirección): la guarda de estado sigue sola, sin depender de él."""
     _sembrar(base)
     _corre(crud.borrar_grupo("Hogar", dict(ESPERADO_HOGAR), actor="panel"))
     q = dict(hecho="grupo_borrado", grupo="Hogar")
-    assert _aviso_en(ver(base, **q), "ya no está en la lista de la izquierda")          # estado bueno: no existe, y hay huella
+    assert _aviso_en(ver_r(base, **q), "ya no está en la lista de la izquierda")          # estado bueno: no existe, y hay huella
     _corre(db.crear_grupo("Hogar"))                                                      # …y ahora existe otra vez
-    assert not _aviso_en(ver(base, **q), "ya no está"), _avisos(ver(base, **q))
-    assert not _aviso_en(ver(base, **q), "Papelera")
+    assert not _aviso_en(ver_r(base, **q), "ya no está"), _avisos(ver_r(base, **q))
+    assert not _aviso_en(ver_r(base, **q), "Papelera")
     # y un grupo que existe y nunca tuvo huella, ni uno que nunca existió
-    assert not _aviso_en(ver(base, hecho="grupo_borrado", grupo="CDS"), "ya no está")
-    assert not _aviso_en(ver(base, hecho="grupo_borrado", grupo="Nunca existió"), "Papelera")
+    assert not _aviso_en(ver_r(base, hecho="grupo_borrado", grupo="CDS"), "ya no está")
+    assert not _aviso_en(ver_r(base, hecho="grupo_borrado", grupo="Nunca existió"), "Papelera")
 
 
 def _caso_proyecto_borrado(base):
     _sembrar(base)
     q = dict(hecho="proyecto_borrado", borrado=1)
-    malo = ver(base, **q)                                                                # el proyecto 1 está vivo
+    malo = ver_r(base, **q)                                                                # el proyecto 1 está vivo
     _corre(crud.borrar("proyectos", 1, "x", actor="panel"))
-    return malo, ver(base, **q), "está en la Papelera"
+    return malo, ver_r(base, **q), "está en la Papelera"
 
 
 def _caso_tarea_borrada(base):
     _sembrar(base)
     q = dict(p=4, hecho="tarea_borrada", borrada=20)
-    malo = ver(base, **q)
+    malo = ver_r(base, **q)
     _corre(crud.borrar("tareas", 20, "x", actor="panel"))
-    return malo, ver(base, **q), "está en la Papelera"
+    return malo, ver_r(base, **q), "está en la Papelera"
 
 
 def _caso_grupo_borrado(base):
@@ -123,29 +124,29 @@ def _caso_grupo_borrado(base):
     _corre(crud.borrar_grupo("Hogar", dict(ESPERADO_HOGAR), actor="panel"))
     _corre(db.crear_grupo("Hogar"))
     q = dict(hecho="grupo_borrado", grupo="Hogar")
-    malo = ver(base, **q)                                                                # existe de nuevo
+    malo = ver_r(base, **q)                                                                # existe de nuevo
     _corre(db.quitar_grupo("Hogar"))
-    return malo, ver(base, **q), "ya no está en la lista"
+    return malo, ver_r(base, **q), "ya no está en la lista"
 
 
 def _caso_borrar_cambio(base):
     _sembrar(base)
     q = dict(p=1, borrar_proyecto=1, error="borrar_cambio")
     _corre(crud.borrar("proyectos", 1, "x", actor="panel"))
-    malo = ver(base, **q)                                                                # ya no está: no hay «sigue aquí»
+    malo = ver_r(base, **q)                                                                # ya no está: no hay «sigue aquí»
     _corre(crud.deshacer_borrado("proyectos", 1))
-    return malo, ver(base, **q), "sigue aquí: NO se borró nada"
+    return malo, ver_r(base, **q), "sigue aquí: NO se borró nada"
 
 
 def _caso_grupo_cambio(base):
     _sembrar(base)
     q = dict(error="grupo_cambio", quitar_grupo="Hogar")
     _corre(crud.borrar_grupo("Hogar", dict(ESPERADO_HOGAR), actor="panel"))
-    malo = ver(base, **q)                                                                # el grupo ya no existe
+    malo = ver_r(base, **q)                                                                # el grupo ya no existe
     _corre(db.crear_grupo("Hogar"))
     base.proyecto(40, "Nuevo en Hogar", area="Hogar")
     base.con.commit()
-    return malo, ver(base, **q), "sigue aquí: NO se borró nada"
+    return malo, ver_r(base, **q), "sigue aquí: NO se borró nada"
 
 
 CASOS_DE_PROYECTOS = {"proyecto_borrado": _caso_proyecto_borrado, "tarea_borrada": _caso_tarea_borrada,

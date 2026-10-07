@@ -24,6 +24,7 @@ import re
 import pytest
 
 import test_grupos as tg  # pone el entorno antes de importar `config`
+from _navegador import dar_recibo
 from test_grupos import base  # noqa: F401
 from test_pagina_proyectos import Mundo, _cliente, _dia, gente, mundo, ver  # noqa: F401
 from test_borrar_proyecto_y_grupo import (ESPERADO_HOGAR, ESPERADO_P1, _avisos, _borrada, _casa, _corre, _filas,
@@ -45,6 +46,9 @@ def pap(base, monkeypatch):
 
 
 def _papelera(m, **consulta):
+    """La Papelera con esa consulta, pintada como si un POST hubiera mandado aquí (con el recibo de
+    sus avisos): mide CÓMO se pinta. Sin recibo una dirección a mano no pinta ninguno."""
+    dar_recibo("/papelera", **consulta)
     r = _casa(m).get("/papelera", params=consulta)
     assert r.status_code == 200, r.text[:300]
     return r.text

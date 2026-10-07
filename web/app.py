@@ -58,6 +58,7 @@ import db.db as db
 import noco_lectura
 import web.auth as auth
 import web.menu as _menu
+from web.avisos import Aviso, AvisoQueElige, Navegacion, PuertaDeAvisos
 from acciones import crud
 from cerebro.bancos.categorias import (CATEGORIAS, NO_SUMAN,
                                        categoria_permitida)
@@ -70,6 +71,9 @@ app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 # PROPIA autenticación por clave -- nunca la cookie `lucy_panel` de abajo.
 # Ver `web/api_code.py` para el porqué de vivir en el mismo proceso.
 app.include_router(api_code_router)
+# La puerta de los avisos (`web/avisos.py`): ningún aviso de «se guardó» o «no se
+# pudo» sale de una dirección escrita a mano; solo de lo que un POST de verdad dejó.
+app.add_middleware(PuertaDeAvisos)
 plantillas = Jinja2Templates(directory="web/plantillas")
 
 COOKIE = "lucy_panel"
@@ -1078,17 +1082,22 @@ def _vista_de_proyectos(modelo: dict, visibles: dict, *, p: int, g: str,
 
 @app.get("/proyectos", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_VER)
-async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
-                    error: str = "", nombre_guardado: int = 0,
-                    tarea_creada: int = 0, sala_no: int = 0,
-                    p: int = 0, g: str = "", sin_grupo: int = 0, q: str = "",
-                    hecho: str = "", nuevo: str = "", confirmar: str = "",
-                    editar: str = "", t: int = 0, editar_tarea: int = 0,
-                    confirmar_borrar: int = 0, editar_comentario: int = 0,
-                    derivar: int = 0, derivadas: str = "",
-                    pq: str = "", pdonde: str = "",
-                    nuevo_grupo: int = 0, quitar_grupo: str = "", grupo: str = "",
-                    borrar_proyecto: int = 0, borrado: int = 0, borrada: int = 0):
+async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
+                    creado: AvisoQueElige[int] = 0, error: Aviso[str] = "",
+                    nombre_guardado: AvisoQueElige[int] = 0,
+                    tarea_creada: Aviso[int] = 0, sala_no: Aviso[int] = 0,
+                    p: Navegacion[int] = 0, g: Navegacion[str] = "",
+                    sin_grupo: Navegacion[int] = 0, q: Navegacion[str] = "",
+                    hecho: Aviso[str] = "", nuevo: Navegacion[str] = "",
+                    confirmar: Navegacion[str] = "", editar: Navegacion[str] = "",
+                    t: Navegacion[int] = 0, editar_tarea: Navegacion[int] = 0,
+                    confirmar_borrar: Navegacion[int] = 0,
+                    editar_comentario: Navegacion[int] = 0,
+                    derivar: Navegacion[int] = 0, derivadas: Aviso[str] = "",
+                    pq: Navegacion[str] = "", pdonde: Navegacion[str] = "",
+                    nuevo_grupo: Navegacion[int] = 0, quitar_grupo: Navegacion[str] = "",
+                    grupo: Aviso[str] = "", borrar_proyecto: Navegacion[int] = 0,
+                    borrado: Aviso[int] = 0, borrada: Aviso[int] = 0):
     """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
     (`?g=`), las de «Sin grupo» (`?sin_grupo=1`) o el formulario de un proyecto
@@ -2742,7 +2751,7 @@ async def crear_tarea(request: Request):
         sala = ("&sala_no=1" if responsable == config.CHAT_ID_CODE and not
                 db.sala_ve(responsable, proyecto_fila["area"]) else "")
         return RedirectResponse(
-            f"/proyectos?tarea_creada={tid}{sala}#proyecto-{proyecto_id}",
+            f"/proyectos?p={proyecto_id}&tarea_creada={tid}{sala}#proyecto-{proyecto_id}",
             status_code=303)
     # Se vuelve A LA LISTA y no al formulario: la tarea recién escrita tiene
     # que VERSE en su grupo. Un "guardado" que no muestra lo guardado obliga a

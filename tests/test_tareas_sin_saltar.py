@@ -109,10 +109,12 @@ def test_lista_un_guardado_que_no_escribio_nada_no_se_ve_como_hecho(tareas):
 
 
 def test_lista_el_aviso_de_antes_no_se_pega(tareas):
-    """La persona viene de `/tareas?guardadas=3` y guarda otra: el aviso de la página
-    que se pinta es el del guardado nuevo, no el viejo (la página que contesta el
-    servidor es la de la redirección, no la dirección que tenía)."""
-    vieja = tareas.cliente.get("/tareas?guardadas=3").text
+    """La persona viene de `/tareas?guardadas=3` (guardó tres de verdad) y guarda otra: el
+    aviso de la página que se pinta es el del guardado nuevo, no el viejo (la página que
+    contesta el servidor es la de la redirección, no la dirección que tenía)."""
+    primero = tareas.cliente.post("/tareas", data={"filtro": "", **{f"{k}_{i}": v for i in (1, 2, 3) for k, v in (
+        ("hecha", "1"), ("prev", "pendiente"))}})
+    vieja = _pagina_de(tareas, primero)
     assert "Cerradas 3." in vieja
     r = tareas.cliente.post("/tareas", data={"filtro": "", "hecha_4": "1", "prev_4": "pendiente"})
     nueva = _pagina_de(tareas, r)

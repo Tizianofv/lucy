@@ -39,6 +39,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql://test/test")
 os.environ.setdefault("CHAT_ID_DUENO", "424242")
 
 import _proyectos_de_prueba as pp  # noqa: E402
+from _navegador import Navegador, dar_recibo  # noqa: E402
 import config  # noqa: E402
 import web.api_code as api_code  # noqa: E402
 import web.app as panel  # noqa: E402
@@ -57,7 +58,7 @@ def _sin_contar_claves_malas_de_code(monkeypatch):
 
 
 def cliente(con: str | None = "ver") -> TestClient:
-    c = TestClient(panel.app, base_url="https://testserver")
+    c = Navegador(panel.app, base_url="https://testserver")
     if con == "ver":
         c.cookies.set(panel.COOKIE_VER, auth.crear_token_ver())
     elif con == "casa":
@@ -325,6 +326,9 @@ A_MANO = {
 
 
 def _pintar(con, **consulta):
+    # Con el recibo puesto (como si un POST hubiera mandado a esa dirección): lo que se mide es lo
+    # que la SESIÓN deja pintar, no la puerta de los avisos, que ya los quita sin recibo.
+    dar_recibo("/proyectos", **consulta)
     with pp.pagina_sin_base():
         r = cliente(con).get("/proyectos", params=consulta)
     assert r.status_code == 200, (consulta, r.status_code)

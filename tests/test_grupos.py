@@ -37,7 +37,7 @@ from urllib.parse import parse_qsl, quote, urlsplit
 import pytest
 
 import test_grupo_ia as g
-from test_pagina_proyectos import _cliente, _dia, gente, mundo, ver  # noqa: F401
+from test_pagina_proyectos import _cliente, _dia, gente, mundo, ver, ver_r  # noqa: F401
 from test_proyectos_solo_ver import cliente as cliente_de_sesion
 from test_grupo_ia import _ROOT
 import config
@@ -362,13 +362,15 @@ def test_una_direccion_escrita_a_mano_no_hace_decir_creado_ni_quitado(base, cons
 
 
 def test_lo_que_el_aviso_dice_es_un_estado_comprobado(base):
+    """Con el recibo bueno puesto (como si un POST hubiera mandado ahí) el aviso SIGUE diciendo
+    solo un estado que se comprueba: el recibo no basta para afirmar lo que la base desmiente."""
     ultimo = [a["clave"] for a in db_areas(base)][-1]
-    assert _avisos(ver(base, hecho="grupo_creado", grupo=ultimo)) == [
+    assert _avisos(ver_r(base, hecho="grupo_creado", grupo=ultimo)) == [
         f"El grupo «{ultimo}» está al final de la lista de la izquierda."]
-    assert _avisos(ver(base, hecho="grupo_creado", grupo="CDS")) == []             # está, pero no al final
-    assert _avisos(ver(base, hecho="grupo_creado", grupo="Inventado")) == []       # no está
-    assert _avisos(ver(base, hecho="grupo_quitado", grupo="CDS")) == []            # sigue en la lista
-    assert _avisos(ver(base, hecho="grupo_quitado", grupo="Fantasma")) == [
+    assert _avisos(ver_r(base, hecho="grupo_creado", grupo="CDS")) == []             # está, pero no al final
+    assert _avisos(ver_r(base, hecho="grupo_creado", grupo="Inventado")) == []       # no está
+    assert _avisos(ver_r(base, hecho="grupo_quitado", grupo="CDS")) == []            # sigue en la lista
+    assert _avisos(ver_r(base, hecho="grupo_quitado", grupo="Fantasma")) == [
         "El grupo «Fantasma» ya no está en la lista de la izquierda."]             # es verdad: no está
 
 
@@ -678,7 +680,7 @@ async def test_crear_no_se_traga_otros_errores_de_la_base(monkeypatch):
 
 def test_el_aviso_de_que_el_grupo_tiene_cosas_solo_sale_si_las_tiene(base):
     """Un grupo vacío con `?error=grupo_con_cosas` a mano no hace decir que tiene cosas."""
-    assert [a for a in _avisos(ver(base, error="grupo_con_cosas", quitar_grupo="ACD")) if "NO se quitó" in a] == []
+    assert [a for a in _avisos(ver_r(base, error="grupo_con_cosas", quitar_grupo="ACD")) if "NO se quitó" in a] == []
     base.proyecto(1, "Algo", area="Hogar")
     base.con.commit()
-    assert [a for a in _avisos(ver(base, error="grupo_con_cosas", quitar_grupo="Hogar")) if "NO se quitó" in a]
+    assert [a for a in _avisos(ver_r(base, error="grupo_con_cosas", quitar_grupo="Hogar")) if "NO se quitó" in a]

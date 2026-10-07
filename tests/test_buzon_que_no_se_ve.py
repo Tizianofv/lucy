@@ -4035,10 +4035,14 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 7-oct-2026, segunda vuelta de `trabajo/borrar-proyecto-grupo`: +1 en disco y +1 EXENTO por
     # `tests/test_borrar_segunda_vuelta.py` (nuevo); VIGILADOS sin cambio. Medida corriendo la prueba:
     # 136 en disco, 91 EXENTOS, 45 VIGILADOS.
-    assert medido == {"en disco": 136, "exentos": 91, "vigilados": 45}, (
+    # 7-oct-2026, rama `trabajo/avisos-verdad` (la puerta de los avisos): +3 en disco, +2 EXENTOS por
+    # `tests/test_avisos_verdad.py` y `tests/_navegador.py` (nuevos) y +1 VIGILADO por `web/avisos.py`
+    # (nuevo, lo que toca el SQL no pero sí lo que se lee de las rutas). Medida corriendo la prueba:
+    # 139 en disco, 93 EXENTOS, 46 VIGILADOS.
+    assert medido == {"en disco": 139, "exentos": 93, "vigilados": 46}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "7-oct-2026 (borrar proyecto o grupo, segunda vuelta) era {'en disco': 136, "
-        "'exentos': 91, 'vigilados': 45}. La aserción de fondo —cero "
+        "7-oct-2026 (avisos-verdad) era {'en disco': 139, "
+        "'exentos': 93, 'vigilados': 46}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "
@@ -5757,9 +5761,15 @@ def test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_cuesta_hoy():
     # para que las pruebas de protección de rutas pregunten qué exige CADA
     # ruta mirando lo que FastAPI registró de verdad, no un literal de texto
     # en el código fuente (el hallazgo del testigo).
-    assert cuantos == 15, (
+    #
+    # 7-oct-2026, rama `trabajo/avisos-verdad` (la puerta de los avisos): 15 → 18. Los 3 nuevos son de
+    # `web/avisos.py`, leyendo lo que FastAPI registró de la ruta, como `rutas_registradas` de arriba:
+    # `getattr(ruta, "dependant", None)` (en `marcas_de`), `getattr(p.field_info, "json_schema_extra",
+    # None)` (en `marcas_de`) y `getattr(r, "methods", None)` (en `parametros_sin_marca`). Los tres
+    # nombres son literales enumerables; la aserción de «opacos» de arriba ya corrió y quedó verde.
+    assert cuantos == 18, (
         f"{_MARCA_CONTADOR}los archivos vigilados tienen {cuantos} llamadas a "
-        "getattr y el 26-sep-2026 (rama code-puerta) eran 15. La aserción de "
+        "getattr y el 7-oct-2026 (rama avisos-verdad) eran 18. La aserción de "
         "fondo —ninguna de esas llamadas pide un nombre que no se pueda "
         "enumerar— YA CORRIÓ arriba y quedó verde, así que esto NO es una "
         "fuga: es el precio del límite, que se movió. Hay que volver a mirar "

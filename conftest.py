@@ -267,3 +267,15 @@ def _sin_imap_de_verdad():
             f"esta prueba intentó abrir {len(intentos)} conexión(es) IMAP de "
             f"verdad ({destinos}). La suite no sale a internet: ponele un doble "
             "al camino que quedó real.")
+
+
+@pytest.fixture(autouse=True)
+def _un_navegador_por_prueba():
+    """El navegador de mentira (`tests/_navegador.py`) empieza cada prueba sin recibos:
+    uno que sobrara de otra prueba del mismo proceso taparía justo lo que miden las
+    pruebas de «dirección escrita a mano»."""
+    import sys
+    modulo = sys.modules.get("_navegador")
+    if modulo is not None:
+        modulo.Navegador.reiniciar()
+    yield

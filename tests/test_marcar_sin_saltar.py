@@ -39,6 +39,7 @@ import pytest
 from test_escrituras_proyecto import _correr_en_jxa, _script_de_la_pagina, hay_osascript, la_funcion_de_marcar
 from test_escrituras_tarea import mt, post, tarea  # noqa: F401
 from test_grupo_ia import _ROOT
+from _navegador import dar_recibo
 from test_pagina_proyectos import _cliente, gente, mundo  # noqa: F401
 import config
 
@@ -102,7 +103,10 @@ def test_el_servidor_descarta_los_estados_viejos_al_marcar(mt):
     """El caso del testigo: la persona está en `?p=2&tarea_creada=..&confirmar_borrar=..`
     y marca otra tarea. Lo que el guion pinta es la página de la redirección: no
     hereda ese aviso ni el «¿Borrar?»; la dirección vieja SÍ los pintaría (por eso
-    el guion no la vuelve a pedir)."""
+    el guion no la vuelve a pedir). Desde `web/avisos.py` la dirección vieja solo pinta el
+    aviso mientras conserve SU recibo (aquí se le da con `dar_recibo`); sin él, a mano, no."""
+    assert not any("Tarea creada" in a for a in _avisos(_pagina(p=2, tarea_creada=12, confirmar_borrar=10)))
+    dar_recibo("/proyectos", tarea_creada=12)
     vieja = _pagina(p=2, tarea_creada=12, confirmar_borrar=10)
     assert any("Tarea creada" in a for a in _avisos(vieja))
     r = post("/proyectos/tarea/10/hecha")

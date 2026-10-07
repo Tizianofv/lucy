@@ -485,7 +485,8 @@ def test_el_nombre_nuevo_llega_a_la_lista_de_lucy_y_a_su_prompt():
 
 def _pintar(proyectos, **kw):
     """La página (ruta y plantilla reales) con los proyectos que se le dan, sin
-    base. Enseña UN proyecto a la vez (`p=`), como la página nueva."""
+    base. Enseña UN proyecto a la vez (`p=`), como la página nueva. Pinta los avisos como si un POST
+    hubiera mandado aquí (`pintar_modelo` le da el recibo)."""
     import test_pagina_proyectos as pagina
     return pagina.pintar_modelo(pagina.modelo_de_filas(proyectos=proyectos),
                                 areas=[], **kw)

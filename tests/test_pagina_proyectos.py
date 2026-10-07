@@ -28,6 +28,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
+from _navegador import Navegador, dar_recibo
 import test_base_m2 as b2
 import test_grupo_ia as g
 import acciones.crud as crud
@@ -79,6 +80,7 @@ def pintar_modelo(modelo: dict, areas=AREAS, **consulta) -> str:
 
     guardado = (db.pagina_de_proyectos, db.areas)
     db.pagina_de_proyectos, db.areas = _pagina, _areas
+    dar_recibo("/proyectos", **consulta)         # mide CÓMO se pinta: como si un POST hubiera mandado aquí
     try:
         r = _cliente(config.CHAT_ID_DUENO).get("/proyectos", params=consulta)
     finally:
@@ -163,7 +165,7 @@ def mundo(monkeypatch, gente):
 
 
 def _cliente(chat=None) -> TestClient:
-    c = TestClient(panel.app)
+    c = Navegador(panel.app)
     if chat is not None:
         c.cookies.set(panel.COOKIE, auth.crear_token(chat, auth.VIDA_SESION))
     return c
@@ -174,6 +176,14 @@ def ver(mundo, **consulta) -> str:
     r = _cliente(config.CHAT_ID_DUENO).get("/proyectos", params=consulta)
     assert r.status_code == 200, r.text[:300]
     return r.text
+
+
+def ver_r(mundo, **consulta) -> str:
+    """Como `ver`, pero como si un POST hubiera mandado a esa dirección: lleva el recibo
+    de sus avisos (`tests/_navegador.py::dar_recibo`). Para medir CÓMO se pinta un aviso;
+    sin recibo (`ver`) una dirección escrita a mano no pinta ninguno."""
+    dar_recibo("/proyectos", **consulta)
+    return ver(mundo, **consulta)
 
 
 def titulo_de(html: str):
@@ -667,11 +677,11 @@ def test_los_avisos_con_los_que_vuelven_las_rutas_que_escriben(mundo):
     mundo.proyecto(1, "P", area="CDS")
     for clave in ("area", "proyecto", "nombre_vacio", "nombre_largo", "nombre_repetido",
                   "nombre_igual", "nombre_invalido"):
-        assert 'class="aviso"' in ver(mundo, error=clave, p=1), clave
-    assert 'class="aviso"' not in ver(mundo, error="inventada")
-    assert "Nombre guardado" in ver(mundo, nombre_guardado=1)
-    assert "Grupo guardado" in ver(mundo, area_guardada=1)
-    assert "Proyecto creado (#1)" in ver(mundo, creado=1)
+        assert 'class="aviso"' in ver_r(mundo, error=clave, p=1), clave
+    assert 'class="aviso"' not in ver_r(mundo, error="inventada")
+    assert "Nombre guardado" in ver_r(mundo, nombre_guardado=1)
+    assert "Grupo guardado" in ver_r(mundo, area_guardada=1)
+    assert "Proyecto creado (#1)" in ver_r(mundo, creado=1)
 
 
 # ── Qué se enseña a la derecha ──────────────────────────────────────────
@@ -695,9 +705,14 @@ def test_las_rutas_que_vuelven_con_un_aviso_enseñan_el_proyecto_del_que_hablan(
     mundo.proyecto(2, "Zeta", area="CDS")
     mundo.tarea(20, "de Zeta", proyecto=2)
     assert titulo_de(ver(mundo)) == "Alfa"
-    for consulta in ({"nombre_guardado": 2}, {"area_guardada": 2}, {"creado": 2},
-                     {"tarea_creada": 20}):
+    # `nombre_guardado`, `area_guardada` y `creado` también ESCOGEN el proyecto: sin recibo
+    # (recarga, dirección vieja) conservan esa parte y pierden el aviso; con él, las dos.
+    for consulta in ({"nombre_guardado": 2}, {"area_guardada": 2}, {"creado": 2}):
         assert titulo_de(ver(mundo, **consulta)) == "Zeta", consulta
+        assert "guardado" not in " ".join(re.findall(r'class="aviso ok">([^<]*)', ver(mundo, **consulta))), consulta
+    # `tarea_creada` solo cuenta (el proyecto lo escoge el `p=` de la propia redirección)
+    assert titulo_de(ver_r(mundo, tarea_creada=20)) == "Zeta"
+    assert titulo_de(ver(mundo, tarea_creada=20)) == "Alfa"
 
 
 def test_las_tareas_sueltas_de_un_grupo_y_de_sin_grupo(mundo):

@@ -137,7 +137,7 @@ def test_una_tarea_con_todas_sus_caracteristicas_queda_en_el_proyecto():
                    "primero_id": str(otra), "persona": str(ana),
                    "detalle": "linea 1\r\nlinea 2"})
     fila = m.filas()[-1]
-    assert _destino(r) == f"/proyectos?tarea_creada={fila['id']}#proyecto-{pid}", (
+    assert _destino(r) == f"/proyectos?p={pid}&tarea_creada={fila['id']}#proyecto-{pid}", (
         "al guardar no vuelve al proyecto con el aviso de lo creado")
     assert (fila["proyecto_id"], fila["area"], fila["responsable_chat_id"],
             fila["primero_id"], fila["persona_id"], fila["estado"]) == (
