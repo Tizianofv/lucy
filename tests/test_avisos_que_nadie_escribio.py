@@ -399,3 +399,61 @@ def test_paso_movido_que_no_es_un_numero_ya_no_da_422_y_no_deja_ver_nada_falso(m
     from _navegador import dar_recibo
     dar_recibo("/tareas/1", paso_movido="abc")
     assert not any("punta" in t for t in textos(esc.cliente.get("/tareas/1?paso_movido=abc").text))
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Vuelta 3: el destino escrito CODIFICADO, y el límite de cuerpo REAL
+# ═══════════════════════════════════════════════════════════════════════
+
+def _codificaciones(texto: str, azar: random.Random) -> str:
+    """Escribe `texto` con una parte de sus letras en `%XX` (a veces con `+` por espacio no hace falta aquí)."""
+    return "".join(f"%{ord(c):02X}" if azar.random() < 0.5 else c for c in texto)
+
+
+def _destinos_codificados() -> list[str]:
+    a_mano = ["/movimientos?guardad%6Fs=99", "/movimientos?guardados=9%39", "/movimientos?guardados=%2099",
+              "/movimientos?guardados=+99", "/movimientos?%67uardados=99", "/movimientos?guardados%3D99",
+              "/movimientos?guardados=%2539", "/movimientos?efectivo=%35", "/movimientos?borrado=%31&error=%6Dalo"]
+    azar = random.Random(11)
+    base = ["guardados=99", "efectivo=88", "borrado=77", "error=zz"]
+    inventadas = ["/movimientos?" + _codificaciones(azar.choice(base), azar) for _ in range(60)]
+    dobles = ["/movimientos?" + _codificaciones(_codificaciones(azar.choice(base), azar).replace("%", "%25"), azar)
+              for _ in range(20)]
+    return a_mano + inventadas + dobles
+
+
+@pytest.mark.parametrize("destino", _destinos_codificados())
+def test_un_destino_con_el_aviso_escrito_codificado_tampoco_se_firma_ni_se_dice(monkeypatch, destino):
+    """El mismo ataque del hallazgo 2 escrito de otras formas: letras en `%XX`, `+`, `%20`, `=` codificado, doble
+    codificación (a mano, y 80 generadas con semilla). Exige: ni aviso en el destino, ni cookie, ni texto en la página."""
+    esc = _mundo_dinero(monkeypatch)
+    c = _cliente_dinero(esc)
+    r = c.post("/borrar", data={"movimiento_id": "abc", "volver": destino})
+    assert r.status_code == 303 and "set-cookie" not in r.headers, (destino, r.headers.get("set-cookie"))
+    donde = urlsplit(r.headers["location"])
+    de_aviso_ahi = avisos.avisos_de(avisos._ruta_get(panel.app, donde.path))
+    assert not [k for k, _ in parse_qsl(donde.query, keep_blank_values=True) if k in de_aviso_ahi], r.headers["location"]
+    assert [t for t in textos(c.get(r.headers["location"]).text) if "Guardado" in t or "papelera" in t.lower()] == []
+
+
+def test_la_codificacion_del_destino_sin_la_segunda_lectura_se_ve_en_la_prueba(monkeypatch):
+    """La prueba de arriba no es un vacío: sin la lectura decodificada de la puerta, la forma codificada sí pasa."""
+    monkeypatch.setattr(avisos, "unquote_plus", lambda v: v)
+    esc = _mundo_dinero(monkeypatch)
+    c = _cliente_dinero(esc)
+    r = c.post("/borrar", data={"movimiento_id": "abc", "volver": "/movimientos?guardad%6Fs=99"})
+    assert "set-cookie" in r.headers and "Guardados 99" in " ".join(textos(c.get(r.headers["location"]).text))
+
+
+def test_el_limite_de_cuerpo_real_es_el_que_dice_la_puerta():
+    """Sin fijar la constante: un cuerpo de un byte más que `LIMITE_DE_CUERPO` no se revisa y su redirección no deja
+    recibo; uno de un byte menos sí lo deja."""
+    c = TestClient(_aplicacion_con_destinos(), follow_redirects=False)
+    hueco = len("cuenta=2&relleno=")
+    justo = avisos.LIMITE_DE_CUERPO - hueco
+    ok = c.post("/repite-su-argumento", content=f"cuenta=2&relleno={'x' * justo}".encode(),
+                headers={"content-type": "application/x-www-form-urlencoded"})
+    assert "lucy_aviso=" in ok.headers["set-cookie"]
+    grande = c.post("/repite-su-argumento", content=f"cuenta=2&relleno={'x' * (justo + 1)}".encode(),
+                    headers={"content-type": "application/x-www-form-urlencoded"})
+    assert grande.status_code == 303 and "set-cookie" not in grande.headers and "cuenta" not in grande.headers["location"]

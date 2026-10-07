@@ -70,7 +70,10 @@ recibo a un aviso viejo (hoy ninguna lo hace; `tests/test_avisos_verdad.py` reco
 las rutas que redirigen con un `Referer` hostil); un aviso de verdad idéntico, letra por
 letra, a uno que venía dentro de un valor de la petición se quita también (lado seguro: se
 pierde un aviso verdadero, nunca se dice uno falso); cuerpos de más de `LIMITE_DE_CUERPO` bytes no se
-revisan y por eso ninguna de sus redirecciones deja recibo. Un parámetro mal marcado
+revisan y por eso ninguna de sus redirecciones deja recibo. Un destino escrito codificado (`guardad%6Fs=99`, `%2099`, doble codificación) se compara
+después de una decodificación más, que es la que el GET le hará al `Location`: lo vigila
+`test_un_destino_con_el_aviso_escrito_codificado…` con formas a mano y generadas con semilla;
+una codificación que el GET no decodifica tampoco forma un aviso, así que no hay una más que cubrir. Un parámetro mal marcado
 como navegación sale tal cual.
 """
 from __future__ import annotations
