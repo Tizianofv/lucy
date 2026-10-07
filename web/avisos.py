@@ -106,7 +106,7 @@ VIDA_RECIBO = 120
 # Cuántos recibos conviven en la cookie (varias pestañas guardando a la vez).
 MAXIMO_DE_RECIBOS = 6
 # Lo más largo que se mira de una cookie de recibos y del cuerpo de un POST.
-LARGO_DE_COOKIE = 4096
+LARGO_DE_COOKIE = 4096          # menor que los 4300 dígitos que `int()` acepta
 LIMITE_DE_CUERPO = 1_000_000
 
 
@@ -135,8 +135,9 @@ def _recibos_de(valor: str | None, ahora: float) -> list[str]:
         return vivos                      # una cookie hostil no se usa: sin recibos
     for r in valor.split("~"):
         vence, _, firma = r.partition(".")
-        # solo dígitos ASCII y de un largo que un reloj puede tener (`int()` de miles de dígitos revienta)
-        if vence.isdigit() and len(vence) <= 12 and firma and int(vence) >= ahora:
+        # solo dígitos ASCII (el largo total ya está acotado arriba: `int()` revienta con más de 4300
+        # dígitos y `LARGO_DE_COOKIE` es menor)
+        if vence.isdigit() and firma and int(vence) >= ahora:
             vivos.append(r)
     return vivos[-MAXIMO_DE_RECIBOS:]
 

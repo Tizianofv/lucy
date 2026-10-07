@@ -245,7 +245,7 @@ def test_el_recorrido_ve_una_ruta_que_copia_el_aviso_de_la_referencia(monkeypatc
 
 def _cookies_hostiles() -> dict[str, str]:
     casos = {"vacia": "", "tildes": "~~~~", "sin_punto": "abc", "digitos_unicode": "²9.abc", "sup3": "³.abc",
-             "arabe": "٣.abc", "enorme_digitos": "9" * 5000 + ".abc", "gigante": "x" * 15000, "negativa": "-5.abc",
+             "arabe": "٣.abc", "enorme_digitos": "9" * 5000 + ".abc", "cuatro_mil_digitos": "9" * 4000 + ".abc", "gigante": "x" * 15000, "negativa": "-5.abc",
              "mixta": "1.a~²9.b~99999999999999999999.c", "solo_puntos": "....", "nulos": "1\x00.a\x00",
              "flotante": "1e5.abc", "muchos": "~".join(f"{10**11 + i}.{'a' * 32}" for i in range(400)),
              "no_ascii": "9999999999.é", "cabeza_larga": "1" * 13 + "." + "a" * 32, "firma_larga": "9999999999." + "a" * 5000}
