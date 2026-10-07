@@ -120,7 +120,8 @@ def _ruta_get(app, ruta: str):
 
 def marcas_de(ruta) -> dict[str, dict]:
     """{parámetro: marca} de una ruta GET, leído de su firma real. La marca es
-    `{"aviso": True|False, "elige": …}`; un parámetro sin marca da `{}`."""
+    `{"aviso": True|False, "elige": …}`; un parámetro sin marca da `{}`. Una ruta
+    que no existe (`None`) o que no declara parámetros (un `Mount`) da `{}`."""
     dependiente = getattr(ruta, "dependant", None)
     if dependiente is None:
         return {}
@@ -181,7 +182,7 @@ class PuertaDeAvisos:
     # ── GET: sin recibo, los avisos no existen ─────────────────────────────
     def _al_entrar(self, aplicacion, scope, send):
         ruta = _ruta_get(aplicacion, scope["path"])
-        avisos = avisos_de(ruta) if ruta is not None else {}
+        avisos = avisos_de(ruta)
         if not avisos:
             return scope, send
         pares = parse_qsl(scope.get("query_string", b"").decode("latin-1"),
@@ -235,7 +236,7 @@ class PuertaDeAvisos:
         if partes.scheme or partes.netloc or not partes.path.startswith("/"):
             return mensaje              # solo direcciones de este mismo sitio
         ruta = _ruta_get(aplicacion, partes.path)
-        avisos = avisos_de(ruta) if ruta is not None else {}
+        avisos = avisos_de(ruta)
         pares = parse_qsl(partes.query, keep_blank_values=True)
         if not any(k in avisos for k, _ in pares):
             return mensaje
