@@ -179,7 +179,7 @@ def test_lo_que_no_se_puede_restaurar_no_se_restaura_y_se_dice(pap):
     assert _foto(pap) == antes                                               # y nada se escribió
     html = _papelera(pap)
     assert "ya hay otro proyecto vivo con ese nombre" in _texto(html)
-    assert "No se restauró: sigue en la papelera." in _avisos(_papelera(pap, error="restaurar_no_se_pudo"))[0]
+    assert "No se pudo restaurar." in _avisos(_papelera(pap, error="restaurar_no_se_pudo"))[0]
 
 
 async def test_lo_que_la_pantalla_ofrece_restaurar_es_lo_que_deshacer_deja_restaurar(pap):
@@ -237,7 +237,7 @@ def test_el_bot_archiva_un_proyecto_con_sus_tareas_y_lo_dice_con_el_numero_de_la
     p = b.proyecto("Casa")
     b.con.execute("INSERT INTO tareas (id, titulo, proyecto_id) VALUES (1, 'a', ?), (2, 'b', ?)", (p, p))
     r, _ = t._herramienta(b, "archivar", {"tabla": "proyectos", "id": p})
-    assert re.fullmatch(r"OK: archivado \(acción #\d+, reversible\)\. Se fueron con él 2 tareas; deshacer lo trae de vuelta con ellas\.", r), r
+    assert re.fullmatch(r"OK: archivado \(acción #\d+, reversible\)\. Se fueron con él 2 tareas\. Deshacer intenta traerlo de vuelta con ellas y puede negarse \(por ejemplo, si ya hay otro proyecto vivo con ese nombre\): entonces dice por qué\.", r), r
     assert [f[0] for f in b.con.execute("SELECT borrado_en IS NOT NULL FROM tareas ORDER BY id")] == [1, 1]
     sin = b.proyecto("Vacío")
     r, _ = t._herramienta(b, "archivar", {"tabla": "proyectos", "id": sin})

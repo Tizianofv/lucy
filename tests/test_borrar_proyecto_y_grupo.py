@@ -722,7 +722,8 @@ def test_un_si_sin_cuentas_o_con_cuentas_viejas_no_borra_y_vuelve_a_preguntar_co
     q = _va_a(cliente.post("/proyectos/1/borrar", data=ESPERADO_P1, follow_redirects=False))
     assert q["error"] == "borrar_cambio" and not _borrada(base, "proyectos", 1)
     html = ver(base, **{k: v for k, v in q.items() if k != "ruta"})
-    assert _avisos(html)[0].startswith("Desde que se hizo la pregunta cambió lo que tiene el proyecto: NO se borró nada.")
+    assert _avisos(html)[0] == ("El proyecto «Casa nueva» sigue aquí: NO se borró nada. Lo que tiene ahora está abajo; "
+                                "confirma otra vez solo si es lo que quieres borrar.")
     assert "Se van con él 4 tareas (2 pendientes, 1 hecha, 1 con otro estado)" in _texto(html)
 
 
@@ -762,7 +763,8 @@ def test_un_si_del_grupo_con_cuentas_viejas_no_borra_y_la_pagina_vuelve_a_pregun
     assert q == {"ruta": "/proyectos", "error": "grupo_cambio", "quitar_grupo": "Hogar"}
     assert "Hogar" in [f[0] for f in base.con.execute("SELECT clave FROM areas")] and not _borrada(base, "proyectos", 1)
     html = ver(base, **{k: v for k, v in q.items() if k != "ruta"})
-    assert _avisos(html)[0].startswith("Desde que se hizo la pregunta cambió lo que tiene el grupo: NO se borró nada.")
+    assert _avisos(html)[0] == ("El grupo «Hogar» sigue aquí: NO se borró nada. Lo que tiene ahora está a la izquierda; "
+                                "confirma otra vez solo si es lo que quieres borrar.")
     assert "Tiene 2 proyectos abiertos" in _texto(html)
     sin = _va_a(c.post("/proyectos/grupos/borrar", data={"clave": "Hogar"}, follow_redirects=False))
     assert sin["error"] == "grupo_cambio" and not _borrada(base, "proyectos", 1)

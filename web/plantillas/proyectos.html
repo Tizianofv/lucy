@@ -609,8 +609,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'grupo_fijo' %}<p class="aviso">Ese grupo no se puede quitar: Lucy y Code lo usan.</p>
     {% elif error == 'grupo_no_existe' %}<p class="aviso">Ese grupo ya no está.</p>
     {% elif error == 'grupo_con_cosas' and contenido_quitar and contenido_quitar.total %}<p class="aviso">El grupo NO se quitó: todavía tiene cosas (se dice a la izquierda).</p>
-    {% elif error == 'grupo_cambio' %}<p class="aviso">Desde que se hizo la pregunta cambió lo que tiene el grupo: NO se borró nada. A la izquierda está lo de ahora; confirma otra vez si sigue siendo lo que quieres.</p>
-    {% elif error == 'borrar_cambio' %}<p class="aviso">Desde que se hizo la pregunta cambió lo que tiene el proyecto: NO se borró nada. Abajo está lo de ahora; confirma otra vez si sigue siendo lo que quieres.</p>
+    {% elif error == 'grupo_cambio' and contenido_quitar and contenido_quitar.total %}<p class="aviso">El grupo «{{ quitar_grupo }}» sigue aquí: NO se borró nada. Lo que tiene ahora está a la izquierda; confirma otra vez solo si es lo que quieres borrar.</p>
+    {% elif error == 'borrar_cambio' and contenido_borrar_proyecto %}<p class="aviso">El proyecto «{{ contenido_borrar_proyecto.nombre }}» sigue aquí: NO se borró nada. Lo que tiene ahora está abajo; confirma otra vez solo si es lo que quieres borrar.</p>
     {% elif error == 'proyecto_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe tareas nuevas.</p>{% endif %}
     {% if hecho == 'proyecto_nuevo' %}<p class="aviso ok">Proyecto creado.</p>
     {% elif hecho == 'grupo_creado' and grupo_existe and grupo_es_el_ultimo %}<p class="aviso ok">El grupo «{{ grupo }}» está al final de la lista de la izquierda.</p>

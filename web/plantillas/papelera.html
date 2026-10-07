@@ -6,7 +6,7 @@
 {#- Los avisos de proyectos y tareas dicen un ESTADO comprobado al pintar (vivo, en
     la lista), no que la acción ocurrió: una dirección escrita a mano no los fuerza. -#}
 {% if error == 'restaurar_no_esta' %}<p class="aviso">Eso ya no está en la papelera, o no hay registro de cómo se borró: no se restauró nada.</p>
-{% elif error == 'restaurar_no_se_pudo' %}<p class="aviso">No se restauró: sigue en la papelera. Si hay otro proyecto con el mismo nombre, o su proyecto está en la papelera o cerrado, se dice en su línea.</p>{% endif %}
+{% elif error == 'restaurar_no_se_pudo' %}<p class="aviso">No se pudo restaurar. Si hay otro proyecto con el mismo nombre, o su proyecto está en la papelera o cerrado, se dice en su línea.</p>{% endif %}
 {% if de_vuelta and de_vuelta.tipo == 'proyecto' %}<p class="aviso ok">El proyecto «{{ de_vuelta.nombre }}» ya está de vuelta en <a href="/proyectos">Proyectos</a>{% if de_vuelta.tareas %}, con {{ de_vuelta.tareas }} tarea{{ 's' if de_vuelta.tareas != 1 }} de las que se fueron con él{% endif %}. Si su grupo ya no existe, está en «Sin grupo».</p>
 {% elif de_vuelta and de_vuelta.tipo == 'tarea' %}<p class="aviso ok">La tarea «{{ de_vuelta.nombre }}» ya está de vuelta en <a href="/tareas">Tareas</a>.</p>{% endif %}
 
