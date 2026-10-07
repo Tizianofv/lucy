@@ -38,7 +38,7 @@ from test_avisos_verdad import (_app_minima, _con_reloj, _dice, _mundo_casa, _mu
 import _tareas_de_prueba as TP
 import web.app as panel
 import web.avisos as avisos
-from web.avisos import Aviso, PuertaDeAvisos
+from web.avisos import Aviso, Navegacion, PuertaDeAvisos
 
 SENTINELA = "/movimientos?guardados=987654&hecho=zzcentinela&error=zzcentinela&efectivo=987655&borrado=987656"
 HUELLAS = ("987654", "987655", "987656", "zzcentinela")
@@ -350,6 +350,22 @@ def test_las_paginas_sin_aviso_salen_con_las_mismas_cabeceras_de_cache_que_antes
             if ruta.path == esc.rutas[url] and de_aviso(ruta):
                 forzada = esc.cliente.get(url, params={de_aviso(ruta)[0]: "1"})
                 assert "cache-control" not in forzada.headers and "set-cookie" not in forzada.headers, url
+
+
+def test_una_ruta_sin_parametros_de_aviso_sale_con_sus_cabeceras_de_siempre(monkeypatch):
+    """Las rutas que no declaran avisos (la pantalla del historial, y una mínima) no reciben `no-store` ni cookie."""
+    app = _app_minima()
+
+    @app.get("/plano", response_class=HTMLResponse)
+    async def plano(p: Navegacion[int] = 0):
+        return "<main>plano</main>"
+    c = TestClient(app)
+    for url in ("/plano", "/plano?p=3"):
+        r = c.get(url)
+        assert r.status_code == 200 and "cache-control" not in r.headers and "set-cookie" not in r.headers, url
+    esc = _mundo_tareas(monkeypatch)
+    r = esc.cliente.get("/tareas/historial")
+    assert r.status_code == 200 and "cache-control" not in r.headers and "set-cookie" not in r.headers
 
 
 def test_la_pagina_que_pinta_un_aviso_gastado_si_sale_no_store_y_una_redireccion_no():
