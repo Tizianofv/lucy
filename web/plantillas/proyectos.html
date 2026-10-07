@@ -439,26 +439,42 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 </a>
 {% endmacro %}
 
-{#- QUITAR UN GRUPO (6-oct-2026): la pregunta o la explicación, dibujadas por el
-    servidor (`?quitar_grupo=`). Las cuentas salen de `db.contenido_de_grupo`,
-    medidas al pintar. Solo un grupo con CERO filas (de cualquier estado, también
-    la papelera) se puede quitar: la base no deja borrar uno que algo nombra. -#}
+{#- QUITAR O BORRAR UN GRUPO (6 y 7-oct-2026): la pregunta o la explicación, dibujadas
+    por el servidor (`?quitar_grupo=`). Las cuentas salen de
+    `db.contenido_para_borrar_grupo`, medidas al pintar. Uno VACÍO se quita
+    (`/proyectos/grupos/quitar`). Uno con cosas se BORRA CON TODO LO SUYO
+    (`/proyectos/grupos/borrar`, Tiziano 7-oct): lo vivo va a la papelera, el grupo
+    desaparece y lo que se restaure vuelve a «Sin grupo». El «Sí» trae de vuelta
+    estas mismas cuentas; si al enviarlo ya son otras, no se borra y se pregunta de
+    nuevo. -#}
 {% macro quitar_este_grupo(g) %}
 {% set c = contenido_quitar %}
 <div class="quitar-aviso">
-  {% if g.clave == area_tecnica %}<p>Ese grupo no se puede quitar: Lucy y Code lo usan.</p>
+  {% if g.clave == area_tecnica %}<p>Ese grupo no se puede quitar: Lucy y Code lo usan. Sus proyectos sí se pueden borrar, uno por uno.</p>
   {% elif c and c.total %}
-  <p>No se puede quitar «{{ g.clave }}»: todavía tiene
+  <form class="confirmar-grupo" method="post" action="/proyectos/grupos/borrar">
+    <p><b>¿Borrar el grupo «{{ g.clave }}» con todo lo que tiene?</b> Tiene
     {%- set partes = [] %}
     {%- if c.proyectos_abiertos %}{% set _ = partes.append(c.proyectos_abiertos ~ (' proyecto abierto' if c.proyectos_abiertos == 1 else ' proyectos abiertos')) %}{% endif %}
     {%- if c.proyectos_cerrados %}{% set _ = partes.append(c.proyectos_cerrados ~ (' proyecto cerrado' if c.proyectos_cerrados == 1 else ' proyectos cerrados')) %}{% endif %}
-    {%- if c.proyectos_papelera %}{% set _ = partes.append(c.proyectos_papelera ~ (' proyecto en la papelera' if c.proyectos_papelera == 1 else ' proyectos en la papelera')) %}{% endif %}
+    {%- if c.proyectos_papelera %}{% set _ = partes.append(c.proyectos_papelera ~ (' proyecto ya en la papelera' if c.proyectos_papelera == 1 else ' proyectos ya en la papelera')) %}{% endif %}
+    {%- if c.tareas_en_proyectos_pendientes %}{% set _ = partes.append(c.tareas_en_proyectos_pendientes ~ (' tarea pendiente' if c.tareas_en_proyectos_pendientes == 1 else ' tareas pendientes') ~ ' dentro de sus proyectos') %}{% endif %}
+    {%- if c.tareas_en_proyectos_hechas %}{% set _ = partes.append(c.tareas_en_proyectos_hechas ~ (' tarea hecha' if c.tareas_en_proyectos_hechas == 1 else ' tareas hechas') ~ ' dentro de sus proyectos') %}{% endif %}
+    {%- if c.tareas_en_proyectos_otras %}{% set _ = partes.append(c.tareas_en_proyectos_otras ~ (' tarea con otro estado' if c.tareas_en_proyectos_otras == 1 else ' tareas con otro estado') ~ ' dentro de sus proyectos') %}{% endif %}
     {%- if c.tareas_pendientes %}{% set _ = partes.append(c.tareas_pendientes ~ (' tarea suelta pendiente' if c.tareas_pendientes == 1 else ' tareas sueltas pendientes')) %}{% endif %}
     {%- if c.tareas_hechas %}{% set _ = partes.append(c.tareas_hechas ~ (' tarea suelta hecha' if c.tareas_hechas == 1 else ' tareas sueltas hechas')) %}{% endif %}
     {%- if c.tareas_otras %}{% set _ = partes.append(c.tareas_otras ~ (' tarea suelta con otro estado' if c.tareas_otras == 1 else ' tareas sueltas con otro estado')) %}{% endif %}
-    {%- if c.tareas_papelera %}{% set _ = partes.append(c.tareas_papelera ~ (' tarea suelta en la papelera' if c.tareas_papelera == 1 else ' tareas sueltas en la papelera')) %}{% endif %}
-    {{ partes|join(', ') }}. Un grupo solo se quita cuando no queda nada en él: cuenta todo, también lo cerrado y lo que está en la papelera. Mueve esos proyectos y tareas a otro grupo primero.</p>
-  <div class="botones"><a class="btn-linea" href="/proyectos">Entendido</a></div>
+    {%- if c.tareas_papelera %}{% set _ = partes.append(c.tareas_papelera ~ (' tarea suelta ya en la papelera' if c.tareas_papelera == 1 else ' tareas sueltas ya en la papelera')) %}{% endif %}
+    {{ partes|join(', ') }}.</p>
+    <p>Qué pasa con cada cosa: los proyectos y las tareas sueltas que están vivos
+    van a la <a href="/papelera">Papelera</a>, igual que si los borraras uno por uno (cada proyecto con las tareas de
+    adentro). Lo que ya estaba en la papelera se queda ahí. El grupo desaparece, y lo que
+    restaures después vuelve a «Sin grupo», porque el grupo ya no existe: para tenerlo como antes tendrías
+    que crear el grupo de nuevo y mover las cosas.</p>
+    <input type="hidden" name="clave" value="{{ g.clave }}">
+    {% for k in claves_de_contenido_de_grupo %}<input type="hidden" name="{{ k }}" value="{{ c[k] }}">{% endfor %}
+    <div class="botones"><button class="btn-lleno">Sí, borrar el grupo y todo lo suyo</button> <a class="btn-linea" href="/proyectos">No</a></div>
+  </form>
   {% elif c %}
   <form class="confirmar" method="post" action="/proyectos/grupos/quitar">¿Quitar el grupo «{{ g.clave }}»? Está vacío.
     <input type="hidden" name="clave" value="{{ g.clave }}">
@@ -593,10 +609,16 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'grupo_fijo' %}<p class="aviso">Ese grupo no se puede quitar: Lucy y Code lo usan.</p>
     {% elif error == 'grupo_no_existe' %}<p class="aviso">Ese grupo ya no está.</p>
     {% elif error == 'grupo_con_cosas' and contenido_quitar and contenido_quitar.total %}<p class="aviso">El grupo NO se quitó: todavía tiene cosas (se dice a la izquierda).</p>
+    {% elif error == 'grupo_cambio' %}<p class="aviso">Desde que se hizo la pregunta cambió lo que tiene el grupo: NO se borró nada. A la izquierda está lo de ahora; confirma otra vez si sigue siendo lo que quieres.</p>
+    {% elif error == 'borrar_cambio' %}<p class="aviso">Desde que se hizo la pregunta cambió lo que tiene el proyecto: NO se borró nada. Abajo está lo de ahora; confirma otra vez si sigue siendo lo que quieres.</p>
     {% elif error == 'proyecto_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe tareas nuevas.</p>{% endif %}
     {% if hecho == 'proyecto_nuevo' %}<p class="aviso ok">Proyecto creado.</p>
     {% elif hecho == 'grupo_creado' and grupo_existe and grupo_es_el_ultimo %}<p class="aviso ok">El grupo «{{ grupo }}» está al final de la lista de la izquierda.</p>
     {% elif hecho == 'grupo_quitado' and grupo and not grupo_existe %}<p class="aviso ok">El grupo «{{ grupo }}» ya no está en la lista de la izquierda.</p>
+    {% elif hecho == 'grupo_borrado' and aviso_grupo_borrado %}<p class="aviso ok">El grupo «{{ grupo }}» ya no está en la lista de la izquierda.
+      {%- if aviso_grupo_borrado.proyectos or aviso_grupo_borrado.tareas %} Lo que tenía se fue a la <a href="/papelera">Papelera</a>: {{ aviso_grupo_borrado.proyectos }} proyecto{{ 's' if aviso_grupo_borrado.proyectos != 1 }} y {{ aviso_grupo_borrado.tareas }} tarea{{ 's' if aviso_grupo_borrado.tareas != 1 }}. Lo que restaures vuelve a «Sin grupo».{% endif %}</p>
+    {% elif hecho == 'proyecto_borrado' and aviso_proyecto_borrado %}<p class="aviso ok">El proyecto «{{ aviso_proyecto_borrado.nombre }}» está en la <a href="/papelera">Papelera</a>
+      {%- if aviso_proyecto_borrado.tareas %}, con {{ aviso_proyecto_borrado.tareas }} tarea{{ 's' if aviso_proyecto_borrado.tareas != 1 }} que se {{ 'fue' if aviso_proyecto_borrado.tareas == 1 else 'fueron' }} con él{% endif %}. Se restaura desde ahí.</p>
     {% elif hecho == 'responsable' %}<p class="aviso ok">Responsable guardado.</p>
     {% elif hecho == 'cerrado' %}<p class="aviso ok">Proyecto cerrado. Está en «cerrados» en la lista de la izquierda.</p>
     {% elif hecho == 'cliente' %}<p class="aviso ok">Cliente guardado.</p>
@@ -607,7 +629,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif hecho == 'tarea_hecha' %}<p class="aviso ok">Tarea marcada como hecha.{% if derivadas %}{{ ' Salieron las tareas que siguen' if ',' in derivadas else ' Salió la tarea que sigue' }} (#{{ derivadas }}).{% endif %}</p>
     {% elif hecho == 'tarea_reabierta' %}<p class="aviso ok">Tarea desmarcada: vuelve a pendiente, con la misma fecha.</p>
     {% elif hecho == 'tarea_titulo' %}<p class="aviso ok">Título guardado.</p>
-    {% elif hecho == 'tarea_borrada' %}<p class="aviso ok">Tarea borrada. Está en la papelera: de ahí se recupera.</p>
+    {% elif hecho == 'tarea_borrada' and titulo_tarea_borrada is not none %}<p class="aviso ok">La tarea «{{ titulo_tarea_borrada }}» está en la <a href="/papelera">Papelera</a>.</p>
     {% elif hecho == 'tarea_proyecto' %}<p class="aviso ok">Tarea metida en el proyecto.</p>{% if sala_no %}
     <p class="aviso">Es de {{ nombre_code }}, pero el proyecto no es del grupo «{{ area_tecnica }}»: la sala de control NO la verá.</p>{% endif %}
     {% elif hecho == 'tarea_responsable' %}<p class="aviso ok">Responsable de la tarea guardado.</p>
@@ -705,6 +727,30 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         <form class="en-linea" method="post" action="/proyectos/{{ m.id }}/estado"><input type="hidden" name="estado" value="cerrado"><button class="btn-lleno">Sí, cerrar</button></form>
         <a class="btn-linea" href="/proyectos?p={{ m.id }}">Cancelar</a></div>
       {% else %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;confirmar=cerrar">Cerrar proyecto</a>{% endif %}
+    </div>
+    {% endif %}
+    {#- BORRAR EL PROYECTO (7-oct-2026), abierto o cerrado: la pregunta la dibuja el
+        servidor (`?borrar_proyecto=`) con las cuentas de sus tareas medidas ahora; el «Sí»
+        las trae de vuelta. Se va a la papelera con sus tareas y se restaura desde ahí. -#}
+    {% if not solo_ver %}
+    <div class="acciones abajo">
+      {% if contenido_borrar_proyecto and contenido_borrar_proyecto.id == m.id %}
+      {% set c = contenido_borrar_proyecto %}
+      <form class="confirmar" method="post" action="/proyectos/{{ m.id }}/borrar">
+        <span>¿Borrar el proyecto «{{ c.nombre }}»?
+        {%- set n = c.tareas_pendientes + c.tareas_hechas + c.tareas_otras %}
+        {%- if n %} Se van con él {{ n }} tarea{{ 's' if n != 1 }}
+          {%- set partes = [] %}
+          {%- if c.tareas_pendientes %}{% set _ = partes.append(c.tareas_pendientes ~ (' pendiente' if c.tareas_pendientes == 1 else ' pendientes')) %}{% endif %}
+          {%- if c.tareas_hechas %}{% set _ = partes.append(c.tareas_hechas ~ (' hecha' if c.tareas_hechas == 1 else ' hechas')) %}{% endif %}
+          {%- if c.tareas_otras %}{% set _ = partes.append(c.tareas_otras ~ (' con otro estado' if c.tareas_otras == 1 else ' con otro estado')) %}{% endif %}
+          ({{ partes|join(', ') }}).
+        {%- else %} No tiene tareas.{% endif %}
+        Todo va a la <a href="/papelera">Papelera</a>; de ahí lo restauras y el proyecto vuelve con esas tareas.</span>
+        {% for k in claves_de_contenido_de_proyecto %}<input type="hidden" name="{{ k }}" value="{{ c[k] }}">{% endfor %}
+        <button class="btn-lleno">Sí, borrar el proyecto</button>
+        <a class="btn-linea" href="/proyectos?p={{ m.id }}">No</a></form>
+      {% else %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;borrar_proyecto={{ m.id }}">Borrar proyecto</a>{% endif %}
     </div>
     {% endif %}
       </div>

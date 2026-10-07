@@ -307,6 +307,10 @@ VISTAS = [
 A_MANO = {
     "nuevo=CDS": {"nuevo": "CDS"},
     "confirmar=cerrar": {"p": 1, "confirmar": "cerrar"},
+    "borrar_proyecto": {"p": 1, "borrar_proyecto": 1},
+    "proyecto_borrado": {"p": 1, "hecho": "proyecto_borrado", "borrado": 1},
+    "grupo_borrado": {"p": 1, "hecho": "grupo_borrado", "grupo": "CDS"},
+    "tarea_borrada": {"p": 1, "hecho": "tarea_borrada", "borrada": 10},
     "editar=nombre": {"p": 1, "editar": "nombre"},
     "editar_tarea": {"p": 1, "t": 10, "editar_tarea": 10},
     "confirmar_borrar": {"p": 1, "t": 10, "confirmar_borrar": 10},
@@ -315,7 +319,8 @@ A_MANO = {
     "busqueda de personas": {"p": 1, "t": 10, "pq": "ab", "pdonde": "cliente"},
     "todo junto": {"p": 1, "t": 10, "nuevo": "CDS", "confirmar": "cerrar", "editar": "nombre",
                    "editar_tarea": 10, "confirmar_borrar": 10, "editar_comentario": 100,
-                   "derivar": 10, "pq": "a", "pdonde": "tarea-10"},
+                   "derivar": 10, "pq": "a", "pdonde": "tarea-10", "borrar_proyecto": 1, "borrado": 1,
+                   "borrada": 10},
 }
 
 
@@ -552,6 +557,8 @@ COBERTURA = (VISTAS + list(A_MANO.values()) + [
     # Agregar y quitar grupos (6-oct-2026): el formulario del nombre, la pregunta de un
     # grupo vacío y la explicación de uno con cosas.
     {"nuevo_grupo": 1}, {"quitar_grupo": "ACD"}, {"quitar_grupo": "CDS"},
+    # Borrar un proyecto (7-oct-2026): la pregunta con las cuentas de sus tareas.
+    {"p": 1, "borrar_proyecto": 1},
 ])
 
 

@@ -803,7 +803,8 @@ async def restaurar(request: Request):
 
 @app.get("/papelera", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_SIEMPRE)
-async def papelera(request: Request, restaurado: int = 0):
+async def papelera(request: Request, restaurado: int = 0, hecho: str = "", id: int = 0,
+                   error: str = ""):
     """Lo borrado, con los días que le quedan.
 
     Existe para que "borrar" no dé miedo: sale de las listas al instante y se
@@ -812,10 +813,47 @@ async def papelera(request: Request, restaurado: int = 0):
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
+    lo_borrado = await db.papelera_de_proyectos_y_tareas()
+    # Los avisos de restaurar dicen un ESTADO comprobado en la base al pintar, no la
+    # acción (una dirección escrita a mano no puede forzarlos).
+    de_vuelta = None
+    if hecho == "proyecto_restaurado" and id:
+        a = await db.aviso_de_proyecto_restaurado(id)
+        de_vuelta = {"tipo": "proyecto", **a} if a else None
+    elif hecho == "tarea_restaurada" and id:
+        t = await db.aviso_de_tarea(id, borrada=False)
+        de_vuelta = {"tipo": "tarea", "nombre": t} if t is not None else None
     return plantillas.TemplateResponse(
         request, "papelera.html",
         {"movs": await db.papelera(), "dias": db.DIAS_EN_PAPELERA,
-         "restaurado": restaurado})
+         "restaurado": restaurado, "proyectos_borrados": lo_borrado["proyectos"],
+         "tareas_borradas": lo_borrado["tareas"], "error": error, "de_vuelta": de_vuelta})
+
+
+@app.post("/papelera/restaurar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def restaurar_proyecto_o_tarea(request: Request):
+    """Restaurar un proyecto o una tarea desde la Papelera. NO es otra forma de
+    des-borrar: `crud.deshacer_borrado` busca la huella `borrar` de esa fila y la
+    pasa por `crud.deshacer`, lo mismo que hace Telegram con «deshaz». Las reglas
+    (nombre repetido, proyecto en la papelera o cerrado) son las de `deshacer`."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    tabla = str(formulario.get("tabla", ""))
+    crudo = str(formulario.get("id", ""))
+    if tabla not in ("proyectos", "tareas") or not re.fullmatch(r"[0-9]{1,9}", crudo):
+        return RedirectResponse("/papelera?error=restaurar_no_esta", status_code=303)
+    rid = int(crudo)
+    try:
+        await crud.deshacer_borrado(tabla, rid)
+    except crud.NadaQueRestaurar:
+        return RedirectResponse("/papelera?error=restaurar_no_esta", status_code=303)
+    except ValueError as e:
+        log.warning("Papelera: no se restauró %s #%s: %s", tabla, rid, e)
+        return RedirectResponse("/papelera?error=restaurar_no_se_pudo", status_code=303)
+    hecho = "proyecto_restaurado" if tabla == "proyectos" else "tarea_restaurada"
+    return RedirectResponse(f"/papelera?hecho={hecho}&id={rid}", status_code=303)
 
 
 @app.get("/tareas", response_class=HTMLResponse)
@@ -1049,7 +1087,8 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
                     confirmar_borrar: int = 0, editar_comentario: int = 0,
                     derivar: int = 0, derivadas: str = "",
                     pq: str = "", pdonde: str = "",
-                    nuevo_grupo: int = 0, quitar_grupo: str = "", grupo: str = ""):
+                    nuevo_grupo: int = 0, quitar_grupo: str = "", grupo: str = "",
+                    borrar_proyecto: int = 0, borrado: int = 0, borrada: int = 0):
     """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
     (`?g=`), las de «Sin grupo» (`?sin_grupo=1`) o el formulario de un proyecto
@@ -1089,6 +1128,7 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
         error = hecho = nuevo = confirmar = editar = derivadas = pq = pdonde = ""
         nuevo_grupo = 0
         quitar_grupo = grupo = ""
+        borrar_proyecto = borrado = borrada = 0
     modelo = await db.pagina_de_proyectos()
     visibles = _filtrar_por_busqueda(modelo, q)
     elegido = p or nombre_guardado or area_guardada or creado
@@ -1108,7 +1148,18 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
     # «ya no está en la lista» (solo si no está).
     todos_los_grupos = [a["clave"] for a in await db.areas()]
     claves_de_grupos = set(todos_los_grupos)
-    contenido_quitar = await db.contenido_de_grupo(quitar_grupo) if quitar_grupo else None
+    contenido_quitar = await db.contenido_para_borrar_grupo(quitar_grupo) if quitar_grupo else None
+    # BORRAR (7-oct-2026): lo que dice cada aviso sale de la base al pintar. La
+    # pregunta de «¿borrar este proyecto?» lleva las cuentas de sus tareas medidas
+    # ahora; los avisos de «borrado» solo salen si es verdad (el proyecto está en la
+    # papelera, el grupo ya no está, la tarea está borrada).
+    contenido_borrar_proyecto = await db.contenido_de_proyecto(borrar_proyecto) if borrar_proyecto else None
+    aviso_proyecto_borrado = (await db.aviso_de_proyecto_borrado(borrado)
+                              if hecho == "proyecto_borrado" and borrado else None)
+    aviso_grupo_borrado = (await db.aviso_de_grupo_borrado(grupo)
+                           if hecho == "grupo_borrado" and grupo else None)
+    titulo_tarea_borrada = (await db.aviso_de_tarea(borrada, borrada=True)
+                            if hecho == "tarea_borrada" and borrada else None)
     return plantillas.TemplateResponse(
         request, "proyectos.html",
         {"solo_ver": solo_ver,
@@ -1116,6 +1167,12 @@ async def proyectos(request: Request, area_guardada: int = 0, creado: int = 0,
          "grupo_existe": grupo in claves_de_grupos,
          "grupo_es_el_ultimo": bool(todos_los_grupos) and grupo == todos_los_grupos[-1],
          "contenido_quitar": contenido_quitar,
+         "claves_de_contenido_de_grupo": db.CLAVES_DE_CONTENIDO_DE_GRUPO,
+         "claves_de_contenido_de_proyecto": db.CLAVES_DE_CONTENIDO_DE_PROYECTO,
+         "contenido_borrar_proyecto": contenido_borrar_proyecto,
+         "aviso_proyecto_borrado": aviso_proyecto_borrado,
+         "aviso_grupo_borrado": aviso_grupo_borrado,
+         "titulo_tarea_borrada": titulo_tarea_borrada,
          "largo_grupo": db.LARGO_NOMBRE_GRUPO,
          "volver_a_la_app": (config.REGISTRO_URL + "/") if config.REGISTRO_URL.startswith(
              ("http://", "https://")) else "",
@@ -1457,6 +1514,65 @@ async def quitar_grupo_de_proyectos(request: Request):
         f"/proyectos?hecho=grupo_quitado&grupo={quote(clave, safe='')}", status_code=303)
 
 
+def _cuentas_del_formulario(formulario, claves) -> dict:
+    """Las cuentas que la pregunta de borrar enseñó y que el «Sí» trae de vuelta, solo
+    dígitos ASCII; lo que falte o no sea un número queda en `None` (y no coincide con
+    nada: un «Sí» sin cuentas nunca borra)."""
+    salida = {}
+    for k in claves:
+        crudo = str(formulario.get(k, ""))
+        salida[k] = int(crudo) if re.fullmatch(r"[0-9]{1,9}", crudo) else None
+    return salida
+
+
+@app.post("/proyectos/grupos/borrar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def borrar_grupo_de_proyectos(request: Request):
+    """Borrar un grupo CON lo que tenga (Tiziano, 7-oct-2026). La pregunta la dibuja el
+    servidor (`?quitar_grupo=`) con las cuentas medidas al pintar, y este botón las
+    trae de vuelta: `crud.borrar_grupo` las compara con lo medido AHORA y, si cambió
+    algo, no borra y la página vuelve a preguntar. Todo lo decide `crud.borrar_grupo`;
+    la ruta solo traduce el rechazo a una CLAVE en la URL. La página NO afirma
+    «borrado»: dice un estado comprobado (el grupo ya no está, y lo que dice su huella)."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    clave = str(formulario.get("clave", ""))
+    esperado = _cuentas_del_formulario(formulario, db.CLAVES_DE_CONTENIDO_DE_GRUPO)
+    try:
+        await crud.borrar_grupo(clave, esperado, actor="panel")
+    except db.GrupoNoSeQuita as e:
+        return RedirectResponse(
+            f"/proyectos?error=grupo_{e.clave}&quitar_grupo={quote(clave, safe='')}", status_code=303)
+    except crud.CambioAlBorrar:
+        return RedirectResponse(
+            f"/proyectos?error=grupo_cambio&quitar_grupo={quote(clave, safe='')}", status_code=303)
+    return RedirectResponse(
+        f"/proyectos?hecho=grupo_borrado&grupo={quote(clave, safe='')}", status_code=303)
+
+
+@app.post("/proyectos/{pid}/borrar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def borrar_proyecto_desde_proyectos(request: Request, pid: int):
+    """Borrar un proyecto, abierto o cerrado, con sus tareas (B2). POR LA MISMA PUERTA
+    que Telegram: `crud.borrar("proyectos", ...)`, que lo manda a la papelera y se
+    lleva sus tareas vivas. El «Sí» trae las cuentas de tareas de la pregunta: si lo
+    medido ahora es otra cosa, no se borra y se vuelve a preguntar."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    esperado = _cuentas_del_formulario(formulario, db.CLAVES_DE_CONTENIDO_DE_PROYECTO)
+    try:
+        log_id = await crud.borrar(
+            "proyectos", pid, "Proyecto borrado desde el panel", actor="panel", esperado=esperado)
+    except crud.CambioAlBorrar:
+        return RedirectResponse(
+            f"/proyectos?p={pid}&borrar_proyecto={pid}&error=borrar_cambio", status_code=303)
+    if log_id is None:
+        return RedirectResponse("/proyectos?error=proyecto", status_code=303)
+    return RedirectResponse(f"/proyectos?hecho=proyecto_borrado&borrado={pid}", status_code=303)
+
+
 @app.post("/proyectos/{pid}/tareas")
 @auth.puerta(auth.PUERTA_SIEMPRE)
 async def agregar_tarea_al_proyecto(request: Request, pid: int):
@@ -1602,7 +1718,7 @@ async def borrar_tarea_desde_proyectos(request: Request, tid: int):
     la papelera, con huella, y se recupera con `deshacer` o desde la papelera)."""
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
-    donde = await _volver_a_la_tarea(tid, hecho="tarea_borrada")
+    donde = await _volver_a_la_tarea(tid, hecho="tarea_borrada", borrada=tid)
     log_id = await crud.borrar(
         "tareas", tid, "Tarea borrada desde el panel de proyectos", actor="panel")
     if log_id is None:

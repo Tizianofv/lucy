@@ -298,7 +298,10 @@ def test_quitar_pregunta_primero_y_un_grupo_vacio_se_quita(base):
     assert _avisos(html)[0] == "El grupo «Hogar» ya no está en la lista de la izquierda." and 'data-g="hogar"' not in html
 
 
-def test_un_grupo_con_cosas_dice_cuantas_y_no_ofrece_quitarlo(base):
+def test_un_grupo_con_cosas_dice_cuantas_y_ofrece_borrarlo_con_todo_lo_suyo(base):
+    """Desde el 7-oct-2026 (Tiziano: «poder borrar cualquier proyecto o grupo, con
+    confirmación») un grupo con cosas no se rechaza: la pregunta dice con números qué
+    tiene y qué le pasa a cada cosa. `quitar` (solo vacíos) sigue rechazándolo."""
     base.proyecto(1, "A", area="Hogar")
     base.proyecto(2, "B", area="Hogar")
     base.proyecto(3, "C", area="Hogar", estado="cerrado")
@@ -306,18 +309,24 @@ def test_un_grupo_con_cosas_dice_cuantas_y_no_ofrece_quitarlo(base):
     base.tarea(10, "t1", area="Hogar")
     base.tarea(11, "t2", area="Hogar", estado="hecha", completado=_dia(-1))
     base.tarea(12, "t3", area="Hogar", borrada=True)
+    base.tarea(13, "dentro de A", proyecto=1)
+    base.tarea(14, "dentro de B, hecha", proyecto=2, estado="hecha", completado=_dia(-1))
     base.con.commit()
     html = ver(base, quitar_grupo="Hogar")
     texto = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", html))
-    assert ("No se puede quitar «Hogar»: todavía tiene 2 proyectos abiertos, 1 proyecto cerrado, "
-            "1 proyecto en la papelera, 1 tarea suelta pendiente, 1 tarea suelta hecha, "
-            "1 tarea suelta en la papelera. Un grupo solo se quita cuando no queda nada en él: "
-            "cuenta todo, también lo cerrado y lo que está en la papelera. "
-            "Mueve esos proyectos y tareas a otro grupo primero.") in texto
+    assert ("¿Borrar el grupo «Hogar» con todo lo que tiene? Tiene 2 proyectos abiertos, 1 proyecto cerrado, "
+            "1 proyecto ya en la papelera, 1 tarea pendiente dentro de sus proyectos, "
+            "1 tarea hecha dentro de sus proyectos, 1 tarea suelta pendiente, 1 tarea suelta hecha, "
+            "1 tarea suelta ya en la papelera.") in texto
+    assert ("los proyectos y las tareas sueltas que están vivos van a la Papelera, igual que si los borraras uno por uno "
+            "(cada proyecto con las tareas de adentro). Lo que ya estaba en la papelera se queda ahí. "
+            "El grupo desaparece, y lo que restaures después vuelve a «Sin grupo», porque el grupo ya no existe: "
+            "para tenerlo como antes tendrías que crear el grupo de nuevo y mover las cosas.") in texto
+    assert 'action="/proyectos/grupos/borrar"' in html and ">Sí, borrar el grupo y todo lo suyo<" in html
     assert 'action="/proyectos/grupos/quitar"' not in html and ">Sí, quitarlo<" not in html
     antes = (_grupos(base), _fotos(base))
     q = _va_a(_casa(base).post("/proyectos/grupos/quitar", data={"clave": "Hogar"}, follow_redirects=False))
-    assert q == {"error": "grupo_con_cosas", "quitar_grupo": "Hogar"}
+    assert q == {"error": "grupo_con_cosas", "quitar_grupo": "Hogar"}   # `quitar` sigue siendo solo para vacíos
     assert (_grupos(base), _fotos(base)) == antes                       # y nada se movió
     despues = ver(base, **q)
     assert _avisos(despues)[0] == "El grupo NO se quitó: todavía tiene cosas (se dice a la izquierda)."

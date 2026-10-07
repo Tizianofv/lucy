@@ -337,13 +337,18 @@ def test_borrar_va_a_la_papelera_con_huella_de_panel_y_se_deshace(mt):
     import asyncio
     antes = foto(mt)
     r = post("/proyectos/tarea/10/borrar")
-    assert _adonde(r) == "/proyectos?p=2&hecho=tarea_borrada#tarea-10"
+    assert _adonde(r) == "/proyectos?p=2&hecho=tarea_borrada&borrada=10#tarea-10"
     t = tarea(mt, 10)
     assert t is not None and t["borrado_en"] is not None            # soft-delete: la fila sigue
     h, = huellas(mt)
     assert (h["actor"], h["accion"], h["tabla"], h["registro_id"]) == ("panel", "borrar", "tareas", 10)
     assert 10 not in tareas_en(ver(mt, p=2))
-    assert "Tarea borrada. Está en la papelera" in ver(mt, p=2, hecho="tarea_borrada")
+    # El aviso dice un ESTADO comprobado en la base (7-oct-2026): la tarea con ese id
+    # está en la papelera. Una dirección escrita a mano, sin id o con el de una tarea
+    # viva, no lo fuerza.
+    assert "está en la <a href=\"/papelera\">Papelera</a>" in ver(mt, p=2, hecho="tarea_borrada", borrada=10)
+    assert "está en la <a href=\"/papelera\">Papelera</a>" not in ver(mt, p=2, hecho="tarea_borrada")
+    assert "está en la <a href=\"/papelera\">Papelera</a>" not in ver(mt, p=2, hecho="tarea_borrada", borrada=11)
     assert igual_salvo(antes, foto(mt), tareas={10}, log_acciones={h["id"]})
     asyncio.new_event_loop().run_until_complete(crud.deshacer(h["id"]))
     assert tarea(mt, 10)["borrado_en"] is None and 10 in tareas_en(ver(mt, p=2))
@@ -983,8 +988,10 @@ def test_quien_escribe_cada_columna_de_la_tarea_y_cada_comentario():
                            "crear_tarea_desde_el_panel"}                       # los que CREAN; el cambio es `crud.editar`
     assert e["estado"] == {"_reprogramar_recurrentes", "cerrar_tarea_de_la_sala", "cerrar_y_derivar",
                            "marcar_tarea_hecha", "reabrir_tarea"}
-    assert e["area"] == {"cerrar_y_derivar", "crear_desde_interpretacion", "crear_o_reusar_alerta_tecnica",
-                         "crear_tarea_desde_el_panel"}
+    # `borrar_grupo` (7-oct-2026) solo PONE el área en NULL en lo que nombraba el grupo
+    # que se borra: no escribe un grupo que venga de afuera (ver su prueba).
+    assert e["area"] == {"borrar_grupo", "cerrar_y_derivar", "crear_desde_interpretacion",
+                         "crear_o_reusar_alerta_tecnica", "crear_tarea_desde_el_panel"}
     assert e["responsable_chat_id"] == {"asignar_responsable", "cerrar_y_derivar", "crear_desde_interpretacion",
                                         "crear_o_reusar_alerta_tecnica", "crear_tarea_desde_el_panel"}
     assert e["comentarios_tarea"] == {"borrar_comentario", "comentar_tarea", "editar_comentario"}

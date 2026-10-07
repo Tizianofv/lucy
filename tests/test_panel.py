@@ -453,6 +453,13 @@ def test_las_pantallas_se_pintan_de_verdad():
                  "contraparte": "X", "categoria": None,
                  "borrado_en": "2026-08-20", "dias": 12}]
 
+    async def _papelera_de_proyectos_y_tareas():
+        return {"proyectos": [{"id": 3, "nombre": "Un proyecto", "area": "CDS", "estado": "activo",
+                               "borrado_en": None, "huella_id": 30, "tareas": 2, "choca": False}],
+                "tareas": [{"id": 4, "titulo": "Una tarea", "estado": "pendiente", "proyecto_id": None,
+                            "proyecto_nombre": None, "borrado_en": None, "huella_id": 40,
+                            "por_que_no": None}]}
+
     async def _por_banco():
         return [{"banco": "bhd", "n": 12,
                  "ultimo": datetime(2026, 8, 30, 11, 0, tzinfo=timezone.utc)}]
@@ -467,7 +474,8 @@ def test_las_pantallas_se_pintan_de_verdad():
         "resumen_por_mes", "gasto_por_categoria", "gastos_de_cada_categoria",
         "meses_con_movimientos", "salud_ingesta", "movimientos_filtrados",
         "sin_clasificar", "categorias_usadas", "bancos_usados",
-        "posibles_duplicados", "papelera", "silencio_por_banco")}
+        "posibles_duplicados", "papelera", "silencio_por_banco",
+        "papelera_de_proyectos_y_tareas")}
     base.resumen_por_mes = _resumen_mes
     base.gasto_por_categoria = _por_categoria
     base.gastos_de_cada_categoria = _detalle
@@ -480,6 +488,7 @@ def test_las_pantallas_se_pintan_de_verdad():
     base.posibles_duplicados = _duplicados
     base.silencio_por_banco = _por_banco
     base.papelera = _papelera
+    base.papelera_de_proyectos_y_tareas = _papelera_de_proyectos_y_tareas
     try:
         bucle = asyncio.new_event_loop()
         for nombre, corutina in (

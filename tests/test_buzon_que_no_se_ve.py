@@ -4026,10 +4026,16 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `tests/test_tareas_sin_saltar.py` y `tests/_tareas_de_prueba.py` (nuevos);
     # VIGILADOS sin cambio: no se tocó ningún `.py` vigilado. Medida corriendo la
     # prueba: 133 en disco, 88 EXENTOS, 45 VIGILADOS.
-    assert medido == {"en disco": 133, "exentos": 88, "vigilados": 45}, (
+    # 7-oct-2026, rama `trabajo/borrar-proyecto-grupo` (borrar proyecto o grupo, papelera de
+    # proyectos y tareas): +2 en disco y +2 EXENTOS por
+    # `tests/test_borrar_proyecto_y_grupo.py` y `tests/test_papelera_de_proyectos.py` (nuevos);
+    # VIGILADOS sin cambio: se tocaron `acciones/crud.py`, `db/db.py`, `web/app.py`, `cerebro/agente.py`
+    # y `acciones/botones.py`, ya vigilados. Medida corriendo la prueba: 135 en disco, 90 EXENTOS,
+    # 45 VIGILADOS.
+    assert medido == {"en disco": 135, "exentos": 90, "vigilados": 45}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "7-oct-2026 (tareas sin saltar) era {'en disco': 133, "
-        "'exentos': 88, 'vigilados': 45}. La aserción de fondo —cero "
+        "7-oct-2026 (borrar proyecto o grupo) era {'en disco': 135, "
+        "'exentos': 90, 'vigilados': 45}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

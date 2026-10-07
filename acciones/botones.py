@@ -258,6 +258,11 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             if plan.get("accion") == "borrar":
                 log_id = await crud.borrar(plan["tabla"], registro_id, motivo)
                 remate = ("🗑 <b>Archivado</b>" if log_id else "⚠️ Ya no estaba ahí")
+                if log_id and plan["tabla"] == "proyectos":
+                    # Un proyecto se lleva sus tareas (7-oct-2026): el remate dice cuántas.
+                    n = await crud.tareas_que_se_fueron(log_id)
+                    remate += (f" · se fueron con él {n} tarea{'s' if n != 1 else ''}" if n
+                               else " · no tenía tareas")
             else:
                 despues, log_id = await crud.editar(
                     plan["tabla"], registro_id, plan.get("cambios") or {}, motivo)

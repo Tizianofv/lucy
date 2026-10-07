@@ -925,6 +925,14 @@ def _rutas_post_de_proyectos(con_tareas: bool = False):
                         actor = [k.value.value for k in n.keywords
                                  if k.arg == "actor" and isinstance(k.value, ast.Constant)]
                         escribe.append(("crud.editar", tuple(actor)))
+                    # BORRAR (7-oct-2026): `crud.borrar("proyectos", ...)` y `crud.borrar_grupo(...)`,
+                    # con su actor, igual que `crud.editar`.
+                    if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                            and ((n.func.attr == "borrar" and n.args and isinstance(n.args[0], ast.Constant)
+                                  and n.args[0].value == "proyectos") or n.func.attr == "borrar_grupo")):
+                        actor = [k.value.value for k in n.keywords
+                                 if k.arg == "actor" and isinstance(k.value, ast.Constant)]
+                        escribe.append((f"crud.{n.func.attr}", tuple(actor)))
                     if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                             and n.func.attr in ("crear_proyecto", "poner_cliente",
                                                 "agregar_participante", "quitar_participante",
@@ -953,6 +961,8 @@ def test_toda_ruta_post_de_proyectos_pide_sesion_y_escribe_por_una_puerta_con_ac
         "/proyectos/{pid}/personas/{xid}/quitar": {"db.quitar_participante"},
         "/proyectos/grupos": {"db.crear_grupo"},               # 6-oct-2026: agregar y quitar grupos
         "/proyectos/grupos/quitar": {"db.quitar_grupo"},
+        "/proyectos/grupos/borrar": {"crud.borrar_grupo"},     # 7-oct-2026: borrar con lo que tenga
+        "/proyectos/{pid}/borrar": {"crud.borrar"},            # y borrar un proyecto con sus tareas
     }
     assert {r["ruta"] for r in rutas.values()} == set(esperadas)
     for nombre, r in rutas.items():
@@ -961,7 +971,7 @@ def test_toda_ruta_post_de_proyectos_pide_sesion_y_escribe_por_una_puerta_con_ac
             f"{nombre} escribe por {r['escribe']}")
         assert len(r["escribe"]) == len(esperadas[r["ruta"]]), f"{nombre}: una llamada por puerta"
         for puerta, actor in r["escribe"]:
-            if puerta == "crud.editar":
+            if puerta in ("crud.editar", "crud.borrar", "crud.borrar_grupo"):
                 assert actor == ("panel",), f"{nombre}: actor {actor}"
 
 
@@ -1012,7 +1022,9 @@ def test_quien_escribe_cada_columna_del_proyecto_y_si_pasa_por_su_puerta():
     # alguien lo mire y lo declare acá.
     assert escritores["responsable_chat_id"] == {"crear_proyecto"}
     assert escritores["estado"] == set()            # nacen con el DEFAULT; el resto, por `crud.editar`
-    assert escritores["area"] == {"convertir_tarea_en_proyecto", "crear_proyecto"}
+    # `borrar_grupo` (7-oct-2026) solo PONE el área en NULL en los proyectos del grupo
+    # que se borra; no escribe un grupo que venga de afuera.
+    assert escritores["area"] == {"borrar_grupo", "convertir_tarea_en_proyecto", "crear_proyecto"}
     # (`_buscar_o_crear` arma su `INSERT INTO {tabla}` al vuelo y este censo no lo
     # ve; el de `tests/test_nombre_de_proyecto.py` sí, y exige la puerta del nombre.)
     # `perfil` SALIÓ de acá con E8 (1-oct-2026): su `INSERT INTO proyectos

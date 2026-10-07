@@ -1058,12 +1058,19 @@ def test_todo_lo_que_toca_area_o_proyecto_id_en_crud_pasa_por_la_misma_puerta():
                 "deshacer devuelve tareas a un proyecto sin la puerta del "
                 "proyecto cerrado (`_recibir_al_deshacer`)")
             continue
+        if nodo.name == "borrar_grupo":
+            # `borrar_grupo` (7-oct-2026) nombra `area` para PONERLA EN NULL en lo que
+            # nombraba el grupo que se borra y para guardarla en la huella (`antes`):
+            # no escribe ningún grupo que venga de afuera, así que no hay valor que
+            # pasar por `_area_que_vale`. Lo que se exige es eso, dicho en el texto.
+            assert "SET area = NULL" in texto and "SET area = %s" not in texto
+            continue
         if "_area_que_vale(" not in texto:
             culpables.append(nodo.name)
     assert vistas, ("no se encontró ninguna función que mencione 'area' ni "
                     "'proyecto_id' -- la prueba dejó de medir algo")
     esperadas = {"crear_desde_interpretacion", "editar", "deshacer",
-                 "_recibir_al_deshacer"}
+                 "_recibir_al_deshacer", "borrar_grupo"}
     assert set(vistas) == esperadas, (
         f"aparecieron funciones nuevas que tocan 'area' o 'proyecto_id': "
         f"{set(vistas) - esperadas}. Revisá "

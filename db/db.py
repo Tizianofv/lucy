@@ -2868,6 +2868,246 @@ async def quitar_grupo(clave: str) -> None:
                 raise GrupoNoSeQuita("con_cosas", "ese grupo tiene cosas: no se quita", contenido)
 
 
+# ── BORRAR UN GRUPO CON COSAS, Y BORRAR UN PROYECTO CON SUS TAREAS (7-oct-2026) ──
+#
+# Tiziano: «poder borrar cualquier proyecto o grupo, con confirmación». Lo que se
+# decidió (B2 y C): borrar un proyecto se lleva sus tareas; borrar un grupo borra
+# sus proyectos y sus tareas sueltas «igual que si se hubieran borrado a mano»
+# (papelera, recuperable) y el grupo desaparece; lo que se restaure vuelve a
+# «Sin grupo». La ESCRITURA vive en `acciones/crud.py` (`borrar`, `borrar_grupo`,
+# `deshacer`): acá solo lo que se LEE para preguntar (la confirmación dice con
+# números qué se va) y para dibujar la papelera. Los números de la pregunta son
+# los mismos con los que después se compara el «Sí» (ver `crud.borrar`).
+
+CLAVES_DE_CONTENIDO_DE_PROYECTO = ("tareas_pendientes", "tareas_hechas", "tareas_otras")
+CLAVES_DE_CONTENIDO_DE_GRUPO = (
+    "proyectos_abiertos", "proyectos_cerrados", "proyectos_papelera",
+    "tareas_pendientes", "tareas_hechas", "tareas_otras", "tareas_papelera",
+    "tareas_en_proyectos_pendientes", "tareas_en_proyectos_hechas",
+    "tareas_en_proyectos_otras")
+
+
+async def _contenido_de_proyecto(cur, proyecto_id: int) -> dict:
+    """Las tareas VIVAS del proyecto por clase, medidas ahora (las que se van con
+    él si se borra). Mismas clases que las del grupo: pendientes, hechas, otras."""
+    await cur.execute(
+        "SELECT count(*) FILTER (WHERE estado = %s) AS tareas_pendientes, "
+        "count(*) FILTER (WHERE estado = %s) AS tareas_hechas, "
+        "count(*) FILTER (WHERE estado NOT IN (%s, %s)) AS tareas_otras "
+        "FROM tareas WHERE proyecto_id = %s AND borrado_en IS NULL",
+        (ESTADO_PENDIENTE, ESTADO_HECHA, ESTADO_PENDIENTE, ESTADO_HECHA, proyecto_id))
+    return dict(await cur.fetchone())
+
+
+async def contenido_de_proyecto(proyecto_id: int) -> dict | None:
+    """`{id, nombre, estado, area, tareas_pendientes, tareas_hechas, tareas_otras}`
+    de un proyecto VIVO, o `None` si no existe o ya está en la papelera."""
+    if isinstance(proyecto_id, bool) or not isinstance(proyecto_id, int):
+        return None
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, nombre, estado, area FROM proyectos "
+            "WHERE id = %s AND borrado_en IS NULL", (proyecto_id,))
+        fila = await cur.fetchone()
+        if fila is None:
+            return None
+        return {**dict(fila), **await _contenido_de_proyecto(cur, proyecto_id)}
+
+
+async def _contenido_para_borrar_grupo(cur, clave: str) -> dict:
+    """Lo que tiene un grupo y se iría al borrarlo: lo de `_contenido_de_grupo`
+    más las tareas VIVAS que están dentro de sus proyectos vivos (se van con
+    ellos). `total` es la suma de todo."""
+    c = await _contenido_de_grupo(cur, clave)
+    await cur.execute(
+        "SELECT count(*) FILTER (WHERE t.estado = %s) AS tareas_en_proyectos_pendientes, "
+        "count(*) FILTER (WHERE t.estado = %s) AS tareas_en_proyectos_hechas, "
+        "count(*) FILTER (WHERE t.estado NOT IN (%s, %s)) AS tareas_en_proyectos_otras "
+        "FROM tareas t JOIN proyectos p ON p.id = t.proyecto_id "
+        "WHERE t.borrado_en IS NULL AND p.borrado_en IS NULL AND p.area = %s",
+        (ESTADO_PENDIENTE, ESTADO_HECHA, ESTADO_PENDIENTE, ESTADO_HECHA, clave))
+    c.update(dict(await cur.fetchone()))
+    c["total"] = sum(v for k, v in c.items() if k != "total")
+    return c
+
+
+async def contenido_para_borrar_grupo(clave: str) -> dict | None:
+    """Lo que se iría con el grupo (ver `_contenido_para_borrar_grupo`), o `None`
+    si no hay un grupo con esa clave."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute("SELECT 1 AS x FROM areas WHERE clave = %s", (clave,))
+        if await cur.fetchone() is None:
+            return None
+        return await _contenido_para_borrar_grupo(cur, clave)
+
+
+def _json_de(valor):
+    """El JSON de una columna `jsonb` (psycopg lo da ya convertido; SQLite, como
+    texto), o `{}`."""
+    if isinstance(valor, dict):
+        return valor
+    try:
+        r = json.loads(valor) if valor else {}
+    except (TypeError, ValueError):
+        return {}
+    return r if isinstance(r, dict) else {}
+
+
+def _ids_que_se_fueron_con_de(despues) -> list[int]:
+    """Los ids de `despues.tareas_con_el` de la huella `borrar` de un proyecto
+    (solo enteros). UNA lectura de esa lista: la usan la papelera, los avisos, el
+    bot y `crud.deshacer` para devolver las MISMAS tareas."""
+    ids = _json_de(despues).get("tareas_con_el") or []
+    return [i for i in ids if isinstance(i, int) and not isinstance(i, bool)]
+
+
+async def _ids_que_se_fueron_con(cur, huella_id) -> list[int]:
+    """Los ids de las tareas que se fueron con un proyecto en SU acto de borrar
+    (lo que guardó la huella `borrar` del proyecto en `despues`)."""
+    if huella_id is None:
+        return []
+    await cur.execute("SELECT despues FROM log_acciones WHERE id = %s", (huella_id,))
+    fila = await cur.fetchone()
+    return _ids_que_se_fueron_con_de(fila["despues"] if fila else None)
+
+
+async def aviso_de_proyecto_borrado(proyecto_id) -> dict | None:
+    """Para el aviso de «borrado»: `{nombre, tareas}` SOLO si el proyecto está de
+    verdad en la papelera (`tareas` = las que se fueron con él según su huella);
+    `None` si no existe o sigue vivo. Una dirección escrita a mano no lo cambia."""
+    if isinstance(proyecto_id, bool) or not isinstance(proyecto_id, int):
+        return None
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT nombre, "
+            "(SELECT max(l.id) FROM log_acciones l WHERE l.tabla = 'proyectos' "
+            "   AND l.registro_id = proyectos.id AND l.accion = 'borrar') AS huella_id "
+            "FROM proyectos WHERE id = %s AND borrado_en IS NOT NULL", (proyecto_id,))
+        fila = await cur.fetchone()
+        if fila is None:
+            return None
+        return {"nombre": fila["nombre"],
+                "tareas": len(await _ids_que_se_fueron_con(cur, fila["huella_id"]))}
+
+
+async def aviso_de_proyecto_restaurado(proyecto_id) -> dict | None:
+    """Para el aviso de «restaurado»: `{nombre, tareas}` SOLO si el proyecto está
+    VIVO (`tareas` = cuántas de las que se fueron con él en su último borrado
+    están vivas ahora); `None` si no existe o sigue en la papelera."""
+    if isinstance(proyecto_id, bool) or not isinstance(proyecto_id, int):
+        return None
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT nombre, "
+            "(SELECT max(l.id) FROM log_acciones l WHERE l.tabla = 'proyectos' "
+            "   AND l.registro_id = proyectos.id AND l.accion = 'borrar') AS huella_id "
+            "FROM proyectos WHERE id = %s AND borrado_en IS NULL", (proyecto_id,))
+        fila = await cur.fetchone()
+        if fila is None:
+            return None
+        vivas = 0
+        for tid in await _ids_que_se_fueron_con(cur, fila["huella_id"]):
+            await cur.execute(
+                "SELECT 1 AS x FROM tareas WHERE id = %s AND borrado_en IS NULL", (tid,))
+            vivas += 1 if await cur.fetchone() else 0
+        return {"nombre": fila["nombre"], "tareas": vivas}
+
+
+async def aviso_de_tarea(tarea_id, *, borrada: bool) -> str | None:
+    """El título de la tarea SOLO si su estado es el que el aviso dice: en la
+    papelera (`borrada=True`) o viva (`borrada=False`). `None` si no."""
+    if isinstance(tarea_id, bool) or not isinstance(tarea_id, int):
+        return None
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT titulo, (borrado_en IS NOT NULL) AS borrada FROM tareas WHERE id = %s",
+            (tarea_id,))
+        fila = await cur.fetchone()
+    if fila is None or bool(fila["borrada"]) != borrada:
+        return None
+    return fila["titulo"]
+
+
+async def aviso_de_grupo_borrado(clave: str) -> dict | None:
+    """Para el aviso de «grupo borrado»: lo que dice la huella del último borrado
+    de un grupo con ese nombre (`{proyectos, tareas}`), SOLO si el grupo ya no
+    existe; `None` si existe o no hay huella. La huella (`tabla='areas'`) la deja
+    `crud.borrar_grupo`."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute("SELECT 1 AS x FROM areas WHERE clave = %s", (clave,))
+        if await cur.fetchone() is not None:
+            return None
+        await cur.execute(
+            "SELECT antes, despues FROM log_acciones WHERE tabla = 'areas' AND accion = 'borrar' "
+            "ORDER BY id DESC")
+        for fila in await cur.fetchall():
+            if _json_de(fila["antes"]).get("clave") == clave:
+                d = _json_de(fila["despues"])
+                return {"proyectos": len(d.get("proyectos") or []),
+                        "tareas": len(d.get("tareas") or [])}
+    return None
+
+
+async def papelera_de_proyectos_y_tareas() -> dict:
+    """Lo borrado de Proyectos para la pantalla Papelera: `{proyectos, tareas}`.
+
+    · Cada proyecto: `id, nombre, area, borrado_en, huella_id` (su último `borrar`;
+      sin él no hay con qué restaurar), `tareas` (las que se fueron con él en ese
+      acto, según la huella) y `choca` (hay otro proyecto VIVO con ese nombre: no se
+      puede restaurar mientras).
+    · Cada tarea: `id, titulo, estado, proyecto_id, proyecto_nombre, borrado_en,
+      huella_id` y `por_que_no` (`None` si se puede restaurar; `sin_huella`,
+      `proyecto_borrado` o `proyecto_cerrado`). Las que se fueron CON su proyecto
+      no se listan aparte: van contadas en la fila de su proyecto, y vuelven con él.
+    No toca nada. Es la MISMA decisión que toma `crud.deshacer` (ver la prueba de
+    hermanos de `tests/test_papelera_de_proyectos.py`)."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT p.id, p.nombre, p.area, p.estado, p.borrado_en, "
+            "(SELECT max(l.id) FROM log_acciones l WHERE l.tabla = 'proyectos' "
+            "   AND l.registro_id = p.id AND l.accion = 'borrar') AS huella_id "
+            "FROM proyectos p WHERE p.borrado_en IS NOT NULL ORDER BY p.borrado_en DESC, p.id DESC")
+        proyectos = [dict(f) for f in await cur.fetchall()]
+        fueron: dict[int, int] = {}              # tarea_id -> proyecto_id con el que se fue
+        for p in proyectos:
+            ids = await _ids_que_se_fueron_con(cur, p["huella_id"])
+            p["tareas"] = len(ids)
+            p["choca"] = (await proyecto_vivo_con_nombre(cur, p["nombre"], excluir_id=p["id"])) is not None
+            for tid in ids:
+                fueron[tid] = p["id"]
+        await cur.execute(
+            "SELECT t.id, t.titulo, t.estado, t.proyecto_id, t.borrado_en, "
+            "(SELECT max(l.id) FROM log_acciones l WHERE l.tabla = 'tareas' "
+            "   AND l.registro_id = t.id AND l.accion = 'borrar') AS huella_id, "
+            "p.nombre AS proyecto_nombre, p.borrado_en AS proyecto_borrado_en, "
+            "p.estado AS proyecto_estado "
+            "FROM tareas t LEFT JOIN proyectos p ON p.id = t.proyecto_id "
+            "WHERE t.borrado_en IS NOT NULL ORDER BY t.borrado_en DESC, t.id DESC")
+        tareas = []
+        for f in await cur.fetchall():
+            t = dict(f)
+            if t["proyecto_id"] is not None and fueron.get(t["id"]) == t["proyecto_id"] \
+                    and t["proyecto_borrado_en"] is not None:
+                continue                         # se fue con su proyecto: vuelve con él
+            if t["huella_id"] is None:
+                t["por_que_no"] = "sin_huella"
+            elif t["proyecto_id"] is not None and t["proyecto_borrado_en"] is not None:
+                t["por_que_no"] = "proyecto_borrado"
+            elif t["proyecto_id"] is not None and t["proyecto_estado"] == ESTADO_PROYECTO_CERRADO:
+                t["por_que_no"] = "proyecto_cerrado"
+            else:
+                t["por_que_no"] = None
+            tareas.append(t)
+        return {"proyectos": proyectos, "tareas": tareas}
+
+
 async def proyectos_vivos() -> list[dict]:
     """Los proyectos no archivados, para que Lucy los reciba como información
     (encargo 5, requisito 3) y entienda "dentro del proyecto X" sin tener que

@@ -375,6 +375,8 @@ HERRAMIENTAS DISPONIBLES:
   existe. Es reversible (soft-delete; deshacer lo revive), así que no pidas
   permiso si la orden es clara — pero consultá antes para dar con el id
   correcto, y si hay varios candidatos preguntá cuál, como con editar.
+  Si es un PROYECTO, se van con él sus tareas (y vuelven con él al deshacer):
+  decíselo a Tiziano con el número que te devuelve la herramienta.
 
 · deshacer  {"accion": N}
   Revierte una acción del log. El resultado de crear/editar te da el número.
@@ -1053,7 +1055,15 @@ async def _ejecutar_herramienta(
             _anotar(acciones, log_id,
                     f"archivé {str(args.get('tabla') or '')} "
                     f"#{int(args.get('id') or 0)}")
-            return f"OK: archivado (acción #{log_id}, reversible)."
+            # UN PROYECTO SE LLEVA SUS TAREAS (7-oct-2026): el parte lo dice, con el número
+            # que dejó la huella (no el que uno supone), para no decir «archivado» a secas.
+            se_fueron = await crud.tareas_que_se_fueron(log_id)
+            if str(args.get("tabla") or "") == "proyectos":
+                cola = (f" Se fueron con él {se_fueron} tarea{'s' if se_fueron != 1 else ''}; "
+                        "deshacer lo trae de vuelta con ellas." if se_fueron else " No tenía tareas.")
+            else:
+                cola = ""
+            return f"OK: archivado (acción #{log_id}, reversible).{cola}"
 
         if nombre == "pasos":
             # "texto" tiene que ser una LISTA de pasos. Si el modelo manda un

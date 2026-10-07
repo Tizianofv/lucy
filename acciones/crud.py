@@ -2002,8 +2002,67 @@ async def guardar_lugar(
     return f"OK: lugar '{nombre}' guardado (#{rid}).", log_id
 
 
+class CambioAlBorrar(ValueError):
+    """Entre la pregunta («¿borrar esto? se va X») y el «Sí» cambió lo que se iba a
+    borrar (apareció o se movió una tarea, un proyecto…): no se borró nada. `contenido`
+    trae lo que hay AHORA, para volver a preguntar con eso."""
+
+    def __init__(self, contenido: dict):
+        super().__init__("lo que se iba a borrar cambió desde la pregunta: no se borró nada")
+        self.contenido = contenido
+
+
+def _mismo_contenido(actual: dict, esperado: dict, claves) -> bool:
+    """¿Lo medido ahora es EXACTAMENTE lo que decía la pregunta? Compara cada clave
+    de `claves` (la lista sale de `db`, no de aquí); una que falte en lo esperado
+    cuenta como distinta."""
+    return all(isinstance(esperado.get(k), int) and esperado.get(k) == actual.get(k) for k in claves)
+
+
+async def _borrar_proyecto_en(conn, cur, antes: dict, *, motivo: str, bandeja_id, actor: str):
+    """LA ÚNICA FORMA DE BORRAR UN PROYECTO (Tiziano, 7-oct-2026, B2: «se van con él
+    y vuelven con él»): lo manda a la papelera Y SUS TAREAS VIVAS con él, cada una con
+    su huella (`borrar`, con su `antes`) y el proyecto con la suya, que guarda en
+    `despues.tareas_con_el` los ids de las que se fueron EN ESTE ACTO. Eso es lo que
+    `deshacer` devuelve después: esas, no las que ya estaban borradas de antes.
+
+    Lo llaman `borrar` («proyectos») —el panel, el bot y los botones—, y
+    `borrar_grupo`: no hay otro borrado de proyecto. Devuelve `(log_id, ids)`, o
+    `None` si otro pedido ya lo había borrado (el `UPDATE ... borrado_en IS NULL` es
+    el que decide: el segundo «Sí» sobre lo mismo no escribe nada)."""
+    pid = antes["id"]
+    c = await conn.execute(
+        "UPDATE proyectos SET borrado_en = now() WHERE id = %s AND borrado_en IS NULL RETURNING id",
+        (pid,))
+    if await c.fetchone() is None:
+        return None
+    ids: list[int] = []
+    for _pasada in range(2):         # una segunda por si entró una tarea mientras tanto
+        await cur.execute(
+            "SELECT * FROM tareas WHERE proyecto_id = %s AND borrado_en IS NULL ORDER BY id", (pid,))
+        filas = await cur.fetchall()
+        if not filas:
+            break
+        for t in filas:
+            c = await conn.execute(
+                "UPDATE tareas SET borrado_en = now() WHERE id = %s AND borrado_en IS NULL RETURNING id",
+                (t["id"],))
+            if await c.fetchone() is None:
+                continue
+            await _registrar(
+                conn, accion="borrar", tabla="tareas", registro_id=t["id"], antes=dict(t),
+                motivo=f"Se fue con el proyecto #{pid}, que se borró",
+                bandeja_id=t.get("bandeja_id"), actor=actor)
+            ids.append(t["id"])
+    log_id = await _registrar(
+        conn, accion="borrar", tabla="proyectos", registro_id=pid, antes=dict(antes),
+        despues={"tareas_con_el": ids}, motivo=motivo,
+        bandeja_id=antes.get("bandeja_id"), actor=actor)
+    return log_id, ids
+
+
 async def borrar(tabla: str, registro_id: int, motivo: str,
-                 *, actor: str = "lucy") -> int | None:
+                 *, actor: str = "lucy", esperado: dict | None = None) -> int | None:
     """Soft-delete: marca borrado_en y guarda el 'antes' completo en el log.
 
     `actor` es 'lucy' por omisión (todos los llamadores de siempre son
@@ -2011,12 +2070,21 @@ async def borrar(tabla: str, registro_id: int, motivo: str,
     G15) para que la huella diga quién fue de verdad. Sigue siendo
     soft-delete: nunca hay DELETE.
 
+    UN PROYECTO SE LLEVA SUS TAREAS (7-oct-2026, B2), desde cualquier vía: panel, bot
+    y botones llaman a esta misma función (ver `_borrar_proyecto_en`). Y `esperado`
+    (solo el panel de proyectos lo manda) ata el «Sí» a la pregunta: son las cuentas
+    de tareas que la confirmación enseñó; si lo medido AHORA, antes de escribir, es
+    otra cosa, `CambioAlBorrar` y no se borra nada. Sin `esperado` (Telegram, que ya
+    preguntó a su manera) borra lo que haya.
+
     Devuelve el log_id, o None si no había nada que borrar. Ese 'antes' ES el
     deshacer: restaurar la fila es volver a escribir lo que quedó guardado
     ahí. Por eso nunca hay DELETE de verdad.
     """
     if tabla not in TABLAS:
         raise ValueError(f"Tabla no permitida: {tabla}")
+    if esperado is not None and tabla != "proyectos":
+        raise ValueError("`esperado` solo vale para proyectos")
 
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -2027,6 +2095,15 @@ async def borrar(tabla: str, registro_id: int, motivo: str,
         antes = await cur.fetchone()
         if antes is None:
             return None  # no existe o ya estaba borrada
+
+        if tabla == "proyectos":
+            if esperado is not None:
+                actual = await db._contenido_de_proyecto(cur, registro_id)
+                if not _mismo_contenido(actual, esperado, db.CLAVES_DE_CONTENIDO_DE_PROYECTO):
+                    raise CambioAlBorrar(actual)
+            hecho = await _borrar_proyecto_en(
+                conn, cur, antes, motivo=motivo, bandeja_id=antes.get("bandeja_id"), actor=actor)
+            return None if hecho is None else hecho[0]
 
         await conn.execute(
             f"UPDATE {tabla} SET borrado_en = now() WHERE id = %s", (registro_id,)
@@ -2041,6 +2118,119 @@ async def borrar(tabla: str, registro_id: int, motivo: str,
             bandeja_id=antes.get("bandeja_id"),
             actor=actor,
         )
+
+
+async def tareas_que_se_fueron(log_id: int) -> int:
+    """Cuántas tareas se fueron con un proyecto en el acto de borrar que dejó esa
+    huella (0 si la huella no es de un proyecto o no lo dice). Lo leen el bot y los
+    botones para no decir «archivado» sin decir lo que se llevó."""
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT tabla, despues FROM log_acciones WHERE id = %s AND accion = 'borrar'", (log_id,))
+        fila = await cur.fetchone()
+        if fila is None or fila["tabla"] != "proyectos":
+            return 0
+        return len(db._ids_que_se_fueron_con_de(fila["despues"]))
+
+
+async def borrar_grupo(clave: str, esperado: dict | None = None, *, actor: str = "panel") -> dict:
+    """Borra un grupo CON lo que tenga (Tiziano, 7-oct-2026, C): lo vivo se borra
+    «igual que a mano» (papelera, con su huella, recuperable) y el grupo desaparece.
+    Lo que se restaure después vuelve a «Sin grupo»: el grupo ya no existe.
+
+    Todo en UNA transacción y bajo el bloqueo de grupos (el mismo de crear y quitar):
+      1. el fijo (`db.AREA_TECNICA`) no se borra; uno que no existe se dice;
+      2. `esperado` (las cuentas de la pregunta) se compara con lo medido AHORA: si
+         difiere, `CambioAlBorrar` y no se escribe nada;
+      3. sus proyectos vivos se borran por `_borrar_proyecto_en` (con sus tareas) y
+         sus tareas sueltas vivas por su huella `borrar`;
+      4. si aún queda algo VIVO nombrando el grupo (otro pedido se lo metió), se
+         vuelve a preguntar (`CambioAlBorrar`);
+      5. a lo que nombra el grupo —también lo que ya estaba en la papelera— se le
+         pone `area = NULL`, y lo que ya estaba borrado de antes deja una huella
+         `editar` (antes: el grupo); lo borrado ahora ya lleva el grupo en su
+         `antes`;
+      6. se borra la fila de `areas`; y una huella `borrar` de tabla `areas`
+         (`registro_id` 0: la clave es un nombre) guarda el grupo (nombre, color,
+         orden) y los ids que se fueron, para que quede dicho de dónde venía cada cosa.
+    Devuelve `{proyectos, tareas, ya_borradas}` (cuántas filas de cada clase)."""
+    if clave == db.AREA_TECNICA:
+        raise db.GrupoNoSeQuita("fijo", "ese grupo no se puede borrar: Lucy y Code lo usan")
+    async with db.pool.connection() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", ("grupos", ))
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute("SELECT clave, color, orden FROM areas WHERE clave = %s", (clave,))
+            grupo = await cur.fetchone()
+            if grupo is None:
+                raise db.GrupoNoSeQuita("no_existe", "ese grupo ya no está")
+            grupo = dict(grupo)
+            actual = await db._contenido_para_borrar_grupo(cur, clave)
+            if esperado is not None and not _mismo_contenido(
+                    actual, esperado, db.CLAVES_DE_CONTENIDO_DE_GRUPO):
+                raise CambioAlBorrar(actual)
+            # Lo que ya estaba en la papelera con este grupo: se apunta ANTES de borrar
+            # nada, para distinguirlo de lo que se borra ahora.
+            await cur.execute("SELECT id FROM proyectos WHERE area = %s AND borrado_en IS NOT NULL ORDER BY id", (clave,))
+            proyectos_de_antes = [f["id"] for f in await cur.fetchall()]
+            await cur.execute("SELECT id FROM tareas WHERE area = %s AND borrado_en IS NOT NULL ORDER BY id", (clave,))
+            tareas_de_antes = [f["id"] for f in await cur.fetchall()]
+
+            motivo = f"Se fue con el grupo «{clave}», que se borró"
+            proyectos_ahora: list[int] = []
+            tareas_ahora: list[int] = []
+            await cur.execute("SELECT * FROM proyectos WHERE area = %s AND borrado_en IS NULL ORDER BY id", (clave,))
+            for p in [dict(f) for f in await cur.fetchall()]:
+                hecho = await _borrar_proyecto_en(
+                    conn, cur, p, motivo=motivo, bandeja_id=p.get("bandeja_id"), actor=actor)
+                if hecho is not None:
+                    proyectos_ahora.append(p["id"])
+                    tareas_ahora.extend(hecho[1])
+            await cur.execute("SELECT * FROM tareas WHERE area = %s AND borrado_en IS NULL ORDER BY id", (clave,))
+            for t in [dict(f) for f in await cur.fetchall()]:
+                c = await conn.execute(
+                    "UPDATE tareas SET borrado_en = now() WHERE id = %s AND borrado_en IS NULL RETURNING id",
+                    (t["id"],))
+                if await c.fetchone() is None:
+                    continue
+                await _registrar(conn, accion="borrar", tabla="tareas", registro_id=t["id"], antes=t,
+                                 motivo=motivo, bandeja_id=t.get("bandeja_id"), actor=actor)
+                tareas_ahora.append(t["id"])
+            # ¿Quedó algo VIVO nombrando el grupo? Entonces alguien se lo metió: se pregunta otra vez.
+            await cur.execute(
+                "SELECT (SELECT count(*) FROM proyectos WHERE area = %s AND borrado_en IS NULL) "
+                "     + (SELECT count(*) FROM tareas WHERE area = %s AND borrado_en IS NULL) AS n",
+                (clave, clave))
+            if (await cur.fetchone())["n"]:
+                raise CambioAlBorrar(await db._contenido_para_borrar_grupo(cur, clave))
+            for tabla, ids in (("proyectos", proyectos_de_antes), ("tareas", tareas_de_antes)):
+                for rid in ids:
+                    await _registrar(conn, accion="editar", tabla=tabla, registro_id=rid,
+                                     antes={"area": clave}, despues={"area": None},
+                                     motivo=f"Su grupo «{clave}» se borró: queda en «Sin grupo»", actor=actor)
+            await conn.execute("UPDATE proyectos SET area = NULL WHERE area = %s", (clave,))
+            await conn.execute("UPDATE tareas SET area = NULL WHERE area = %s", (clave,))
+            try:
+                # Un punto de guardado propio, como en `quitar_grupo`: si la llave
+                # foránea lo rechaza, es que alguien le acaba de meter algo.
+                async with conn.transaction():
+                    c = await conn.execute("DELETE FROM areas WHERE clave = %s RETURNING clave", (clave,))
+                    borrada = await c.fetchone()
+            except Exception as e:
+                if not db._es_violacion(e, "23503"):
+                    raise
+                raise CambioAlBorrar(await db._contenido_para_borrar_grupo(cur, clave)) from e
+            if borrada is None:
+                raise db.GrupoNoSeQuita("no_existe", "ese grupo ya no está")
+            await _registrar(
+                conn, accion="borrar", tabla="areas", registro_id=0, antes=grupo,
+                despues={"proyectos": proyectos_ahora, "tareas": tareas_ahora,
+                         "ya_en_la_papelera": {"proyectos": proyectos_de_antes, "tareas": tareas_de_antes}},
+                motivo=f"Grupo «{clave}» borrado con lo que tenía", actor=actor)
+    return {"proyectos": len(proyectos_ahora), "tareas": len(tareas_ahora),
+            "ya_borradas": len(proyectos_de_antes) + len(tareas_de_antes)}
 
 
 async def _recibir_al_deshacer(cur, tarea_id, quedara, reaparece=False):
@@ -2065,6 +2255,12 @@ async def _recibir_al_deshacer(cur, tarea_id, quedara, reaparece=False):
     try:
         await db.proyecto_admite_tareas(cur, destino)
     except db.ProyectoNoAdmiteTareas as e:
+        if e.clave == "no_existe":
+            await cur.execute("SELECT 1 AS x FROM proyectos WHERE id = %s AND borrado_en IS NOT NULL", (destino,))
+            if await cur.fetchone() is not None:
+                raise ValueError(
+                    "No lo deshice: su proyecto está en la papelera. Restaura primero el "
+                    "proyecto: con él vuelven sus tareas.") from e
         raise ValueError(f"No lo deshice: {e}.") from e
 
 
@@ -2134,6 +2330,27 @@ async def deshacer(log_id: int) -> str:
             await conn.execute(
                 f"UPDATE {tabla} SET borrado_en = NULL WHERE id = %s", (registro_id,))
             que = "lo que había archivado"
+            if tabla == "proyectos":
+                # UN PROYECTO VUELVE CON SUS TAREAS: las que se fueron con él EN ESE ACTO
+                # (`despues.tareas_con_el` de la huella), y solo si siguen en la papelera;
+                # no las que ya estaban borradas de antes ni otras.
+                vueltas = 0
+                for tid in db._ids_que_se_fueron_con_de(huella.get("despues")):
+                    # Solo si NO se borró aparte DESPUÉS: la huella `borrar` más nueva de esa
+                    # tarea tiene que ser anterior a la del proyecto (que se escribe al final).
+                    c = await conn.execute(
+                        "UPDATE tareas SET borrado_en = NULL "
+                        "WHERE id = %s AND proyecto_id = %s AND borrado_en IS NOT NULL "
+                        "AND (SELECT max(l.id) FROM log_acciones l WHERE l.tabla = 'tareas' "
+                        "     AND l.registro_id = tareas.id AND l.accion = 'borrar') < %s RETURNING id",
+                        (tid, registro_id, log_id))
+                    if await c.fetchone() is not None:
+                        vueltas += 1
+                        await _registrar(
+                            conn, accion="deshacer", tabla="tareas", registro_id=tid,
+                            motivo=f"Volvió con el proyecto #{registro_id} (acción #{log_id})")
+                if vueltas:
+                    que += f" y {vueltas} tarea{'s' if vueltas != 1 else ''} que se fue{'ron' if vueltas != 1 else ''} con él"
 
         elif huella["accion"] == "editar":
             antes = huella["antes"] or {}
@@ -2209,6 +2426,40 @@ async def deshacer(log_id: int) -> str:
             motivo=f"Tiziano deshizo la acción #{log_id} ({huella['accion']})",
         )
     return que
+
+
+class NadaQueRestaurar(ValueError):
+    """`clave`: `no_esta_borrado` (no existe o ya está vivo) o `sin_huella` (está en
+    la papelera pero no hay una huella `borrar` con la que devolverlo)."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+async def deshacer_borrado(tabla: str, registro_id: int) -> tuple[str, int]:
+    """Restaurar un proyecto o una tarea DESDE LA PAPELERA de la página. NO es otra
+    forma de des-borrar: busca la huella `borrar` más reciente de esa fila (la misma
+    que Telegram deshace con `deshacer(log_id)`) y la pasa por `deshacer`. Por eso las
+    dos vías dejan exactamente el mismo resultado, con las mismas reglas (nombre
+    repetido, proyecto en la papelera o cerrado…). Devuelve `(qué, log_id)`;
+    `NadaQueRestaurar` si la fila no está borrada o no tiene huella; el `ValueError`
+    de `deshacer` si la regla no deja."""
+    if tabla not in ("proyectos", "tareas"):
+        raise ValueError(f"Tabla no permitida: {tabla}")
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(f"SELECT borrado_en FROM {tabla} WHERE id = %s", (registro_id,))
+        fila = await cur.fetchone()
+        if fila is None or fila["borrado_en"] is None:
+            raise NadaQueRestaurar("no_esta_borrado", "eso no está en la papelera")
+        await cur.execute(
+            "SELECT max(id) AS id FROM log_acciones "
+            "WHERE tabla = %s AND registro_id = %s AND accion = 'borrar'", (tabla, registro_id))
+        log_id = (await cur.fetchone())["id"]
+    if log_id is None:
+        raise NadaQueRestaurar("sin_huella", "no hay registro de cómo se borró")
+    return await deshacer(log_id), log_id
 
 
 async def deshacer_varias(log_ids) -> tuple[int, list[str]]:

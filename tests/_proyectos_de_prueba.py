@@ -53,19 +53,39 @@ class BaseQueNoSeToca:
             async def _pagina(hoy=None):
                 return modelo()
             return _pagina
-        if nombre == "contenido_de_grupo":
-            # FINGIDO, declarado: lo que `db.contenido_de_grupo` mediría. Un grupo que
+        if nombre == "contenido_para_borrar_grupo":
+            # FINGIDO, declarado: lo que `db.contenido_para_borrar_grupo` mediría. Un grupo que
             # no está en `AREAS` da `None`; «CDS» (el del modelo, con proyectos y
             # tareas) da cuentas distintas de cero; los demás, vacíos.
             async def _contenido(clave):
                 if clave not in {a["clave"] for a in tp.AREAS}:
                     return None
-                ceros = dict(proyectos_abiertos=0, proyectos_cerrados=0, proyectos_papelera=0,
-                             tareas_pendientes=0, tareas_hechas=0, tareas_otras=0, tareas_papelera=0)
+                ceros = dict.fromkeys(db.CLAVES_DE_CONTENIDO_DE_GRUPO, 0)
                 if clave == "CDS":
                     ceros.update(proyectos_abiertos=2, proyectos_cerrados=1, tareas_pendientes=1)
                 return {**ceros, "total": sum(ceros.values())}
             return _contenido
+        if nombre == "contenido_de_proyecto":
+            # FINGIDO, declarado: lo que `db.contenido_de_proyecto` mediría para el
+            # proyecto 1 del modelo («Disco Uno», con una pendiente y una hecha).
+            async def _de_proyecto(pid):
+                if pid != 1:
+                    return None
+                return dict(id=1, nombre="Disco Uno", estado="activo", area="CDS",
+                            tareas_pendientes=1, tareas_hechas=1, tareas_otras=0)
+            return _de_proyecto
+        if nombre == "aviso_de_proyecto_borrado":
+            async def _aviso_proyecto(pid):         # FINGIDO: «está de verdad en la papelera»
+                return {"nombre": "Disco Uno", "tareas": 2} if pid == 1 else None
+            return _aviso_proyecto
+        if nombre == "aviso_de_grupo_borrado":
+            async def _aviso_grupo(clave):          # FINGIDO: «el grupo ya no está y su huella dice…»
+                return {"proyectos": 1, "tareas": 2}
+            return _aviso_grupo
+        if nombre == "aviso_de_tarea":
+            async def _aviso_tarea(tid, *, borrada):  # FINGIDO: «la tarea está en el estado que el aviso dice»
+                return "Pendiente A" if tid == 10 else None
+            return _aviso_tarea
         if nombre == "areas":
             async def _areas():
                 return list(tp.AREAS)
