@@ -262,7 +262,9 @@ def _pedir(c, metodo, ruta, galleta, **kw):
 
 
 @pytest.mark.parametrize("nombre", sorted(_cookies_hostiles()))
-def test_una_cookie_hostil_no_tumba_ni_la_pagina_ni_el_guardado(monkeypatch, nombre):
+def test_una_cookie_hostil_no_tumba_ni_la_pagina_ni_el_guardado(monkeypatch, nombre, caplog):
+    """Y se descarta ANTES de usarse: ni siquiera hace falta que la puerta contenga una excepción (dos
+    capas: la cookie hostil no llega a `int()`, y si algo llegara a fallar, ver la prueba de roturas)."""
     esc = _mundo_dinero(monkeypatch)
     c = TestClient(panel.app, follow_redirects=False, raise_server_exceptions=False)
     galleta = _cookies_hostiles()[nombre]
@@ -271,6 +273,7 @@ def test_una_cookie_hostil_no_tumba_ni_la_pagina_ni_el_guardado(monkeypatch, nom
     antes = list(esc.algo.papelera)
     r = _pedir(c, "POST", "/borrar", galleta, data={"movimiento_id": "7", "volver": "/movimientos"})
     assert r.status_code == 303 and esc.algo.papelera == antes + [7], (nombre, r.status_code)
+    assert not [x for x in caplog.records if "falló la puerta" in x.getMessage()], nombre
 
 
 ROTURAS = ["_recibos_de", "_recibo", "avisos_de", "_ruta_get", "_cookie_de", "_poner_cookie", "clave_de",
