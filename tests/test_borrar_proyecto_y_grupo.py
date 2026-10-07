@@ -808,3 +808,18 @@ def test_en_solo_ver_ni_los_controles_ni_los_avisos_de_borrar(base):
 def test_la_papelera_no_la_ve_ni_la_toca_quien_no_entro(base):
     _sembrar(base)
     assert cliente_de_sesion(None).get("/papelera", follow_redirects=False).status_code in (303, 401, 307)
+
+
+# ── Lo nuevo NO pasa por la pieza que escribe por JavaScript ──────────────
+
+def test_los_formularios_de_borrar_y_restaurar_no_son_form_marcar_ni_hay_guion_en_la_papelera():
+    """`marcarSinSaltar` (`_marcar_sin_saltar.html`) es la ÚNICA excepción a las prohibiciones del
+    guion: solo engancha `form.marcar`. Los formularios de borrar y de restaurar (de las plantillas
+    reales) son envíos normales —el servidor decide qué se ve—, y la Papelera no trae ningún guion."""
+    for nombre in ("proyectos.html", "papelera.html"):
+        texto = (_ROOT / "web" / "plantillas" / nombre).read_text(encoding="utf-8")
+        hallados = [e for e, _ in re.findall(r"<form\b([^>]*)>(.*?)</form>", texto, re.S)
+                    if re.search(r'action="[^"]*/(?:borrar|restaurar)"', e)]
+        assert len(hallados) >= (2 if nombre == "proyectos.html" else 2), (nombre, hallados)
+        assert not [e for e in hallados if re.search(r'\bclass="[^"]*\bmarcar\b', e)], (nombre, hallados)
+    assert "<script" not in (_ROOT / "web" / "plantillas" / "papelera.html").read_text(encoding="utf-8")
