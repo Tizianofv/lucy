@@ -38,24 +38,50 @@ además escoge el proyecto 5 en pantalla. Sin recibo se quita el aviso pero su
 valor se lee como el parámetro de navegación que declara (`p`), para que una
 recarga siga en el mismo proyecto (solo si el valor es un id: dígitos).
 
+LO QUE LA RUTA NO DECIDIÓ NO SE FIRMA NI VIAJA. Una redirección puede traer parámetros
+de aviso que la ruta no puso: el destino que llega en un campo del formulario
+(`volver`, en `/categorias`, `/efectivo` y `/borrar`), una cabecera, la propia
+dirección del POST. Firmar «lo que haya en el `Location`» amparaba un aviso heredado de
+otra página o escrito por la persona. Por eso, al salir, la puerta QUITA del `Location`
+todo parámetro de aviso que aparezca DENTRO de un valor que la petición trajo (un
+campo del formulario, la dirección, una cabecera; menos `Referer` y `Cookie`) y firma solo
+lo que queda. Un campo que se llama como un aviso (`id=1` al restaurar) no cuenta: es el
+argumento de la acción. Que una ruta lo repita como aviso lo vigila la prueba que recorre
+todas las rutas que redirigen. Es la
+misma puerta para todas las rutas, hoy y mañana. Además `/movimientos` ya no pinta los
+avisos en el `volver` de sus formularios (`consulta_sin_avisos`).
+
+LA PUERTA NUNCA TUMBA NADA. Dentro de la puerta ninguna excepción llega a la persona:
+al entrar (GET), si algo falla se quitan TODOS los avisos de la petición (falla hacia
+«no se dice nada», nunca hacia «se dice algo falso»); al salir, si algo falla la
+respuesta sale tal cual la dio la ruta, sin recibo (lo que ya se guardó sigue guardado
+y sin error). Una cookie hostil (gigante, con dígitos que no son de ASCII, con números
+que `int()` no acepta) se descarta antes de usarse.
+
 FRONTERA (lo que esta puerta NO ve): una ruta que llame a su función a mano en
 vez de pasar por la aplicación (las pruebas lo hacen) no pasa por la puerta; solo
 las respuestas de un método que no sea GET dejan recibo (una ruta GET que redirija
-a una dirección con avisos no lo deja; hoy ninguna lo hace); un
-aviso que viaje por otro canal que un parámetro del GET (una cabecera, una
-cookie propia, el cuerpo de un POST que se pinta sin redirigir) no se declara
-aquí; el recibo se firma con lo que la ruta puso en SU redirección, así que una
-ruta que copie a su redirección un parámetro de aviso que vino del usuario le da
-recibo a un texto inventado (hoy ninguna lo hace: `volver` se arma con la
-petición ya limpia). Un parámetro mal marcado como navegación sale tal cual.
+a una dirección con avisos no lo deja; hoy ninguna lo hace); un aviso que viaje por
+otro canal que un parámetro del GET (una cabecera, una cookie propia, el cuerpo de
+un POST que se pinta sin redirigir) no se declara aquí; una ruta que copie a su
+redirección un aviso de la cabecera `Referer` (el navegador la manda sola, así que no
+puede contarse como «lo que trajo la petición»: taparía los avisos de verdad) le daría
+recibo a un aviso viejo (hoy ninguna lo hace; `tests/test_avisos_verdad.py` recorre todas
+las rutas que redirigen con un `Referer` hostil); un aviso de verdad idéntico, letra por
+letra, a uno que venía dentro de un valor de la petición se quita también (lado seguro: se
+pierde un aviso verdadero, nunca se dice uno falso); cuerpos de más de `LIMITE_DE_CUERPO` bytes no se
+revisan y por eso ninguna de sus redirecciones deja recibo. Un parámetro mal marcado
+como navegación sale tal cual.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
+import re
 import time
 from typing import Annotated, TypeVar
-from urllib.parse import parse_qsl, urlencode, urlsplit
+from urllib.parse import parse_qsl, unquote_plus, urlencode, urlsplit
 
 from fastapi import Query
 from starlette.requests import cookie_parser
@@ -64,6 +90,7 @@ from starlette.routing import Match
 import config
 
 T = TypeVar("T")
+log = logging.getLogger("lucy.avisos")
 
 # Las tres marcas. `json_schema_extra` es lo que FastAPI deja en
 # `route.dependant.query_params[i].field_info`; no cambia cómo la ruta recibe el
@@ -78,6 +105,9 @@ COOKIE = "lucy_aviso"
 VIDA_RECIBO = 120
 # Cuántos recibos conviven en la cookie (varias pestañas guardando a la vez).
 MAXIMO_DE_RECIBOS = 6
+# Lo más largo que se mira de una cookie de recibos y del cuerpo de un POST.
+LARGO_DE_COOKIE = 4096
+LIMITE_DE_CUERPO = 1_000_000
 
 
 def _firmar(texto: str) -> str:
@@ -101,9 +131,12 @@ def _recibo(clave: str, vence: int) -> str:
 def _recibos_de(valor: str | None, ahora: float) -> list[str]:
     """Los recibos de la cookie que todavía no vencieron (el resto se descarta)."""
     vivos = []
-    for r in (valor or "").split("~"):
+    if not valor or len(valor) > LARGO_DE_COOKIE or not valor.isascii():
+        return vivos                      # una cookie hostil no se usa: sin recibos
+    for r in valor.split("~"):
         vence, _, firma = r.partition(".")
-        if vence.isdigit() and firma and int(vence) >= ahora:
+        # solo dígitos ASCII y de un largo que un reloj puede tener (`int()` de miles de dígitos revienta)
+        if vence.isdigit() and len(vence) <= 12 and firma and int(vence) >= ahora:
             vivos.append(r)
     return vivos[-MAXIMO_DE_RECIBOS:]
 
@@ -163,6 +196,38 @@ def _poner_cookie(scope, recibos: list[str]) -> bytes:
     return "; ".join(partes).encode("latin-1")
 
 
+def consulta_sin_avisos(app, ruta: str, pares) -> list[tuple[str, str]]:
+    """Los parámetros de `pares` que NO son de aviso en `ruta` (para armar un enlace o un campo
+    oculto que vuelva a la misma pantalla sin heredar el aviso de esta visita)."""
+    try:
+        avisos = avisos_de(_ruta_get(app, ruta))
+        return [(k, v) for k, v in pares if k not in avisos]
+    except Exception:                      # una página no se cae por esto: sin parámetros, que es lo seguro
+        log.warning("Avisos: no se pudo limpiar la dirección de %s", ruta, exc_info=True)
+        return []
+
+
+def _valores_que_trajo_la_peticion(scope, cuerpo: bytes) -> list[str]:
+    """Cada VALOR que vino de fuera en un POST, ya decodificado: los de los campos del
+    formulario, los de la dirección y los de las cabeceras (menos `Referer`, que el navegador
+    manda solo con la dirección de la página anterior, y `Cookie`). Un formulario con partes
+    (`multipart`) se toma entero como un solo valor. Se miran los VALORES y no los nombres de
+    los campos: un campo que se llama como un aviso (`id=1` al restaurar) es el argumento de la
+    acción, y la ruta lo repite a propósito; lo que no puede repetir es un destino que otro
+    escribió, que lleva un aviso DENTRO de un valor (`volver=/movimientos?guardados=1`)."""
+    tipo = next((v.decode("latin-1").lower() for k, v in scope.get("headers", []) if k == b"content-type"), "")
+    texto = cuerpo.decode("utf-8", "replace")
+    valores = [texto] if "multipart" in tipo else [v for _, v in parse_qsl(texto, keep_blank_values=True)]
+    valores += [v for _, v in parse_qsl(scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)]
+    valores += [v.decode("latin-1") for k, v in scope.get("headers", []) if k not in (b"referer", b"cookie")]
+    return valores + [unquote_plus(v) for v in valores]       # y escrito dos veces codificado
+
+
+def _viene_de_fuera(k: str, v: str, valores: list[str]) -> bool:
+    patron = re.compile(r"(?<![\w%])" + re.escape(f"{k}={v}") + r"(?![\w%])")
+    return any(patron.search(x) for x in valores)
+
+
 class PuertaDeAvisos:
     """Middleware ASGI: ver el texto del módulo."""
 
@@ -173,13 +238,44 @@ class PuertaDeAvisos:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         aplicacion = scope.get("app")
-        if scope["method"] == "GET" and aplicacion is not None:
-            scope, send = self._al_entrar(aplicacion, scope, send)
-        elif aplicacion is not None:
-            send = self._al_salir(aplicacion, scope, send)
+        if aplicacion is None:
+            return await self.app(scope, receive, send)
+        if scope["method"] == "GET":
+            try:
+                scope, send = self._al_entrar(aplicacion, scope, send)
+            except Exception:
+                log.warning("Avisos: falló la puerta al entrar; la petición sale sin avisos", exc_info=True)
+                scope = self._sin_ningun_aviso(aplicacion, scope)
+        else:
+            cuerpo = bytearray()
+            truncado = []
+
+            original = receive
+
+            async def recibir():
+                mensaje = await original()
+                if mensaje.get("type") == "http.request":
+                    trozo = mensaje.get("body", b"")
+                    if len(cuerpo) + len(trozo) <= LIMITE_DE_CUERPO:
+                        cuerpo.extend(trozo)
+                    else:
+                        truncado.append(True)
+                return mensaje
+            receive = recibir
+            send = self._al_salir(aplicacion, scope, send, cuerpo, truncado)
         return await self.app(scope, receive, send)
 
     # ── GET: sin recibo, los avisos no existen ─────────────────────────────
+    def _sin_ningun_aviso(self, aplicacion, scope):
+        """Lo que se hace si la puerta falla al entrar: la petición llega SIN avisos (y, si ni
+        eso se puede calcular, sin dirección)."""
+        try:
+            pares = parse_qsl(scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True)
+            limpios = consulta_sin_avisos(aplicacion, scope["path"], pares)
+            return dict(scope, query_string=urlencode(limpios).encode("latin-1"))
+        except Exception:
+            return dict(scope, query_string=b"")
+
     def _al_entrar(self, aplicacion, scope, send):
         ruta = _ruta_get(aplicacion, scope["path"])
         avisos = avisos_de(ruta)
@@ -193,19 +289,24 @@ class PuertaDeAvisos:
         recibos = _recibos_de(_cookie_de(scope), ahora)
         clave = clave_de(scope["path"], pares, avisos)
         for r in recibos:
-            vence = r.partition(".")[0]
-            if hmac.compare_digest(r, _recibo(clave, int(vence))):
-                # Recibo bueno: pasa tal cual, y se gasta.
-                restantes = [x for x in recibos if x != r]
+            vence = int(r.partition(".")[0])
+            if hmac.compare_digest(r.encode("ascii"), _recibo(clave, vence).encode("ascii")):
+                # Recibo bueno: pasa tal cual, y se gasta UNO (dos iguales en el mismo segundo,
+                # de dos pestañas, son dos avisos: cada uno se gasta una vez).
+                restantes = list(recibos)
+                restantes.remove(r)
 
                 async def enviar(mensaje, _s=send, _rest=restantes):
                     if mensaje["type"] == "http.response.start":
                         # `no-store`: «atrás» no resucita del caché del navegador una página con un
                         # aviso que ya se gastó; vuelve a pedirla, y sin recibo sale sin aviso.
-                        mensaje = dict(mensaje, headers=[
-                            *[(k, v) for k, v in mensaje.get("headers", []) if k.lower() != b"cache-control"],
-                            (b"cache-control", b"no-store"),
-                            (b"set-cookie", _poner_cookie(scope, _rest))])
+                        cabeceras = [(k, v) for k, v in mensaje.get("headers", []) if k.lower() != b"cache-control"]
+                        cabeceras.append((b"cache-control", b"no-store"))
+                        try:
+                            cabeceras.append((b"set-cookie", _poner_cookie(scope, _rest)))
+                        except Exception:
+                            log.warning("Avisos: no se pudo gastar el recibo en la cookie", exc_info=True)
+                        mensaje = dict(mensaje, headers=cabeceras)
                     await _s(mensaje)
                 return scope, enviar
         # Sin recibo: la petición llega sin los avisos (y los que además
@@ -220,14 +321,18 @@ class PuertaDeAvisos:
         return dict(scope, query_string=urlencode(limpios).encode("latin-1")), send
 
     # ── POST (y cualquier otro): la redirección con aviso deja su recibo ───
-    def _al_salir(self, aplicacion, scope, send):
+    def _al_salir(self, aplicacion, scope, send, cuerpo, truncado):
         async def enviar(mensaje):
             if mensaje["type"] == "http.response.start" and 300 <= mensaje["status"] < 400:
-                mensaje = self._con_recibo(aplicacion, scope, mensaje)
+                try:
+                    mensaje = self._con_recibo(aplicacion, scope, mensaje, bytes(cuerpo), bool(truncado))
+                except Exception:
+                    # lo que la ruta ya hizo, hecho está: la respuesta sale como la dio, sin recibo
+                    log.warning("Avisos: falló la puerta al salir; la respuesta sale sin recibo", exc_info=True)
             await send(mensaje)
         return enviar
 
-    def _con_recibo(self, aplicacion, scope, mensaje):
+    def _con_recibo(self, aplicacion, scope, mensaje, cuerpo, truncado):
         destino = next((v.decode("latin-1") for k, v in mensaje.get("headers", [])
                         if k.lower() == b"location"), None)
         if not destino:
@@ -235,15 +340,31 @@ class PuertaDeAvisos:
         partes = urlsplit(destino)
         if partes.scheme or partes.netloc or not partes.path.startswith("/"):
             return mensaje              # solo direcciones de este mismo sitio
-        ruta = _ruta_get(aplicacion, partes.path)
-        avisos = avisos_de(ruta)
+        avisos = avisos_de(_ruta_get(aplicacion, partes.path))
         pares = parse_qsl(partes.query, keep_blank_values=True)
         if not any(k in avisos for k, _ in pares):
             return mensaje
+        # Lo que la petición trajo no es de esta acción: se quita del destino y no se firma.
+        texto = _valores_que_trajo_la_peticion(scope, cuerpo)
+        quedan, quitado = [], False
+        for segmento in partes.query.split("&"):
+            par = parse_qsl(segmento, keep_blank_values=True)
+            if par and par[0][0] in avisos and (truncado or _viene_de_fuera(par[0][0], par[0][1], texto)):
+                quitado = True
+                continue
+            quedan.append(segmento)
+        headers = mensaje.get("headers", [])
+        if quitado:
+            nuevo = partes.path + ("?" + "&".join(quedan) if quedan else "") + (
+                "#" + partes.fragment if partes.fragment else "")
+            headers = [(k, nuevo.encode("latin-1") if k.lower() == b"location" else v) for k, v in headers]
+            pares = parse_qsl("&".join(quedan), keep_blank_values=True)
+            if not any(k in avisos for k, _ in pares):
+                return dict(mensaje, headers=headers)
         ahora = time.time()
         vence = int(ahora) + VIDA_RECIBO
         recibos = _recibos_de(_cookie_de(scope), ahora) + [
             _recibo(clave_de(partes.path, pares, avisos), vence)]
         return dict(mensaje, headers=[
-            *mensaje.get("headers", []),
+            *headers,
             (b"set-cookie", _poner_cookie(scope, recibos[-MAXIMO_DE_RECIBOS:]))])

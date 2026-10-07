@@ -43,7 +43,7 @@ import asyncio
 import logging
 import re
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -58,6 +58,7 @@ import db.db as db
 import noco_lectura
 import web.auth as auth
 import web.menu as _menu
+import web.avisos as avisos_mod
 from web.avisos import Aviso, AvisoQueElige, Navegacion, PuertaDeAvisos
 from acciones import crud
 from cerebro.bancos.categorias import (CATEGORIAS, NO_SUMAN,
@@ -677,6 +678,17 @@ async def categorias(request: Request):
                             status_code=303)
 
 
+def _volver_sin_avisos(request: Request) -> str:
+    """La dirección de esta pantalla para el campo oculto `volver`, sin los avisos de ESTA visita (un
+    «Guardado 1» no se hereda a la próxima acción). Si limpiarla falla, es solo la ruta: la página no se cae."""
+    try:
+        q = avisos_mod.consulta_sin_avisos(request.app, request.url.path, list(request.query_params.multi_items()))
+        return str(request.url.path) + ("?" + urlencode(q) if q else "")
+    except Exception:
+        log.warning("Panel: no se pudo armar el volver de %s", request.url.path, exc_info=True)
+        return str(request.url.path)
+
+
 @app.get("/movimientos", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_SIEMPRE)
 async def movimientos(request: Request, desde: Navegacion[str] = "",
@@ -715,8 +727,8 @@ async def movimientos(request: Request, desde: Navegacion[str] = "",
          # acotada entre el piso y hoy. Los mismos dos valores que valida el
          # servidor, para que la pantalla no ofrezca lo que la ruta rechaza.
          "hoy": _hoy().isoformat(), "piso_fecha": PISO_FECHA.isoformat(),
-         "volver": str(request.url.path) + (
-             "?" + str(request.url.query) if request.url.query else "")})
+         # sin los avisos de ESTA visita: un «Guardado 1» no se hereda a la próxima acción
+         "volver": _volver_sin_avisos(request)})
 
 
 @app.post("/efectivo")

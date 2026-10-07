@@ -4039,10 +4039,13 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `tests/test_avisos_verdad.py` y `tests/_navegador.py` (nuevos) y +1 VIGILADO por `web/avisos.py`
     # (nuevo, lo que toca el SQL no pero sí lo que se lee de las rutas). Medida corriendo la prueba:
     # 139 en disco, 93 EXENTOS, 46 VIGILADOS.
-    assert medido == {"en disco": 139, "exentos": 93, "vigilados": 46}, (
+    # 7-oct-2026, segunda vuelta de `trabajo/avisos-verdad`: +1 en disco y +1 EXENTO por
+    # `tests/test_avisos_que_nadie_escribio.py` (nuevo); VIGILADOS sin cambio. Medida corriendo la
+    # prueba: 140 en disco, 94 EXENTOS, 46 VIGILADOS.
+    assert medido == {"en disco": 140, "exentos": 94, "vigilados": 46}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "7-oct-2026 (avisos-verdad) era {'en disco': 139, "
-        "'exentos': 93, 'vigilados': 46}. La aserción de fondo —cero "
+        "7-oct-2026 (avisos-verdad, segunda vuelta) era {'en disco': 140, "
+        "'exentos': 94, 'vigilados': 46}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "
