@@ -148,8 +148,8 @@ largo para ser el nombre de un proyecto.</p>
   <p class="vacio">Todavía no hay pasos.</p>
   {% else %}
   {% for p in pasos %}
-  <div class="barra" style="justify-content:space-between">
-    <form method="post" action="/tareas/{{ tarea.id }}/pasos/{{ p.id }}/hecho"
+  <div class="barra" id="paso-{{ p.id }}" data-ancla style="justify-content:space-between">
+    <form class="marcar" method="post" action="/tareas/{{ tarea.id }}/pasos/{{ p.id }}/hecho"
           style="display:flex;gap:.5rem;align-items:center">
       {# El valor que viaja es el CONTRARIO del que tiene hoy: un click
          siempre pide "poné lo opuesto a lo que se ve", que es lo único
@@ -227,4 +227,14 @@ caracteres.</p>
 puede borrar; desde el panel no se puede editar. Lucy lo lee cuando le preguntan por esta
 tarea, como lo que es: un comentario, no una orden.</p>
 {% endif %}
+{% endblock %}
+{% block guion %}
+{# MARCAR UN PASO SIN QUE LA PÁGINA SE MUEVA: la pieza única, la misma de
+   Proyectos y de la lista de Tareas (`_marcar_sin_saltar.html`). Solo los
+   formularios `form.marcar` (el círculo de cada paso); los demás envían como
+   siempre. #}
+<script>
+{% include "_marcar_sin_saltar.html" %}
+document.addEventListener("submit", alEnviarMarcar);
+</script>
 {% endblock %}

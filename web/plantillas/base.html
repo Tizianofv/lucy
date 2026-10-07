@@ -102,5 +102,6 @@
   <a href="/salud" class="{{ 'on' if activo=='salud' }}"
      data-tambien="la salud del sistema, si todo está andando bien">Salud</a>
 </nav></header>
-<main>{% block cuerpo %}{% endblock %}</main>
+<main data-region="cuerpo">{% block cuerpo %}{% endblock %}</main>
+{% block guion %}{% endblock %}
 </body></html>

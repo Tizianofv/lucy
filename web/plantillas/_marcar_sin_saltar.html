@@ -1,0 +1,97 @@
+{# LA PIEZA ÚNICA de «marcar o desmarcar sin que la página se mueva». La incluyen
+   (`{% include "_marcar_sin_saltar.html" %}`, dentro de su <script>) TODAS las
+   pantallas que marcan algo como hecho: Proyectos (`proyectos.html`), la lista
+   de Tareas (`tareas.html`) y el detalle de una tarea (`tarea_detalle.html`).
+   Una sola copia: si mañana se cambia, cambia para las tres, y
+   `tests/test_tareas_sin_saltar.py` exige que ninguna pantalla que marca
+   escriba su propia versión. #}
+/* MARCAR O DESMARCAR NO MUEVE LA PÁGINA. El formulario que marca (`form.marcar`)
+   se envía igual (el MISMO POST a la misma ruta, que escribe y contesta con la
+   misma redirección de siempre), pero sin dejar la página: el navegador sigue la
+   redirección y baja la página que el servidor decidió mostrar (la misma de
+   antes, con sus mismos avisos y sin lo que la persona tenía abierto), y con ELLA
+   se cambian las regiones de la pantalla (`data-region`: en Proyectos la columna
+   de la izquierda y el centro, en las pantallas de Tareas el cuerpo). No hay un
+   segundo pedido ni se calcula nada aquí: contadores, dónde queda la tarea y el
+   aviso son los de siempre. Lo único que se guarda y se devuelve es el
+   desplazamiento de cada región y de la ventana, y la fila de referencia
+   (`data-ancla`, la primera que se veía arriba, sin contar la tocada ni las
+   marcadas) vuelve al mismo sitio de la pantalla. Si el POST ni llega o el
+   servidor contesta un error, se envía el formulario de siempre y se ve lo que
+   diga el servidor; si el POST contestó bien pero la página no se puede poner
+   aquí (ya se guardó), se va a esa misma página con un enlace, SIN reenviar el
+   POST: nunca queda una tarea dibujada como hecha sin que lo esté, ni un error
+   sobre algo que sí se guardó. */
+function marcarSinSaltar(form) {
+  var boton = form.querySelector("button");
+  if (boton) boton.disabled = true;
+  var normal = function () { if (boton) boton.disabled = false; form.submit(); };
+  var irA = function (url) { var a = document.createElement("a"); a.href = url; a.click(); };
+  var pintar = function (url, texto) {
+    var nuevo = new DOMParser().parseFromString(texto, "text/html");
+    var viejas = document.querySelectorAll("[data-region]"), nuevas = nuevo.querySelectorAll("[data-region]");
+    if (!viejas.length || nuevas.length !== viejas.length) throw new Error("no es esta pantalla");
+    var pares = [], i, j, hallada;
+    for (i = 0; i < viejas.length; i++) {
+      hallada = null;
+      for (j = 0; j < nuevas.length; j++) {
+        if (nuevas[j].getAttribute("data-region") === viejas[i].getAttribute("data-region")) hallada = nuevas[j];
+      }
+      if (!hallada) throw new Error("no es esta pantalla");
+      pares.push({vieja: viejas[i], nueva: hallada, arriba: viejas[i].scrollTop});
+    }
+    var y = window.pageYOffset, x = window.pageXOffset;
+    /* El punto de referencia: la primera fila (que no sea la tocada ni una marcada
+       para guardar) que se ve arriba de lo que se ve (en pantalla angosta el centro
+       empieza muy arriba de la ventana); al final se deja exactamente donde estaba
+       (el aviso de arriba y la fila que se va empujarían todo lo demás). */
+    var tocada = form.closest("[data-ancla]"), filas = document.querySelectorAll("[data-ancla][id]");
+    var ancla = null, anclaY = 0, f, rf, region, tope;
+    for (f = 0; f < filas.length && !ancla; f++) {
+      if (filas[f] === tocada || filas[f].querySelector("input:checked:not(:disabled)")) continue;
+      region = filas[f].closest("[data-region]");
+      tope = Math.max(region ? region.getBoundingClientRect().top : 0, 0);
+      rf = filas[f].getBoundingClientRect();
+      if (rf.height > 0 && rf.bottom > tope + 4) { ancla = filas[f].id; anclaY = rf.top; }
+    }
+    for (i = 0; i < pares.length; i++) {
+      pares[i].puesta = document.importNode(pares[i].nueva, true);
+      pares[i].vieja.replaceWith(pares[i].puesta);
+      pares[i].puesta.scrollTop = pares[i].arriba;
+    }
+    window.scrollTo(x, y);
+    var puesta = ancla && document.getElementById(ancla);
+    if (puesta && puesta.getBoundingClientRect().height > 0) {
+      var corre = puesta.getBoundingClientRect().top - anclaY;
+      var suya = puesta.closest("[data-region]");
+      if (suya && suya.scrollHeight > suya.clientHeight) suya.scrollTop += corre;   // pantalla ancha: la región tiene su desplazamiento
+      else window.scrollTo(window.pageXOffset, window.pageYOffset + corre);         // si no, es la ventana
+    }
+    var donde = new URL(url);
+    history.replaceState(null, "", donde.pathname + donde.search);
+  };
+  fetch(form.action, {method: "POST", body: new URLSearchParams(new FormData(form)), credentials: "same-origin"})
+    .then(function (r) {
+      if (!r.ok) throw new Error("POST " + r.status);
+      return r.text().then(function (texto) {
+        try { pintar(r.url, texto); } catch (e) { irA(r.url); }
+      });
+    })
+    .catch(normal);
+}
+/* El oyente de «enviar» de las pantallas que marcan: lo llama el de Proyectos
+   (que tiene más cosas que atender) y lo registra tal cual el de las pantallas
+   de Tareas. Devuelve si se hizo cargo; sin lo que hace falta en el navegador
+   (`fetch`, `URLSearchParams`, `DOMParser`) no se hace cargo y el envío es el de
+   siempre. Un formulario ya enviado no se vuelve a enviar mientras se espera. */
+function alEnviarMarcar(e) {
+  var form = e.target;
+  if (!form || !form.dataset || !form.classList || !form.classList.contains("marcar")) return false;
+  if (typeof window === "undefined" || !window.fetch || !window.URLSearchParams || !window.DOMParser) return false;
+  e.preventDefault();
+  if (form.dataset.enviado === undefined) {
+    form.dataset.enviado = "";
+    marcarSinSaltar(form);
+  }
+  return true;
+}

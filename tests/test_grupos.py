@@ -246,7 +246,7 @@ def _avisos(html: str) -> list[str]:
 
 
 def _lista(html: str) -> str:
-    return html.split("<aside>", 1)[1].split("</aside>", 1)[0]
+    return html.split('<aside data-region="izquierda">', 1)[1].split("</aside>", 1)[0]
 
 
 def test_la_pagina_ofrece_nuevo_grupo_y_crear_lo_pinta_al_final_con_su_aviso(base):
@@ -365,7 +365,7 @@ def test_lo_que_el_aviso_dice_es_un_estado_comprobado(base):
 
 def test_el_nombre_en_un_aviso_se_escapa(base):
     html = ver(base, hecho="grupo_quitado", grupo="<script>x</script>")
-    assert "<script>x" not in html.split("<main>", 1)[1].split("</main>", 1)[0]
+    assert "<script>x" not in html.split('<main data-region="centro">', 1)[1].split("</main>", 1)[0]
 
 
 def test_con_un_filtro_de_busqueda_no_se_ofrece_agregar_ni_quitar(base):

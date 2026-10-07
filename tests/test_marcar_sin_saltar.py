@@ -7,7 +7,9 @@ contestaba 303 a la página entera con `#tarea-N`, y el navegador la cargaba de 
 el centro (`.envoltura > main`, con su propio desplazamiento) y la ventana quedaban
 donde los dejara el ancla, no donde estaba la persona.
 
-EL ARREGLO: el guion de la página (`marcarSinSaltar` en `proyectos.html`) envía EL
+EL ARREGLO: el guion de la página (`marcarSinSaltar`, hoy en la pieza única
+`_marcar_sin_saltar.html` que también usan las pantallas de Tareas; ver
+`tests/test_tareas_sin_saltar.py`) envía EL
 MISMO formulario (mismo POST, misma ruta). El navegador sigue la redirección del
 servidor y baja la página que el servidor decidió mostrar (la de antes, con sus
 avisos y sin los estados viejos de la URL); con ESA página, sin pedir nada más, se
@@ -208,20 +210,23 @@ var modo = "ok";
 var vivos = {};
 function nodo(rol, y, desde) {
   return {rol: rol, desde: desde, scrollTop: y, scrollHeight: 3000, clientHeight: 700,
+    getAttribute: function (a) { return a === "data-region" ? rol : null; },
     querySelector: function () { return null; }, querySelectorAll: function () { return []; },
+    closest: function () { return null; },
     getBoundingClientRect: function () { return {top: 0, bottom: 0, height: 0}; },
-    replaceWith: function (n) { vivos[rol] = n; }};
+    replaceWith: function (n) { vivos[rol === "izquierda" ? "aside" : "main"] = n; }};
 }
-vivos.aside = nodo("aside", 300, "VIEJA"); vivos.main = nodo("main", 1200, "VIEJA");
-document.querySelector = function (s) { return s.indexOf("aside") >= 0 ? vivos.aside : (s.indexOf("main") >= 0 ? vivos.main : null); };
-document.querySelectorAll = function () { return []; };
+vivos.aside = nodo("izquierda", 300, "VIEJA"); vivos.main = nodo("centro", 1200, "VIEJA");
+document.querySelector = function () { return null; };
+document.querySelectorAll = function (s) { return s === "[data-region]" ? [vivos.aside, vivos.main] : []; };
+document.getElementById = function () { return null; };
 document.importNode = function (n) { if (modo === "importar-falla") throw new Error("x"); return n; };
 document.createElement = function (t) { return {tag: t, click: function () { llamadas.ir.push(this.href); }}; };
 function DOMParser() {}
 DOMParser.prototype.parseFromString = function (texto) {
-  return {querySelector: function (s) {
-    if (modo === "no-es-proyectos") return null;
-    return s.indexOf("aside") >= 0 ? nodo("aside", 0, texto) : nodo("main", 0, texto); }}; };
+  return {querySelectorAll: function (s) {
+    if (modo === "no-es-proyectos" || s !== "[data-region]") return [];
+    return [nodo("izquierda", 0, texto), nodo("centro", 0, texto)]; }}; };
 var history = {replaceState: function (a, b, u) { llamadas.replace.push(u); }};
 var fetch = function (url, op) {
   if (op && op.method === "POST") {

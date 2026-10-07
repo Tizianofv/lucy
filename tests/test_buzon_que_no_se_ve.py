@@ -4021,10 +4021,15 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # EXENTO por `tests/test_grupos.py` (nuevo); VIGILADOS sin cambio: se tocaron
     # `db/db.py` y `web/app.py`, ya vigilados. Medida corriendo la prueba: 131 en
     # disco, 86 EXENTOS, 45 VIGILADOS.
-    assert medido == {"en disco": 131, "exentos": 86, "vigilados": 45}, (
+    # 7-oct-2026, rama `trabajo/tareas-sin-saltar` (marcar sin saltar en las
+    # pantallas de Tareas): +2 en disco y +2 EXENTOS por
+    # `tests/test_tareas_sin_saltar.py` y `tests/_tareas_de_prueba.py` (nuevos);
+    # VIGILADOS sin cambio: no se tocó ningún `.py` vigilado. Medida corriendo la
+    # prueba: 133 en disco, 88 EXENTOS, 45 VIGILADOS.
+    assert medido == {"en disco": 133, "exentos": 88, "vigilados": 45}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "6-oct-2026 (grupos) era {'en disco': 131, "
-        "'exentos': 86, 'vigilados': 45}. La aserción de fondo —cero "
+        "7-oct-2026 (tareas sin saltar) era {'en disco': 133, "
+        "'exentos': 88, 'vigilados': 45}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

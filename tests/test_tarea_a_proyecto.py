@@ -223,7 +223,7 @@ def test_el_selector_va_por_grupo_en_el_orden_de_la_izquierda_y_por_nombre_dentr
     f = _formulario(html, 30)
     opciones = re.findall(r'<option value="(\d+)">([^<]*)</option>', f)
     izquierda = [x for x in re.findall(r'<div class="grupo gc" data-g="([^"]*)"',
-                                       html.split("<aside>", 1)[1].split("</aside>", 1)[0]) if x != "sin-grupo"]
+                                       html.split('<aside data-region="izquierda">', 1)[1].split("</aside>", 1)[0]) if x != "sin-grupo"]
     nombres = {r[0].lower(): r[0] for r in ms.con.execute("SELECT clave FROM areas")}
     orden_de_grupos = [nombres[x] for x in izquierda]
     textos = [t for _, t in opciones]

@@ -179,7 +179,7 @@ def ver(mundo, **consulta) -> str:
 def titulo_de(html: str):
     """El texto del título (`<h1>`) de la página, o None si no hay. El título
     lleva atributos (`data-dbl`, `title`): se lee el contenido, no la etiqueta."""
-    m = re.search(r"<h1[^>]*>(.*?)</h1>", html.split("<main>", 1)[-1], re.S)
+    m = re.search(r"<h1[^>]*>(.*?)</h1>", html.split('<main data-region="centro">', 1)[-1], re.S)
     return m.group(1) if m else None
 
 
@@ -737,7 +737,7 @@ def test_el_buscador_esconde_los_grupos_vacios_y_los_apartados_de_sueltas(mundo)
     mundo.proyecto(1, "Uno", area="CDS")
     mundo.tarea(10, "suelta", area="CDS")
     html = ver(mundo, q="uno")
-    lista = html.split("<aside>", 1)[1].split("</aside>", 1)[0]
+    lista = html.split('<aside data-region="izquierda">', 1)[1].split("</aside>", 1)[0]
     assert "ACD" not in lista and "Tareas sin proyecto" not in lista
     assert "Quitar el filtro" in html
 

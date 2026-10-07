@@ -217,7 +217,7 @@ def test_el_formulario_de_proyecto_nuevo_pide_nombre_y_responsable_y_el_cliente_
 def test_cada_grupo_ofrece_su_boton_de_proyecto_nuevo_y_sin_grupo_no(mundo):
     mundo.proyecto(1, "Sin grupo", area=None)
     html = ver(mundo)
-    lista = html.split("<aside>", 1)[1].split("</aside>", 1)[0]
+    lista = html.split('<aside data-region="izquierda">', 1)[1].split("</aside>", 1)[0]
     for grupo in ("CDS", "ACD", "IA"):
         assert (f'<a class="nuevo-proy mas" href="/proyectos?nuevo={grupo}" aria-label="Proyecto nuevo en {grupo}" '
                 f'title="Proyecto nuevo en {grupo}">+</a>') in lista
@@ -225,7 +225,7 @@ def test_cada_grupo_ofrece_su_boton_de_proyecto_nuevo_y_sin_grupo_no(mundo):
     # La × de «quitar el grupo» (6-oct-2026): una por grupo MENOS el fijo (IA), que deja su sitio reservado.
     assert lista.count('<a class="quitar-grupo"') == 2 and 'href="/proyectos?quitar_grupo=IA"' not in lista
     assert lista.count('<span class="quitar-grupo" aria-hidden="true"') == 1
-    assert 'class="nuevo-proy' not in ver(mundo, q="sin").split("<aside>", 1)[1].split("</aside>", 1)[0]
+    assert 'class="nuevo-proy' not in ver(mundo, q="sin").split('<aside data-region="izquierda">', 1)[1].split("</aside>", 1)[0]
 
 
 def test_un_grupo_que_no_existe_no_abre_el_formulario(mundo):

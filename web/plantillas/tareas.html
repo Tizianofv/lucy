@@ -135,7 +135,7 @@ aviso de Telegram que ya sonó.</p>
    formulario por fila, cerrar una recargaba la página y se llevaba puesto todo
    lo demás que estuviera marcado sin enviar. Marcar diez y guardar una vez es
    la diferencia entre un panel que se usa y uno que no. #}
-<form method="post" action="/tareas">
+<form class="marcar" method="post" action="/tareas">
   {# El filtro que se está viendo, YA validado por el servidor al pintar, para
      que guardar vuelva a la misma vista. El servidor lo vuelve a validar. #}
   <input type="hidden" name="filtro" value="{{ filtro }}">
@@ -150,7 +150,7 @@ aviso de Telegram que ya sonó.</p>
   <tr><th style="width:2.5rem"></th><th>Tarea</th><th>Área</th><th>Vence</th>
       <th>Responsable</th><th>Estado</th></tr>
   {% for t in g.filas %}
-  <tr>
+  <tr id="tarea-{{ t.id }}" data-ancla>
     <td>
       {# `prev_` va en TODAS las filas, hecha o no: es lo que dice qué filas
          estaban en la pantalla cuando se pintó. Un checkbox sin marcar no
@@ -415,20 +415,31 @@ aviso de Telegram que ya sonó.</p>
   <div class="barra"><button>Guardar los cambios</button></div>
 </form>
 
+{% endif %}
+{% endblock %}
+{% block guion %}
 {# El contador es una comodidad, no un requisito: si el JS no corre, el
-   formulario funciona igual. Quien decide qué se guarda es el servidor. #}
+   formulario funciona igual. Quien decide qué se guarda es el servidor.
+
+   LOS OYENTES VAN EN EL DOCUMENTO, no en el formulario: al guardar, la página
+   cambia el cuerpo (`data-region="cuerpo"`, ver `_marcar_sin_saltar.html`) por
+   el que contesta el servidor, y un oyente pegado al formulario de antes se
+   iría con él. Por eso este guion vive FUERA de `<main>` (bloque `guion`): un
+   guion dentro del cuerpo cambiado no se volvería a correr. #}
 <script>
 (function () {
-  var f = document.querySelector('form[action="/tareas"]');
-  var c = document.getElementById('cuenta');
-  if (!f || !c) return;
   function contar() {
+    var f = document.querySelector('form[action="/tareas"]');
+    var c = document.getElementById('cuenta');
+    if (!f || !c) return;
     var n = 0;
     f.querySelectorAll('input[type=checkbox]:not([disabled])').forEach(
       function (b) { if (b.checked) n++; });
     c.textContent = n ? n + ' para cerrar' : '';
   }
-  f.addEventListener('change', contar);
+  document.addEventListener('change', function (e) {
+    if (e.target && e.target.closest && e.target.closest('form[action="/tareas"]')) contar();
+  });
   contar();
 })();
 {# LA TAREA DERIVADA (25-sep-2026): mostrar/esconder el renglón de captura,
@@ -438,10 +449,12 @@ aviso de Telegram que ya sonó.</p>
    se queda `hidden` para siempre y la pantalla funciona como antes de este
    encargo: marcar la casilla cierra la tarea sin crear nada. #}
 (function () {
-  var f = document.querySelector('form[action="/tareas"]');
-  if (!f) return;
-  f.addEventListener('change', function (e) {
-    var abre = e.target && e.target.dataset && e.target.dataset.abre;
+  function deLaLista(e) {
+    return e.target && e.target.closest && e.target.closest('form[action="/tareas"]');
+  }
+  document.addEventListener('change', function (e) {
+    if (!deLaLista(e)) return;
+    var abre = e.target.dataset && e.target.dataset.abre;
     if (!abre) return;
     var fila = document.getElementById(abre);
     if (!fila) return;
@@ -451,8 +464,9 @@ aviso de Telegram que ya sonó.</p>
       if (t) t.focus();
     }
   });
-  f.addEventListener('click', function (e) {
-    var abre = e.target && e.target.dataset && e.target.dataset.masDe;
+  document.addEventListener('click', function (e) {
+    if (!deLaLista(e)) return;
+    var abre = e.target.dataset && e.target.dataset.masDe;
     if (!abre) return;
     var fila = document.getElementById(abre);
     if (!fila) return;
@@ -466,6 +480,10 @@ aviso de Telegram que ya sonó.</p>
     if (!fila.querySelector('.renglon[hidden]')) e.target.hidden = true;
   });
 })();
+{# GUARDAR SIN QUE LA PÁGINA SE MUEVA: la pieza única, la misma de Proyectos y del
+   detalle de una tarea. Un solo oyente de «enviar»; el formulario de la lista
+   (`form.marcar`) manda el mismo POST de siempre. #}
+{% include "_marcar_sin_saltar.html" %}
+document.addEventListener("submit", alEnviarMarcar);
 </script>
-{% endif %}
 {% endblock %}
