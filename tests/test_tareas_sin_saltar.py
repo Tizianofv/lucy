@@ -444,3 +444,23 @@ def test_js_la_fila_de_referencia_vuelve_a_su_sitio(tareas, pantalla, region_con
         assert r["main"] == 1200 + 120 and r["ventana"] == [[0, 50]], r
     else:
         assert r["main"] == 1200 and r["ventana"] == [[0, 50], [0, 50 + 120]], r
+
+
+@hay_osascript
+def test_js_los_oyentes_de_la_lista_van_en_el_documento_y_siguen_vivos_tras_cambiar_el_cuerpo(tareas):
+    """Al guardar, el guion cambia el cuerpo de la página por el que contesta el
+    servidor, y un guion que viva DENTRO del cuerpo cambiado no se vuelve a correr:
+    por eso el de la lista vive fuera de `<main>` y sus oyentes de «cambiar» y de
+    clic están en el documento, no en el formulario de antes. Aquí el formulario NO
+    existe al cargar el guion (`document.querySelector` da nada) y marcar la casilla
+    igual abre el renglón de la tarea derivada."""
+    g = _scripts_de_tareas(tareas)["tareas"]
+    assert "<script" not in re.search(r'<main data-region="cuerpo">(.*?)</main>',
+                                      tareas.cliente.get("/tareas").text, re.S).group(1), "el guion quedó dentro del cuerpo"
+    r = _jxa(g, 'var fila = {hidden: true, querySelector: function () { return null; }};'
+                'document.getElementById = function (id) { return id === "derivada-3" ? fila : null; };'
+                'var casilla = {checked: true, dataset: {abre: "derivada-3"},'
+                ' closest: function () { return {}; }};'
+                'oyentes.change({target: casilla});'
+                'JSON.stringify({abierta: fila.hidden === false, cambio: typeof oyentes.change, clic: typeof oyentes.click})')
+    assert r == {"abierta": True, "cambio": "function", "clic": "function"}
