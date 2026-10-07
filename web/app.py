@@ -422,7 +422,7 @@ def _poner_sesion_de_la_casa(r, chat: int) -> None:
 
 @app.get("/entrar", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_ENTRADA)
-async def entrar(request: Request, t: str = ""):
+async def entrar(request: Request, t: Navegacion[str] = ""):
     """La puerta. El token del enlace mágico se cambia por una cookie de sesión.
 
     El token viaja en la URL y por eso vive 10 minutos; la cookie vive una
@@ -502,7 +502,7 @@ async def _canjear_boleto(codigo: str) -> tuple[str, int | None] | None:
 
 @app.get("/entrar-cds", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_ENTRADA)
-async def entrar_cds(request: Request, c: str = ""):
+async def entrar_cds(request: Request, c: Navegacion[str] = ""):
     """El boleto de la App se cambia por una cookie y se va a Proyectos. Ver el
     bloque de arriba."""
     def _no():
@@ -534,7 +534,7 @@ async def entrar_cds(request: Request, c: str = ""):
 
 @app.get("/", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_SIEMPRE)
-async def resumen(request: Request, mes: str = ""):
+async def resumen(request: Request, mes: Navegacion[str] = ""):
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     filas = await db.resumen_por_mes()
@@ -577,7 +577,7 @@ async def resumen(request: Request, mes: str = ""):
 
 @app.get("/sin-clasificar", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_SIEMPRE)
-async def cola(request: Request, guardados: int = 0):
+async def cola(request: Request, guardados: Aviso[int] = 0):
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     # El desplegable ofrece el VOCABULARIO COMPLETO, no las categorías ya
@@ -679,9 +679,12 @@ async def categorias(request: Request):
 
 @app.get("/movimientos", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_SIEMPRE)
-async def movimientos(request: Request, desde: str = "", hasta: str = "",
-                      tipo: str = "", categoria: str = "", banco: str = "",
-                      codigo: str = "", guardados: int = 0):
+async def movimientos(request: Request, desde: Navegacion[str] = "",
+                      hasta: Navegacion[str] = "", tipo: Navegacion[str] = "",
+                      categoria: Navegacion[str] = "", banco: Navegacion[str] = "",
+                      codigo: Navegacion[str] = "", guardados: Aviso[int] = 0,
+                      borrado: Aviso[str] = "", efectivo: Aviso[str] = "",
+                      error: Aviso[str] = ""):
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
 
@@ -807,8 +810,8 @@ async def restaurar(request: Request):
 
 @app.get("/papelera", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_SIEMPRE)
-async def papelera(request: Request, restaurado: int = 0, hecho: str = "", id: int = 0,
-                   error: str = ""):
+async def papelera(request: Request, restaurado: Aviso[int] = 0, hecho: Aviso[str] = "",
+                   id: Aviso[int] = 0, error: Aviso[str] = ""):
     """Lo borrado, con los días que le quedan.
 
     Existe para que "borrar" no dé miedo: sale de las listas al instante y se
@@ -862,10 +865,10 @@ async def restaurar_proyecto_o_tarea(request: Request):
 
 @app.get("/tareas", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_SIEMPRE)
-async def tareas(request: Request, guardadas: int = 0, creada: int = 0,
-                 asignadas: int = 0, movidas: int = 0, derivadas: int = 0,
-                 derivadas_ids: str = "", responsable: str = "",
-                 sin_cerrar: str = ""):
+async def tareas(request: Request, guardadas: Aviso[int] = 0, creada: Aviso[int] = 0,
+                 asignadas: Aviso[int] = 0, movidas: Aviso[int] = 0,
+                 derivadas: Aviso[int] = 0, derivadas_ids: Aviso[str] = "",
+                 responsable: Navegacion[str] = "", sin_cerrar: Aviso[str] = ""):
     """El panel de tareas: lo que hay que hacer, para las dos personas.
 
     UNA SOLA LISTA PARA LOS DOS, por decisión de Tiziano —"está bien que Rosi
@@ -1880,7 +1883,7 @@ async def logo_cds(request: Request):
 
 @app.get("/personas/buscar")
 @auth.puerta(auth.PUERTA_SIEMPRE)
-async def buscar_personas_en_noco(request: Request, q: str = ""):
+async def buscar_personas_en_noco(request: Request, q: Navegacion[str] = ""):
     """El buscador de personas de Noco, en JSON (Lucy 1.0, E3).
 
     Es la ÚNICA ruta del panel que contesta JSON, y existe para que el
@@ -2528,8 +2531,8 @@ async def guardar_tareas(request: Request):
 
 @app.get("/tareas/nueva", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_SIEMPRE)
-async def tarea_nueva(request: Request, error: str = "",
-                      responsable: str = "", proyecto: str = ""):
+async def tarea_nueva(request: Request, error: Aviso[str] = "",
+                      responsable: Navegacion[str] = "", proyecto: Navegacion[str] = ""):
     """El formulario para escribir una tarea a mano.
 
     POR QUÉ ES UNA PANTALLA APARTE Y NO UN SEGUNDO FORMULARIO EN /tareas, que
@@ -2797,10 +2800,10 @@ def _texto_de_comentario(crudo: str) -> str | None:
 
 @app.get("/tareas/{tid}", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_SIEMPRE)
-async def tarea_detalle(request: Request, tid: int, error: str = "",
-                        comentado: int = 0, borrado: int = 0,
-                        area_guardada: int = 0, primero_guardado: int = 0,
-                        paso_agregado: int = 0, paso_movido: int = 0):
+async def tarea_detalle(request: Request, tid: int, error: Aviso[str] = "",
+                        comentado: Aviso[int] = 0, borrado: Aviso[int] = 0,
+                        area_guardada: Aviso[int] = 0, primero_guardado: Aviso[int] = 0,
+                        paso_agregado: Aviso[int] = 0, paso_movido: Aviso[str] = ""):
     """Una tarea con sus comentarios, y el cuadro para escribir uno.
 
     VA EN SU PROPIA PANTALLA, a la que se entra tocando el título en /tareas.

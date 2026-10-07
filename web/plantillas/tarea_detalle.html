@@ -138,7 +138,7 @@ largo para ser el nombre de un proyecto.</p>
   {{ paso_agregado }} paso{{ 's' if paso_agregado > 1 }} agregado{{ 's' if paso_agregado > 1 }}.
 </p>
 {% endif %}
-{% if paso_movido == 0 %}<p class="aviso">Ese paso ya estaba en la punta.</p>{% endif %}
+{% if paso_movido == '0' %}<p class="aviso">Ese paso ya estaba en la punta.</p>{% endif %}
 {% if error == 'pasos' %}
 <p class="aviso">No se guardó: el paso ya no estaba, o el texto venía vacío.</p>
 {% endif %}

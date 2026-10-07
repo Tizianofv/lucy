@@ -29,9 +29,6 @@ QUÉ VIGILA ESTE ARCHIVO, y de dónde saca cada lista:
      valor, falsificado, redirección a otro sitio, banderas de la cookie, alias de navegación,
      tope de recibos, y un aviso inventado (rojo si no se declara; sin salir si se declara).
 
-ENTREGA EN DOS PARTES: esta es la primera (la puerta y la pantalla de Proyectos, donde se midió). Las demás
-pantallas se marcan en la segunda; mientras tanto el censo exige que SOLO las demás estén sin marcar.
-
 FRONTERA (lo que esto NO ve): rutas que no sean GET con parámetros; un aviso que viaje por
 otro canal que la dirección; que una ruta nueva con avisos tenga mundo de prueba aquí (si no
 lo tiene, `test_cada_pantalla_con_avisos_tiene_su_mundo` se pone roja); que un aviso dependa de
@@ -149,12 +146,68 @@ class Escenario:
 
 def _mundo_casa(pap):
     _sembrar(pap)
-    return Escenario("casa", _cliente(config.CHAT_ID_DUENO), {"/proyectos": "/proyectos"}, pap)
+    return Escenario("casa", _cliente(config.CHAT_ID_DUENO),
+                     {"/proyectos": "/proyectos", "/papelera": "/papelera"}, pap)
 
 
-@pytest.fixture(params=["casa"])
+def _mundo_tareas(monkeypatch):
+    TP.Mundo().instalar(monkeypatch)
+    monkeypatch.setattr(panel.crud, "_chat_del_nombre", crud._chat_del_nombre, raising=False)
+    c = Navegador(panel.app)
+    c.cookies.set(panel.COOKIE, TP.galleta())
+    return Escenario("tareas", c, {"/tareas": "/tareas", "/tareas/1": "/tareas/{tid}",
+                                   "/tareas/nueva": "/tareas/nueva"})
+
+
+class _DineroDeMentira:
+    """Lo que `/movimientos`, `/sin-clasificar` y los POST de dinero necesitan de la base."""
+
+    def __init__(self, monkeypatch):
+        self.puestas, self.efectivo, self.papelera = [], [], []
+        fila = {"id": 7, "fecha": "2026-08-04", "tipo": "gasto", "monto": Decimal("100"),
+                "moneda": "DOP", "contraparte": "X", "categoria": "Seguros",
+                "referencia": "x", "banco": "bhd"}
+
+        async def movs(*a, **k):
+            return [dict(fila)]
+
+        async def lista(*a, **k):
+            return ["Seguros"]
+
+        async def poner(mid, cat):
+            self.puestas.append((mid, cat))
+
+        async def olvidar(mid):
+            return None
+
+        async def efectivo(concepto, monto, categoria, fecha):
+            self.efectivo.append(concepto)
+            return 31
+
+        async def a_la_papelera(mid, motivo="x"):
+            self.papelera.append(mid)
+            return True
+
+        for n, f in (("movimientos_filtrados", movs), ("sin_clasificar", movs),
+                     ("categorias_usadas", lista), ("bancos_usados", lista),
+                     ("poner_categoria", poner), ("olvidar_categoria", olvidar),
+                     ("crear_gasto_en_efectivo", efectivo), ("a_la_papelera", a_la_papelera)):
+            monkeypatch.setattr(db, n, f)
+
+
+def _mundo_dinero(monkeypatch):
+    m = _DineroDeMentira(monkeypatch)
+    c = Navegador(panel.app)
+    c.cookies.set(panel.COOKIE, TP.galleta())
+    return Escenario("dinero", c, {"/movimientos": "/movimientos",
+                                   "/sin-clasificar": "/sin-clasificar"}, m)
+
+
+@pytest.fixture(params=["casa", "tareas", "dinero"])
 def esc(request, monkeypatch):
-    return _mundo_casa(request.getfixturevalue("pap"))
+    if request.param == "casa":
+        return _mundo_casa(request.getfixturevalue("pap"))
+    return {"tareas": _mundo_tareas, "dinero": _mundo_dinero}[request.param](monkeypatch)
 
 
 def _todas_las_pantallas_con_avisos():
@@ -165,13 +218,14 @@ def _todas_las_pantallas_con_avisos():
 # 1. El censo: todo parámetro de toda ruta GET está marcado
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_en_esta_entrega_solo_las_demas_pantallas_estan_sin_marcar():
-    """TRANSITORIA (primera de dos partes): todo parámetro de toda ruta GET que NO sea de `/proyectos` está
-    sin marcar, y los de `/proyectos` están todos marcados. La segunda parte marca el resto y reemplaza
-    esta prueba por la de «ninguno sin marca»."""
-    de_las_demas = {(r.path, n) for r in _rutas_get(panel.app) if r.path != "/proyectos" for n in parametros(r)}
-    assert set(avisos.parametros_sin_marca(panel.app)) == de_las_demas
-    assert de_las_demas and parametros(_ruta(panel.app, "/proyectos")), "la lectura no ve las rutas: ya no sirve"
+def test_todo_parametro_de_toda_ruta_get_esta_marcado_aviso_o_navegacion():
+    """Se lee de las rutas registradas de verdad (`route.dependant.query_params`), no de una lista:
+    un parámetro nuevo sin `Aviso[...]` ni `Navegacion[...]` pone roja esta prueba."""
+    assert avisos.parametros_sin_marca(panel.app) == []
+    # y la lectura ve de verdad las rutas con parámetros (no es un vacío)
+    rutas = {r.path for r in _rutas_get(panel.app) if parametros(r)}
+    assert {"/proyectos", "/tareas", "/tareas/{tid}", "/tareas/nueva", "/papelera", "/movimientos",
+            "/sin-clasificar"} <= rutas, rutas
 
 
 def test_el_censo_ve_un_parametro_sin_marca_y_uno_marcado_no_se_reporta():
@@ -193,11 +247,9 @@ def test_las_plantillas_solo_leen_parametros_que_alguna_ruta_declara():
     declarados = {n for r in _rutas_get(panel.app) for n in parametros(r)}
     leidos = {}
     for f in PLANTILLAS.glob("*.html"):
-        if f.name == "movimientos.html":        # transitoria: sus parámetros se declaran en la segunda parte
-            continue
         for m in re.finditer(r"query_params(?:\.get\(|\[)['\"](\w+)['\"]", f.read_text(encoding="utf-8")):
             leidos[(f.name, m.group(1))] = True
-    # (transitoria: en esta parte la única plantilla que lee la dirección a mano, `movimientos.html`, se salta)
+    assert leidos, "la búsqueda no vio ninguna lectura: ya no sirve"
     assert {k for k in leidos if k[1] not in declarados} == set(), leidos
     # y sin ninguna otra forma de leer la dirección en las plantillas
     for f in PLANTILLAS.glob("*.html"):
@@ -208,7 +260,11 @@ def test_las_plantillas_solo_leen_parametros_que_alguna_ruta_declara():
 def test_cada_pantalla_con_avisos_tiene_su_mundo():
     """Si mañana una pantalla nueva declara avisos y esta prueba no sabe armarle una base, no se
     queda sin vigilar en silencio: se pone roja."""
-    assert _todas_las_pantallas_con_avisos() == {"/proyectos"}
+    cubiertas = {tpl for nombre, f in (("casa", _mundo_casa), ("tareas", _mundo_tareas), ("dinero", _mundo_dinero))
+                 for tpl in {"casa": {"/proyectos", "/papelera"},
+                             "tareas": {"/tareas", "/tareas/{tid}", "/tareas/nueva"},
+                             "dinero": {"/movimientos", "/sin-clasificar"}}[nombre]}
+    assert _todas_las_pantallas_con_avisos() == cubiertas
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -333,7 +389,7 @@ def _sale_una_vez(c, accion, esperado: str, limpia: list[str]):
     assert [t for t in a_mano if t not in limpia] == [], ("sin recibo sale", destino, a_mano)
 
 
-def test_el_aviso_de_una_accion_hecha_sale_una_vez_en_proyectos(pap):
+def test_el_aviso_de_una_accion_hecha_sale_una_vez_en_proyectos_y_papelera(pap):
     esc = _mundo_casa(pap)
     c = esc.cliente
     limpia = textos(c.get("/proyectos?p=1").text)
@@ -344,6 +400,42 @@ def test_el_aviso_de_una_accion_hecha_sale_una_vez_en_proyectos(pap):
     # un rechazo
     _sale_una_vez(c, lambda: c.post("/proyectos/1/nombre", data={"nombre": ""}, follow_redirects=False),
                   "El nombre no puede quedar vacío", limpia)
+    # la Papelera: borrar de verdad y restaurar por la ruta
+    _corre(crud.borrar("proyectos", 2, "x", actor="panel"))
+    limpia_p = textos(c.get("/papelera").text)
+    _sale_una_vez(c, lambda: c.post("/papelera/restaurar", data={"tabla": "proyectos", "id": 2}, follow_redirects=False),
+                  "ya está de vuelta", limpia_p)
+    _sale_una_vez(c, lambda: c.post("/papelera/restaurar", data={"tabla": "tareas", "id": 9999}, follow_redirects=False),
+                  "no se restauró nada", limpia_p)
+
+
+def test_el_aviso_de_una_accion_hecha_sale_una_vez_en_tareas(monkeypatch):
+    esc = _mundo_tareas(monkeypatch)
+    c = esc.cliente
+    _sale_una_vez(c, lambda: c.post("/tareas", data={"filtro": "", "hecha_4": "1", "prev_4": "pendiente"},
+                                    follow_redirects=False), "Cerrada 1.", textos(c.get("/tareas").text))
+    _sale_una_vez(c, lambda: c.post("/tareas/1/pasos/900/hecho", data={"hecho": "1"}, follow_redirects=False),
+                  "No se guardó: el paso ya no estaba", textos(c.get("/tareas/1").text))
+    _sale_una_vez(c, lambda: c.post("/tareas/nueva", data={"titulo": ""}, follow_redirects=False),
+                  "Falta el título", textos(c.get("/tareas/nueva").text))
+
+
+def test_el_aviso_de_una_accion_hecha_sale_una_vez_en_dinero(monkeypatch):
+    esc = _mundo_dinero(monkeypatch)
+    c, m = esc.cliente, esc.algo
+    limpia = textos(c.get("/movimientos").text)
+    _sale_una_vez(c, lambda: c.post("/efectivo", data={"concepto": "café", "monto": "-5", "fecha": "2026-08-04",
+                                                       "volver": "/movimientos"}, follow_redirects=False),
+                  "No se guardó: el monto", limpia)
+    _sale_una_vez(c, lambda: c.post("/efectivo", data={"concepto": "café", "monto": "5", "fecha": "2026-08-04",
+                                                       "volver": "/movimientos"}, follow_redirects=False),
+                  "Gasto en efectivo guardado", limpia)
+    _sale_una_vez(c, lambda: c.post("/borrar", data={"movimiento_id": "7", "volver": "/movimientos"},
+                                    follow_redirects=False), "A la papelera", limpia)
+    assert m.efectivo == ["café"] and m.papelera == [7]
+    _sale_una_vez(c, lambda: c.post("/categorias", data={"cat_7": "Seguros", "prev_7": "", "volver": "/sin-clasificar"},
+                                    follow_redirects=False), "Guardado 1.", textos(c.get("/sin-clasificar").text))
+    assert m.puestas == [(7, "Seguros")]
 
 
 def test_proyectos_el_aviso_dice_el_estado_de_la_base_que_el_recibo_no_puede_cambiar(pap):
@@ -593,3 +685,19 @@ def test_la_sonda_a_mano_ve_un_aviso_nuevo_que_la_puerta_no_cubre():
     assert textos(c.get("/x/1?hecho=listo").text) != textos(c.get("/x/1").text)
     c = armar(True)
     assert textos(c.get("/x/1?hecho=listo").text) == textos(c.get("/x/1").text)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Un bug que esta medición encontró: un aviso que salía SIN parámetros
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_el_detalle_de_una_tarea_no_dice_que_un_paso_ya_estaba_en_la_punta_si_nadie_lo_movio(monkeypatch):
+    """Medido sobre `5948720`: `paso_movido` valía 0 por omisión y la plantilla comparaba `== 0`, así
+    que TODA página de tarea decía «Ese paso ya estaba en la punta.» sin que nadie moviera nada. Ahora
+    solo sale tras un `mover` de verdad que no cambió nada."""
+    esc = _mundo_tareas(monkeypatch)
+    assert not any("punta" in t for t in textos(esc.cliente.get("/tareas/1").text))
+    dar_recibo("/tareas/1", paso_movido="0")
+    assert any("punta" in t for t in textos(esc.cliente.get("/tareas/1?paso_movido=0").text))
+    dar_recibo("/tareas/1", paso_movido="1")
+    assert not any("punta" in t for t in textos(esc.cliente.get("/tareas/1?paso_movido=1").text))
