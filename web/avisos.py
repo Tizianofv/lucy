@@ -39,7 +39,9 @@ valor se lee como el parámetro de navegación que declara (`p`), para que una
 recarga siga en el mismo proyecto (solo si el valor es un id: dígitos).
 
 FRONTERA (lo que esta puerta NO ve): una ruta que llame a su función a mano en
-vez de pasar por la aplicación (las pruebas lo hacen) no pasa por la puerta; un
+vez de pasar por la aplicación (las pruebas lo hacen) no pasa por la puerta; solo
+las respuestas de un método que no sea GET dejan recibo (una ruta GET que redirija
+a una dirección con avisos no lo deja; hoy ninguna lo hace); un
 aviso que viaje por otro canal que un parámetro del GET (una cabecera, una
 cookie propia, el cuerpo de un POST que se pinta sin redirigir) no se declara
 aquí; el recibo se firma con lo que la ruta puso en SU redirección, así que una

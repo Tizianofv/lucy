@@ -43,7 +43,7 @@ from decimal import Decimal
 
 import pytest
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.testclient import TestClient
 
 import test_grupos as tg  # noqa: F401  (pone el entorno antes de importar `config`)
@@ -542,6 +542,7 @@ def test_el_recibo_de_un_post_hace_salir_el_aviso_una_sola_vez():
     r = c.post("/x/1/hacer", follow_redirects=False)
     assert r.status_code == 303 and "lucy_aviso=" in r.headers["set-cookie"]
     assert _dice(c.get(r.headers["location"])) == "hecho=listo cuenta=2"
+    assert c.cookies.get("lucy_aviso") is None                                       # el último recibo se tira
     assert _dice(c.get(r.headers["location"])) == "hecho= cuenta=0"                  # recargar
 
 
@@ -646,6 +647,21 @@ def test_un_parametro_que_tambien_escoge_conserva_esa_parte_sin_recibo():
     assert "p=5 creado=0" in sin.text                       # escoge, no afirma
     assert "p=0 creado=0" in c.get("/x/1").text
     assert "p=7 creado=0" in c.get("/x/1?creado=5&p=7").text    # lo que dice `p` manda
+    r = c.get("/x/1?creado=zzz")                            # un valor que no es un id no escoge nada
+    assert r.status_code == 200 and "p=0 creado=0" in r.text
+
+
+def test_la_puerta_no_estorba_lo_que_no_es_una_pagina_con_avisos():
+    """Ramas de seguridad de la puerta: una ruta que no existe, una redirección sin Location y el
+    arranque de la aplicación (lifespan) pasan sin que la puerta los rompa."""
+    app = _app_minima()
+
+    @app.post("/sin-location")
+    async def sin_location():
+        return Response(status_code=300)
+    with TestClient(app) as c:                               # corre el lifespan por la puerta
+        assert c.get("/no-existe?hecho=listo").status_code == 404
+        assert c.post("/sin-location", follow_redirects=False).status_code == 300
 
 
 def test_un_aviso_inventado_hoy_sin_marca_se_ve_en_el_censo_y_marcado_no_sale_a_mano():
