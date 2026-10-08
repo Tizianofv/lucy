@@ -956,6 +956,7 @@ def test_toda_ruta_post_de_proyectos_pide_sesion_y_escribe_por_una_puerta_con_ac
         "/proyectos/nuevo": {"db.crear_proyecto", "db.poner_cliente"},
         "/proyectos/{pid}/nombre": {"crud.editar"},
         "/proyectos/{pid}/descripcion": {"crud.editar"},      # 8-oct-2026: «De qué se trata»
+        "/proyectos/{pid}/fechas": {"crud.editar"},           # 8-oct-2026: inicio, entrega, «Termina cuando»
         "/proyectos/{pid}/area": {"crud.editar"},
         "/proyectos/{pid}/responsable": {"crud.editar"},
         "/proyectos/{pid}/estado": {"crud.editar"},
@@ -997,7 +998,8 @@ def _escritores_sql_de_proyectos() -> dict:
     RECORRER LOS `.py`. FRONTERA: un SQL armado al vuelo (los escritores
     genéricos `crud.editar`, `deshacer`) no se ve; esos los cubren las pruebas
     de las puertas (`tests/test_base_m2.py`)."""
-    columnas = ("nombre", "area", "estado", "responsable_chat_id", "descripcion")
+    columnas = ("nombre", "area", "estado", "responsable_chat_id", "descripcion",
+                "inicio", "entrega", "termina_cuando")
     salida = {c: set() for c in columnas}
     for archivo in _archivos_de_texto():
         if archivo.suffix != ".py":
@@ -1030,6 +1032,11 @@ def test_quien_escribe_cada_columna_del_proyecto_y_si_pasa_por_su_puerta():
     # `editar` y `perfil`) escribe por `crud.editar`, que arma su UPDATE al vuelo: ese lo declara y lo
     # ejerce `tests/test_descripcion_de_proyecto.py`.
     assert escritores["descripcion"] == {"convertir_tarea_en_proyecto"}
+    # Las fechas (parte 4, 8-oct-2026): `inicio` al crear lo escribe SOLO `db._con_su_inicio` (la llaman
+    # los tres sitios que insertan un proyecto; `tests/test_fechas_de_proyecto.py` lo exige); `entrega` y
+    # `termina_cuando` nacen NULL y el resto, por `crud.editar` (SQL al vuelo, que este censo no ve).
+    assert escritores["inicio"] == {"_con_su_inicio"}
+    assert escritores["entrega"] == set() and escritores["termina_cuando"] == set()
     # `borrar_grupo` (7-oct-2026) solo PONE el área en NULL en los proyectos del grupo
     # que se borra; no escribe un grupo que venga de afuera.
     assert escritores["area"] == {"borrar_grupo", "convertir_tarea_en_proyecto", "crear_proyecto"}
@@ -1478,7 +1485,7 @@ def _primera_habilitada(c):
 # vista -> (consulta, acciones POST exactas que tiene que tener, página = proyecto)
 # Las escrituras de la tarea (`/proyectos/tarea/...`, `/proyectos/{pid}/tareas`)
 # son de `tests/test_escrituras_tarea.py`; acá, solo las del proyecto.
-_SOLO_PROYECTO = re.compile(r"/proyectos/(nuevo|\d+/(nombre|descripcion|area|responsable|estado|cliente|personas))")
+_SOLO_PROYECTO = re.compile(r"/proyectos/(nuevo|\d+/(nombre|descripcion|fechas|area|responsable|estado|cliente|personas))")
 
 
 def _del_proyecto(formularios):
@@ -1511,6 +1518,10 @@ _VISTAS = {
     "editar_descripcion": ({"p": 2, "editar": "descripcion"},
                            ["/proyectos/2/nombre", "/proyectos/2/descripcion", "/proyectos/2/responsable",
                             "/proyectos/2/cliente", "/proyectos/2/personas"] + _V),
+    # Las fechas (parte 4, 8-oct-2026): el formulario solo se dibuja con `?editar=fechas`.
+    "editar_fechas": ({"p": 2, "editar": "fechas"},
+                      ["/proyectos/2/nombre", "/proyectos/2/fechas", "/proyectos/2/responsable",
+                       "/proyectos/2/cliente", "/proyectos/2/personas"] + _V),
     # La página aparte (`?nuevo=`) es un formulario MÁS, el de siempre.
     "nuevo": ({"nuevo": "CDS"}, ["/proyectos/nuevo"] + _V),
 }
@@ -1582,6 +1593,12 @@ def test_cada_formulario_enviado_como_el_navegador_escribe_en_el_proyecto_de_la_
             assert fila["descripcion"] == "Escrito en descripcion", (vista, fila)
             assert {k: v for k, v in fila.items() if k != "descripcion"} == {
                 k: v for k, v in antes[pid].items() if k != "descripcion"}, (vista, "tocó otra columna")
+        elif clase == "fechas-editar":
+            assert (fila["inicio"], fila["entrega"], fila["termina_cuando"]) == (
+                FECHA_ESCRITA, FECHA_ESCRITA, "Escrito en termina_cuando"), (vista, fila)
+            assert {k: v for k, v in fila.items() if k not in ("inicio", "entrega", "termina_cuando")} == {
+                k: v for k, v in antes[pid].items() if k not in ("inicio", "entrega", "termina_cuando")}, (
+                vista, "tocó otra columna")
         elif clase == "resp":
             elegido = _otra_opcion(next(c for c in form["campos"] if c["tipo"] == "select"))
             assert fila["responsable_chat_id"] == nombres[_valor(elegido)], (vista, fila)

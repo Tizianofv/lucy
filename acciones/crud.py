@@ -1437,6 +1437,13 @@ PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale,
                         # texto limpio y de a lo sumo `db.LARGO_DESCRIPCION_PROYECTO`,
                         # por el panel, por Telegram `editar` y por `perfil`.
                         "descripcion": db.descripcion_de_proyecto_que_vale,
+                        # Las fechas (parte 4, 8-oct-2026): un día `AAAA-MM-DD` (el inicio no
+                        # se deja vacío) y el «Termina cuando» (texto, a lo sumo
+                        # `db.LARGO_TERMINA_CUANDO`). Que la entrega no sea anterior al inicio
+                        # mira dos columnas a la vez y lo hacen `editar` y `deshacer`.
+                        "inicio": db.inicio_de_proyecto_que_vale,
+                        "entrega": db.dia_de_proyecto_que_vale,
+                        "termina_cuando": db.termina_cuando_que_vale,
                         "cliente_noco_id": _el_cliente_se_elige_en_el_panel,
                         "cliente_nombre": _el_cliente_se_elige_en_el_panel}}
 
@@ -1474,9 +1481,35 @@ _VUELVE_A = {
     ("proyectos", "responsable_chat_id"): "el proyecto volvería a quien lo llevaba",
     ("proyectos", "estado"): "el proyecto volvería al estado que tenía",
     ("proyectos", "descripcion"): "el proyecto volvería a tener la descripción que tenía",
+    ("proyectos", "inicio"): "el proyecto volvería a tener la fecha de inicio que tenía",
+    ("proyectos", "entrega"): "el proyecto volvería a tener la fecha de entrega que tenía",
+    ("proyectos", "termina_cuando"): "el proyecto volvería a decir lo que decía en «Termina cuando»",
     ("proyectos", "cliente_noco_id"): "el proyecto volvería al cliente que tenía",
     ("proyectos", "cliente_nombre"): "el proyecto volvería al cliente que tenía",
 }
+
+
+# LAS COLUMNAS QUE SON UN DÍA (`DATE`, sin hora). `_adaptar` convertiría «2026-10-30» en un
+# `datetime` a medianoche y la puerta (que rechaza un `datetime`) ya no podría distinguir un día de
+# una hora: estas columnas se le pasan a su puerta TAL CUAL llegaron.
+_COLUMNAS_DE_DIA = frozenset({("proyectos", "inicio"), ("proyectos", "entrega")})
+
+# Las fechas del proyecto (parte 4): `editar` no escribe las que ya valen lo que se pide, y mira que
+# la entrega no quede antes del inicio. Misma regla en `deshacer`.
+_FECHAS_DE_PROYECTO = ("inicio", "entrega", "termina_cuando")
+
+
+def _fecha_guardada(columna: str, valor):
+    """Lo que dice una columna de fecha del proyecto YA guardada, en la forma en que se compara con lo
+    que llega (un `date` o `None`; el texto limpio o `None`). Postgres entrega el `date`; la huella
+    (JSON) lo deja como texto `AAAA-MM-DD`. Lo que no se entiende queda tal cual, para que no sea igual
+    a nada de lo que llegue."""
+    try:
+        if columna == "termina_cuando":
+            return db.termina_cuando_guardado(valor)
+        return db.dia_de_proyecto_que_vale(valor)
+    except (db.FechaDeProyectoNoVale, db.TerminaCuandoNoVale):
+        return valor
 
 
 def _adaptar(v):
@@ -1562,7 +1595,8 @@ async def editar(
     if tabla == "participantes":
         raise ValueError("Las personas de un proyecto no se editan: se quitan y se vuelven a agregar.")
 
-    campos = {k: _adaptar(v) for k, v in cambios.items() if es_editable(tabla, k)}
+    campos = {k: (v if (tabla, k) in _COLUMNAS_DE_DIA else _adaptar(v))
+              for k, v in cambios.items() if es_editable(tabla, k)}
     if not campos:
         raise ValueError("No hay nada que cambiar.")
 
@@ -1667,6 +1701,24 @@ async def editar(
                 del campos["descripcion"]
                 if not campos:
                     return antes, None
+
+        # LAS FECHAS DE UN PROYECTO (parte 4, 8-oct-2026): (1) las que ya valen lo que se pide no se
+        # escriben (un formulario que reenvía las tres no deja huella por las que no cambiaron; si
+        # ninguna cambió, no se escribe ni se deja huella). (2) La entrega no puede quedar antes del
+        # inicio: se compara lo que VA A QUEDAR (lo pedido, o lo que ya había). Sin candado: no son
+        # texto que se edite a partir de lo leído.
+        if tabla == "proyectos" and any(c in campos for c in _FECHAS_DE_PROYECTO):
+            for c in _FECHAS_DE_PROYECTO:
+                if c in campos and c in antes and campos[c] == _fecha_guardada(c, antes[c]):
+                    del campos[c]
+            if not campos:
+                return antes, None
+            if "inicio" in campos or "entrega" in campos:
+                if not db.entrega_cuadra_con_inicio(
+                        campos["inicio"] if "inicio" in campos else _fecha_guardada("inicio", antes.get("inicio")),
+                        campos["entrega"] if "entrega" in campos else _fecha_guardada("entrega", antes.get("entrega"))):
+                    raise ValueError("No cambié nada: la entrega no puede ser antes del inicio.") \
+                        from db.FechaDeProyectoNoVale("orden", "la entrega no puede ser antes del inicio")
 
         # EL ÁREA (encargo 4), en TAREAS y en PROYECTOS, por la MISMA puerta
         # que usa `crear_desde_interpretacion` — `_area_que_vale`, ni una
@@ -2488,6 +2540,18 @@ async def deshacer(log_id: int) -> str:
                 if que is None:
                     raise ValueError(f"No lo deshice: {e}.") from e
                 raise ValueError(f"No lo deshice: {que}, y {e}.") from e
+            # LAS FECHAS DE UN PROYECTO (parte 4): volver atrás una sola de las dos no puede dejar la
+            # entrega antes del inicio. Se compara lo que va a quedar: lo que esta edición devuelve, o lo
+            # que hay AHORA en la fila para la que no devuelve. (La base lo repite en su CHECK, pero
+            # acá se dice en claro y sin dejar la transacción a medias.)
+            if tabla == "proyectos" and ("inicio" in columnas or "entrega" in columnas):
+                await cur.execute("SELECT inicio, entrega FROM proyectos WHERE id = %s", (registro_id,))
+                ahora = await cur.fetchone() or {}
+                if not db.entrega_cuadra_con_inicio(
+                        _fecha_guardada("inicio", antes["inicio"] if "inicio" in columnas else ahora.get("inicio")),
+                        _fecha_guardada("entrega", antes["entrega"] if "entrega" in columnas else ahora.get("entrega"))):
+                    raise ValueError(
+                        "No lo deshice: la entrega quedaría antes del inicio. Corrige las fechas a mano.")
             # DESHACER TAMBIÉN «RECIBE»: si el resultado deja la tarea en un
             # proyecto DISTINTO del que tiene AHORA, ese proyecto tiene que
             # admitirla hoy (puede haberse cerrado desde entonces). Se compara con

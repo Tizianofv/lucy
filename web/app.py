@@ -379,6 +379,11 @@ def _dia_corto(dia) -> str:
     return f"{dia.day} {_MESES_CORTOS[dia.month - 1]}" if dia else "sin fecha"
 
 
+def _dia_largo(dia) -> str:
+    """Un día → «30 oct 2026» (las fechas de un proyecto, que sí necesitan el año)."""
+    return f"{dia.day} {_MESES_CORTOS[dia.month - 1]} {dia.year}" if dia else "sin fecha"
+
+
 def _hace_dias(n) -> str:
     """Días enteros → «hoy», «ayer» o «hace N días»."""
     if n is None:
@@ -393,6 +398,7 @@ def _iniciales(nombre) -> str:
 
 
 plantillas.env.filters["dia_corto"] = _dia_corto
+plantillas.env.filters["dia_largo"] = _dia_largo
 plantillas.env.filters["hace_dias"] = _hace_dias
 plantillas.env.filters["iniciales"] = _iniciales
 # El buscador de la página de proyectos filtra EN VIVO en el navegador (1-oct-2026,
@@ -1230,6 +1236,8 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          "area_tecnica": db.AREA_TECNICA, "estado_cerrado": db.ESTADO_PROYECTO_CERRADO,
          "largo_nombre": db.LARGO_NOMBRE_PROYECTO,
          "largo_descripcion": db.LARGO_DESCRIPCION_PROYECTO,
+         "largo_termina_cuando": db.LARGO_TERMINA_CUANDO,
+         "anio_menor": db.DIA_MAS_VIEJO_DE_PROYECTO.year, "anio_mayor": db.DIA_MAS_NUEVO_DE_PROYECTO.year,
          "dias_dormido": db.DIAS_DORMIDO, "hecho": hecho,
          "confirmar": confirmar, "editar": editar,
          # Qué tarea tiene el detalle abierto o un formulario dibujado por el
@@ -2148,6 +2156,71 @@ async def cambiar_descripcion_de_proyecto(request: Request, pid: int):
     hecho = "descripcion" if despues["descripcion"] else "descripcion_quitada"
     return RedirectResponse(
         f"/proyectos?hecho={hecho}&p={pid}#de-que-se-trata", status_code=303)
+
+
+# Qué `error=` sale de cada rechazo de las fechas. CERRADO: lo que no esté acá es `fechas_invalida`.
+# (`tipo` y `formato` dicen lo mismo a quien lee: eso que escribiste no es un día.)
+_ERRORES_DE_FECHAS = {"tipo": "formato", "formato": "formato", "rango": "rango", "vacio": "vacio"}
+
+
+@app.post("/proyectos/{pid}/fechas")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def cambiar_fechas_de_proyecto(request: Request, pid: int):
+    """Poner o corregir las fechas de un proyecto: cuándo empezó (`inicio`), cuándo se entrega
+    (`entrega`) y «Termina cuando» (`termina_cuando`), parte 4 de la página completa del proyecto
+    (8-oct-2026).
+
+    POR LA MISMA PUERTA que Telegram: `crud.editar("proyectos", ...)`, que llama a
+    `crud.PUERTAS["proyectos"]` por cada columna (un día `AAAA-MM-DD`, el inicio no se deja vacío,
+    «Termina cuando» de a lo sumo `db.LARGO_TERMINA_CUANDO`) y rechaza una entrega anterior al inicio.
+    Esta ruta no decide qué vale: traduce el formulario y el rechazo a una CLAVE en la URL
+    (`?error=inicio_formato|entrega_rango|fechas_orden|termina_largo|...`); ni la URL ni el log llevan
+    lo escrito. Se manda todo o no se escribe nada: un rechazo no deja la mitad guardada.
+
+    Lo que se dice es lo que pasó: «guardadas» solo si `editar` escribió (hay huella), «no cambió nada»
+    si todo ya era así, «ya no está» si el proyecto no existe o está en la papelera.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    # Los valores se pasan TAL CUAL (pueden no ser texto si el POST es multipart): las puertas deciden.
+    cambios = {c: formulario.get(c) for c in ("inicio", "entrega", "termina_cuando") if c in formulario}
+    try:
+        despues, log_id = await crud.editar(
+            "proyectos", pid, cambios, motivo="Fechas cambiadas desde el panel", actor="panel")
+    except ValueError as e:
+        causa = e.__cause__
+        if isinstance(causa, db.TerminaCuandoNoVale):
+            clave = f"termina_{causa.clave}"
+        elif isinstance(causa, db.FechaDeProyectoNoVale) and causa.clave == "orden":
+            clave = "fechas_orden"
+        elif isinstance(causa, db.FechaDeProyectoNoVale):
+            try:
+                columna = causa.columna_con_puerta
+            except AttributeError:
+                columna = None
+            clave = (f"{columna}_{_ERRORES_DE_FECHAS[causa.clave]}"
+                     if columna in ("inicio", "entrega") and causa.clave in _ERRORES_DE_FECHAS
+                     else "fechas_invalida")
+        elif str(e).startswith("Esa tabla no tiene:"):
+            clave = "fechas_sin_columnas"
+        else:
+            clave = "fechas_invalida"
+        log.warning("Panel de proyectos: fechas rechazadas para #%s (%s)", pid, clave)
+        return RedirectResponse(
+            f"/proyectos?error={clave}&p={pid}&editar=fechas#de-que-se-trata", status_code=303)
+    except Exception:
+        # La base falló en el guardado. No se sabe con certeza si llegó a confirmar, así que el aviso
+        # no dice «guardadas» ni «NO se guardó»: manda a mirar cómo quedó.
+        log.exception("Panel de proyectos: falló la base al guardar las fechas de #%s", pid)
+        return RedirectResponse(
+            f"/proyectos?error=fechas_base&p={pid}&editar=fechas#de-que-se-trata", status_code=303)
+    if despues is None:
+        return RedirectResponse("/proyectos?error=proyecto", status_code=303)
+    if log_id is None:
+        return RedirectResponse(
+            f"/proyectos?error=fechas_igual&p={pid}#de-que-se-trata", status_code=303)
+    return RedirectResponse(f"/proyectos?hecho=fechas&p={pid}#de-que-se-trata", status_code=303)
 
 
 @app.post("/tareas/{tid}/area")

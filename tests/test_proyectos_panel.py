@@ -8,6 +8,7 @@ Correr:  python3 -m pytest tests/test_proyectos_panel.py
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import re
 import sys
@@ -105,6 +106,17 @@ class _CursorProyectos:
             self._conn.proyectos.append(fila)
             self._fila = fila
 
+        elif s.startswith("UPDATE proyectos SET inicio"):
+            # `db._con_su_inicio` (parte 4, 8-oct-2026): el día de hoy en Santo Domingo al crear.
+            inicio, pid = p
+            for q in self._conn.proyectos:
+                if q["id"] == pid:
+                    q["inicio"] = inicio
+            self._fila = None
+
+        elif s.startswith("SELECT * FROM proyectos WHERE id"):
+            self._fila = next((dict(q) for q in self._conn.proyectos if q["id"] == p[0]), None)
+
         elif s.startswith("INSERT INTO log_acciones"):
             self._conn.sig_log += 1
             # Las columnas Y los valores se leen del propio SQL: algunos
@@ -156,6 +168,10 @@ class _ConnProyectos:
 
     def cursor(self, row_factory=None):
         return _CursorProyectos(self)
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        yield self
 
     async def execute(self, sql, params=None):
         return await _CursorProyectos(self).execute(sql, params)
@@ -323,6 +339,16 @@ class _CursorBuscarOCrear:
             self._conn.proyectos.append(fila)
             self._fila = fila
 
+        elif s.startswith("UPDATE proyectos SET inicio"):
+            inicio, pid = p
+            for q in self._conn.proyectos:
+                if q["id"] == pid:
+                    q["inicio"] = inicio
+            self._fila = None
+
+        elif s.startswith("SELECT * FROM proyectos WHERE id"):
+            self._fila = next((dict(q) for q in self._conn.proyectos if q["id"] == p[0]), None)
+
         elif s.startswith("INSERT INTO log_acciones"):
             m = re.search(
                 r"log_acciones\s*\(([^)]*)\)\s*VALUES\s*\(([^)]*)\)", s,
@@ -356,6 +382,10 @@ class _ConnBuscarOCrear:
 
     def cursor(self, row_factory=None):
         return _CursorBuscarOCrear(self)
+
+    @contextlib.asynccontextmanager
+    async def transaction(self):
+        yield self
 
     async def execute(self, sql, params=None):
         return await _CursorBuscarOCrear(self).execute(sql, params)

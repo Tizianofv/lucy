@@ -43,7 +43,7 @@ import sqlite3
 import sys
 import types
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -436,6 +436,14 @@ def _fila(f, como_dict: bool):
             except ValueError:
                 continue
             d[k] = visto if visto.tzinfo else visto.replace(tzinfo=timezone.utc)
+    # Un `DATE` de Postgres llega de psycopg como `datetime.date`; SQLite lo guarda como texto
+    # `AAAA-MM-DD` (imitación declarada). Las fechas del proyecto (parte 4, 8-oct-2026).
+    for k in ("inicio", "entrega"):
+        if isinstance(d.get(k), str):
+            try:
+                d[k] = date.fromisoformat(d[k])
+            except ValueError:
+                pass
     return d if como_dict else tuple(d.values())
 
 
@@ -449,7 +457,8 @@ class _Cur:
         # Un `int[]` de Postgres (los `anticipos_min` de una tarea nueva) viaja
         # como lista; SQLite no la entiende y se guarda como texto JSON
         # (imitación declarada, igual que las columnas JSON de más abajo).
-        params = tuple(json.dumps(x) if isinstance(x, (list, tuple)) else x
+        params = tuple(json.dumps(x) if isinstance(x, (list, tuple)) else
+                       x.isoformat() if isinstance(x, date) and not isinstance(x, datetime) else x
                        for x in (params or ()))
         self._cur = self.con.execute(_hacia_sqlite(sql), params)
         return self

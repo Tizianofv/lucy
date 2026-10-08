@@ -194,6 +194,13 @@ NOTAS_DE_COLUMNA = {
                               "'efectivo'… NULL si no se dijo",
     ("movimientos", "hash_contenido"): "huella del correo del banco; NULL = "
                                        "cargado a mano desde el panel",
+    # Las fechas del proyecto (parte 4, 8-oct-2026) son `date`: un día de Santo Domingo, SIN hora ni
+    # zona (la regla de arriba, «las fechas son timestamptz», no vale para estas dos).
+    ("proyectos", "inicio"): "date, un día de Santo Domingo sin hora: cuándo arrancó el proyecto",
+    ("proyectos", "entrega"): "date, un día de Santo Domingo sin hora: cuándo debe estar listo; "
+                              "NULL = sin fecha de entrega",
+    ("proyectos", "termina_cuando"): "texto escrito a mano: qué tiene que ser verdad para dar el "
+                                     "proyecto por terminado; NULL = sin escribir",
     ("personas", "alias"): "text[]",
     ("log_acciones", "antes"): "jsonb",
     ("log_acciones", "despues"): "jsonb",

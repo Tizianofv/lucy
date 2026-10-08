@@ -52,7 +52,9 @@ HECHOS_DE_ANTES = {"proyecto_nuevo", "grupo_creado", "grupo_quitado", "responsab
                    # «De qué se trata» (parte 3, 8-oct-2026): como `responsable` o `cliente`, dicen que se
                    # guardó o se quitó; los ampara el recibo de `web/avisos.py` (solo un POST que llegó a
                    # escribir lo deja), no una condición de estado.
-                   "descripcion", "descripcion_quitada"}
+                   "descripcion", "descripcion_quitada",
+                   # Las fechas (parte 4, 8-oct-2026): igual que la descripción, las ampara el recibo.
+                   "fechas"}
 
 
 def _claves(texto: str, campo: str) -> dict[str, bool]:

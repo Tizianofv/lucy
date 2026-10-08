@@ -149,7 +149,7 @@ class Mundo:
             CREATE TABLE areas (clave TEXT PRIMARY KEY, color TEXT, orden INTEGER);
             CREATE TABLE proyectos (id INTEGER PRIMARY KEY, nombre TEXT NOT NULL,
               descripcion, estado TEXT DEFAULT 'activo', area,
-              responsable_chat_id INTEGER, borrado_en);
+              responsable_chat_id INTEGER, borrado_en, inicio, entrega, termina_cuando);
             CREATE TABLE tareas (id INTEGER PRIMARY KEY, bandeja_id, titulo,
               detalle, vence_en, recurrencia, estado TEXT DEFAULT 'pendiente',
               proyecto_id, persona_id, anticipos_min, responsable_chat_id,

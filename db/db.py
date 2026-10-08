@@ -1249,6 +1249,185 @@ def huella_de_descripcion(valor) -> str:
     return hashlib.sha256((texto_de_descripcion(valor) or "").encode("utf-8")).hexdigest()
 
 
+# ── LAS FECHAS DEL PROYECTO (`proyectos.inicio`, `entrega`, `termina_cuando`, parte 4 del
+# diseño de la página completa del proyecto, 8-oct-2026) ──────────────────────────────
+#
+# UNA SOLA PUERTA para «qué vale como día» y UNA para «qué vale como "Termina cuando"»,
+# llamadas por TODO lo que escribe esas columnas: `crud.editar` (el panel
+# `POST /proyectos/{pid}/fechas` y Telegram `editar`, por `crud.PUERTAS`) y `crud.deshacer`.
+# Al CREAR un proyecto escribe `inicio` solo `_con_su_inicio` (el día de hoy en Santo Domingo).
+#
+# Los días viajan como `date` (Postgres `DATE`) o como el texto `AAAA-MM-DD`; cualquier otra
+# cosa no vale, y un `datetime` tampoco (un día no lleva hora: aceptarlo en silencio sería
+# cortarle la hora a alguien que creía haberla dado).
+DIA_MAS_VIEJO_DE_PROYECTO = date(2000, 1, 1)
+DIA_MAS_NUEVO_DE_PROYECTO = date(2100, 12, 31)
+# Cuánto puede medir «Termina cuando». Tope puesto por la construcción, SIN medir nada de
+# producción (hoy ningún proyecto lo tiene): es una frase, así que mucho menos que la
+# descripción (`LARGO_DESCRIPCION_PROYECTO`). Decide Tiziano si es otro.
+LARGO_TERMINA_CUANDO = 300
+
+
+class FechaDeProyectoNoVale(ValueError):
+    """Un día de proyecto que no puede quedar. `clave`: `tipo` (no es un día), `formato` (texto
+    que no es `AAAA-MM-DD` o un día que no existe), `rango` (fuera de `DIA_MAS_VIEJO_DE_PROYECTO`
+    .. `DIA_MAS_NUEVO_DE_PROYECTO`), `vacio` (el inicio no se deja vacío) y `orden` (la entrega
+    antes del inicio). El mensaje NUNCA repite lo que se pidió."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+class TerminaCuandoNoVale(ValueError):
+    """Un «Termina cuando» que no puede quedar. `clave`: `tipo`, `caracteres`, `largo`. El
+    mensaje NUNCA repite el texto pedido."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+def dia_de_proyecto_que_vale(valor) -> date | None:
+    """El día que va a quedar (`None` = sin fecha: `None` o un texto vacío), o
+    `FechaDeProyectoNoVale`. Vale un `date` (no un `datetime`) o el texto `AAAA-MM-DD`
+    (cifras ASCII; sin espacios de alrededor), entre `DIA_MAS_VIEJO_DE_PROYECTO` y
+    `DIA_MAS_NUEVO_DE_PROYECTO`."""
+    if valor is None:
+        return None
+    if isinstance(valor, datetime):
+        raise FechaDeProyectoNoVale("tipo", "la fecha del proyecto tiene que ser un día, sin hora")
+    if isinstance(valor, str):
+        texto = valor.strip()
+        if not texto:
+            return None
+        if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", texto):
+            raise FechaDeProyectoNoVale("formato", "la fecha del proyecto no se entiende")
+        try:
+            dia = date.fromisoformat(texto)
+        except ValueError:
+            raise FechaDeProyectoNoVale("formato", "la fecha del proyecto no se entiende") from None
+    elif isinstance(valor, date):
+        dia = valor
+    else:
+        raise FechaDeProyectoNoVale("tipo", "la fecha del proyecto tiene que ser un día")
+    if not DIA_MAS_VIEJO_DE_PROYECTO <= dia <= DIA_MAS_NUEVO_DE_PROYECTO:
+        raise FechaDeProyectoNoVale(
+            "rango", f"la fecha del proyecto tiene que estar entre {DIA_MAS_VIEJO_DE_PROYECTO.year} "
+                     f"y {DIA_MAS_NUEVO_DE_PROYECTO.year}")
+    return dia
+
+
+def inicio_de_proyecto_que_vale(valor) -> date:
+    """`dia_de_proyecto_que_vale`, pero el inicio no se deja vacío (todo proyecto tiene el día
+    en que arrancó: la migración se lo pone a los que ya existían y `_con_su_inicio` a los nuevos)."""
+    dia = dia_de_proyecto_que_vale(valor)
+    if dia is None:
+        raise FechaDeProyectoNoVale("vacio", "el inicio del proyecto no puede quedar vacío")
+    return dia
+
+
+def termina_cuando_guardado(valor) -> str | None:
+    """«Termina cuando» en su forma de siempre (saltos `\\n`, sin espacios de alrededor, `None` si
+    queda vacío), SIN mirar el largo: sirve también para leer lo que YA está guardado y compararlo con
+    lo que llega. Lo que no es texto, o lleva un NUL o un carácter que no se puede codificar, no vale
+    (`TerminaCuandoNoVale`)."""
+    if valor is None:
+        return None
+    if not isinstance(valor, str):
+        raise TerminaCuandoNoVale("tipo", "lo que dice «Termina cuando» tiene que ser un texto")
+    limpio = valor.replace("\r\n", "\n").replace("\r", "\n").strip()
+    try:
+        limpio.encode("utf-8")
+    except UnicodeEncodeError:
+        raise TerminaCuandoNoVale(
+            "caracteres", "lo que dice «Termina cuando» lleva caracteres que no se pueden guardar") from None
+    if "\x00" in limpio:
+        raise TerminaCuandoNoVale(
+            "caracteres", "lo que dice «Termina cuando» lleva caracteres que no se pueden guardar")
+    return limpio or None
+
+
+def termina_cuando_que_vale(valor) -> str | None:
+    """El «Termina cuando» que va a quedar (`None` = sin escribir), o `TerminaCuandoNoVale`: el de
+    `termina_cuando_guardado` y de a lo sumo `LARGO_TERMINA_CUANDO` caracteres."""
+    limpio = termina_cuando_guardado(valor)
+    if limpio is not None and len(limpio) > LARGO_TERMINA_CUANDO:
+        raise TerminaCuandoNoVale(
+            "largo", f"«Termina cuando» no puede pasar de {LARGO_TERMINA_CUANDO} caracteres")
+    return limpio
+
+
+def entrega_cuadra_con_inicio(inicio, entrega) -> bool:
+    """¿La entrega NO es anterior al inicio? Sin uno de los dos días, no hay con qué comparar y
+    cuadra. Los dos ya limpios (`date` o `None`). Es la regla de `crud.editar` y de
+    `crud.deshacer`; la base la repite en `proyectos_entrega_despues_del_inicio`."""
+    return inicio is None or entrega is None or entrega >= inicio
+
+
+def frase_de_entrega(entrega, hoy: date) -> tuple[str, bool] | None:
+    """Lo que dice «Cómo va» de la entrega, y si va en rojo: `(frase, vencida)`, o `None` sin
+    fecha de entrega. Los días se cuentan en Santo Domingo (`hoy` sale de `hoy_rd`): el día
+    de la entrega es «hoy» hasta que acaba, y pasado ese día dice «venció», nunca un número
+    negativo. Quien llama decide además si el proyecto está cerrado (`armar_pagina`)."""
+    if not isinstance(entrega, date) or isinstance(entrega, datetime):
+        return None
+    faltan = (entrega - hoy).days
+    if faltan < 0:
+        return "La entrega venció", True
+    if faltan == 0:
+        return "La entrega es hoy", False
+    return (f"{faltan} día para la entrega" if faltan == 1 else f"{faltan} días para la entrega"), False
+
+
+async def fechas_de_proyectos() -> dict[int, dict] | None:
+    """`{proyecto_id: {inicio, entrega, termina_cuando}}` de los proyectos VIVOS, o `None` si las
+    columnas todavía no existen (la migración `2026-10-08_proyectos_fechas.sql` sin aplicar,
+    SQLSTATE 42703): entonces la página no dibuja fechas ni el enlace para cambiarlas. UNA LECTURA
+    APARTE, con su propia conexión (un error 42703 deja abortada la transacción de la conexión
+    donde ocurre), igual que `graves_de`; no es un cuarto nivel de la consulta de la página."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(
+                "SELECT id, inicio, entrega, termina_cuando FROM proyectos WHERE borrado_en IS NULL")
+            filas = await cur.fetchall()
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate == "42703":
+                return None
+            raise
+    return {f["id"]: {"inicio": f["inicio"], "entrega": f["entrega"],
+                      "termina_cuando": f["termina_cuando"]} for f in filas}
+
+
+async def _con_su_inicio(conn, cur, fila: dict) -> dict:
+    """Un proyecto recién insertado (`fila`, con `RETURNING *`) con su `inicio` puesto a HOY en
+    Santo Domingo (`hoy_rd`), y la fila releída para que la huella `crear` lo diga. LA ÚNICA que
+    escribe `inicio` al crear: la llaman los TRES sitios que insertan un proyecto
+    (`crear_proyecto`, `convertir_tarea_en_proyecto`, `_buscar_o_crear`), dentro de la misma
+    transacción que el `INSERT`. Con la columna sin migrar (SQLSTATE 42703) no escribe nada y
+    devuelve la fila como vino (la migración le pone el día de creación): crear no se rompe.
+    Va en un SAVEPOINT para que ese error no deje abortada la transacción del `INSERT`."""
+    try:
+        async with conn.transaction():
+            await cur.execute(
+                "UPDATE proyectos SET inicio = %s WHERE id = %s", (hoy_rd(), fila["id"]))
+    except Exception as e:
+        try:
+            sqlstate = e.sqlstate
+        except AttributeError:
+            raise e from None
+        if sqlstate == "42703":
+            return fila
+        raise
+    await cur.execute("SELECT * FROM proyectos WHERE id = %s", (fila["id"],))
+    return await cur.fetchone()
+
+
 async def proyecto_vivo_con_nombre(cur, nombre: str, excluir_id: int | None = None):
     """El id de un proyecto VIVO que se llama así, o None. LA comparación de
     nombres de proyecto: la usan la búsqueda de Lucy (`_buscar_o_crear`,
@@ -1528,6 +1707,8 @@ async def _buscar_o_crear(tabla: str, nombre: str, *,
             )
         nueva = await cur.fetchone()
         if tabla == "proyectos":
+            # Nace con `inicio` = hoy (parte 4), por la misma función que los otros dos sitios.
+            nueva = await _con_su_inicio(conn, cur, nueva)
             await conn.execute(
                 """
                 INSERT INTO log_acciones
@@ -1667,7 +1848,8 @@ async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int,
             RETURNING *
             """,
             (nombre, area, responsable_chat_id))
-        nuevo = await cur.fetchone()
+        # Nace con `inicio` = hoy (parte 4): `_con_su_inicio` es la única que lo escribe al crear.
+        nuevo = await _con_su_inicio(conn, cur, await cur.fetchone())
         # EL ASA, EN LA MISMA FILA QUE SE DEVUELVE. La huella ya se escribía;
         # lo que faltaba era PODER NOMBRARLA. Quien crea un proyecto desde
         # Telegram (E8) tiene que poder decir «acción #N, reversible» y dejar
@@ -1804,7 +1986,8 @@ async def convertir_tarea_en_proyecto(tarea_id: int) -> dict:
             RETURNING *
             """,
             (nombre_proyecto, tarea.get("detalle"), tarea.get("area")))
-        proyecto = await cur.fetchone()
+        # Nace con `inicio` = hoy (parte 4), por la misma función que los otros dos sitios.
+        proyecto = await _con_su_inicio(conn, cur, await cur.fetchone())
 
         await cur.execute(
             """
@@ -3423,9 +3606,12 @@ def _resumen(pendientes: list[dict], otras: list[dict]) -> dict:
 
 
 def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
-                 hoy: date, participantes=()) -> dict:
+                 hoy: date, participantes=(), fechas=None) -> dict:
     """El modelo de la página de proyectos, con todas las decisiones.
 
+    `fechas` es lo que devuelve `fechas_de_proyectos()` (`None` = las columnas no existen: el
+    proyecto sale con `fechas_disponibles` falso y nada de fechas). Los días para la entrega
+    se cuentan contra `hoy` (Santo Domingo) y no se enseñan en un proyecto cerrado.
     `huellas` es `[(proyecto_id, accion, ts)]`; `comentarios`, las filas de
     `comentarios_tarea` vivas; `nombres`, `{chat: nombre}`. EL REPARTO (diseño
     §5.2): cada tarea viva cae en EXACTAMENTE un sitio —dentro de su proyecto si
@@ -3477,6 +3663,9 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
         resumen = _resumen(pendientes, otras)
         ultimo = ultimo_movimiento(p["creado_en"], ultimas.get(pid, []))
         dias = dias_sin_movimiento(ultimo, hoy)
+        propias = (fechas or {}).get(pid)
+        entrega_dicha = (frase_de_entrega(propias["entrega"], hoy)
+                         if propias and p["estado"] != ESTADO_PROYECTO_CERRADO else None)
         modelo_proyectos[pid] = {
             "id": pid, "nombre": p["nombre"], "area": p["area"] if p["area"] in claves else None,
             "descripcion": p["descripcion"], "estado": p["estado"],
@@ -3494,6 +3683,15 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
             "pendientes": pendientes, "otras": otras, **resumen,
             "ultimo": ultimo, "dias_sin_movimiento": dias,
             "dormido": esta_dormido(p["estado"], dias),
+            # Las fechas (parte 4). Sin las columnas (`fechas` es None, o el proyecto no salió en la
+            # lectura) no se dibuja nada de esto. `entrega_frase` es None si no hay entrega o el
+            # proyecto está cerrado; `entrega_vencida` pinta la frase en rojo.
+            "fechas_disponibles": propias is not None,
+            "inicio": propias["inicio"] if propias else None,
+            "entrega": propias["entrega"] if propias else None,
+            "termina_cuando": propias["termina_cuando"] if propias else None,
+            "entrega_frase": entrega_dicha[0] if entrega_dicha else None,
+            "entrega_vencida": bool(entrega_dicha and entrega_dicha[1]),
         }
 
     def _grupo(clave, color):
@@ -3584,8 +3782,11 @@ async def pagina_de_proyectos(hoy: date | None = None) -> dict:
     graves = await graves_de([t["id"] for t in tareas])
     for t in tareas:
         t["grave"] = t["id"] in graves
+    # LAS FECHAS DEL PROYECTO (parte 4): lectura aparte, tolerante a las columnas sin migrar
+    # (`fechas_de_proyectos` devuelve `None` y la página no dibuja fechas).
+    fechas = await fechas_de_proyectos()
     return armar_pagina(grupos, proyectos, tareas, huellas, comentarios,
-                        nombres_con_code(), hoy, participantes)
+                        nombres_con_code(), hoy, participantes, fechas)
 
 
 async def derivaciones() -> dict[int, int]:

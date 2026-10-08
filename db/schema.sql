@@ -93,8 +93,20 @@ CREATE TABLE proyectos (
   -- nombre que tenía al elegirla; las escribe SOLO `db.poner_cliente`.
   cliente_noco_id BIGINT,
   cliente_nombre  TEXT,
+  -- Las fechas del proyecto (parte 4 de la página completa, migración
+  -- 2026-10-08_proyectos_fechas.sql). `inicio`: el día en que arrancó (el de
+  -- creación, en Santo Domingo, salvo que se corrija); `entrega`: el día en que
+  -- debe estar listo (NULL = sin fecha); `termina_cuando`: texto libre con lo
+  -- que tiene que ser verdad para dar el proyecto por terminado. Las tres las
+  -- escribe `crud.editar` por sus puertas; `inicio` también `db._con_su_inicio`
+  -- al crear.
+  inicio          DATE,
+  entrega         DATE,
+  termina_cuando  TEXT,
   CONSTRAINT proyectos_cliente_entero
-    CHECK ((cliente_noco_id IS NULL) = (cliente_nombre IS NULL))
+    CHECK ((cliente_noco_id IS NULL) = (cliente_nombre IS NULL)),
+  CONSTRAINT proyectos_entrega_despues_del_inicio
+    CHECK (entrega IS NULL OR inicio IS NULL OR entrega >= inicio)
 );
 
 -- Lo que Lucy aprende de CÓMO Tiziano quiere que trabaje (req 35). Cada fila es

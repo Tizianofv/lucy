@@ -28,10 +28,15 @@ def modelo(con_personas: bool = True) -> dict:
     personas = [dict(id=500, nombre="Persona Uno", rol="productor", proyecto_id=1, tarea_id=None),
                 dict(id=501, nombre="Persona Dos", rol="mezcla", proyecto_id=None, tarea_id=10),
                 dict(id=502, nombre="Persona Tres", rol="edicion", proyecto_id=None, tarea_id=11)]
-    return _armar(pr, ta, co, personas if con_personas else [])
+    # Las fechas (parte 4): el 1 las tiene todas, el 2 (cerrado) inicio y entrega, el resto no salió en la
+    # lectura (`fechas_disponibles` falso). Sin esto la plantilla no dibuja el formulario de las fechas.
+    fechas = {1: dict(inicio=tp.HOY.replace(day=1), entrega=tp.HOY.replace(day=28),
+                      termina_cuando="Los másters entregados"),
+              2: dict(inicio=tp.HOY.replace(day=1), entrega=tp.HOY.replace(day=20), termina_cuando=None)}
+    return _armar(pr, ta, co, personas if con_personas else [], fechas)
 
 
-def _armar(pr, ta, co, personas):
+def _armar(pr, ta, co, personas, fechas=None):
     """`tp.modelo_de_filas` con participantes (esa función no los recibe): los mismos
     rellenos, y `db.armar_pagina` de verdad."""
     pr = [{"creado_en": tp.CREADO, "descripcion": None, "estado": "activo", "area": None,
@@ -40,7 +45,7 @@ def _armar(pr, ta, co, personas):
            "creado_en": tp.CREADO, "responsable_chat_id": None, "estado": "pendiente", **t}
           for t in ta]
     return db.armar_pagina(list(tp.AREAS), pr, ta, [], list(co), {424242: "Dueño"}, tp.HOY,
-                           participantes=personas)
+                           participantes=personas, fechas=fechas)
 
 
 class BaseQueNoSeToca:
