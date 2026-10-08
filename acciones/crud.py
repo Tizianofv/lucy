@@ -1508,10 +1508,19 @@ _HUELLAS_DE_COLUMNA = {("proyectos", "descripcion"): db.huella_de_descripcion}
 
 # LAS COLUMNAS CON CANDADO: texto que se EDITA a partir de lo que se leyó (se agrega un renglón, se
 # corrige un párrafo), de modo que escribir sin mirar si cambió en el medio borra lo de otro sin
-# avisar. Para estas, el UPDATE de `editar` escribe SOLO si la columna sigue valiendo lo que `editar`
-# leyó (`AND col IS NOT DISTINCT FROM <lo leído>`): leer y escribir ya no se pueden separar por una
-# escritura ajena, sea quien sea quien llama (panel, Telegram `editar`, `perfil`). Si no escribió
-# ninguna fila, `CambioAlEditar`. Las demás columnas de todas las tablas siguen con el UPDATE de siempre.
+# avisar. Qué cubre cada pieza, y qué no:
+#  · EL CANDADO (este UPDATE, `AND col IS NOT DISTINCT FROM <lo que editar leyó>`) cubre SOLO la
+#    ventana entre el `SELECT` y el `UPDATE` de `editar` mismo, para cualquiera que llame. Si no tocó
+#    ninguna fila, `CambioAlEditar`.
+#  · LA HUELLA (`si_sigue_igual`) cubre la ventana ANTERIOR: entre que quien llama leyó o abrió la
+#    pantalla y la lectura de `editar`. Solo la pasan el panel (la huella con la que abrió el formulario)
+#    y `perfil` (la de la fila sobre la que calculó su renglón).
+#  · NADIE cubre hoy a Telegram `editar`: escribe un texto entero armado con lo que el modelo leyó
+#    antes, sin huella; si otro escribió entre esa lectura y la de `editar`, lo pisa (queda la huella
+#    `antes`, así que se puede deshacer).
+#  · Que, en Postgres, el `UPDATE … WHERE` vuelva a evaluar la condición contra una fila que otra
+#    transacción acaba de confirmar (READ COMMITTED) está LEÍDO en su documentación, no corrido aquí.
+# Las demás columnas de todas las tablas siguen con el UPDATE de siempre.
 _COLUMNAS_CON_CANDADO = frozenset({("proyectos", "descripcion")})
 
 # Lo que dice `deshacer` cuando volver atrás borraría lo que se escribió DESPUÉS de esa edición.

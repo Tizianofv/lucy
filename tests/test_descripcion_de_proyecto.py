@@ -712,10 +712,12 @@ def test_sonda_en_marcha_todo_lo_que_cambia_la_descripcion_deja_huella_con_el_an
 # 7. El intercalado de verdad: leer y escribir no se pueden separar por una escritura ajena
 # ═══════════════════════════════════════════════════════════════════════
 #
-# LA GARANTÍA (una sola, en la escritura misma): quien escribe `proyectos.descripcion` por `crud.editar` (el
-# panel, Telegram `editar`, `perfil`) escribe solo si la columna sigue valiendo lo que `editar` leyó
-# (`UPDATE … AND descripcion IS NOT DISTINCT FROM <lo leído>`); `perfil` además pasa la huella de lo que
-# ÉL leyó para calcular su renglón. `deshacer` se niega si la descripción cambió después de esa edición.
+# LO QUE SE VIGILA: el candado de `crud.editar` (`UPDATE … AND descripcion IS NOT DISTINCT FROM <lo que
+# editar leyó>`) cubre solo la ventana entre el `SELECT` y el `UPDATE` de `editar`; la huella
+# (`si_sigue_igual`) cubre la ventana anterior, y solo la pasan el panel y `perfil` (ésta, con la de la
+# fila sobre la que calculó su renglón). Telegram `editar` no pasa huella: NO está cubierto contra una
+# escritura ajena anterior a su lectura (su prueba de abajo mide solo la ventana del candado).
+# `deshacer` se niega si la descripción cambió después de esa edición.
 #
 # CÓMO SE INTERCALA: el pool de prueba deja correr UNA escritura ajena (un `UPDATE` hecho como si lo
 # confirmara otra conexión) justo antes de que `editar` ejecute su `UPDATE proyectos SET descripcion`, es decir
