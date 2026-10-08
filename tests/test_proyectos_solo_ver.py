@@ -57,6 +57,13 @@ def _sin_contar_claves_malas_de_code(monkeypatch):
     monkeypatch.setattr(api_code, "_registrar_clave_mala", lambda: None)
 
 
+@pytest.fixture(autouse=True)
+def _el_dueno_tiene_nombre(monkeypatch):
+    """El modelo de prueba (`_proyectos_de_prueba.modelo`) pone a «Dueño» de responsable de una tarea; con ese nombre en la casa, la página puede ofrecer «Las mías» y «Por persona» y la prueba de
+    cobertura las ve correr."""
+    monkeypatch.setattr(config, "NOMBRES_POR_CHAT", {config.CHAT_ID_DUENO: "Dueño"})
+
+
 def cliente(con: str | None = "ver") -> TestClient:
     c = Navegador(panel.app, base_url="https://testserver")
     if con == "ver":
@@ -563,6 +570,11 @@ COBERTURA = (VISTAS + list(A_MANO.values()) + [
     {"nuevo_grupo": 1}, {"quitar_grupo": "ACD"}, {"quitar_grupo": "CDS"},
     # Borrar un proyecto (7-oct-2026): la pregunta con las cuentas de sus tareas.
     {"p": 1, "borrar_proyecto": 1},
+    # Los filtros de las tareas (parte 2, 8-oct-2026): uno de cada clase, y con la búsqueda de una persona abierta
+    # (el filtro viaja escondido en el formulario de búsqueda).
+    {"p": 1, "filtro": "pendientes"}, {"p": 1, "filtro": "vencidas"}, {"p": 1, "filtro": "mias"},
+    {"p": 1, "filtro": "persona", "quien": "Dueño", "pq": "ab", "pdonde": "proyecto"},
+    {"p": 1, "filtro": "persona", "quien": "Dueño", "t": 10},
 ])
 
 
@@ -587,10 +599,12 @@ def test_el_extractor_ve_los_controles_y_el_hueco_del_testigo(monkeypatch):
     fuente = _fuente_sin_jinja()
     original = pp.modelo
     monkeypatch.setattr(config, "REGISTRO_URL", "https://registro.example.test")
+    monkeypatch.setattr(config, "NOMBRES_POR_CHAT", {config.CHAT_ID_DUENO: "Dueño"})     # (`undo` de abajo también deshace el autouse)
     monkeypatch.setattr(pp, "modelo", lambda: original(con_personas=False))
     sin = sitios_sin_cubrir(fuente, _paginas_de_la_casa())
     monkeypatch.undo()
     monkeypatch.setattr(config, "REGISTRO_URL", "https://registro.example.test")
+    monkeypatch.setattr(config, "NOMBRES_POR_CHAT", {config.CHAT_ID_DUENO: "Dueño"})
     assert any("quitar" in s for s in sin), sin
     assert len(sin) == 1, sin       # solo la ✕: «Agregar» corre aunque no haya personas
     paginas = _paginas_de_la_casa()

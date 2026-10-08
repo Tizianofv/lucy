@@ -40,10 +40,11 @@ proyecto de mantenimiento, y el tiempo es justo lo que este proyecto no tiene.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import re
 from pathlib import Path
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qsl, quote, urlencode
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -1112,7 +1113,8 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
                     pq: Navegacion[str] = "", pdonde: Navegacion[str] = "",
                     nuevo_grupo: Navegacion[int] = 0, quitar_grupo: Navegacion[str] = "",
                     grupo: Aviso[str] = "", borrar_proyecto: Navegacion[int] = 0,
-                    borrado: Aviso[int] = 0, borrada: Aviso[int] = 0):
+                    borrado: Aviso[int] = 0, borrada: Aviso[int] = 0,
+                    filtro: Navegacion[str] = "", quien: Navegacion[str] = ""):
     """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
     (`?g=`), las de «Sin grupo» (`?sin_grupo=1`) o el formulario de un proyecto
@@ -1184,9 +1186,26 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
                            if hecho == "grupo_borrado" and grupo else None)
     titulo_tarea_borrada = (await db.aviso_de_tarea(borrada, borrada=True)
                             if hecho == "tarea_borrada" and borrada else None)
+    # LOS FILTROS DE LAS TAREAS (parte 2, 8-oct-2026): solo en la vista de un proyecto. `?filtro=` y
+    # `?quien=` se normalizan en `_filtro_vigente` (una sola puerta) y la lista sale de
+    # `db.tareas_con_filtro`; cualquier otra vista los ignora.
+    tareas_p, sufijo_filtro, personas_filtro, mi_nombre = None, "", [], None
+    if vista["tipo"] == "proyecto":
+        m = vista["proyecto"]
+        personas_filtro = sorted({f["responsable"] for f in m["pendientes"] + m["otras"] if f["responsable"]})
+        mi_nombre = None if solo_ver else config.nombres_con_code().get(_sesion(request))
+        filtro, quien = _filtro_vigente(filtro, quien, personas=personas_filtro, mi_nombre=mi_nombre,
+                                        solo_ver=solo_ver)
+        tareas_p = db.tareas_con_filtro(m, filtro, quien, mi_nombre)
+        sufijo_filtro = _sufijo_de_filtro(filtro, quien)
+    else:
+        filtro = quien = ""
     return plantillas.TemplateResponse(
         request, "proyectos.html",
         {"solo_ver": solo_ver,
+         "filtro": filtro, "quien": quien, "tareas_p": tareas_p, "personas_filtro": personas_filtro,
+         "ofrece_mias": bool(mi_nombre), "sufijo_filtro": sufijo_filtro,
+         "consulta_filtro": ("?" + sufijo_filtro[1:]) if sufijo_filtro else "",
          "nuevo_grupo": nuevo_grupo, "quitar_grupo": quitar_grupo, "grupo": grupo,
          "grupo_existe": grupo in claves_de_grupos,
          "grupo_es_el_ultimo": bool(todos_los_grupos) and grupo == todos_los_grupos[-1],
@@ -1223,7 +1242,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          # piezas que usa /tareas (`MAX_DERIVADAS`, `PISO_FECHA`).
          "derivar": derivar, "max_derivadas": MAX_DERIVADAS,
          "piso_fecha": PISO_FECHA, "derivadas": derivadas,
-         "vuelta": _direccion_de_la_vista(vista),
+         "vuelta": _direccion_de_la_vista(vista) + sufijo_filtro,
          "largo_comentario": db.LARGO_COMENTARIO,
          "largo_titulo": db.LARGO_TITULO_TAREA,
          # Solo los nombres, sin la opción «sin responsable»: no hay (Tiziano,
@@ -1270,6 +1289,65 @@ def _direccion_de_la_vista(vista: dict) -> str:
     return "/proyectos?"
 
 
+LARGO_QUIEN = 80          # lo más largo que se acepta de un nombre en `?quien=`
+
+
+def _sufijo_de_filtro(filtro: str, quien: str) -> str:
+    """`&filtro=…[&quien=…]` listo para pegar a una dirección de `/proyectos?p=N`, o "" si lo
+    pedido no es un filtro. LA puerta del vocabulario en la dirección: solo `db.FILTROS_DE_TAREAS`;
+    «persona» pide un nombre sin caracteres de control y de a lo más `LARGO_QUIEN`. El valor viaja
+    codificado (`quote`): nunca cambia el destino, solo se anota en la consulta."""
+    if filtro not in db.FILTROS_DE_TAREAS:
+        return ""
+    if filtro == "persona":
+        if not quien or len(quien) > LARGO_QUIEN or not quien.isprintable():
+            return ""
+        return f"&filtro=persona&quien={quote(quien, safe='')}"
+    return f"&filtro={filtro}"
+
+
+# El filtro con el que se envió el formulario de una tarea (`/proyectos/tarea/N/...?filtro=…`): lo anota
+# este middleware para que `_volver_a_la_tarea` lo devuelva en la dirección de vuelta. Va en la
+# dirección de la acción y no en el cuerpo del formulario: el destino sigue saliendo de la base.
+_FILTRO_DEL_POST = contextvars.ContextVar("filtro_del_post", default="")
+
+
+class FiltroDeLosPostDeTarea:
+    """Middleware ASGI: en un POST a `/proyectos/tarea/...` guarda `_sufijo_de_filtro(filtro, quien)`
+    (de la consulta de la dirección) mientras dura el pedido."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["method"] == "POST" and scope["path"].startswith("/proyectos/tarea/"):
+            consulta = dict(parse_qsl(scope.get("query_string", b"").decode("latin-1"), keep_blank_values=True))
+            marca = _FILTRO_DEL_POST.set(_sufijo_de_filtro(consulta.get("filtro", ""), consulta.get("quien", "")))
+            try:
+                return await self.app(scope, receive, send)
+            finally:
+                _FILTRO_DEL_POST.reset(marca)
+        return await self.app(scope, receive, send)
+
+
+app.add_middleware(FiltroDeLosPostDeTarea)
+
+
+def _filtro_vigente(filtro: str, quien: str, *, personas: list[str], mi_nombre: str | None,
+                    solo_ver: bool) -> tuple[str, str]:
+    """El filtro que de verdad se aplica a la lista de un proyecto, o ("", "") si no hay ninguno.
+    Un filtro que nadie declaró no vale; «Las mías» solo vale en la sesión de la casa y con nombre
+    conocido (la de solo ver no dice de quién es); «Por persona» solo vale con alguien que tiene
+    tareas en ese proyecto. Todo lo que no vale se ignora y se enseña la lista entera."""
+    if filtro not in db.FILTROS_DE_TAREAS:
+        return "", ""
+    if filtro == "mias":
+        return ("mias", "") if (not solo_ver and mi_nombre) else ("", "")
+    if filtro == "persona":
+        return ("persona", quien) if quien in personas else ("", "")
+    return filtro, ""
+
+
 async def _volver_a_la_tarea(tid: int, **parametros) -> str:
     """Adónde vuelve un POST de tarea: al sitio donde ESTÁ la tarea (su proyecto,
     las sueltas de su grupo o «Sin grupo»), calculado en el servidor desde la
@@ -1280,7 +1358,7 @@ async def _volver_a_la_tarea(tid: int, **parametros) -> str:
     if donde is None:
         return "/proyectos?error=tarea"
     if donde["proyecto_vivo"]:
-        base = f"/proyectos?p={donde['proyecto_id']}"
+        base = f"/proyectos?p={donde['proyecto_id']}{_FILTRO_DEL_POST.get()}"
     elif (donde["proyecto_id"] is None and donde["area"]
           and donde["area"] in {a["clave"] for a in await db.areas()}):
         base = f"/proyectos?g={quote(donde['area'], safe='')}"

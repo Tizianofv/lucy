@@ -44,7 +44,7 @@ from test_pagina_proyectos import _cliente, gente, mundo  # noqa: F401
 import config
 
 CLAVES_DEL_AVISO = ("hecho", "error", "derivadas", "derivar")
-MARCAR = re.compile(r'<form class="marcar" method="post" action="(/proyectos/tarea/(\d+)/(hecha|reabrir))"')
+MARCAR = re.compile(r'<form class="marcar" method="post" action="(/proyectos/tarea/(\d+)/(hecha|reabrir)(?:\?[^"]*)?)"')
 
 
 def _pagina(**consulta) -> str:
@@ -123,14 +123,14 @@ def test_todos_los_formularios_que_marcan_son_los_que_intercepta_el_guion(mt):
     vistos = set()
     for v in vistas:
         html = _pagina(**v)
-        marcan = re.findall(r'<form\b[^>]*action="(/proyectos/tarea/\d+/(?:hecha|reabrir))"[^>]*>', html)
+        marcan = re.findall(r'<form\b[^>]*action="(/proyectos/tarea/\d+/(?:hecha|reabrir)(?:\?[^"]*)?)"[^>]*>', html)
         enganchables = [m.group(1) for m in MARCAR.finditer(html)]
         assert sorted(marcan) == sorted(enganchables), (v, marcan, enganchables)
         vistos |= set(marcan)
     assert any(x.endswith("/hecha") for x in vistos) and any(x.endswith("/reabrir") for x in vistos), vistos
     fuente = (_ROOT / "web" / "plantillas" / "proyectos.html").read_text(encoding="utf-8")
-    assert len(re.findall(r'action="/proyectos/tarea/\{\{ t\.id \}\}/(?:hecha|reabrir)"', fuente)) == 2
-    assert len(re.findall(r'<form class="marcar" method="post" action="/proyectos/tarea/\{\{ t\.id \}\}/(?:hecha|reabrir)"', fuente)) == 2
+    assert len(re.findall(r'action="/proyectos/tarea/\{\{ t\.id \}\}/(?:hecha|reabrir)(?:\{\{ consulta_filtro \}\})?"', fuente)) == 2
+    assert len(re.findall(r'<form class="marcar" method="post" action="/proyectos/tarea/\{\{ t\.id \}\}/(?:hecha|reabrir)(?:\{\{ consulta_filtro \}\})?"', fuente)) == 2
 
 
 # LAS MISMAS PROHIBICIONES que el resto del guion (la unión de las listas de

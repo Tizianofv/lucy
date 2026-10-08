@@ -172,7 +172,7 @@ def formularios_que_marcan(texto: str) -> list[str]:
     hecho. Es un análisis de TEXTO de la plantilla (frontera: no ve un formulario
     que se arme en tiempo de ejecución con JavaScript)."""
     return [etiqueta for etiqueta, cuerpo in _formularios(texto)
-            if re.search(r'action="[^"]*/(?:hecha|reabrir|hecho)"', etiqueta)
+            if re.search(r'action="[^"]*/(?:hecha|reabrir|hecho)[^"/]*"', etiqueta)
             or re.search(r'name="hecha_', cuerpo)]
 
 

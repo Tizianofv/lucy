@@ -118,6 +118,9 @@ h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balan
 .como-va .meta{margin-top:.7rem}
 .avance .riel span{display:block;height:100%;background:var(--color);border-radius:99px;transition:width .3s}
 @media (prefers-reduced-motion:reduce){.avance .riel span{transition:none}}
+.filtros{display:flex;flex-wrap:wrap;gap:.4rem .5rem;align-items:center;margin-bottom:.8rem}
+.filtros a{font-size:.8rem;padding:.2rem .65rem;border-radius:99px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta);text-decoration:none}
+.filtros a[aria-current="true"]{border-color:var(--color);background:var(--color);color:#fff;font-weight:600}
 .aviso-dormido{background:var(--dormido-fondo);color:var(--dormido);border-radius:10px;padding:.6rem .8rem;font-size:.88rem;font-weight:500}
 .aviso-cerrado{background:var(--papel);border:1px dashed var(--linea);border-radius:10px;padding:.6rem .8rem;font-size:.88rem;color:var(--suave)}
 .aviso{background:var(--papel);border-left:3px solid var(--vencida);padding:.7rem 1rem;border-radius:0 8px 8px 0}
@@ -288,6 +291,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 {%- if vista.tipo == 'proyecto' %}<input type="hidden" name="p" value="{{ vista.proyecto.id }}">
 {%- elif vista.tipo == 'grupo' %}<input type="hidden" name="g" value="{{ vista.grupo.clave }}">
 {%- elif vista.tipo == 'sin_grupo' %}<input type="hidden" name="sin_grupo" value="1">{% endif -%}
+{%- if filtro %}<input type="hidden" name="filtro" value="{{ filtro }}">{% if quien %}<input type="hidden" name="quien" value="{{ quien }}">{% endif %}{% endif -%}
 {%- if t_abierta %}<input type="hidden" name="t" value="{{ t_abierta }}">{% endif -%}
 <input type="hidden" name="pdonde" value="{{ donde }}">{% endmacro %}
 
@@ -324,13 +328,13 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% if solo_ver and t.es_hecha %}<span class="marca hecha-b" role="img" aria-label="Hecha">✓</span>
     {% elif solo_ver and t.es_pendiente %}<span class="marca" role="img" aria-label="Pendiente">○</span>
     {% elif t.es_hecha %}
-    <form class="marcar" method="post" action="/proyectos/tarea/{{ t.id }}/reabrir"><button class="marca hecha-b" title="Desmarcar: vuelve a pendiente" aria-label="Desmarcar la tarea: vuelve a pendiente">✓</button></form>
+    <form class="marcar" method="post" action="/proyectos/tarea/{{ t.id }}/reabrir{{ consulta_filtro }}"><button class="marca hecha-b" title="Desmarcar: vuelve a pendiente" aria-label="Desmarcar la tarea: vuelve a pendiente">✓</button></form>
     {% elif t.es_pendiente %}
     {#- MARCAR HECHA ES DE UN CLIC: el botón (dibujado como la casilla de la
         maqueta) envía este formulario. La maqueta no ofrece «la tarea que
         sigue» (el «＋» y sus renglones se quitaron de esta página el 1-oct-2026,
         decisión de Tiziano; la ruta y `/tareas` siguen haciéndolo). -#}
-    <form class="marcar" method="post" action="/proyectos/tarea/{{ t.id }}/hecha">
+    <form class="marcar" method="post" action="/proyectos/tarea/{{ t.id }}/hecha{{ consulta_filtro }}">
       <button class="marca" title="Marcar hecha" aria-label="Marcar la tarea como hecha">○</button>
     </form>
     {% else %}<span class="marca" role="img" aria-label="{{ t.estado }}">–</span>{% endif %}
@@ -344,7 +348,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     <a class="titulo" {% if not solo_ver %}data-dbl="titulo" {% endif %}href="{{ u }}{{ '' if abierta else '&t=' ~ t.id }}#tarea-{{ t.id }}" title="{{ 'Un clic abre el detalle' if solo_ver else 'Un clic abre el detalle; doble clic cambia el título' }}" aria-label="{{ 'Cerrar' if abierta else 'Abrir' }} el detalle de la tarea" {% if editar_tarea == t.id %}hidden{% endif %}>{{ t.titulo }}</a>
     {% if t.grave %}<span class="nota" style="color:#c0392b;font-weight:600" title="Alerta técnica grave: la sala la atiende primero">🚨 grave</span>{% endif %}
         {% if t.comentarios %}<span class="nota comentarios-n" title="Comentarios de la tarea">{{ t.comentarios|length }} coment.</span>{% endif %}
-    {% if not solo_ver %}<form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/titulo" data-auto {% if editar_tarea != t.id %}hidden{% endif %}>
+    {% if not solo_ver %}<form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/titulo{{ consulta_filtro }}" data-auto {% if editar_tarea != t.id %}hidden{% endif %}>
       <input name="titulo" type="text" required maxlength="{{ largo_titulo }}" value="{{ t.titulo }}" aria-label="Título de la tarea">
       <button class="guardar">Guardar</button>
       <a class="btn-linea" href="{{ u }}#tarea-{{ t.id }}">Cancelar</a>
@@ -355,7 +359,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     <span class="vence" {% if t.vence_en %}title="{{ t.vence_en|hora_rd }}"{% endif %}>{{ 'Venció el ' if t.vencida }}{{ t.dia|dia_corto }}</span>
     {% if solo_ver %}{% elif confirmar_borrar == t.id %}
     <span class="confirmar">¿Borrarla?
-      <form class="en-linea" method="post" action="/proyectos/tarea/{{ t.id }}/borrar"><button class="btn-lleno">Sí</button></form>
+      <form class="en-linea" method="post" action="/proyectos/tarea/{{ t.id }}/borrar{{ consulta_filtro }}"><button class="btn-lleno">Sí</button></form>
       <a class="btn-linea" href="{{ u }}#tarea-{{ t.id }}">No</a></span>
     {% else %}<a class="borrar-x" href="{{ u }}&amp;confirmar_borrar={{ t.id }}#tarea-{{ t.id }}" aria-label="Borrar la tarea" title="Borrar tarea">×</a>{% endif %}
     {% if t.de_proyecto_en_papelera %}<span class="de-papelera">Era de un proyecto que está en la papelera.</span>{% endif %}
@@ -369,9 +373,9 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     <h4>Personas de esta tarea</h4>
     <div class="personas">{% if t.responsable %}<div class="persona"><span class="ini">{{ t.responsable|iniciales }}</span>
       <span class="quien"><b>{{ t.responsable }}</b><span>Responsable</span></span></div>{% endif %}
-      {%- for x in t.personas %}{{ ficha_persona(x, '/proyectos/tarea/' ~ t.id ~ '/personas/' ~ x.id ~ '/quitar') }}{% endfor %}
+      {%- for x in t.personas %}{{ ficha_persona(x, '/proyectos/tarea/' ~ t.id ~ '/personas/' ~ x.id ~ '/quitar' ~ consulta_filtro) }}{% endfor %}
       {%- if not t.responsable and not t.personas %}<p class="vacio">Nadie asignado.</p>{% endif %}</div>
-    {{ agregar_persona('tarea-' ~ t.id, '/proyectos/tarea/' ~ t.id ~ '/personas') }}
+    {{ agregar_persona('tarea-' ~ t.id, '/proyectos/tarea/' ~ t.id ~ '/personas' ~ consulta_filtro) }}
     {#- EL RESPONSABLE DE LA TAREA se cambia aquí mismo (Tiziano, 7-oct-2026: «En
         las tareas, tambien quiero poder cambiar el resposable.»; y que sea en
         Proyectos, sin avisar por Telegram a nadie). Solo para quien puede
@@ -382,7 +386,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         Es `form.marcar` para que guardar no mueva la página (la misma pieza
         que marcar hecha) y `data-auto` para que se guarde al escoger. -#}
     {% if not solo_ver %}
-    <form class="resp marcar" method="post" action="/proyectos/tarea/{{ t.id }}/responsable" data-auto>
+    <form class="resp marcar" method="post" action="/proyectos/tarea/{{ t.id }}/responsable{{ consulta_filtro }}" data-auto>
       <label for="rt-{{ t.id }}">Responsable</label>
       <select id="rt-{{ t.id }}" name="responsable">
         <option value="" {%- if not t.responsable %} selected{% endif %}>sin responsable</option>
@@ -398,7 +402,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         los demás desplegables de la página (el botón sigue ahí y sin JavaScript
         se guarda con él). -#}
     {% if not solo_ver and vista.tipo != 'proyecto' %}
-    <form class="resp" method="post" action="/proyectos/tarea/{{ t.id }}/proyecto" data-auto>
+    <form class="resp" method="post" action="/proyectos/tarea/{{ t.id }}/proyecto{{ consulta_filtro }}" data-auto>
       <label for="meter-{{ t.id }}">Meter en un proyecto</label>
       <select id="meter-{{ t.id }}" name="proyecto" required>
         <option value="" selected disabled>Escoge un proyecto…</option>
@@ -420,7 +424,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         <div class="globo">
           <div class="de"><b>{{ c.autor }}</b> · {{ c.creado_en|hora_rd }}{{ ' · editado' if c.editado }}</div>
           <p {% if not solo_ver %}data-dbl="texto" title="Doble clic para editar" {% endif %}{% if editar_comentario == c.id %}hidden{% endif %}>{{ c.texto }}</p>
-          {% if not solo_ver %}<form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/comentario/{{ c.id }}/editar" data-auto {% if editar_comentario != c.id %}hidden{% endif %}>
+          {% if not solo_ver %}<form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/comentario/{{ c.id }}/editar{{ consulta_filtro }}" data-auto {% if editar_comentario != c.id %}hidden{% endif %}>
             <textarea name="texto" required maxlength="{{ largo_comentario }}" aria-label="Editar el comentario">{{ c.texto }}</textarea>
             <button class="guardar">Guardar</button>
             <a class="btn-linea" href="{{ u }}&amp;t={{ t.id }}#tarea-{{ t.id }}">Cancelar</a>
@@ -430,7 +434,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       </div>
       {% else %}<p class="vacio">Sin comentarios todavía.</p>{% endfor %}
     </div>
-    {% if not solo_ver %}<form class="comentar" method="post" action="/proyectos/tarea/{{ t.id }}/comentar" data-auto>
+    {% if not solo_ver %}<form class="comentar" method="post" action="/proyectos/tarea/{{ t.id }}/comentar{{ consulta_filtro }}" data-auto>
       <textarea name="texto" required maxlength="{{ largo_comentario }}" placeholder="Escribe un comentario…" aria-label="Comentario"></textarea>
       <button class="guardar">Comentar</button>
     </form>{% endif %}
@@ -679,9 +683,9 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {% if not solo_ver %}<form class="renombrar" method="post" action="/proyectos/{{ m.id }}/nombre" data-auto {% if editar != 'nombre' %}hidden{% endif %}>
         <input name="nombre" type="text" required maxlength="{{ largo_nombre }}" value="{{ m.nombre }}" aria-label="Nombre del proyecto">
         <button class="guardar">Guardar</button>
-        <a class="btn-linea" href="/proyectos?p={{ m.id }}">Cancelar</a>
+        <a class="btn-linea" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}">Cancelar</a>
       </form>
-      <noscript><a class="nota" href="/proyectos?p={{ m.id }}&amp;editar=nombre">Cambiar el nombre</a></noscript>{% endif %}
+      <noscript><a class="nota" href="/proyectos?p={{ m.id }}&amp;editar=nombre{{ sufijo_filtro }}">Cambiar el nombre</a></noscript>{% endif %}
       {#- El aviso va justo debajo del título, como en la maqueta. -#}
       {% if m.dormido %}<div class="aviso-dormido">Este proyecto lleva {{ m.dias_sin_movimiento }} días sin movimiento: ni tareas hechas ni comentarios.</div>{% endif %}
       {% if m.descripcion %}<p class="descripcion">{{ m.descripcion }}</p>{% endif %}
@@ -723,7 +727,21 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       <div class="centro">
     <section class="bloque">
       <div class="encabezado"><h2>Tareas</h2></div>
-      {{ lista_de_tareas(m.pendientes, m.otras, m.n_hechas, m.n_otras, 'Sin tareas todavía.' if not m.n_total else 'No queda nada pendiente.') }}
+      {#- LOS FILTROS: enlaces de lectura (GET) que el servidor dibuja; la lista sale de
+          `db.tareas_con_filtro` y las cifras de «Cómo va» no cambian. «Las mías» no se ofrece
+          en solo ver (esa sesión no dice de quién es). -#}
+      {% if m.n_total %}
+      {% set base = '/proyectos?p=' ~ m.id %}
+      <nav class="filtros" aria-label="Filtrar las tareas">
+        <a href="{{ base }}"{% if not filtro %} aria-current="true"{% endif %}>Todas</a>
+        <a href="{{ base }}&amp;filtro=pendientes"{% if filtro == 'pendientes' %} aria-current="true"{% endif %}>Pendientes</a>
+        <a href="{{ base }}&amp;filtro=vencidas"{% if filtro == 'vencidas' %} aria-current="true"{% endif %}>Vencidas</a>
+        {% if ofrece_mias %}<a href="{{ base }}&amp;filtro=mias"{% if filtro == 'mias' %} aria-current="true"{% endif %}>Las mías</a>{% endif %}
+        {% if personas_filtro %}<span class="nota">Por persona:</span>
+        {% for n in personas_filtro %}<a href="{{ base }}&amp;filtro=persona&amp;quien={{ n|urlencode }}"{% if filtro == 'persona' and quien == n %} aria-current="true"{% endif %}>{{ n }}</a>{% endfor %}{% endif %}
+      </nav>
+      {% endif %}
+      {{ lista_de_tareas(tareas_p.pendientes, tareas_p.otras, tareas_p.n_hechas, tareas_p.n_otras, 'Sin tareas todavía.' if not m.n_total else ('Ninguna tarea pendiente con este filtro.' if filtro else 'No queda nada pendiente.')) }}
       {% if not m.cerrado and not solo_ver %}
       <form class="nueva-tarea" method="post" action="/proyectos/{{ m.id }}/tareas">
         <input name="titulo" type="text" required maxlength="{{ largo_titulo }}" placeholder="Nueva tarea" aria-label="Nueva tarea">
@@ -753,8 +771,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         Todo va a la <a href="/papelera">Papelera</a>; de ahí lo restauras y el proyecto vuelve con esas tareas.</span>
         {% for k in claves_de_contenido_de_proyecto %}<input type="hidden" name="{{ k }}" value="{{ c[k] }}">{% endfor %}
         <button class="btn-lleno">Sí, borrar el proyecto</button>
-        <a class="btn-linea" href="/proyectos?p={{ m.id }}">No</a></form>
-      {% else %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;borrar_proyecto={{ m.id }}">Borrar proyecto</a>{% endif %}
+        <a class="btn-linea" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}">No</a></form>
+      {% else %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;borrar_proyecto={{ m.id }}{{ sufijo_filtro }}">Borrar proyecto</a>{% endif %}
     </div>
     {% endif %}
       </div>
@@ -787,8 +805,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         {%- if m.n_pendientes == 1 %} Queda 1 pendiente y sigue abierta en <a href="/tareas">Tareas</a>.
         {%- elif m.n_pendientes %} Quedan {{ m.n_pendientes }} pendientes y siguen abiertas en <a href="/tareas">Tareas</a>.{% endif %}
         <form class="en-linea" method="post" action="/proyectos/{{ m.id }}/estado"><input type="hidden" name="estado" value="cerrado"><button class="btn-lleno">Sí, cerrar</button></form>
-        <a class="btn-linea" href="/proyectos?p={{ m.id }}">Cancelar</a></div>
-      {% else %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;confirmar=cerrar">Cerrar proyecto</a>{% endif %}
+        <a class="btn-linea" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}">Cancelar</a></div>
+      {% else %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;confirmar=cerrar{{ sufijo_filtro }}">Cerrar proyecto</a>{% endif %}
     </section>
     {% endif %}
       </aside>

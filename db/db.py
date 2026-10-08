@@ -3289,6 +3289,37 @@ def _fila_de_tarea(t: dict, hoy: date, nombres: dict, comentarios: dict) -> dict
     }
 
 
+# Los filtros de las tareas de un proyecto (parte 2 de la página completa, 8-oct-2026). El
+# vocabulario es CERRADO: lo que no esté aquí no es un filtro y no esconde nada.
+FILTROS_DE_TAREAS = ("pendientes", "vencidas", "mias", "persona")
+
+
+def tarea_cumple_filtro(f: dict, filtro: str, quien: str = "", mi_nombre: str | None = None) -> bool:
+    """¿Esta fila (`_fila_de_tarea`) se enseña con ese filtro? Mira SOLO lo que la fila ya dice:
+    `es_pendiente`, `vencida` y `responsable` (el nombre). «Las mías» y «Por persona» comparan el
+    NOMBRE del responsable, el mismo con el que la página lo pinta; una tarea sin responsable no es de
+    nadie. Un filtro que no está en `FILTROS_DE_TAREAS` deja pasar todo (nunca esconde)."""
+    if filtro == "pendientes":
+        return bool(f["es_pendiente"])
+    if filtro == "vencidas":
+        return bool(f["vencida"])
+    if filtro == "mias":
+        return bool(mi_nombre) and f["responsable"] == mi_nombre
+    if filtro == "persona":
+        return bool(quien) and f["responsable"] == quien
+    return True
+
+
+def tareas_con_filtro(m: dict, filtro: str, quien: str = "", mi_nombre: str | None = None) -> dict:
+    """Las tareas de un proyecto (`armar_pagina`) con el filtro puesto: las mismas listas y el mismo
+    orden, sin las que no lo cumplen, y las cuentas del «N hechas» de la lista PLEGADA recalculadas
+    sobre lo que queda. Las cifras de «Cómo va» siguen siendo las de `_resumen` (todo el proyecto)."""
+    pendientes = [f for f in m["pendientes"] if tarea_cumple_filtro(f, filtro, quien, mi_nombre)]
+    otras = [f for f in m["otras"] if tarea_cumple_filtro(f, filtro, quien, mi_nombre)]
+    hechas = sum(1 for f in otras if f["es_hecha"])
+    return {"pendientes": pendientes, "otras": otras, "n_hechas": hechas, "n_otras": len(otras) - hechas}
+
+
 def _repartir(filas: list[dict]) -> tuple[list[dict], list[dict]]:
     """(pendientes ordenadas, no pendientes). Lo que no es `pendiente` —hecha,
     descartada o un estado que nadie declaró— va al segundo grupo, que también

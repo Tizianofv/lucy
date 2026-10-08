@@ -16,7 +16,7 @@ def modelo(con_personas: bool = True) -> dict:
           dict(id=2, nombre="Cerrado Dos", area="CDS", estado="cerrado"),
           dict(id=3, nombre="Sin area", area=None),
           dict(id=4, nombre="Estado raro", area="CDS", estado="estado-que-nadie-conoce")]
-    ta = [dict(id=10, titulo="Pendiente A", proyecto_id=1, vence_en=tp._dia(1)),
+    ta = [dict(id=10, titulo="Pendiente A", proyecto_id=1, vence_en=tp._dia(1), responsable_chat_id=424242),
           dict(id=11, titulo="Hecha B", proyecto_id=1, estado="hecha", completado_en=tp._dia(-1)),
           dict(id=12, titulo="Suelta C", area="CDS"),
           dict(id=13, titulo="Suelta sin grupo")]
@@ -90,6 +90,10 @@ class BaseQueNoSeToca:
             async def _areas():
                 return list(tp.AREAS)
             return _areas
+        if nombre == "tareas_con_filtro":
+            # NO es un doble: es la función REAL y pura de `db` (no toca la base; solo recorre las filas
+            # del modelo que ya se entregaron). Se deja pasar para que la prueba corra el filtro de verdad.
+            return db.tareas_con_filtro
         if nombre in {n for n in dir(db) if n.isupper()}:    # constantes (largos, estados…)
             return getattr(db, nombre)
         raise AssertionError(f"la ruta tocó la base: db.{nombre}")

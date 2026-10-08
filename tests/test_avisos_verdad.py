@@ -69,7 +69,11 @@ GENERICOS = ("1", "0", "7", "zzz", "Hogar", "5,6")      # valores que ninguna pl
 # («Ningún proyecto ni cliente con «x»»), `codigo` («No entendí «x» como código»), `responsable`
 # («no es de nadie»), `proyecto` de `/tareas/nueva` («Ese proyecto no existe o ya no está»). Una marca equivocada en un aviso nuevo NO está aquí y pone roja la prueba.
 NAVEGACION_QUE_HABLA = {("/proyectos", "p"), ("/proyectos", "q"), ("/movimientos", "codigo"),
-                        ("/tareas", "responsable"), ("/tareas/nueva", "proyecto")}
+                        ("/tareas", "responsable"), ("/tareas/nueva", "proyecto"),
+                        # `filtro` de un proyecto (parte 2, 8-oct-2026): con «Pendientes» o «Vencidas» y nada que
+                        # mostrar la lista dice «Ninguna tarea pendiente con este filtro.» Es el estado de la lista,
+                        # no un aviso de que algo se hizo.
+                        ("/proyectos", "filtro")}
 # Parámetros de aviso que SOLO acompañan a otro y no pintan nada por sí solos en un mundo de
 # prueba (su texto sale con `hecho=…`, o depende de un estado que el mundo no reproduce); su
 # prueba de estado es `test_borrar_segunda_vuelta.py` / `test_grupos.py` / `test_tarea_derivada.py`.
