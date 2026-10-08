@@ -878,6 +878,7 @@ def test_la_papelera_lista_la_nota_borrada_de_un_proyecto_y_la_devuelve_por_el_m
     assert [(n["id"], n["proyecto_nombre"], n["por_que_no"]) for n in lo_borrado["notas"]] == [(10, "Disco de prueba", None)]
     assert lo_borrado["proyectos"] == [] and lo_borrado["tareas"] == []
     html = _papelera().text
+    assert "La papelera está vacía" not in html and "No hay gastos en la papelera" in html
     assert "Notas · 1" in html and "se va y vuelve" in html and "sigue viva en el proyecto" not in html
     assert 'name="tabla" value="notas"' in html and 'name="id" value="10"' in html
     r = _restaurar(10)
