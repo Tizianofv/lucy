@@ -869,6 +869,20 @@ def test_la_pagina_carga_con_la_base_sin_migrar_y_no_dibuja_la_carpeta(uno, monk
     assert "Empezó" in ver(uno, p=1)                                    # y las fechas (migración anterior) también
 
 
+def test_con_la_carpeta_migrada_y_las_fechas_no_la_pagina_ensena_la_carpeta(uno, monkeypatch):
+    """La otra mitad de la independencia de las dos lecturas: si faltaran las columnas de las fechas (la
+    migración de la parte 4) y estuviera la de la carpeta, la carpeta se ve igual y las fechas no."""
+    from test_fechas_de_proyecto import _ddl_sin_las_fechas
+    uno.con.execute("DROP TABLE proyectos")
+    uno.con.execute(_ddl_sin_las_fechas())
+    monkeypatch.setattr(db, "pool", _PoolPg(uno.con))
+    uno.proyecto(1, "Disco de prueba", area="CDS", responsable=DUENO)
+    _poner(uno, carpeta=DRIVE)
+    html = ver(uno, p=1)
+    assert 'class="carpeta-enlace"' in html and f'href="{escape(DRIVE)}"' in html
+    assert "Empezó" not in html and "Cambiar las fechas" not in html
+
+
 def test_sin_migrar_la_lectura_dice_no_disponible_y_otro_error_no_se_traga(uno, monkeypatch):
     assert _correr(db.carpetas_de_proyectos()) == {1: None}
     _sin_migrar(uno, monkeypatch)
