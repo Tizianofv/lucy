@@ -94,6 +94,11 @@ class _Cur:
             tuple(_para_sqlite(v) for v in (params or ())))
         return self
 
+    @property
+    def rowcount(self):
+        """Como el cursor de psycopg: cuántas filas tocó la última sentencia."""
+        return self._cur.rowcount
+
     def _fila(self, f):
         if f is None or not self._dict:
             return f

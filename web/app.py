@@ -2132,6 +2132,14 @@ async def cambiar_descripcion_de_proyecto(request: Request, pid: int):
         return RedirectResponse(
             f"/proyectos?error=descripcion_{clave}&p={pid}&editar=descripcion#de-que-se-trata",
             status_code=303)
+    except Exception:
+        # La base falló en el guardado. No se sabe con certeza si llegó a confirmar, así que el aviso
+        # no dice «guardada» ni «NO se guardó»: manda a mirar cómo quedó (el formulario vuelve abierto
+        # con lo que HAY en la base).
+        log.exception("Panel de proyectos: falló la base al guardar la descripción de #%s", pid)
+        return RedirectResponse(
+            f"/proyectos?error=descripcion_base&p={pid}&editar=descripcion#de-que-se-trata",
+            status_code=303)
     if despues is None:
         return RedirectResponse("/proyectos?error=proyecto", status_code=303)
     if log_id is None:

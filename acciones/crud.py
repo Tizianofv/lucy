@@ -1506,6 +1506,19 @@ class CambioAlEditar(ValueError):
 # darle su huella al formulario.
 _HUELLAS_DE_COLUMNA = {("proyectos", "descripcion"): db.huella_de_descripcion}
 
+# LAS COLUMNAS CON CANDADO: texto que se EDITA a partir de lo que se leyó (se agrega un renglón, se
+# corrige un párrafo), de modo que escribir sin mirar si cambió en el medio borra lo de otro sin
+# avisar. Para estas, el UPDATE de `editar` escribe SOLO si la columna sigue valiendo lo que `editar`
+# leyó (`AND col IS NOT DISTINCT FROM <lo leído>`): leer y escribir ya no se pueden separar por una
+# escritura ajena, sea quien sea quien llama (panel, Telegram `editar`, `perfil`). Si no escribió
+# ninguna fila, `CambioAlEditar`. Las demás columnas de todas las tablas siguen con el UPDATE de siempre.
+_COLUMNAS_CON_CANDADO = frozenset({("proyectos", "descripcion")})
+
+# Lo que dice `deshacer` cuando volver atrás borraría lo que se escribió DESPUÉS de esa edición.
+DESHACER_PISARIA_LA_DESCRIPCION = (
+    "No lo deshice: la descripción cambió después de esa edición y volver atrás borraría lo escrito "
+    "después. Si quieres la de antes, escríbela de nuevo.")
+
 
 class FilaEditada(dict):
     """La fila que devuelve `editar`, con `escritas`: las columnas que el UPDATE
@@ -1807,10 +1820,15 @@ async def editar(
             campos["pospuesta_veces"] = (antes.get("pospuesta_veces") or 0) + 1
 
         asignaciones = ", ".join(f"{c} = %s" for c in campos)
-        await conn.execute(
-            f"UPDATE {tabla} SET {asignaciones} WHERE id = %s",
-            (*campos.values(), registro_id),
+        # Las columnas con candado escriben solo si siguen valiendo lo leído arriba (`antes`).
+        candado = [c for c in campos if (tabla, c) in _COLUMNAS_CON_CANDADO]
+        condicion = "".join(f" AND {c} IS NOT DISTINCT FROM %s" for c in candado)
+        escrita = await conn.execute(
+            f"UPDATE {tabla} SET {asignaciones} WHERE id = %s{condicion}",
+            (*campos.values(), registro_id, *(antes[c] for c in candado)),
         )
+        if candado and escrita.rowcount == 0:
+            raise CambioAlEditar(candado[0])
         await cur.execute(f"SELECT * FROM {tabla} WHERE id = %s", (registro_id,))
         despues = await cur.fetchone()
 
@@ -1962,34 +1980,63 @@ async def perfil(
             return f"OK: {tipo} '{nombre}' creado en el perfil (#{rid}).", log_id
 
     # ── Existía: se acumula (editar() registra antes/después y es reversible) ─
-    cambios: dict = {}
-    if alias:
-        nuevos = [a.strip() for a in alias if a.strip()]
-        viejos = fila.get("alias") or []
-        union = viejos + [a for a in nuevos
-                          if a.lower() not in {v.lower() for v in viejos}]
-        if union != viejos:
-            cambios["alias"] = union
-    if relacion and relacion.strip():
-        if (fila.get("relacion") or "").strip().lower() != relacion.strip().lower():
-            cambios["relacion"] = relacion.strip()
-    if descripcion and descripcion.strip() and tabla == "proyectos":
-        cambios["descripcion"] = descripcion.strip()
-    if linea:
-        campo = "notas" if tabla == "personas" else "descripcion"
-        previo = fila.get(campo)
-        if campo not in cambios:
-            cambios[campo] = f"{previo}\n{linea}" if previo else linea
-        else:
-            cambios[campo] = f"{cambios[campo]}\n{linea}"
+    def _cambios_sobre(fila: dict) -> dict:
+        """Lo que hay que escribir, calculado sobre la `fila` que se leyó (se vuelve a calcular
+        si hay que leerla otra vez)."""
+        cambios: dict = {}
+        if alias:
+            nuevos = [a.strip() for a in alias if a.strip()]
+            viejos = fila.get("alias") or []
+            union = viejos + [a for a in nuevos
+                              if a.lower() not in {v.lower() for v in viejos}]
+            if union != viejos:
+                cambios["alias"] = union
+        if relacion and relacion.strip():
+            if (fila.get("relacion") or "").strip().lower() != relacion.strip().lower():
+                cambios["relacion"] = relacion.strip()
+        if descripcion and descripcion.strip() and tabla == "proyectos":
+            cambios["descripcion"] = descripcion.strip()
+        if linea:
+            campo = "notas" if tabla == "personas" else "descripcion"
+            previo = fila.get(campo)
+            if campo not in cambios:
+                cambios[campo] = f"{previo}\n{linea}" if previo else linea
+            else:
+                cambios[campo] = f"{cambios[campo]}\n{linea}"
+        return cambios
 
+    cambios = _cambios_sobre(fila)
     if not cambios:
         return f"OK: eso ya lo sabía de '{fila['nombre']}'.", None
 
-    _, log_id = await editar(
-        tabla, fila["id"], cambios,
-        motivo=f"Perfil: Tiziano contó algo de {fila['nombre']}",
-    )
+    # Lo que se agrega se calculó sobre `fila`, leída arriba en OTRA conexión: si la descripción
+    # cambió desde entonces (un guardado del panel, otro `perfil`), `editar` lo ve por la huella de
+    # lo leído y no escribe (`CambioAlEditar`); se vuelve a leer y a calcular, hasta 3 veces.
+    for intento in range(3):
+        sobre = ({"descripcion": db.huella_de_descripcion(fila.get("descripcion"))}
+                 if tabla == "proyectos" and "descripcion" in cambios else None)
+        try:
+            _, log_id = await editar(
+                tabla, fila["id"], cambios,
+                motivo=f"Perfil: Tiziano contó algo de {fila['nombre']}",
+                **({"si_sigue_igual": sobre} if sobre else {}),
+            )
+            break
+        except CambioAlEditar:
+            if intento == 2:
+                raise ValueError(
+                    "No anoté nada: la descripción del proyecto sigue cambiando mientras escribo. "
+                    "Vuelve a intentarlo en un momento.") from None
+            async with db.pool.connection() as conn:
+                cur = conn.cursor(row_factory=dict_row)
+                await cur.execute(
+                    "SELECT * FROM proyectos WHERE id = %s AND borrado_en IS NULL", (fila["id"],))
+                fila = await cur.fetchone()
+            if fila is None:
+                raise ValueError("No anoté nada: el proyecto ya no está.") from None
+            cambios = _cambios_sobre(fila)
+            if not cambios:
+                return f"OK: eso ya lo sabía de '{fila['nombre']}'.", None
     return (f"OK: perfil de '{fila['nombre']}' actualizado "
             f"({', '.join(cambios)}).", log_id)
 
@@ -2443,11 +2490,29 @@ async def deshacer(log_id: int) -> str:
             if tabla == "tareas" and "proyecto_id" in columnas:
                 await _recibir_al_deshacer(cur, registro_id, antes.get("proyecto_id"))
             asignaciones = ", ".join(f"{c} = r.{c}" for c in columnas)
+            # LAS COLUMNAS CON CANDADO no se devuelven si cambiaron DESPUÉS de esa edición: volver
+            # atrás borraría en silencio lo escrito después (p. ej. los renglones que `perfil`
+            # agregó). Se mira ahora, y el UPDATE además escribe solo si sigue valiendo lo mirado.
+            # (Las demás columnas siguen como siempre: se devuelve el `antes` sin mirar el valor actual.)
+            candado = [c for c in columnas if (tabla, c) in _COLUMNAS_CON_CANDADO]
+            actuales = {}
+            for c in candado:
+                await cur.execute(f"SELECT {c} FROM {tabla} WHERE id = %s", (registro_id,))
+                fila_actual = await cur.fetchone()
+                actuales[c] = fila_actual[c] if fila_actual else None
+                if _HUELLAS_DE_COLUMNA[(tabla, c)](actuales[c]) != _HUELLAS_DE_COLUMNA[(tabla, c)](despues.get(c)):
+                    raise ValueError(DESHACER_PISARIA_LA_DESCRIPCION)
+            condicion = "".join(f" AND t.{c} IS NOT DISTINCT FROM %s" for c in candado)
             try:
-                await conn.execute(
+                devuelta = await conn.execute(
                     f"UPDATE {tabla} t SET {asignaciones} "
-                    f"FROM jsonb_populate_record(null::{tabla}, %s) r WHERE t.id = %s",
-                    (json.dumps(antes, default=str, ensure_ascii=False), registro_id))
+                    f"FROM jsonb_populate_record(null::{tabla}, %s) r WHERE t.id = %s{condicion}",
+                    (json.dumps(antes, default=str, ensure_ascii=False), registro_id,
+                     *(actuales[c] for c in candado)))
+                if candado and devuelta.rowcount == 0:
+                    raise ValueError(DESHACER_PISARIA_LA_DESCRIPCION)
+            except ValueError:
+                raise
             except Exception as e:
                 # Devolver un grupo (`area`) que ya se quitó choca con la llave
                 # foránea: la transacción se revierte y no queda nada a medias; lo

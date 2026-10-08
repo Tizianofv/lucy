@@ -304,10 +304,10 @@ def test_guardar_escribe_deja_huella_de_panel_y_la_pagina_lo_dice_una_vez(uno):
 
 def test_una_direccion_escrita_a_mano_no_dice_que_se_guardo(uno):
     for consulta in ({"hecho": "descripcion"}, {"hecho": "descripcion_quitada"}, {"error": "descripcion_cambio"},
-                     {"error": "descripcion_largo"}, {"error": "descripcion_igual"}):
+                     {"error": "descripcion_largo"}, {"error": "descripcion_igual"}, {"error": "descripcion_base"}):
         html = ver(uno, p=1, **consulta)
         assert "Descripción guardada" not in html and "Descripción quitada" not in html, consulta
-        assert "NO se guardó" not in html and "ya decía eso" not in html, consulta
+        assert "NO se guardó" not in html and "ya decía eso" not in html and "no se pudo confirmar" not in html, consulta
 
 
 def test_vaciar_la_descripcion_la_quita_y_se_dice_que_se_quito(uno):
@@ -374,20 +374,21 @@ def test_un_proyecto_que_ya_no_esta_no_recibe_nada_y_se_dice(mundo, estado):
     assert "Ese proyecto ya no está." in ver_r(mundo, error="proyecto")
 
 
-def test_si_la_base_falla_no_se_dice_guardada(uno, monkeypatch):
-    """Una falla de la base no llega a la persona como un «guardada»: la ruta no contesta con
-    redirección ni deja recibo de ningún aviso."""
+def test_si_la_base_falla_el_aviso_no_dice_guardada_ni_deja_una_pagina_de_error_pelada(uno, monkeypatch):
+    """Una falla de la base en el guardado ya no sale como una página de error pelada: vuelve a la
+    descripción con un aviso que no afirma nada que no se sepa (no se sabe si llegó a confirmar)."""
     async def revienta(*a, **k):
         raise RuntimeError("la base no contesta")
+    original = crud.editar
     monkeypatch.setattr(crud, "editar", revienta)
-    c = Navegador(panel.app, base_url="https://testserver", raise_server_exceptions=False)
-    c.cookies.set(panel.COOKIE, auth.crear_token(config.CHAT_ID_DUENO, auth.VIDA_SESION))
-    r = c.post(RUTA.format(1), data={"descripcion": "Algo", "antes": db.huella_de_descripcion(None)},
-               follow_redirects=False)
-    assert r.status_code == 500 and "location" not in r.headers
-    assert "lucy_aviso" not in r.headers.get("set-cookie", "")
-    assert _fila(uno)["descripcion"] is None
-    assert "Descripción guardada" not in ver(uno, p=1, hecho="descripcion")
+    r = mandar(1, {"descripcion": "Algo", "antes": db.huella_de_descripcion(None)})
+    assert r.status_code == 303 and _donde(r) == "/proyectos?error=descripcion_base&p=1&editar=descripcion#de-que-se-trata"
+    assert "Algo" not in _donde(r)
+    assert _fila(uno)["descripcion"] is None and _huellas(uno) == []
+    monkeypatch.setattr(crud, "editar", original)
+    html = ver_r(uno, error="descripcion_base", p=1, editar="descripcion")
+    assert "no se pudo confirmar" in html and "Descripción guardada" not in html
+    assert "<textarea" in html                                        # el formulario vuelve abierto, con lo que hay
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -439,8 +440,9 @@ def test_abrir_y_guardar_sin_cambios_con_texto_que_empieza_con_saltos_y_espacios
     assert _fila(uno)["descripcion"] == crudo and _huellas(uno) == []
 
 
-def test_lo_que_llega_por_telegram_mientras_se_escribe_no_se_pisa(uno):
-    """Se abre el formulario, Telegram agrega un renglón con `perfil`, y se guarda lo que se veía: NO se
+def test_lo_que_llega_por_telegram_entre_abrir_el_formulario_y_guardar_no_se_pisa_EN_SECUENCIA(uno):
+    """EN SECUENCIA (cada paso termina antes del siguiente; el intercalado de verdad está en la sección 7).
+    Se abre el formulario, Telegram agrega un renglón con `perfil`, y se guarda lo que se veía: NO se
     escribe encima; la página vuelve con el formulario abierto y el texto como está AHORA."""
     _perfil(uno, "Primer renglón")
     abierto = _como_lo_manda_un_navegador(_abrir(uno))
@@ -459,7 +461,7 @@ def test_lo_que_llega_por_telegram_mientras_se_escribe_no_se_pisa(uno):
     assert _fila(uno)["descripcion"].endswith("Renglón que llegó por Telegram\nLo que escribí yo")
 
 
-def test_dos_sesiones_del_panel_la_segunda_que_guarda_no_pisa_a_la_primera(uno):
+def test_dos_formularios_abiertos_con_la_misma_huella_el_segundo_en_llegar_no_pisa_EN_SECUENCIA(uno):
     abierto = _como_lo_manda_un_navegador(_abrir(uno))
     primera = mandar(1, {**abierto, "descripcion": "Escribió la primera"})
     segunda = mandar(1, {**abierto, "descripcion": "Escribió la segunda"})
@@ -704,3 +706,227 @@ def test_sonda_en_marcha_todo_lo_que_cambia_la_descripcion_deja_huella_con_el_an
     escrituras = [s for s in visto if re.match(r"\s*UPDATE\s+proyectos\s+SET\s+descripcion\s*=", s, re.I)]
     assert len(escrituras) == 3, escrituras
     assert len(_huellas(uno)) == 3 and {h["accion"] for h in _huellas(uno)} == {"editar"}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 7. El intercalado de verdad: leer y escribir no se pueden separar por una escritura ajena
+# ═══════════════════════════════════════════════════════════════════════
+#
+# LA GARANTÍA (una sola, en la escritura misma): quien escribe `proyectos.descripcion` por `crud.editar` (el
+# panel, Telegram `editar`, `perfil`) escribe solo si la columna sigue valiendo lo que `editar` leyó
+# (`UPDATE … AND descripcion IS NOT DISTINCT FROM <lo leído>`); `perfil` además pasa la huella de lo que
+# ÉL leyó para calcular su renglón. `deshacer` se niega si la descripción cambió después de esa edición.
+#
+# CÓMO SE INTERCALA: el pool de prueba deja correr UNA escritura ajena (un `UPDATE` hecho como si lo
+# confirmara otra conexión) justo antes de que `editar` ejecute su `UPDATE proyectos SET descripcion`, es decir
+# entre su lectura y su escritura. El SQL es el de verdad, sobre SQLite.
+# FRONTERA: SQLite tiene una sola conexión y un solo hilo aquí; que, en Postgres, un `UPDATE … WHERE col IS NOT
+# DISTINCT FROM x` vuelva a evaluar la condición contra la fila que otra transacción acaba de confirmar (READ
+# COMMITTED) no corre en estas pruebas. Para medirlo hace falta una base Postgres real y dos conexiones
+# concurrentes (p. ej. un guion de `tools/` contra una base de pruebas, nunca la de producción); `tools/humo.py`
+# hoy solo ejerce lecturas de la página (`pagina_de_proyectos`), no esta escritura.
+
+import test_grupo_ia as _g
+
+
+class _PoolConGancho(_g._Pool):
+    """Como `_Pool`, pero antes del `UPDATE proyectos SET descripcion` de `editar` ejecuta `gancho(con)` (una
+    vez, o siempre con `siempre=True`): la escritura que otro confirmó entre la lectura y la escritura."""
+
+    def __init__(self, con, gancho, siempre=False):
+        super().__init__(con)
+        self.gancho, self.siempre, self.veces = gancho, siempre, 0
+
+    def connection(self):
+        pool = self
+        base = super().connection()
+
+        class _Cm:
+            async def __aenter__(s):
+                conn = await base.__aenter__()
+                original = conn.execute
+
+                async def execute(sql, params=()):
+                    if pool.gancho and str(sql).startswith("UPDATE proyectos SET descripcion"):
+                        pool.veces += 1
+                        gancho = pool.gancho
+                        if not pool.siempre:
+                            pool.gancho = None
+                        gancho(pool.con)
+                    return await original(sql, params)
+                conn.execute = execute
+                return conn
+
+            async def __aexit__(s, *e):
+                return await base.__aexit__(*e)
+        return _Cm()
+
+
+def _ajeno(texto):
+    def escribir(con):
+        con.execute("UPDATE proyectos SET descripcion = ? WHERE id = 1", (texto,))
+    return escribir
+
+
+def _con_gancho(monkeypatch, uno, gancho, siempre=False):
+    pool = _PoolConGancho(uno.con, gancho, siempre)
+    monkeypatch.setattr(db, "pool", pool)
+    return pool
+
+
+def test_el_panel_no_pisa_una_escritura_que_cayo_entre_su_lectura_y_su_escritura(uno, monkeypatch):
+    """Dos guardados casi simultáneos del panel que PASAN los dos la comparación de la huella: el segundo
+    no escribe, no dice «guardada» y no deja huella."""
+    _poner(uno, "Base")
+    abierto = db.huella_de_descripcion("Base")
+    pool = _con_gancho(monkeypatch, uno, _ajeno("Base\nEscrito por la otra sesión"))
+    r = mandar(1, {"descripcion": "Base\nEscrito por mí", "antes": abierto})
+    assert pool.veces == 1                                              # el intercalado ocurrió de verdad
+    assert _donde(r) == "/proyectos?error=descripcion_cambio&p=1&editar=descripcion#de-que-se-trata"
+    assert _fila(uno)["descripcion"] == "Base\nEscrito por la otra sesión" and _huellas(uno) == []
+
+
+def test_telegram_editar_no_pisa_una_escritura_que_cayo_entre_su_lectura_y_su_escritura(uno, monkeypatch):
+    _poner(uno, "Base")
+    _con_gancho(monkeypatch, uno, _ajeno("Base\nOtro"))
+    with pytest.raises(crud.CambioAlEditar):
+        _correr(crud.editar("proyectos", 1, {"descripcion": "Lo mío"}, motivo="t"))
+    assert _fila(uno)["descripcion"] == "Base\nOtro" and _huellas(uno) == []
+
+
+def test_perfil_no_pierde_un_guardado_del_panel_que_cae_entre_su_lectura_y_su_escritura(uno, monkeypatch):
+    """La carrera del testigo (H1): el guardado del panel cae entre la lectura de `perfil` y su llamada a
+    `editar`. `perfil` reintenta sobre lo nuevo y quedan los DOS textos."""
+    _poner(uno, "Lo que había")
+    abierto = _como_lo_manda_un_navegador(_abrir(uno))
+    original = crud.editar
+    pasos = {"n": 0}
+
+    async def editar_con_carrera(tabla, rid, cambios, motivo, **kw):
+        if tabla == "proyectos" and kw.get("actor", "lucy") == "lucy" and pasos["n"] == 0:
+            pasos["n"] = 1
+            await original("proyectos", rid, {"descripcion": "Texto del panel"}, motivo="panel", actor="panel",
+                           si_sigue_igual={"descripcion": abierto["antes"]})
+        return await original(tabla, rid, cambios, motivo, **kw)
+
+    monkeypatch.setattr(crud, "editar", editar_con_carrera)
+    res, log_id = _perfil(uno, "Renglón de Telegram")
+    final = _fila(uno)["descripcion"]
+    assert log_id is not None and res.startswith("OK: perfil de")
+    assert final.startswith("Texto del panel\n· [") and final.endswith("] Renglón de Telegram"), final
+    assert "Lo que había" not in final                    # el panel había reemplazado ese texto; perfil sumó el suyo encima
+
+
+def test_perfil_no_pierde_la_escritura_ajena_que_cae_justo_antes_del_update(uno, monkeypatch):
+    """Lo mismo en el último instante (entre el `SELECT` de `editar` y su `UPDATE`): el candado del UPDATE
+    lo ataja y `perfil` vuelve a leer."""
+    _poner(uno, "Base")
+    pool = _con_gancho(monkeypatch, uno, _ajeno("Base\nLlegó en el medio"))
+    res, log_id = _perfil(uno, "Mi renglón")
+    assert pool.veces == 1 and log_id is not None             # la escritura ajena cayó una vez, de verdad
+    final = _fila(uno)["descripcion"]
+    assert final.startswith("Base\nLlegó en el medio\n· [") and final.endswith("] Mi renglón"), final
+    assert len(_huellas(uno)) == 1                        # la tentativa fallida no dejó huella
+
+
+def test_perfil_se_rinde_diciendolo_si_la_descripcion_no_deja_de_cambiar(uno, monkeypatch):
+    _poner(uno, "Base")
+    cuenta = {"n": 0}
+
+    def siempre_otra(con):
+        cuenta["n"] += 1
+        con.execute("UPDATE proyectos SET descripcion = ? WHERE id = 1", (f"Base {cuenta['n']}",))
+    _con_gancho(monkeypatch, uno, siempre_otra, siempre=True)
+    with pytest.raises(ValueError, match="No anoté nada: la descripción del proyecto sigue cambiando"):
+        _perfil(uno, "Nunca entra")
+    assert cuenta["n"] == 3 and "Nunca entra" not in _fila(uno)["descripcion"] and _huellas(uno) == []
+
+
+def test_el_candado_solo_esta_en_la_descripcion_y_el_resto_de_las_ediciones_escribe_como_antes(uno, monkeypatch):
+    """HERMANOS: las demás columnas y tablas escriben con el UPDATE de siempre (`SET … WHERE id = N`, sin
+    condición sobre el valor). La lista de columnas con candado es esta y solo esta."""
+    assert crud._COLUMNAS_CON_CANDADO == {("proyectos", "descripcion")}
+    uno.tarea(7, "una tarea", proyecto=1)
+    visto = []
+    uno.con.set_trace_callback(visto.append)
+    try:
+        for tabla, rid, cambios in (
+                ("proyectos", 1, {"nombre": "Otro nombre"}), ("proyectos", 1, {"estado": "pausado"}),
+                ("proyectos", 1, {"area": "ACD"}), ("proyectos", 1, {"responsable_chat_id": config.CHAT_ID_DUENO}),
+                ("tareas", 7, {"titulo": "Otro"}), ("tareas", 7, {"detalle": "texto"}),
+                ("proyectos", 1, {"descripcion": "Con candado"})):
+            _correr(crud.editar(tabla, rid, cambios, motivo="t"))
+    finally:
+        uno.con.set_trace_callback(None)
+    updates = [q for q in visto if re.match(r"\s*UPDATE\s+(proyectos|tareas)\s+SET", q)]
+    assert len(updates) == 7, updates
+    for q in updates[:-1]:
+        assert re.fullmatch(r"UPDATE (proyectos|tareas) SET \w+ = .+ WHERE id = \d+", q) and "DISTINCT" not in q, q
+    assert updates[-1].endswith("AND descripcion IS NOT DISTINCT FROM NULL"), updates[-1]
+
+
+# ── deshacer ──────────────────────────────────────────────────────────────
+
+import test_nombre_de_proyecto as _tn
+
+
+def test_deshacer_una_edicion_de_la_descripcion_la_devuelve_si_nadie_la_toco_despues():
+    b = _tn.Base()
+    pid = b.proyecto("P")
+    b.con.execute("UPDATE proyectos SET descripcion = 'Antes' WHERE id = ?", (pid,))
+    _, l1 = _tn._correr(b, lambda: crud.editar("proyectos", pid, {"descripcion": "Después"}, motivo="uno"))
+    que = _tn._correr(b, lambda: crud.deshacer(l1))
+    assert que == "el cambio" and b.con.execute("SELECT descripcion FROM proyectos").fetchone()[0] == "Antes"
+    sql = [q for q in b.sql if "jsonb_populate_record" in q][-1]
+    assert sql.endswith("WHERE t.id = %s AND t.descripcion IS NOT DISTINCT FROM %s"), sql
+
+
+def test_deshacer_se_niega_si_la_descripcion_cambio_despues_y_no_borra_lo_escrito():
+    """H2: deshacer un guardado viejo no borra los renglones que llegaron después."""
+    b = _tn.Base()
+    pid = b.proyecto("P")
+    b.con.execute("UPDATE proyectos SET descripcion = 'Antes' WHERE id = ?", (pid,))
+    _, l1 = _tn._correr(b, lambda: crud.editar("proyectos", pid, {"descripcion": "Panel"}, motivo="uno"))
+    _tn._correr(b, lambda: crud.perfil("proyecto", "P", nota="Llegó después por Telegram"))
+    antes_de_deshacer = b.con.execute("SELECT descripcion FROM proyectos").fetchone()[0]
+    assert "Llegó después por Telegram" in antes_de_deshacer
+    huellas = len(b.huellas())
+    with pytest.raises(ValueError) as e:
+        _tn._correr(b, lambda: crud.deshacer(l1))
+    assert str(e.value) == crud.DESHACER_PISARIA_LA_DESCRIPCION == (
+        "No lo deshice: la descripción cambió después de esa edición y volver atrás borraría lo escrito "
+        "después. Si quieres la de antes, escríbela de nuevo.")
+    assert b.con.execute("SELECT descripcion FROM proyectos").fetchone()[0] == antes_de_deshacer
+    assert len(b.huellas()) == huellas                                # ni huella de deshacer
+
+
+def test_deshacer_tambien_se_niega_si_el_cambio_cae_entre_su_lectura_y_su_escritura(monkeypatch):
+    """El UPDATE de `deshacer` lleva el candado; si no tocó ninguna fila, se niega con la misma frase.
+    (El emulador de `jsonb_populate_record` de esta base de prueba no aplica la condición: aquí se
+    simula el resultado «0 filas» y se comprueba la rama; la condición misma se lee en el SQL.)"""
+    b = _tn.Base()
+    pid = b.proyecto("P")
+    b.con.execute("UPDATE proyectos SET descripcion = 'Antes' WHERE id = ?", (pid,))
+    _, l1 = _tn._correr(b, lambda: crud.editar("proyectos", pid, {"descripcion": "Después"}, motivo="uno"))
+
+    def cero_filas(self, sql, params):
+        if not re.search(r"UPDATE (\w+) t SET (.+?) FROM jsonb_populate_record", " ".join(sql.split())):
+            return None
+        return self._b.con.execute("UPDATE proyectos SET descripcion = descripcion WHERE 1 = 0")
+    monkeypatch.setattr(_tn._Cur, "_emular_deshacer", cero_filas)
+    with pytest.raises(ValueError, match="volver atrás borraría lo escrito después"):
+        _tn._correr(b, lambda: crud.deshacer(l1))
+    assert b.con.execute("SELECT descripcion FROM proyectos").fetchone()[0] == "Después"
+
+
+def test_deshacer_de_las_otras_columnas_sigue_como_en_06037e2_sin_mirar_el_valor_actual():
+    """HERMANOS (no es una garantía deseable: es lo que ya hacía y este trabajo no cambia): deshacer una edición
+    de `estado` devuelve el `antes` aunque el estado haya cambiado después, y su UPDATE no lleva condición."""
+    b = _tn.Base()
+    pid = b.proyecto("P")
+    _, l1 = _tn._correr(b, lambda: crud.editar("proyectos", pid, {"estado": "pausado"}, motivo="uno"))
+    _tn._correr(b, lambda: crud.editar("proyectos", pid, {"estado": "cerrado"}, motivo="dos"))
+    _tn._correr(b, lambda: crud.deshacer(l1))
+    assert b.con.execute("SELECT estado FROM proyectos").fetchone()[0] == "activo"
+    sql = [q for q in b.sql if "jsonb_populate_record" in q][-1]
+    assert "DISTINCT" not in sql and sql.endswith("WHERE t.id = %s")

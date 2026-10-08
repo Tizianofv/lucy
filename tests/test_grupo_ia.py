@@ -454,6 +454,11 @@ class _Cur:
         self._cur = self.con.execute(_hacia_sqlite(sql), params)
         return self
 
+    @property
+    def rowcount(self):
+        """Como el cursor de psycopg: cuántas filas tocó la última sentencia."""
+        return self._cur.rowcount
+
     async def fetchone(self):
         return _fila(self._cur.fetchone(), self.como_dict)
 

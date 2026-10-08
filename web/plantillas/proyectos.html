@@ -610,6 +610,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'descripcion_igual' %}<p class="aviso">La descripción ya decía eso: no cambió nada.</p>
     {% elif error == 'descripcion_largo' %}<p class="aviso">La descripción no puede pasar de {{ largo_descripcion }} caracteres: NO se guardó.</p>
     {% elif error == 'descripcion_caracteres' %}<p class="aviso">La descripción lleva caracteres que no se pueden guardar: NO se guardó.</p>
+    {% elif error == 'descripcion_base' %}<p class="aviso">La base de datos falló al guardar y no se pudo confirmar: lo que escribiste no está a salvo. Abajo está lo que hay ahora en la descripción; míralo antes de escribirlo otra vez.</p>
     {% elif error in ('descripcion_tipo', 'descripcion_invalida') %}<p class="aviso">Ese texto no se puede guardar como descripción: NO se guardó.</p>
     {% elif error == 'responsable' %}<p class="aviso">Ese responsable no vale: se escoge entre {{ nombres_responsable|join(', ') }}.</p>
     {% elif error == 'grupo' %}<p class="aviso">Ese grupo no existe.</p>

@@ -97,6 +97,11 @@ class _Cur:
             f"UPDATE {tabla} SET " + ", ".join(f"{c} = ?" for c in columnas)
             + " WHERE id = ?", [datos[c] for c in columnas] + [params[1]])
 
+    @property
+    def rowcount(self):
+        """Como el cursor de psycopg: cuántas filas tocó la última sentencia."""
+        return self._cur.rowcount
+
     def _fila(self, f):
         if f is None:
             return None
