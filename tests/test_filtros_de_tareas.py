@@ -60,6 +60,7 @@ def _sembrar(mundo, gente):
     t(19, "descartada de rosi", proyecto=1, estado="descartado", responsable=gente.rosi)
     t(20, "de otro proyecto", proyecto=2, vence=_dia(-1), responsable=gente.dueno)
     t(21, "suelta", area="CDS", responsable=gente.dueno)
+    t(22, "suelta sin grupo")
     mundo.con.execute("INSERT INTO comentarios_tarea (id, tarea_id, autor_chat_id, creado_en, texto) "
                       "VALUES (50, 10, ?, '2026-09-01T00:00:00+00:00', 'un comentario')", (gente.dueno,))
 
@@ -465,14 +466,13 @@ def test_como_va_dice_lo_mismo_con_cualquier_filtro(mundo, gente):
 
 def test_las_otras_vistas_ignoran_el_filtro(mundo, gente):
     _sembrar(mundo, gente)
-    for consulta in ({"g": "CDS"}, {"sin_grupo": 1}, {}):
+    for consulta in ({"g": "CDS"}, {"sin_grupo": 1}, {"g": "CDS", "t": 21}):
         limpio = ver(mundo, **consulta)
+        assert not arbol(limpio).buscar("nav", "filtros") and _ids(limpio)
         for filtro, quien in FILTROS_PUESTOS:
             filtrado = ver(mundo, **consulta, **_consulta(filtro, quien))
-            if arbol(limpio).buscar("nav", "filtros"):
-                continue
             assert _ids(filtrado) == _ids(limpio), (consulta, filtro)
-            assert "filtro=" not in filtrado
+            assert "filtro=" not in filtrado and 'name="filtro"' not in filtrado and 'name="quien"' not in filtrado
 
 
 def test_un_proyecto_sin_tareas_no_ofrece_filtros(mundo, gente):
