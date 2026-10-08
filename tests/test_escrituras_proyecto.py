@@ -962,7 +962,7 @@ def test_toda_ruta_post_de_proyectos_pide_sesion_y_escribe_por_una_puerta_con_ac
         "/proyectos/{pid}/fechas": {"crud.editar"},           # 8-oct-2026: inicio, entrega, «Termina cuando»
         "/proyectos/{pid}/carpeta": {"crud.editar"},          # 8-oct-2026: la carpeta del proyecto
         # 8-oct-2026: las notas y decisiones; escriben por SUS tres funciones de `db` (no por `crud.editar`:
-        # el UPDATE lleva el proyecto y el texto leído, y la puerta de quién la toca es `db.puede_tocar_nota`)
+        # el UPDATE lleva el proyecto y el texto leído; las toca cualquiera de la casa, como los comentarios)
         "/proyectos/{pid}/notas": {"db.crear_nota_de_proyecto"},
         "/proyectos/{pid}/notas/{nid}/editar": {"db.editar_nota_de_proyecto"},
         "/proyectos/{pid}/notas/{nid}/borrar": {"db.borrar_nota_de_proyecto"},

@@ -12,7 +12,7 @@ REALES y SQL que se ejecuta de verdad (SQLite con el `CREATE TABLE notas` y `ban
   4. el autor sale de la sesión (nunca del formulario), una nota de Telegram lo dice por su bandeja, una
      sin autor conocido lo dice, y la página no escribe un número de chat;
   5. quién ve y quién puede: la casa ve y escribe; solo ver ve y no escribe; sin sesión ni se ve ni se
-     escribe; editar y borrar, solo quien la escribió (`db.puede_tocar_nota`);
+     escribe; editar y borrar, cualquiera de la casa (el autor no cambia);
   6. los tres hermanos (crear, editar, borrar) cumplen lo mismo: sesión, proyecto vivo, huella, aviso
      verdadero; una nota de OTRO proyecto, o de ninguno, no se toca por la ruta de este;
   7. escribir una nota cuenta como movimiento del proyecto (la consulta REAL del modelo), y todo sitio
@@ -905,7 +905,7 @@ def test_el_aviso_de_nota_restaurada_dice_un_estado_y_no_la_direccion(uno):
     assert "ya está de vuelta" not in _papelera(hecho="nota_restaurada", id=10).text   # sin recibo
 
 
-def test_lo_que_no_se_lista_ni_se_devuelve_nota_sin_proyecto_viva_sin_huella_o_de_proyecto_borrado(uno):
+def test_por_la_pagina_lo_que_no_se_lista_ni_se_devuelve_viva_sin_huella_o_de_proyecto_borrado(uno):
     uno.proyecto(3, "En la papelera", area="CDS", borrado=True)
     _nota(uno, 10, None, "sin proyecto", autor=DUENO, borrada=True)
     _nota(uno, 11, 1, "borrada sin huella", autor=DUENO, borrada=True)
@@ -923,6 +923,38 @@ def test_lo_que_no_se_lista_ni_se_devuelve_nota_sin_proyecto_viva_sin_huella_o_d
     # el proyecto vuelve: ahora la nota sí se puede devolver sola
     _correr(crud.deshacer_borrado("proyectos", 3))
     assert "hecho=nota_restaurada" in _donde(_restaurar(12))
+
+
+def _huella_de_borrar(uno, nid):
+    return max(h["id"] for h in _huellas(uno) if h["accion"] == "borrar" and h["tabla"] == "notas" and h["registro_id"] == nid)
+
+
+def test_por_telegram_deshacer_tampoco_devuelve_una_nota_a_un_proyecto_en_la_papelera(uno):
+    """`crud.deshacer(log_id)` DIRECTO (la ruta de Telegram): la regla vive ahí y la comparte la Papelera."""
+    uno.proyecto(3, "En la papelera", area="CDS", borrado=True)
+    _nota(uno, 12, 3, "de un proyecto borrado", autor=DUENO, borrada=True)
+    uno.huella("borrar", "notas", 12, CREADO)
+    antes, h_antes = _filas(uno), _huellas(uno)
+    with pytest.raises(ValueError, match="su proyecto está en la papelera"):
+        _correr(crud.deshacer(_huella_de_borrar(uno, 12)))
+    assert _filas(uno) == antes and _huellas(uno) == h_antes             # nada cambió, ni huella de «deshacer»
+    # y por la página, la misma negativa con la misma razón
+    assert "error=restaurar_no_se_pudo" in _donde(_restaurar(12)) and _filas(uno) == antes
+    # cuando el proyecto vuelve, por los dos caminos sí
+    uno.huella("borrar", "proyectos", 3, CREADO)
+    _correr(crud.deshacer_borrado("proyectos", 3))
+    assert _correr(crud.deshacer(_huella_de_borrar(uno, 12))) == "lo que había archivado"
+    assert _nota_fila(uno, 12)["borrado_en"] is None
+
+
+def test_una_nota_sin_proyecto_se_sigue_devolviendo_por_deshacer_como_antes(uno):
+    """Comportamiento de ANTES de la parte 6 (Telegram crea notas sin proyecto y `deshacer` las devuelve):
+    no cambia. En `9fb5f0c` la rama `borrar` de `deshacer` hacía `UPDATE {tabla} SET borrado_en = NULL` sin
+    mirar nada más (sonda: `git show 9fb5f0c:acciones/crud.py`)."""
+    _nota(uno, 10, None, "sin proyecto", autor=DUENO, borrada=True)
+    uno.huella("borrar", "notas", 10, CREADO)
+    assert _correr(crud.deshacer(_huella_de_borrar(uno, 10))) == "lo que había archivado"
+    assert _nota_fila(uno, 10)["borrado_en"] is None
 
 
 def test_devolver_una_nota_cuenta_como_movimiento_del_proyecto(uno):
@@ -1137,7 +1169,7 @@ def test_sonda_quien_lee_notas_con_el_nombre_a_mano_y_quien_la_pide_por_argument
                     lectores.add((rel, fn.name))
     assert lectores == {("db/db.py", "notas_de_proyectos"), ("db/db.py", "_nota_viva_de"),
                         ("db/db.py", "editar_nota_de_proyecto"), ("db/db.py", "aviso_de_nota"),
-                        ("db/db.py", "papelera_de_proyectos_y_tareas"), ("acciones/crud.py", "deshacer_borrado"),
+                        ("db/db.py", "papelera_de_proyectos_y_tareas"), ("acciones/crud.py", "deshacer"),
                         ("db/db.py", "pagina_de_proyectos")}, sorted(lectores)   # (esta última, la consulta de «movimiento»)
 
 

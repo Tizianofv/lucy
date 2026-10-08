@@ -2513,6 +2513,18 @@ async def deshacer(log_id: int) -> str:
             # proyecto: también es «recibir».
             if tabla == "tareas":
                 await _recibir_al_deshacer(cur, registro_id, None, reaparece=True)
+            # UNA NOTA DE UN PROYECTO QUE ESTÁ EN LA PAPELERA NO VUELVE SOLA (lo más conservador): quedaría
+            # viva dentro de un proyecto que no se ve. Se restaura primero el proyecto. Es LA decisión, y la
+            # toman los dos caminos (Telegram y la Papelera de la página). Una nota SIN proyecto sí vuelve,
+            # como siempre (Telegram las crea así y no salen en la página de ningún proyecto).
+            if tabla == "notas":
+                await cur.execute(
+                    "SELECT p.borrado_en FROM notas n JOIN proyectos p ON p.id = n.proyecto_id WHERE n.id = %s",
+                    (registro_id,))
+                suyo = await cur.fetchone()
+                if suyo is not None and suyo["borrado_en"] is not None:
+                    raise ValueError(
+                        "No la restauré: su proyecto está en la papelera. Restaura primero el proyecto.")
             await conn.execute(
                 f"UPDATE {tabla} SET borrado_en = NULL WHERE id = %s", (registro_id,))
             que = "lo que había archivado"
@@ -2654,7 +2666,7 @@ class NadaQueRestaurar(ValueError):
 
 
 async def deshacer_borrado(tabla: str, registro_id: int) -> tuple[str, int]:
-    """Restaurar un proyecto o una tarea DESDE LA PAPELERA de la página. NO es otra
+    """Restaurar un proyecto, una tarea o una nota DESDE LA PAPELERA de la página. NO es otra
     forma de des-borrar: busca la huella `borrar` más reciente de esa fila (la misma
     que Telegram deshace con `deshacer(log_id)`) y la pasa por `deshacer`. Por eso las
     dos vías dejan exactamente el mismo resultado, con las mismas reglas (nombre
@@ -2669,17 +2681,8 @@ async def deshacer_borrado(tabla: str, registro_id: int) -> tuple[str, int]:
         fila = await cur.fetchone()
         if fila is None or fila["borrado_en"] is None:
             raise NadaQueRestaurar("no_esta_borrado", "eso no está en la papelera")
-        # UNA NOTA NO VUELVE SOLA a un proyecto que está en la papelera (lo más conservador): se restaura
-        # primero el proyecto. Es la misma regla que la lista de la Papelera dice en su línea.
-        if tabla == "notas":
-            await cur.execute(
-                "SELECT p.borrado_en FROM notas n JOIN proyectos p ON p.id = n.proyecto_id WHERE n.id = %s",
-                (registro_id,))
-            suyo = await cur.fetchone()
-            if suyo is None:
-                raise ValueError("No la restauré: la nota no es de ningún proyecto.")
-            if suyo["borrado_en"] is not None:
-                raise ValueError("No la restauré: su proyecto está en la papelera. Restaura primero el proyecto.")
+        # (La regla «una nota de un proyecto en la papelera no vuelve sola» vive en `deshacer`, que es por
+        # donde pasa este camino: la página y Telegram no pueden decidir distinto.)
         await cur.execute(
             "SELECT max(id) AS id FROM log_acciones "
             "WHERE tabla = %s AND registro_id = %s AND accion = 'borrar'", (tabla, registro_id))

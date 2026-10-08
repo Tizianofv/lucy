@@ -13,8 +13,9 @@
 
 {% if proyectos_borrados or tareas_borradas or notas_borradas %}
 <h2>Proyectos, tareas y notas</h2>
-<p class="suave">Lo que se borra en Proyectos y en Tareas (desde la página o por Telegram) viene a
-parar aquí y se puede restaurar. Un proyecto vuelve con las tareas que se fueron con él. A diferencia de
+<p class="suave">Lo que se borra en Proyectos, en Tareas y en las notas de un proyecto (desde la página o por
+Telegram) viene a parar aquí y se puede restaurar. Un proyecto vuelve con las tareas que se fueron con él; una
+nota no vuelve mientras su proyecto esté en la papelera. A diferencia de
 los gastos de más abajo, esto no se vacía solo.</p>
 {% if proyectos_borrados %}
 <h3 class="suave">Proyectos · {{ proyectos_borrados|length }}</h3>
