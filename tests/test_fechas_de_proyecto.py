@@ -783,6 +783,24 @@ def test_solo_ver_ve_lo_que_tiene_valor_y_ningun_control(uno_con_fechas):
     assert "<dt>Entrega</dt>" in html and "Termina cuando" not in html.split("</style>", 1)[1]
 
 
+def test_la_plantilla_sola_tampoco_dibuja_controles_de_fechas_en_solo_ver(uno_con_fechas, monkeypatch):
+    """La ruta ya apaga `editar` en solo ver; esta prueba le quita ese apoyo: la plantilla recibe
+    `editar='fechas'` con `solo_ver=True` y no puede dibujar formulario, campos ni enlace."""
+    original = panel.plantillas.TemplateResponse
+
+    def con_editar(request, nombre, contexto=None, *a, **k):
+        if nombre == "proyectos.html":
+            assert contexto["solo_ver"] is True
+            contexto = {**contexto, "editar": "fechas"}
+        return original(request, nombre, contexto, *a, **k)
+
+    monkeypatch.setattr(panel.plantillas, "TemplateResponse", con_editar)
+    html = pagina_ver(uno_con_fechas, p=1)
+    assert 'name="inicio"' not in html and 'name="entrega"' not in html and "/proyectos/1/fechas" not in html
+    assert "editar=fechas" not in html and "Cambiar las fechas" not in html
+    assert "<dt>Entrega</dt><dd>30 oct 2026</dd>" in html            # lo que hay se lee
+
+
 def test_solo_ver_y_sin_sesion_no_escriben(uno_con_fechas):
     antes = _fila(uno_con_fechas)
     for chat in ("ver", None):
