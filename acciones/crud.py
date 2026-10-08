@@ -1433,6 +1433,10 @@ PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale,
           "proyectos": {"nombre": db.nombre_de_proyecto_que_vale,
                         "responsable_chat_id": _responsable_que_vale,
                         "estado": db.estado_de_proyecto_que_vale,
+                        # «De qué se trata» (parte 3 de la página completa, 8-oct-2026):
+                        # texto limpio y de a lo sumo `db.LARGO_DESCRIPCION_PROYECTO`,
+                        # por el panel, por Telegram `editar` y por `perfil`.
+                        "descripcion": db.descripcion_de_proyecto_que_vale,
                         "cliente_noco_id": _el_cliente_se_elige_en_el_panel,
                         "cliente_nombre": _el_cliente_se_elige_en_el_panel}}
 
@@ -1469,6 +1473,7 @@ _VUELVE_A = {
     ("proyectos", "nombre"): "el proyecto volvería a llamarse como se llamaba",
     ("proyectos", "responsable_chat_id"): "el proyecto volvería a quien lo llevaba",
     ("proyectos", "estado"): "el proyecto volvería al estado que tenía",
+    ("proyectos", "descripcion"): "el proyecto volvería a tener la descripción que tenía",
     ("proyectos", "cliente_noco_id"): "el proyecto volvería al cliente que tenía",
     ("proyectos", "cliente_nombre"): "el proyecto volvería al cliente que tenía",
 }
@@ -1485,6 +1490,23 @@ def _adaptar(v):
     return v
 
 
+class CambioAlEditar(ValueError):
+    """Entre que se abrió el formulario y se guardó, la columna `columna` cambió
+    (Telegram agregó un renglón con `perfil`, otra sesión del panel la editó): no
+    se escribió nada. Es lo que impide que guardar lo que se veía pise lo que
+    llegó en el medio."""
+
+    def __init__(self, columna: str):
+        super().__init__(f"{columna} cambió desde que se abrió: no cambié nada")
+        self.columna = columna
+
+
+# Cómo se reconoce «sigue igual» en cada columna que `editar` puede comparar
+# (`si_sigue_igual`). UNA función por columna, la misma que la pantalla usó para
+# darle su huella al formulario.
+_HUELLAS_DE_COLUMNA = {("proyectos", "descripcion"): db.huella_de_descripcion}
+
+
 class FilaEditada(dict):
     """La fila que devuelve `editar`, con `escritas`: las columnas que el UPDATE
     de verdad escribió (puede ser menos de las pedidas: un nombre que ya era ese
@@ -1494,9 +1516,14 @@ class FilaEditada(dict):
 
 async def editar(
     tabla: str, registro_id: int, cambios: dict, motivo: str,
-    *, actor: str = "lucy",
+    *, actor: str = "lucy", si_sigue_igual: dict | None = None,
 ) -> tuple[dict | None, int | None]:
     """Aplica cambios a una fila existente. Devuelve (después, log_id).
+
+    `si_sigue_igual` ({columna: huella}, solo las de `_HUELLAS_DE_COLUMNA`): el
+    panel dice con qué huella de la columna abrió su formulario; si lo que hay
+    ahora en la base ya no la tiene, `CambioAlEditar` y no se escribe nada. Quien
+    no la pasa (Telegram) escribe como siempre.
 
     Guarda el antes Y el después en el log: con eso, deshacer una edición es
     volver a escribir el 'antes', igual que con el borrado.
@@ -1601,6 +1628,23 @@ async def editar(
                     "No cambié nada: ya hay otro proyecto con ese nombre."
                 ) from db.NombreDeProyectoNoVale(
                     "repetido", "ya hay otro proyecto con ese nombre")
+
+        # LA DESCRIPCIÓN DE UN PROYECTO (parte 3, 8-oct-2026): (1) si el panel dijo con qué
+        # huella abrió el formulario y lo que hay ahora ya no la tiene, NO se escribe encima
+        # (`CambioAlEditar`). (2) Si lo pedido es lo que ya hay (comparado ya limpio, igual que
+        # el nombre), no se escribe ni se deja huella: abrir y guardar sin cambios no toca
+        # nada, tampoco lo que Telegram agregó con `perfil`.
+        for columna, esperada in (si_sigue_igual or {}).items():
+            huella_de = _HUELLAS_DE_COLUMNA.get((tabla, columna))
+            if huella_de is None:
+                raise ValueError(f"No sé comparar {tabla}.{columna} (si_sigue_igual).")
+            if columna not in antes or huella_de(antes[columna]) != esperada:
+                raise CambioAlEditar(columna)
+        if tabla == "proyectos" and "descripcion" in campos:
+            if campos["descripcion"] == db.texto_de_descripcion(antes["descripcion"]):
+                del campos["descripcion"]
+                if not campos:
+                    return antes, None
 
         # EL ÁREA (encargo 4), en TAREAS y en PROYECTOS, por la MISMA puerta
         # que usa `crear_desde_interpretacion` — `_area_que_vale`, ni una

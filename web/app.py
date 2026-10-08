@@ -1229,6 +1229,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          "sala_no": sala_no, "nombre_code": config.NOMBRE_CODE,
          "area_tecnica": db.AREA_TECNICA, "estado_cerrado": db.ESTADO_PROYECTO_CERRADO,
          "largo_nombre": db.LARGO_NOMBRE_PROYECTO,
+         "largo_descripcion": db.LARGO_DESCRIPCION_PROYECTO,
          "dias_dormido": db.DIAS_DORMIDO, "hecho": hecho,
          "confirmar": confirmar, "editar": editar,
          # Qué tarea tiene el detalle abierto o un formulario dibujado por el
@@ -2081,6 +2082,64 @@ async def cambiar_nombre_de_proyecto(request: Request, pid: int):
             f"/proyectos?error=nombre_igual&p={pid}#proyecto-{pid}", status_code=303)
     return RedirectResponse(
         f"/proyectos?nombre_guardado={pid}&p={pid}#proyecto-{pid}", status_code=303)
+
+
+@app.post("/proyectos/{pid}/descripcion")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def cambiar_descripcion_de_proyecto(request: Request, pid: int):
+    """Escribir o cambiar «De qué se trata» (`proyectos.descripcion`), parte 3 de la
+    página completa del proyecto (8-oct-2026).
+
+    POR LA MISMA PUERTA que Telegram: `crud.editar("proyectos", ...)`, que llama a
+    `crud.PUERTAS["proyectos"]["descripcion"]` (texto limpio, a lo sumo
+    `db.LARGO_DESCRIPCION_PROYECTO`); deja huella `actor='panel'` y se puede
+    deshacer. Esta ruta no decide qué texto vale: traduce el formulario y el rechazo a
+    una CLAVE en la URL (`?error=descripcion_largo|descripcion_caracteres|...`); ni la
+    URL ni el log llevan el texto.
+
+    El formulario trae `antes`: la huella de la descripción tal como estaba cuando se
+    abrió. `crud.editar` la compara con lo que hay AHORA y, si cambió en el medio
+    (Telegram agregó un renglón con `perfil`, otra sesión del panel), NO escribe y esta
+    ruta vuelve al formulario abierto, con la descripción como está hoy. Sin `antes` (un
+    POST que no salió de la página) se trata igual: no se escribe encima de algo que
+    no se vio.
+
+    Lo que se dice es lo que pasó: «guardada» solo si `editar` escribió (hay huella), «ya
+    decía eso» si el texto limpio es el que había, «ya no está» si el proyecto no existe o
+    está en la papelera.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    antes = formulario.get("antes", "")
+    # El valor se pasa TAL CUAL (puede no ser texto si el POST es multipart): la
+    # puerta de `crud.PUERTAS` decide si vale.
+    try:
+        despues, log_id = await crud.editar(
+            "proyectos", pid, {"descripcion": formulario.get("descripcion", "")},
+            motivo="Descripción cambiada desde el panel", actor="panel",
+            si_sigue_igual={"descripcion": antes if isinstance(antes, str) else ""})
+    except crud.CambioAlEditar:
+        log.warning("Panel de proyectos: la descripción de #%s cambió mientras se escribía", pid)
+        return RedirectResponse(
+            f"/proyectos?error=descripcion_cambio&p={pid}&editar=descripcion#de-que-se-trata",
+            status_code=303)
+    except ValueError as e:
+        causa = e.__cause__
+        clave = (causa.clave if isinstance(causa, db.DescripcionDeProyectoNoVale)
+                 else "invalida")
+        log.warning("Panel de proyectos: descripción rechazada para #%s (%s)", pid, clave)
+        return RedirectResponse(
+            f"/proyectos?error=descripcion_{clave}&p={pid}&editar=descripcion#de-que-se-trata",
+            status_code=303)
+    if despues is None:
+        return RedirectResponse("/proyectos?error=proyecto", status_code=303)
+    if log_id is None:
+        return RedirectResponse(
+            f"/proyectos?error=descripcion_igual&p={pid}#de-que-se-trata", status_code=303)
+    hecho = "descripcion" if despues["descripcion"] else "descripcion_quitada"
+    return RedirectResponse(
+        f"/proyectos?hecho={hecho}&p={pid}#de-que-se-trata", status_code=303)
 
 
 @app.post("/tareas/{tid}/area")

@@ -320,6 +320,7 @@ A_MANO = {
     "grupo_borrado": {"p": 1, "hecho": "grupo_borrado", "grupo": "CDS"},
     "tarea_borrada": {"p": 1, "hecho": "tarea_borrada", "borrada": 10},
     "editar=nombre": {"p": 1, "editar": "nombre"},
+    "editar=descripcion": {"p": 1, "editar": "descripcion"},     # parte 3 (8-oct-2026): el formulario de «De qué se trata»
     "editar_tarea": {"p": 1, "t": 10, "editar_tarea": 10},
     "confirmar_borrar": {"p": 1, "t": 10, "confirmar_borrar": 10},
     "editar_comentario": {"p": 1, "t": 10, "editar_comentario": 100},

@@ -1171,6 +1171,84 @@ def nombre_de_proyecto_que_vale(valor) -> str:
     return limpio
 
 
+# ── «DE QUÉ SE TRATA» (`proyectos.descripcion`, parte 3 del diseño de la página
+# completa del proyecto, 8-oct-2026) ──────────────────────────────────────────
+#
+# UNA SOLA PUERTA para «qué texto vale como descripción» y UNA SOLA forma de
+# dejarlo limpio, llamadas por TODO lo que escribe la columna por `crud.editar`
+# (el panel `POST /proyectos/{pid}/descripcion`, Telegram `editar` y `perfil`, que
+# agrega renglones con fecha) y por `crud.deshacer`. La puerta es
+# `crud.PUERTAS["proyectos"]["descripcion"]`. `convertir_tarea_en_proyecto`
+# copia el `detalle` de la tarea con su propio INSERT y NO pasa por acá (ver
+# `tests/test_descripcion_de_proyecto.py` para por qué y con qué frontera).
+#
+# El tope es el MISMO que ya tienen el detalle de una tarea y un comentario
+# (`LARGO_COMENTARIO`, `web/app.py::LARGO_DETALLE`): 2000. No sale de una medida de
+# producción de descripciones (no se midió); sale de que es el texto libre más largo
+# que la casa ya acepta en otra columna, y de la misma razón de ese tope: `TEXT` no
+# tiene límite, y sin uno un POST a mano puede guardar megabytes que después hay que
+# pintar y mandarle al modelo.
+LARGO_DESCRIPCION_PROYECTO = 2000
+
+
+class DescripcionDeProyectoNoVale(ValueError):
+    """Una descripción que no puede quedar. `clave` dice por qué (`tipo`,
+    `caracteres`, `largo`) para que una pantalla lo traduzca sin adivinar por el
+    texto. El mensaje NUNCA repite el texto pedido."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+def texto_de_descripcion(valor) -> str | None:
+    """La descripción en su forma de siempre: saltos de línea `\\n` (el navegador
+    manda `\\r\\n` desde un `textarea`), sin los espacios de alrededor, y `None`
+    si queda vacía. NO mira el largo (`descripcion_de_proyecto_que_vale` lo
+    hace): sirve también para leer lo que YA está guardado, sea cual sea su
+    largo, y compararlo con lo que llega. `None` es «sin descripción»; algo que
+    no es texto, o que lleva un NUL o un carácter que no se puede codificar
+    (Postgres no guarda un NUL en un `TEXT`), no vale."""
+    if valor is None:
+        return None
+    if not isinstance(valor, str):
+        raise DescripcionDeProyectoNoVale(
+            "tipo", "la descripción del proyecto tiene que ser un texto")
+    limpio = valor.replace("\r\n", "\n").replace("\r", "\n").strip()
+    try:
+        limpio.encode("utf-8")
+    except UnicodeEncodeError:
+        raise DescripcionDeProyectoNoVale(
+            "caracteres",
+            "la descripción del proyecto lleva caracteres que no se pueden guardar") from None
+    if "\x00" in limpio:
+        raise DescripcionDeProyectoNoVale(
+            "caracteres",
+            "la descripción del proyecto lleva caracteres que no se pueden guardar")
+    return limpio or None
+
+
+def descripcion_de_proyecto_que_vale(valor) -> str | None:
+    """La descripción limpia que va a quedar (`None` = sin descripción), o
+    `DescripcionDeProyectoNoVale`. Es la parte que no necesita la base: por eso
+    entra en `crud.PUERTAS`, que es síncrona."""
+    limpio = texto_de_descripcion(valor)
+    if limpio is not None and len(limpio) > LARGO_DESCRIPCION_PROYECTO:
+        raise DescripcionDeProyectoNoVale(
+            "largo",
+            f"la descripción del proyecto no puede pasar de {LARGO_DESCRIPCION_PROYECTO} caracteres")
+    return limpio
+
+
+def huella_de_descripcion(valor) -> str:
+    """Una huella de lo que dice AHORA la descripción (la de `texto_de_descripcion`,
+    así que `\\r\\n` y los espacios de alrededor no la cambian). El formulario del
+    panel la lleva escondida: al guardar, `crud.editar` la compara con lo que hay
+    en ese momento, y si otro (Telegram agregó un renglón con `perfil`, otra
+    sesión del panel) la cambió mientras se escribía, NO se guarda encima."""
+    return hashlib.sha256((texto_de_descripcion(valor) or "").encode("utf-8")).hexdigest()
+
+
 async def proyecto_vivo_con_nombre(cur, nombre: str, excluir_id: int | None = None):
     """El id de un proyecto VIVO que se llama así, o None. LA comparación de
     nombres de proyecto: la usan la búsqueda de Lucy (`_buscar_o_crear`,
@@ -3402,6 +3480,9 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
         modelo_proyectos[pid] = {
             "id": pid, "nombre": p["nombre"], "area": p["area"] if p["area"] in claves else None,
             "descripcion": p["descripcion"], "estado": p["estado"],
+            # Con qué huella se abre el formulario de «De qué se trata»: `crud.editar` la
+            # compara al guardar (`si_sigue_igual`) para no pisar lo que llegó en el medio.
+            "descripcion_huella": huella_de_descripcion(p["descripcion"]),
             "cerrado": p["estado"] == ESTADO_PROYECTO_CERRADO,
             # Telegram pudo guardar un estado libre antes de que existiera la
             # puerta (`crud.PUERTAS["proyectos"]["estado"]`): se ve, no se oculta.

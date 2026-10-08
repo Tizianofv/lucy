@@ -48,7 +48,11 @@ ERRORES_DE_ESTE_TRABAJO = {"proyectos.html": {"grupo_cambio", "borrar_cambio"},
                            "papelera.html": {"restaurar_no_esta", "restaurar_no_se_pudo"}}
 HECHOS_DE_ANTES = {"proyecto_nuevo", "grupo_creado", "grupo_quitado", "responsable", "cerrado", "cliente", "cliente_quitado",
                    "persona", "persona_quitada", "reabierto", "tarea_hecha", "tarea_reabierta", "tarea_titulo",
-                   "tarea_proyecto", "tarea_responsable", "comentario", "comentario_editado"}
+                   "tarea_proyecto", "tarea_responsable", "comentario", "comentario_editado",
+                   # «De qué se trata» (parte 3, 8-oct-2026): como `responsable` o `cliente`, dicen que se
+                   # guardó o se quitó; los ampara el recibo de `web/avisos.py` (solo un POST que llegó a
+                   # escribir lo deja), no una condición de estado.
+                   "descripcion", "descripcion_quitada"}
 
 
 def _claves(texto: str, campo: str) -> dict[str, bool]:

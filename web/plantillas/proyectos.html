@@ -103,6 +103,10 @@ main{min-width:0;display:flex;flex-direction:column;gap:1.4rem}
 .migas b{color:var(--color);font-weight:600}
 h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balance;overflow-wrap:anywhere}
 .descripcion{margin:0;color:var(--suave);font-size:.92rem;white-space:pre-wrap;overflow-wrap:anywhere}
+.de-que-se-trata form{display:flex;flex-direction:column;gap:.6rem}
+.de-que-se-trata textarea{font:inherit;width:100%;min-height:9rem;resize:vertical;padding:.55rem .7rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
+.de-que-se-trata .botones{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.de-que-se-trata button.guardar{font:600 .88rem var(--texto);padding:.5rem 1rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
 .quienes{display:flex;flex-wrap:wrap;gap:.4rem 1.4rem;font-size:.95rem}
 .quienes span{color:var(--suave)} .quienes b{font-weight:600}
 .quienes label{display:flex;align-items:center;gap:.45rem;color:var(--suave);font-size:.92rem}
@@ -602,6 +606,11 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'nombre_repetido' %}<p class="aviso">Ya hay otro proyecto con ese nombre. Cada proyecto se llama distinto.</p>
     {% elif error == 'nombre_igual' %}<p class="aviso">El nombre ya era ese: no cambió nada.</p>
     {% elif error == 'nombre_invalido' %}<p class="aviso">Ese nombre no se puede guardar.</p>
+    {% elif error == 'descripcion_cambio' %}<p class="aviso">La descripción cambió mientras la escribías (o el formulario no venía de esta página): lo que escribiste NO se guardó. Abajo está como está ahora.</p>
+    {% elif error == 'descripcion_igual' %}<p class="aviso">La descripción ya decía eso: no cambió nada.</p>
+    {% elif error == 'descripcion_largo' %}<p class="aviso">La descripción no puede pasar de {{ largo_descripcion }} caracteres: NO se guardó.</p>
+    {% elif error == 'descripcion_caracteres' %}<p class="aviso">La descripción lleva caracteres que no se pueden guardar: NO se guardó.</p>
+    {% elif error in ('descripcion_tipo', 'descripcion_invalida') %}<p class="aviso">Ese texto no se puede guardar como descripción: NO se guardó.</p>
     {% elif error == 'responsable' %}<p class="aviso">Ese responsable no vale: se escoge entre {{ nombres_responsable|join(', ') }}.</p>
     {% elif error == 'grupo' %}<p class="aviso">Ese grupo no existe.</p>
     {% elif error == 'estado' %}<p class="aviso">No se pudo cambiar el estado del proyecto.</p>
@@ -646,6 +655,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {%- if aviso_grupo_borrado.proyectos or aviso_grupo_borrado.tareas %} Lo que tenía se fue a la <a href="/papelera">Papelera</a>: {{ aviso_grupo_borrado.proyectos }} proyecto{{ 's' if aviso_grupo_borrado.proyectos != 1 }} y {{ aviso_grupo_borrado.tareas }} tarea{{ 's' if aviso_grupo_borrado.tareas != 1 }}. Lo que restaures vuelve a «Sin grupo».{% endif %}</p>
     {% elif hecho == 'proyecto_borrado' and aviso_proyecto_borrado %}<p class="aviso ok">El proyecto «{{ aviso_proyecto_borrado.nombre }}» está en la <a href="/papelera">Papelera</a>
       {%- if aviso_proyecto_borrado.tareas %}, con {{ aviso_proyecto_borrado.tareas }} tarea{{ 's' if aviso_proyecto_borrado.tareas != 1 }} que se {{ 'fue' if aviso_proyecto_borrado.tareas == 1 else 'fueron' }} con él{% endif %}. Se restaura desde ahí.</p>
+    {% elif hecho == 'descripcion' %}<p class="aviso ok">Descripción guardada.</p>
+    {% elif hecho == 'descripcion_quitada' %}<p class="aviso ok">Descripción quitada: el proyecto queda sin descripción.</p>
     {% elif hecho == 'responsable' %}<p class="aviso ok">Responsable guardado.</p>
     {% elif hecho == 'cerrado' %}<p class="aviso ok">Proyecto cerrado. Está en «cerrados» en la lista de la izquierda.</p>
     {% elif hecho == 'cliente' %}<p class="aviso ok">Cliente guardado.</p>
@@ -688,7 +699,6 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       <noscript><a class="nota" href="/proyectos?p={{ m.id }}&amp;editar=nombre{{ sufijo_filtro }}">Cambiar el nombre</a></noscript>{% endif %}
       {#- El aviso va justo debajo del título, como en la maqueta. -#}
       {% if m.dormido %}<div class="aviso-dormido">Este proyecto lleva {{ m.dias_sin_movimiento }} días sin movimiento: ni tareas hechas ni comentarios.</div>{% endif %}
-      {% if m.descripcion %}<p class="descripcion">{{ m.descripcion }}</p>{% endif %}
       <div class="quienes">{% if solo_ver %}<span class="nota">Cliente: <b>{{ m.cliente or 'Sin cliente' }}</b></span> <span class="nota">Responsable: <b>{{ m.responsable or '—' }}</b></span>{% else %}
         {#- EL CLIENTE se busca entre las personas de Noco (opcional: se puede
             quitar). Con JavaScript, escribir ofrece coincidencias y elegir
@@ -725,6 +735,27 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 
     <div class="cuerpo">
       <div class="centro">
+    {#- DE QUÉ SE TRATA (parte 3, 8-oct-2026): `proyectos.descripcion`. «Para quién» y con quién
+        hablar van DENTRO del texto (no hay un campo aparte). Se escribe con `?editar=descripcion`:
+        el servidor dibuja el formulario (sin JavaScript también). En solo ver se lee, y no sale si
+        no hay nada escrito; ningún control. El formulario lleva `antes`, la huella de lo que
+        se veía, para no pisar lo que llegue en el medio (`crud.editar`, `si_sigue_igual`). -#}
+    {% if m.descripcion or not solo_ver %}
+    <section class="bloque de-que-se-trata" id="de-que-se-trata">
+      <div class="encabezado"><h2>De qué se trata</h2>
+        {% if not solo_ver and editar != 'descripcion' %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar=descripcion{{ sufijo_filtro }}">{{ 'Cambiar' if m.descripcion else 'Escribir' }}</a>{% endif %}</div>
+      {% if not solo_ver and editar == 'descripcion' %}
+      <form class="descripcion-editar" method="post" action="/proyectos/{{ m.id }}/descripcion" data-auto>
+        <textarea name="descripcion" maxlength="{{ largo_descripcion }}" placeholder="De qué se trata, para quién es y con quién hablar" aria-label="De qué se trata este proyecto">
+{{ m.descripcion or '' }}</textarea>
+        <input type="hidden" name="antes" value="{{ m.descripcion_huella }}">
+        <p class="nota">Hasta {{ largo_descripcion }} caracteres. Si lo dejas vacío, el proyecto queda sin descripción.</p>
+        <div class="botones"><button class="guardar">Guardar</button><a class="btn-linea" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}">Cancelar</a></div>
+      </form>
+      {% elif m.descripcion %}<p class="descripcion">{{ m.descripcion }}</p>
+      {% else %}<p class="vacio">Todavía no hay nada escrito.</p>{% endif %}
+    </section>
+    {% endif %}
     <section class="bloque">
       <div class="encabezado"><h2>Tareas</h2></div>
       {#- LOS FILTROS: enlaces de lectura (GET) que el servidor dibuja; la lista sale de
