@@ -141,6 +141,18 @@ def test_las_mias_son_las_de_quien_entro_y_cada_quien_ve_las_suyas(mundo, gente,
     assert "Las mías" in html and 'aria-current="true">Las mías' in html
 
 
+def test_por_persona_compara_el_nombre_entero_no_un_pedazo(mundo, gente, monkeypatch):
+    """Dos personas cuyos nombres se contienen («Ana» y «Ana María»): filtrar por una no trae las de la otra, ni
+    por mayúsculas distintas."""
+    monkeypatch.setattr(config, "NOMBRES_POR_CHAT", {gente.dueno: "Ana", gente.rosi: "Ana María"})
+    _sembrar(mundo, gente)
+    for quien, chat in (("Ana", gente.dueno), ("Ana María", gente.rosi)):
+        html = ver(mundo, p=1, filtro="persona", quien=quien)
+        propias = {f["id"] for f in _filas() if f["responsable"] == quien}
+        assert propias and _ids(html) == propias, quien
+    assert _ids(ver(mundo, p=1, filtro="persona", quien="ana")) == {f["id"] for f in _filas()}      # no existe: no filtra
+
+
 def test_la_lista_de_una_persona_incluye_sus_hechas_y_el_resumen_cuenta_lo_que_queda(mundo, gente):
     _sembrar(mundo, gente)
     html = ver(mundo, p=1, filtro="persona", quien="Persona Dos")
