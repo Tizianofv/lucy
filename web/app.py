@@ -2237,7 +2237,7 @@ async def cambiar_carpeta_de_proyecto(request: Request, pid: int):
     del proyecto (8-oct-2026).
 
     POR LA MISMA PUERTA que Telegram: `crud.editar("proyectos", ...)`, que llama a
-    `crud.PUERTAS["proyectos"]["carpeta"]` (texto de una línea, de a lo sumo
+    `crud.PUERTAS["proyectos"]["carpeta"]` (texto sin caracteres de control `Cc`; U+2028 y U+2029 pasan; de a lo sumo
     `db.LARGO_CARPETA_PROYECTO`); deja huella `actor='panel'` y se puede deshacer. Esta ruta no decide
     qué vale ni si es un enlace (eso lo decide, al PINTAR, `db.enlace_de_carpeta`): traduce el
     formulario y el rechazo a una CLAVE en la URL (`?error=carpeta_largo|carpeta_caracteres|...`); ni

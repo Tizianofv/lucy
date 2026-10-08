@@ -1438,7 +1438,8 @@ async def _con_su_inicio(conn, cur, fila: dict) -> dict:
 #
 # DOS PUERTAS, y no se mezclan:
 #  · ESCRIBIR: `carpeta_de_proyecto_que_vale` (la llama `crud.PUERTAS["proyectos"]["carpeta"]`, o sea
-#    el panel, Telegram `editar` y `deshacer`): texto de una línea, sin espacios de alrededor, a lo
+#    el panel, Telegram `editar` y `deshacer`): texto sin caracteres de control (categoría Unicode `Cc`:
+#    NUL, `\n`, `\r`, tabulador…; los separadores U+2028 y U+2029 SÍ pasan), sin espacios de alrededor, a lo
 #    sumo `LARGO_CARPETA_PROYECTO`. NO decide si es un enlace: guarda cualquier texto que sea
 #    una ruta o una dirección.
 #  · PINTAR UN ENLACE: `enlace_de_carpeta` (la plantilla la llama como filtro, ver `web/app.py`). Es
@@ -1465,7 +1466,9 @@ def carpeta_guardada(valor) -> str | None:
     """La carpeta en su forma de siempre (sin espacios de alrededor, `None` si queda vacía), SIN mirar
     el largo: sirve también para leer lo que YA está guardado y compararlo con lo que llega. Lo que no
     es texto, o lleva un carácter de control (también un salto de línea en medio: es una ruta o una
-    dirección, de una línea) o uno que no se puede codificar, no vale (`CarpetaDeProyectoNoVale`)."""
+    dirección) o uno que no se puede codificar, no vale (`CarpetaDeProyectoNoVale`). «Carácter de control» es
+    la categoría Unicode `Cc` (NUL, `\\n`, `\\r`, tabulador…): los separadores de línea U+2028 y U+2029 (categorías
+    `Zl` y `Zp`) NO lo son y pasan esta puerta."""
     if valor is None:
         return None
     if not isinstance(valor, str):

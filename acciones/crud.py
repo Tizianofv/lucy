@@ -1444,8 +1444,9 @@ PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale,
                         "inicio": db.inicio_de_proyecto_que_vale,
                         "entrega": db.dia_de_proyecto_que_vale,
                         "termina_cuando": db.termina_cuando_que_vale,
-                        # La carpeta del proyecto (parte 5, 8-oct-2026): un texto de una línea, de a lo
-                        # sumo `db.LARGO_CARPETA_PROYECTO`; vacío = sin carpeta. Si es un enlace lo decide
+                        # La carpeta del proyecto (parte 5, 8-oct-2026): un texto sin caracteres de control
+                        # (`Cc`; los separadores U+2028 y U+2029 pasan), de a lo sumo `db.LARGO_CARPETA_PROYECTO`;
+                        # vacío = sin carpeta. Si es un enlace lo decide
                         # otra puerta, la de PINTAR (`db.enlace_de_carpeta`): esta guarda cualquier ruta.
                         "carpeta": db.carpeta_de_proyecto_que_vale,
                         "cliente_noco_id": _el_cliente_se_elige_en_el_panel,
