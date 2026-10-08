@@ -201,6 +201,10 @@ NOTAS_DE_COLUMNA = {
                               "NULL = sin fecha de entrega",
     ("proyectos", "termina_cuando"): "texto escrito a mano: qué tiene que ser verdad para dar el "
                                      "proyecto por terminado; NULL = sin escribir",
+    # La carpeta (parte 5, 8-oct-2026): texto escrito a mano; la página solo la pinta como enlace
+    # si empieza por http:// o https://.
+    ("proyectos", "carpeta"): "texto escrito a mano: dónde vive el proyecto (una dirección de Drive o "
+                              "la ruta de una carpeta de una computadora); NULL = sin carpeta",
     ("personas", "alias"): "text[]",
     ("log_acciones", "antes"): "jsonb",
     ("log_acciones", "despues"): "jsonb",

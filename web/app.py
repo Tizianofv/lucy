@@ -399,6 +399,11 @@ def _iniciales(nombre) -> str:
 
 plantillas.env.filters["dia_corto"] = _dia_corto
 plantillas.env.filters["dia_largo"] = _dia_largo
+# LA CARPETA DEL PROYECTO (parte 5, 8-oct-2026): la plantilla NO decide si la carpeta es un enlace ni
+# recibe esa decisión ya tomada en el modelo: llama a este filtro con el texto guardado, y solo lo que
+# devuelve (la dirección `http(s)` completa) llega a un `href`. Es `db.enlace_de_carpeta` y ninguna
+# otra función.
+plantillas.env.filters["enlace_de_carpeta"] = db.enlace_de_carpeta
 plantillas.env.filters["hace_dias"] = _hace_dias
 plantillas.env.filters["iniciales"] = _iniciales
 # El buscador de la página de proyectos filtra EN VIVO en el navegador (1-oct-2026,
@@ -1237,6 +1242,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          "largo_nombre": db.LARGO_NOMBRE_PROYECTO,
          "largo_descripcion": db.LARGO_DESCRIPCION_PROYECTO,
          "largo_termina_cuando": db.LARGO_TERMINA_CUANDO,
+         "largo_carpeta": db.LARGO_CARPETA_PROYECTO,
          "anio_menor": db.DIA_MAS_VIEJO_DE_PROYECTO.year, "anio_mayor": db.DIA_MAS_NUEVO_DE_PROYECTO.year,
          "dias_dormido": db.DIAS_DORMIDO, "hecho": hecho,
          "confirmar": confirmar, "editar": editar,
@@ -2221,6 +2227,64 @@ async def cambiar_fechas_de_proyecto(request: Request, pid: int):
         return RedirectResponse(
             f"/proyectos?error=fechas_igual&p={pid}#de-que-se-trata", status_code=303)
     return RedirectResponse(f"/proyectos?hecho=fechas&p={pid}#de-que-se-trata", status_code=303)
+
+
+@app.post("/proyectos/{pid}/carpeta")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def cambiar_carpeta_de_proyecto(request: Request, pid: int):
+    """Poner, cambiar o quitar la carpeta de un proyecto (`proyectos.carpeta`): dónde vive el proyecto,
+    una dirección de Drive o la ruta de una carpeta de una computadora. Parte 5 de la página completa
+    del proyecto (8-oct-2026).
+
+    POR LA MISMA PUERTA que Telegram: `crud.editar("proyectos", ...)`, que llama a
+    `crud.PUERTAS["proyectos"]["carpeta"]` (texto de una línea, de a lo sumo
+    `db.LARGO_CARPETA_PROYECTO`); deja huella `actor='panel'` y se puede deshacer. Esta ruta no decide
+    qué vale ni si es un enlace (eso lo decide, al PINTAR, `db.enlace_de_carpeta`): traduce el
+    formulario y el rechazo a una CLAVE en la URL (`?error=carpeta_largo|carpeta_caracteres|...`); ni
+    la URL ni el log llevan lo escrito.
+
+    Un campo vacío QUITA la carpeta. Un POST que ni trae el campo no quita nada: se rechaza.
+
+    Lo que se dice es lo que pasó: «guardada» o «quitada» solo si `editar` escribió (hay huella), «ya
+    estaba así» si el texto limpio es el que había, «ya no está» si el proyecto no existe o está en la
+    papelera.
+    """
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    if "carpeta" not in formulario:
+        log.warning("Panel de proyectos: carpeta de #%s sin el campo", pid)
+        return RedirectResponse(
+            f"/proyectos?error=carpeta_invalida&p={pid}&editar=carpeta#carpeta-del-proyecto", status_code=303)
+    try:
+        # El valor se pasa TAL CUAL (puede no ser texto si el POST es multipart): la puerta decide.
+        despues, log_id = await crud.editar(
+            "proyectos", pid, {"carpeta": formulario.get("carpeta")},
+            motivo="Carpeta cambiada desde el panel", actor="panel")
+    except ValueError as e:
+        causa = e.__cause__
+        if isinstance(causa, db.CarpetaDeProyectoNoVale):
+            clave = f"carpeta_{causa.clave}"
+        elif str(e).startswith("Esa tabla no tiene:"):
+            clave = "carpeta_sin_columna"
+        else:
+            clave = "carpeta_invalida"
+        log.warning("Panel de proyectos: carpeta rechazada para #%s (%s)", pid, clave)
+        return RedirectResponse(
+            f"/proyectos?error={clave}&p={pid}&editar=carpeta#carpeta-del-proyecto", status_code=303)
+    except Exception:
+        # La base falló en el guardado. No se sabe con certeza si llegó a confirmar, así que el aviso
+        # no dice «guardada» ni «NO se guardó»: manda a mirar cómo quedó.
+        log.exception("Panel de proyectos: falló la base al guardar la carpeta de #%s", pid)
+        return RedirectResponse(
+            f"/proyectos?error=carpeta_base&p={pid}&editar=carpeta#carpeta-del-proyecto", status_code=303)
+    if despues is None:
+        return RedirectResponse("/proyectos?error=proyecto", status_code=303)
+    if log_id is None:
+        return RedirectResponse(
+            f"/proyectos?error=carpeta_igual&p={pid}#carpeta-del-proyecto", status_code=303)
+    hecho = "carpeta" if despues["carpeta"] else "carpeta_quitada"
+    return RedirectResponse(f"/proyectos?hecho={hecho}&p={pid}#carpeta-del-proyecto", status_code=303)
 
 
 @app.post("/tareas/{tid}/area")

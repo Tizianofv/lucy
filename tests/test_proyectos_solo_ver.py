@@ -41,6 +41,7 @@ os.environ.setdefault("CHAT_ID_DUENO", "424242")
 import _proyectos_de_prueba as pp  # noqa: E402
 from _navegador import Navegador, dar_recibo  # noqa: E402
 import config  # noqa: E402
+import db.db as db  # noqa: E402
 import web.api_code as api_code  # noqa: E402
 import web.app as panel  # noqa: E402
 import web.auth as auth  # noqa: E402
@@ -285,6 +286,15 @@ class _Mirador(HTMLParser):
             if k.startswith("on") or k in ("contenteditable", "formaction", "data-dbl",
                                            "data-auto"):
                 self.sobran.append(f"{tag} con {k}")
+        # LA CARPETA DEL PROYECTO (parte 5, 8-oct-2026): el ÚNICO enlace hacia afuera que esta página
+        # puede llevar en solo ver (a Drive, p. ej.). Se declara con todo lo que se le exige: su clase,
+        # que abra aparte sin `opener` ni `referer`, y que su dirección pase por la puerta real
+        # (`db.enlace_de_carpeta`: una dirección http(s) entera, sin nada raro). Un enlace de esa
+        # clase que no cumpla cae en `sobran` como cualquier otro.
+        if (tag == "a" and a.get("class") == "carpeta-enlace" and a.get("target") == "_blank"
+                and a.get("rel") == "noopener noreferrer"
+                and a.get("href") is not None and db.enlace_de_carpeta(a["href"]) == a["href"]):
+            return
         for atributo in ("href", "src", "action", "formaction"):
             if tag in ("link", "meta"):      # tipografías y metadatos: no navegan a nada de Lucy
                 continue
@@ -322,6 +332,7 @@ A_MANO = {
     "editar=nombre": {"p": 1, "editar": "nombre"},
     "editar=descripcion": {"p": 1, "editar": "descripcion"},     # parte 3 (8-oct-2026): el formulario de «De qué se trata»
     "editar=fechas": {"p": 1, "editar": "fechas"},               # parte 4 (8-oct-2026): el formulario de las fechas
+    "editar=carpeta": {"p": 1, "editar": "carpeta"},             # parte 5 (8-oct-2026): el formulario de la carpeta
     "editar_tarea": {"p": 1, "t": 10, "editar_tarea": 10},
     "confirmar_borrar": {"p": 1, "t": 10, "confirmar_borrar": 10},
     "editar_comentario": {"p": 1, "t": 10, "editar_comentario": 100},

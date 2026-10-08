@@ -54,7 +54,9 @@ HECHOS_DE_ANTES = {"proyecto_nuevo", "grupo_creado", "grupo_quitado", "responsab
                    # escribir lo deja), no una condición de estado.
                    "descripcion", "descripcion_quitada",
                    # Las fechas (parte 4, 8-oct-2026): igual que la descripción, las ampara el recibo.
-                   "fechas"}
+                   "fechas",
+                   # La carpeta (parte 5, 8-oct-2026): igual, las ampara el recibo.
+                   "carpeta", "carpeta_quitada"}
 
 
 def _claves(texto: str, campo: str) -> dict[str, bool]:

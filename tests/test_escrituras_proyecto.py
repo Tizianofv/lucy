@@ -957,6 +957,7 @@ def test_toda_ruta_post_de_proyectos_pide_sesion_y_escribe_por_una_puerta_con_ac
         "/proyectos/{pid}/nombre": {"crud.editar"},
         "/proyectos/{pid}/descripcion": {"crud.editar"},      # 8-oct-2026: «De qué se trata»
         "/proyectos/{pid}/fechas": {"crud.editar"},           # 8-oct-2026: inicio, entrega, «Termina cuando»
+        "/proyectos/{pid}/carpeta": {"crud.editar"},          # 8-oct-2026: la carpeta del proyecto
         "/proyectos/{pid}/area": {"crud.editar"},
         "/proyectos/{pid}/responsable": {"crud.editar"},
         "/proyectos/{pid}/estado": {"crud.editar"},
@@ -999,7 +1000,7 @@ def _escritores_sql_de_proyectos() -> dict:
     genéricos `crud.editar`, `deshacer`) no se ve; esos los cubren las pruebas
     de las puertas (`tests/test_base_m2.py`)."""
     columnas = ("nombre", "area", "estado", "responsable_chat_id", "descripcion",
-                "inicio", "entrega", "termina_cuando")
+                "inicio", "entrega", "termina_cuando", "carpeta")
     salida = {c: set() for c in columnas}
     for archivo in _archivos_de_texto():
         if archivo.suffix != ".py":
@@ -1037,6 +1038,10 @@ def test_quien_escribe_cada_columna_del_proyecto_y_si_pasa_por_su_puerta():
     # `termina_cuando` nacen NULL y el resto, por `crud.editar` (SQL al vuelo, que este censo no ve).
     assert escritores["inicio"] == {"_con_su_inicio"}
     assert escritores["entrega"] == set() and escritores["termina_cuando"] == set()
+    # La carpeta (parte 5, 8-oct-2026): ningún `INSERT`/`UPDATE` escrito a mano la nombra; nace NULL y
+    # se escribe SOLO por `crud.editar` (SQL al vuelo, que este censo no ve: lo declara y lo ejerce
+    # `tests/test_carpeta_de_proyecto.py`).
+    assert escritores["carpeta"] == set()
     # `borrar_grupo` (7-oct-2026) solo PONE el área en NULL en los proyectos del grupo
     # que se borra; no escribe un grupo que venga de afuera.
     assert escritores["area"] == {"borrar_grupo", "convertir_tarea_en_proyecto", "crear_proyecto"}
@@ -1485,7 +1490,7 @@ def _primera_habilitada(c):
 # vista -> (consulta, acciones POST exactas que tiene que tener, página = proyecto)
 # Las escrituras de la tarea (`/proyectos/tarea/...`, `/proyectos/{pid}/tareas`)
 # son de `tests/test_escrituras_tarea.py`; acá, solo las del proyecto.
-_SOLO_PROYECTO = re.compile(r"/proyectos/(nuevo|\d+/(nombre|descripcion|fechas|area|responsable|estado|cliente|personas))")
+_SOLO_PROYECTO = re.compile(r"/proyectos/(nuevo|\d+/(nombre|descripcion|fechas|carpeta|area|responsable|estado|cliente|personas))")
 
 
 def _del_proyecto(formularios):
@@ -1522,6 +1527,10 @@ _VISTAS = {
     "editar_fechas": ({"p": 2, "editar": "fechas"},
                       ["/proyectos/2/nombre", "/proyectos/2/fechas", "/proyectos/2/responsable",
                        "/proyectos/2/cliente", "/proyectos/2/personas"] + _V),
+    # La carpeta (parte 5, 8-oct-2026): el formulario solo se dibuja con `?editar=carpeta`.
+    "editar_carpeta": ({"p": 2, "editar": "carpeta"},
+                       ["/proyectos/2/nombre", "/proyectos/2/carpeta", "/proyectos/2/responsable",
+                        "/proyectos/2/cliente", "/proyectos/2/personas"] + _V),
     # La página aparte (`?nuevo=`) es un formulario MÁS, el de siempre.
     "nuevo": ({"nuevo": "CDS"}, ["/proyectos/nuevo"] + _V),
 }
@@ -1599,6 +1608,10 @@ def test_cada_formulario_enviado_como_el_navegador_escribe_en_el_proyecto_de_la_
             assert {k: v for k, v in fila.items() if k not in ("inicio", "entrega", "termina_cuando")} == {
                 k: v for k, v in antes[pid].items() if k not in ("inicio", "entrega", "termina_cuando")}, (
                 vista, "tocó otra columna")
+        elif clase == "carpeta-editar":
+            assert fila["carpeta"] == "Escrito en carpeta", (vista, fila)
+            assert {k: v for k, v in fila.items() if k != "carpeta"} == {
+                k: v for k, v in antes[pid].items() if k != "carpeta"}, (vista, "tocó otra columna")
         elif clase == "resp":
             elegido = _otra_opcion(next(c for c in form["campos"] if c["tipo"] == "select"))
             assert fila["responsable_chat_id"] == nombres[_valor(elegido)], (vista, fila)

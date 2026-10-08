@@ -68,7 +68,7 @@ def _bloque(lado, clase):
 def test_como_va_esta_en_la_columna_derecha_y_no_en_la_cabecera_ni_en_el_centro(mundo, gente):
     _con_de_todo(mundo, gente)
     cabeza, centro, lado = _columnas(ver(mundo, p=1))
-    assert [h.todo_el_texto() for h in lado.buscar("h2")] == ["Cómo va", "Personas del proyecto", "Cerrar el proyecto"]
+    assert [h.todo_el_texto() for h in lado.buscar("h2")] == ["Cómo va", "Personas del proyecto", "Carpeta del proyecto", "Cerrar el proyecto"]
     como = _bloque(lado, "como-va")
     assert "2 de 4 tareas hechas" in como.todo_el_texto() and "1 vencida" in como.todo_el_texto()
     # En la cabecera quedan el estado, el último movimiento y los pendientes; ni la barra ni las vencidas.

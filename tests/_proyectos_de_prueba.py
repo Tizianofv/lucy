@@ -33,10 +33,14 @@ def modelo(con_personas: bool = True) -> dict:
     fechas = {1: dict(inicio=tp.HOY.replace(day=1), entrega=tp.HOY.replace(day=28),
                       termina_cuando="Los másters entregados"),
               2: dict(inicio=tp.HOY.replace(day=1), entrega=tp.HOY.replace(day=20), termina_cuando=None)}
-    return _armar(pr, ta, co, personas if con_personas else [], fechas)
+    # La carpeta (parte 5): el 1 es una dirección de Drive (se pinta como enlace), el 2 la ruta de una
+    # computadora (texto con «Copiar»), el resto no salió en la lectura (`carpeta_disponible` falso).
+    # Sin esto la plantilla no dibuja ni el enlace, ni el texto, ni el formulario de la carpeta.
+    carpetas = {1: "https://drive.example.test/carpetas/disco-uno", 2: "/Users/estudio/Proyectos/Disco Dos"}
+    return _armar(pr, ta, co, personas if con_personas else [], fechas, carpetas)
 
 
-def _armar(pr, ta, co, personas, fechas=None):
+def _armar(pr, ta, co, personas, fechas=None, carpetas=None):
     """`tp.modelo_de_filas` con participantes (esa función no los recibe): los mismos
     rellenos, y `db.armar_pagina` de verdad."""
     pr = [{"creado_en": tp.CREADO, "descripcion": None, "estado": "activo", "area": None,
@@ -45,7 +49,7 @@ def _armar(pr, ta, co, personas, fechas=None):
            "creado_en": tp.CREADO, "responsable_chat_id": None, "estado": "pendiente", **t}
           for t in ta]
     return db.armar_pagina(list(tp.AREAS), pr, ta, [], list(co), {424242: "Dueño"}, tp.HOY,
-                           participantes=personas, fechas=fechas)
+                           participantes=personas, fechas=fechas, carpetas=carpetas)
 
 
 class BaseQueNoSeToca:

@@ -1444,6 +1444,10 @@ PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale,
                         "inicio": db.inicio_de_proyecto_que_vale,
                         "entrega": db.dia_de_proyecto_que_vale,
                         "termina_cuando": db.termina_cuando_que_vale,
+                        # La carpeta del proyecto (parte 5, 8-oct-2026): un texto de una línea, de a lo
+                        # sumo `db.LARGO_CARPETA_PROYECTO`; vacío = sin carpeta. Si es un enlace lo decide
+                        # otra puerta, la de PINTAR (`db.enlace_de_carpeta`): esta guarda cualquier ruta.
+                        "carpeta": db.carpeta_de_proyecto_que_vale,
                         "cliente_noco_id": _el_cliente_se_elige_en_el_panel,
                         "cliente_nombre": _el_cliente_se_elige_en_el_panel}}
 
@@ -1484,6 +1488,7 @@ _VUELVE_A = {
     ("proyectos", "inicio"): "el proyecto volvería a tener la fecha de inicio que tenía",
     ("proyectos", "entrega"): "el proyecto volvería a tener la fecha de entrega que tenía",
     ("proyectos", "termina_cuando"): "el proyecto volvería a decir lo que decía en «Termina cuando»",
+    ("proyectos", "carpeta"): "el proyecto volvería a tener la carpeta que tenía",
     ("proyectos", "cliente_noco_id"): "el proyecto volvería al cliente que tenía",
     ("proyectos", "cliente_nombre"): "el proyecto volvería al cliente que tenía",
 }
@@ -1493,6 +1498,12 @@ _VUELVE_A = {
 # `datetime` a medianoche y la puerta (que rechaza un `datetime`) ya no podría distinguir un día de
 # una hora: estas columnas se le pasan a su puerta TAL CUAL llegaron.
 _COLUMNAS_DE_DIA = frozenset({("proyectos", "inicio"), ("proyectos", "entrega")})
+
+# LAS COLUMNAS QUE SON UN TEXTO Y NADA MÁS. `_adaptar` convierte en `datetime` un texto que arranca
+# como una fecha ISO; una carpeta que se llame «2026-10-08» (o «2026-10 ventas») no es una hora y la
+# puerta de la carpeta (que pide un texto) la rechazaría como `tipo`. Estas se le pasan a su puerta
+# TAL CUAL llegaron.
+_COLUMNAS_DE_TEXTO = frozenset({("proyectos", "carpeta")})
 
 # Las fechas del proyecto (parte 4): `editar` no escribe las que ya valen lo que se pide, y mira que
 # la entrega no quede antes del inicio. Misma regla en `deshacer`.
@@ -1595,7 +1606,7 @@ async def editar(
     if tabla == "participantes":
         raise ValueError("Las personas de un proyecto no se editan: se quitan y se vuelven a agregar.")
 
-    campos = {k: (v if (tabla, k) in _COLUMNAS_DE_DIA else _adaptar(v))
+    campos = {k: (v if (tabla, k) in _COLUMNAS_DE_DIA or (tabla, k) in _COLUMNAS_DE_TEXTO else _adaptar(v))
               for k, v in cambios.items() if es_editable(tabla, k)}
     if not campos:
         raise ValueError("No hay nada que cambiar.")
@@ -1699,6 +1710,20 @@ async def editar(
         if tabla == "proyectos" and "descripcion" in campos:
             if campos["descripcion"] == db.texto_de_descripcion(antes["descripcion"]):
                 del campos["descripcion"]
+                if not campos:
+                    return antes, None
+
+        # LA CARPETA DE UN PROYECTO (parte 5, 8-oct-2026): si lo pedido (ya limpio) es lo que ya hay,
+        # no se escribe ni se deja huella. Sin candado: es un dato corto que se escribe entero, no un
+        # texto que se edite a partir de lo leído. Lo ya guardado que la puerta no entiende (escrito a
+        # mano en la base) no es igual a nada de lo que llegue.
+        if tabla == "proyectos" and "carpeta" in campos:
+            try:
+                igual = campos["carpeta"] == db.carpeta_guardada(antes["carpeta"])
+            except db.CarpetaDeProyectoNoVale:
+                igual = False
+            if igual:
+                del campos["carpeta"]
                 if not campos:
                     return antes, None
 

@@ -115,6 +115,16 @@ h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balan
 .fechas-p input{font:inherit;padding:.45rem .6rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
 .fechas-p .botones{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
 .fechas-p button.guardar{font:600 .88rem var(--texto);padding:.5rem 1rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
+.carpeta-p .carpeta-contenido{display:flex;flex-direction:column;gap:.6rem;align-items:flex-start}
+.carpeta-p a.carpeta-enlace{font-weight:600;overflow-wrap:anywhere}
+.carpeta-p code.carpeta-texto{display:block;max-width:100%;box-sizing:border-box;user-select:all;overflow-wrap:anywhere;font-size:.86rem;padding:.45rem .6rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel)}
+.carpeta-p .copiar{display:none}
+.con-js .carpeta-p .copiar{display:inline-block}
+.carpeta-p form{display:flex;flex-direction:column;gap:.6rem;width:100%}
+.carpeta-p label{display:flex;flex-direction:column;gap:.2rem;font-size:.85rem;color:var(--suave)}
+.carpeta-p input{font:inherit;padding:.45rem .6rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
+.carpeta-p .botones{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.carpeta-p button.guardar{font:600 .88rem var(--texto);padding:.5rem 1rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
 .entrega-en{margin:.7rem 0 0;font-size:.88rem;color:var(--suave)}
 .entrega-en.roja{color:var(--vencida);font-weight:600}
 .quienes{display:flex;flex-wrap:wrap;gap:.4rem 1.4rem;font-size:.95rem}
@@ -634,6 +644,12 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'fechas_base' %}<p class="aviso">La base de datos falló al guardar y no se pudo confirmar: lo que escribiste no está a salvo. Abajo están las fechas como están ahora; míralas antes de escribirlas otra vez.</p>
     {% elif error == 'fechas_sin_columnas' %}<p class="aviso">Las fechas todavía no se pueden guardar: falta actualizar la base de datos. NO se guardó nada.</p>
     {% elif error == 'fechas_invalida' %}<p class="aviso">Esas fechas no se pueden guardar: NO se guardó nada.</p>
+    {% elif error == 'carpeta_largo' %}<p class="aviso">La carpeta no puede pasar de {{ largo_carpeta }} caracteres: NO se guardó.</p>
+    {% elif error in ('carpeta_caracteres', 'carpeta_tipo') %}<p class="aviso">Esa carpeta lleva caracteres que no se pueden guardar (por ejemplo un salto de línea): NO se guardó.</p>
+    {% elif error == 'carpeta_igual' %}<p class="aviso">La carpeta ya estaba así: no cambió nada.</p>
+    {% elif error == 'carpeta_base' %}<p class="aviso">La base de datos falló al guardar y no se pudo confirmar: lo que escribiste no está a salvo. Abajo está la carpeta como está ahora; mírala antes de escribirla otra vez.</p>
+    {% elif error == 'carpeta_sin_columna' %}<p class="aviso">La carpeta todavía no se puede guardar: falta actualizar la base de datos. NO se guardó nada.</p>
+    {% elif error == 'carpeta_invalida' %}<p class="aviso">Esa carpeta no se puede guardar: NO se guardó nada.</p>
     {% elif error == 'responsable' %}<p class="aviso">Ese responsable no vale: se escoge entre {{ nombres_responsable|join(', ') }}.</p>
     {% elif error == 'grupo' %}<p class="aviso">Ese grupo no existe.</p>
     {% elif error == 'estado' %}<p class="aviso">No se pudo cambiar el estado del proyecto.</p>
@@ -681,6 +697,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif hecho == 'descripcion' %}<p class="aviso ok">Descripción guardada.</p>
     {% elif hecho == 'descripcion_quitada' %}<p class="aviso ok">Descripción quitada: el proyecto queda sin descripción.</p>
     {% elif hecho == 'fechas' %}<p class="aviso ok">Fechas guardadas.</p>
+    {% elif hecho == 'carpeta' %}<p class="aviso ok">Carpeta guardada.</p>
+    {% elif hecho == 'carpeta_quitada' %}<p class="aviso ok">Carpeta quitada: el proyecto queda sin carpeta.</p>
     {% elif hecho == 'responsable' %}<p class="aviso ok">Responsable guardado.</p>
     {% elif hecho == 'cerrado' %}<p class="aviso ok">Proyecto cerrado. Está en «cerrados» en la lista de la izquierda.</p>
     {% elif hecho == 'cliente' %}<p class="aviso ok">Cliente guardado.</p>
@@ -876,6 +894,36 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       <div class="personas">{% for x in m.personas %}{{ ficha_persona(x, '/proyectos/' ~ m.id ~ '/personas/' ~ x.id ~ '/quitar') }}{% else %}<p class="vacio">Nadie más todavía.</p>{% endfor %}</div>
       {{ agregar_persona('proyecto', '/proyectos/' ~ m.id ~ '/personas') }}
     </section>
+    {#- LA CARPETA DEL PROYECTO (parte 5, 8-oct-2026): UN solo dato, dónde vive el proyecto. Si es una
+        dirección `http://` o `https://` se pinta como enlace («Abrir la carpeta», en otra pestaña y
+        sin darle a esa página ni el `opener` ni de dónde vienes); cualquier otra cosa, como TEXTO
+        escapado. Quién decide si es un enlace es el filtro `enlace_de_carpeta` (`db.enlace_de_carpeta`),
+        llamado acá con el texto guardado: ningún otro sitio de la plantilla escribe `m.carpeta` dentro de
+        un `href`. El botón «Copiar» solo sale a la sesión de la casa (la de solo ver no lleva guion) y
+        sin JavaScript no se ve: el texto queda seleccionable. Sin la columna en la base
+        (`m.carpeta_disponible` falso) no se dibuja nada de esto. -#}
+    {% set enlace_carpeta = m.carpeta|enlace_de_carpeta %}
+    {% set copiar_carpeta = false %}
+    {% if m.carpeta_disponible and (m.carpeta or not solo_ver) %}
+    <section class="bloque carpeta-p" id="carpeta-del-proyecto">
+      <div class="encabezado"><h2>Carpeta del proyecto</h2>
+        {% if not solo_ver and editar != 'carpeta' %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar=carpeta{{ sufijo_filtro }}#carpeta-del-proyecto">{{ 'Cambiar' if m.carpeta else 'Poner' }}</a>{% endif %}</div>
+      {% if not solo_ver and editar == 'carpeta' %}
+      <form class="carpeta-editar" method="post" action="/proyectos/{{ m.id }}/carpeta" data-auto>
+        <label>Dónde vive el proyecto <input type="text" name="carpeta" maxlength="{{ largo_carpeta }}" value="{{ m.carpeta or '' }}" placeholder="Dirección de la carpeta en Drive o ruta en la computadora" aria-label="Carpeta del proyecto"></label>
+        <p class="nota">Pega la dirección de la carpeta en Drive (empieza por http:// o https://) y se abre con un clic, o escribe la ruta de la carpeta en la computadora. Hasta {{ largo_carpeta }} caracteres. Se guarda al salir del campo si cambió; para dejarla vacía, usa «Guardar» con el campo vacío. Si la dejas vacía, el proyecto queda sin carpeta.</p>
+        <div class="botones"><button class="guardar">Guardar</button><a class="btn-linea" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}#carpeta-del-proyecto">Cancelar</a></div>
+      </form>
+      {% elif enlace_carpeta %}
+      <div class="carpeta-contenido"><a class="carpeta-enlace" href="{{ enlace_carpeta }}" target="_blank" rel="noopener noreferrer">Abrir la carpeta</a></div>
+      {% elif m.carpeta %}
+      {% set copiar_carpeta = not solo_ver %}
+      <div class="carpeta-contenido"><code class="carpeta-texto">{{ m.carpeta }}</code>
+        {% if not solo_ver %}<button type="button" class="btn-linea copiar" data-copiar-carpeta>Copiar</button>{% endif %}
+        <p class="nota">Esta ruta solo sirve en la computadora donde existe la carpeta.</p></div>
+      {% else %}<p class="vacio">Todavía no hay carpeta.</p>{% endif %}
+    </section>
+    {% endif %}
     {#- CERRAR EL PROYECTO. La confirmación la dibuja el servidor (`?confirmar=cerrar`).
         En solo ver no hay controles: el bloque solo sale si el proyecto está cerrado (para decirlo). -#}
     {% if not solo_ver or m.cerrado %}
@@ -1249,6 +1297,39 @@ document.addEventListener("focusout", function (e) {
   if (!campo.value || !campo.value.trim()) return;         // vacío no guarda nada
   if (campo.value === campo.defaultValue) return;          // no cambió: no hay nada que guardar
   form.requestSubmit();
+});
+</script>{% endif %}
+{#- EL GUION DE «COPIAR» (carpeta del proyecto, parte 5): aparte del de arriba a propósito, para no
+    tocar el que marca tareas sin que la página salte. Solo sale si la página dibujó el botón (una
+    ruta de computadora, sesión de la casa). Va FUERA de `<main>`: los guiones de una región que
+    se repinta no vuelven a correr, y el oyente está en el documento. -#}
+{% if copiar_carpeta %}<script id="guion-copiar-carpeta">
+/* Lo que hace este guion, y nada más: el botón «Copiar» de la carpeta del proyecto copia al
+   portapapeles el texto que se ve al lado, y dice «Copiado» solo si el navegador lo copió. Si no
+   puede, deja el texto seleccionado y dice que se copie a mano. No manda nada a ningún servidor. */
+document.documentElement.classList.add("con-js");
+document.addEventListener("click", function (e) {
+  var boton = e.target && e.target.closest ? e.target.closest("[data-copiar-carpeta]") : null;
+  if (!boton) return;
+  var texto = boton.parentNode.querySelector("code.carpeta-texto");
+  if (!texto) return;
+  function decir(frase) {
+    boton.textContent = frase;
+    setTimeout(function () { boton.textContent = "Copiar"; }, 2500);
+  }
+  function aMano() {
+    var rango = document.createRange();
+    rango.selectNodeContents(texto);
+    var seleccion = window.getSelection();
+    seleccion.removeAllRanges();
+    seleccion.addRange(rango);
+    decir("Cópialo a mano");
+  }
+  var portapapeles = navigator.clipboard;
+  if (!portapapeles || typeof portapapeles.writeText !== "function") { aMano(); return; }
+  try {
+    portapapeles.writeText(texto.textContent).then(function () { decir("Copiado"); }, aMano);
+  } catch (x) { aMano(); }
 });
 </script>{% endif %}
 </body></html>

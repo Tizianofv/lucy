@@ -103,6 +103,12 @@ CREATE TABLE proyectos (
   inicio          DATE,
   entrega         DATE,
   termina_cuando  TEXT,
+  -- La carpeta del proyecto (parte 5, migración 2026-10-08_proyectos_carpeta.sql):
+  -- dónde vive, escrito por quien lo lleva. Una dirección `http(s)` de Drive o la
+  -- ruta de una carpeta de una computadora; NULL = sin carpeta. Solo lo que
+  -- empieza por `http://` o `https://` se pinta como enlace (`db.enlace_de_carpeta`).
+  -- La escribe `crud.editar` por su puerta (`db.carpeta_de_proyecto_que_vale`).
+  carpeta         TEXT,
   CONSTRAINT proyectos_cliente_entero
     CHECK ((cliente_noco_id IS NULL) = (cliente_nombre IS NULL)),
   CONSTRAINT proyectos_entrega_despues_del_inicio
