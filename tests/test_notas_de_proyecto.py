@@ -704,6 +704,46 @@ def test_una_nota_de_telegram_mas_larga_que_el_tope_se_ve_entera_y_no_se_puede_g
     assert "hecho=nota_editada" in _donde(editar(1, 10, {"texto": larga[:LARGO]}))
 
 
+@pytest.mark.parametrize("fallo", [ErrorSQL("40001", "serialización"), ErrorSQL("23503", "llave"), RuntimeError("sin sqlstate")])
+def test_si_la_base_falla_al_guardar_ninguna_ruta_dice_guardado_ni_lo_disfraza_de_columna_ausente(uno, monkeypatch, fallo):
+    """Un error de la base que NO es «la columna no existe» (42703) se dice como lo que es: no se sabe si llegó
+    a confirmar, así que ni «guardada» ni «NO se guardó». La clave de la dirección es `nota_base`."""
+    from contextlib import asynccontextmanager
+    _nota(uno, 10, 1, "intacta", autor=DUENO)
+    pool = g._Pool(uno.con)
+    original = pool.connection
+
+    @asynccontextmanager
+    async def conexion():
+        async with original() as c:
+            ejecutar = c.execute
+
+            async def execute(sql, params=()):
+                if re.match(r"\s*(INSERT INTO notas|UPDATE notas)", sql):
+                    raise fallo
+                return await ejecutar(sql, params)
+            c.execute = execute
+            cursor = c.cursor
+
+            def cur(row_factory=None):
+                k = cursor(row_factory=row_factory)
+                k_execute = k.execute
+
+                async def ex(sql, params=()):
+                    if re.match(r"\s*INSERT INTO notas", sql):
+                        raise fallo
+                    return await k_execute(sql, params)
+                k.execute = ex
+                return k
+            c.cursor = cur
+            yield c
+    pool.connection = conexion
+    monkeypatch.setattr(db, "pool", pool)
+    for r in (crear(1, {"texto": "x"}), editar(1, 10, {"texto": "y"}), borrar(1, 10)):
+        assert "error=nota_base" in _donde(r) and "hecho=" not in _donde(r) and "sin_columna" not in _donde(r), _donde(r)
+    assert "no se pudo confirmar si se guardó" in ver_r(uno, error="nota_base", p=1)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # 7. Escribir una nota es un movimiento del proyecto
 # ═══════════════════════════════════════════════════════════════════════
