@@ -242,6 +242,29 @@ def test_en_solo_ver_se_lee_la_descripcion_y_no_hay_ningun_control(uno):
         assert ">Cambiar<" not in html and ">Escribir<" not in html
 
 
+@pytest.mark.parametrize("con_texto", [True, False])
+def test_la_plantilla_sola_tampoco_dibuja_nada_en_solo_ver_aunque_le_llegue_editar(uno, monkeypatch, con_texto):
+    """La ruta ya apaga `editar` en solo ver (`web/app.py::proyectos`); esta prueba le quita ese apoyo: la
+    plantilla recibe `editar='descripcion'` con `solo_ver=True` y no puede dibujar formulario, campo ni enlace."""
+    if con_texto:
+        _poner(uno, "Texto que sí se lee")
+    original = panel.plantillas.TemplateResponse
+
+    def con_editar(request, nombre, contexto=None, *a, **k):
+        if nombre == "proyectos.html":
+            assert contexto["solo_ver"] is True
+            contexto = {**contexto, "editar": "descripcion"}
+        return original(request, nombre, contexto, *a, **k)
+
+    monkeypatch.setattr(panel.plantillas, "TemplateResponse", con_editar)
+    c = Navegador(panel.app, base_url="https://testserver")
+    c.cookies.set(panel.COOKIE_VER, auth.crear_token_ver())
+    html = c.get("/proyectos", params={"p": 1}).text
+    assert "<textarea" not in html and "/descripcion" not in html and 'name="antes"' not in html
+    assert "editar=descripcion" not in html and ">Cambiar<" not in html and ">Escribir<" not in html
+    assert ("Texto que sí se lee" in html) is con_texto
+
+
 def test_en_solo_ver_sin_descripcion_el_bloque_no_sale(uno):
     c = Navegador(panel.app, base_url="https://testserver")
     c.cookies.set(panel.COOKIE_VER, auth.crear_token_ver())
