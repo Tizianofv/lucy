@@ -1198,7 +1198,10 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          "aviso_grupo_borrado": aviso_grupo_borrado,
          "titulo_tarea_borrada": titulo_tarea_borrada,
          "largo_grupo": db.LARGO_NOMBRE_GRUPO,
-         "volver_a_la_app": (config.REGISTRO_URL + "/") if config.REGISTRO_URL.startswith(
+         # `/#inicio` (exacto, en el hash): la App lo lee y abre su página de inicio en vez de
+         # la última sesión; una App que no lo conozca lo ignora. Contrato: Levantamientos
+         # INFO/registro/la-pagina-de-inicio-y-como-se-llega.md
+         "volver_a_la_app": (config.REGISTRO_URL + "/#inicio") if config.REGISTRO_URL.startswith(
              ("http://", "https://")) else "",
          "busqueda": busqueda, "largo_rol": db.LARGO_ROL_PARTICIPANTE, "modelo": modelo, "visibles": visibles, "vista": vista, "q": q,
          "pantallas": pantallas, "areas": await db.areas(), "error": error,

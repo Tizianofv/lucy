@@ -779,7 +779,7 @@ def test_el_inicio_sale_antes_del_logo_y_apunta_a_la_App(mundo, monkeypatch):
     monkeypatch.setattr(config, "REGISTRO_URL", "https://registro.example.test")
     barra = _barra(ver(mundo))
     m = re.search(r'<a id="btn-inicio" class="btn-fantasma" href="([^"]*)"[^>]*>‹ Inicio</a>', barra)
-    assert m and m.group(1) == "https://registro.example.test/"
+    assert m and m.group(1) == "https://registro.example.test/#inicio"
     assert m.start() < barra.index('<img class="logo"') < barra.index('class="barra-tag"')
 
 

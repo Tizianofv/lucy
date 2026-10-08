@@ -340,7 +340,7 @@ def _pintar(con, **consulta):
 def test_la_pagina_de_ver_no_ofrece_nada_que_cambie_algo(consulta, monkeypatch):
     monkeypatch.setattr(config, "REGISTRO_URL", "https://registro.example.test")
     html = _pintar("ver", **consulta)
-    assert controles_que_sobran(html, "https://registro.example.test/") == []
+    assert controles_que_sobran(html, "https://registro.example.test/#inicio") == []
     assert "<script" not in html and "fetch(" not in html
 
 
@@ -348,7 +348,7 @@ def test_la_pagina_de_ver_dice_lo_que_hay_pero_no_lo_que_se_puede_hacer(monkeypa
     monkeypatch.setattr(config, "REGISTRO_URL", "https://registro.example.test")
     html = _pintar("ver", p=1, t=10)
     for visible in ("Disco Uno", "Pendiente A", "Hecha B", "hola comentario", "Cliente X",
-                    "Volver al inicio", 'href="https://registro.example.test/"'):
+                    "Volver al inicio", 'href="https://registro.example.test/#inicio"'):
         assert visible in html, visible
     # Y no el menú de las finanzas ni los enlaces a lo que ver no abre.
     for href in ("/movimientos", "/tareas", "/salud", "/sin-clasificar", "/papelera"):
@@ -358,7 +358,7 @@ def test_la_pagina_de_ver_dice_lo_que_hay_pero_no_lo_que_se_puede_hacer(monkeypa
 def test_en_ver_sale_el_inicio_antes_del_logo_y_el_logo_no_es_enlace(monkeypatch):
     monkeypatch.setattr(config, "REGISTRO_URL", "https://registro.example.test")
     html = _pintar("ver", p=1)
-    m = re.search(r'<a id="btn-inicio" class="btn-fantasma" href="https://registro.example.test/"[^>]*>‹ Inicio</a>\s*<img class="logo"', html)
+    m = re.search(r'<a id="btn-inicio" class="btn-fantasma" href="https://registro.example.test/#inicio"[^>]*>‹ Inicio</a>\s*<img class="logo"', html)
     assert m and "Volver al inicio" in html
 
 
