@@ -2743,6 +2743,47 @@ def _archivos_vigilados(raiz: Path) -> list[Path]:
     return [p for p in _py_en_disco(raiz) if p.resolve() not in exentos]
 
 
+def _cargar_lo_que_los_vigilados_importan(raiz: Path) -> list[str]:
+    """Carga en memoria los módulos del repo que importan los archivos vigilados.
+
+    POR QUÉ. La guarda resuelve cada nombre importado al objeto de verdad, pero
+    solo mira lo que YA está en `sys.modules` y no importa nada (ver
+    `_objeto_ya_cargado`). Un nombre cuyo módulo no se cargó es «no se puede
+    clasificar» y cae del lado estricto. Resultado, medido el 8-oct-2026: sobre
+    `web/app.py`, `from web.avisos import Aviso, AvisoQueElige, Navegacion` y
+    `AvisoQueElige[int]` en la firma de `proyectos` daban «saca de
+    AvisoQueElige un nombre que no puedo enumerar» si `web.avisos` no se había
+    cargado, y 0 culpables si sí. Quién lo cargaba era cualquier otra prueba
+    colectada antes (casi todas importan `web.app`); corriendo `test_nadie_lee_la_
+    lista_cruda` sola, o el archivo solo, daba rojo. La guarda tenía razón en lo
+    que veía y el veredicto dependía de qué otras pruebas corrieron en el proceso.
+
+    QUÉ HACE. De los archivos vigilados saca, leyendo el árbol (no una lista), los
+    imports absolutos cuyo primer nombre es un archivo o carpeta de `raiz`, y los
+    importa. Es lo que Lucy en producción tiene cargado de todos modos. La guarda
+    sigue sin importar nada por su cuenta: es la prueba la que prepara el terreno.
+    Un import que falle revienta la prueba, a propósito.
+    """
+    nombres: set[str] = set()
+    for py in _archivos_vigilados(raiz):
+        try:
+            arbol = ast.parse(py.read_bytes())
+        except SyntaxError:
+            continue
+        for n in ast.walk(arbol):
+            if isinstance(n, ast.Import):
+                nombres.update(a.name for a in n.names)
+            elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
+                nombres.add(n.module)
+    cargados = []
+    for nombre in sorted(nombres):
+        primero = nombre.split(".")[0]
+        if (raiz / f"{primero}.py").is_file() or (raiz / primero).is_dir():
+            importlib.import_module(nombre)
+            cargados.append(nombre)
+    return cargados
+
+
 def _quienes_leen_la_lista_cruda(raiz: Path) -> dict[str, list[str]]:
     """Recorre los .py que hay EN DISCO bajo `raiz` y los clasifica.
 
@@ -2761,6 +2802,10 @@ def _quienes_leen_la_lista_cruda(raiz: Path) -> dict[str, list[str]]:
     esté corriendo, es
     `test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales`.
     """
+    if raiz.resolve() == RAIZ.resolve():
+        # Sobre el repo de verdad, el veredicto no puede depender de qué otras pruebas
+        # corrieron antes en el proceso. Las copias de mentira de las otras pruebas no.
+        _cargar_lo_que_los_vigilados_importan(raiz)
     permitidos = _atributos_que_config_ofrece()
     exentos = _archivos_exentos(raiz)
     culpables: dict[str, list[str]] = {}
