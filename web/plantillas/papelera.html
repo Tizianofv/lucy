@@ -8,10 +8,11 @@
 {% if error == 'restaurar_no_esta' %}<p class="aviso">Eso ya no está en la papelera, o no hay registro de cómo se borró: no se restauró nada.</p>
 {% elif error == 'restaurar_no_se_pudo' %}<p class="aviso">No se pudo restaurar. Si hay otro proyecto con el mismo nombre, o su proyecto está en la papelera o cerrado, se dice en su línea.</p>{% endif %}
 {% if de_vuelta and de_vuelta.tipo == 'proyecto' %}<p class="aviso ok">El proyecto «{{ de_vuelta.nombre }}» ya está de vuelta en <a href="/proyectos">Proyectos</a>{% if de_vuelta.tareas %}, con {{ de_vuelta.tareas }} tarea{{ 's' if de_vuelta.tareas != 1 }} de las que se fueron con él{% endif %}. Si su grupo ya no existe, está en «Sin grupo».</p>
+{% elif de_vuelta and de_vuelta.tipo == 'nota' %}<p class="aviso ok">La nota ya está de vuelta en «Notas y decisiones» del proyecto «{{ de_vuelta.proyecto }}», en <a href="/proyectos">Proyectos</a>.</p>
 {% elif de_vuelta and de_vuelta.tipo == 'tarea' %}<p class="aviso ok">La tarea «{{ de_vuelta.nombre }}» ya está de vuelta en <a href="/tareas">Tareas</a>.</p>{% endif %}
 
-{% if proyectos_borrados or tareas_borradas %}
-<h2>Proyectos y tareas</h2>
+{% if proyectos_borrados or tareas_borradas or notas_borradas %}
+<h2>Proyectos, tareas y notas</h2>
 <p class="suave">Lo que se borra en Proyectos y en Tareas (desde la página o por Telegram) viene a
 parar aquí y se puede restaurar. Un proyecto vuelve con las tareas que se fueron con él. A diferencia de
 los gastos de más abajo, esto no se vacía solo.</p>
@@ -58,10 +59,30 @@ los gastos de más abajo, esto no se vacía solo.</p>
 {% endfor %}
 </table></div>
 {% endif %}
+{% if notas_borradas %}
+<h3 class="suave">Notas · {{ notas_borradas|length }}</h3>
+<div class="scroll"><table>
+<tr><th>Nota</th><th>Proyecto</th><th>Borrada</th><th></th></tr>
+{% for n in notas_borradas %}
+<tr>
+  <td>{{ n.contenido[:140] }}{% if n.contenido|length > 140 %}…{% endif %}</td>
+  <td class="suave">{{ n.proyecto_nombre }}</td>
+  <td class="suave">{{ n.borrado_en|hora_rd }}</td>
+  <td>
+    {% if n.por_que_no == 'sin_huella' %}<span class="suave">sin registro de cómo se borró: no se restaura desde aquí</span>
+    {% elif n.por_que_no == 'proyecto_borrado' %}<span class="suave">su proyecto está en la papelera: restaura primero el proyecto</span>
+    {% else %}<form method="post" action="/papelera/restaurar" style="margin:0">
+      <input type="hidden" name="tabla" value="notas"><input type="hidden" name="id" value="{{ n.id }}">
+      <button>Restaurar</button></form>{% endif %}
+  </td>
+</tr>
+{% endfor %}
+</table></div>
+{% endif %}
 <h2>Gastos</h2>
 {% endif %}
 {% if not movs %}
-{% if not proyectos_borrados and not tareas_borradas %}<p class="vacio">La papelera está vacía.</p>{% else %}<p class="vacio">No hay gastos en la papelera.</p>{% endif %}
+{% if not proyectos_borrados and not tareas_borradas and not notas_borradas %}<p class="vacio">La papelera está vacía.</p>{% else %}<p class="vacio">No hay gastos en la papelera.</p>{% endif %}
 {% else %}
 <p class="suave">Lo borrado sale de los totales y de las listas al instante, pero
 no se destruye: se puede traer de vuelta durante {{ dias }} días. Después se

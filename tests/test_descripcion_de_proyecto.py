@@ -277,7 +277,8 @@ def test_la_casa_ve_el_bloque_con_su_enlace_segun_haya_o_no_texto(uno):
     assert "De qué se trata" in html and "Todavía no hay nada escrito." in html
     assert 'href="/proyectos?p=1&amp;editar=descripcion">Escribir</a>' in html
     assert 'class="descripcion"' not in html
-    assert "<textarea" not in html.split('id="notas-del-proyecto"')[0]     # (el de «Nueva nota» es otro bloque)
+    seccion = html.split('id="de-que-se-trata"', 1)[1].split("</section>", 1)[0]      # (el de «Nueva nota» es otro bloque)
+    assert "<textarea" not in seccion and "<textarea" in html
     _poner(uno, "Algo")
     html = ver(uno, p=1)
     assert 'href="/proyectos?p=1&amp;editar=descripcion">Cambiar</a>' in html

@@ -1573,9 +1573,9 @@ async def carpetas_de_proyectos() -> dict[int, str | None] | None:
 # no escribió el panel (Telegram) dice quién la mandó por su `bandeja` (`autor_de_nota`), y una sin
 # ninguna de las dos cosas no tiene autor conocido: la página lo dice, no inventa un nombre.
 #
-# QUIÉN LA TOCA (editar, borrar): UNA sola puerta, `puede_tocar_nota`: solo quien la escribió. Es la
-# forma más cerrada; los comentarios de las tareas, en cambio, los toca cualquiera de la casa
-# (`borrar_comentario`, `editar_comentario`). Decide Tiziano si las notas van como los comentarios.
+# QUIÉN LA TOCA (editar, borrar): cualquiera que entre al panel, igual que los comentarios de las tareas
+# (`borrar_comentario`, `editar_comentario`). La nota dice quién la escribió y eso no se cambia; no hay una
+# regla de «solo el autor» (por Telegram, `crud.editar` tampoco la tendría).
 #
 # EL TOPE de una nota es el mismo de los demás textos libres de la casa (`LARGO_COMENTARIO`,
 # `LARGO_DESCRIPCION_PROYECTO`): 2000. No sale de medir notas de producción (no se midió): sale de que
@@ -1598,8 +1598,9 @@ class NotaNoEsta(LookupError):
     """La nota (o el proyecto) no existe, está borrada, o es de OTRO proyecto que el de la ruta."""
 
 
-class NotaAjena(PermissionError):
-    """Quien lo pide no es quien la escribió (o no entra al panel): no se toca."""
+class NotaSinSesion(PermissionError):
+    """Quien lo pide no entra al panel: no se escribe nada. Las rutas ya cortan con 401 antes; esto es la
+    puerta de las funciones de `db` cuando alguien las llama directo."""
 
 
 class NotaCambio(RuntimeError):
@@ -1643,15 +1644,6 @@ def autor_de_nota(fila: dict) -> int | None:
     return None
 
 
-def puede_tocar_nota(chat_id, fila: dict) -> bool:
-    """LA puerta de editar y borrar una nota: entra al panel Y es quien la escribió. La usan la página
-    (para dibujar los controles) y las tres escrituras (para decidir); nadie arma su propio criterio."""
-    from web.auth import puede_entrar
-
-    autor = autor_de_nota(fila)
-    return chat_id is not None and puede_entrar(chat_id) and autor is not None and autor == chat_id
-
-
 def _columna_ausente(e: Exception) -> bool:
     try:
         return e.sqlstate == "42703"
@@ -1688,10 +1680,9 @@ async def notas_de_proyectos() -> dict[int, list[dict]] | None:
     return salida
 
 
-async def _nota_viva_de(cur, nota_id: int, proyecto_id: int) -> tuple[dict, dict]:
-    """`(fila, fila_con_su_bandeja)` de la nota VIVA `nota_id` que es de ESE proyecto VIVO, o `NotaNoEsta`.
-    La primera es la fila entera (lo que va a la huella); la segunda trae además `bandeja_chat_id` y
-    `bandeja_origen` para `autor_de_nota`. Sin la columna `autor_chat_id`: `NotasSinColumna`."""
+async def _nota_viva_de(cur, nota_id: int, proyecto_id: int) -> dict:
+    """La fila entera (lo que va a la huella) de la nota VIVA `nota_id` que es de ESE proyecto VIVO, o
+    `NotaNoEsta`. Sin la columna `autor_chat_id`: `NotasSinColumna`."""
     await cur.execute(
         "SELECT n.* FROM notas n JOIN proyectos p ON p.id = n.proyecto_id "
         "WHERE n.id = %s AND n.proyecto_id = %s AND n.borrado_en IS NULL AND p.borrado_en IS NULL",
@@ -1702,13 +1693,7 @@ async def _nota_viva_de(cur, nota_id: int, proyecto_id: int) -> tuple[dict, dict
     fila = dict(fila)
     if "autor_chat_id" not in fila:
         raise NotasSinColumna("notas.autor_chat_id no existe todavía")
-    con_bandeja = dict(fila, bandeja_chat_id=None, bandeja_origen=None)
-    if fila.get("bandeja_id") is not None:
-        await cur.execute("SELECT chat_id, origen FROM bandeja WHERE id = %s", (fila["bandeja_id"],))
-        b = await cur.fetchone()
-        if b is not None:
-            con_bandeja["bandeja_chat_id"], con_bandeja["bandeja_origen"] = b["chat_id"], b["origen"]
-    return fila, con_bandeja
+    return fila
 
 
 async def _huella_de_nota(conn, accion: str, registro_id: int, antes, despues, motivo: str, bandeja_id) -> None:
@@ -1727,7 +1712,7 @@ async def _huella_de_nota(conn, accion: str, registro_id: int, antes, despues, m
 async def crear_nota_de_proyecto(proyecto_id: int, autor_chat_id: int, texto) -> int:
     """Escribe UNA nota en un proyecto VIVO y devuelve su id. `autor_chat_id` es el chat de la SESIÓN del
     panel (la ruta lo saca de la cookie, nunca de un campo). `NotaNoVale` si el texto no vale,
-    `NotaAjena` si ese chat no entra al panel, `NotaNoEsta` si el proyecto no existe o está en la
+    `NotaSinSesion` si ese chat no entra al panel, `NotaNoEsta` si el proyecto no existe o está en la
     papelera, `NotasSinColumna` si falta la migración. La fila y su huella `crear` (actor `panel`) van en
     la misma transacción. Un proyecto cerrado SÍ recibe notas (Telegram ya las pone en cualquier
     proyecto vivo)."""
@@ -1735,7 +1720,7 @@ async def crear_nota_de_proyecto(proyecto_id: int, autor_chat_id: int, texto) ->
 
     limpio = texto_de_nota_que_vale(texto)
     if autor_chat_id is None or not puede_entrar(autor_chat_id):
-        raise NotaAjena("quien escribe no entra al panel")
+        raise NotaSinSesion("quien escribe no entra al panel")
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute("SELECT id FROM proyectos WHERE id = %s AND borrado_en IS NULL", (proyecto_id,))
@@ -1758,16 +1743,18 @@ async def crear_nota_de_proyecto(proyecto_id: int, autor_chat_id: int, texto) ->
 async def editar_nota_de_proyecto(nota_id: int, proyecto_id: int, chat_id: int, texto) -> bool:
     """Cambia el texto de UNA nota de ESE proyecto. `True` si cambió, `False` si el texto limpio ya era
     el que había (sin escribir ni dejar huella). `NotaNoVale`, `NotaNoEsta` (la nota no está, está
-    borrada o es de OTRO proyecto, o de ninguno), `NotaAjena` (`puede_tocar_nota`), `NotaCambio` (otro la
+    borrada o es de OTRO proyecto, o de ninguno), `NotaSinSesion` (no entra al panel), `NotaCambio` (otro la
     cambió en el medio: el `UPDATE` solo escribe si el texto sigue siendo el leído, para que el `antes`
     de la huella sea verdad) y `NotasSinColumna`. Huella `editar` con la fila de antes y la de después en
     la misma transacción: `crud.deshacer` la revierte."""
+    from web.auth import puede_entrar
+
     nuevo = texto_de_nota_que_vale(texto)
+    if chat_id is None or not puede_entrar(chat_id):
+        raise NotaSinSesion("quien escribe no entra al panel")
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        antes, para_autor = await _nota_viva_de(cur, nota_id, proyecto_id)
-        if not puede_tocar_nota(chat_id, para_autor):
-            raise NotaAjena("solo quien la escribió puede cambiarla")
+        antes = await _nota_viva_de(cur, nota_id, proyecto_id)
         if antes["contenido"] == nuevo:
             return False
         escrita = await conn.execute(
@@ -1785,13 +1772,15 @@ async def editar_nota_de_proyecto(nota_id: int, proyecto_id: int, chat_id: int, 
 
 async def borrar_nota_de_proyecto(nota_id: int, proyecto_id: int, chat_id: int) -> None:
     """Borra (marca `borrado_en`) UNA nota de ESE proyecto; nunca un `DELETE`. Las mismas negativas que
-    `editar_nota_de_proyecto` (`NotaNoEsta`, `NotaAjena`, `NotasSinColumna`). Huella `borrar` con la fila
+    `editar_nota_de_proyecto` (`NotaNoEsta`, `NotaSinSesion`, `NotasSinColumna`). Huella `borrar` con la fila
     entera de antes, como `crud.borrar`: `crud.deshacer` la devuelve."""
+    from web.auth import puede_entrar
+
+    if chat_id is None or not puede_entrar(chat_id):
+        raise NotaSinSesion("quien escribe no entra al panel")
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        antes, para_autor = await _nota_viva_de(cur, nota_id, proyecto_id)
-        if not puede_tocar_nota(chat_id, para_autor):
-            raise NotaAjena("solo quien la escribió puede borrarla")
+        antes = await _nota_viva_de(cur, nota_id, proyecto_id)
         escrita = await conn.execute(
             "UPDATE notas SET borrado_en = now() "
             "WHERE id = %s AND proyecto_id = %s AND borrado_en IS NULL", (nota_id, proyecto_id))
@@ -3667,6 +3656,22 @@ async def aviso_de_tarea(tarea_id, *, borrada: bool) -> str | None:
     return fila["titulo"]
 
 
+async def aviso_de_nota(nota_id, *, borrada: bool) -> dict | None:
+    """`{proyecto: nombre}` de la nota SOLO si su estado es el que el aviso dice: en la papelera
+    (`borrada=True`) o viva (`borrada=False`). `None` si no, o si la nota no es de ningún proyecto."""
+    if isinstance(nota_id, bool) or not isinstance(nota_id, int):
+        return None
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT p.nombre, (n.borrado_en IS NOT NULL) AS borrada FROM notas n "
+            "JOIN proyectos p ON p.id = n.proyecto_id WHERE n.id = %s", (nota_id,))
+        fila = await cur.fetchone()
+    if fila is None or bool(fila["borrada"]) != borrada:
+        return None
+    return {"proyecto": fila["nombre"]}
+
+
 async def aviso_de_grupo_borrado(clave: str) -> dict | None:
     """Para el aviso de «grupo borrado»: lo que dice la huella del último borrado
     de un grupo con ese nombre (`{proyectos, tareas}`), SOLO si el grupo ya no
@@ -3689,7 +3694,7 @@ async def aviso_de_grupo_borrado(clave: str) -> dict | None:
 
 
 async def papelera_de_proyectos_y_tareas() -> dict:
-    """Lo borrado de Proyectos para la pantalla Papelera: `{proyectos, tareas}`.
+    """Lo borrado de Proyectos para la pantalla Papelera: `{proyectos, tareas, notas}`.
 
     · Cada proyecto: `id, nombre, area, borrado_en, huella_id` (su último `borrar`;
       sin él no hay con qué restaurar), `tareas` (las que se fueron con él en ese
@@ -3739,7 +3744,26 @@ async def papelera_de_proyectos_y_tareas() -> dict:
             else:
                 t["por_que_no"] = None
             tareas.append(t)
-        return {"proyectos": proyectos, "tareas": tareas}
+        # LAS NOTAS BORRADAS DE UN PROYECTO (parte 6): sin proyecto no salen (no hay a dónde volver).
+        # Una cuyo proyecto está en la papelera SALE, pero no se devuelve sola (`por_que_no`).
+        await cur.execute(
+            "SELECT n.id, n.contenido, n.proyecto_id, n.borrado_en, "
+            "(SELECT max(l.id) FROM log_acciones l WHERE l.tabla = 'notas' "
+            "   AND l.registro_id = n.id AND l.accion = 'borrar') AS huella_id, "
+            "p.nombre AS proyecto_nombre, p.borrado_en AS proyecto_borrado_en "
+            "FROM notas n JOIN proyectos p ON p.id = n.proyecto_id "
+            "WHERE n.borrado_en IS NOT NULL ORDER BY n.borrado_en DESC, n.id DESC")
+        notas = []
+        for f in await cur.fetchall():
+            n = dict(f)
+            if n["huella_id"] is None:
+                n["por_que_no"] = "sin_huella"
+            elif n["proyecto_borrado_en"] is not None:
+                n["por_que_no"] = "proyecto_borrado"
+            else:
+                n["por_que_no"] = None
+            notas.append(n)
+        return {"proyectos": proyectos, "tareas": tareas, "notas": notas}
 
 
 async def proyectos_vivos() -> list[dict]:
@@ -3979,11 +4003,12 @@ def _resumen(pendientes: list[dict], otras: list[dict]) -> dict:
 
 
 def _nota_del_modelo(f: dict, nombres: dict) -> dict:
-    """Una fila de `notas_de_proyectos()` → lo que sabe la plantilla. `autor` es el NOMBRE (`None` si no se
-    sabe quién la escribió o ese chat no tiene nombre): la página nunca escribe un número de chat."""
+    """Una fila de `notas_de_proyectos()` → lo que sabe la plantilla. `autor` es el NOMBRE, o «Autor sin
+    nombre» (se sabe el chat pero no tiene nombre en `NOMBRES_POR_CHAT`), o «Autor desconocido»: la página
+    nunca escribe un número de chat."""
     de = autor_de_nota(f)
-    return {"id": f["id"], "autor": nombres.get(de) if de is not None else None, "autor_chat": de,
-            "creado_en": f["creado_en"], "texto": f["contenido"]}
+    autor = (nombres.get(de) or "Autor sin nombre") if de is not None else "Autor desconocido"
+    return {"id": f["id"], "autor": autor, "creado_en": f["creado_en"], "texto": f["contenido"]}
 
 
 def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
@@ -3997,8 +4022,7 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
     proyecto sale con `carpeta_disponible` falso y el bloque de la carpeta no se dibuja).
     `notas` es lo que devuelve `notas_de_proyectos()` (`None` = la columna `autor_chat_id` no existe:
     el proyecto sale con `notas_disponibles` falso y el bloque de notas no se dibuja). Cada nota lleva
-    el NOMBRE de su autor (o `None` si no se sabe) y `autor_chat`, que la plantilla no escribe: la
-    ruta lo compara con la sesión para decidir qué notas puede tocar quien mira.
+    el NOMBRE de su autor (`_nota_del_modelo`), nunca el número de chat.
     `huellas` es `[(proyecto_id, accion, ts)]`; `comentarios`, las filas de
     `comentarios_tarea` vivas; `nombres`, `{chat: nombre}`. EL REPARTO (diseño
     §5.2): cada tarea viva cae en EXACTAMENTE un sitio —dentro de su proyecto si

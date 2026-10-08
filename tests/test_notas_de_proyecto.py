@@ -104,8 +104,11 @@ def _huellas(m):
 
 
 @pytest.fixture
-def uno(mundo):
-    """Dos proyectos de la casa y uno cerrado."""
+def uno(mundo, monkeypatch):
+    """Dos proyectos de la casa. (Y la Papelera sin gastos: `db.papelera()` lee `movimientos`, que este mundo no tiene.)"""
+    async def _sin_gastos():
+        return []
+    monkeypatch.setattr(db, "papelera", _sin_gastos)
     mundo.proyecto(1, "Disco de prueba", area="CDS", responsable=DUENO)
     mundo.proyecto(2, "Otro proyecto", area="CDS", responsable=DUENO)
     return mundo
@@ -391,7 +394,7 @@ def test_la_pagina_dice_el_nombre_del_autor_y_nunca_su_numero(uno):
     html = ver(uno, p=1)
     assert {i: a for i, a, _ in _lo_pintado(html)} == {
         10: "Persona Uno", 11: "Persona Dos", 12: "Autor desconocido", 13: "Autor desconocido",
-        14: "Autor desconocido", 15: "Autor desconocido", 16: "Autor desconocido", 17: "Persona Dos"}
+        14: "Autor desconocido", 15: "Autor sin nombre", 16: "Autor sin nombre", 17: "Persona Dos"}
     for numero in (str(DUENO), str(ROSI), str(SIN_NOMBRE)):
         assert numero not in html, numero
 
@@ -469,7 +472,9 @@ def test_sin_sesion_la_pagina_no_se_ve(uno):
     assert r.status_code == 401 and "una nota" not in r.text and "viva" not in r.text
 
 
-def test_la_casa_ofrece_cambiar_y_borrar_solo_en_las_notas_que_escribio(uno):
+def test_la_casa_ofrece_cambiar_y_borrar_en_todas_las_notas_sean_de_quien_sean(uno):
+    """Cualquiera de la casa puede, como con los comentarios de las tareas: también la de Telegram, la de
+    otro y la que no dice quién la escribió."""
     _bandeja(uno, 1, DUENO, "telegram")
     _bandeja(uno, 2, ROSI, "telegram")
     _nota(uno, 10, 1, "del dueño por el panel", autor=DUENO)
@@ -477,22 +482,21 @@ def test_la_casa_ofrece_cambiar_y_borrar_solo_en_las_notas_que_escribio(uno):
     _nota(uno, 12, 1, "de Rosi por el panel", autor=ROSI)
     _nota(uno, 13, 1, "de Rosi por Telegram", bandeja=2)
     _nota(uno, 14, 1, "sin autor conocido")
-    for chat, suyas in (("dueno", {10, 11}), ("rosi", {12, 13})):
+    for chat in ("dueno", "rosi"):
         html = pagina(uno, chat=chat, p=1)
         con_cambiar = set(int(x) for x in re.findall(r"editar_nota=(\d+)#nota-", html))
         con_borrar = set(int(x) for x in re.findall(r"borrar_nota=(\d+)#nota-", html))
-        assert con_cambiar == suyas and con_borrar == suyas, (chat, con_cambiar, con_borrar)
+        assert con_cambiar == con_borrar == {10, 11, 12, 13, 14}, (chat, con_cambiar, con_borrar)
 
 
-def test_el_formulario_y_la_pregunta_solo_se_dibujan_para_la_nota_propia(uno):
+def test_el_formulario_y_la_pregunta_se_dibujan_para_cualquier_nota_a_la_casa_y_a_nadie_mas(uno):
     _nota(uno, 10, 1, "mía", autor=DUENO)
     _nota(uno, 11, 1, "ajena", autor=ROSI)
-    mia = pagina(uno, p=1, editar_nota=10)
-    assert 'action="/proyectos/1/notas/10/editar"' in mia and ">mía</textarea>" in mia
-    ajena = pagina(uno, p=1, editar_nota=11)
-    assert "/notas/11/editar" not in ajena and ">ajena</textarea>" not in ajena and '<p class="texto">ajena</p>' in ajena
-    assert 'action="/proyectos/1/notas/10/borrar"' in pagina(uno, p=1, borrar_nota=10)
-    assert "/notas/11/borrar" not in pagina(uno, p=1, borrar_nota=11)
+    for nid, texto in ((10, "mía"), (11, "ajena")):
+        assert f'action="/proyectos/1/notas/{nid}/editar"' in pagina(uno, p=1, editar_nota=nid)
+        assert f">{texto}</textarea>" in pagina(uno, p=1, editar_nota=nid)
+        assert f'action="/proyectos/1/notas/{nid}/borrar"' in pagina(uno, p=1, borrar_nota=nid)
+        assert "/notas/" not in _bloque(pagina(uno, chat="ver", p=1, editar_nota=nid, borrar_nota=nid))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -532,14 +536,18 @@ def test_una_direccion_escrita_a_mano_no_dice_que_se_guardo_ninguna_nota(uno):
 def test_borrar_marca_la_fila_deja_la_huella_y_no_la_borra_de_verdad(uno):
     _nota(uno, 10, 1, "para borrar", autor=DUENO)
     r = borrar(1, 10)
-    assert r.status_code == 303 and _donde(r) == "/proyectos?hecho=nota_borrada&p=1#notas-del-proyecto"
+    assert r.status_code == 303 and _donde(r) == "/proyectos?hecho=nota_borrada&borrada=10&p=1#notas-del-proyecto"
     f = _nota_fila(uno, 10)
     assert f is not None and f["borrado_en"] is not None and f["contenido"] == "para borrar"
     h, = _huellas(uno)
     assert (h["actor"], h["accion"], h["tabla"], h["registro_id"]) == ("panel", "borrar", "notas", 10)
     assert json.loads(h["antes"])["contenido"] == "para borrar" and h["despues"] is None
     assert _lo_pintado(ver(uno, p=1)) == []
-    assert "Nota borrada." in ver_r(uno, hecho="nota_borrada", p=1)
+    assert "Nota borrada. Está en la Papelera; se restaura desde ahí." in re.sub(
+        r"<[^>]+>", "", ver_r(uno, hecho="nota_borrada", borrada=10, p=1))
+    # la misma dirección con una nota que NO está borrada no dice nada de la Papelera
+    _nota(uno, 11, 1, "viva", autor=DUENO)
+    assert "se restaura desde ahí" not in ver_r(uno, hecho="nota_borrada", borrada=11, p=1)
 
 
 def test_una_nota_que_no_es_de_este_proyecto_no_se_toca_por_la_ruta_de_este(uno):
@@ -555,19 +563,27 @@ def test_una_nota_que_no_es_de_este_proyecto_no_se_toca_por_la_ruta_de_este(uno)
     assert "hecho=nota_editada" in _donde(editar(2, 20, {"texto": "cambiada"}))
 
 
-def test_solo_quien_la_escribio_edita_o_borra_y_el_otro_ve_que_no_se_cambio_nada(uno):
+def test_cualquiera_de_la_casa_edita_o_borra_una_nota_ajena_y_el_autor_no_cambia(uno):
     _bandeja(uno, 1, ROSI, "telegram")
     _nota(uno, 10, 1, "del dueño", autor=DUENO)
     _nota(uno, 11, 1, "de Rosi por Telegram", bandeja=1)
     _nota(uno, 12, 1, "sin autor conocido")
-    antes = _filas(uno)
-    for nid, intruso in ((10, "rosi"), (11, "dueno"), (12, "dueno"), (12, "rosi")):
-        for r in (editar(1, nid, {"texto": "pisada"}, chat=intruso), borrar(1, nid, chat=intruso)):
-            assert "error=nota_ajena" in _donde(r) and "hecho=" not in _donde(r), (nid, intruso, _donde(r))
-    assert _filas(uno) == antes and _huellas(uno) == []
-    assert "Solo quien escribió una nota puede cambiarla o borrarla: NO se cambió nada." in ver_r(uno, error="nota_ajena", p=1)
-    # el dueño de la de Telegram de Rosi no es el dueño: ella sí la toca
-    assert "hecho=nota_editada" in _donde(editar(1, 11, {"texto": "mejor"}, chat="rosi"))
+    _nota(uno, 13, 1, "otra del dueño", autor=DUENO)
+    assert "hecho=nota_editada" in _donde(editar(1, 10, {"texto": "cambiada por Rosi"}, chat="rosi"))
+    assert "hecho=nota_editada" in _donde(editar(1, 11, {"texto": "cambiada por el dueño"}, chat="dueno"))
+    assert "hecho=nota_editada" in _donde(editar(1, 12, {"texto": "ahora tiene texto"}, chat="rosi"))
+    assert "hecho=nota_borrada" in _donde(borrar(1, 13, chat="rosi"))
+    assert _nota_fila(uno, 10)["contenido"] == "cambiada por Rosi" and _nota_fila(uno, 10)["autor_chat_id"] == DUENO
+    assert _nota_fila(uno, 12)["autor_chat_id"] is None and _nota_fila(uno, 13)["borrado_en"] is not None
+    assert {a for _, a, _ in _lo_pintado(ver(uno, p=1))} == {"Persona Uno", "Persona Dos", "Autor desconocido"}
+    assert [h["actor"] for h in _huellas(uno)] == ["panel"] * 4
+
+
+def test_ninguna_frase_ni_clave_promete_una_regla_de_solo_el_autor():
+    fuente = "".join((_ROOT / a).read_text(encoding="utf-8") for a in
+                     ("web/app.py", "web/plantillas/proyectos.html", "db/db.py"))
+    for muerto in ("nota_ajena", "NotaAjena", "puede_tocar_nota", "notas_que_toco", "Solo quien escribió una nota"):
+        assert muerto not in fuente, muerto
 
 
 def test_un_texto_que_no_vale_no_escribe_ni_deja_huella(uno):
@@ -669,12 +685,12 @@ def test_las_tres_funciones_de_db_rechazan_por_si_solas_a_quien_no_entra_al_pane
     _nota(uno, 10, 1, "de alguien que no entra", autor=AJENO)
     _nota(uno, 11, 1, "de otro que no entra", autor=SIN_NOMBRE)
     antes = _filas(uno)
-    with pytest.raises(db.NotaAjena):
+    with pytest.raises(db.NotaSinSesion):
         _correr(db.crear_nota_de_proyecto(1, chat, "x"))
     for nid in (10, 11):
-        with pytest.raises(db.NotaAjena):
+        with pytest.raises(db.NotaSinSesion):
             _correr(db.editar_nota_de_proyecto(nid, 1, chat, "x"))
-        with pytest.raises(db.NotaAjena):
+        with pytest.raises(db.NotaSinSesion):
             _correr(db.borrar_nota_de_proyecto(nid, 1, chat))
     assert _filas(uno) == antes and _huellas(uno) == []
 
@@ -844,16 +860,115 @@ def test_borrar_el_proyecto_no_toca_las_notas_y_restaurarlo_las_devuelve(uno):
     assert [n[2] for n in _lo_pintado(ver(uno, p=1))] == ["sobrevive"]
 
 
-def test_la_papelera_de_la_pagina_no_lista_notas_y_sigue_andando(uno):
-    """Dicho tal cual: borrar una nota deja `borrado_en` y su huella (se devuelve con `crud.deshacer`), pero
-    la pantalla Papelera de proyectos y tareas NO la lista ni la restaura (`crud.deshacer_borrado` solo
-    sabe de proyectos y tareas). Esta prueba fija ese límite y que lo de siempre sigue andando."""
-    _nota(uno, 10, 1, "borrada", autor=DUENO)
+def _papelera(chat="dueno", **consulta):
+    r = _cliente(chat).get("/papelera", params=consulta)
+    return r
+
+
+def _restaurar(nid, *, chat="dueno", tabla="notas"):
+    return _cliente(chat).post("/papelera/restaurar", data={"tabla": tabla, "id": str(nid)}, follow_redirects=False)
+
+
+def test_la_papelera_lista_la_nota_borrada_de_un_proyecto_y_la_devuelve_por_el_mismo_camino(uno):
+    _nota(uno, 10, 1, "se va y vuelve", autor=DUENO)
+    _nota(uno, 11, 1, "sigue viva en el proyecto", autor=DUENO)
+    assert "Notas · " not in _papelera().text
     borrar(1, 10)
     lo_borrado = _correr(db.papelera_de_proyectos_y_tareas())
-    assert set(lo_borrado) == {"proyectos", "tareas"} and lo_borrado["proyectos"] == [] and lo_borrado["tareas"] == []
-    with pytest.raises(ValueError):
-        _correr(crud.deshacer_borrado("notas", 10))
+    assert [(n["id"], n["proyecto_nombre"], n["por_que_no"]) for n in lo_borrado["notas"]] == [(10, "Disco de prueba", None)]
+    assert lo_borrado["proyectos"] == [] and lo_borrado["tareas"] == []
+    html = _papelera().text
+    assert "Notas · 1" in html and "se va y vuelve" in html and "sigue viva en el proyecto" not in html
+    assert 'name="tabla" value="notas"' in html and 'name="id" value="10"' in html
+    r = _restaurar(10)
+    assert r.status_code == 303 and _donde(r) == "/papelera?hecho=nota_restaurada&id=10"
+    assert _nota_fila(uno, 10)["borrado_en"] is None and _nota_fila(uno, 10)["autor_chat_id"] == DUENO
+    assert {n[2] for n in _lo_pintado(ver(uno, p=1))} == {"se va y vuelve", "sigue viva en el proyecto"}
+    aviso = re.sub(r"<[^>]+>", "", _papelera_r(hecho="nota_restaurada", id=10))
+    assert "La nota ya está de vuelta en «Notas y decisiones» del proyecto «Disco de prueba»" in aviso
+    assert "Notas · " not in _papelera().text
+    # y es la MISMA huella que usa Telegram: la restauración deja `deshacer` de `notas`
+    assert [(h["accion"], h["tabla"], h["registro_id"]) for h in _huellas(uno)][-1] == ("deshacer", "notas", 10)
+
+
+def _papelera_r(**consulta):
+    from _navegador import dar_recibo
+    dar_recibo("/papelera", **consulta)
+    return _papelera(**consulta).text
+
+
+def test_el_aviso_de_nota_restaurada_dice_un_estado_y_no_la_direccion(uno):
+    _nota(uno, 10, 1, "sigue borrada", autor=DUENO, borrada=True)
+    assert "ya está de vuelta" not in _papelera_r(hecho="nota_restaurada", id=10)      # sigue en la papelera
+    assert "ya está de vuelta" not in _papelera_r(hecho="nota_restaurada", id=999)
+    assert "ya está de vuelta" not in _papelera(hecho="nota_restaurada", id=10).text   # sin recibo
+
+
+def test_lo_que_no_se_lista_ni_se_devuelve_nota_sin_proyecto_viva_sin_huella_o_de_proyecto_borrado(uno):
+    uno.proyecto(3, "En la papelera", area="CDS", borrado=True)
+    _nota(uno, 10, None, "sin proyecto", autor=DUENO, borrada=True)
+    _nota(uno, 11, 1, "borrada sin huella", autor=DUENO, borrada=True)
+    _nota(uno, 12, 3, "de un proyecto borrado", autor=DUENO, borrada=True)
+    _nota(uno, 13, 1, "viva", autor=DUENO)
+    uno.huella("borrar", "notas", 12, CREADO)
+    uno.huella("borrar", "proyectos", 3, CREADO)
+    lista = {n["id"]: n["por_que_no"] for n in _correr(db.papelera_de_proyectos_y_tareas())["notas"]}
+    assert lista == {11: "sin_huella", 12: "proyecto_borrado"}               # la 10 y la 13 no salen
+    html = _papelera().text
+    assert "sin registro de cómo se borró" in html and "su proyecto está en la papelera: restaura primero el proyecto" in html
+    for nid in (10, 11, 12, 13, 999):
+        assert "error=restaurar_no_" in _donde(_restaurar(nid)), nid
+    assert {f["id"] for f in _filas(uno) if f["borrado_en"] is None} == {13}
+    # el proyecto vuelve: ahora la nota sí se puede devolver sola
+    _correr(crud.deshacer_borrado("proyectos", 3))
+    assert "hecho=nota_restaurada" in _donde(_restaurar(12))
+
+
+def test_devolver_una_nota_cuenta_como_movimiento_del_proyecto(uno):
+    uno.proyecto(5, "Dormido", area="CDS", creado=CREADO - timedelta(days=30))
+    _nota(uno, 10, 5, "una nota", autor=DUENO)
+    uno.huella("borrar", "notas", 10, CREADO - timedelta(days=20))
+    uno.con.execute("UPDATE notas SET borrado_en = '2026-09-02T00:00:00+00:00' WHERE id = 10")
+    antes = _ultimo(uno, 5)
+    uno.con.execute("UPDATE log_acciones SET ts = ? WHERE accion = 'borrar'", ((CREADO - timedelta(days=20)).isoformat(),))
+    _restaurar(10)
+    uno.con.execute("UPDATE log_acciones SET ts = ? WHERE accion = 'deshacer'", ((CREADO + timedelta(hours=1)).isoformat(),))
+    assert _ultimo(uno, 5) == CREADO + timedelta(hours=1) != antes
+
+
+@pytest.mark.parametrize("chat", [None, "ver", "ajeno"])
+def test_sin_sesion_de_la_casa_ni_se_ve_la_papelera_ni_se_devuelve_una_nota(uno, chat):
+    _nota(uno, 10, 1, "borrada", autor=DUENO, borrada=True)
+    uno.huella("borrar", "notas", 10, CREADO)
+    assert _papelera(chat=chat).status_code == 401 and "borrada" not in _papelera(chat=chat).text
+    assert _restaurar(10, chat=chat).status_code == 401
+    assert _nota_fila(uno, 10)["borrado_en"] is not None
+
+
+def test_hermanos_la_papelera_de_proyectos_y_tareas_sigue_igual(uno):
+    """Lo que ya devolvía `deshacer_borrado` no cambia: proyectos y tareas, y una tabla que no es de la lista se rechaza."""
+    uno.tarea(20, "una tarea", proyecto=1)
+    _correr(crud.borrar("tareas", 20, "x", actor="panel"))
+    _correr(crud.borrar("proyectos", 2, "x", actor="panel"))
+    assert _correr(crud.deshacer_borrado("tareas", 20))[0] == "lo que había archivado"
+    assert _correr(crud.deshacer_borrado("proyectos", 2))[0].startswith("lo que había archivado")
+    for tabla in ("movimientos", "eventos", "areas", "participantes"):
+        with pytest.raises(ValueError, match="Tabla no permitida"):
+            _correr(crud.deshacer_borrado(tabla, 1))
+    assert "tabla=eventos" not in _donde(_restaurar(1, tabla="eventos"))
+    assert "error=restaurar_no_esta" in _donde(_restaurar(1, tabla="eventos"))
+
+
+def test_sonda_nadie_edita_el_autor_de_un_comentario_por_crud():
+    """`NO_EDITABLES` es por nombre de columna y cubre también `comentarios_tarea.autor_chat_id`. Derivado del
+    esquema: las tablas de `crud.TABLAS` con una columna `autor_chat_id` son solo `notas`; `comentarios_tarea`
+    la tiene y no está en `TABLAS`, así que `editar` y `deshacer` la rechazan (nadie la edita por ahí)."""
+    declaradas = db.columnas_declaradas()
+    con_autor = {t for t, cols in declaradas.items() if "autor_chat_id" in cols}
+    assert "comentarios_tarea" in con_autor and "notas" in con_autor
+    assert con_autor & set(crud.TABLAS) == {"notas"}
+    with pytest.raises(ValueError, match="Tabla no permitida"):
+        _correr(crud.editar("comentarios_tarea", 1, {"autor_chat_id": 1}, "x"))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1020,7 +1135,8 @@ def test_sonda_quien_lee_notas_con_el_nombre_a_mano_y_quien_la_pide_por_argument
                 if re.search(r"(FROM|JOIN)\s+notas\b", texto, re.I):
                     lectores.add((rel, fn.name))
     assert lectores == {("db/db.py", "notas_de_proyectos"), ("db/db.py", "_nota_viva_de"),
-                        ("db/db.py", "editar_nota_de_proyecto"),
+                        ("db/db.py", "editar_nota_de_proyecto"), ("db/db.py", "aviso_de_nota"),
+                        ("db/db.py", "papelera_de_proyectos_y_tareas"), ("acciones/crud.py", "deshacer_borrado"),
                         ("db/db.py", "pagina_de_proyectos")}, sorted(lectores)   # (esta última, la consulta de «movimiento»)
 
 
@@ -1078,23 +1194,4 @@ def test_lucy_por_telegram_ve_la_columna_nueva_y_sabe_que_la_escribe_el_panel():
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# La puerta única de quién toca una nota, con valores fijos
 # ═══════════════════════════════════════════════════════════════════════
-
-@pytest.mark.parametrize("chat,fila,toca", [
-    (DUENO, {"autor_chat_id": DUENO}, True),
-    (ROSI, {"autor_chat_id": DUENO}, False),
-    (DUENO, {"autor_chat_id": ROSI}, False),
-    (DUENO, {"autor_chat_id": None, "bandeja_origen": "telegram", "bandeja_chat_id": DUENO}, True),
-    (ROSI, {"autor_chat_id": None, "bandeja_origen": "telegram", "bandeja_chat_id": DUENO}, False),
-    (DUENO, {"autor_chat_id": None, "bandeja_origen": "banco", "bandeja_chat_id": DUENO}, False),
-    (DUENO, {"autor_chat_id": None, "bandeja_origen": "correo", "bandeja_chat_id": DUENO}, False),
-    (DUENO, {"autor_chat_id": None, "bandeja_origen": None, "bandeja_chat_id": None}, False),
-    (DUENO, {}, False),
-    (None, {"autor_chat_id": None, "bandeja_origen": "telegram", "bandeja_chat_id": None}, False),
-    (None, {"autor_chat_id": DUENO}, False),
-    (AJENO, {"autor_chat_id": AJENO}, False),            # tiene nombre pero no entra al panel
-    (SIN_NOMBRE, {"autor_chat_id": SIN_NOMBRE}, False),
-])
-def test_quien_puede_tocar_una_nota(gente, chat, fila, toca):
-    assert db.puede_tocar_nota(chat, fila) is toca

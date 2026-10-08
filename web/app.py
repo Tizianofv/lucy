@@ -854,17 +854,20 @@ async def papelera(request: Request, restaurado: Aviso[int] = 0, hecho: Aviso[st
     elif hecho == "tarea_restaurada" and id:
         t = await db.aviso_de_tarea(id, borrada=False)
         de_vuelta = {"tipo": "tarea", "nombre": t} if t is not None else None
+    elif hecho == "nota_restaurada" and id:
+        n = await db.aviso_de_nota(id, borrada=False)
+        de_vuelta = {"tipo": "nota", **n} if n is not None else None
     return plantillas.TemplateResponse(
         request, "papelera.html",
         {"movs": await db.papelera(), "dias": db.DIAS_EN_PAPELERA,
          "restaurado": restaurado, "proyectos_borrados": lo_borrado["proyectos"],
-         "tareas_borradas": lo_borrado["tareas"], "error": error, "de_vuelta": de_vuelta})
+         "tareas_borradas": lo_borrado["tareas"], "notas_borradas": lo_borrado["notas"], "error": error, "de_vuelta": de_vuelta})
 
 
 @app.post("/papelera/restaurar")
 @auth.puerta(auth.PUERTA_SIEMPRE)
 async def restaurar_proyecto_o_tarea(request: Request):
-    """Restaurar un proyecto o una tarea desde la Papelera. NO es otra forma de
+    """Restaurar un proyecto, una tarea o una nota desde la Papelera. NO es otra forma de
     des-borrar: `crud.deshacer_borrado` busca la huella `borrar` de esa fila y la
     pasa por `crud.deshacer`, lo mismo que hace Telegram con «deshaz». Las reglas
     (nombre repetido, proyecto en la papelera o cerrado) son las de `deshacer`."""
@@ -873,7 +876,7 @@ async def restaurar_proyecto_o_tarea(request: Request):
     formulario = await request.form()
     tabla = str(formulario.get("tabla", ""))
     crudo = str(formulario.get("id", ""))
-    if tabla not in ("proyectos", "tareas") or not re.fullmatch(r"[0-9]{1,9}", crudo):
+    if tabla not in ("proyectos", "tareas", "notas") or not re.fullmatch(r"[0-9]{1,9}", crudo):
         return RedirectResponse("/papelera?error=restaurar_no_esta", status_code=303)
     rid = int(crudo)
     try:
@@ -883,7 +886,7 @@ async def restaurar_proyecto_o_tarea(request: Request):
     except ValueError as e:
         log.warning("Papelera: no se restauró %s #%s: %s", tabla, rid, e)
         return RedirectResponse("/papelera?error=restaurar_no_se_pudo", status_code=303)
-    hecho = "proyecto_restaurado" if tabla == "proyectos" else "tarea_restaurada"
+    hecho = {"proyectos": "proyecto_restaurado", "tareas": "tarea_restaurada", "notas": "nota_restaurada"}[tabla]
     return RedirectResponse(f"/papelera?hecho={hecho}&id={rid}", status_code=303)
 
 
@@ -1199,19 +1202,15 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
                            if hecho == "grupo_borrado" and grupo else None)
     titulo_tarea_borrada = (await db.aviso_de_tarea(borrada, borrada=True)
                             if hecho == "tarea_borrada" and borrada else None)
+    # «Nota borrada. Está en la Papelera»: solo si la nota de verdad está borrada (estado, no la dirección).
+    nota_borrada_en_papelera = (await db.aviso_de_nota(borrada, borrada=True)
+                                is not None if hecho == "nota_borrada" and borrada else False)
     # LOS FILTROS DE LAS TAREAS (parte 2, 8-oct-2026): solo en la vista de un proyecto. `?filtro=` y
     # `?quien=` se normalizan en `_filtro_vigente` (una sola puerta) y la lista sale de
     # `db.tareas_con_filtro`; cualquier otra vista los ignora.
     tareas_p, sufijo_filtro, personas_filtro, mi_nombre = None, "", [], None
-    # LAS NOTAS (parte 6): cuáles de las notas de este proyecto puede cambiar o borrar QUIEN MIRA. Lo
-    # decide `db.puede_tocar_nota`, la misma puerta de las tres escrituras; en solo ver, ninguna. El
-    # número de chat del autor no se escribe en la página: solo se compara aquí.
-    notas_que_toco: set[int] = set()
     if vista["tipo"] == "proyecto":
         m = vista["proyecto"]
-        if not solo_ver:
-            notas_que_toco = {n["id"] for n in m["notas"]
-                              if db.puede_tocar_nota(_sesion(request), {"autor_chat_id": n["autor_chat"]})}
         personas_filtro = sorted({f["responsable"] for f in m["pendientes"] + m["otras"] if f["responsable"]})
         mi_nombre = None if solo_ver else config.nombres_con_code().get(_sesion(request))
         filtro, quien = _filtro_vigente(filtro, quien, personas=personas_filtro, mi_nombre=mi_nombre,
@@ -1236,6 +1235,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          "aviso_proyecto_borrado": aviso_proyecto_borrado,
          "aviso_grupo_borrado": aviso_grupo_borrado,
          "titulo_tarea_borrada": titulo_tarea_borrada,
+         "nota_borrada_en_papelera": nota_borrada_en_papelera,
          "largo_grupo": db.LARGO_NOMBRE_GRUPO,
          # `/#inicio` (exacto, en el hash): la App lo lee y abre su página de inicio en vez de
          # la última sesión; una App que no lo conozca lo ignora. Contrato: Levantamientos
@@ -1252,7 +1252,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          "largo_descripcion": db.LARGO_DESCRIPCION_PROYECTO,
          "largo_termina_cuando": db.LARGO_TERMINA_CUANDO,
          "largo_carpeta": db.LARGO_CARPETA_PROYECTO, "largo_nota": db.LARGO_NOTA_PROYECTO,
-         "notas_que_toco": notas_que_toco, "editar_nota": editar_nota, "borrar_nota": borrar_nota,
+         "editar_nota": editar_nota, "borrar_nota": borrar_nota,
          "anio_menor": db.DIA_MAS_VIEJO_DE_PROYECTO.year, "anio_mayor": db.DIA_MAS_NUEVO_DE_PROYECTO.year,
          "dias_dormido": db.DIAS_DORMIDO, "hecho": hecho,
          "confirmar": confirmar, "editar": editar,
@@ -2310,8 +2310,6 @@ def _error_de_nota(e: Exception) -> str:
         return f"nota_{e.clave}"
     if isinstance(e, db.NotaNoEsta):
         return "nota_no_esta"
-    if isinstance(e, db.NotaAjena):
-        return "nota_ajena"
     if isinstance(e, db.NotaCambio):
         return "nota_cambio"
     if isinstance(e, db.NotasSinColumna):
@@ -2333,6 +2331,8 @@ async def escribir_nota_de_proyecto(request: Request, pid: int):
     try:
         # El valor se pasa TAL CUAL (puede no ser texto si el POST es multipart): la puerta decide.
         await db.crear_nota_de_proyecto(pid, chat, formulario.get("texto"))
+    except db.NotaSinSesion:
+        return _fuera(request)
     except Exception as e:
         clave = _error_de_nota(e)
         if clave == "nota_base":
@@ -2346,7 +2346,7 @@ async def escribir_nota_de_proyecto(request: Request, pid: int):
 @app.post("/proyectos/{pid}/notas/{nid}/editar")
 @auth.puerta(auth.PUERTA_SIEMPRE)
 async def editar_nota_de_proyecto(request: Request, pid: int, nid: int):
-    """Cambiar el texto de una nota de ESTE proyecto, solo quien la escribió (`db.puede_tocar_nota`).
+    """Cambiar el texto de una nota de ESTE proyecto (cualquiera de la casa; el autor no cambia).
     «Ya decía eso» si el texto limpio es el que había: no se escribe ni se dice «guardado»."""
     chat = _sesion(request)
     if not auth.puede_entrar(chat):
@@ -2357,6 +2357,8 @@ async def editar_nota_de_proyecto(request: Request, pid: int, nid: int):
             f"/proyectos?error=nota_invalida&p={pid}&editar_nota={nid}#nota-{nid}", status_code=303)
     try:
         cambio = await db.editar_nota_de_proyecto(nid, pid, chat, formulario.get("texto"))
+    except db.NotaSinSesion:
+        return _fuera(request)
     except Exception as e:
         clave = _error_de_nota(e)
         if clave == "nota_base":
@@ -2382,6 +2384,8 @@ async def borrar_nota_de_proyecto(request: Request, pid: int, nid: int):
         return _fuera(request)
     try:
         await db.borrar_nota_de_proyecto(nid, pid, chat)
+    except db.NotaSinSesion:
+        return _fuera(request)
     except Exception as e:
         clave = _error_de_nota(e)
         if clave == "nota_base":
@@ -2389,7 +2393,8 @@ async def borrar_nota_de_proyecto(request: Request, pid: int, nid: int):
         else:
             log.warning("Panel de proyectos: borrar la nota #%s de #%s rechazado (%s)", nid, pid, clave)
         return RedirectResponse(f"/proyectos?error={clave}&p={pid}#notas-del-proyecto", status_code=303)
-    return RedirectResponse(f"/proyectos?hecho=nota_borrada&p={pid}#notas-del-proyecto", status_code=303)
+    return RedirectResponse(
+        f"/proyectos?hecho=nota_borrada&borrada={nid}&p={pid}#notas-del-proyecto", status_code=303)
 
 
 @app.post("/tareas/{tid}/area")

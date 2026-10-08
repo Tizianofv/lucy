@@ -43,7 +43,7 @@ PLANTILLAS = _ROOT / "web" / "plantillas"
 # Lo que este trabajo AGREGÓ o CAMBIÓ en las plantillas: cada clave de `hecho` o `error` que habla de borrar o
 # de restaurar. Los demás `hecho` de `proyectos.html` son de antes (no cambiaron: la lista de abajo es un
 # TRINQUETE, una clave nueva sin declarar pone roja la prueba hasta que alguien decida a cuál lista va).
-HECHOS_DE_ESTE_TRABAJO = {"proyectos.html": {"grupo_borrado", "proyecto_borrado", "tarea_borrada"}}
+HECHOS_DE_ESTE_TRABAJO = {"proyectos.html": {"grupo_borrado", "proyecto_borrado", "tarea_borrada", "nota_borrada"}}
 ERRORES_DE_ESTE_TRABAJO = {"proyectos.html": {"grupo_cambio", "borrar_cambio"},
                            "papelera.html": {"restaurar_no_esta", "restaurar_no_se_pudo"}}
 HECHOS_DE_ANTES = {"proyecto_nuevo", "grupo_creado", "grupo_quitado", "responsable", "cerrado", "cliente", "cliente_quitado",
@@ -58,7 +58,7 @@ HECHOS_DE_ANTES = {"proyecto_nuevo", "grupo_creado", "grupo_quitado", "responsab
                    # La carpeta (parte 5, 8-oct-2026): igual, las ampara el recibo.
                    "carpeta", "carpeta_quitada",
                    # Las notas (parte 6, 8-oct-2026): igual, las ampara el recibo.
-                   "nota", "nota_editada", "nota_borrada"}
+                   "nota", "nota_editada"}
 
 
 def _claves(texto: str, campo: str) -> dict[str, bool]:
@@ -129,6 +129,16 @@ def _caso_tarea_borrada(base):
     return malo, ver_r(base, **q), "está en la Papelera"
 
 
+def _caso_nota_borrada(base):
+    _sembrar(base)
+    base.con.execute("PRAGMA foreign_keys = OFF")        # (`notas` apunta a `personas`, que este mundo no tiene)
+    base.con.execute("INSERT INTO notas (id, contenido, proyecto_id) VALUES (90, 'una nota', 1)")
+    q = dict(p=1, hecho="nota_borrada", borrada=90)
+    malo = ver_r(base, **q)                                                                # la nota está viva
+    _corre(crud.borrar("notas", 90, "x", actor="panel"))
+    return malo, ver_r(base, **q), "Está en la Papelera"
+
+
 def _caso_grupo_borrado(base):
     _sembrar(base)
     _corre(crud.borrar_grupo("Hogar", dict(ESPERADO_HOGAR), actor="panel"))
@@ -160,6 +170,7 @@ def _caso_grupo_cambio(base):
 
 
 CASOS_DE_PROYECTOS = {"proyecto_borrado": _caso_proyecto_borrado, "tarea_borrada": _caso_tarea_borrada,
+                      "nota_borrada": _caso_nota_borrada,
                       "grupo_borrado": _caso_grupo_borrado, "borrar_cambio": _caso_borrar_cambio,
                       "grupo_cambio": _caso_grupo_cambio}
 

@@ -660,7 +660,6 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'nota_largo' %}<p class="aviso">La nota no puede pasar de {{ largo_nota }} caracteres: NO se guardó nada.</p>
     {% elif error in ('nota_caracteres', 'nota_tipo') %}<p class="aviso">Esa nota lleva caracteres que no se pueden guardar: NO se guardó nada.</p>
     {% elif error == 'nota_no_esta' %}<p class="aviso">Esa nota (o ese proyecto) ya no está: NO se cambió nada.</p>
-    {% elif error == 'nota_ajena' %}<p class="aviso">Solo quien escribió una nota puede cambiarla o borrarla: NO se cambió nada.</p>
     {% elif error == 'nota_cambio' %}<p class="aviso">La nota cambió mientras la editabas: lo que escribiste NO se guardó. Abajo está como está ahora.</p>
     {% elif error == 'nota_igual' %}<p class="aviso">La nota ya decía eso: no cambió nada.</p>
     {% elif error == 'nota_base' %}<p class="aviso">La base de datos falló y no se pudo confirmar si se guardó: mira cómo quedaron las notas antes de volver a intentarlo.</p>
@@ -717,7 +716,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif hecho == 'carpeta_quitada' %}<p class="aviso ok">Carpeta quitada: el proyecto queda sin carpeta.</p>
     {% elif hecho == 'nota' %}<p class="aviso ok">Nota guardada.</p>
     {% elif hecho == 'nota_editada' %}<p class="aviso ok">Nota cambiada.</p>
-    {% elif hecho == 'nota_borrada' %}<p class="aviso ok">Nota borrada.</p>
+    {% elif hecho == 'nota_borrada' and nota_borrada_en_papelera %}<p class="aviso ok">Nota borrada. Está en la <a href="/papelera">Papelera</a>; se restaura desde ahí.</p>
     {% elif hecho == 'responsable' %}<p class="aviso ok">Responsable guardado.</p>
     {% elif hecho == 'cerrado' %}<p class="aviso ok">Proyecto cerrado. Está en «cerrados» en la lista de la izquierda.</p>
     {% elif hecho == 'cliente' %}<p class="aviso ok">Cliente guardado.</p>
@@ -871,8 +870,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {#- LAS NOTAS Y DECISIONES (parte 6, 8-oct-2026): lo que se anota en el proyecto, por la página o
         por Telegram (`notas.proyecto_id`), la más nueva primero. Cada nota dice su autor por NOMBRE
         (`n.autor`; sin autor conocido lo dice, no inventa uno) y su día; el número de chat no se
-        escribe. «Cambiar» y «Borrar» salen solo en las notas que `notas_que_toco` deja a quien mira
-        (la que la escribió, `db.puede_tocar_nota`); el formulario y la pregunta de borrar los dibuja el
+        escribe. «Cambiar» y «Borrar» salen en todas las notas a la sesión de la casa (cualquiera de la casa puede, como en
+        los comentarios); el formulario y la pregunta de borrar los dibuja el
         servidor (`?editar_nota=`, `?borrar_nota=`). En solo ver se leen y no hay ningún control. Sin la
         columna en la base (`m.notas_disponibles` falso) no se dibuja nada de esto. -#}
     {% if m.notas_disponibles and (m.notas or not solo_ver) %}
@@ -881,7 +880,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {% for n in m.notas %}
       <div class="nota-item" id="nota-{{ n.id }}">
         <small>{{ n.autor or 'Autor desconocido' }} · {{ n.creado_en|hora_rd }}</small>
-        {% if not solo_ver and editar_nota == n.id and n.id in notas_que_toco %}
+        {% if not solo_ver and editar_nota == n.id %}
         <form class="renombrar" method="post" action="/proyectos/{{ m.id }}/notas/{{ n.id }}/editar" data-auto>
           <textarea name="texto" required maxlength="{{ largo_nota }}" aria-label="Cambiar la nota">{{ n.texto }}</textarea>
           <button class="guardar">Guardar</button>
@@ -889,7 +888,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         </form>
         {% else %}
         <p class="texto">{{ n.texto }}</p>
-        {% if not solo_ver and n.id in notas_que_toco %}
+        {% if not solo_ver %}
         {% if borrar_nota == n.id %}
         <form class="confirmar" method="post" action="/proyectos/{{ m.id }}/notas/{{ n.id }}/borrar">
           <span>¿Borrar esta nota?</span>

@@ -910,8 +910,11 @@ async def olvidar_preferencia(bandeja_id: int, pref_id: int) -> int | None:
 #
 # `autor_chat_id` (nota escrita desde el panel, parte 6 de la página del proyecto, 8-oct-2026) se suma
 # acá por la misma razón que `bandeja_id`: es quién la escribió, sale de la SESIÓN del panel
-# (`db.crear_nota_de_proyecto`) y ni Telegram `editar` ni `deshacer` pueden cambiarlo. Es el único
-# `autor_chat_id` de una tabla de `TABLAS`; `comentarios_tarea` no está en ella.
+# (`db.crear_nota_de_proyecto`) y ni Telegram `editar` ni `deshacer` pueden cambiarlo. FRONTERA: la lista
+# es por NOMBRE de columna, así que también cubriría `comentarios_tarea.autor_chat_id`; no cambia nada
+# porque `comentarios_tarea` no está en `TABLAS` (`editar` y `deshacer` la rechazan: sonda en
+# `tests/test_notas_de_proyecto.py`, derivada del esquema). Si algún día entra a `TABLAS`, su autor
+# tampoco se podrá editar, que es lo que se quiere.
 NO_EDITABLES = {"id", "bandeja_id", "creado_en", "borrado_en", "deriva_de_id", "autor_chat_id"}
 
 # LAS COLUMNAS DE `tareas` SE CLASIFICAN UNA POR UNA (4-oct-2026). `NO_EDITABLES`
@@ -2658,7 +2661,7 @@ async def deshacer_borrado(tabla: str, registro_id: int) -> tuple[str, int]:
     repetido, proyecto en la papelera o cerrado…). Devuelve `(qué, log_id)`;
     `NadaQueRestaurar` si la fila no está borrada o no tiene huella; el `ValueError`
     de `deshacer` si la regla no deja."""
-    if tabla not in ("proyectos", "tareas"):
+    if tabla not in ("proyectos", "tareas", "notas"):
         raise ValueError(f"Tabla no permitida: {tabla}")
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -2666,6 +2669,17 @@ async def deshacer_borrado(tabla: str, registro_id: int) -> tuple[str, int]:
         fila = await cur.fetchone()
         if fila is None or fila["borrado_en"] is None:
             raise NadaQueRestaurar("no_esta_borrado", "eso no está en la papelera")
+        # UNA NOTA NO VUELVE SOLA a un proyecto que está en la papelera (lo más conservador): se restaura
+        # primero el proyecto. Es la misma regla que la lista de la Papelera dice en su línea.
+        if tabla == "notas":
+            await cur.execute(
+                "SELECT p.borrado_en FROM notas n JOIN proyectos p ON p.id = n.proyecto_id WHERE n.id = %s",
+                (registro_id,))
+            suyo = await cur.fetchone()
+            if suyo is None:
+                raise ValueError("No la restauré: la nota no es de ningún proyecto.")
+            if suyo["borrado_en"] is not None:
+                raise ValueError("No la restauré: su proyecto está en la papelera. Restaura primero el proyecto.")
         await cur.execute(
             "SELECT max(id) AS id FROM log_acciones "
             "WHERE tabla = %s AND registro_id = %s AND accion = 'borrar'", (tabla, registro_id))

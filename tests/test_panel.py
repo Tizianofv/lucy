@@ -458,7 +458,8 @@ def test_las_pantallas_se_pintan_de_verdad():
                                "borrado_en": None, "huella_id": 30, "tareas": 2, "choca": False}],
                 "tareas": [{"id": 4, "titulo": "Una tarea", "estado": "pendiente", "proyecto_id": None,
                             "proyecto_nombre": None, "borrado_en": None, "huella_id": 40,
-                            "por_que_no": None}]}
+                            "por_que_no": None}],
+                "notas": []}
 
     async def _por_banco():
         return [{"banco": "bhd", "n": 12,

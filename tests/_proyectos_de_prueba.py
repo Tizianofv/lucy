@@ -112,10 +112,10 @@ class BaseQueNoSeToca:
             async def _areas():
                 return list(tp.AREAS)
             return _areas
-        if nombre in ("puede_tocar_nota", "autor_de_nota"):
-            # NO es un doble: es la función REAL y pura de `db` (la puerta de quién toca una nota), para que
-            # la prueba pinte los controles con el criterio de verdad.
-            return getattr(db, nombre)
+        if nombre == "aviso_de_nota":
+            async def _aviso_nota(nid, *, borrada):  # FINGIDO: «la nota 700 está en el estado que el aviso dice»
+                return {"proyecto": "Disco Uno"} if (nid == 700 and borrada) else None
+            return _aviso_nota
         if nombre == "tareas_con_filtro":
             # NO es un doble: es la función REAL y pura de `db` (no toca la base; solo recorre las filas
             # del modelo que ya se entregaron). Se deja pasar para que la prueba corra el filtro de verdad.
