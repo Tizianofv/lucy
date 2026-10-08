@@ -661,6 +661,49 @@ def test_si_otro_cambia_la_nota_en_el_medio_no_se_escribe_nada_y_se_dice(uno, mo
     assert "La nota cambió mientras la editabas: lo que escribiste NO se guardó." in ver_r(uno, error="nota_cambio", p=1)
 
 
+# Las tres funciones de `db` son LA puerta (la ruta solo traduce): llamadas directo, sin pasar por la ruta,
+# cada una rechaza a quien no entra al panel y no escribe nada.
+
+@pytest.mark.parametrize("chat", [None, AJENO, SIN_NOMBRE])
+def test_las_tres_funciones_de_db_rechazan_por_si_solas_a_quien_no_entra_al_panel(uno, chat):
+    _nota(uno, 10, 1, "de alguien que no entra", autor=AJENO)
+    _nota(uno, 11, 1, "de otro que no entra", autor=SIN_NOMBRE)
+    antes = _filas(uno)
+    with pytest.raises(db.NotaAjena):
+        _correr(db.crear_nota_de_proyecto(1, chat, "x"))
+    for nid in (10, 11):
+        with pytest.raises(db.NotaAjena):
+            _correr(db.editar_nota_de_proyecto(nid, 1, chat, "x"))
+        with pytest.raises(db.NotaAjena):
+            _correr(db.borrar_nota_de_proyecto(nid, 1, chat))
+    assert _filas(uno) == antes and _huellas(uno) == []
+
+
+def test_las_tres_funciones_de_db_dicen_la_verdad_de_lo_que_no_esta(uno):
+    uno.proyecto(3, "En la papelera", area="CDS", borrado=True)
+    _nota(uno, 10, 3, "de un proyecto borrado", autor=DUENO)
+    _nota(uno, 11, 2, "de otro proyecto", autor=DUENO)
+    with pytest.raises(db.NotaNoEsta):
+        _correr(db.crear_nota_de_proyecto(3, DUENO, "x"))
+    for pid, nid in ((3, 10), (1, 11), (1, 999)):
+        with pytest.raises(db.NotaNoEsta):
+            _correr(db.editar_nota_de_proyecto(nid, pid, DUENO, "x"))
+        with pytest.raises(db.NotaNoEsta):
+            _correr(db.borrar_nota_de_proyecto(nid, pid, DUENO))
+    assert _huellas(uno) == []
+
+
+def test_una_nota_de_telegram_mas_larga_que_el_tope_se_ve_entera_y_no_se_puede_guardar_sin_recortarla(uno):
+    """La frontera: Telegram no limita el largo de una nota, el panel sí (`LARGO_NOTA_PROYECTO`)."""
+    _bandeja(uno, 1, DUENO, "telegram")
+    larga = "z" * (LARGO + 500)
+    _nota(uno, 10, 1, larga, bandeja=1)
+    assert larga in ver(uno, p=1)
+    r = editar(1, 10, {"texto": larga})
+    assert "error=nota_largo" in _donde(r) and _nota_fila(uno, 10)["contenido"] == larga and _huellas(uno) == []
+    assert "hecho=nota_editada" in _donde(editar(1, 10, {"texto": larga[:LARGO]}))
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # 7. Escribir una nota es un movimiento del proyecto
 # ═══════════════════════════════════════════════════════════════════════
