@@ -250,9 +250,9 @@ def test_el_proyecto_va_en_tres_columnas_las_tareas_al_centro_y_las_personas_a_l
     centro, lado = cuerpos[0].hijos[0], cuerpos[0].hijos[1]
     assert centro.tag == "div" and centro.clases == ["centro"]
     assert lado.tag == "aside" and lado.clases == ["lado-der"]
-    # En el centro: «De qué se trata» (parte 3, 8-oct-2026), el bloque de tareas y debajo «Borrar proyecto»
-    # (parte 1, 8-oct-2026: «Cerrar» se fue a la derecha).
-    assert [h2.todo_el_texto() for h2 in centro.buscar("h2")] == ["De qué se trata", "Tareas"]
+    # En el centro: «De qué se trata» (parte 3, 8-oct-2026), el bloque de tareas, «Notas y decisiones» (parte 6,
+    # 8-oct-2026) y debajo «Borrar proyecto» (parte 1, 8-oct-2026: «Cerrar» se fue a la derecha).
+    assert [h2.todo_el_texto() for h2 in centro.buscar("h2")] == ["De qué se trata", "Tareas", "Notas y decisiones"]
     assert [n.clases[:2] for n in centro.buscar("div", "acciones")][-1] == ["acciones", "abajo"]
     assert "Cerrar proyecto" not in centro.todo_el_texto() and "Borrar proyecto" in centro.todo_el_texto()
     # A la derecha: cómo va, las personas del proyecto, la carpeta del proyecto (parte 5, 8-oct-2026;

@@ -518,7 +518,12 @@ CREATE TABLE notas (
   etiquetas   TEXT[] DEFAULT '{}',
   proyecto_id BIGINT REFERENCES proyectos(id),
   persona_id  BIGINT REFERENCES personas(id),
-  borrado_en  TIMESTAMPTZ
+  borrado_en  TIMESTAMPTZ,
+  -- Quién la escribió DESDE EL PANEL (parte 6 de la página completa del proyecto, 8-oct-2026): el
+  -- chat de la SESIÓN, nunca un campo del formulario. NULL = no la escribió el panel: una nota de
+  -- Telegram dice quién la mandó por `bandeja_id` -> `bandeja.chat_id`. Solo la escribe
+  -- `db.crear_nota_de_proyecto`; `crud.NO_EDITABLES` impide que `editar`/`deshacer` la cambien.
+  autor_chat_id BIGINT
 );
 
 -- Todo lo que mueve plata, salga o entre. Una tabla y no dos porque "¿cuánto

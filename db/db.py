@@ -1554,6 +1554,253 @@ async def carpetas_de_proyectos() -> dict[int, str | None] | None:
     return {f["id"]: f["carpeta"] for f in filas}
 
 
+# ── LAS NOTAS Y DECISIONES DEL PROYECTO (`notas.proyecto_id`, parte 6 del diseño de la página completa
+# del proyecto, 8-oct-2026) ─────────────────────────────────────────────────────────────────
+#
+# SE REUSA `notas`, no una tabla nueva: lo que se le dicte a Lucy por Telegram para un proyecto
+# (`crud.crear_desde_interpretacion`, que llena `notas.proyecto_id` cuando el mensaje nombra un
+# proyecto vivo) sale en la página sin hacer nada más, y viceversa.
+#
+# QUIÉN ESCRIBE `notas` (sonda sobre el código, 8-oct-2026): `crud.crear_desde_interpretacion` (Telegram,
+# el único `INSERT INTO notas` escrito a mano que había), los escritores genéricos `crud.editar`,
+# `crud.borrar` y `crud.deshacer` (arman el SQL con la tabla al vuelo) y, desde esta parte,
+# `crear_nota_de_proyecto`, `editar_nota_de_proyecto` y `borrar_nota_de_proyecto`. QUIÉN LA LEE: la página
+# (`notas_de_proyectos`), Lucy por Telegram (`cerebro/consultar.py`, SQL que arma el modelo), la
+# lectura de lo de Tiziano para Code (`db/lectura_dueno.py`, solo las que tienen `bandeja_id` suyo) y
+# el respaldo (`db/backup.py`). Ninguno de esos lectores cambia con esta parte.
+#
+# EL AUTOR sale de la sesión del panel (`autor_chat_id`), nunca de un campo del formulario. Una nota que
+# no escribió el panel (Telegram) dice quién la mandó por su `bandeja` (`autor_de_nota`), y una sin
+# ninguna de las dos cosas no tiene autor conocido: la página lo dice, no inventa un nombre.
+#
+# QUIÉN LA TOCA (editar, borrar): UNA sola puerta, `puede_tocar_nota`: solo quien la escribió. Es la
+# forma más cerrada; los comentarios de las tareas, en cambio, los toca cualquiera de la casa
+# (`borrar_comentario`, `editar_comentario`). Decide Tiziano si las notas van como los comentarios.
+#
+# EL TOPE de una nota es el mismo de los demás textos libres de la casa (`LARGO_COMENTARIO`,
+# `LARGO_DESCRIPCION_PROYECTO`): 2000. No sale de medir notas de producción (no se midió): sale de que
+# `TEXT` no tiene límite y sin uno un POST a mano puede guardar megabytes que después hay que pintar.
+# Una nota de Telegram no tiene tope (`crud.crear_desde_interpretacion`): una más larga se ve entera
+# y editarla desde el panel se rechaza por el tope hasta recortarla.
+LARGO_NOTA_PROYECTO = 2000
+
+
+class NotaNoVale(ValueError):
+    """Un texto de nota que no puede quedar. `clave`: `tipo` (no es texto), `vacio`, `largo`, `caracteres`
+    (un NUL, o algo que no se puede codificar). El mensaje NUNCA repite lo que se pidió."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+class NotaNoEsta(LookupError):
+    """La nota (o el proyecto) no existe, está borrada, o es de OTRO proyecto que el de la ruta."""
+
+
+class NotaAjena(PermissionError):
+    """Quien lo pide no es quien la escribió (o no entra al panel): no se toca."""
+
+
+class NotaCambio(RuntimeError):
+    """La nota cambió entre que se leyó y se escribió: NO se escribió nada."""
+
+
+class NotasSinColumna(RuntimeError):
+    """La base todavía no tiene `notas.autor_chat_id` (migración sin aplicar): NO se escribió nada."""
+
+
+def texto_de_nota_que_vale(crudo) -> str:
+    """El cuadro de texto → la nota a guardar, o `NotaNoVale`. Los saltos de línea del navegador
+    (`\\r\\n`) se guardan como `\\n`; sin espacios de alrededor; no vacía, de a lo sumo
+    `LARGO_NOTA_PROYECTO`, sin NUL ni caracteres que no se puedan codificar."""
+    if not isinstance(crudo, str):
+        raise NotaNoVale("tipo", "la nota tiene que ser un texto")
+    limpio = crudo.replace("\r\n", "\n").replace("\r", "\n").strip()
+    try:
+        limpio.encode("utf-8")
+    except UnicodeEncodeError:
+        raise NotaNoVale("caracteres", "la nota lleva caracteres que no se pueden guardar") from None
+    if "\x00" in limpio:
+        raise NotaNoVale("caracteres", "la nota lleva caracteres que no se pueden guardar")
+    if not limpio:
+        raise NotaNoVale("vacio", "la nota no puede quedar vacía")
+    if len(limpio) > LARGO_NOTA_PROYECTO:
+        raise NotaNoVale("largo", f"la nota no puede pasar de {LARGO_NOTA_PROYECTO} caracteres")
+    return limpio
+
+
+def autor_de_nota(fila: dict) -> int | None:
+    """El chat de quien escribió la nota, o `None` si no se sabe. `fila` trae `autor_chat_id` (el panel) y,
+    de su `bandeja`, `bandeja_chat_id` y `bandeja_origen`. Una nota del panel dice su autor; una de
+    Telegram, el chat que mandó el mensaje (solo si la bandeja es de origen `telegram`: en otro origen el
+    `chat_id` es a quién iba dirigido el aviso o el dueño por omisión, no quién escribió el texto)."""
+    propio = fila.get("autor_chat_id")
+    if propio is not None:
+        return propio
+    if fila.get("bandeja_origen") == "telegram":
+        return fila.get("bandeja_chat_id")
+    return None
+
+
+def puede_tocar_nota(chat_id, fila: dict) -> bool:
+    """LA puerta de editar y borrar una nota: entra al panel Y es quien la escribió. La usan la página
+    (para dibujar los controles) y las tres escrituras (para decidir); nadie arma su propio criterio."""
+    from web.auth import puede_entrar
+
+    autor = autor_de_nota(fila)
+    return chat_id is not None and puede_entrar(chat_id) and autor is not None and autor == chat_id
+
+
+def _columna_ausente(e: Exception) -> bool:
+    try:
+        return e.sqlstate == "42703"
+    except AttributeError:
+        return False
+
+
+async def notas_de_proyectos() -> dict[int, list[dict]] | None:
+    """`{proyecto_id: [fila, ...]}` de las notas VIVAS de proyectos VIVOS, la más nueva primero, o `None`
+    si la columna `notas.autor_chat_id` todavía no existe (la migración `2026-10-08_notas_autor.sql` sin
+    aplicar, SQLSTATE 42703): entonces la página no dibuja el bloque de notas. UNA LECTURA APARTE con su
+    propia conexión, igual que `fechas_de_proyectos` y `carpetas_de_proyectos` (un 42703 deja abortada la
+    transacción de la conexión donde ocurre). Cada fila trae `autor_chat_id` y lo de su bandeja para
+    `autor_de_nota`; un proyecto sin notas no sale en el diccionario."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(
+                "SELECT n.id, n.proyecto_id, n.creado_en, n.contenido, n.autor_chat_id, "
+                "       b.chat_id AS bandeja_chat_id, b.origen AS bandeja_origen "
+                "  FROM notas n "
+                "  JOIN proyectos p ON p.id = n.proyecto_id "
+                "  LEFT JOIN bandeja b ON b.id = n.bandeja_id "
+                " WHERE n.borrado_en IS NULL AND p.borrado_en IS NULL "
+                " ORDER BY n.creado_en DESC, n.id DESC")
+            filas = await cur.fetchall()
+        except Exception as e:
+            if _columna_ausente(e):
+                return None
+            raise
+    salida: dict[int, list[dict]] = {}
+    for f in filas:
+        salida.setdefault(f["proyecto_id"], []).append(dict(f))
+    return salida
+
+
+async def _nota_viva_de(cur, nota_id: int, proyecto_id: int) -> tuple[dict, dict]:
+    """`(fila, fila_con_su_bandeja)` de la nota VIVA `nota_id` que es de ESE proyecto VIVO, o `NotaNoEsta`.
+    La primera es la fila entera (lo que va a la huella); la segunda trae además `bandeja_chat_id` y
+    `bandeja_origen` para `autor_de_nota`. Sin la columna `autor_chat_id`: `NotasSinColumna`."""
+    await cur.execute(
+        "SELECT n.* FROM notas n JOIN proyectos p ON p.id = n.proyecto_id "
+        "WHERE n.id = %s AND n.proyecto_id = %s AND n.borrado_en IS NULL AND p.borrado_en IS NULL",
+        (nota_id, proyecto_id))
+    fila = await cur.fetchone()
+    if fila is None:
+        raise NotaNoEsta("esa nota no está en ese proyecto")
+    fila = dict(fila)
+    if "autor_chat_id" not in fila:
+        raise NotasSinColumna("notas.autor_chat_id no existe todavía")
+    con_bandeja = dict(fila, bandeja_chat_id=None, bandeja_origen=None)
+    if fila.get("bandeja_id") is not None:
+        await cur.execute("SELECT chat_id, origen FROM bandeja WHERE id = %s", (fila["bandeja_id"],))
+        b = await cur.fetchone()
+        if b is not None:
+            con_bandeja["bandeja_chat_id"], con_bandeja["bandeja_origen"] = b["chat_id"], b["origen"]
+    return fila, con_bandeja
+
+
+async def _huella_de_nota(conn, accion: str, registro_id: int, antes, despues, motivo: str, bandeja_id) -> None:
+    await conn.execute(
+        """
+        INSERT INTO log_acciones
+          (actor, accion, tabla, registro_id, antes, despues, motivo, bandeja_id)
+        VALUES ('panel', %s, 'notas', %s, %s, %s, %s, %s)
+        """,
+        (accion, registro_id,
+         json.dumps(antes, default=str, ensure_ascii=False) if antes else None,
+         json.dumps(despues, default=str, ensure_ascii=False) if despues else None,
+         motivo, bandeja_id))
+
+
+async def crear_nota_de_proyecto(proyecto_id: int, autor_chat_id: int, texto) -> int:
+    """Escribe UNA nota en un proyecto VIVO y devuelve su id. `autor_chat_id` es el chat de la SESIÓN del
+    panel (la ruta lo saca de la cookie, nunca de un campo). `NotaNoVale` si el texto no vale,
+    `NotaAjena` si ese chat no entra al panel, `NotaNoEsta` si el proyecto no existe o está en la
+    papelera, `NotasSinColumna` si falta la migración. La fila y su huella `crear` (actor `panel`) van en
+    la misma transacción. Un proyecto cerrado SÍ recibe notas (Telegram ya las pone en cualquier
+    proyecto vivo)."""
+    from web.auth import puede_entrar
+
+    limpio = texto_de_nota_que_vale(texto)
+    if autor_chat_id is None or not puede_entrar(autor_chat_id):
+        raise NotaAjena("quien escribe no entra al panel")
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute("SELECT id FROM proyectos WHERE id = %s AND borrado_en IS NULL", (proyecto_id,))
+        if await cur.fetchone() is None:
+            raise NotaNoEsta("ese proyecto no está")
+        try:
+            await cur.execute(
+                "INSERT INTO notas (contenido, proyecto_id, autor_chat_id) VALUES (%s, %s, %s) RETURNING *",
+                (limpio, proyecto_id, autor_chat_id))
+        except Exception as e:
+            if _columna_ausente(e):
+                raise NotasSinColumna("notas.autor_chat_id no existe todavía") from e
+            raise
+        fila = dict(await cur.fetchone())
+        await _huella_de_nota(conn, "crear", fila["id"], None, fila,
+                              "nota escrita desde el panel de proyectos", None)
+        return fila["id"]
+
+
+async def editar_nota_de_proyecto(nota_id: int, proyecto_id: int, chat_id: int, texto) -> bool:
+    """Cambia el texto de UNA nota de ESE proyecto. `True` si cambió, `False` si el texto limpio ya era
+    el que había (sin escribir ni dejar huella). `NotaNoVale`, `NotaNoEsta` (la nota no está, está
+    borrada o es de OTRO proyecto, o de ninguno), `NotaAjena` (`puede_tocar_nota`), `NotaCambio` (otro la
+    cambió en el medio: el `UPDATE` solo escribe si el texto sigue siendo el leído, para que el `antes`
+    de la huella sea verdad) y `NotasSinColumna`. Huella `editar` con la fila de antes y la de después en
+    la misma transacción: `crud.deshacer` la revierte."""
+    nuevo = texto_de_nota_que_vale(texto)
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        antes, para_autor = await _nota_viva_de(cur, nota_id, proyecto_id)
+        if not puede_tocar_nota(chat_id, para_autor):
+            raise NotaAjena("solo quien la escribió puede cambiarla")
+        if antes["contenido"] == nuevo:
+            return False
+        escrita = await conn.execute(
+            "UPDATE notas SET contenido = %s "
+            "WHERE id = %s AND proyecto_id = %s AND borrado_en IS NULL AND contenido = %s",
+            (nuevo, nota_id, proyecto_id, antes["contenido"]))
+        if escrita.rowcount == 0:
+            raise NotaCambio("la nota cambió mientras se editaba")
+        await cur.execute("SELECT * FROM notas WHERE id = %s", (nota_id,))
+        despues = dict(await cur.fetchone())
+        await _huella_de_nota(conn, "editar", nota_id, antes, despues,
+                              "nota editada desde el panel de proyectos", antes.get("bandeja_id"))
+        return True
+
+
+async def borrar_nota_de_proyecto(nota_id: int, proyecto_id: int, chat_id: int) -> None:
+    """Borra (marca `borrado_en`) UNA nota de ESE proyecto; nunca un `DELETE`. Las mismas negativas que
+    `editar_nota_de_proyecto` (`NotaNoEsta`, `NotaAjena`, `NotasSinColumna`). Huella `borrar` con la fila
+    entera de antes, como `crud.borrar`: `crud.deshacer` la devuelve."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        antes, para_autor = await _nota_viva_de(cur, nota_id, proyecto_id)
+        if not puede_tocar_nota(chat_id, para_autor):
+            raise NotaAjena("solo quien la escribió puede borrarla")
+        escrita = await conn.execute(
+            "UPDATE notas SET borrado_en = now() "
+            "WHERE id = %s AND proyecto_id = %s AND borrado_en IS NULL", (nota_id, proyecto_id))
+        if escrita.rowcount == 0:
+            raise NotaNoEsta("la nota ya no está")
+        await _huella_de_nota(conn, "borrar", nota_id, antes, None,
+                              "nota borrada desde el panel de proyectos", antes.get("bandeja_id"))
+
+
 async def proyecto_vivo_con_nombre(cur, nombre: str, excluir_id: int | None = None):
     """El id de un proyecto VIVO que se llama así, o None. LA comparación de
     nombres de proyecto: la usan la búsqueda de Lucy (`_buscar_o_crear`,
@@ -3528,7 +3775,7 @@ async def proyectos_vivos() -> list[dict]:
 DIAS_DORMIDO = 5
 
 # QUÉ ES «MOVERSE» (§5.6): cada huella de `log_acciones` sobre el proyecto, sus
-# tareas o los comentarios de sus tareas es un movimiento, MENOS las que Lucy
+# tareas, los comentarios de sus tareas o sus notas es un movimiento, MENOS las que Lucy
 # escribe sola cuando AVISA (no es que alguien se moviera). TODA `accion` que
 # el código escribe tiene que estar en una de las dos listas: lo comprueba
 # `tests/test_pagina_proyectos.py` recorriendo el código. Una `accion` que no
@@ -3731,8 +3978,16 @@ def _resumen(pendientes: list[dict], otras: list[dict]) -> dict:
     }
 
 
+def _nota_del_modelo(f: dict, nombres: dict) -> dict:
+    """Una fila de `notas_de_proyectos()` → lo que sabe la plantilla. `autor` es el NOMBRE (`None` si no se
+    sabe quién la escribió o ese chat no tiene nombre): la página nunca escribe un número de chat."""
+    de = autor_de_nota(f)
+    return {"id": f["id"], "autor": nombres.get(de) if de is not None else None, "autor_chat": de,
+            "creado_en": f["creado_en"], "texto": f["contenido"]}
+
+
 def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
-                 hoy: date, participantes=(), fechas=None, carpetas=None) -> dict:
+                 hoy: date, participantes=(), fechas=None, carpetas=None, notas=None) -> dict:
     """El modelo de la página de proyectos, con todas las decisiones.
 
     `fechas` es lo que devuelve `fechas_de_proyectos()` (`None` = las columnas no existen: el
@@ -3740,6 +3995,10 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
     se cuentan contra `hoy` (Santo Domingo) y no se enseñan en un proyecto cerrado.
     `carpetas` es lo que devuelve `carpetas_de_proyectos()` (`None` = la columna no existe: el
     proyecto sale con `carpeta_disponible` falso y el bloque de la carpeta no se dibuja).
+    `notas` es lo que devuelve `notas_de_proyectos()` (`None` = la columna `autor_chat_id` no existe:
+    el proyecto sale con `notas_disponibles` falso y el bloque de notas no se dibuja). Cada nota lleva
+    el NOMBRE de su autor (o `None` si no se sabe) y `autor_chat`, que la plantilla no escribe: la
+    ruta lo compara con la sesión para decidir qué notas puede tocar quien mira.
     `huellas` es `[(proyecto_id, accion, ts)]`; `comentarios`, las filas de
     `comentarios_tarea` vivas; `nombres`, `{chat: nombre}`. EL REPARTO (diseño
     §5.2): cada tarea viva cae en EXACTAMENTE un sitio —dentro de su proyecto si
@@ -3824,6 +4083,10 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
             # plantilla con `enlace_de_carpeta` (una sola puerta), no este modelo.
             "carpeta_disponible": carpetas is not None and pid in carpetas,
             "carpeta": carpetas.get(pid) if carpetas else None,
+            # Las notas (parte 6): las vivas de este proyecto, la más nueva primero. Sin la columna
+            # `autor_chat_id` en la base (`notas` es `None`) no se dibuja nada de esto.
+            "notas_disponibles": notas is not None,
+            "notas": [_nota_del_modelo(f, nombres) for f in (notas or {}).get(pid, [])],
         }
 
     def _grupo(clave, color):
@@ -3888,6 +4151,10 @@ async def pagina_de_proyectos(hoy: date | None = None) -> dict:
                   JOIN comentarios_tarea c ON c.id = l.registro_id
                   JOIN tareas t ON t.id = c.tarea_id
                  WHERE l.tabla = 'comentarios_tarea' AND t.proyecto_id IS NOT NULL
+                UNION ALL
+                SELECT n.proyecto_id, l.accion, l.ts
+                  FROM log_acciones l JOIN notas n ON n.id = l.registro_id
+                 WHERE l.tabla = 'notas' AND n.proyecto_id IS NOT NULL
               ) x
              GROUP BY x.pid, x.accion
             """)
@@ -3919,8 +4186,10 @@ async def pagina_de_proyectos(hoy: date | None = None) -> dict:
     fechas = await fechas_de_proyectos()
     # LA CARPETA (parte 5): otra lectura aparte, tolerante a su columna sin migrar.
     carpetas = await carpetas_de_proyectos()
+    # LAS NOTAS (parte 6): otra lectura aparte, tolerante a su columna sin migrar.
+    notas = await notas_de_proyectos()
     return armar_pagina(grupos, proyectos, tareas, huellas, comentarios,
-                        nombres_con_code(), hoy, participantes, fechas, carpetas)
+                        nombres_con_code(), hoy, participantes, fechas, carpetas, notas)
 
 
 async def derivaciones() -> dict[int, int]:

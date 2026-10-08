@@ -333,6 +333,8 @@ A_MANO = {
     "editar=descripcion": {"p": 1, "editar": "descripcion"},     # parte 3 (8-oct-2026): el formulario de «De qué se trata»
     "editar=fechas": {"p": 1, "editar": "fechas"},               # parte 4 (8-oct-2026): el formulario de las fechas
     "editar=carpeta": {"p": 1, "editar": "carpeta"},             # parte 5 (8-oct-2026): el formulario de la carpeta
+    "editar_nota": {"p": 1, "editar_nota": 700},                 # parte 6 (8-oct-2026): el formulario de una nota
+    "borrar_nota": {"p": 1, "borrar_nota": 700},                 # parte 6: la pregunta de borrar una nota
     "editar_tarea": {"p": 1, "t": 10, "editar_tarea": 10},
     "confirmar_borrar": {"p": 1, "t": 10, "confirmar_borrar": 10},
     "editar_comentario": {"p": 1, "t": 10, "editar_comentario": 100},
@@ -341,7 +343,7 @@ A_MANO = {
     "todo junto": {"p": 1, "t": 10, "nuevo": "CDS", "confirmar": "cerrar", "editar": "nombre",
                    "editar_tarea": 10, "confirmar_borrar": 10, "editar_comentario": 100,
                    "derivar": 10, "pq": "a", "pdonde": "tarea-10", "borrar_proyecto": 1, "borrado": 1,
-                   "borrada": 10},
+                   "borrada": 10, "editar_nota": 700, "borrar_nota": 701},
 }
 
 
@@ -583,6 +585,9 @@ COBERTURA = (VISTAS + list(A_MANO.values()) + [
     {"nuevo_grupo": 1}, {"quitar_grupo": "ACD"}, {"quitar_grupo": "CDS"},
     # Borrar un proyecto (7-oct-2026): la pregunta con las cuentas de sus tareas.
     {"p": 1, "borrar_proyecto": 1},
+    # Las notas (parte 6, 8-oct-2026): el formulario de cambiar una nota suya, la pregunta de borrar otra suya
+    # (la 700 es del panel y la 701 de Telegram, las dos del dueño) y la nota de otro (la 702 no tiene autor).
+    {"p": 1, "editar_nota": 700}, {"p": 1, "borrar_nota": 701}, {"p": 1, "editar_nota": 702},
     # Los filtros de las tareas (parte 2, 8-oct-2026): uno de cada clase, y con la búsqueda de una persona abierta
     # (el filtro viaja escondido en el formulario de búsqueda).
     {"p": 1, "filtro": "pendientes"}, {"p": 1, "filtro": "vencidas"}, {"p": 1, "filtro": "mias"},

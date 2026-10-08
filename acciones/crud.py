@@ -907,7 +907,12 @@ async def olvidar_preferencia(bandeja_id: int, pref_id: int) -> int | None:
 # acá. Crearla vacía tampoco: no está entre las columnas que arma
 # `crear_desde_interpretacion`, así que el agente no tiene NINGÚN camino para
 # ponerla, ni al crear ni al editar.
-NO_EDITABLES = {"id", "bandeja_id", "creado_en", "borrado_en", "deriva_de_id"}
+#
+# `autor_chat_id` (nota escrita desde el panel, parte 6 de la página del proyecto, 8-oct-2026) se suma
+# acá por la misma razón que `bandeja_id`: es quién la escribió, sale de la SESIÓN del panel
+# (`db.crear_nota_de_proyecto`) y ni Telegram `editar` ni `deshacer` pueden cambiarlo. Es el único
+# `autor_chat_id` de una tabla de `TABLAS`; `comentarios_tarea` no está en ella.
+NO_EDITABLES = {"id", "bandeja_id", "creado_en", "borrado_en", "deriva_de_id", "autor_chat_id"}
 
 # LAS COLUMNAS DE `tareas` SE CLASIFICAN UNA POR UNA (4-oct-2026). `NO_EDITABLES`
 # es una lista negra y por eso lo que no estaba en ella era editable «por

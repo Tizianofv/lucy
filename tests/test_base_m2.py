@@ -109,6 +109,13 @@ def _base(participantes_desde: str = "schema") -> sqlite3.Connection:
     for tabla in ("proyectos", "comentarios_tarea"):
         for s in _ddl(schema, tabla):
             con.execute(s)
+    # `notas` y `bandeja` (parte 6 de la página del proyecto): la página lee las notas de un proyecto y el
+    # autor de las de Telegram sale de su bandeja. Solo el `CREATE TABLE` (el índice `hnsw` de `bandeja`
+    # es de pgvector y SQLite no lo conoce).
+    for tabla in ("bandeja", "notas"):
+        for s in _ddl(schema, tabla):
+            if s.lstrip().upper().startswith("CREATE TABLE"):
+                con.execute(s)
     fuente = schema if participantes_desde == "schema" else \
         _migracion_m2().read_text(encoding="utf-8")
     for s in _ddl(fuente, "participantes"):

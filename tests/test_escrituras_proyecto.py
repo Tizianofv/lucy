@@ -938,7 +938,10 @@ def _rutas_post_de_proyectos(con_tareas: bool = False):
                     if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                             and n.func.attr in ("crear_proyecto", "poner_cliente",
                                                 "agregar_participante", "quitar_participante",
-                                                "crear_grupo", "quitar_grupo")):
+                                                "crear_grupo", "quitar_grupo",
+                                                # parte 6 (8-oct-2026): las notas del proyecto
+                                                "crear_nota_de_proyecto", "editar_nota_de_proyecto",
+                                                "borrar_nota_de_proyecto")):
                         escribe.append((f"db.{n.func.attr}", ()))
                     if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                             and n.func.attr == "puede_entrar"):
@@ -958,6 +961,11 @@ def test_toda_ruta_post_de_proyectos_pide_sesion_y_escribe_por_una_puerta_con_ac
         "/proyectos/{pid}/descripcion": {"crud.editar"},      # 8-oct-2026: «De qué se trata»
         "/proyectos/{pid}/fechas": {"crud.editar"},           # 8-oct-2026: inicio, entrega, «Termina cuando»
         "/proyectos/{pid}/carpeta": {"crud.editar"},          # 8-oct-2026: la carpeta del proyecto
+        # 8-oct-2026: las notas y decisiones; escriben por SUS tres funciones de `db` (no por `crud.editar`:
+        # el UPDATE lleva el proyecto y el texto leído, y la puerta de quién la toca es `db.puede_tocar_nota`)
+        "/proyectos/{pid}/notas": {"db.crear_nota_de_proyecto"},
+        "/proyectos/{pid}/notas/{nid}/editar": {"db.editar_nota_de_proyecto"},
+        "/proyectos/{pid}/notas/{nid}/borrar": {"db.borrar_nota_de_proyecto"},
         "/proyectos/{pid}/area": {"crud.editar"},
         "/proyectos/{pid}/responsable": {"crud.editar"},
         "/proyectos/{pid}/estado": {"crud.editar"},

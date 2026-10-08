@@ -182,6 +182,8 @@ NOTAS_DE_COLUMNA = {
                                 "ni se escribe, no la uses",
     ("eventos", "gcal_cal_id"): "id del calendario en Google",
     ("notas", "etiquetas"): "text[]; 'idea' marca las ideas",
+    ("notas", "autor_chat_id"): "quién la escribió desde el panel: el chat con el que entró. NULL = no "
+                                "la escribió el panel (una de Telegram dice quién por bandeja_id)",
     ("movimientos", "tipo"): "'gasto'|'ingreso'|'transferencia'",
     ("movimientos", "fecha"): "DATE, ya en hora local",
     ("movimientos", "monto"): "numeric, SIEMPRE positivo",

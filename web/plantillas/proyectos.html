@@ -125,6 +125,12 @@ h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balan
 .carpeta-p input{font:inherit;padding:.45rem .6rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
 .carpeta-p .botones{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
 .carpeta-p button.guardar{font:600 .88rem var(--texto);padding:.5rem 1rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
+.notas-p .nota-item{border-top:1px solid var(--linea);padding:.6rem 0}
+.notas-p .nota-item:first-of-type{border-top:0;padding-top:0}
+.notas-p .nota-item small{color:var(--suave);font-size:.78rem}
+.notas-p .nota-item p.texto{margin:.1rem 0 0;max-width:65ch;overflow-wrap:anywhere;white-space:pre-wrap}
+.notas-p .nota-acciones{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.35rem}
+.notas-p textarea{font:inherit;width:100%;min-height:5rem;resize:vertical;padding:.55rem .7rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
 .entrega-en{margin:.7rem 0 0;font-size:.88rem;color:var(--suave)}
 .entrega-en.roja{color:var(--vencida);font-weight:600}
 .quienes{display:flex;flex-wrap:wrap;gap:.4rem 1.4rem;font-size:.95rem}
@@ -650,6 +656,16 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'carpeta_base' %}<p class="aviso">La base de datos falló al guardar y no se pudo confirmar: lo que escribiste no está a salvo. Abajo está la carpeta como está ahora; mírala antes de escribirla otra vez.</p>
     {% elif error == 'carpeta_sin_columna' %}<p class="aviso">La carpeta todavía no se puede guardar: falta actualizar la base de datos. NO se guardó nada.</p>
     {% elif error == 'carpeta_invalida' %}<p class="aviso">Esa carpeta no se puede guardar: NO se guardó nada.</p>
+    {% elif error == 'nota_vacio' %}<p class="aviso">La nota no puede quedar vacía: NO se guardó nada.</p>
+    {% elif error == 'nota_largo' %}<p class="aviso">La nota no puede pasar de {{ largo_nota }} caracteres: NO se guardó nada.</p>
+    {% elif error in ('nota_caracteres', 'nota_tipo') %}<p class="aviso">Esa nota lleva caracteres que no se pueden guardar: NO se guardó nada.</p>
+    {% elif error == 'nota_no_esta' %}<p class="aviso">Esa nota (o ese proyecto) ya no está: NO se cambió nada.</p>
+    {% elif error == 'nota_ajena' %}<p class="aviso">Solo quien escribió una nota puede cambiarla o borrarla: NO se cambió nada.</p>
+    {% elif error == 'nota_cambio' %}<p class="aviso">La nota cambió mientras la editabas: lo que escribiste NO se guardó. Abajo está como está ahora.</p>
+    {% elif error == 'nota_igual' %}<p class="aviso">La nota ya decía eso: no cambió nada.</p>
+    {% elif error == 'nota_base' %}<p class="aviso">La base de datos falló y no se pudo confirmar si se guardó: mira cómo quedaron las notas antes de volver a intentarlo.</p>
+    {% elif error == 'nota_sin_columna' %}<p class="aviso">Las notas todavía no se pueden guardar: falta actualizar la base de datos. NO se guardó nada.</p>
+    {% elif error == 'nota_invalida' %}<p class="aviso">Esa nota no se puede guardar: NO se guardó nada.</p>
     {% elif error == 'responsable' %}<p class="aviso">Ese responsable no vale: se escoge entre {{ nombres_responsable|join(', ') }}.</p>
     {% elif error == 'grupo' %}<p class="aviso">Ese grupo no existe.</p>
     {% elif error == 'estado' %}<p class="aviso">No se pudo cambiar el estado del proyecto.</p>
@@ -699,6 +715,9 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif hecho == 'fechas' %}<p class="aviso ok">Fechas guardadas.</p>
     {% elif hecho == 'carpeta' %}<p class="aviso ok">Carpeta guardada.</p>
     {% elif hecho == 'carpeta_quitada' %}<p class="aviso ok">Carpeta quitada: el proyecto queda sin carpeta.</p>
+    {% elif hecho == 'nota' %}<p class="aviso ok">Nota guardada.</p>
+    {% elif hecho == 'nota_editada' %}<p class="aviso ok">Nota cambiada.</p>
+    {% elif hecho == 'nota_borrada' %}<p class="aviso ok">Nota borrada.</p>
     {% elif hecho == 'responsable' %}<p class="aviso ok">Responsable guardado.</p>
     {% elif hecho == 'cerrado' %}<p class="aviso ok">Proyecto cerrado. Está en «cerrados» en la lista de la izquierda.</p>
     {% elif hecho == 'cliente' %}<p class="aviso ok">Cliente guardado.</p>
@@ -848,6 +867,49 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       </form>
       {% endif %}
     </section>
+
+    {#- LAS NOTAS Y DECISIONES (parte 6, 8-oct-2026): lo que se anota en el proyecto, por la página o
+        por Telegram (`notas.proyecto_id`), la más nueva primero. Cada nota dice su autor por NOMBRE
+        (`n.autor`; sin autor conocido lo dice, no inventa uno) y su día; el número de chat no se
+        escribe. «Cambiar» y «Borrar» salen solo en las notas que `notas_que_toco` deja a quien mira
+        (la que la escribió, `db.puede_tocar_nota`); el formulario y la pregunta de borrar los dibuja el
+        servidor (`?editar_nota=`, `?borrar_nota=`). En solo ver se leen y no hay ningún control. Sin la
+        columna en la base (`m.notas_disponibles` falso) no se dibuja nada de esto. -#}
+    {% if m.notas_disponibles and (m.notas or not solo_ver) %}
+    <section class="bloque notas-p" id="notas-del-proyecto">
+      <div class="encabezado"><h2>Notas y decisiones</h2></div>
+      {% for n in m.notas %}
+      <div class="nota-item" id="nota-{{ n.id }}">
+        <small>{{ n.autor or 'Autor desconocido' }} · {{ n.creado_en|hora_rd }}</small>
+        {% if not solo_ver and editar_nota == n.id and n.id in notas_que_toco %}
+        <form class="renombrar" method="post" action="/proyectos/{{ m.id }}/notas/{{ n.id }}/editar" data-auto>
+          <textarea name="texto" required maxlength="{{ largo_nota }}" aria-label="Cambiar la nota">{{ n.texto }}</textarea>
+          <button class="guardar">Guardar</button>
+          <a class="btn-linea" href="/proyectos?p={{ m.id }}#nota-{{ n.id }}">Cancelar</a>
+        </form>
+        {% else %}
+        <p class="texto">{{ n.texto }}</p>
+        {% if not solo_ver and n.id in notas_que_toco %}
+        {% if borrar_nota == n.id %}
+        <form class="confirmar" method="post" action="/proyectos/{{ m.id }}/notas/{{ n.id }}/borrar">
+          <span>¿Borrar esta nota?</span>
+          <button class="btn-lleno">Sí, borrar la nota</button><a class="btn-linea" href="/proyectos?p={{ m.id }}#nota-{{ n.id }}">No</a>
+        </form>
+        {% else %}
+        <div class="nota-acciones"><a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar_nota={{ n.id }}#nota-{{ n.id }}">Cambiar</a><a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;borrar_nota={{ n.id }}#nota-{{ n.id }}">Borrar</a></div>
+        {% endif %}
+        {% endif %}
+        {% endif %}
+      </div>
+      {% else %}<p class="vacio">Todavía no hay notas.</p>{% endfor %}
+      {% if not solo_ver %}
+      <form class="comentar" method="post" action="/proyectos/{{ m.id }}/notas" data-auto>
+        <textarea name="texto" required maxlength="{{ largo_nota }}" placeholder="Escribe una nota o una decisión" aria-label="Nueva nota"></textarea>
+        <button class="guardar">Escribir la nota</button>
+      </form>
+      {% endif %}
+    </section>
+    {% endif %}
 
     {#- BORRAR EL PROYECTO (7-oct-2026), abierto o cerrado: la pregunta la dibuja el
         servidor (`?borrar_proyecto=`) con las cuentas de sus tareas medidas ahora; el «Sí»

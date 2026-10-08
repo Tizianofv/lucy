@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import re
 
+import config
 import db.db as db
 import test_pagina_proyectos as tp
 import web.app as panel
@@ -37,10 +38,21 @@ def modelo(con_personas: bool = True) -> dict:
     # computadora (texto con «Copiar»), el resto no salió en la lectura (`carpeta_disponible` falso).
     # Sin esto la plantilla no dibuja ni el enlace, ni el texto, ni el formulario de la carpeta.
     carpetas = {1: "https://drive.example.test/carpetas/disco-uno", 2: "/Users/estudio/Proyectos/Disco Dos"}
-    return _armar(pr, ta, co, personas if con_personas else [], fechas, carpetas)
+    # Las notas (parte 6): el 1 tiene tres (una del panel con autor conocido, una de Telegram que dice su
+    # autor por la bandeja y una que no dice quién), el 2 (cerrado) una; el resto no salió en la lectura
+    # (`notas_disponibles` falso en cada uno). Sin esto la plantilla no dibuja el bloque, ni los controles.
+    notas = {1: [dict(id=700, proyecto_id=1, creado_en=tp.CREADO, contenido="Nota del panel del dueño",
+                      autor_chat_id=config.CHAT_ID_DUENO, bandeja_chat_id=None, bandeja_origen=None),
+                 dict(id=701, proyecto_id=1, creado_en=tp.CREADO, contenido="Nota de Telegram",
+                      autor_chat_id=None, bandeja_chat_id=config.CHAT_ID_DUENO, bandeja_origen="telegram"),
+                 dict(id=702, proyecto_id=1, creado_en=tp.CREADO, contenido="Nota sin autor conocido",
+                      autor_chat_id=None, bandeja_chat_id=None, bandeja_origen=None)],
+             2: [dict(id=703, proyecto_id=2, creado_en=tp.CREADO, contenido="Nota del cerrado",
+                      autor_chat_id=config.CHAT_ID_DUENO, bandeja_chat_id=None, bandeja_origen=None)]}
+    return _armar(pr, ta, co, personas if con_personas else [], fechas, carpetas, notas)
 
 
-def _armar(pr, ta, co, personas, fechas=None, carpetas=None):
+def _armar(pr, ta, co, personas, fechas=None, carpetas=None, notas=None):
     """`tp.modelo_de_filas` con participantes (esa función no los recibe): los mismos
     rellenos, y `db.armar_pagina` de verdad."""
     pr = [{"creado_en": tp.CREADO, "descripcion": None, "estado": "activo", "area": None,
@@ -48,8 +60,9 @@ def _armar(pr, ta, co, personas, fechas=None, carpetas=None):
     ta = [{"proyecto_id": None, "area": None, "vence_en": None, "completado_en": None,
            "creado_en": tp.CREADO, "responsable_chat_id": None, "estado": "pendiente", **t}
           for t in ta]
-    return db.armar_pagina(list(tp.AREAS), pr, ta, [], list(co), {424242: "Dueño"}, tp.HOY,
-                           participantes=personas, fechas=fechas, carpetas=carpetas)
+    return db.armar_pagina(list(tp.AREAS), pr, ta, [], list(co),
+                           {424242: "Dueño", config.CHAT_ID_DUENO: "Dueño"}, tp.HOY,
+                           participantes=personas, fechas=fechas, carpetas=carpetas, notas=notas)
 
 
 class BaseQueNoSeToca:
@@ -99,6 +112,10 @@ class BaseQueNoSeToca:
             async def _areas():
                 return list(tp.AREAS)
             return _areas
+        if nombre in ("puede_tocar_nota", "autor_de_nota"):
+            # NO es un doble: es la función REAL y pura de `db` (la puerta de quién toca una nota), para que
+            # la prueba pinte los controles con el criterio de verdad.
+            return getattr(db, nombre)
         if nombre == "tareas_con_filtro":
             # NO es un doble: es la función REAL y pura de `db` (no toca la base; solo recorre las filas
             # del modelo que ya se entregaron). Se deja pasar para que la prueba corra el filtro de verdad.

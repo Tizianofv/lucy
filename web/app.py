@@ -1125,7 +1125,8 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
                     nuevo_grupo: Navegacion[int] = 0, quitar_grupo: Navegacion[str] = "",
                     grupo: Aviso[str] = "", borrar_proyecto: Navegacion[int] = 0,
                     borrado: Aviso[int] = 0, borrada: Aviso[int] = 0,
-                    filtro: Navegacion[str] = "", quien: Navegacion[str] = ""):
+                    filtro: Navegacion[str] = "", quien: Navegacion[str] = "",
+                    editar_nota: Navegacion[int] = 0, borrar_nota: Navegacion[int] = 0):
     """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
     (`?g=`), las de «Sin grupo» (`?sin_grupo=1`) o el formulario de un proyecto
@@ -1166,6 +1167,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         nuevo_grupo = 0
         quitar_grupo = grupo = ""
         borrar_proyecto = borrado = borrada = 0
+        editar_nota = borrar_nota = 0
     modelo = await db.pagina_de_proyectos()
     visibles = _filtrar_por_busqueda(modelo, q)
     elegido = p or nombre_guardado or area_guardada or creado
@@ -1201,8 +1203,15 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
     # `?quien=` se normalizan en `_filtro_vigente` (una sola puerta) y la lista sale de
     # `db.tareas_con_filtro`; cualquier otra vista los ignora.
     tareas_p, sufijo_filtro, personas_filtro, mi_nombre = None, "", [], None
+    # LAS NOTAS (parte 6): cuáles de las notas de este proyecto puede cambiar o borrar QUIEN MIRA. Lo
+    # decide `db.puede_tocar_nota`, la misma puerta de las tres escrituras; en solo ver, ninguna. El
+    # número de chat del autor no se escribe en la página: solo se compara aquí.
+    notas_que_toco: set[int] = set()
     if vista["tipo"] == "proyecto":
         m = vista["proyecto"]
+        if not solo_ver:
+            notas_que_toco = {n["id"] for n in m["notas"]
+                              if db.puede_tocar_nota(_sesion(request), {"autor_chat_id": n["autor_chat"]})}
         personas_filtro = sorted({f["responsable"] for f in m["pendientes"] + m["otras"] if f["responsable"]})
         mi_nombre = None if solo_ver else config.nombres_con_code().get(_sesion(request))
         filtro, quien = _filtro_vigente(filtro, quien, personas=personas_filtro, mi_nombre=mi_nombre,
@@ -1242,7 +1251,8 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          "largo_nombre": db.LARGO_NOMBRE_PROYECTO,
          "largo_descripcion": db.LARGO_DESCRIPCION_PROYECTO,
          "largo_termina_cuando": db.LARGO_TERMINA_CUANDO,
-         "largo_carpeta": db.LARGO_CARPETA_PROYECTO,
+         "largo_carpeta": db.LARGO_CARPETA_PROYECTO, "largo_nota": db.LARGO_NOTA_PROYECTO,
+         "notas_que_toco": notas_que_toco, "editar_nota": editar_nota, "borrar_nota": borrar_nota,
          "anio_menor": db.DIA_MAS_VIEJO_DE_PROYECTO.year, "anio_mayor": db.DIA_MAS_NUEVO_DE_PROYECTO.year,
          "dias_dormido": db.DIAS_DORMIDO, "hecho": hecho,
          "confirmar": confirmar, "editar": editar,
@@ -2285,6 +2295,101 @@ async def cambiar_carpeta_de_proyecto(request: Request, pid: int):
             f"/proyectos?error=carpeta_igual&p={pid}#carpeta-del-proyecto", status_code=303)
     hecho = "carpeta" if despues["carpeta"] else "carpeta_quitada"
     return RedirectResponse(f"/proyectos?hecho={hecho}&p={pid}#carpeta-del-proyecto", status_code=303)
+
+
+# LAS NOTAS Y DECISIONES DEL PROYECTO (parte 6, 8-oct-2026). Las tres rutas son sesión de la casa
+# (`auth.puede_entrar`; solo ver y sin sesión: 401) y escriben por `db.crear_nota_de_proyecto`,
+# `db.editar_nota_de_proyecto` y `db.borrar_nota_de_proyecto`, que son quienes deciden (la ruta traduce
+# el formulario y la excepción a una CLAVE en la dirección). Quién escribe sale de la sesión, nunca de
+# un campo del formulario; lo escrito nunca viaja en la dirección ni en el registro.
+
+def _error_de_nota(e: Exception) -> str:
+    """La CLAVE de `?error=` para lo que rechazó una escritura de nota. Una excepción que no es de las
+    de `db` es un fallo de la base: no se sabe si llegó a confirmar."""
+    if isinstance(e, db.NotaNoVale):
+        return f"nota_{e.clave}"
+    if isinstance(e, db.NotaNoEsta):
+        return "nota_no_esta"
+    if isinstance(e, db.NotaAjena):
+        return "nota_ajena"
+    if isinstance(e, db.NotaCambio):
+        return "nota_cambio"
+    if isinstance(e, db.NotasSinColumna):
+        return "nota_sin_columna"
+    return "nota_base"
+
+
+@app.post("/proyectos/{pid}/notas")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def escribir_nota_de_proyecto(request: Request, pid: int):
+    """Escribir una nota en un proyecto. El autor es la sesión. Un POST que ni trae el campo `texto` no
+    escribe nada."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    formulario = await request.form()
+    if "texto" not in formulario:
+        return RedirectResponse(f"/proyectos?error=nota_invalida&p={pid}#notas-del-proyecto", status_code=303)
+    try:
+        # El valor se pasa TAL CUAL (puede no ser texto si el POST es multipart): la puerta decide.
+        await db.crear_nota_de_proyecto(pid, chat, formulario.get("texto"))
+    except Exception as e:
+        clave = _error_de_nota(e)
+        if clave == "nota_base":
+            log.exception("Panel de proyectos: falló la base al escribir una nota en #%s", pid)
+        else:
+            log.warning("Panel de proyectos: nota rechazada en #%s (%s)", pid, clave)
+        return RedirectResponse(f"/proyectos?error={clave}&p={pid}#notas-del-proyecto", status_code=303)
+    return RedirectResponse(f"/proyectos?hecho=nota&p={pid}#notas-del-proyecto", status_code=303)
+
+
+@app.post("/proyectos/{pid}/notas/{nid}/editar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def editar_nota_de_proyecto(request: Request, pid: int, nid: int):
+    """Cambiar el texto de una nota de ESTE proyecto, solo quien la escribió (`db.puede_tocar_nota`).
+    «Ya decía eso» si el texto limpio es el que había: no se escribe ni se dice «guardado»."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    formulario = await request.form()
+    if "texto" not in formulario:
+        return RedirectResponse(
+            f"/proyectos?error=nota_invalida&p={pid}&editar_nota={nid}#nota-{nid}", status_code=303)
+    try:
+        cambio = await db.editar_nota_de_proyecto(nid, pid, chat, formulario.get("texto"))
+    except Exception as e:
+        clave = _error_de_nota(e)
+        if clave == "nota_base":
+            log.exception("Panel de proyectos: falló la base al editar la nota #%s de #%s", nid, pid)
+        else:
+            log.warning("Panel de proyectos: edición de la nota #%s de #%s rechazada (%s)", nid, pid, clave)
+        # El formulario se vuelve a abrir solo si la nota sigue ahí para editarse.
+        reabre = f"&editar_nota={nid}" if clave in ("nota_vacio", "nota_largo", "nota_caracteres", "nota_tipo",
+                                                      "nota_cambio", "nota_base") else ""
+        return RedirectResponse(f"/proyectos?error={clave}&p={pid}{reabre}#nota-{nid}", status_code=303)
+    if not cambio:
+        return RedirectResponse(f"/proyectos?error=nota_igual&p={pid}#nota-{nid}", status_code=303)
+    return RedirectResponse(f"/proyectos?hecho=nota_editada&p={pid}#nota-{nid}", status_code=303)
+
+
+@app.post("/proyectos/{pid}/notas/{nid}/borrar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def borrar_nota_de_proyecto(request: Request, pid: int, nid: int):
+    """Borrar una nota de ESTE proyecto (queda marcada, con su huella; no hay `DELETE`), solo quien la
+    escribió. La pregunta «¿borrarla?» la dibuja el servidor (`?borrar_nota=`)."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    try:
+        await db.borrar_nota_de_proyecto(nid, pid, chat)
+    except Exception as e:
+        clave = _error_de_nota(e)
+        if clave == "nota_base":
+            log.exception("Panel de proyectos: falló la base al borrar la nota #%s de #%s", nid, pid)
+        else:
+            log.warning("Panel de proyectos: borrar la nota #%s de #%s rechazado (%s)", nid, pid, clave)
+        return RedirectResponse(f"/proyectos?error={clave}&p={pid}#notas-del-proyecto", status_code=303)
+    return RedirectResponse(f"/proyectos?hecho=nota_borrada&p={pid}#notas-del-proyecto", status_code=303)
 
 
 @app.post("/tareas/{tid}/area")
