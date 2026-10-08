@@ -735,7 +735,9 @@ def test_el_selector_del_responsable_no_escribe_ningun_numero_de_chat(mundo, gen
 # Cerrar y reabrir
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_el_boton_de_cerrar_va_debajo_al_final_a_la_derecha(mundo):
+def test_el_boton_de_cerrar_va_en_la_columna_derecha_en_su_bloque(mundo):
+    # 8-oct-2026 (parte 1 de «la página de un proyecto, completa», aprobada por Tiziano): «Cerrar» se movió
+    # de debajo de las tareas al bloque «Cerrar el proyecto» de la columna derecha.
     mundo.proyecto(1, "P", area="CDS")
     mundo.tarea(10, "una", proyecto=1)
     html = ver(mundo, p=1)
@@ -743,8 +745,8 @@ def test_el_boton_de_cerrar_va_debajo_al_final_a_la_derecha(mundo):
     assert html.count(boton) == 1
     # (El «+ Agregar tarea con más opciones» se quitó de esta página: la maqueta no lo tiene.)
     assert "más opciones" not in html and html.index("Agregar tarea</button>") < html.index(boton)
-    assert '<div class="acciones abajo">\n      ' + boton in html
-    assert "justify-content:flex-end" in html.split(".acciones.abajo{", 1)[1].split("}", 1)[0]
+    assert '<section class="bloque cerrar-p">\n      <div class="encabezado"><h2>Cerrar el proyecto</h2></div>\n      ' + boton in html
+    assert html.index('<aside class="lado-der">') < html.index(boton)       # a la derecha, no en el centro
 
 
 @pytest.mark.parametrize("pendientes,frase", [

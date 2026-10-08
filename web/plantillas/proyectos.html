@@ -112,8 +112,10 @@ h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balan
 .pastilla{font-size:.78rem;padding:.2rem .6rem;border-radius:99px;border:1px solid var(--linea);background:var(--papel)}
 .pastilla.roja{border-color:var(--vencida);color:var(--vencida)}
 .pastilla.dormido{border-color:var(--dormido);color:var(--dormido);background:var(--dormido-fondo)}
-.avance{display:flex;align-items:center;gap:.7rem;font-size:.85rem;color:var(--suave)}
-.avance .riel{flex:1;height:8px;border-radius:99px;background:var(--linea);overflow:hidden;max-width:22rem}
+.avance{display:flex;flex-direction:column;gap:.45rem;font-size:.85rem;color:var(--suave)}
+.avance .riel{height:8px;border-radius:99px;background:var(--linea);overflow:hidden}
+.lado-der{display:flex;flex-direction:column;gap:1.2rem;min-width:0}
+.como-va .meta{margin-top:.7rem}
 .avance .riel span{display:block;height:100%;background:var(--color);border-radius:99px;transition:width .3s}
 @media (prefers-reduced-motion:reduce){.avance .riel span{transition:none}}
 .aviso-dormido{background:var(--dormido-fondo);color:var(--dormido);border-radius:10px;padding:.6rem .8rem;font-size:.88rem;font-weight:500}
@@ -713,14 +715,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         <span class="pastilla">{{ m.estado_calculado }}</span>
         <span class="pastilla {{ 'dormido' if m.dormido }}">Último movimiento: {{ m.dias_sin_movimiento|hace_dias }}</span>
         <span class="pastilla">{{ m.n_pendientes }} pendiente{{ 's' if m.n_pendientes != 1 }}</span>
-        {% if m.n_vencidas %}<span class="pastilla roja">{{ m.n_vencidas }} vencida{{ 's' if m.n_vencidas > 1 }}</span>{% endif %}
       </div>
-      {% if m.n_total %}
-      <div class="avance"><div class="riel"><span style="width:{{ m.pct }}%"></span></div>{{ m.n_hechas }} de {{ m.n_total }} tareas hechas</div>
-      {% endif %}
     </div>
-    {% if m.cerrado %}<div class="aviso-cerrado">Proyecto cerrado: no se le agregan tareas.
-      {% if not solo_ver %}<form class="en-linea" method="post" action="/proyectos/{{ m.id }}/estado"><input type="hidden" name="estado" value="activo"><button class="btn-linea">Reabrir</button></form>{% endif %}</div>{% endif %}
     {% if not m.estado_conocido and not solo_ver %}<div class="aviso-raro">Este proyecto tiene un estado que no es de la lista («{{ m.estado }}»). Al cerrarlo o reabrirlo se corrige.</div>{% endif %}
 
     <div class="cuerpo">
@@ -737,19 +733,6 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {% endif %}
     </section>
 
-    {#- «Cerrar proyecto» va debajo, al final, a la derecha (lo pidió Tiziano en la
-        maqueta). La confirmación la dibuja el servidor (`?confirmar=cerrar`). -#}
-    {% if not m.cerrado and not solo_ver %}
-    <div class="acciones abajo">
-      {% if confirmar == 'cerrar' %}
-      <div class="confirmar">¿Cerrar este proyecto?
-        {%- if m.n_pendientes == 1 %} Queda 1 pendiente y sigue abierta en <a href="/tareas">Tareas</a>.
-        {%- elif m.n_pendientes %} Quedan {{ m.n_pendientes }} pendientes y siguen abiertas en <a href="/tareas">Tareas</a>.{% endif %}
-        <form class="en-linea" method="post" action="/proyectos/{{ m.id }}/estado"><input type="hidden" name="estado" value="cerrado"><button class="btn-lleno">Sí, cerrar</button></form>
-        <a class="btn-linea" href="/proyectos?p={{ m.id }}">Cancelar</a></div>
-      {% else %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;confirmar=cerrar">Cerrar proyecto</a>{% endif %}
-    </div>
-    {% endif %}
     {#- BORRAR EL PROYECTO (7-oct-2026), abierto o cerrado: la pregunta la dibuja el
         servidor (`?borrar_proyecto=`) con las cuentas de sus tareas medidas ahora; el «Sí»
         las trae de vuelta. Se va a la papelera con sus tareas y se restaura desde ahí. -#}
@@ -778,11 +761,36 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {#- LAS PERSONAS DEL PROYECTO, en la tercera columna como en la maqueta.
           Agregar o quitar una persona NO cuenta como movimiento del proyecto. -#}
       <aside class="lado-der">
+    {#- CÓMO VA: las cifras son las de `db._resumen` (`m.n_hechas`, `m.n_total`, `m.pct`,
+        `m.n_vencidas`); la plantilla no cuenta nada. -#}
+    <section class="bloque como-va">
+      <div class="encabezado"><h2>Cómo va</h2></div>
+      {% if m.n_total %}
+      <div class="avance"><span>{{ m.n_hechas }} de {{ m.n_total }} tareas hechas</span><div class="riel"><span style="width:{{ m.pct }}%"></span></div></div>
+      {% if m.n_vencidas %}<div class="meta"><span class="pastilla roja">{{ m.n_vencidas }} vencida{{ 's' if m.n_vencidas > 1 }}</span></div>{% endif %}
+      {% else %}<p class="vacio">Sin tareas todavía.</p>{% endif %}
+    </section>
     <section class="bloque personas-p">
       <div class="encabezado"><h2>Personas del proyecto</h2><span class="nota">Quién está metido y qué hace aquí</span></div>
       <div class="personas">{% for x in m.personas %}{{ ficha_persona(x, '/proyectos/' ~ m.id ~ '/personas/' ~ x.id ~ '/quitar') }}{% else %}<p class="vacio">Nadie más todavía.</p>{% endfor %}</div>
       {{ agregar_persona('proyecto', '/proyectos/' ~ m.id ~ '/personas') }}
     </section>
+    {#- CERRAR EL PROYECTO. La confirmación la dibuja el servidor (`?confirmar=cerrar`).
+        En solo ver no hay controles: el bloque solo sale si el proyecto está cerrado (para decirlo). -#}
+    {% if not solo_ver or m.cerrado %}
+    <section class="bloque cerrar-p">
+      <div class="encabezado"><h2>Cerrar el proyecto</h2></div>
+      {% if m.cerrado %}<div class="aviso-cerrado">Proyecto cerrado: no se le agregan tareas.
+        {% if not solo_ver %}<form class="en-linea" method="post" action="/proyectos/{{ m.id }}/estado"><input type="hidden" name="estado" value="activo"><button class="btn-linea">Reabrir</button></form>{% endif %}</div>
+      {% elif confirmar == 'cerrar' %}
+      <div class="confirmar">¿Cerrar este proyecto?
+        {%- if m.n_pendientes == 1 %} Queda 1 pendiente y sigue abierta en <a href="/tareas">Tareas</a>.
+        {%- elif m.n_pendientes %} Quedan {{ m.n_pendientes }} pendientes y siguen abiertas en <a href="/tareas">Tareas</a>.{% endif %}
+        <form class="en-linea" method="post" action="/proyectos/{{ m.id }}/estado"><input type="hidden" name="estado" value="cerrado"><button class="btn-lleno">Sí, cerrar</button></form>
+        <a class="btn-linea" href="/proyectos?p={{ m.id }}">Cancelar</a></div>
+      {% else %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;confirmar=cerrar">Cerrar proyecto</a>{% endif %}
+    </section>
+    {% endif %}
       </aside>
     </div>
     </div>

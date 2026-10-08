@@ -250,13 +250,15 @@ def test_el_proyecto_va_en_tres_columnas_las_tareas_al_centro_y_las_personas_a_l
     centro, lado = cuerpos[0].hijos[0], cuerpos[0].hijos[1]
     assert centro.tag == "div" and centro.clases == ["centro"]
     assert lado.tag == "aside" and lado.clases == ["lado-der"]
-    # En el centro: el bloque de tareas y debajo «Cerrar proyecto».
+    # En el centro: el bloque de tareas y debajo «Borrar proyecto» (parte 1, 8-oct-2026: «Cerrar» se fue a la derecha).
     assert [h2.todo_el_texto() for h2 in centro.buscar("h2")] == ["Tareas"]
     assert [n.clases[:2] for n in centro.buscar("div", "acciones")][-1] == ["acciones", "abajo"]
-    assert "Cerrar proyecto" in centro.todo_el_texto()
-    # A la derecha: las personas del proyecto, y nada más.
-    assert [h2.todo_el_texto() for h2 in lado.buscar("h2")] == ["Personas del proyecto"]
-    assert lado.buscar("section", "bloque")[0].buscar("span", "nota")[0].todo_el_texto() == "Quién está metido y qué hace aquí"
+    assert "Cerrar proyecto" not in centro.todo_el_texto() and "Borrar proyecto" in centro.todo_el_texto()
+    # A la derecha: cómo va, las personas del proyecto y cerrar el proyecto, en ese orden.
+    assert [h2.todo_el_texto() for h2 in lado.buscar("h2")] == ["Cómo va", "Personas del proyecto", "Cerrar el proyecto"]
+    assert "Cerrar proyecto" in lado.todo_el_texto()
+    personas = [s for s in lado.buscar("section", "bloque") if "personas-p" in s.clases][0]
+    assert personas.buscar("span", "nota")[0].todo_el_texto() == "Quién está metido y qué hace aquí"
     assert "Nadie más todavía." in lado.todo_el_texto()
     assert not lado.buscar("section") or all("Tareas" not in s.todo_el_texto() for s in lado.buscar("section"))
     # Las tareas del centro y las personas: dos columnas del MISMO nivel dentro del cuerpo.
