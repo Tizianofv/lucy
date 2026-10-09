@@ -129,15 +129,15 @@ _FIJAS = {
     ("proyectos", "deshacer"): "Se deshizo un cambio del proyecto.",
     ("tareas", "crear"): f"Se agregó la tarea «{TITULO}».",
     ("tareas", "borrar"): f"Se borró la tarea «{TITULO}».",
-    ("tareas", "deshacer"): f"Volvió la tarea «{TITULO}».",
+    ("tareas", "deshacer"): f"Se deshizo un cambio en la tarea «{TITULO}».",
     ("comentarios_tarea", "crear"): f"Nuevo comentario en «{TITULO}».",
     ("comentarios_tarea", "editar"): f"Se editó un comentario en «{TITULO}».",
     ("comentarios_tarea", "borrar"): f"Se borró un comentario en «{TITULO}».",
-    ("comentarios_tarea", "deshacer"): f"Volvió un comentario en «{TITULO}».",
+    ("comentarios_tarea", "deshacer"): f"Se deshizo un cambio en un comentario de «{TITULO}».",
     ("notas", "crear"): "Nueva nota en el proyecto.",
     ("notas", "editar"): "Se editó una nota.",
     ("notas", "borrar"): "Se borró una nota.",
-    ("notas", "deshacer"): "Volvió una nota.",
+    ("notas", "deshacer"): "Se deshizo un cambio en una nota.",
 }
 
 # Las dos que miran QUÉ cambió. La huella trae a veces la fila ENTERA de después (`crud.editar`) y a
@@ -595,6 +595,21 @@ def test_el_titulo_de_la_tarea_sale_escapado(mundo):
     b = _bloque(ver(mundo, p=1))
     assert "<img src=x" not in b
     assert "&lt;img src=x onerror=alert(1)&gt;" in b
+
+
+def test_deshacer_una_creacion_dice_lo_mismo_que_deshacer_un_borrado(mundo):
+    """`deshacer` sirve para las DOS cosas —devolver algo borrado, o deshacer una creación (que la manda
+    a la papelera)— y su huella no dice cuál: la frase no puede prometer que algo «volvió»."""
+    mundo.proyecto(1, "Uno", area="CDS", responsable=DUENO)
+    assert post("/proyectos/1/notas", {"texto": "una nota"}).status_code == 303
+    nid = mundo.con.execute("SELECT id FROM notas").fetchone()[0]
+    crear = mundo.con.execute(
+        "SELECT id FROM log_acciones WHERE tabla = 'notas' AND accion = 'crear'").fetchone()[0]
+    correr(crud.deshacer(crear))
+    borrada = mundo.con.execute("SELECT borrado_en FROM notas WHERE id = ?", (nid,)).fetchone()[0]
+    assert borrada is not None, "deshacer una creación tiene que mandar la nota a la papelera"
+    assert _frases(ver(mundo, p=1)) == ["Se deshizo un cambio en una nota.",
+                                        "Nueva nota en el proyecto."]
 
 
 def test_borrar_una_nota_deja_su_frase_y_un_proyecto_en_la_papelera_no_sale(mundo):

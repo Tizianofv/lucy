@@ -3927,15 +3927,18 @@ FRASES_DE_ACTIVIDAD = {
     ("tareas", "crear"): lambda t, a, d: _con_titulo(t, "Se agregó la tarea {t}.", "Se agregó una tarea."),
     ("tareas", "editar"): _tarea_cambiada,
     ("tareas", "borrar"): lambda t, a, d: _con_titulo(t, "Se borró la tarea {t}.", "Se borró una tarea."),
-    ("tareas", "deshacer"): lambda t, a, d: _con_titulo(t, "Volvió la tarea {t}.", "Volvió una tarea."),
+    # DESHACER SIRVE PARA LAS DOS COSAS: devolver algo borrado o deshacer una creación (que la manda a
+    # la papelera). La huella de `deshacer` NO dice cuál de las dos fue (no guarda `antes`/`despues`), así
+    # que la frase no puede prometer que algo «volvió».
+    ("tareas", "deshacer"): lambda t, a, d: _con_titulo(t, "Se deshizo un cambio en la tarea {t}.", "Se deshizo un cambio en una tarea."),
     ("comentarios_tarea", "crear"): lambda t, a, d: _con_titulo(t, "Nuevo comentario en {t}.", "Nuevo comentario en una tarea."),
     ("comentarios_tarea", "editar"): lambda t, a, d: _con_titulo(t, "Se editó un comentario en {t}.", "Se editó un comentario en una tarea."),
     ("comentarios_tarea", "borrar"): lambda t, a, d: _con_titulo(t, "Se borró un comentario en {t}.", "Se borró un comentario en una tarea."),
-    ("comentarios_tarea", "deshacer"): lambda t, a, d: _con_titulo(t, "Volvió un comentario en {t}.", "Volvió un comentario en una tarea."),
+    ("comentarios_tarea", "deshacer"): lambda t, a, d: _con_titulo(t, "Se deshizo un cambio en un comentario de {t}.", "Se deshizo un cambio en un comentario."),
     ("notas", "crear"): lambda t, a, d: "Nueva nota en el proyecto.",
     ("notas", "editar"): lambda t, a, d: "Se editó una nota.",
     ("notas", "borrar"): lambda t, a, d: "Se borró una nota.",
-    ("notas", "deshacer"): lambda t, a, d: "Volvió una nota.",
+    ("notas", "deshacer"): lambda t, a, d: "Se deshizo un cambio en una nota.",
 }
 
 COMBINACIONES_DE_ACTIVIDAD = tuple(sorted(FRASES_DE_ACTIVIDAD))
