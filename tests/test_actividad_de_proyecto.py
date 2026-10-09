@@ -405,9 +405,10 @@ def test_la_sonda_ve_los_pares_escritos_a_mano():
 #
 # QUÉ ES «SIN NOMBRES», exacto: la Actividad no dice QUIÉN hizo cada cosa ni nombra a la persona que
 # entra o sale de un papel (responsable, cliente, autor de un comentario o de una nota), ni escribe un
-# número de chat. FRONTERA: el TÍTULO de la tarea y el nombre del proyecto son texto libre que escribe
-# la casa y salen TAL CUAL (el diseño lo pide: «Se marcó hecha “…”»), así que si alguien escribe un
-# nombre de persona en un título, ese nombre sale — eso lo fija la segunda prueba de aquí abajo.
+# número de chat. FRONTERA: el único texto libre de la casa que sale es el TÍTULO de la tarea, tal cual
+# (el diseño lo pide: «Se marcó hecha “…”»), así que si alguien escribe un nombre de persona en un
+# título, ese nombre sale — eso lo fija la segunda prueba de aquí abajo. El nombre del proyecto NO sale
+# en ninguna frase.
 
 # Todo lo que puede ser un nombre de persona en estos mundos.
 _NOMBRES = ("Persona Uno", "Persona Dos", "Fulano de Tal", "Mengana de Noco",

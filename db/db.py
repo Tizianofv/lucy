@@ -3818,10 +3818,12 @@ ACCIONES_QUE_MUEVEN = ("crear", "editar", "borrar", "deshacer")
 # `actor`, ni un `responsable_chat_id`, ni el nombre de un cliente, de una persona agregada, de quien
 # escribió un comentario o una nota. El cliente y el responsable salen por su PAPEL, sin nombre.
 #
-# FRONTERA, dicha una vez: el TÍTULO de la tarea y el nombre del proyecto son texto libre que escribe
-# la casa y salen TAL CUAL (el diseño lo pide así: «Se marcó hecha “…”»). Si alguien escribe un nombre
-# de persona en el título de una tarea, ese nombre sale en la Actividad. Lo que la garantía cubre es
-# que la frase no saque el nombre de ningún CAMPO de persona, no que filtre lo que una persona escribió.
+# FRONTERA, dicha una vez: el único texto libre de la casa que sale en una frase es el TÍTULO de la
+# tarea, tal cual (el diseño lo pide así: «Se marcó hecha “…”»). Si alguien escribe un nombre de persona
+# en el título de una tarea, ese nombre sale en la Actividad. **El NOMBRE DEL PROYECTO no sale en
+# ninguna frase**: una edición suya dice «Se le cambió el nombre al proyecto.». Lo que la garantía
+# cubre es que la frase no saque el nombre de ningún CAMPO de persona, no que filtre lo que una persona
+# escribió.
 #
 # LAS TABLAS QUE LLEGAN A UN PROYECTO son las cuatro que ya juntaba la consulta de «Último movimiento»
 # (`pagina_de_proyectos`): el proyecto, sus tareas, los comentarios de sus tareas y sus notas. La
@@ -3860,11 +3862,11 @@ def _titulo_de_la_huella(tabla, accion, antes, despues):
     """El título que la tarea tenía EN ESE MOMENTO, sacado de la PROPIA huella — nunca del JOIN a
     `tareas`, que da el de HOY (una tarea creada como «A» y hoy llamada «B» no se agregó como «B»).
 
-    Cuál es el campo, medido con una sonda (8-oct-2026, las acciones de verdad por las rutas y por
-    `crud`/`db`; la tabla está en el reporte de la parte 7): al CREAR, la fila que queda está en
-    `despues`; al EDITAR y al BORRAR, la que había está en `antes`. Las huellas de un COMENTARIO no
-    guardan el título de su tarea (guardan el comentario) y la de un `deshacer` no guarda ni `antes` ni
-    `despues`: en esos tres casos se devuelve `None` y la frase va SIN título, en vez de decir el de hoy.
+    De qué lado de la huella sale, por acción: al CREAR, del `despues` (la fila que quedó); al EDITAR y
+    al BORRAR, del `antes` (la que había). Las huellas de un COMENTARIO no traen el título de su tarea
+    (traen el comentario) y la de un `deshacer` no trae ni `antes` ni `despues`: en esos casos se
+    devuelve `None` y la frase va SIN título, en vez de decir el de hoy. Y un `editar` cuyo `antes` no
+    traiga `titulo` también sale sin título: no se inventa ni se busca el de ahora.
     """
     if tabla != "tareas" or accion not in ("crear", "editar", "borrar"):
         return None
