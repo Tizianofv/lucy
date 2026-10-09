@@ -9,8 +9,11 @@ QUÉ SE VIGILA, una prueba por garantía:
   · un proyecto sin cliente no pregunta nada;
   · las canceladas no salen;
   · el código se pinta como texto discreto al lado del concepto;
-  · el dinero no se pinta (es la parte 10);
   · se ve igual en la sesión de la casa y en la de solo ver.
+
+El DINERO (la columna de cada renglón y los tres totales) es la parte 10 y se
+vigila en `tests/test_dinero_de_proyecto.py`. Acá quedó lo que aquella prueba
+necesita del lector: que los renglones traigan sus cifras.
 
 CÓMO. La App se dobla EN LA RED: un servidor HTTP de verdad en 127.0.0.1
 (`tests/_app_de_registro.py`), al que `registro_lectura` le habla con `httpx`
@@ -445,17 +448,6 @@ def test_lo_que_manda_el_registro_sale_escapado(registro, monkeypatch, campo):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Garantía: el dinero no se pinta (es la parte 10)
-# ═══════════════════════════════════════════════════════════════════════
-
-def test_el_dinero_no_sale_en_la_pagina(registro, monkeypatch):
-    registro.sesiones = _respuesta(sesiones=(SESION, TRABAJO))
-    html = _abrir(monkeypatch)
-    for cifra in ("987654", "111111", "876543", "765432", "RD$"):
-        assert cifra not in html, f"el bloque pintó {cifra!r}, y el dinero es la parte 10"
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # Lo que la App dice de una ficha (y que no es «no tiene sesiones»)
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -496,7 +488,7 @@ async def test_sin_ficha_no_le_pregunta_a_nadie(registro, ficha):
 
 
 async def test_lo_que_devuelve_el_lector_es_lo_que_la_pagina_pinta(registro):
-    """Las dos listas, partidas por `es_trabajo`, y sin el dinero ni el `ref`."""
+    """Las dos listas, partidas por `es_trabajo`, con sus cifras y sin el `ref`."""
     registro.sesiones = _respuesta(sesiones=(SESION, CANCELADA, TRABAJO))
     respuesta = await registro_lectura.sesiones_de_cliente(FICHA)
     assert respuesta["estado"] == "ok"
@@ -504,8 +496,10 @@ async def test_lo_que_devuelve_el_lector_es_lo_que_la_pagina_pinta(registro):
     assert [r["codigo"] for r in respuesta["trabajos"]] == ["t012"]
     for renglon in respuesta["sesiones"] + respuesta["trabajos"]:
         assert set(renglon) == {"fecha", "sala", "horas", "concepto", "codigo",
-                                "atendio", "asignado", "estado", "es_trabajo"}
+                                "atendio", "asignado", "estado", "es_trabajo",
+                                "total", "abonado", "saldo", "dinero"}
         assert renglon["fecha"].isoformat() == HOY
+    assert "ref" not in respuesta["sesiones"][0]
 
 
 async def test_la_pregunta_lleva_la_ficha_del_cliente(registro):

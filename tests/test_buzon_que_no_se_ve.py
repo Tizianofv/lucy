@@ -4124,10 +4124,14 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # red del repositorio). Se tocaron además `config.py`, `db/db.py` y `web/app.py`, ya vigilados, y
     # `tests/_app_de_registro.py`, exento. Medida corriendo la prueba: 151 en disco, 104 EXENTOS,
     # 47 VIGILADOS.
-    assert medido == {"en disco": 151, "exentos": 104, "vigilados": 47}, (
+    # 9-oct-2026, rama `trabajo/proyecto-completo-10` (parte 10: la columna de dinero y los totales):
+    # +1 en disco y +1 EXENTO por `tests/test_dinero_de_proyecto.py` (nuevo); VIGILADOS sin cambio (se
+    # tocó `registro_lectura.py`, ya vigilado, y `web/plantillas/proyectos.html`, que no es `.py`).
+    # Medida corriendo la prueba: 152 en disco, 105 EXENTOS, 47 VIGILADOS.
+    assert medido == {"en disco": 152, "exentos": 105, "vigilados": 47}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "9-oct-2026 (proyecto-completo-9) era {'en disco': 151, "
-        "'exentos': 104, 'vigilados': 47}. La aserción de fondo —cero "
+        "9-oct-2026 (proyecto-completo-10) era {'en disco': 152, "
+        "'exentos': 105, 'vigilados': 47}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

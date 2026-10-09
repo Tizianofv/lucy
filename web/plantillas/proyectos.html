@@ -150,6 +150,17 @@ h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balan
 .sesiones-p .cod{font:400 .74rem ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.03em;color:var(--suave);margin-left:.35rem;white-space:nowrap}
 .sesiones-p .quien{color:var(--suave);font-size:.82rem}
 .sesiones-p .est{font-size:.76rem;padding:.1rem .55rem;border-radius:99px;border:1px solid var(--linea);color:var(--suave);white-space:nowrap}
+/* La columna de dinero (parte 10, 9-oct-2026): verde lo cobrado, rojo lo que se debe, y sin color
+   lo que no encaja. El formato es el de la casa para plata (`_pesos`, «1,234.56»), con el RD$ de
+   la maqueta delante. */
+.sesiones-p .plata{font-variant-numeric:tabular-nums;white-space:nowrap;font-weight:600;text-align:right;min-width:6.2rem}
+.sesiones-p .plata.pago{color:var(--ok)}
+.sesiones-p .plata.debe{color:var(--vencida)}
+.sesiones-p .plata small{display:block;font-weight:400;font-size:.74rem;color:var(--suave)}
+.sesiones-p .cifras{display:flex;flex-wrap:wrap;gap:.5rem 1.8rem;margin-top:1rem;border-top:1px solid var(--linea);padding-top:.8rem}
+.sesiones-p .cifra b{display:block;font-size:1.05rem;font-variant-numeric:tabular-nums}
+.sesiones-p .cifra span{color:var(--suave);font-size:.8rem}
+.sesiones-p .cifra.roja b{color:var(--vencida)}
 .entrega-en{margin:.7rem 0 0;font-size:.88rem;color:var(--suave)}
 .entrega-en.roja{color:var(--vencida);font-weight:600}
 .quienes{display:flex;flex-wrap:wrap;gap:.4rem 1.4rem;font-size:.95rem}
@@ -862,10 +873,10 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% endif %}
 
     {#- LAS SESIONES Y TRABAJOS (parte 9, 9-oct-2026): lo que el registro del estudio tiene a nombre
-        del cliente de este proyecto, partido en dos listas por `es_trabajo`. Se le pregunta a la App
-        al abrir el proyecto (`registro_lectura.sesiones_de_cliente`); las canceladas no llegan hasta
-        acá y el dinero es la parte 10, así que este bloque no lo pinta. Se ve igual en la sesión de
-        la casa y en la de solo ver: no tiene ningún control. -#}
+        del cliente de este proyecto, partido en dos listas por `es_trabajo`, con la columna de dinero
+        y los tres totales (parte 10, 9-oct-2026). Se le pregunta a la App al abrir el proyecto
+        (`registro_lectura.sesiones_de_cliente`); las canceladas no llegan hasta acá. Se ve igual en la
+        sesión de la casa y en la de solo ver: no tiene ningún control. -#}
     <section class="bloque sesiones-p" id="sesiones-y-trabajos">
       <div class="encabezado"><h2>Sesiones y trabajos de este proyecto</h2></div>
       {% if registro.estado == 'ok' %}
@@ -884,12 +895,25 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
             {% if r.atendio %}<span class="quien">atendió {{ r.atendio }}</span>
             {% elif r.asignado %}<span class="quien">{{ r.asignado }}</span>
             {% elif r.es_trabajo %}<span class="quien">sin asignar</span>{% endif %}
+            {#- La columna de dinero (parte 10, 9-oct-2026): lo que decide `registro_lectura.dinero_de_sesion`
+                para la tabla del diseño (3.8). Sin total todavía: «—». Lo que no encaja: sus cifras sin
+                color y el aviso, sin adivinar. -#}
+            {% set d = r.dinero %}
+            {% if d.caso == 'revisar' %}<span class="plata">RD$ {{ d.cifras|map('pesos')|join(' · RD$ ') }}<small>revísala en el registro</small></span>
+            {% elif d.caso == 'sin_total' %}<span class="plata">—</span>
+            {% else %}<span class="plata {{ d.clase }}">RD$ {{ d.monto|pesos }}{% if d.caso == 'debe_con_abono' %}<small>pagó RD$ {{ d.abonado|pesos }} de {{ d.total|pesos }}</small>{% endif %}</span>{% endif %}
             {% if r.estado %}<span class="est">{{ r.estado }}</span>{% endif %}
           </div>
           {% endfor %}
         </div>
         {% endif %}
         {% endfor %}
+        {#- Los tres totales: la suma de lo que aportan los renglones pintados (`registro.totales`). -#}
+        <div class="cifras">
+          <div class="cifra"><b>RD$ {{ registro.totales.facturado|pesos }}</b><span>facturado</span></div>
+          <div class="cifra"><b>RD$ {{ registro.totales.cobrado|pesos }}</b><span>cobrado</span></div>
+          <div class="cifra roja"><b>RD$ {{ registro.totales.por_cobrar|pesos }}</b><span>por cobrar</span></div>
+        </div>
         {% else %}<p class="vacio">El registro no tiene sesiones ni trabajos de este cliente.</p>{% endif %}
       {% elif registro.estado == 'sin_ligar' %}
       <p class="vacio">{% if registro.motivo == 'sin_telefono' %}El registro no puede ligar las sesiones de este cliente: la ficha no tiene teléfono allá.{% else %}El registro no puede ligar las sesiones de este cliente.{% endif %}</p>

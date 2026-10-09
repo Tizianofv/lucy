@@ -9,16 +9,22 @@ misma variable en los dos servicios); la llave viaja en la cabecera
 este archivo que toca la red, y solo sabe hacer GET.
 
 Lo que devuelve `sesiones_de_cliente` es un diccionario con su `estado`: `ok`
-(con las dos listas), `sin_cliente` (el proyecto no tiene ficha a la que
-preguntar), `sin_ligar` (la ficha no se puede ligar, con su motivo) o
+(con las dos listas y los totales), `sin_cliente` (el proyecto no tiene ficha a
+la que preguntar), `sin_ligar` (la ficha no se puede ligar, con su motivo) o
 `no_se_pudo` (no hay llave, la App no contestó o contestó algo que no se
 entiende). Los cuatro se dicen distinto en la página; ninguno se disfraza de
 «no tiene sesiones».
+
+El dinero lo calcula la App; acá solo se decide cómo se pinta (`dinero_de_sesion`,
+la tabla del diseño 3.8) y cuánto suman los renglones pintados
+(`totales_de_sesiones`). Las dos son funciones puras, sin red ni base.
 """
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date
+from decimal import Decimal, InvalidOperation
 
 import httpx
 
@@ -104,15 +110,92 @@ def _horas(valor) -> str | None:
     return f"{valor:g}"
 
 
+def _dinero(valor) -> Decimal | None:
+    """Una cifra de dinero como `Decimal`, sin pasar por `float` al hacer
+    cuentas; lo que no es un número —o no es finito—, None («no vino»).
+
+    `Decimal(str(valor))` y no `Decimal(valor)`: el segundo arrastra lo que el
+    `float` guarda de verdad (2000.1 no es 2000.1), y esas sobras hacen que dos
+    cifras que la App manda cuadradas acá no cuadren.
+    """
+    if isinstance(valor, bool) or not isinstance(valor, (int, float)):
+        return None
+    if isinstance(valor, float) and not math.isfinite(valor):
+        return None
+    try:
+        return Decimal(str(valor))
+    except InvalidOperation:
+        return None
+
+
+def dinero_de_sesion(total, abonado, saldo) -> dict:
+    """Qué se pinta en la columna de dinero de una sesión (diseño 3.8), y qué
+    aporta a los totales del bloque.
+
+    Verde con el total cuando no debe nada; rojo con lo que debe cuando debe, y
+    con «pagó X de TOTAL» debajo si ya pagó una parte; «—» cuando todavía no hay
+    total. Las tres cifras tienen que venir, no ser negativas y cuadrar
+    (`abonado + saldo == total`): lo que no encaja sale con sus cifras sin color
+    y con «revísala en el registro», sin adivinar ninguno.
+    """
+    if total is None or total == 0:
+        return _lo_que_se_pinta("sin_total")
+    cuadra = (abonado is not None and saldo is not None and total > 0
+              and abonado >= 0 and saldo >= 0 and abonado + saldo == total)
+    if not cuadra:
+        return _lo_que_se_pinta("revisar", total, abonado, saldo)
+    if saldo == 0:
+        return _lo_que_se_pinta("pago", total, abonado, saldo)
+    if abonado == 0:
+        return _lo_que_se_pinta("debe", total, abonado, saldo)
+    return _lo_que_se_pinta("debe_con_abono", total, abonado, saldo)
+
+
+def _lo_que_se_pinta(caso, total=None, abonado=None, saldo=None) -> dict:
+    """La forma que la página pinta para un caso, con lo que el renglón aporta a
+    los totales (`aporta`: facturado, cobrado y por cobrar, en ese orden).
+
+    Un renglón sin total no aporta nada: no pintó ninguna cifra.
+    """
+    if caso == "sin_total":
+        return {"caso": caso, "clase": "", "monto": None,
+                "total": None, "abonado": None, "cifras": [], "aporta": (None, None, None)}
+    if caso == "revisar":
+        cifras = [c for c in (total, abonado, saldo) if c is not None]
+        return {"caso": caso, "clase": "", "monto": None,
+                "total": total, "abonado": abonado, "cifras": cifras,
+                "aporta": (total, abonado, saldo)}
+    return {"caso": caso, "clase": "pago" if caso == "pago" else "debe",
+            "monto": total if caso == "pago" else saldo,
+            "total": total, "abonado": abonado, "cifras": [],
+            "aporta": (total, abonado, saldo)}
+
+
+def totales_de_sesiones(renglones) -> dict:
+    """Los tres totales del bloque (facturado, cobrado, por cobrar): la suma de
+    lo que aporta cada renglón pintado. Las quitadas y las canceladas no llegan
+    hasta acá, así que no cuentan."""
+    facturado, cobrado, por_cobrar = Decimal(0), Decimal(0), Decimal(0)
+    for renglon in renglones:
+        aporta = renglon["dinero"]["aporta"]
+        facturado += aporta[0] or 0
+        cobrado += aporta[1] or 0
+        por_cobrar += aporta[2] or 0
+    return {"facturado": facturado, "cobrado": cobrado, "por_cobrar": por_cobrar}
+
+
 def _renglon(fila) -> dict | None:
     """Un renglón con SOLO lo que la página pinta, o None si no sirve.
 
-    Deja caer a propósito el dinero (`total`, `abonado`, `saldo`) y el `ref`:
-    esta parte no los pinta, y lo que no entra acá no puede pintarse por
-    descuido desde la plantilla. Una sesión cancelada no sale.
+    El `ref` no entra: es de las partes que quitan y agregan sesiones, y lo que
+    no entra acá no puede pintarse por descuido desde la plantilla. Una sesión
+    cancelada no sale.
     """
     if not isinstance(fila, dict) or fila.get("cancelada"):
         return None
+    total = _dinero(fila.get("total"))
+    abonado = _dinero(fila.get("abonado"))
+    saldo = _dinero(fila.get("saldo"))
     return {
         "fecha": _dia(fila.get("fecha")),
         "sala": _texto(fila.get("sala_mostrar")) or _texto(fila.get("sala")),
@@ -123,17 +206,20 @@ def _renglon(fila) -> dict | None:
         "asignado": _texto(fila.get("asignado_a")),
         "estado": _texto(fila.get("estado")),
         "es_trabajo": fila.get("es_trabajo") is True,
+        "total": total, "abonado": abonado, "saldo": saldo,
+        "dinero": dinero_de_sesion(total, abonado, saldo),
     }
 
 
 def _vacio(estado: str, motivo: str = "") -> dict:
     """La respuesta sin renglones, con su estado y su motivo."""
-    return {"estado": estado, "motivo": motivo, "sesiones": [], "trabajos": []}
+    return {"estado": estado, "motivo": motivo, "sesiones": [], "trabajos": [],
+            "totales": totales_de_sesiones([])}
 
 
 async def sesiones_de_cliente(noco_id) -> dict:
     """Las sesiones y los trabajos de esa ficha del cliente, ya partidos en dos
-    listas por `es_trabajo`.
+    listas por `es_trabajo`, con los tres totales del bloque.
 
     Sin ficha (`None` o algo que no es un Id) no le pregunta a nadie: un
     proyecto sin cliente no tiene de quién traerlas.
@@ -157,4 +243,5 @@ async def sesiones_de_cliente(noco_id) -> dict:
                  len(filas) - len(renglones), len(filas))
     return {"estado": "ok", "motivo": "",
             "sesiones": [r for r in renglones if not r["es_trabajo"]],
-            "trabajos": [r for r in renglones if r["es_trabajo"]]}
+            "trabajos": [r for r in renglones if r["es_trabajo"]],
+            "totales": totales_de_sesiones(renglones)}
