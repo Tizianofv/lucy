@@ -444,3 +444,40 @@ def test_el_indice_deja_una_sola_decision_viva_y_la_borrada_no_estorba(dos):
     devolver(1, 11)
     assert "hecho=sesion_quitada" in _donde(quitar(1, 11))
     assert len(_filas(dos, 1)) == 2 and len(_vivas(dos, 1)) == 1
+
+
+def test_la_migracion_corre_y_deja_la_tabla_con_su_modo_y_su_indice():
+    """La migración EJECUTADA, traducida a SQLite como en las otras partes: crea la tabla para
+    Postgres (el `BIGSERIAL` y el `DEFAULT now()` son los dos cambios de dialecto de siempre), con
+    el vocabulario cerrado del `modo` y el índice único parcial entre las vivas."""
+    import test_base_m2 as b2
+
+    suyas = [a for a in g._migraciones()
+             if "CREATE TABLE IF NOT EXISTS sesiones_de_proyecto" in a.read_text(encoding="utf-8")]
+    assert len(suyas) == 1, suyas
+    con = sqlite3.connect(":memory:")
+    # `DEFAULT (now())` es de Postgres: SQLite necesita que alguien le conteste esa función (igual
+    # que en `tests/test_base_m2.py::_base`).
+    con.create_function("now", 0, lambda: "2026-10-09T12:00:00+00:00")
+    con.execute("CREATE TABLE proyectos (id INTEGER PRIMARY KEY)")
+    con.execute("INSERT INTO proyectos (id) VALUES (1)")
+    for sentencia in b2._ddl(suyas[0].read_text(encoding="utf-8"), "sesiones_de_proyecto"):
+        con.execute(sentencia)
+    assert con.execute("SELECT count(*) FROM sesiones_de_proyecto").fetchone()[0] == 0
+
+    con.execute("INSERT INTO sesiones_de_proyecto "
+                "(proyecto_id, sesion_ref, codigo, modo, creado_por_chat_id) "
+                "VALUES (1, '11', 's011', 'quitada', 42)")
+    with pytest.raises(sqlite3.IntegrityError):
+        con.execute("INSERT INTO sesiones_de_proyecto "
+                    "(proyecto_id, sesion_ref, codigo, modo, creado_por_chat_id) "
+                    "VALUES (1, '12', 'x', 'otra-cosa', 42)")
+    with pytest.raises(sqlite3.IntegrityError):
+        con.execute("INSERT INTO sesiones_de_proyecto "
+                    "(proyecto_id, sesion_ref, codigo, modo, creado_por_chat_id) "
+                    "VALUES (1, '11', 's011', 'quitada', 42)")
+    con.execute("UPDATE sesiones_de_proyecto SET borrado_en = '2026-10-09T00:00:00+00:00'")
+    con.execute("INSERT INTO sesiones_de_proyecto "
+                "(proyecto_id, sesion_ref, codigo, modo, creado_por_chat_id) "
+                "VALUES (1, '11', 's011', 'quitada', 42)")
+    assert con.execute("SELECT count(*) FROM sesiones_de_proyecto").fetchone()[0] == 2
