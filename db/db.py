@@ -3808,6 +3808,155 @@ DIAS_DORMIDO = 5
 ACCIONES_AUTOMATICAS = ("avisar", "aviso_atraso_code")
 ACCIONES_QUE_MUEVEN = ("crear", "editar", "borrar", "deshacer")
 
+# LA ACTIVIDAD DEL PROYECTO (parte 7 del diseño «la página de un proyecto, completa», 8-oct-2026).
+#
+# Lo que ha pasado en un proyecto, SIN decir quién lo hizo. La huella de `log_acciones` no guarda el
+# actor de verdad (`actor` es una palabra fija, 'panel', 'lucy' o 'sala'), y Tiziano lo dejó para
+# después (8-oct-2026: «Que no diga quien lo hizo, eso se hace despues»). Por eso lo que se pinta sale
+# de la HUELLA —tabla, acción y qué cambió— y NUNCA de un dato de persona: ni el `actor`, ni un
+# `responsable_chat_id`, ni el nombre de un cliente, de una persona agregada, de quien escribió un
+# comentario o una nota. El título de la tarea SÍ sale: lo escribe la casa.
+#
+# LAS TABLAS QUE LLEGAN A UN PROYECTO son las cuatro que ya juntaba la consulta de «Último movimiento»
+# (`pagina_de_proyectos`): el proyecto, sus tareas, los comentarios de sus tareas y sus notas. La
+# Actividad y «Último movimiento» salen de LA MISMA consulta, así que cuentan lo mismo. Las huellas de
+# `participantes` NO entran a propósito: agregar o quitar una persona no cuenta como movimiento del
+# proyecto (diseño §5.4; la nota de `proyectos.html` y su prueba `tests/test_personas_y_cliente.py`).
+# Los gastos (`movimientos`), las citas (`eventos`) y los micro-pasos no se ven en esta página, así que
+# tampoco salen aquí.
+#
+# CADA COMBINACIÓN DE TABLA Y ACCIÓN que el código escribe tiene su frase. La lista sale de recorrer el
+# código, no de una lista tecleada: `tests/test_actividad_de_proyecto.py` saca las tablas del `UNION`
+# de la consulta y las acciones de `ACCIONES_QUE_MUEVEN`, y exige que cada par tenga su frase. Una
+# combinación que nadie declaró NO se esconde: sale con la frase general (`ACTIVIDAD_OTRA`).
+
+# Cuántos renglones se pintan por proyecto. Veinte: la maqueta muestra tres y un historial no puede
+# crecer sin fin; es el orden de magnitud de un proyecto (sus tareas son un puñado), y el tope se
+# aplica EN LA CONSULTA (`TOPE_ACTIVIDAD`), no al pintar, para que la página no traiga el historial
+# entero. Medido en producción el 8-oct-2026: 43 tareas vivas en 20 proyectos vivos.
+TOPE_ACTIVIDAD = 20
+
+# La frase de una combinación que nadie declaró. Dice la verdad sin prometer qué pasó.
+ACTIVIDAD_OTRA = "Hubo un cambio en el proyecto."
+
+
+def _con_titulo(titulo, con: str, sin: str) -> str:
+    """La frase con el título de la tarea entre comillas angulares, o su versión sin título cuando la
+    huella no lo trae (un renglón viejo, una tarea que ya no está)."""
+    t = (titulo or "").strip()
+    return con.format(t=f"«{t}»") if t else sin
+
+
+def _cambiadas(antes, despues) -> set:
+    """Las columnas que esa edición CAMBIÓ de verdad.
+
+    Hace falta comparar: la huella de `crud.editar` trae la fila ENTERA de después (`SELECT *` tras el
+    `UPDATE`), y la de las funciones de `db` (marcar hecha, reabrir, cerrar…) trae SOLO lo que cambió.
+    Mirar qué claves hay en el `despues` diría, por ejemplo, que un cambio de nombre «cambió el
+    cliente» —porque el cliente está en la fila— y eso sería una frase falsa. Sin `antes` con qué
+    comparar no se afirma nada: no se devuelve ninguna columna y sale la frase general."""
+    if not isinstance(antes, dict) or not isinstance(despues, dict):
+        return set()
+    return {c for c, v in despues.items() if antes.get(c) != v}
+
+
+def _proyecto_cambiado(titulo, antes, despues) -> str:
+    """Qué se dice de una edición de un proyecto: lo que la huella dice que cambió, sin nombres. El
+    cliente y el responsable se nombran por su PAPEL, nunca por su nombre ni por su número de chat."""
+    d = despues if isinstance(despues, dict) else {}
+    cambiadas = _cambiadas(antes, despues)
+    if "estado" in cambiadas:
+        if d["estado"] == ESTADO_PROYECTO_CERRADO:
+            return "Se cerró el proyecto."
+        return ("Se reabrió el proyecto." if d["estado"] == "activo"
+                else "Se cambió el estado del proyecto.")
+    if {"cliente_noco_id", "cliente_nombre"} & cambiadas:
+        return "Se cambió el cliente del proyecto."
+    if "responsable_chat_id" in cambiadas:
+        return "Se cambió el responsable del proyecto."
+    if "nombre" in cambiadas:
+        return "Se le cambió el nombre al proyecto."
+    if "descripcion" in cambiadas:
+        return "Se escribió de qué se trata el proyecto."
+    if "carpeta" in cambiadas:
+        return "Se cambió la carpeta del proyecto."
+    if "area" in cambiadas:
+        return "Se cambió el proyecto de grupo."
+    if {"inicio", "entrega", "termina_cuando"} & cambiadas:
+        return "Se cambiaron las fechas del proyecto."
+    return "Se cambió el proyecto."
+
+
+def _tarea_cambiada(titulo, antes, despues) -> str:
+    """Qué se dice de una edición de una tarea. El responsable se nombra por su papel, y un cambio de
+    título no repite el título: lo escribió una persona y de él se dice solo que cambió."""
+    d = despues if isinstance(despues, dict) else {}
+    cambiadas = _cambiadas(antes, despues)
+    if "estado" in cambiadas:
+        if d["estado"] == ESTADO_HECHA:
+            return _con_titulo(titulo, "Se marcó hecha {t}.", "Se marcó hecha una tarea.")
+        return (_con_titulo(titulo, "Se reabrió {t}.", "Se reabrió una tarea.")
+                if d["estado"] == ESTADO_PENDIENTE
+                else _con_titulo(titulo, "Se le cambió el estado a {t}.",
+                                 "Se le cambió el estado a una tarea."))
+    if "responsable_chat_id" in cambiadas:
+        return _con_titulo(titulo, "Se cambió el responsable de {t}.",
+                           "Se cambió el responsable de una tarea.")
+    if "titulo" in cambiadas:
+        return "Se le cambió el nombre a una tarea."
+    if "vence_en" in cambiadas:
+        return _con_titulo(titulo, "Se le cambió la fecha a {t}.",
+                           "Se le cambió la fecha a una tarea.")
+    if "proyecto_id" in cambiadas:
+        return _con_titulo(titulo, "Se movió {t} a otro proyecto.",
+                           "Se movió una tarea a otro proyecto.")
+    if "area" in cambiadas:
+        return _con_titulo(titulo, "Se cambió {t} de grupo.", "Se cambió una tarea de grupo.")
+    return _con_titulo(titulo, "Se cambió {t}.", "Se cambió una tarea.")
+
+
+# (tabla, acción) → la frase. UNA entrada por cada combinación que el código puede escribir en
+# `log_acciones` sobre algo que cuelga de un proyecto. La clave y la frase viven juntas a propósito:
+# así la prueba que saca las combinaciones del código compara contra esto, y no contra una lista aparte
+# que se puede separar de la realidad.
+FRASES_DE_ACTIVIDAD = {
+    ("proyectos", "crear"): lambda t, a, d: "Se creó el proyecto.",
+    ("proyectos", "editar"): _proyecto_cambiado,
+    ("proyectos", "borrar"): lambda t, a, d: "Se mandó el proyecto a la papelera.",
+    ("proyectos", "deshacer"): lambda t, a, d: "Se deshizo un cambio del proyecto.",
+    ("tareas", "crear"): lambda t, a, d: _con_titulo(t, "Se agregó la tarea {t}.", "Se agregó una tarea."),
+    ("tareas", "editar"): _tarea_cambiada,
+    ("tareas", "borrar"): lambda t, a, d: _con_titulo(t, "Se borró la tarea {t}.", "Se borró una tarea."),
+    ("tareas", "deshacer"): lambda t, a, d: _con_titulo(t, "Volvió la tarea {t}.", "Volvió una tarea."),
+    ("comentarios_tarea", "crear"): lambda t, a, d: _con_titulo(t, "Nuevo comentario en {t}.", "Nuevo comentario en una tarea."),
+    ("comentarios_tarea", "editar"): lambda t, a, d: _con_titulo(t, "Se editó un comentario en {t}.", "Se editó un comentario en una tarea."),
+    ("comentarios_tarea", "borrar"): lambda t, a, d: _con_titulo(t, "Se borró un comentario en {t}.", "Se borró un comentario en una tarea."),
+    ("comentarios_tarea", "deshacer"): lambda t, a, d: _con_titulo(t, "Volvió un comentario en {t}.", "Volvió un comentario en una tarea."),
+    ("notas", "crear"): lambda t, a, d: "Nueva nota en el proyecto.",
+    ("notas", "editar"): lambda t, a, d: "Se editó una nota.",
+    ("notas", "borrar"): lambda t, a, d: "Se borró una nota.",
+    ("notas", "deshacer"): lambda t, a, d: "Volvió una nota.",
+}
+
+COMBINACIONES_DE_ACTIVIDAD = tuple(sorted(FRASES_DE_ACTIVIDAD))
+
+
+def frase_de_actividad(tabla, accion, antes=None, despues=None, titulo=None) -> str:
+    """La frase de UNA huella de `log_acciones`: una sola puerta. Nunca vacía: la combinación que
+    nadie declaró sale con la frase general, no se esconde. Ni la frase ni lo que mira para armarla
+    tocan un dato de persona."""
+    como = FRASES_DE_ACTIVIDAD.get((tabla, accion)) \
+        if isinstance(tabla, str) and isinstance(accion, str) else None
+    return como(titulo, antes, despues) if como else ACTIVIDAD_OTRA
+
+
+def actividad_de_renglones(renglones) -> list[dict]:
+    """Las huellas de UN proyecto (las que trae `pagina_de_proyectos`, ya la más nueva primero) → lo
+    que pinta el bloque: la frase y su instante. El `actor` y la bandeja no viajan en la consulta."""
+    return [{"frase": frase_de_actividad(r["tabla"], r["accion"], r.get("antes"),
+                                         r.get("despues"), r.get("titulo")),
+             "cuando": r["ts"]} for r in renglones]
+
 # El color de un grupo sale de `areas.color` y se escribe en un `style=`: solo
 # pasa un hex; cualquier otra cosa se pinta con este gris.
 COLOR_SIN_GRUPO = "#6b6b6b"
@@ -4012,7 +4161,8 @@ def _nota_del_modelo(f: dict, nombres: dict) -> dict:
 
 
 def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
-                 hoy: date, participantes=(), fechas=None, carpetas=None, notas=None) -> dict:
+                 hoy: date, participantes=(), fechas=None, carpetas=None, notas=None,
+                 actividad=None) -> dict:
     """El modelo de la página de proyectos, con todas las decisiones.
 
     `fechas` es lo que devuelve `fechas_de_proyectos()` (`None` = las columnas no existen: el
@@ -4023,6 +4173,8 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
     `notas` es lo que devuelve `notas_de_proyectos()` (`None` = la columna `autor_chat_id` no existe:
     el proyecto sale con `notas_disponibles` falso y el bloque de notas no se dibuja). Cada nota lleva
     el NOMBRE de su autor (`_nota_del_modelo`), nunca el número de chat.
+    `actividad` es `{proyecto_id: [renglones de log_acciones]}` (la más nueva primero), sacado de la
+    MISMA consulta que `huellas`; cada renglón se pasa a frase sin nombres (`actividad_de_renglones`).
     `huellas` es `[(proyecto_id, accion, ts)]`; `comentarios`, las filas de
     `comentarios_tarea` vivas; `nombres`, `{chat: nombre}`. EL REPARTO (diseño
     §5.2): cada tarea viva cae en EXACTAMENTE un sitio —dentro de su proyecto si
@@ -4111,6 +4263,9 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
             # `autor_chat_id` en la base (`notas` es `None`) no se dibuja nada de esto.
             "notas_disponibles": notas is not None,
             "notas": [_nota_del_modelo(f, nombres) for f in (notas or {}).get(pid, [])],
+            # LA ACTIVIDAD (parte 7): las últimas huellas de este proyecto, ya en frases sin nombres.
+            # Solo lo que la consulta trajo (su tope): no se inventa un renglón de más.
+            "actividad": actividad_de_renglones((actividad or {}).get(pid, [])),
         }
 
     def _grupo(clave, color):
@@ -4158,31 +4313,59 @@ async def pagina_de_proyectos(hoy: date | None = None) -> dict:
              WHERE borrado_en IS NULL
             """)
         tareas = list(await cur.fetchall())
+        # LAS HUELLAS DEL PROYECTO (parte 7): UNA SOLA FUENTE para «Último movimiento» y para la
+        # Actividad. Antes traía una fila por (proyecto, acción) con la fecha más nueva; ahora trae
+        # CADA huella con lo que hace falta para pasarla a frase —la tabla, la acción, qué cambió y el
+        # título de la tarea—, y de aquí salen las dos cosas: el renglón que decide el movimiento es el
+        # mismo que se pinta. El tope por proyecto (`TOPE_ACTIVIDAD`) va en el SQL para que la consulta
+        # NO crezca con el historial; las huellas automáticas (`ACCIONES_AUTOMATICAS`) se dejan fuera
+        # aquí para que no ocupen sitio del tope (`armar_pagina` las vuelve a dejar fuera: es una
+        # función pura y se prueba sola). El `actor` y la bandeja NO se traen: lo que no viaja no se
+        # puede escribir por descuido.
+        # Las cuatro tablas de este `UNION` son las que «tocan» a un proyecto; la prueba de la
+        # actividad saca la lista de aquí (`l.tabla = '…'`) y exige una frase por cada combinación.
+        # El SQL va como TEXTO FIJO (sin f-string) para que el censo de escritores genéricos lo pueda
+        # leer entero; los `%s` del `NOT IN` y los valores que van en ellos salen de `ACCIONES_QUE_
+        # MUEVEN`/`ACCIONES_AUTOMATICAS` (el número de huecos lo vigila la prueba de la actividad).
         await cur.execute(
             """
-            SELECT x.pid, x.accion, max(x.ts) AS ts
-              FROM (
-                SELECT l.registro_id AS pid, l.accion, l.ts
-                  FROM log_acciones l
-                 WHERE l.tabla = 'proyectos'
-                UNION ALL
-                SELECT t.proyecto_id, l.accion, l.ts
-                  FROM log_acciones l JOIN tareas t ON t.id = l.registro_id
-                 WHERE l.tabla = 'tareas' AND t.proyecto_id IS NOT NULL
-                UNION ALL
-                SELECT t.proyecto_id, l.accion, l.ts
-                  FROM log_acciones l
-                  JOIN comentarios_tarea c ON c.id = l.registro_id
-                  JOIN tareas t ON t.id = c.tarea_id
-                 WHERE l.tabla = 'comentarios_tarea' AND t.proyecto_id IS NOT NULL
-                UNION ALL
-                SELECT n.proyecto_id, l.accion, l.ts
-                  FROM log_acciones l JOIN notas n ON n.id = l.registro_id
-                 WHERE l.tabla = 'notas' AND n.proyecto_id IS NOT NULL
-              ) x
-             GROUP BY x.pid, x.accion
-            """)
-        huellas = [(f["pid"], f["accion"], f["ts"]) for f in await cur.fetchall()]
+            SELECT z.pid, z.tabla, z.accion, z.registro_id, z.ts, z.antes, z.despues,
+                   z.titulo
+              FROM (SELECT y.*,
+                           row_number() OVER (PARTITION BY y.pid
+                                              ORDER BY y.ts DESC, y.id DESC) AS puesto
+                      FROM (
+                        SELECT l.registro_id AS pid, l.tabla, l.accion, l.registro_id, l.ts,
+                               l.antes, l.despues, NULL AS titulo, l.id
+                          FROM log_acciones l
+                         WHERE l.tabla = 'proyectos'
+                        UNION ALL
+                        SELECT t.proyecto_id, l.tabla, l.accion, l.registro_id, l.ts,
+                               l.antes, l.despues, t.titulo, l.id
+                          FROM log_acciones l JOIN tareas t ON t.id = l.registro_id
+                         WHERE l.tabla = 'tareas' AND t.proyecto_id IS NOT NULL
+                        UNION ALL
+                        SELECT t.proyecto_id, l.tabla, l.accion, l.registro_id, l.ts,
+                               l.antes, l.despues, t.titulo, l.id
+                          FROM log_acciones l
+                          JOIN comentarios_tarea c ON c.id = l.registro_id
+                          JOIN tareas t ON t.id = c.tarea_id
+                         WHERE l.tabla = 'comentarios_tarea' AND t.proyecto_id IS NOT NULL
+                        UNION ALL
+                        SELECT n.proyecto_id, l.tabla, l.accion, l.registro_id, l.ts,
+                               l.antes, l.despues, NULL, l.id
+                          FROM log_acciones l JOIN notas n ON n.id = l.registro_id
+                         WHERE l.tabla = 'notas' AND n.proyecto_id IS NOT NULL
+                      ) y
+                     WHERE y.accion NOT IN (%s, %s)) z
+             WHERE z.puesto <= %s
+             ORDER BY z.pid, z.puesto
+            """, (*ACCIONES_AUTOMATICAS, TOPE_ACTIVIDAD))
+        renglones = list(await cur.fetchall())
+        huellas = [(f["pid"], f["accion"], f["ts"]) for f in renglones]
+        actividad: dict[int, list] = {}
+        for f in renglones:
+            actividad.setdefault(f["pid"], []).append(f)
         await cur.execute(
             """
             SELECT c.id, c.tarea_id, c.autor_chat_id, c.creado_en, c.texto,
@@ -4213,7 +4396,8 @@ async def pagina_de_proyectos(hoy: date | None = None) -> dict:
     # LAS NOTAS (parte 6): otra lectura aparte, tolerante a su columna sin migrar.
     notas = await notas_de_proyectos()
     return armar_pagina(grupos, proyectos, tareas, huellas, comentarios,
-                        nombres_con_code(), hoy, participantes, fechas, carpetas, notas)
+                        nombres_con_code(), hoy, participantes, fechas, carpetas, notas,
+                        actividad)
 
 
 async def derivaciones() -> dict[int, int]:

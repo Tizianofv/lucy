@@ -131,6 +131,13 @@ h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balan
 .notas-p .nota-item p.texto{margin:.1rem 0 0;max-width:65ch;overflow-wrap:anywhere;white-space:pre-wrap}
 .notas-p .nota-acciones{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.35rem}
 .notas-p textarea{font:inherit;width:100%;min-height:5rem;resize:vertical;padding:.55rem .7rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
+/* LA ACTIVIDAD (parte 7, 8-oct-2026): una lista de renglones, la frase a la izquierda y su día a la
+   derecha. Sin controles: es información, y se lee igual en la casa y en solo ver. */
+.actividad-p ul{margin:0;padding:0;list-style:none}
+.actividad-p li{display:flex;justify-content:space-between;align-items:baseline;gap:.9rem;border-top:1px solid var(--linea);padding:.5rem 0;font-size:.92rem}
+.actividad-p li:first-child{border-top:0;padding-top:0}
+.actividad-p li b{font-weight:500;min-width:0;overflow-wrap:anywhere}
+.actividad-p li span{color:var(--suave);font-size:.8rem;white-space:nowrap;font-variant-numeric:tabular-nums}
 .entrega-en{margin:.7rem 0 0;font-size:.88rem;color:var(--suave)}
 .entrega-en.roja{color:var(--vencida);font-weight:600}
 .quienes{display:flex;flex-wrap:wrap;gap:.4rem 1.4rem;font-size:.95rem}
@@ -909,6 +916,21 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {% endif %}
     </section>
     {% endif %}
+
+    {#- LA ACTIVIDAD (parte 7, 8-oct-2026): lo que ha pasado en el proyecto, la más nueva primero, SIN
+        decir quién lo hizo y sin ningún dato de persona (ni responsable, ni cliente, ni el autor de un
+        comentario o una nota): la frase sale de la huella (`db.actividad_de_renglones`). Solo lectura:
+        no hay ningún control, ni en la casa ni en solo ver. El tope (`db.TOPE_ACTIVIDAD`) lo pone la
+        consulta; aquí no se recorta nada. -#}
+    <section class="bloque actividad-p" id="actividad-del-proyecto">
+      <div class="encabezado"><h2>Actividad</h2></div>
+      {% if m.actividad %}
+      <ul>
+        {% for a in m.actividad %}<li><b>{{ a.frase }}</b><span>{{ a.cuando|hora_rd }}</span></li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="vacio">Todavía no hay movimiento.</p>{% endif %}
+    </section>
 
     {#- BORRAR EL PROYECTO (7-oct-2026), abierto o cerrado: la pregunta la dibuja el
         servidor (`?borrar_proyecto=`) con las cuentas de sus tareas medidas ahora; el «Sí»
