@@ -314,6 +314,13 @@ def _servir_por_cuenta(mapa):
 
 
 def _destinos(bandeja):
+    """Los chats que recibieron un encargo, ordenados. Lo que se compara contra esto también va
+    ORDENADO (`sorted([...])`), y no escrito en un orden a mano: `config.CHAT_ID_DUENO` NO es siempre
+    777 —lo fija el PRIMER módulo que importa `config` en cada proceso, y este archivo es uno de
+    varios que lo ponen (`test_grupo_ia` pone 424242, `test_anticipos` 1, este 777…)—, así que
+    comparar contra `[config.CHAT_ID_DUENO, OTRO_DESTINO]` pasaba o fallaba según quién hubiera
+    arrancado el proceso. Medido el 8-oct-2026: con 1, 111 o 777 pasaba; con 1001 o 424242, no.
+    Lo que la prueba vigila es QUE LLEGUEN a los dos destinos, no en qué orden."""
     return sorted(f["chat_id"] for f in bandeja.encargos)
 
 
@@ -337,7 +344,7 @@ def test_el_segundo_destino_recibe_su_reporte_aunque_el_primero_ya_haya_salido()
     assert _correr(correo.reporte_diario()) == 1, (
         "el destino 999 se quedó sin su reporte: el candado de OTRO destinatario "
         "lo dejó fuera")
-    assert _destinos(bandeja) == [config.CHAT_ID_DUENO, OTRO_DESTINO], (
+    assert _destinos(bandeja) == sorted([config.CHAT_ID_DUENO, OTRO_DESTINO]), (
         f"los encargos del día no llegaron a los dos destinos: {_destinos(bandeja)}")
 
 
@@ -350,7 +357,7 @@ def test_cada_destino_recibe_uno_solo_aunque_el_bucle_llame_cien_veces():
     assert _correr(correo.reporte_diario()) == 2
     for _ in range(99):
         assert _correr(correo.reporte_diario()) == 0
-    assert _destinos(bandeja) == [config.CHAT_ID_DUENO, OTRO_DESTINO], (
+    assert _destinos(bandeja) == sorted([config.CHAT_ID_DUENO, OTRO_DESTINO]), (
         f"{len(bandeja.encargos)} encargos en una mañana para dos destinos: "
         f"{_destinos(bandeja)}")
 
