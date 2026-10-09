@@ -415,6 +415,34 @@ CREATE UNIQUE INDEX participantes_una_vez_por_tarea
   ON participantes (tarea_id, noco_id)
   WHERE borrado_en IS NULL AND tarea_id IS NOT NULL;
 
+-- LAS DECISIONES SOBRE LAS SESIONES DE UN PROYECTO (parte 11 de la página completa del proyecto,
+-- 9-oct-2026; migración 2026-10-09_sesiones_de_proyecto.sql). Una fila por decisión a mano de la
+-- casa sobre la lista que el registro del estudio le manda a Lucy: `quitada` (esta parte) o
+-- `agregada` (el vocabulario entero lo fija el CHECK; la parte 13 construye la agregada).
+--
+-- `sesion_ref` es el identificador ESTABLE de la sesión del registro (el `ref` que manda la App:
+-- el Id de su fila), guardado como texto; `codigo`, el código que tenía al decidir, SOLO para
+-- poder nombrarla si un día la App ya no la devuelve. No se copia ningún otro dato de la sesión
+-- (ni fecha, ni sala, ni nombre, ni un monto): el dinero y lo demás los sigue diciendo la App en
+-- cada lectura (diseño 3.3). El índice único es parcial, igual que
+-- `participantes_una_vez_por_proyecto`: una sola decisión viva por proyecto y sesión, y devolver
+-- una quitada es ponerle `borrado_en` (nunca un `DELETE`).
+CREATE TABLE sesiones_de_proyecto (
+  id                 BIGSERIAL PRIMARY KEY,
+  proyecto_id        BIGINT NOT NULL REFERENCES proyectos(id),
+  sesion_ref         TEXT NOT NULL,
+  codigo             TEXT,
+  modo               TEXT NOT NULL,
+  creado_en          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  creado_por_chat_id BIGINT NOT NULL,
+  borrado_en         TIMESTAMPTZ,
+  CONSTRAINT sesiones_de_proyecto_modo_valido
+    CHECK (modo IN ('quitada', 'agregada'))
+);
+CREATE UNIQUE INDEX sesiones_de_proyecto_una_vez
+  ON sesiones_de_proyecto (proyecto_id, sesion_ref)
+  WHERE borrado_en IS NULL;
+
 -- LOS MICRO-PASOS (encargo 7, 22-sep-2026): una lista de chequeo DENTRO de
 -- una tarea, para cuando sigue siendo grande. Decisión de Tiziano, textual:
 -- «No, es una lista de chequeo» — así que NO es una tarea: sin fecha, sin

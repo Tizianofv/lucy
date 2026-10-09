@@ -18,6 +18,12 @@ entiende). Los cuatro se dicen distinto en la página; ninguno se disfraza de
 El dinero lo calcula la App; acá solo se decide cómo se pinta (`dinero_de_sesion`,
 la tabla del diseño 3.8) y cuánto suman los renglones pintados
 (`totales_de_sesiones`). Las dos son funciones puras, sin red ni base.
+
+Desde la parte 11, `con_las_quitadas` es la otra regla pura del bloque: saca de
+las listas y de los totales las sesiones que la casa quitó de ESTE proyecto, y
+arma la lista «Quitadas» para devolverlas. `sesion_por_ref` busca una sesión
+entre lo que la App devolvió; es lo único para lo que sirve el identificador que
+llega del formulario.
 """
 from __future__ import annotations
 
@@ -110,6 +116,23 @@ def _horas(valor) -> str | None:
     return f"{valor:g}"
 
 
+def _ref(valor) -> str | None:
+    """El identificador de la sesión en texto, o None si no sirve.
+
+    Es el `ref` que manda la App (el Id de su fila), que llega como número: se
+    pasa a texto para poder compararlo con lo guardado (`sesion_ref` es TEXT) y
+    para que el formulario de quitar lo lleve tal cual. Un texto se guarda sin
+    espacios de alrededor; lo que no sea un número entero ni un texto, None.
+    """
+    if isinstance(valor, bool):
+        return None
+    if isinstance(valor, int):
+        return str(valor)
+    if isinstance(valor, str):
+        return valor.strip() or None
+    return None
+
+
 def _dinero(valor) -> Decimal | None:
     """Una cifra de dinero como `Decimal`, sin pasar por `float` al hacer
     cuentas; lo que no es un número —o no es finito—, None («no vino»).
@@ -187,9 +210,10 @@ def totales_de_sesiones(renglones) -> dict:
 def _renglon(fila) -> dict | None:
     """Un renglón con SOLO lo que la página pinta, o None si no sirve.
 
-    El `ref` no entra: es de las partes que quitan y agregan sesiones, y lo que
-    no entra acá no puede pintarse por descuido desde la plantilla. Una sesión
-    cancelada no sale.
+    El `ref` entra desde la parte 11: es con lo que se guarda la decisión de
+    quitarla del proyecto, y viaja al formulario de quitar. Lo que no entra acá
+    no puede pintarse por descuido desde la plantilla: un renglón sin `ref` se
+    pinta igual, solo que no se puede quitar. Una sesión cancelada no sale.
     """
     if not isinstance(fila, dict) or fila.get("cancelada"):
         return None
@@ -197,6 +221,7 @@ def _renglon(fila) -> dict | None:
     abonado = _dinero(fila.get("abonado"))
     saldo = _dinero(fila.get("saldo"))
     return {
+        "ref": _ref(fila.get("ref")),
         "fecha": _dia(fila.get("fecha")),
         "sala": _texto(fila.get("sala_mostrar")) or _texto(fila.get("sala")),
         "horas": _horas(fila.get("horas")),
@@ -245,3 +270,52 @@ async def sesiones_de_cliente(noco_id) -> dict:
             "sesiones": [r for r in renglones if not r["es_trabajo"]],
             "trabajos": [r for r in renglones if r["es_trabajo"]],
             "totales": totales_de_sesiones(renglones)}
+
+
+def sesion_por_ref(respuesta, ref) -> dict | None:
+    """El renglón de la sesión con ESE identificador, de las dos listas, o None.
+
+    Es la puerta con la que la página vuelve a encontrar la sesión que se pide
+    quitar: el identificador que llega del formulario solo sirve para BUSCAR
+    entre lo que la App devolvió, nunca para guardarse tal cual.
+    """
+    buscado = _ref(ref)
+    if buscado is None:
+        return None
+    for renglon in respuesta["sesiones"] + respuesta["trabajos"]:
+        if renglon["ref"] == buscado:
+            return renglon
+    return None
+
+
+def con_las_quitadas(respuesta, quitadas) -> dict:
+    """La respuesta del bloque con las sesiones que la casa quitó, fuera de las
+    listas Y de los totales, y con la lista «Quitadas» para devolverlas.
+
+    `quitadas` es `{ref: codigo}` de las decisiones vivas de ESTE proyecto, o
+    `None` si la tabla todavía no existe (la migración sin aplicar): entonces no
+    se filtra nada, no sale ninguna lista de quitadas y `quitadas_disponibles`
+    queda falso, así que la página no dibuja ningún control. Un diccionario
+    vacío es otra cosa: la tabla está y este proyecto no tiene ninguna quitada.
+
+    Cada quitada sale con lo que la App devuelve de ella en ESTA lectura (para
+    nombrarla) o, si ya no la devuelve, con el código que se guardó al quitarla.
+    """
+    if quitadas is None:
+        return {**respuesta, "quitadas": [], "quitadas_disponibles": False}
+    salida = {**respuesta, "quitadas": [], "quitadas_disponibles": True}
+    if respuesta["estado"] != "ok":
+        # Sin la respuesta de la App no hay renglones que filtrar ni nada que
+        # nombrar: no se afirma qué se quitó.
+        return salida
+    todas = respuesta["sesiones"] + respuesta["trabajos"]
+    pintadas = [r for r in todas if r["ref"] not in quitadas]
+    de_la_app = {r["ref"]: r for r in todas if r["ref"] is not None}
+    salida["sesiones"] = [r for r in pintadas if not r["es_trabajo"]]
+    salida["trabajos"] = [r for r in pintadas if r["es_trabajo"]]
+    salida["totales"] = totales_de_sesiones(pintadas)
+    salida["quitadas"] = [
+        {"ref": ref, "codigo": (de_la_app[ref]["codigo"] if ref in de_la_app else codigo),
+         "renglon": de_la_app.get(ref)}
+        for ref, codigo in quitadas.items()]
+    return salida

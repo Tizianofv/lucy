@@ -38,7 +38,7 @@ os.environ.setdefault("CHAT_ID_DUENO", "424242")
 
 import registro_lectura  # noqa: E402
 from test_sesiones_de_proyecto import (  # noqa: E402,F401
-    HOY, _abrir, _bloque, _respuesta, registro)
+    HOY, _abrir, _bloque, _respuesta, _sin_los_controles, registro)
 
 D = Decimal
 
@@ -277,11 +277,12 @@ def test_el_dinero_tiene_el_formato_de_la_casa(registro, monkeypatch):
 
 
 def test_se_ve_igual_en_la_casa_y_en_solo_ver(registro, monkeypatch):
-    """El dinero no es un control: la casa y la de solo ver ven lo mismo."""
+    """El dinero no es un control: la casa y la de solo ver ven lo mismo (parte 11: los controles
+    de quitar y devolver son lo único que la de solo ver no lleva)."""
     registro.sesiones = _respuesta(sesiones=DE_CADA_CLASE)
     casa = _bloque(_abrir(monkeypatch, con="casa"))
     ver = _bloque(_abrir(monkeypatch, con="ver"))
-    assert ver == casa, "el bloque con dinero no se ve igual en las dos sesiones"
+    assert ver == _sin_los_controles(casa), "el bloque con dinero no se ve igual en las dos sesiones"
     assert "RD$ 29,000.00" in ver and "RD$ 16,000.00" in ver
 
 

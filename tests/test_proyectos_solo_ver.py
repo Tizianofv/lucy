@@ -25,6 +25,7 @@ Correr:  python3 -m pytest tests/test_proyectos_solo_ver.py -q
 from __future__ import annotations
 
 import html as html_lib
+import contextlib
 import os
 import re
 from html.parser import HTMLParser
@@ -42,6 +43,7 @@ import _proyectos_de_prueba as pp  # noqa: E402
 from _navegador import Navegador, dar_recibo  # noqa: E402
 import config  # noqa: E402
 import db.db as db  # noqa: E402
+import registro_lectura  # noqa: E402
 import web.api_code as api_code  # noqa: E402
 import web.app as panel  # noqa: E402
 import web.auth as auth  # noqa: E402
@@ -597,7 +599,44 @@ COBERTURA = (VISTAS + list(A_MANO.values()) + [
 
 
 def _paginas_de_la_casa(consultas=COBERTURA) -> list[str]:
-    return [_pintar("casa", **c) for c in consultas]
+    with _con_el_bloque_de_sesiones():
+        return [_pintar("casa", **c) for c in consultas]
+
+
+@contextlib.contextmanager
+def _con_el_bloque_de_sesiones():
+    """Para el censo de controles: la plantilla solo dibuja el bloque de sesiones —y con él los
+    botones de quitar y devolver (parte 11)— cuando el registro contesta y hay algo pintado. Esto es
+    un doble DECLARADO de las dos lecturas del bloque (el lector del registro y las decisiones de la
+    casa): afirma la FORMA que devuelven (partes 9 y 11), no lo que la App contesta. Sin esto el
+    censo diría que esos controles no los pinta ninguna página de prueba, que es justo lo que el
+    censo existe para no dejar pasar."""
+    def _renglon(**campos):
+        return registro_lectura._renglon({"cancelada": False, "es_trabajo": False, **campos})
+
+    pintada = _renglon(ref=11, servicio="Grabación", codigo="s011", fecha="2026-10-09")
+    quitada = _renglon(ref=12, servicio="Mezcla", codigo="t012", fecha="2026-10-09")
+
+    async def _lector(noco_id, *a, **k):
+        return {"estado": "ok", "motivo": "",
+                "sesiones": [pintada], "trabajos": [quitada],
+                "totales": registro_lectura.totales_de_sesiones([pintada, quitada])}
+
+    class _Base(pp.BaseQueNoSeToca):
+        def __getattr__(self, nombre):
+            if nombre == "sesiones_quitadas_de_proyectos":
+                async def _quitadas():
+                    return {1: {"11": "s011"}}
+                return _quitadas
+            return super().__getattr__(nombre)
+
+    guardado = (registro_lectura.sesiones_de_cliente, pp.BaseQueNoSeToca)
+    registro_lectura.sesiones_de_cliente = _lector
+    pp.BaseQueNoSeToca = _Base
+    try:
+        yield
+    finally:
+        registro_lectura.sesiones_de_cliente, pp.BaseQueNoSeToca = guardado
 
 
 def test_el_modelo_de_prueba_hace_correr_todos_los_controles_de_la_plantilla(monkeypatch):

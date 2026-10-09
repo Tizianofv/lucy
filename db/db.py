@@ -1790,6 +1790,226 @@ async def borrar_nota_de_proyecto(nota_id: int, proyecto_id: int, chat_id: int) 
                               "nota borrada desde el panel de proyectos", antes.get("bandeja_id"))
 
 
+# ── LAS SESIONES QUE SE QUITAN DE UN PROYECTO (`sesiones_de_proyecto`, parte 11 del diseño de la
+# página completa del proyecto, 9-oct-2026) ─────────────────────────────────────────────────
+#
+# LA DECISIÓN DE LA CASA, no el dato de la sesión. Lucy le pregunta al registro las sesiones del
+# cliente de un proyecto (`registro_lectura.sesiones_de_cliente`, parte 9) y lo único que guarda es
+# lo que la casa decidió a mano sobre esa lista: `quitada` (esta parte) o `agregada` (parte 13). El
+# dato de la sesión —fecha, sala, horas, concepto, y el dinero— NO se copia: lo sigue diciendo la
+# App en cada lectura, y por eso lo que cambia allá se ve acá la próxima vez que se abra el
+# proyecto. Tampoco se le manda nada: `registro_lectura` solo sabe GET.
+#
+# EL IDENTIFICADOR QUE SE GUARDA es el `ref` que la App devolvió para esa sesión, pasado a texto
+# (`ref_de_sesion_que_vale`), nunca el código de 4 letras (según el mapa de la App, no se sabe que
+# no se repita) ni nada que venga de un formulario: la ruta de quitar vuelve a preguntarle a la App
+# y guarda lo que ESA lectura devolvió para esa sesión, así que una sesión que la App no devuelve
+# no se puede quitar.
+#
+# UNA SOLA DECISIÓN VIVA por proyecto y sesión (el índice único parcial de la tabla): quitar dos
+# veces lo mismo no escribe ni deja huella la segunda, y devolver una quitada le pone `borrado_en`
+# (nunca un `DELETE`), así que se puede volver a quitar después.
+LARGO_REF_SESION = 200
+# El código solo sirve para nombrar una quitada que la App ya no devuelve: uno que no quepa acá no
+# es un código, así que se guarda sin él (no se recorta ni se inventa).
+LARGO_CODIGO_SESION = 40
+
+
+class RefDeSesionNoVale(ValueError):
+    """Un identificador de sesión que no puede quedar. `clave`: `tipo` (no es un texto ni un
+    número), `vacio`, `caracteres` (un carácter de control) o `largo`. El mensaje NUNCA repite lo
+    que se pidió."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+class SesionNoEsta(LookupError):
+    """Esa sesión no está quitada de ese proyecto (o ese proyecto no existe o está en la papelera)."""
+
+
+class SesionSinSesion(PermissionError):
+    """Quien lo pide no entra al panel: no se escribe nada."""
+
+
+class SesionesSinTabla(RuntimeError):
+    """La base todavía no tiene `sesiones_de_proyecto` (migración sin aplicar): NO se escribió nada."""
+
+
+def ref_de_sesion_que_vale(valor) -> str:
+    """El identificador de una sesión del registro en texto, o `RefDeSesionNoVale`. Un número
+    entero vale (la App manda el Id como número); `True` no (es un número de mentira). Sin espacios
+    de alrededor, no vacío, sin caracteres de control y de a lo sumo `LARGO_REF_SESION`."""
+    if isinstance(valor, bool):
+        raise RefDeSesionNoVale("tipo", "ese identificador de sesión no vale")
+    if isinstance(valor, int):
+        return str(valor)
+    if not isinstance(valor, str):
+        raise RefDeSesionNoVale("tipo", "ese identificador de sesión no vale")
+    limpio = valor.strip()
+    if not limpio:
+        raise RefDeSesionNoVale("vacio", "ese identificador de sesión no vale")
+    if any(unicodedata.category(c) == "Cc" for c in limpio):
+        raise RefDeSesionNoVale("caracteres", "ese identificador de sesión no vale")
+    if len(limpio) > LARGO_REF_SESION:
+        raise RefDeSesionNoVale(
+            "largo", f"ese identificador de sesión no puede pasar de {LARGO_REF_SESION} caracteres")
+    return limpio
+
+
+def _codigo_de_sesion_guardable(codigo) -> str | None:
+    """El código que se guarda para poder nombrar una quitada, o `None`. Es solo para nombrarla: lo
+    que no sea un texto que quepa en `LARGO_CODIGO_SESION` se guarda sin código."""
+    if not isinstance(codigo, str):
+        return None
+    limpio = codigo.strip()
+    return limpio if limpio and len(limpio) <= LARGO_CODIGO_SESION else None
+
+
+def _tabla_ausente(e: Exception) -> bool:
+    try:
+        return e.sqlstate == "42P01"
+    except AttributeError:
+        return False
+
+
+async def sesiones_quitadas_de_proyectos() -> dict[int, dict[str, str | None]] | None:
+    """`{proyecto_id: {sesion_ref: codigo}}` de las decisiones VIVAS `quitada` de los proyectos
+    VIVOS, la más nueva primero, o `None` si la tabla todavía no existe (la migración
+    `2026-10-09_sesiones_de_proyecto.sql` sin aplicar, SQLSTATE 42P01): entonces la página carga con
+    el bloque de sesiones como hoy y sin ningún control para quitar. UNA LECTURA APARTE con su
+    propia conexión, igual que `notas_de_proyectos` (un error deja abortada la transacción de la
+    conexión donde ocurre). El código puede ser `None` (la App no lo mandó cuando se quitó)."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(
+                "SELECT s.proyecto_id, s.sesion_ref, s.codigo "
+                "  FROM sesiones_de_proyecto s JOIN proyectos p ON p.id = s.proyecto_id "
+                " WHERE s.modo = 'quitada' AND s.borrado_en IS NULL AND p.borrado_en IS NULL "
+                " ORDER BY s.creado_en DESC, s.id DESC")
+            filas = await cur.fetchall()
+        except Exception as e:
+            if _tabla_ausente(e):
+                return None
+            raise
+    salida: dict[int, dict[str, str | None]] = {}
+    for f in filas:
+        salida.setdefault(f["proyecto_id"], {})[f["sesion_ref"]] = f["codigo"]
+    return salida
+
+
+async def ficha_de_cliente_de_proyecto(proyecto_id: int) -> int | None:
+    """El Id de la ficha de Noco del cliente de un proyecto VIVO, o `None` si no tiene cliente.
+    `SesionNoEsta` si el proyecto no existe o está en la papelera. Es con lo que la ruta de quitar
+    le vuelve a preguntar al registro por las sesiones de ese cliente."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT cliente_noco_id FROM proyectos WHERE id = %s AND borrado_en IS NULL",
+            (proyecto_id,))
+        fila = await cur.fetchone()
+    if fila is None:
+        raise SesionNoEsta("ese proyecto no está")
+    return fila["cliente_noco_id"]
+
+
+async def _huella_de_sesion(conn, accion: str, registro_id: int, antes, despues, motivo: str) -> None:
+    await conn.execute(
+        """
+        INSERT INTO log_acciones
+          (actor, accion, tabla, registro_id, antes, despues, motivo, bandeja_id)
+        VALUES ('panel', %s, 'sesiones_de_proyecto', %s, %s, %s, %s, NULL)
+        """,
+        (accion, registro_id,
+         json.dumps(antes, default=str, ensure_ascii=False) if antes else None,
+         json.dumps(despues, default=str, ensure_ascii=False) if despues else None,
+         motivo))
+
+
+async def quitar_sesion_de_proyecto(proyecto_id: int, sesion_ref, codigo, chat_id: int) -> bool:
+    """Quita una sesión de la lista de ESE proyecto VIVO: guarda la decisión (`modo='quitada'`).
+    `True` si se guardó, `False` si ya estaba quitada (no escribe ni deja huella). `SesionSinSesion`
+    (no entra al panel), `RefDeSesionNoVale`, `SesionNoEsta` (el proyecto no está) y
+    `SesionesSinTabla` (falta la migración).
+
+    `sesion_ref` es el `ref` que DEVOLVIÓ la App: la ruta se lo pasa después de volver a
+    preguntarle al registro por las sesiones de ese cliente. `codigo` es solo para poder nombrarla
+    si un día la App ya no la devuelve. La fila y su huella `crear` (actor `panel`) van en la misma
+    transacción."""
+    from web.auth import puede_entrar
+
+    ref = ref_de_sesion_que_vale(sesion_ref)
+    if chat_id is None or not puede_entrar(chat_id):
+        raise SesionSinSesion("quien lo pide no entra al panel")
+    guardable = _codigo_de_sesion_guardable(codigo)
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute("SELECT id FROM proyectos WHERE id = %s AND borrado_en IS NULL", (proyecto_id,))
+        if await cur.fetchone() is None:
+            raise SesionNoEsta("ese proyecto no está")
+        try:
+            await cur.execute(
+                "SELECT id FROM sesiones_de_proyecto "
+                " WHERE proyecto_id = %s AND sesion_ref = %s AND modo = 'quitada' AND borrado_en IS NULL",
+                (proyecto_id, ref))
+            ya = await cur.fetchone()
+            if ya is not None:
+                return False
+            await cur.execute(
+                "INSERT INTO sesiones_de_proyecto "
+                "  (proyecto_id, sesion_ref, codigo, modo, creado_por_chat_id) "
+                "VALUES (%s, %s, %s, 'quitada', %s) RETURNING *",
+                (proyecto_id, ref, guardable, chat_id))
+            fila = dict(await cur.fetchone())
+        except Exception as e:
+            if _tabla_ausente(e):
+                raise SesionesSinTabla("sesiones_de_proyecto no existe todavía") from e
+            raise
+        await _huella_de_sesion(conn, "crear", fila["id"], None, fila,
+                                "sesión quitada de la lista del proyecto desde el panel")
+        return True
+
+
+async def devolver_sesion_de_proyecto(proyecto_id: int, sesion_ref, chat_id: int) -> bool:
+    """Devuelve a la lista una sesión quitada de ESE proyecto: deshace la decisión (le pone
+    `borrado_en`; nunca un `DELETE`). `True` si la devolvió. `SesionSinSesion`, `RefDeSesionNoVale`,
+    `SesionNoEsta` (esa sesión no estaba quitada de ese proyecto) y `SesionesSinTabla`. Huella
+    `borrar` con la fila entera de antes, actor `panel`, en la misma transacción.
+
+    No le pregunta nada a la App: el identificador ya está guardado, y devolver no depende de que
+    el registro conteste."""
+    from web.auth import puede_entrar
+
+    ref = ref_de_sesion_que_vale(sesion_ref)
+    if chat_id is None or not puede_entrar(chat_id):
+        raise SesionSinSesion("quien lo pide no entra al panel")
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(
+                "SELECT * FROM sesiones_de_proyecto "
+                " WHERE proyecto_id = %s AND sesion_ref = %s AND modo = 'quitada' AND borrado_en IS NULL",
+                (proyecto_id, ref))
+            antes = await cur.fetchone()
+        except Exception as e:
+            if _tabla_ausente(e):
+                raise SesionesSinTabla("sesiones_de_proyecto no existe todavía") from e
+            raise
+        if antes is None:
+            raise SesionNoEsta("esa sesión no estaba quitada de ese proyecto")
+        antes = dict(antes)
+        escrita = await conn.execute(
+            "UPDATE sesiones_de_proyecto SET borrado_en = now() "
+            " WHERE id = %s AND borrado_en IS NULL", (antes["id"],))
+        if escrita.rowcount == 0:
+            raise SesionNoEsta("esa sesión ya no estaba quitada de ese proyecto")
+        await _huella_de_sesion(conn, "borrar", antes["id"], antes, None,
+                                "sesión devuelta a la lista del proyecto desde el panel")
+        return True
+
+
 async def proyecto_vivo_con_nombre(cur, nombre: str, excluir_id: int | None = None):
     """El id de un proyecto VIVO que se llama así, o None. LA comparación de
     nombres de proyecto: la usan la búsqueda de Lucy (`_buscar_o_crear`,

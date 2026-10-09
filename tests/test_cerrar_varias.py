@@ -2328,22 +2328,33 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
     # la rechaza), para que las huellas de `db.agregar_participante` y
     # `db.quitar_participante` se puedan deshacer. Pasa de las que no se juzgan
     # a las vigiladas: 20 declaradas, 10 vigiladas.
-    assert len(declaradas) == 20 and len(vigiladas) == 10, (
+    # 9-oct-2026 (parte 11 de la página de un proyecto): 20 → 21 por
+    # `sesiones_de_proyecto` (las decisiones de la casa sobre las sesiones que el
+    # registro le manda a Lucy para un proyecto: cuál se quitó de la lista). Queda
+    # FUERA de `crud.TABLAS`, como `areas` y `comentarios_tarea`: la escriben SOLO
+    # las dos rutas del panel (`db.quitar_sesion_de_proyecto` y
+    # `db.devolver_sesion_de_proyecto`, cada una con su huella de actor 'panel'), y
+    # el diseño no le da a Lucy ninguna herramienta para tocarla por Telegram. Lo
+    # que eso deja sin juzgar acá: una herramienta del agente que escribiera en esa
+    # tabla saldría verde en ESTA guarda. Hoy ninguna lo hace.
+    assert len(declaradas) == 21 and len(vigiladas) == 10, (
         f"el reparto de tablas cambió: el esquema declara {len(declaradas)} y "
         f"`crud.TABLAS` vigila {len(vigiladas)} (el 1-oct-2026, E7, eran 20 y 10). "
         f"Las que quedan sin juzgar serían {sorted(sin_juzgar)}. No se afloja "
         f"este número: se decide si las nuevas entran en la vigilancia y se "
         f"actualiza la frontera.")
 
-    # Las diez que la puerta VE y la guarda NO JUZGA, enumeradas. `log_acciones`
+    # Las once que la puerta VE y la guarda NO JUZGA, enumeradas. `log_acciones`
     # está acá porque no es una tabla de dominio: es donde viven las huellas, y
     # se la mira aparte (`_Libro.huellas`). `backups` es donde escribe
     # `db/backup.py:360`, que es legítimo y por eso sigue verde. `areas` es el
-    # vocabulario cerrado (ver la nota de arriba).
+    # vocabulario cerrado (ver la nota de arriba). `sesiones_de_proyecto` entra acá
+    # con la parte 11: la escriben solo las dos rutas del panel.
     assert sin_juzgar == {
         "areas", "backups", "bandeja", "categorias_aprendidas",
         "comentarios_tarea", "consumos_estado", "correo_estado",
         "correo_reportado", "cuentas_propias", "log_acciones",
+        "sesiones_de_proyecto",
     }, (f"cambió qué tablas quedan fuera del juicio de esta guarda: "
         f"{sorted(sin_juzgar)}. Una escritura a cualquiera de ellas se VE pero "
         f"no se exige que deje huella ni que salga en el parte.")

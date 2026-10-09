@@ -4128,10 +4128,19 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # +1 en disco y +1 EXENTO por `tests/test_dinero_de_proyecto.py` (nuevo); VIGILADOS sin cambio (se
     # tocó `registro_lectura.py`, ya vigilado, y `web/plantillas/proyectos.html`, que no es `.py`).
     # Medida corriendo la prueba: 152 en disco, 105 EXENTOS, 47 VIGILADOS.
-    assert medido == {"en disco": 152, "exentos": 105, "vigilados": 47}, (
+    # 9-oct-2026, rama `trabajo/proyecto-completo-11` (parte 11: quitar una sesión de la lista de un
+    # proyecto y devolverla): +1 en disco y +1 EXENTO por `tests/test_sesiones_quitadas.py` (nuevo);
+    # VIGILADOS sin cambio (se tocaron `web/app.py`, `db/db.py`, `registro_lectura.py` y
+    # `cerebro/consultar.py`, ya vigilados, y `db/migrations/2026-10-09_sesiones_de_proyecto.sql` y
+    # `web/plantillas/proyectos.html`, que no son `.py`). Y siguen los dos de siempre
+    # (`test_nombre_de_proyecto.py` y `test_tarea_en_proyecto.py`) que en este entorno se caen solos
+    # por el `TypeError: __mro_entries__ must return a tuple` de `fastapi.testclient` — reproducido
+    # sobre una copia limpia de `1e63a58`, no es de este trabajo.
+    # Medida corriendo la prueba: 153 en disco, 106 EXENTOS, 47 VIGILADOS.
+    assert medido == {"en disco": 153, "exentos": 106, "vigilados": 47}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "9-oct-2026 (proyecto-completo-10) era {'en disco': 152, "
-        "'exentos': 105, 'vigilados': 47}. La aserción de fondo —cero "
+        "9-oct-2026 (proyecto-completo-11) era {'en disco': 153, "
+        "'exentos': 106, 'vigilados': 47}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

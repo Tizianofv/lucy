@@ -1224,10 +1224,16 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
     # SOLO al abrir un proyecto, y solo si tiene ficha de cliente. Listar proyectos no le pregunta
     # nada, y un proyecto sin cliente tampoco. Si el registro no contesta, la página carga igual y
     # lo dice (`registro_lectura.sesiones_de_cliente` no levanta).
+    # LAS QUITADAS DE ESTE PROYECTO (parte 11, 9-oct-2026): la decisión de la casa sobre esa lista
+    # (`sesiones_de_proyecto`) se lee aparte, tolerante a la tabla sin migrar (42P01 → None); con
+    # `con_las_quitadas` salen de las listas y de los totales, y quedan en «Quitadas» para
+    # devolverlas. Sin la tabla, el bloque sale como hoy y sin ningún control.
     registro = None
     if vista["tipo"] == "proyecto":
-        registro = await registro_lectura.sesiones_de_cliente(
-            vista["proyecto"].get("cliente_noco_id"))
+        quitadas = await db.sesiones_quitadas_de_proyectos()
+        registro = registro_lectura.con_las_quitadas(
+            await registro_lectura.sesiones_de_cliente(vista["proyecto"].get("cliente_noco_id")),
+            None if quitadas is None else quitadas.get(vista["proyecto"]["id"], {}))
     return plantillas.TemplateResponse(
         request, "proyectos.html",
         {"solo_ver": solo_ver,
@@ -2405,6 +2411,105 @@ async def borrar_nota_de_proyecto(request: Request, pid: int, nid: int):
         return RedirectResponse(f"/proyectos?error={clave}&p={pid}#notas-del-proyecto", status_code=303)
     return RedirectResponse(
         f"/proyectos?hecho=nota_borrada&borrada={nid}&p={pid}#notas-del-proyecto", status_code=303)
+
+
+# LAS SESIONES QUE SE QUITAN DE UN PROYECTO (parte 11, 9-oct-2026). Las dos rutas son sesión de la
+# casa (`auth.puede_entrar`; solo ver y sin sesión: 401). QUITAR le vuelve a preguntar al registro
+# por las sesiones de ese cliente (un GET: al registro no se le manda ninguna escritura) y guarda el
+# identificador que ESA lectura devolvió para la sesión pedida —el `ref` del formulario solo sirve
+# para buscarla entre lo que la App devolvió—: una sesión que el registro no devuelve no se quita.
+# DEVOLVER deshace la decisión con lo que ya está guardado, sin preguntarle a nadie. Lo escrito
+# nunca viaja en la dirección.
+
+def _error_de_sesion(e: Exception) -> str:
+    """La CLAVE de `?error=` para lo que rechazó una escritura de sesión. Una excepción que no es
+    de las de `db` es un fallo de la base: no se sabe si llegó a confirmar."""
+    if isinstance(e, db.RefDeSesionNoVale):
+        return "sesion_invalida"
+    if isinstance(e, db.SesionNoEsta):
+        return "sesion_no_esta"
+    if isinstance(e, db.SesionesSinTabla):
+        return "sesion_sin_tabla"
+    return "sesion_base"
+
+
+@app.post("/proyectos/{pid}/sesiones/quitar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def quitar_sesion_de_proyecto(request: Request, pid: int):
+    """Quitar de la lista de ESTE proyecto una sesión del registro (la decisión se guarda; al
+    registro no se le borra nada). Sin el campo `ref`, o con una sesión que el registro no devuelve,
+    no se quita nada."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    formulario = await request.form()
+    if "ref" not in formulario:
+        return RedirectResponse(
+            f"/proyectos?error=sesion_invalida&p={pid}#sesiones-y-trabajos", status_code=303)
+    try:
+        ficha = await db.ficha_de_cliente_de_proyecto(pid)
+    except db.SesionNoEsta:
+        return RedirectResponse(
+            f"/proyectos?error=sesion_no_esta&p={pid}#sesiones-y-trabajos", status_code=303)
+    # Sin cliente la página no ofrece quitar (no le pregunta al registro a quién); un POST a mano
+    # tampoco quita nada, y una App que no contesta tampoco: no se guarda una decisión a ciegas.
+    if ficha is None:
+        return RedirectResponse(
+            f"/proyectos?error=sesion_sin_cliente&p={pid}#sesiones-y-trabajos", status_code=303)
+    respuesta = await registro_lectura.sesiones_de_cliente(ficha)
+    if respuesta["estado"] != "ok":
+        return RedirectResponse(
+            f"/proyectos?error=sesion_sin_registro&p={pid}#sesiones-y-trabajos", status_code=303)
+    sesion = registro_lectura.sesion_por_ref(respuesta, formulario.get("ref"))
+    if sesion is None:
+        return RedirectResponse(
+            f"/proyectos?error=sesion_no_esta&p={pid}#sesiones-y-trabajos", status_code=303)
+    try:
+        cambio = await db.quitar_sesion_de_proyecto(pid, sesion["ref"], sesion["codigo"], chat)
+    except db.SesionSinSesion:
+        return _fuera(request)
+    except Exception as e:
+        clave = _error_de_sesion(e)
+        if clave == "sesion_base":
+            log.exception("Panel de proyectos: falló la base al quitar una sesión de #%s", pid)
+        else:
+            log.warning("Panel de proyectos: quitar una sesión de #%s rechazado (%s)", pid, clave)
+        return RedirectResponse(
+            f"/proyectos?error={clave}&p={pid}#sesiones-y-trabajos", status_code=303)
+    if not cambio:
+        return RedirectResponse(
+            f"/proyectos?error=sesion_igual&p={pid}#sesiones-y-trabajos", status_code=303)
+    return RedirectResponse(
+        f"/proyectos?hecho=sesion_quitada&p={pid}#sesiones-y-trabajos", status_code=303)
+
+
+@app.post("/proyectos/{pid}/sesiones/devolver")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def devolver_sesion_de_proyecto(request: Request, pid: int):
+    """Devolver a la lista de ESTE proyecto una sesión que estaba quitada (deshace la decisión; no
+    le pregunta nada al registro). Sin el campo `ref`, o con una sesión que no estaba quitada, no
+    se cambia nada."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    formulario = await request.form()
+    if "ref" not in formulario:
+        return RedirectResponse(
+            f"/proyectos?error=sesion_invalida&p={pid}#sesiones-y-trabajos", status_code=303)
+    try:
+        await db.devolver_sesion_de_proyecto(pid, formulario.get("ref"), chat)
+    except db.SesionSinSesion:
+        return _fuera(request)
+    except Exception as e:
+        clave = _error_de_sesion(e)
+        if clave == "sesion_base":
+            log.exception("Panel de proyectos: falló la base al devolver una sesión de #%s", pid)
+        else:
+            log.warning("Panel de proyectos: devolver una sesión de #%s rechazado (%s)", pid, clave)
+        return RedirectResponse(
+            f"/proyectos?error={clave}&p={pid}#sesiones-y-trabajos", status_code=303)
+    return RedirectResponse(
+        f"/proyectos?hecho=sesion_devuelta&p={pid}#sesiones-y-trabajos", status_code=303)
 
 
 @app.post("/tareas/{tid}/area")

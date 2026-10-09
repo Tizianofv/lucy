@@ -498,6 +498,9 @@ LO_QUE_APUNTA_A_UN_PROYECTO = {
     "notas": "no se tocan: siguen nombrando al proyecto en la papelera, no se pierde nada",
     "movimientos": "no se tocan: siguen nombrando al proyecto en la papelera, no se pierde nada",
     "participantes": "no se tocan: siguen nombrando al proyecto en la papelera, no se pierde nada",
+    # Parte 11 (9-oct-2026): las decisiones sobre las sesiones del proyecto. Borrar el proyecto no
+    # las toca: siguen ahí con su `proyecto_id` y vuelven con él desde la papelera.
+    "sesiones_de_proyecto": "no se tocan: siguen nombrando al proyecto en la papelera, no se pierde nada",
 }
 LO_QUE_APUNTA_A_UN_GRUPO = {
     "proyectos": "su `area` pasa a NULL (lo vivo, antes, se borra)",

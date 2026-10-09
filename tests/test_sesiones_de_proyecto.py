@@ -488,18 +488,19 @@ async def test_sin_ficha_no_le_pregunta_a_nadie(registro, ficha):
 
 
 async def test_lo_que_devuelve_el_lector_es_lo_que_la_pagina_pinta(registro):
-    """Las dos listas, partidas por `es_trabajo`, con sus cifras y sin el `ref`."""
+    """Las dos listas, partidas por `es_trabajo`, con sus cifras y con el `ref` (parte 11: es con
+    lo que se guarda la decisión de quitarla, y viaja al formulario)."""
     registro.sesiones = _respuesta(sesiones=(SESION, CANCELADA, TRABAJO))
     respuesta = await registro_lectura.sesiones_de_cliente(FICHA)
     assert respuesta["estado"] == "ok"
     assert [r["codigo"] for r in respuesta["sesiones"]] == ["s011"]
     assert [r["codigo"] for r in respuesta["trabajos"]] == ["t012"]
     for renglon in respuesta["sesiones"] + respuesta["trabajos"]:
-        assert set(renglon) == {"fecha", "sala", "horas", "concepto", "codigo",
+        assert set(renglon) == {"ref", "fecha", "sala", "horas", "concepto", "codigo",
                                 "atendio", "asignado", "estado", "es_trabajo",
                                 "total", "abonado", "saldo", "dinero"}
         assert renglon["fecha"].isoformat() == HOY
-    assert "ref" not in respuesta["sesiones"][0]
+    assert respuesta["sesiones"][0]["ref"] == "11", "el ref de la App no sale en texto"
 
 
 async def test_la_pregunta_lleva_la_ficha_del_cliente(registro):
@@ -511,11 +512,22 @@ async def test_la_pregunta_lleva_la_ficha_del_cliente(registro):
 # Se ve igual en la sesión de la casa y en la de solo ver
 # ═══════════════════════════════════════════════════════════════════════
 
+def _sin_los_controles(bloque: str) -> str:
+    """El bloque sin los formularios (parte 11: quitar y devolver son de la casa). Lo que se
+    compara entre las dos sesiones es lo que se VE —los renglones, el dinero y los totales—, que
+    no cambia; los controles son lo único que la sesión de solo ver no lleva."""
+    return " ".join(re.sub(r"<form\b.*?</form>", " ", bloque, flags=re.S).split())
+
+
 def test_el_bloque_se_ve_igual_en_la_casa_y_en_solo_ver(registro, monkeypatch):
+    """Lo que se VE (renglones, dinero y totales) es igual; los controles son solo de la casa
+    (parte 11: quitar y devolver), y la sesión de solo ver no lleva ninguno."""
     registro.sesiones = _respuesta(sesiones=(SESION, TRABAJO))
     casa = _abrir(monkeypatch, con="casa")
     ver = _abrir(monkeypatch, con="ver")
-    assert _bloque(ver) == _bloque(casa), "el bloque no se ve igual en las dos sesiones"
+    assert _bloque(ver) == _sin_los_controles(_bloque(casa)), (
+        "lo que se ve no es igual en las dos sesiones")
+    assert "<form" in _bloque(casa), "la casa no tiene los controles de quitar (¿se perdió el camino?)"
     assert "s011" in ver
     for control in ("<form", "<button", "<a ", "<script", "<input", "<select"):
         assert control not in _bloque(ver), f"el bloque de solo ver trae {control}"

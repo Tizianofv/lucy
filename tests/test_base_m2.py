@@ -116,6 +116,11 @@ def _base(participantes_desde: str = "schema") -> sqlite3.Connection:
         for s in _ddl(schema, tabla):
             if s.lstrip().upper().startswith("CREATE TABLE"):
                 con.execute(s)
+    # `sesiones_de_proyecto` (parte 11 de la página del proyecto): la página lee las decisiones de la
+    # casa sobre las sesiones de un proyecto, y las dos rutas que las escriben. Con su índice único
+    # parcial (`WHERE borrado_en IS NULL`), que SQLite entiende.
+    for s in _ddl(schema, "sesiones_de_proyecto"):
+        con.execute(s)
     fuente = schema if participantes_desde == "schema" else \
         _migracion_m2().read_text(encoding="utf-8")
     for s in _ddl(fuente, "participantes"):

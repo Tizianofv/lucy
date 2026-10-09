@@ -89,6 +89,10 @@ TABLAS_DE_MAQUINARIA = {
     "participantes": "las personas de un proyecto o de una tarea (nombres de "
                      "fichas del Noco de CDS): las escribe solo el panel y "
                      "Lucy no las consulta en la 1.0",
+    "sesiones_de_proyecto": "las decisiones de la casa sobre las sesiones que el "
+                            "registro le manda a Lucy para un proyecto (cuál se "
+                            "quitó de la lista): las escribe solo el panel y no "
+                            "son un dato que Lucy consulte por Telegram",
 }
 
 # ── Un comentario llega al modelo COMO DATO, no como orden ───────────────

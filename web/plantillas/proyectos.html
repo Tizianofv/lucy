@@ -161,6 +161,11 @@ h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balan
 .sesiones-p .cifra b{display:block;font-size:1.05rem;font-variant-numeric:tabular-nums}
 .sesiones-p .cifra span{color:var(--suave);font-size:.8rem}
 .sesiones-p .cifra.roja b{color:var(--vencida)}
+/* QUITAR UNA SESIÓN DE LA LISTA (parte 11, 9-oct-2026): el botón va en el renglón, y las que se
+   quitaron salen en su propia lista, sin dinero (no cuentan en la lista ni en los totales). */
+.sesiones-p .renglon form{margin:0;display:inline-flex;align-items:center}
+.sesiones-p .quitadas{margin-top:1rem;border-top:1px solid var(--linea);padding-top:.7rem}
+.sesiones-p .quitadas .que{font-weight:400;color:var(--suave)}
 .entrega-en{margin:.7rem 0 0;font-size:.88rem;color:var(--suave)}
 .entrega-en.roja{color:var(--vencida);font-weight:600}
 .quienes{display:flex;flex-wrap:wrap;gap:.4rem 1.4rem;font-size:.95rem}
@@ -695,6 +700,13 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'nota_base' %}<p class="aviso">La base de datos falló y no se pudo confirmar si se guardó: mira cómo quedaron las notas antes de volver a intentarlo.</p>
     {% elif error == 'nota_sin_columna' %}<p class="aviso">Las notas todavía no se pueden guardar: falta actualizar la base de datos. NO se guardó nada.</p>
     {% elif error == 'nota_invalida' %}<p class="aviso">Esa nota no se puede guardar: NO se guardó nada.</p>
+    {% elif error == 'sesion_invalida' %}<p class="aviso">Esa sesión no se puede quitar así: NO se cambió nada.</p>
+    {% elif error == 'sesion_no_esta' %}<p class="aviso">Esa sesión ya no está en la lista de este proyecto: NO se cambió nada.</p>
+    {% elif error == 'sesion_igual' %}<p class="aviso">Esa sesión ya estaba quitada: no cambió nada.</p>
+    {% elif error == 'sesion_sin_cliente' %}<p class="aviso">Este proyecto no tiene cliente, así que no se le pregunta al registro: NO se cambió nada.</p>
+    {% elif error == 'sesion_sin_registro' %}<p class="aviso">No se pudo consultar el registro ahora: la sesión NO se quitó. Intenta otra vez en un momento.</p>
+    {% elif error == 'sesion_sin_tabla' %}<p class="aviso">Las sesiones todavía no se pueden quitar: falta actualizar la base de datos. NO se cambió nada.</p>
+    {% elif error == 'sesion_base' %}<p class="aviso">La base de datos falló y no se pudo confirmar si se guardó: mira la lista antes de volver a intentarlo.</p>
     {% elif error == 'responsable' %}<p class="aviso">Ese responsable no vale: se escoge entre {{ nombres_responsable|join(', ') }}.</p>
     {% elif error == 'grupo' %}<p class="aviso">Ese grupo no existe.</p>
     {% elif error == 'estado' %}<p class="aviso">No se pudo cambiar el estado del proyecto.</p>
@@ -747,6 +759,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif hecho == 'nota' %}<p class="aviso ok">Nota guardada.</p>
     {% elif hecho == 'nota_editada' %}<p class="aviso ok">Nota cambiada.</p>
     {% elif hecho == 'nota_borrada' and nota_borrada_en_papelera %}<p class="aviso ok">Nota borrada. Está en la <a href="/papelera">Papelera</a>; se restaura desde ahí.</p>
+    {% elif hecho == 'sesion_quitada' %}<p class="aviso ok">Sesión quitada de la lista. Está en «Quitadas»; se devuelve desde ahí.</p>
+    {% elif hecho == 'sesion_devuelta' %}<p class="aviso ok">Sesión devuelta a la lista.</p>
     {% elif hecho == 'responsable' %}<p class="aviso ok">Responsable guardado.</p>
     {% elif hecho == 'cerrado' %}<p class="aviso ok">Proyecto cerrado. Está en «cerrados» en la lista de la izquierda.</p>
     {% elif hecho == 'cliente' %}<p class="aviso ok">Cliente guardado.</p>
@@ -903,18 +917,59 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
             {% elif d.caso == 'sin_total' %}<span class="plata">—</span>
             {% else %}<span class="plata {{ d.clase }}">RD$ {{ d.monto|pesos }}{% if d.caso == 'debe_con_abono' %}<small>pagó RD$ {{ d.abonado|pesos }} de {{ d.total|pesos }}</small>{% endif %}</span>{% endif %}
             {% if r.estado %}<span class="est">{{ r.estado }}</span>{% endif %}
+            {#- QUITAR DE LA LISTA (parte 11, 9-oct-2026): solo la sesión de la casa, y solo si la
+                tabla de las decisiones está en la base (`quitadas_disponibles`); sin ella el bloque
+                sale como hoy. Un renglón sin `ref` (la App no lo mandó) no se puede quitar. El
+                formulario lleva el `ref` que devolvió el registro; la ruta vuelve a preguntarle y
+                guarda lo que ESA lectura devuelva. -#}
+            {% if not solo_ver and registro.quitadas_disponibles and r.ref %}
+            <form class="quitar" method="post" action="/proyectos/{{ m.id }}/sesiones/quitar">
+              <input type="hidden" name="ref" value="{{ r.ref }}">
+              <button class="btn-linea">Quitar</button>
+            </form>
+            {% endif %}
           </div>
           {% endfor %}
         </div>
         {% endif %}
         {% endfor %}
-        {#- Los tres totales: la suma de lo que aportan los renglones pintados (`registro.totales`). -#}
+        {#- Los tres totales: la suma de lo que aportan los renglones pintados (`registro.totales`),
+            ya sin las quitadas. -#}
         <div class="cifras">
           <div class="cifra"><b>RD$ {{ registro.totales.facturado|pesos }}</b><span>facturado</span></div>
           <div class="cifra"><b>RD$ {{ registro.totales.cobrado|pesos }}</b><span>cobrado</span></div>
           <div class="cifra roja"><b>RD$ {{ registro.totales.por_cobrar|pesos }}</b><span>por cobrar</span></div>
         </div>
         {% else %}<p class="vacio">El registro no tiene sesiones ni trabajos de este cliente.</p>{% endif %}
+        {#- LAS QUITADAS (parte 11, 9-oct-2026): lo que la casa sacó de la lista, para poder
+            devolverlo. Cada una se nombra con lo que el registro devuelve de ella en ESTA lectura
+            y, si ya no la devuelve, con el código que se guardó al quitarla. Se ven las dos
+            sesiones; el botón de devolver es solo de la casa. -#}
+        {% if registro.quitadas %}
+        <div class="etapa quitadas"><h3>Quitadas</h3>
+          <p class="nota">Estas no están en la lista ni en los totales.</p>
+          {% for q in registro.quitadas %}
+          <div class="renglon">
+            {% if q.renglon %}
+            {% if q.renglon.fecha %}<span class="cuando">{{ q.renglon.fecha|dia_corto }}</span>{% endif %}
+            {% set partes = [] %}
+            {% if q.renglon.sala %}{% set _ = partes.append(q.renglon.sala) %}{% endif %}
+            {% if q.renglon.horas %}{% set _ = partes.append(q.renglon.horas ~ ' h') %}{% endif %}
+            {% if q.renglon.concepto %}{% set _ = partes.append(q.renglon.concepto) %}{% endif %}
+            <span class="que">{{ partes|join(' · ') or 'Sesión del registro' }}{% if q.renglon.codigo %}<span class="cod">{{ q.renglon.codigo }}</span>{% endif %}</span>
+            {% else %}
+            <span class="que">Ya no está en el registro{% if q.codigo %}<span class="cod">{{ q.codigo }}</span>{% endif %}</span>
+            {% endif %}
+            {% if not solo_ver %}
+            <form class="quitar" method="post" action="/proyectos/{{ m.id }}/sesiones/devolver">
+              <input type="hidden" name="ref" value="{{ q.ref }}">
+              <button class="btn-linea">Devolver</button>
+            </form>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
       {% elif registro.estado == 'sin_ligar' %}
       <p class="vacio">{% if registro.motivo == 'sin_telefono' %}El registro no puede ligar las sesiones de este cliente: la ficha no tiene teléfono allá.{% else %}El registro no puede ligar las sesiones de este cliente.{% endif %}</p>
       {% elif registro.estado == 'sin_cliente' %}

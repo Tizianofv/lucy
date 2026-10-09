@@ -120,6 +120,14 @@ class BaseQueNoSeToca:
             # NO es un doble: es la función REAL y pura de `db` (no toca la base; solo recorre las filas
             # del modelo que ya se entregaron). Se deja pasar para que la prueba corra el filtro de verdad.
             return db.tareas_con_filtro
+        if nombre == "sesiones_quitadas_de_proyectos":
+            # FINGIDO, declarado: la tabla `sesiones_de_proyecto` está (la base de esta prueba es la de
+            # después de la migración) y NINGÚN proyecto tiene sesiones quitadas. Un mundo que quiera
+            # medir el filtrado de las quitadas usa la base de SQLite con su SQL real
+            # (`tests/test_sesiones_quitadas.py`), no este doble.
+            async def _sin_quitadas():
+                return {}
+            return _sin_quitadas
         if nombre in {n for n in dir(db) if n.isupper()}:    # constantes (largos, estados…)
             return getattr(db, nombre)
         raise AssertionError(f"la ruta tocó la base: db.{nombre}")
