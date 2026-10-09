@@ -71,20 +71,31 @@ def modelo_de_filas(proyectos=(), tareas=(), areas=AREAS, huellas=(),
 
 def pintar_modelo(modelo: dict, areas=AREAS, **consulta) -> str:
     """La página con ESE modelo: la ruta real y la plantilla real, con la base
-    reemplazada por el modelo ya armado."""
+    reemplazada por el modelo ya armado.
+
+    También se doblan las DOS lecturas que la ruta hace aparte de `pagina_de_proyectos`:
+    `areas` (el menú de grupos) y, desde la parte 11, `sesiones_quitadas_de_proyectos`
+    (la decisión de la casa sobre las sesiones del proyecto). Sin eso la ruta tocaría el
+    `pool` del proceso —el que haya dejado el último archivo de pruebas que lo pisó— y
+    esta página se pinta justamente para medir QUÉ PINTA, sin base.
+    """
     async def _pagina(hoy=None):
         return modelo
 
     async def _areas():
         return list(areas)
 
-    guardado = (db.pagina_de_proyectos, db.areas)
+    async def _quitadas():
+        return None                       # sin la tabla: el bloque sale sin controles
+
+    guardado = (db.pagina_de_proyectos, db.areas, db.sesiones_quitadas_de_proyectos)
     db.pagina_de_proyectos, db.areas = _pagina, _areas
+    db.sesiones_quitadas_de_proyectos = _quitadas
     dar_recibo("/proyectos", **consulta)         # mide CÓMO se pinta: como si un POST hubiera mandado aquí
     try:
         r = _cliente(config.CHAT_ID_DUENO).get("/proyectos", params=consulta)
     finally:
-        db.pagina_de_proyectos, db.areas = guardado
+        db.pagina_de_proyectos, db.areas, db.sesiones_quitadas_de_proyectos = guardado
     assert r.status_code == 200, r.text[:300]
     return r.text
 
