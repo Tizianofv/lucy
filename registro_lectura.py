@@ -1,10 +1,12 @@
 """Las sesiones y trabajos que el registro del estudio tiene a nombre de un cliente.
 
-Hermano de `noco_lectura.py`: la única parte de Lucy que le habla a la App de
-registro, y solo para LEER. La dirección sale de `config.REGISTRO_URL` y la
-llave de `config.LUCY_LLAVE_SERVICIO` (la misma variable en los dos servicios),
-y la llave viaja en la cabecera `X-Lucy-Llave`, nunca en la URL ni en un
-mensaje. `_get` es la única función que toca la red y solo sabe hacer GET.
+Hermano de `noco_lectura.py`: este archivo le PIDE al registro las sesiones de
+una ficha, y solo lee (el otro camino de Lucy hacia la App —el POST que canjea
+el pase de `/entrar-cds`— vive en `web/app.py`: `_canjear_boleto`). La dirección
+sale de `config.REGISTRO_URL` y la llave de `config.LUCY_LLAVE_SERVICIO` (la
+misma variable en los dos servicios); la llave viaja en la cabecera
+`X-Lucy-Llave`, nunca en la URL ni en un mensaje. `_get` es la única función de
+este archivo que toca la red, y solo sabe hacer GET.
 
 Lo que devuelve `sesiones_de_cliente` es un diccionario con su `estado`: `ok`
 (con las dos listas), `sin_cliente` (el proyecto no tiene ficha a la que
@@ -48,17 +50,20 @@ def _configurado() -> tuple[str, str]:
 async def _get(parametros: dict[str, str]) -> dict:
     """La única puerta de salida: un GET a `/api/lucy/sesiones` del registro.
 
-    La llave va en la cabecera y en ningún otro sitio. Sin `follow_redirects`
-    (el de httpx por omisión): una redirección no se sigue, así que la llave no
-    puede terminar en otro servidor.
+    La llave va en la cabecera y en ningún otro sitio, y `follow_redirects=False`
+    va escrito: una redirección no se sigue, así que la llave no puede terminar
+    en otro servidor. Un fallo al pedir —el de la red o el de una dirección mal
+    escrita— sale como `RegistroNoContesta`, y al registro solo se le cuenta el
+    TIPO del fallo: ni la llave ni el texto crudo del error van a un mensaje.
     """
     base, llave = _configurado()
     try:
-        async with httpx.AsyncClient(timeout=TIEMPO_LIMITE) as cliente:
+        async with httpx.AsyncClient(timeout=TIEMPO_LIMITE,
+                                     follow_redirects=False) as cliente:
             respuesta = await cliente.get(
                 f"{base}/api/lucy/sesiones", params=parametros,
                 headers={"X-Lucy-Llave": llave, "Accept": "application/json"})
-    except httpx.HTTPError as e:
+    except Exception as e:                                    # noqa: BLE001
         log.warning("el registro no contestó (%s)", type(e).__name__)
         raise RegistroNoContesta("no pude hablar con el registro") from e
     if respuesta.status_code != 200:

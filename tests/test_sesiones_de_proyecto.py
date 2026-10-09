@@ -48,6 +48,7 @@ import registro_lectura  # noqa: E402
 import web.app as panel  # noqa: E402
 import web.auth as auth  # noqa: E402
 from _app_de_registro import AppDeRegistro  # noqa: E402
+from test_pagina_proyectos import gente, mundo  # noqa: E402,F401  (la base de SQLite con el esquema real)
 
 # Nada de esto es real: ni la llave ni los datos del registro.
 LLAVE = "llave-de-prueba"
@@ -277,6 +278,41 @@ def test_si_el_registro_no_contesta_la_pagina_carga_y_lo_dice(registro, monkeypa
     assert "s011" not in html
 
 
+@pytest.mark.parametrize("url", ["http://[::1", "http://[", "https://", "http://a b/",
+                                 "no-es-una-direccion"])
+def test_una_direccion_mal_escrita_no_tumba_la_pagina(registro, monkeypatch, url):
+    """Una dirección que el cliente HTTP no sabe leer es «no se pudo», no un 500.
+
+    `httpx.InvalidURL` NO es un `httpx.HTTPError`: se comprueba acá para que se
+    vea por qué esta prueba existe. El `httpx` sale del módulo bajo prueba y no
+    de un `import httpx`, que en la suite entera es el módulo de mentira que
+    dejan las pruebas que lo pisan al importarse (`test_noco_lectura` tiene el
+    mismo cuidado).
+    """
+    httpx = registro_lectura.httpx
+    assert not issubclass(httpx.InvalidURL, httpx.HTTPError)
+    monkeypatch.setattr(config, "REGISTRO_URL", url)
+    bloque = _bloque(_abrir(monkeypatch))
+    assert "No se pudo consultar el registro." in bloque, bloque
+    assert registro.pedidos == []
+
+
+def test_una_redireccion_del_registro_no_se_sigue(registro, monkeypatch):
+    """Un 3xx hacia otra dirección no se sigue: la llave no sale de `REGISTRO_URL`."""
+    otra = AppDeRegistro()
+    otra.llave = LLAVE
+    otra.sesiones = _respuesta(sesiones=(SESION,))
+    try:
+        registro.forzada = (302, b"", "text/html", 0.0,
+                            {"Location": otra.url + "/api/lucy/sesiones"})
+        bloque = _bloque(_abrir(monkeypatch))
+        assert otra.pedidos == [], "Lucy siguió la redirección y le llevó la llave a otra dirección"
+        assert "No se pudo consultar el registro." in bloque, bloque
+        assert "s011" not in bloque
+    finally:
+        otra.cerrar()
+
+
 def test_sin_llave_no_se_le_pregunta_nada_al_registro(registro, monkeypatch):
     """La variable vacía no se convierte en un pedido sin cabecera."""
     monkeypatch.setattr(config, "LUCY_LLAVE_SERVICIO", "")
@@ -314,6 +350,27 @@ def test_listar_no_le_pregunta_nada_al_registro_y_abrir_un_proyecto_una_vez(regi
 # Garantía: un proyecto sin cliente no pregunta nada
 # ═══════════════════════════════════════════════════════════════════════
 
+def test_la_ficha_sale_de_la_base_por_el_camino_real(registro, monkeypatch, mundo):
+    """El Id con el que se le pregunta al registro sale del SELECT de
+    `pagina_de_proyectos` y pasa por `armar_pagina`.
+
+    La base es la de SQLite con el esquema real y el SQL se ejecuta (como en las
+    otras pruebas de la página: `tests/test_pagina_proyectos.py::mundo`), no un
+    modelo ya armado a mano. El Id que se le pide al registro es el que quedó
+    escrito en la base, leído de ahí.
+    """
+    mundo.proyecto(1, "Con cliente", area="CDS", cliente="Cliente X")
+    esperado = mundo.con.execute(
+        "SELECT cliente_noco_id FROM proyectos WHERE id = 1").fetchone()[0]
+    assert esperado is not None, "el proyecto de prueba quedó sin ficha de cliente"
+    registro.sesiones = _respuesta(sesiones=(SESION,))
+
+    r = _cliente().get("/proyectos?p=1")
+    assert r.status_code == 200, r.text[:300]
+    assert [p["ruta"] for p in registro.pedidos] == [f"/api/lucy/sesiones?persona={esperado}"]
+    assert "s011" in r.text, "la página no pintó lo que contestó el registro"
+
+
 def test_un_proyecto_sin_cliente_no_pregunta_nada(registro, monkeypatch):
     html = _abrir(monkeypatch, noco_id=None)
     assert registro.pedidos == [], "le preguntó al registro sin cliente a quién"
@@ -350,13 +407,41 @@ def test_el_codigo_va_discreto_al_lado_del_concepto(registro, monkeypatch):
     assert "Sala P · 3 h · Grabación" in bloque, bloque
 
 
-@pytest.mark.parametrize("codigo", ["<b>x</b>", 'a"b', "&lt;script&gt;"])
-def test_lo_que_manda_el_registro_sale_escapado(registro, monkeypatch, codigo):
-    registro.sesiones = _respuesta(sesiones=({**SESION, "codigo": codigo,
-                                              "servicio": "<i>Grabación</i>"},))
+def _claves_que_el_lector_lee() -> list[str]:
+    """Las claves de la respuesta que `_renglon` mira, sacadas de su árbol
+    sintáctico: un campo nuevo que el lector deje pasar entra acá solo."""
+    fuente = open(registro_lectura.__file__, encoding="utf-8").read()
+    for nodo in ast.walk(ast.parse(fuente)):
+        if isinstance(nodo, ast.FunctionDef) and nodo.name == "_renglon":
+            return sorted({n.args[0].value for n in ast.walk(nodo)
+                           if isinstance(n, ast.Call)
+                           and isinstance(n.func, ast.Attribute)
+                           and n.func.attr == "get" and n.args
+                           and isinstance(n.args[0], ast.Constant)
+                           and isinstance(n.args[0].value, str)})
+    raise AssertionError("no encontré `_renglon` en el lector")
+
+
+HOSTIL = "<b>hostil</b>"
+
+
+@pytest.mark.parametrize("campo", _claves_que_el_lector_lee())
+def test_lo_que_manda_el_registro_sale_escapado(registro, monkeypatch, campo):
+    """Cada campo que el bloque pinta, con un valor hostil: sale escapado.
+
+    El campo en juego es el ÚNICO con algo en la fila, porque la plantilla
+    esconde unos detrás de otros (el asignado detrás del «atendió»).
+    """
+    fila = dict.fromkeys(_claves_que_el_lector_lee())
+    fila.update(cancelada=False, es_trabajo=False)
+    fila[campo] = HOSTIL
+    registro.sesiones = _respuesta(sesiones=(fila,))
     bloque = _bloque(_abrir(monkeypatch))
-    assert "<b>x</b>" not in bloque and "<i>Grabación</i>" not in bloque
-    assert "&lt;b&gt;x&lt;/b&gt;" in bloque or "&lt;i&gt;Grabación&lt;/i&gt;" in bloque
+    assert HOSTIL not in bloque, f"{campo!r} salió crudo: {bloque}"
+
+    renglon = registro_lectura._renglon(fila) or {}
+    if any("hostil" in v for v in renglon.values() if isinstance(v, str)):
+        assert "&lt;b&gt;hostil&lt;/b&gt;" in bloque, f"{campo!r} no salió escapado: {bloque}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
