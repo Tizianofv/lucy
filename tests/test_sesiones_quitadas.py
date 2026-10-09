@@ -41,7 +41,7 @@ import test_grupo_ia as g  # noqa: E402
 from _app_de_registro import AppDeRegistro  # noqa: E402
 from _doble_postgres import ErrorSQL  # noqa: E402
 from _navegador import Navegador  # noqa: E402
-from test_pagina_proyectos import gente, mundo, ver  # noqa: E402,F401
+from test_pagina_proyectos import gente, mundo, ver, ver_r  # noqa: E402,F401
 import config  # noqa: E402
 import db.db as db  # noqa: E402
 import web.app as panel  # noqa: E402
@@ -94,7 +94,9 @@ def dos(mundo, registro):
 # ═══════════════════════════════════════════════════════════════════════
 
 def _cliente(con="casa") -> Navegador:
-    c = Navegador(panel.app, base_url="https://testserver")
+    # La misma base que las otras pruebas de la página (`http://testserver`): el recibo de los
+    # avisos viaja por la cookie, y una puesta en una respuesta `https` sale `Secure`.
+    c = Navegador(panel.app)
     if con == "casa":
         c.cookies.set(panel.COOKIE, auth.crear_token(DUENO, auth.VIDA_SESION))
     elif con == "ver":
@@ -273,6 +275,9 @@ def test_la_quitada_sale_de_la_lista_y_de_los_totales(dos):
     assert "<b>RD$ 15,000.00</b>" in antes, antes       # facturado: 9 000 + 6 000
 
     assert "hecho=sesion_quitada" in _donde(quitar(1, 11))
+    # Cómo se pinta el aviso, con el recibo puesto (como en las otras partes: la puerta de los
+    # avisos no deja que una dirección escrita a mano diga que pasó algo).
+    assert "Sesión quitada de la lista." in ver_r(dos, hecho="sesion_quitada", p=1)
 
     bloque = _bloque(ver(dos, p=1))
     pintadas = _pintadas(bloque)
@@ -316,6 +321,7 @@ def test_quitadas_las_lista_y_las_devuelve(dos):
 
     r = devolver(1, 11)
     assert r.status_code == 303 and "hecho=sesion_devuelta" in _donde(r), _donde(r)
+    assert "Sesión devuelta a la lista." in ver_r(dos, hecho="sesion_devuelta", p=1)
     bloque = _bloque(_ver(p=1))
     assert "s011" in _pintadas(bloque), bloque
     assert "Quitadas" not in bloque, bloque
