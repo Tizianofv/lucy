@@ -3810,18 +3810,25 @@ ACCIONES_QUE_MUEVEN = ("crear", "editar", "borrar", "deshacer")
 
 # LA ACTIVIDAD DEL PROYECTO (parte 7 del diseño «la página de un proyecto, completa», 8-oct-2026).
 #
-# Lo que ha pasado en un proyecto, SIN decir quién lo hizo. La huella de `log_acciones` no guarda el
-# actor de verdad (`actor` es una palabra fija, 'panel', 'lucy' o 'sala'), y Tiziano lo dejó para
-# después (8-oct-2026: «Que no diga quien lo hizo, eso se hace despues»). Por eso lo que se pinta sale
-# de la HUELLA —tabla, acción y qué cambió— y NUNCA de un dato de persona: ni el `actor`, ni un
-# `responsable_chat_id`, ni el nombre de un cliente, de una persona agregada, de quien escribió un
-# comentario o una nota. El título de la tarea SÍ sale: lo escribe la casa.
+# Lo que ha pasado en un proyecto, SIN decir quién lo hizo, y sin nombrar a la persona que entra o sale
+# de un papel. La huella de `log_acciones` no guarda el actor de verdad (`actor` es una palabra fija,
+# 'panel', 'lucy' o 'sala'), y Tiziano lo dejó para después (8-oct-2026: «Que no diga quien lo hizo, eso
+# se hace despues»). Por eso lo que se pinta sale de la HUELLA —tabla, acción, qué cambió y el título
+# que la tarea tenía EN ESE MOMENTO (`_titulo_de_la_huella`)— y nunca de un dato de persona: ni el
+# `actor`, ni un `responsable_chat_id`, ni el nombre de un cliente, de una persona agregada, de quien
+# escribió un comentario o una nota. El cliente y el responsable salen por su PAPEL, sin nombre.
+#
+# FRONTERA, dicha una vez: el TÍTULO de la tarea y el nombre del proyecto son texto libre que escribe
+# la casa y salen TAL CUAL (el diseño lo pide así: «Se marcó hecha “…”»). Si alguien escribe un nombre
+# de persona en el título de una tarea, ese nombre sale en la Actividad. Lo que la garantía cubre es
+# que la frase no saque el nombre de ningún CAMPO de persona, no que filtre lo que una persona escribió.
 #
 # LAS TABLAS QUE LLEGAN A UN PROYECTO son las cuatro que ya juntaba la consulta de «Último movimiento»
 # (`pagina_de_proyectos`): el proyecto, sus tareas, los comentarios de sus tareas y sus notas. La
 # Actividad y «Último movimiento» salen de LA MISMA consulta, así que cuentan lo mismo. Las huellas de
 # `participantes` NO entran a propósito: agregar o quitar una persona no cuenta como movimiento del
-# proyecto (diseño §5.4; la nota de `proyectos.html` y su prueba `tests/test_personas_y_cliente.py`).
+# proyecto (la nota de `proyectos.html` y su prueba `tests/test_personas_y_cliente.py`, de la decisión
+# del diseño de Lucy 1.0 §5.4 que está escrita en `db.agregar_participante`).
 # Los gastos (`movimientos`), las citas (`eventos`) y los micro-pasos no se ven en esta página, así que
 # tampoco salen aquí.
 #
@@ -3831,9 +3838,11 @@ ACCIONES_QUE_MUEVEN = ("crear", "editar", "borrar", "deshacer")
 # combinación que nadie declaró NO se esconde: sale con la frase general (`ACTIVIDAD_OTRA`).
 
 # Cuántos renglones se pintan por proyecto. Veinte: la maqueta muestra tres y un historial no puede
-# crecer sin fin; es el orden de magnitud de un proyecto (sus tareas son un puñado), y el tope se
-# aplica EN LA CONSULTA (`TOPE_ACTIVIDAD`), no al pintar, para que la página no traiga el historial
-# entero. Medido en producción el 8-oct-2026: 43 tareas vivas en 20 proyectos vivos.
+# crecer sin fin; es el orden de magnitud de un proyecto (sus tareas son un puñado). El tope se aplica
+# EN LA CONSULTA (`TOPE_ACTIVIDAD`), así que lo que la página TRAE está acotado a 20 por proyecto; el
+# SQL, eso sí, sigue recorriendo y ordenando todas las huellas de esas cuatro tablas en cada carga (es
+# lo que ya hacía para «Último movimiento»). Las 43 tareas vivas en 20 proyectos vivos las midió la
+# sala el 8-oct-2026 con un guion de solo conteos; yo no las medí.
 TOPE_ACTIVIDAD = 20
 
 # La frase de una combinación que nadie declaró. Dice la verdad sin prometer qué pasó.
@@ -3842,9 +3851,25 @@ ACTIVIDAD_OTRA = "Hubo un cambio en el proyecto."
 
 def _con_titulo(titulo, con: str, sin: str) -> str:
     """La frase con el título de la tarea entre comillas angulares, o su versión sin título cuando la
-    huella no lo trae (un renglón viejo, una tarea que ya no está)."""
+    huella no lo trae (un `deshacer`, un comentario, un renglón viejo)."""
     t = (titulo or "").strip()
     return con.format(t=f"«{t}»") if t else sin
+
+
+def _titulo_de_la_huella(tabla, accion, antes, despues):
+    """El título que la tarea tenía EN ESE MOMENTO, sacado de la PROPIA huella — nunca del JOIN a
+    `tareas`, que da el de HOY (una tarea creada como «A» y hoy llamada «B» no se agregó como «B»).
+
+    Cuál es el campo, medido con una sonda (8-oct-2026, las acciones de verdad por las rutas y por
+    `crud`/`db`; la tabla está en el reporte de la parte 7): al CREAR, la fila que queda está en
+    `despues`; al EDITAR y al BORRAR, la que había está en `antes`. Las huellas de un COMENTARIO no
+    guardan el título de su tarea (guardan el comentario) y la de un `deshacer` no guarda ni `antes` ni
+    `despues`: en esos tres casos se devuelve `None` y la frase va SIN título, en vez de decir el de hoy.
+    """
+    if tabla != "tareas" or accion not in ("crear", "editar", "borrar"):
+        return None
+    fila = (despues if accion == "crear" else antes) or {}
+    return fila.get("titulo") if isinstance(fila, dict) else None
 
 
 def _cambiadas(antes, despues) -> set:
@@ -3944,20 +3969,27 @@ FRASES_DE_ACTIVIDAD = {
 COMBINACIONES_DE_ACTIVIDAD = tuple(sorted(FRASES_DE_ACTIVIDAD))
 
 
-def frase_de_actividad(tabla, accion, antes=None, despues=None, titulo=None) -> str:
+def frase_de_actividad(tabla, accion, antes=None, despues=None) -> str:
     """La frase de UNA huella de `log_acciones`: una sola puerta. Nunca vacía: la combinación que
     nadie declaró sale con la frase general, no se esconde. Ni la frase ni lo que mira para armarla
-    tocan un dato de persona."""
+    tocan un dato de persona, y el título que nombra es el que la tarea tenía EN ESE MOMENTO
+    (`_titulo_de_la_huella`), no el de hoy."""
     como = FRASES_DE_ACTIVIDAD.get((tabla, accion)) \
         if isinstance(tabla, str) and isinstance(accion, str) else None
-    return como(titulo, antes, despues) if como else ACTIVIDAD_OTRA
+    if como is None:
+        return ACTIVIDAD_OTRA
+    return como(_titulo_de_la_huella(tabla, accion, antes, despues), antes, despues)
 
 
 def actividad_de_renglones(renglones) -> list[dict]:
     """Las huellas de UN proyecto (las que trae `pagina_de_proyectos`, ya la más nueva primero) → lo
-    que pinta el bloque: la frase y su instante. El `actor` y la bandeja no viajan en la consulta."""
-    return [{"frase": frase_de_actividad(r["tabla"], r["accion"], r.get("antes"),
-                                         r.get("despues"), r.get("titulo")),
+    que pinta el bloque: la frase y su instante.
+
+    El `actor` y la bandeja no viajan en la consulta, así que no se pueden escribir por descuido. Los
+    avisos automáticos (`ACCIONES_AUTOMATICAS`) tampoco llegan: los deja fuera el `NOT IN` del SQL —
+    UNA sola puerta para la Actividad —, y el filtro que `armar_pagina` hace sobre `huellas` es otra
+    decisión (qué despierta un proyecto), no una segunda regla de lo que se pinta."""
+    return [{"frase": frase_de_actividad(r["tabla"], r["accion"], r.get("antes"), r.get("despues")),
              "cuando": r["ts"]} for r in renglones]
 
 # El color de un grupo sale de `areas.color` y se escribe en un `style=`: solo
@@ -4318,13 +4350,15 @@ async def pagina_de_proyectos(hoy: date | None = None) -> dict:
         tareas = list(await cur.fetchall())
         # LAS HUELLAS DEL PROYECTO (parte 7): UNA SOLA FUENTE para «Último movimiento» y para la
         # Actividad. Antes traía una fila por (proyecto, acción) con la fecha más nueva; ahora trae
-        # CADA huella con lo que hace falta para pasarla a frase —la tabla, la acción, qué cambió y el
-        # título de la tarea—, y de aquí salen las dos cosas: el renglón que decide el movimiento es el
-        # mismo que se pinta. El tope por proyecto (`TOPE_ACTIVIDAD`) va en el SQL para que la consulta
-        # NO crezca con el historial; las huellas automáticas (`ACCIONES_AUTOMATICAS`) se dejan fuera
-        # aquí para que no ocupen sitio del tope (`armar_pagina` las vuelve a dejar fuera: es una
-        # función pura y se prueba sola). El `actor` y la bandeja NO se traen: lo que no viaja no se
-        # puede escribir por descuido.
+        # CADA huella con lo que hace falta para pasarla a frase —la tabla, la acción y `antes`/
+        # `despues`, de donde sale el título que la tarea tenía ENTONCES (`_titulo_de_la_huella`; el
+        # título de HOY no se trae a propósito, que sería decir algo falso)— y de aquí salen las dos
+        # cosas: el renglón que decide el movimiento es el mismo que se pinta. Lo que la consulta
+        # DEVUELVE está acotado a `TOPE_ACTIVIDAD` por proyecto; el SQL recorre y ordena todas las
+        # huellas de esas cuatro tablas en cada carga, igual que ya hacía para «Último movimiento».
+        # Las huellas automáticas (`ACCIONES_AUTOMATICAS`) se dejan fuera AQUÍ (el `NOT IN` de abajo):
+        # es la ÚNICA puerta de lo que se pinta, y así tampoco ocupan sitio del tope. El `actor` y la
+        # bandeja NO se traen: lo que no viaja no se puede escribir por descuido.
         # Las cuatro tablas de este `UNION` son las que «tocan» a un proyecto; la prueba de la
         # actividad saca la lista de aquí (`l.tabla = '…'`) y exige una frase por cada combinación.
         # El SQL va como TEXTO FIJO (sin f-string) para que el censo de escritores genéricos lo pueda
@@ -4332,31 +4366,30 @@ async def pagina_de_proyectos(hoy: date | None = None) -> dict:
         # MUEVEN`/`ACCIONES_AUTOMATICAS` (el número de huecos lo vigila la prueba de la actividad).
         await cur.execute(
             """
-            SELECT z.pid, z.tabla, z.accion, z.registro_id, z.ts, z.antes, z.despues,
-                   z.titulo
+            SELECT z.pid, z.tabla, z.accion, z.registro_id, z.ts, z.antes, z.despues
               FROM (SELECT y.*,
                            row_number() OVER (PARTITION BY y.pid
                                               ORDER BY y.ts DESC, y.id DESC) AS puesto
                       FROM (
                         SELECT l.registro_id AS pid, l.tabla, l.accion, l.registro_id, l.ts,
-                               l.antes, l.despues, NULL AS titulo, l.id
+                               l.antes, l.despues, l.id
                           FROM log_acciones l
                          WHERE l.tabla = 'proyectos'
                         UNION ALL
                         SELECT t.proyecto_id, l.tabla, l.accion, l.registro_id, l.ts,
-                               l.antes, l.despues, t.titulo, l.id
+                               l.antes, l.despues, l.id
                           FROM log_acciones l JOIN tareas t ON t.id = l.registro_id
                          WHERE l.tabla = 'tareas' AND t.proyecto_id IS NOT NULL
                         UNION ALL
                         SELECT t.proyecto_id, l.tabla, l.accion, l.registro_id, l.ts,
-                               l.antes, l.despues, t.titulo, l.id
+                               l.antes, l.despues, l.id
                           FROM log_acciones l
                           JOIN comentarios_tarea c ON c.id = l.registro_id
                           JOIN tareas t ON t.id = c.tarea_id
                          WHERE l.tabla = 'comentarios_tarea' AND t.proyecto_id IS NOT NULL
                         UNION ALL
                         SELECT n.proyecto_id, l.tabla, l.accion, l.registro_id, l.ts,
-                               l.antes, l.despues, NULL, l.id
+                               l.antes, l.despues, l.id
                           FROM log_acciones l JOIN notas n ON n.id = l.registro_id
                          WHERE l.tabla = 'notas' AND n.proyecto_id IS NOT NULL
                       ) y

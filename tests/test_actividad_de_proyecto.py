@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import json
 import re
 
 import pytest
@@ -99,6 +100,17 @@ def _ficha(nombre):
     return _leer
 
 
+def huella(m, accion, tabla, registro_id, cuando, antes=None, despues=None):
+    """Una huella en `log_acciones` con la MISMA forma que la de los escritores de verdad: `antes` y
+    `despues` en JSON (`tests/test_pagina_proyectos.Mundo.huella` no los escribe, y sin ellos la frase
+    no puede decir el título — que es justo lo que varias pruebas de aquí abajo miden)."""
+    m.con.execute(
+        "INSERT INTO log_acciones (actor, accion, tabla, registro_id, ts, antes, despues) "
+        "VALUES ('lucy', ?, ?, ?, ?, ?, ?)",
+        (accion, tabla, registro_id, cuando.isoformat(),
+         json.dumps(antes) if antes else None, json.dumps(despues) if despues else None))
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # El bloque
 # ═══════════════════════════════════════════════════════════════════════
@@ -122,30 +134,38 @@ def test_el_bloque_sale_en_un_proyecto_cerrado(mundo):
 # 1 y 2. Una frase por combinación; la que nadie declaró, la general
 # ═══════════════════════════════════════════════════════════════════════
 
-# LOS TEXTOS, FIJOS Y ESCRITOS A MANO: no se comparan contra la misma función que vigilan.
-_FIJAS = {
-    ("proyectos", "crear"): "Se creó el proyecto.",
-    ("proyectos", "borrar"): "Se mandó el proyecto a la papelera.",
-    ("proyectos", "deshacer"): "Se deshizo un cambio del proyecto.",
-    ("tareas", "crear"): f"Se agregó la tarea «{TITULO}».",
-    ("tareas", "borrar"): f"Se borró la tarea «{TITULO}».",
-    ("tareas", "deshacer"): f"Se deshizo un cambio en la tarea «{TITULO}».",
-    ("comentarios_tarea", "crear"): f"Nuevo comentario en «{TITULO}».",
-    ("comentarios_tarea", "editar"): f"Se editó un comentario en «{TITULO}».",
-    ("comentarios_tarea", "borrar"): f"Se borró un comentario en «{TITULO}».",
-    ("comentarios_tarea", "deshacer"): f"Se deshizo un cambio en un comentario de «{TITULO}».",
-    ("notas", "crear"): "Nueva nota en el proyecto.",
-    ("notas", "editar"): "Se editó una nota.",
-    ("notas", "borrar"): "Se borró una nota.",
-    ("notas", "deshacer"): "Se deshizo un cambio en una nota.",
-}
+# LOS TEXTOS, FIJOS Y ESCRITOS A MANO: no se comparan contra la misma función que vigilan. Cada fila
+# trae la huella con la FORMA que le da su escritor (medido con la sonda del reporte: al crear, la fila
+# está en `despues`; al editar y al borrar, en `antes`), que es de donde sale el título que se nombra.
+_FIJAS = [
+    (("proyectos", "crear"), None, {"nombre": "Uno"}, "Se creó el proyecto."),
+    (("proyectos", "borrar"), {"nombre": "Uno"}, None, "Se mandó el proyecto a la papelera."),
+    (("proyectos", "deshacer"), None, None, "Se deshizo un cambio del proyecto."),
+    (("tareas", "crear"), None, {"titulo": TITULO}, f"Se agregó la tarea «{TITULO}»."),
+    (("tareas", "borrar"), {"titulo": TITULO}, None, f"Se borró la tarea «{TITULO}»."),
+    # `deshacer` no guarda ni `antes` ni `despues`: por eso no puede decir el título ni prometer que
+    # algo «volvió» (sirve para devolver un borrado Y para deshacer una creación).
+    (("tareas", "deshacer"), None, None, "Se deshizo un cambio en una tarea."),
+    # Las huellas de un COMENTARIO guardan el comentario, no el título de su tarea: sin título.
+    (("comentarios_tarea", "crear"), None, {"texto": "hola"}, "Nuevo comentario en una tarea."),
+    (("comentarios_tarea", "editar"), {"texto": "a"}, {"texto": "b"},
+     "Se editó un comentario en una tarea."),
+    (("comentarios_tarea", "borrar"), {"texto": "a"}, None, "Se borró un comentario en una tarea."),
+    (("comentarios_tarea", "deshacer"), None, None, "Se deshizo un cambio en un comentario."),
+    (("notas", "crear"), None, {"contenido": "x"}, "Nueva nota en el proyecto."),
+    (("notas", "editar"), {"contenido": "x"}, {"contenido": "y"}, "Se editó una nota."),
+    (("notas", "borrar"), {"contenido": "x"}, None, "Se borró una nota."),
+    (("notas", "deshacer"), None, None, "Se deshizo un cambio en una nota."),
+]
 
 # Las dos que miran QUÉ cambió. La huella trae a veces la fila ENTERA de después (`crud.editar`) y a
 # veces SOLO lo que cambió (las funciones de `db`): las dos formas tienen que decir lo mismo, y lo que
-# NO cambió no se puede afirmar (el `cliente` está en todas las filas de un proyecto).
+# NO cambió no se puede afirmar (el `cliente` está en todas las filas de un proyecto). De una tarea, el
+# `antes` trae su `titulo`: es el que tenía entonces y es el que la frase nombra.
 _ROWS = {"id": 1, "nombre": "Uno", "cliente_nombre": None, "cliente_noco_id": None,
          "responsable_chat_id": None, "estado": "activo", "area": "CDS", "descripcion": None,
          "carpeta": None, "inicio": None, "entrega": None, "termina_cuando": None}
+_T = {"titulo": TITULO}
 _CAMBIOS = [
     (("proyectos", "editar"), {"estado": "activo"}, {"estado": "cerrado"}, "Se cerró el proyecto."),
     (("proyectos", "editar"), {"estado": "cerrado"}, {"estado": "activo"}, "Se reabrió el proyecto."),
@@ -171,55 +191,70 @@ _CAMBIOS = [
      "Se le cambió el nombre al proyecto."),
     (("proyectos", "editar"), {**_ROWS, "cliente_nombre": "Banda"}, {**_ROWS, "cliente_nombre": "Banda"},
      "Se cambió el proyecto."),
-    (("tareas", "editar"), {"estado": "pendiente"}, {"estado": "hecha"}, f"Se marcó hecha «{TITULO}»."),
-    (("tareas", "editar"), {"estado": "hecha"},
+    (("tareas", "editar"), {**_T, "estado": "pendiente"}, {"estado": "hecha"},
+     f"Se marcó hecha «{TITULO}»."),
+    (("tareas", "editar"), {**_T, "estado": "hecha"},
      {"estado": "pendiente", "completado_en": None}, f"Se reabrió «{TITULO}»."),
-    (("tareas", "editar"), {"estado": "pendiente"}, {"estado": "descartado"},
+    (("tareas", "editar"), {**_T, "estado": "pendiente"}, {"estado": "descartado"},
      f"Se le cambió el estado a «{TITULO}»."),
-    (("tareas", "editar"), {"responsable_chat_id": None}, {"responsable_chat_id": ROSI},
+    (("tareas", "editar"), {**_T, "responsable_chat_id": None}, {"responsable_chat_id": ROSI},
      f"Se cambió el responsable de «{TITULO}»."),
-    (("tareas", "editar"), {"titulo": TITULO}, {"titulo": "Otro título"},
+    # El renombre: el `antes` trae el título VIEJO, y la frase no lo repite (lo escribió una persona).
+    (("tareas", "editar"), {"titulo": "Alfa"}, {"titulo": "Alfa bis"},
      "Se le cambió el nombre a una tarea."),
-    (("tareas", "editar"), {"vence_en": None}, {"vence_en": "2026-11-01"},
+    (("tareas", "editar"), {**_T, "vence_en": None}, {"vence_en": "2026-11-01"},
      f"Se le cambió la fecha a «{TITULO}»."),
-    (("tareas", "editar"), {"proyecto_id": 1}, {"proyecto_id": 2},
+    (("tareas", "editar"), {**_T, "proyecto_id": 1}, {"proyecto_id": 2},
      f"Se movió «{TITULO}» a otro proyecto."),
-    (("tareas", "editar"), {"area": "CDS"}, {"area": "ACD"}, f"Se cambió «{TITULO}» de grupo."),
+    (("tareas", "editar"), {**_T, "area": "CDS"}, {"area": "ACD"}, f"Se cambió «{TITULO}» de grupo."),
     # La fila entera de una tarea con el estado cambiado a hecha: se dice que se marcó hecha.
-    (("tareas", "editar"), {"estado": "pendiente", "vence_en": None},
+    (("tareas", "editar"), {**_T, "estado": "pendiente", "vence_en": None},
      {"estado": "hecha", "vence_en": None, "completado_en": "2026-10-02 12:00:00+00:00"},
      f"Se marcó hecha «{TITULO}»."),
-    (("tareas", "editar"), {"estado": "pendiente"}, {"estado": "pendiente", "detalle": "nuevo"},
+    (("tareas", "editar"), {**_T, "estado": "pendiente"}, {"estado": "pendiente", "detalle": "nuevo"},
      f"Se cambió «{TITULO}»."),
 ]
 
 
-@pytest.mark.parametrize("par,esperada", sorted(_FIJAS.items()))
-def test_cada_combinacion_declarada_tiene_su_frase_fija(par, esperada):
-    assert db.frase_de_actividad(*par, titulo=TITULO) == esperada
+@pytest.mark.parametrize("par,antes,despues,esperada", _FIJAS,
+                         ids=[f"{p[0]}-{p[1]}" for p, _, _, _ in _FIJAS])
+def test_cada_combinacion_declarada_tiene_su_frase_fija(par, antes, despues, esperada):
+    assert db.frase_de_actividad(*par, antes=antes, despues=despues) == esperada
 
 
 @pytest.mark.parametrize("par,antes,despues,esperada", _CAMBIOS,
                          ids=[f"{p[0]}-{p[1]}-{i}" for i, (p, _, _, _) in enumerate(_CAMBIOS)])
 def test_lo_que_cambio_se_dice_por_su_papel_nunca_por_su_nombre(par, antes, despues, esperada):
-    assert db.frase_de_actividad(*par, antes=antes, despues=despues, titulo=TITULO) == esperada
+    assert db.frase_de_actividad(*par, antes=antes, despues=despues) == esperada
 
 
 def test_sin_lo_que_cambio_o_sin_titulo_la_frase_sigue_leyendose():
-    """Una huella sin `despues` (vieja, o la de un `deshacer`) o de una tarea que ya no está no deja
-    la frase a medias; y sin `antes` con qué comparar NO se afirma qué cambió."""
+    """Una huella sin `despues` (vieja, o la de un `deshacer`) o sin el título de la tarea no deja la
+    frase a medias; y sin `antes` con qué comparar NO se afirma qué cambió."""
     assert db.frase_de_actividad("tareas", "crear") == "Se agregó una tarea."
-    assert db.frase_de_actividad("tareas", "borrar", titulo="") == "Se borró una tarea."
+    assert db.frase_de_actividad("tareas", "borrar", antes={}) == "Se borró una tarea."
+    assert db.frase_de_actividad("tareas", "crear", despues={"titulo": "   "}) == "Se agregó una tarea."
     assert db.frase_de_actividad("tareas", "editar", antes={"estado": "pendiente"},
                                  despues={"estado": "hecha"}) == "Se marcó hecha una tarea."
     assert db.frase_de_actividad("tareas", "editar") == "Se cambió una tarea."
     assert db.frase_de_actividad("proyectos", "editar") == "Se cambió el proyecto."
-    assert db.frase_de_actividad("comentarios_tarea", "crear", titulo="   ") == "Nuevo comentario en una tarea."
     assert "«»" not in db.frase_de_actividad("tareas", "editar")
     # SIN `antes` no se afirma qué cambió: la fila entera no dice qué columna se tocó.
     assert db.frase_de_actividad("proyectos", "editar", despues={"estado": "activo"}) == "Se cambió el proyecto."
     assert db.frase_de_actividad("tareas", "editar", despues={"estado": "hecha"}) == "Se cambió una tarea."
     assert db.frase_de_actividad("proyectos", "editar", antes={}, despues={}) == "Se cambió el proyecto."
+
+
+def test_el_titulo_sale_solo_de_la_huella_nunca_de_lo_que_hoy_se_llama():
+    """`_titulo_de_la_huella`: crear → `despues`; editar y borrar → `antes`; lo demás, sin título."""
+    assert db._titulo_de_la_huella("tareas", "crear", None, {"titulo": "Alfa"}) == "Alfa"
+    assert db._titulo_de_la_huella("tareas", "editar", {"titulo": "Alfa"}, {"estado": "hecha"}) == "Alfa"
+    assert db._titulo_de_la_huella("tareas", "borrar", {"titulo": "Alfa"}, None) == "Alfa"
+    # Lo que NO trae título: `deshacer`, los comentarios, las notas y los proyectos.
+    assert db._titulo_de_la_huella("tareas", "deshacer", None, None) is None
+    assert db._titulo_de_la_huella("comentarios_tarea", "crear", None, {"texto": "hola"}) is None
+    assert db._titulo_de_la_huella("notas", "crear", None, {"contenido": "x"}) is None
+    assert db._titulo_de_la_huella("proyectos", "editar", {"nombre": "Uno"}, {"nombre": "Dos"}) is None
 
 
 def test_una_combinacion_que_nadie_declaro_sale_con_la_frase_general():
@@ -236,7 +271,7 @@ def test_una_combinacion_que_nadie_declaro_sale_con_la_frase_general():
 def test_la_frase_general_no_se_usa_para_ninguna_combinacion_declarada():
     for par in db.COMBINACIONES_DE_ACTIVIDAD:
         assert db.frase_de_actividad(*par, antes={"estado": "pendiente"},
-                                     despues={"estado": "hecha"}, titulo=TITULO) != db.ACTIVIDAD_OTRA
+                                     despues={"estado": "hecha"}) != db.ACTIVIDAD_OTRA
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -367,20 +402,27 @@ def test_la_sonda_ve_los_pares_escritos_a_mano():
 # ═══════════════════════════════════════════════════════════════════════
 # 3. SIN NOMBRES: la garantía central, mirando lo que SALE
 # ═══════════════════════════════════════════════════════════════════════
+#
+# QUÉ ES «SIN NOMBRES», exacto: la Actividad no dice QUIÉN hizo cada cosa ni nombra a la persona que
+# entra o sale de un papel (responsable, cliente, autor de un comentario o de una nota), ni escribe un
+# número de chat. FRONTERA: el TÍTULO de la tarea y el nombre del proyecto son texto libre que escribe
+# la casa y salen TAL CUAL (el diseño lo pide: «Se marcó hecha “…”»), así que si alguien escribe un
+# nombre de persona en un título, ese nombre sale — eso lo fija la segunda prueba de aquí abajo.
 
 # Todo lo que puede ser un nombre de persona en estos mundos.
 _NOMBRES = ("Persona Uno", "Persona Dos", "Fulano de Tal", "Mengana de Noco",
             "Doña Perengana", "Banda Fulana", "Juan Pérez")
 
 
-async def test_ninguna_frase_lleva_un_nombre_de_persona_ni_un_numero_de_chat(mundo):
+async def test_la_actividad_no_dice_quien_lo_hizo_ni_nombra_a_la_persona_de_un_papel(mundo):
     """EL MUNDO CON NOMBRES EN TODAS PARTE, con las acciones de verdad por las rutas."""
     # `gente` (fixture de la suite) nombra a los chats: Persona Uno es el dueño del panel.
     mundo.proyecto(1, "Disco con nombres", area="CDS", cliente="Banda Fulana", responsable=DUENO)
-    mundo.tarea(10, TITULO, proyecto=1, responsable=DUENO)
-    mundo.comentario(100, 10, DUENO, "Fulano de Tal dijo que sí; Doña Perengana no")
+    assert post("/proyectos/1/tareas", {"titulo": TITULO}).status_code == 303
+    tid = mundo.con.execute("SELECT id FROM tareas").fetchone()[0]
+    mundo.comentario(100, tid, DUENO, "Fulano de Tal dijo que sí; Doña Perengana no")
     # Comentar (el nombre va DENTRO del texto), escribir una nota y agregar una persona de Noco.
-    assert post("/proyectos/tarea/10/comentar", {"texto": "Lo dijo Fulano de Tal"}).status_code == 303
+    assert post(f"/proyectos/tarea/{tid}/comentar", {"texto": "Lo dijo Fulano de Tal"}).status_code == 303
     assert post("/proyectos/1/notas", {"texto": "Hablar con Mengana de Noco"}).status_code == 303
     persona = await db.agregar_participante(("proyecto", 1), 501, "productor", DUENO,
                                             leer_persona=_ficha("Mengana de Noco"))
@@ -388,7 +430,7 @@ async def test_ninguna_frase_lleva_un_nombre_de_persona_ni_un_numero_de_chat(mun
     # responsable de la tarea (por la ruta del panel).
     await db.poner_cliente(1, 7, leer_persona=_ficha("Banda Fulana"))
     assert post("/proyectos/1/nombre", {"nombre": "Doña Perengana"}).status_code == 303
-    assert post("/proyectos/tarea/10/responsable", {"responsable": "Persona Dos"}).status_code == 303
+    assert post(f"/proyectos/tarea/{tid}/responsable", {"responsable": "Persona Dos"}).status_code == 303
     assert post("/proyectos/1/estado", {"estado": "cerrado"}).status_code == 303
     html = ver(mundo, p=1)
     b = _bloque(html)
@@ -399,7 +441,20 @@ async def test_ninguna_frase_lleva_un_nombre_de_persona_ni_un_numero_de_chat(mun
         assert numero not in b, f"la Actividad dice el número de chat {numero!r}"
     assert str(501) not in b, "la Actividad dice el Id de la ficha de Noco"
     assert str(persona["id"]) not in b
-    assert TITULO in b, "el título de la tarea SÍ sale: lo escribe la casa"
+    # Y lo que SÍ sale, entero: el título de la tarea (lo escribe la casa).
+    assert f"Se agregó la tarea «{TITULO}»." in b
+
+
+def test_un_titulo_que_lleva_un_nombre_sale_entero_y_escapado(mundo):
+    """LA OTRA CARA, la que la frase NO promete: el título es texto libre de la casa. Si alguien
+    escribe un nombre de persona (o un `<script>`) en el título, sale tal cual, escapado — la garantía
+    es sobre los CAMPOS de persona, no sobre lo que una persona escribió."""
+    mundo.proyecto(1, "Uno", area="CDS", responsable=DUENO)
+    titulo = "Llamar a Doña Perengana <script>alert(1)</script>"
+    assert post("/proyectos/1/tareas", {"titulo": titulo}).status_code == 303
+    b = _bloque(ver(mundo, p=1))
+    assert "Se agregó la tarea «Llamar a Doña Perengana &lt;script&gt;alert(1)&lt;/script&gt;»." in b
+    assert "<script>" not in b and "alert(1)</script>" not in b
 
 
 def test_la_actividad_no_lleva_nombres_con_valores_inventados(mundo):
@@ -408,15 +463,15 @@ def test_la_actividad_no_lleva_nombres_con_valores_inventados(mundo):
     filas = [
         {"pid": 1, "tabla": "proyectos", "accion": "editar", "registro_id": 1, "ts": CREADO,
          "antes": {"cliente_nombre": "Doña Perengana", "responsable_chat_id": 42},
-         "despues": {"cliente_nombre": "Banda Fulana", "responsable_chat_id": 43}, "titulo": None},
+         "despues": {"cliente_nombre": "Banda Fulana", "responsable_chat_id": 43}},
         {"pid": 1, "tabla": "proyectos", "accion": "editar", "registro_id": 1, "ts": CREADO,
          "antes": {"nombre": "Uno", "cliente_nombre": "Banda Fulana"},
-         "despues": {"nombre": "Juan Pérez", "cliente_nombre": "Banda Fulana"}, "titulo": None},
+         "despues": {"nombre": "Juan Pérez", "cliente_nombre": "Banda Fulana"}},
         {"pid": 1, "tabla": "tareas", "accion": "editar", "registro_id": 10, "ts": CREADO,
-         "antes": {"responsable_chat_id": 41}, "despues": {"responsable_chat_id": 44},
-         "titulo": TITULO},
+         "antes": {"responsable_chat_id": 41, "titulo": TITULO},
+         "despues": {"responsable_chat_id": 44}},
         {"pid": 1, "tabla": "notas", "accion": "crear", "registro_id": 700, "ts": CREADO,
-         "antes": None, "despues": {"contenido": "Mengana de Noco"}, "titulo": None},
+         "antes": None, "despues": {"contenido": "Mengana de Noco"}},
     ]
     modelo = db.armar_pagina(
         list(tp.AREAS),
@@ -459,16 +514,19 @@ def _sembrar_dos(m) -> None:
 
 def test_nada_de_otro_proyecto_ni_de_una_tarea_suelta(mundo):
     _sembrar_dos(mundo)
-    for accion, tabla, rid in [("crear", "tareas", 10), ("crear", "tareas", 20),
-                               ("crear", "tareas", 30), ("crear", "comentarios_tarea", 100),
-                               ("crear", "comentarios_tarea", 200), ("crear", "comentarios_tarea", 300),
-                               ("crear", "proyectos", 2)]:
-        mundo.huella(accion, tabla, rid, _dia(-1))
+    # Las huellas con la forma que les da su escritor: al crear una tarea, el título va en `despues`.
+    for tabla, rid, despues in [("tareas", 10, {"titulo": "De Uno"}), ("tareas", 20, {"titulo": "De Dos"}),
+                                ("tareas", 30, {"titulo": "Suelta"}),
+                                ("comentarios_tarea", 100, {"texto": "un comentario"}),
+                                ("comentarios_tarea", 200, {"texto": "otro"}),
+                                ("comentarios_tarea", 300, {"texto": "de una suelta"}),
+                                ("proyectos", 2, {"nombre": "Dos"})]:
+        huella(mundo, "crear", tabla, rid, _dia(-1), despues=despues)
     # (Todo el mismo día: manda el `id`, el más nuevo primero. Se mira QUIÉN entra, no el orden.)
     assert sorted(_frases(ver(mundo, p=1))) == sorted(["Se agregó la tarea «De Uno».",
-                                                       "Nuevo comentario en «De Uno»."])
+                                                       "Nuevo comentario en una tarea."])
     assert sorted(_frases(ver(mundo, p=2))) == sorted(["Se agregó la tarea «De Dos».",
-                                                       "Nuevo comentario en «De Dos».",
+                                                       "Nuevo comentario en una tarea.",
                                                        "Se creó el proyecto."])
     # Lo de la tarea SUELTA («Suelta») no aparece en el proyecto de nadie.
     assert not any("Suelta" in f for p in (1, 2) for f in _frases(ver(mundo, p=p)))
@@ -478,7 +536,7 @@ def test_una_tarea_que_se_mueve_de_proyecto_lleva_sus_huellas_al_nuevo(mundo):
     """El dato que decide es `tareas.proyecto_id` de AHORA: así lo dice la consulta, y por eso la
     Actividad y «Último movimiento» cuentan lo mismo."""
     _sembrar_dos(mundo)
-    mundo.huella("crear", "tareas", 10, _dia(-1))
+    huella(mundo, "crear", "tareas", 10, _dia(-1), despues={"titulo": "De Uno"})
     assert _frases(ver(mundo, p=1)) == ["Se agregó la tarea «De Uno»."]
     assert _frases(ver(mundo, p=2)) == []
     correr(crud.editar("tareas", 10, {"proyecto_id": 2}, motivo="sonda", actor="panel"))
@@ -490,9 +548,9 @@ def test_la_actividad_y_el_ultimo_movimiento_cuentan_lo_mismo(mundo):
     """UNA SOLA FUENTE: la fecha más nueva de la Actividad es el «último movimiento» del proyecto."""
     mundo.proyecto(1, "Uno", area="CDS")
     mundo.tarea(10, TITULO, proyecto=1)
-    mundo.huella("crear", "proyectos", 1, _dia(-2))
-    mundo.huella("crear", "tareas", 10, _dia(-1))
-    mundo.huella("avisar", "tareas", 10, _dia(0))          # automática: no cuenta, aunque sea la más nueva
+    huella(mundo, "crear", "proyectos", 1, _dia(-2), despues={"nombre": "Uno"})
+    huella(mundo, "crear", "tareas", 10, _dia(-1), despues={"titulo": TITULO})
+    huella(mundo, "avisar", "tareas", 10, _dia(0))         # automática: no cuenta, aunque sea la más nueva
     m = correr(db.pagina_de_proyectos())["proyectos"][1]
     assert m["ultimo"] == _dia(-1) and m["ultimo"] != _dia(0)
     assert max(a["cuando"] for a in m["actividad"]) == m["ultimo"]
@@ -506,9 +564,9 @@ def test_la_actividad_y_el_ultimo_movimiento_cuentan_lo_mismo(mundo):
 def test_los_avisos_automaticos_no_salen(mundo):
     mundo.proyecto(1, "Uno", area="CDS")
     mundo.tarea(10, TITULO, proyecto=1)
-    mundo.huella("avisar", "tareas", 10, _dia(0))
-    mundo.huella("aviso_atraso_code", "tareas", 10, _dia(0))
-    mundo.huella("crear", "tareas", 10, _dia(-1))
+    huella(mundo, "avisar", "tareas", 10, _dia(0))
+    huella(mundo, "aviso_atraso_code", "tareas", 10, _dia(0))
+    huella(mundo, "crear", "tareas", 10, _dia(-1), despues={"titulo": TITULO})
     assert _frases(ver(mundo, p=1)) == [f"Se agregó la tarea «{TITULO}»."]
 
 
@@ -516,9 +574,9 @@ def test_el_orden_es_lo_mas_nuevo_primero(mundo):
     mundo.proyecto(1, "Uno", area="CDS")
     for i, titulo in ((10, "Primera"), (11, "Segunda"), (12, "Tercera")):
         mundo.tarea(i, titulo, proyecto=1)
-    mundo.huella("crear", "tareas", 10, _dia(-3))
-    mundo.huella("crear", "tareas", 11, _dia(-2))
-    mundo.huella("crear", "tareas", 12, _dia(-1))
+    huella(mundo, "crear", "tareas", 10, _dia(-3), despues={"titulo": "Primera"})
+    huella(mundo, "crear", "tareas", 11, _dia(-2), despues={"titulo": "Segunda"})
+    huella(mundo, "crear", "tareas", 12, _dia(-1), despues={"titulo": "Tercera"})
     assert _frases(ver(mundo, p=1)) == ["Se agregó la tarea «Tercera».",
                                         "Se agregó la tarea «Segunda».",
                                         "Se agregó la tarea «Primera»."]
@@ -526,7 +584,7 @@ def test_el_orden_es_lo_mas_nuevo_primero(mundo):
 
 def test_el_tope_es_por_proyecto_y_no_crece_con_el_historial(mundo):
     """Con más huellas que el tope, se pintan `TOPE_ACTIVIDAD`, las más nuevas — y cada proyecto tiene
-    las suyas (no es un tope global): la consulta trae solo lo que se pinta."""
+    las suyas (no es un tope global): lo que la consulta DEVUELVE está acotado."""
     mundo.proyecto(1, "Uno", area="CDS")
     mundo.proyecto(2, "Dos", area="CDS")
     for pid in (1, 2):
@@ -536,6 +594,23 @@ def test_el_tope_es_por_proyecto_y_no_crece_con_el_historial(mundo):
     assert len(_renglones(ver(mundo, p=1))) == db.TOPE_ACTIVIDAD
     assert len(_renglones(ver(mundo, p=2))) == db.TOPE_ACTIVIDAD
     assert db.TOPE_ACTIVIDAD <= 30, "un tope así ya no es «los últimos renglones»"
+
+
+def test_con_mas_de_un_tope_de_huellas_el_movimiento_sigue_siendo_el_de_siempre(mundo):
+    """El tope acota lo que se PINTA, no lo que decide «Último movimiento»: la huella no automática
+    más nueva del proyecto, aunque haya más de `TOPE_ACTIVIDAD` y la más nueva quede fuera de la lista."""
+    mundo.proyecto(1, "Uno", area="CDS")
+    mundo.tarea(10, TITULO, proyecto=1)
+    for i in range(db.TOPE_ACTIVIDAD + 5):
+        mundo.huella("editar", "tareas", 10, _dia(-i - 1))          # de -1 a -25 días
+    mundo.huella("avisar", "tareas", 10, _dia(0))                    # automática: no cuenta
+    m = correr(db.pagina_de_proyectos())["proyectos"][1]
+    assert m["ultimo"] == _dia(-1), "el movimiento no es la huella no automática más nueva"
+    assert m["dias_sin_movimiento"] == 1 and m["dormido"] is False
+    assert len(m["actividad"]) == db.TOPE_ACTIVIDAD
+    # Las más nuevas son las que se pintan: -1 … -20 días, y no las viejas.
+    assert m["actividad"][0]["cuando"] == _dia(-1)
+    assert m["actividad"][-1]["cuando"] == _dia(-db.TOPE_ACTIVIDAD)
 
 
 def test_la_fecha_sale_en_hora_de_santo_domingo(mundo):
@@ -554,7 +629,7 @@ def test_la_fecha_sale_en_hora_de_santo_domingo(mundo):
 def test_solo_ver_ve_la_actividad_y_no_hay_ningun_control(mundo):
     mundo.proyecto(1, "Uno", area="CDS")
     mundo.tarea(10, TITULO, proyecto=1)
-    mundo.huella("crear", "tareas", 10, _dia(-1))
+    huella(mundo, "crear", "tareas", 10, _dia(-1), despues={"titulo": TITULO})
     r = _cliente("ver").get("/proyectos", params={"p": 1})
     assert r.status_code == 200
     b = _bloque(r.text)
@@ -566,6 +641,45 @@ def test_solo_ver_ve_la_actividad_y_no_hay_ningun_control(mundo):
 # ═══════════════════════════════════════════════════════════════════════
 # 8. El camino de producción: acciones de verdad, frases de verdad
 # ═══════════════════════════════════════════════════════════════════════
+
+def test_cada_renglon_dice_el_titulo_que_la_tarea_tenia_entonces(mundo):
+    """El título sale de la HUELLA, no del JOIN a `tareas` (que da el de HOY). Acciones de verdad:
+    se crea «Alfa», se renombra a «Alfa bis», se marca hecha y se borra — y cada renglón dice el
+    título que la tarea tenía EN ESE MOMENTO. Con el de hoy, «Se agregó» diría «Alfa bis» (falso)."""
+    mundo.proyecto(1, "Uno", area="CDS", responsable=DUENO)
+    assert post("/proyectos/1/tareas", {"titulo": "Alfa"}).status_code == 303
+    tid = mundo.con.execute("SELECT id FROM tareas").fetchone()[0]
+    assert post(f"/proyectos/tarea/{tid}/titulo", {"titulo": "Alfa bis"}).status_code == 303
+    assert post(f"/proyectos/tarea/{tid}/hecha", {}).status_code == 303
+    assert post(f"/proyectos/tarea/{tid}/borrar", {}).status_code == 303
+    # La tarea se llama HOY «Alfa bis»: si el título viniera del JOIN, el primer renglón mentiría.
+    assert mundo.con.execute("SELECT titulo FROM tareas WHERE id = ?", (tid,)).fetchone()[0] == "Alfa bis"
+    assert _frases(ver(mundo, p=1)) == [
+        "Se borró la tarea «Alfa bis».",          # al borrarla se llamaba así
+        "Se marcó hecha «Alfa bis».",
+        "Se le cambió el nombre a una tarea.",    # el renombre no repite el título
+        "Se agregó la tarea «Alfa».",             # el que tenía AL CREARSE
+    ]
+
+
+def test_la_huella_de_un_comentario_no_trae_el_titulo_de_su_tarea(mundo):
+    """Por eso su frase va SIN título (medido: la huella guarda el comentario, no la tarea). La
+    alternativa —decir el título de hoy en un renglón de entonces— es la mentira que se está evitando."""
+    mundo.proyecto(1, "Uno", area="CDS", responsable=DUENO)
+    mundo.tarea(10, "Alfa", proyecto=1)
+    assert post("/proyectos/tarea/10/comentar", {"texto": "hola"}).status_code == 303
+    assert post("/proyectos/tarea/10/titulo", {"titulo": "Alfa bis"}).status_code == 303
+    assert _frases(ver(mundo, p=1)) == [
+        "Se le cambió el nombre a una tarea.",
+        "Nuevo comentario en una tarea.",
+    ]
+    # Y queda fijo en la huella: ni `antes` ni `despues` de un comentario traen `titulo`.
+    fila = mundo.con.execute("SELECT antes, despues FROM log_acciones "
+                             "WHERE tabla = 'comentarios_tarea' AND accion = 'crear'").fetchone()
+    for crudo in fila:
+        assert not (crudo and "titulo" in json.loads(crudo)), \
+            "la huella del comentario SÍ trae el título de su tarea"
+
 
 def test_las_acciones_de_verdad_dejan_las_frases_que_se_esperan(mundo):
     mundo.proyecto(1, "Uno", area="CDS", responsable=DUENO)
@@ -581,7 +695,7 @@ def test_las_acciones_de_verdad_dejan_las_frases_que_se_esperan(mundo):
         "Se cerró el proyecto.",
         "Se le cambió el nombre al proyecto.",
         "Nueva nota en el proyecto.",
-        f"Nuevo comentario en «{TITULO}».",
+        "Nuevo comentario en una tarea.",      # la huella del comentario no trae el título
         f"Se reabrió «{TITULO}».",
         f"Se marcó hecha «{TITULO}».",
         f"Se agregó la tarea «{TITULO}».",
@@ -591,7 +705,8 @@ def test_las_acciones_de_verdad_dejan_las_frases_que_se_esperan(mundo):
 def test_el_titulo_de_la_tarea_sale_escapado(mundo):
     mundo.proyecto(1, "Uno", area="CDS")
     mundo.tarea(10, "<img src=x onerror=alert(1)>", proyecto=1)
-    mundo.huella("crear", "tareas", 10, _dia(-1))
+    huella(mundo, "crear", "tareas", 10, _dia(-1),
+           despues={"titulo": "<img src=x onerror=alert(1)>"})
     b = _bloque(ver(mundo, p=1))
     assert "<img src=x" not in b
     assert "&lt;img src=x onerror=alert(1)&gt;" in b
