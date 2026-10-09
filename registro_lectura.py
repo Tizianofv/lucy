@@ -53,8 +53,8 @@ async def _get(parametros: dict[str, str]) -> dict:
     La llave va en la cabecera y en ningún otro sitio, y `follow_redirects=False`
     va escrito: una redirección no se sigue, así que la llave no puede terminar
     en otro servidor. Un fallo al pedir —el de la red o el de una dirección mal
-    escrita— sale como `RegistroNoContesta`, y al registro solo se le cuenta el
-    TIPO del fallo: ni la llave ni el texto crudo del error van a un mensaje.
+    escrita— sale como `RegistroNoContesta`, y en el log de Lucy solo queda el
+    TIPO del fallo: ni la llave ni el texto crudo del error se escriben.
     """
     base, llave = _configurado()
     try:
