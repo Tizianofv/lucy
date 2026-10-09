@@ -138,6 +138,18 @@ h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balan
 .actividad-p li:first-child{border-top:0;padding-top:0}
 .actividad-p li b{font-weight:500;min-width:0;overflow-wrap:anywhere}
 .actividad-p li span{color:var(--suave);font-size:.8rem;white-space:nowrap;font-variant-numeric:tabular-nums}
+/* LAS SESIONES Y TRABAJOS (parte 9, 9-oct-2026): dos listas de renglones, con el día, lo que es, quién
+   y el estado. El código de la sesión va discreto, al lado del concepto. */
+.sesiones-p .etapa{margin-top:.9rem}
+.sesiones-p .etapa:first-of-type{margin-top:0}
+.sesiones-p h3{margin:0 0 .25rem;font:600 .76rem var(--texto);letter-spacing:.08em;text-transform:uppercase;color:var(--suave)}
+.sesiones-p .renglon{display:flex;flex-wrap:wrap;align-items:baseline;gap:.25rem .8rem;border-top:1px solid var(--linea);padding:.5rem 0;font-size:.92rem}
+.sesiones-p .renglon:first-of-type{border-top:0;padding-top:0}
+.sesiones-p .cuando{color:var(--suave);font-size:.82rem;white-space:nowrap;font-variant-numeric:tabular-nums;min-width:4.6rem}
+.sesiones-p .que{flex:1 1 12rem;min-width:0;font-weight:500;overflow-wrap:anywhere}
+.sesiones-p .cod{font:400 .74rem ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.03em;color:var(--suave);margin-left:.35rem;white-space:nowrap}
+.sesiones-p .quien{color:var(--suave);font-size:.82rem}
+.sesiones-p .est{font-size:.76rem;padding:.1rem .55rem;border-radius:99px;border:1px solid var(--linea);color:var(--suave);white-space:nowrap}
 .entrega-en{margin:.7rem 0 0;font-size:.88rem;color:var(--suave)}
 .entrega-en.roja{color:var(--vencida);font-weight:600}
 .quienes{display:flex;flex-wrap:wrap;gap:.4rem 1.4rem;font-size:.95rem}
@@ -848,6 +860,46 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {% endif %}
     </section>
     {% endif %}
+
+    {#- LAS SESIONES Y TRABAJOS (parte 9, 9-oct-2026): lo que el registro del estudio tiene a nombre
+        del cliente de este proyecto, partido en dos listas por `es_trabajo`. Se le pregunta a la App
+        al abrir el proyecto (`registro_lectura.sesiones_de_cliente`); las canceladas no llegan hasta
+        acá y el dinero es la parte 10, así que este bloque no lo pinta. Se ve igual en la sesión de
+        la casa y en la de solo ver: no tiene ningún control. -#}
+    <section class="bloque sesiones-p" id="sesiones-y-trabajos">
+      <div class="encabezado"><h2>Sesiones y trabajos de este proyecto</h2></div>
+      {% if registro.estado == 'ok' %}
+        {% if registro.sesiones or registro.trabajos %}
+        {% for lista, titulo in [(registro.sesiones, 'Sesiones'), (registro.trabajos, 'Trabajos')] %}
+        {% if lista %}
+        <div class="etapa"><h3>{{ titulo }}</h3>
+          {% for r in lista %}
+          <div class="renglon">
+            {% if r.fecha %}<span class="cuando">{{ r.fecha|dia_corto }}</span>{% endif %}
+            {% set partes = [] %}
+            {% if r.sala %}{% set _ = partes.append(r.sala) %}{% endif %}
+            {% if r.horas %}{% set _ = partes.append(r.horas ~ ' h') %}{% endif %}
+            {% if r.concepto %}{% set _ = partes.append(r.concepto) %}{% endif %}
+            {% if partes or r.codigo %}<span class="que">{{ partes|join(' · ') }}{% if r.codigo %}<span class="cod">{{ r.codigo }}</span>{% endif %}</span>{% endif %}
+            {% if r.atendio %}<span class="quien">atendió {{ r.atendio }}</span>
+            {% elif r.asignado %}<span class="quien">{{ r.asignado }}</span>
+            {% elif r.es_trabajo %}<span class="quien">sin asignar</span>{% endif %}
+            {% if r.estado %}<span class="est">{{ r.estado }}</span>{% endif %}
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% endfor %}
+        {% else %}<p class="vacio">El registro no tiene sesiones ni trabajos de este cliente.</p>{% endif %}
+      {% elif registro.estado == 'sin_ligar' %}
+      <p class="vacio">{% if registro.motivo == 'sin_telefono' %}El registro no puede ligar las sesiones de este cliente: la ficha no tiene teléfono allá.{% else %}El registro no puede ligar las sesiones de este cliente.{% endif %}</p>
+      {% elif registro.estado == 'sin_cliente' %}
+      <p class="vacio">Este proyecto no tiene cliente, así que no se le pregunta al registro.</p>
+      {% else %}
+      <p class="vacio">No se pudo consultar el registro.</p>
+      {% endif %}
+    </section>
+
     <section class="bloque">
       <div class="encabezado"><h2>Tareas</h2></div>
       {#- LOS FILTROS: enlaces de lectura (GET) que el servidor dibuja; la lista sale de

@@ -64,6 +64,13 @@ PANEL_URL = os.environ.get("PANEL_URL", "").rstrip("/")
 # Vacía = la puerta `/entrar-cds` queda cerrada (todo pedido es 401).
 REGISTRO_URL = os.environ.get("REGISTRO_URL", "").strip().rstrip("/")
 
+# La llave con la que Lucy le pregunta al registro del estudio las sesiones de un
+# cliente (parte 9 de la página de un proyecto, 9-oct-2026). Es la MISMA variable
+# en los dos servicios; la pone la sala en Railway. No es un secreto de la casa,
+# pero no se imprime en ningún registro ni mensaje. Vacía = Lucy no le pregunta
+# nada al registro y la página lo dice.
+LUCY_LLAVE_SERVICIO = os.environ.get("LUCY_LLAVE_SERVICIO", "").strip()
+
 # Candado de seguridad (pilar): Lucy SOLO le responde a este chat.
 # Cualquier otro que le escriba es ignorado sin más.
 CHAT_ID_DUENO = int(os.environ["CHAT_ID_DUENO"])

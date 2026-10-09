@@ -57,6 +57,7 @@ from fastapi.templating import Jinja2Templates
 import config
 import db.db as db
 import noco_lectura
+import registro_lectura
 import web.auth as auth
 import web.menu as _menu
 import web.avisos as avisos_mod
@@ -1219,9 +1220,18 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         sufijo_filtro = _sufijo_de_filtro(filtro, quien)
     else:
         filtro = quien = ""
+    # LAS SESIONES Y TRABAJOS DEL PROYECTO (parte 9, 9-oct-2026): se le preguntan al registro
+    # SOLO al abrir un proyecto, y solo si tiene ficha de cliente. Listar proyectos no le pregunta
+    # nada, y un proyecto sin cliente tampoco. Si el registro no contesta, la página carga igual y
+    # lo dice (`registro_lectura.sesiones_de_cliente` no levanta).
+    registro = None
+    if vista["tipo"] == "proyecto":
+        registro = await registro_lectura.sesiones_de_cliente(
+            vista["proyecto"].get("cliente_noco_id"))
     return plantillas.TemplateResponse(
         request, "proyectos.html",
         {"solo_ver": solo_ver,
+         "registro": registro,
          "filtro": filtro, "quien": quien, "tareas_p": tareas_p, "personas_filtro": personas_filtro,
          "ofrece_mias": bool(mi_nombre), "sufijo_filtro": sufijo_filtro,
          "consulta_filtro": ("?" + sufijo_filtro[1:]) if sufijo_filtro else "",

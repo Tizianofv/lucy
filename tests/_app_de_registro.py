@@ -1,6 +1,7 @@
-"""Un doble de la App de registro, SOLO la puerta del canje, para probar
-`/entrar-cds` por el camino de producción: un servidor HTTP de verdad en
-127.0.0.1, y `web.app` lo llama con `httpx` como llamaría a la App.
+"""Un doble de la App de registro para probar por el camino de producción: un
+servidor HTTP de verdad en 127.0.0.1, y Lucy lo llama con `httpx` como llamaría
+a la App. Trae dos puertas: el canje del pase (`/entrar-cds`) y las sesiones de
+una ficha (parte 9 de la página de un proyecto).
 
 DE DÓNDE SALE LO QUE AFIRMA este doble (y por eso no inventa nada): del contrato
 que fija la prueba de la App, `tests/test_pase_proyectos.py` de su repositorio
@@ -12,6 +13,21 @@ que fija la prueba de la App, `tests/test_pase_proyectos.py` de su repositorio
   · 404 `{"error": "no"}` por CUALQUIER fallo, sin decir cuál;
   · el boleto se borra al leerlo, sirva o no: el segundo intento da 404.
 La vida de 60 s y la baja de la ficha son cosas de la App y no se imitan acá.
+
+Y de la puerta de las sesiones (parte 8 de la App, publicada el 9-oct-2026; el
+contrato es el que la sala le pasó a Lucy en el encargo de la parte 9):
+
+  · `GET /api/lucy/sesiones?persona=<Id de ficha>` con la cabecera
+    `X-Lucy-Llave`; 401 si la llave no es la que la App tiene puesta;
+  · 200 `{"puede_ligar", "motivo_sin_ligar", "sesiones", "no_halladas"}`;
+    `puede_ligar` falso trae `motivo_sin_ligar` (`sin_telefono`, `ficha_inexistente`,
+    `sin_persona`), que NO es lo mismo que una lista vacía;
+  · cada sesión trae `ref`, `codigo`, `es_trabajo`, `fecha` («AAAA-MM-DD»), `sala`,
+    `sala_mostrar`, `horas`, `servicio`, `atendio`, `asignado_a`, `estado`,
+    `cancelada` y el dinero (`total`, `abonado`, `saldo`);
+  · 502 `{"error": "no_se_pudo_leer"}` si la App no pudo leer su base.
+LO QUE ESTE DOBLE NO IMITA, y por eso no lo afirma: la regla con la que la App
+reconoce las sesiones de una ficha (por teléfono), y de dónde saca cada cifra.
 
 ⚠️ LO QUE NO SE PUDO COMPROBAR AUTOMÁTICAMENTE: que este doble siga igual a la
 App de verdad. Esas dos pruebas viven en repositorios distintos y una no puede
@@ -33,6 +49,10 @@ class AppDeRegistro:
         self.pedidos: list[dict] = []       # lo que le llegó, para que la prueba lo mire
         # Para imitar fallas que la App de verdad no tiene hoy (500, basura, lentitud):
         self.forzada: tuple | None = None   # (HTTP, cuerpo, tipo, demora[, {cabeceras}])
+        # La puerta de las sesiones: la llave que la App tiene puesta (vacía = cerrada) y lo que
+        # contesta. `sesiones` es fijo a propósito: las pruebas miran lo que Lucy HACE con él.
+        self.llave = ""
+        self.sesiones: dict = {"puede_ligar": True, "motivo_sin_ligar": "", "sesiones": []}
         self._lock = threading.Lock()
         doble = self
 
@@ -44,8 +64,8 @@ class AppDeRegistro:
                 largo = int(self.headers.get("Content-Length") or 0)
                 crudo = self.rfile.read(largo) if largo else b""
                 with doble._lock:
-                    doble.pedidos.append({"ruta": self.path, "cuerpo": crudo,
-                                          "cabeceras": dict(self.headers)})
+                    doble.pedidos.append({"ruta": self.path, "metodo": "POST",
+                                          "cuerpo": crudo, "cabeceras": dict(self.headers)})
                     forzada = doble.forzada
                 if forzada is not None:
                     estado, cuerpo, tipo, demora, *resto = forzada
@@ -65,10 +85,24 @@ class AppDeRegistro:
                     return self._responder(404, b'{"error": "no"}')
                 return self._responder(200, json.dumps(b).encode())
 
-            def do_GET(self):               # a la App solo se le hace POST: cualquier otro
-                with doble._lock:           # método que llegue se anota para que la prueba lo vea
-                    doble.pedidos.append({"ruta": self.path, "metodo": "GET", "cuerpo": b""})
-                self._responder(404, b'{"error": "no"}')
+            def do_GET(self):
+                with doble._lock:           # todo lo que llega se anota, sea la ruta que sea
+                    doble.pedidos.append({"ruta": self.path, "metodo": "GET", "cuerpo": b"",
+                                          "cabeceras": dict(self.headers)})
+                    forzada = doble.forzada
+                    llave = doble.llave
+                    cuerpo_sesiones = doble.sesiones
+                if forzada is not None:
+                    estado, cuerpo, tipo, demora, *resto = forzada
+                    if demora:
+                        time.sleep(demora)
+                    return self._responder(estado, cuerpo, tipo, resto[0] if resto else {})
+                if self.path.split("?")[0] != "/api/lucy/sesiones":
+                    return self._responder(404, b'{"error": "no"}')
+                if not llave or self.headers.get("X-Lucy-Llave") != llave:
+                    return self._responder(401, b'{"error": "no"}')
+                return self._responder(200, json.dumps(
+                    {**cuerpo_sesiones, "no_halladas": []}).encode())
 
             def _responder(self, estado, cuerpo, tipo="application/json", cabeceras=None):
                 self.send_response(estado)

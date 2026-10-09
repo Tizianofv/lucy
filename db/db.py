@@ -4278,6 +4278,9 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
             "estado_conocido": p["estado"] in ESTADOS_PROYECTO,
             "estado_calculado": estado_calculado(p["estado"], resumen["n_hechas"]),
             "cliente": (p["cliente_nombre"] or None),
+            # La ficha de Noco del cliente (parte 9): con ella se le piden al registro las sesiones
+            # del proyecto, y sin ella (o sin ficha) la página no le pregunta nada.
+            "cliente_noco_id": p.get("cliente_noco_id"),
             "personas": personas_de_proyecto.get(pid, []),
             "responsable": nombres.get(p["responsable_chat_id"]),
             "pendientes": pendientes, "otras": otras, **resumen,
@@ -4337,7 +4340,7 @@ async def pagina_de_proyectos(hoy: date | None = None) -> dict:
         await cur.execute(
             """
             SELECT id, nombre, descripcion, estado, area, creado_en,
-                   responsable_chat_id, cliente_nombre
+                   responsable_chat_id, cliente_nombre, cliente_noco_id
               FROM proyectos
              WHERE borrado_en IS NULL
             """)
