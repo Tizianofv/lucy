@@ -380,12 +380,12 @@ def test_quitar_y_devolver_dejan_su_huella(dos):
 
 def test_quitar_en_un_proyecto_no_la_quita_en_el_otro(dos):
     assert _ficha(dos, 1) == _ficha(dos, 2) is not None, "los dos tienen que ser del mismo cliente"
-    quitar(1, 11)
-    assert "s011" not in _pintadas(_bloque(_ver(p=1)))
-    assert "s011" in _pintadas(_bloque(_ver(p=2))), "se quitó en el proyecto de al lado"
-    assert "Quitadas" not in _bloque(_ver(p=2))
-    assert [f["proyecto_id"] for f in _vivas(dos)] == [1]
-    assert _filas(dos, 2) == []
+    quitar(2, 11)
+    assert "s011" not in _pintadas(_bloque(_ver(p=2))), "no se quitó del proyecto donde se pidió"
+    assert "s011" in _pintadas(_bloque(_ver(p=1))), "se quitó en el proyecto de al lado"
+    assert "Quitadas" not in _bloque(_ver(p=1))
+    assert [f["proyecto_id"] for f in _vivas(dos)] == [2]
+    assert _filas(dos, 1) == []
 
 
 # ═══════════════════════════════════════════════════════════════════════
