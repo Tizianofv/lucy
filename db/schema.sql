@@ -421,8 +421,8 @@ CREATE UNIQUE INDEX participantes_una_vez_por_tarea
 -- `agregada` (el vocabulario entero lo fija el CHECK; la parte 13 construye la agregada).
 --
 -- `sesion_ref` es el identificador ESTABLE de la sesión del registro (el `ref` que manda la App:
--- el Id de su fila), guardado como texto; `codigo`, el código que tenía al decidir, SOLO para
--- poder nombrarla si un día la App ya no la devuelve. No se copia ningún otro dato de la sesión
+-- el Id de su fila), guardado como texto; `codigo`, el código que la sesión tenía al decidir: se
+-- guarda y hoy no se pinta. No se copia ningún otro dato de la sesión
 -- (ni fecha, ni sala, ni nombre, ni un monto): el dinero y lo demás los sigue diciendo la App en
 -- cada lectura (diseño 3.3). El índice único es parcial, igual que
 -- `participantes_una_vez_por_proyecto`: una sola decisión viva por proyecto y sesión, y devolver

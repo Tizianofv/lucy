@@ -1810,8 +1810,8 @@ async def borrar_nota_de_proyecto(nota_id: int, proyecto_id: int, chat_id: int) 
 # veces lo mismo no escribe ni deja huella la segunda, y devolver una quitada le pone `borrado_en`
 # (nunca un `DELETE`), así que se puede volver a quitar después.
 LARGO_REF_SESION = 200
-# El código solo sirve para nombrar una quitada que la App ya no devuelve: uno que no quepa acá no
-# es un código, así que se guarda sin él (no se recorta ni se inventa).
+# El código que la sesión tenía al decidir: uno que no quepa acá no es un código, así que se guarda
+# sin él (no se recorta ni se inventa). Se guarda y hoy no se pinta.
 LARGO_CODIGO_SESION = 40
 
 
@@ -1859,8 +1859,8 @@ def ref_de_sesion_que_vale(valor) -> str:
 
 
 def _codigo_de_sesion_guardable(codigo) -> str | None:
-    """El código que se guarda para poder nombrar una quitada, o `None`. Es solo para nombrarla: lo
-    que no sea un texto que quepa en `LARGO_CODIGO_SESION` se guarda sin código."""
+    """El código que la sesión tenía al decidir, o `None`: se guarda y hoy no se pinta. Lo que no
+    sea un texto que quepa en `LARGO_CODIGO_SESION` se guarda sin código."""
     if not isinstance(codigo, str):
         return None
     limpio = codigo.strip()
@@ -1935,9 +1935,9 @@ async def quitar_sesion_de_proyecto(proyecto_id: int, sesion_ref, codigo, chat_i
     `SesionesSinTabla` (falta la migración).
 
     `sesion_ref` es el `ref` que DEVOLVIÓ la App: la ruta se lo pasa después de volver a
-    preguntarle al registro por las sesiones de ese cliente. `codigo` es solo para poder nombrarla
-    si un día la App ya no la devuelve. La fila y su huella `crear` (actor `panel`) van en la misma
-    transacción."""
+    preguntarle al registro por las sesiones de ese cliente. `codigo` es el código que la sesión
+    tenía al decidir: se guarda y hoy no se pinta. La fila y su huella `crear` (actor `panel`) van
+    en la misma transacción."""
     from web.auth import puede_entrar
 
     ref = ref_de_sesion_que_vale(sesion_ref)

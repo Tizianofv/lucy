@@ -7,8 +7,8 @@
 --       - `proyecto_id` (BIGINT): el proyecto de Lucy.
 --       - `sesion_ref` (TEXT): CON QUÉ SE IDENTIFICA LA SESIÓN DEL REGISTRO, tal como lo manda la
 --         App (`ref`: el Id de su fila). Lucy no lo interpreta: lo guarda y lo compara como texto.
---       - `codigo` (TEXT, NULL = la App no lo mandó): el código que la sesión tenía al decidir.
---         SOLO para poder nombrarla si un día la App ya no la devuelve. No se liga por él.
+--       - `codigo` (TEXT, NULL = la App no lo mandó): el código que la sesión tenía al decidir;
+--         se guarda y hoy no se pinta. No se liga por él.
 --       - `modo` (TEXT): `quitada` (esta parte) o `agregada` (el vocabulario entero lo fija el
 --         CHECK; la parte 13 construye la agregada).
 --       - `creado_en`, `creado_por_chat_id` (BIGINT): cuándo y desde qué sesión de la casa.
@@ -63,8 +63,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS sesiones_de_proyecto_una_vez
 COMMENT ON TABLE sesiones_de_proyecto IS
   'Las decisiones a mano de la casa sobre las sesiones que el registro le manda a Lucy para un '
   'proyecto: quitada (esta parte) o agregada. Una viva por proyecto y sesión. Lucy no copia el '
-  'dato de la sesión: solo guarda su identificador estable (sesion_ref) y, para poder nombrarla, '
-  'el código que tenía (codigo).';
+  'dato de la sesión: guarda su identificador estable (sesion_ref) y el código que la sesión '
+  'tenía al decidir (codigo), que se guarda y hoy no se pinta.';
 
 COMMENT ON COLUMN sesiones_de_proyecto.sesion_ref IS
   'Con qué se identifica la sesión del registro: el `ref` que manda la App (el Id de su fila), '

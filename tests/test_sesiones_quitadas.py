@@ -457,8 +457,8 @@ def test_una_sesion_que_la_app_no_devuelve_no_se_quita(dos):
 
 
 def test_lo_que_se_guarda_es_la_sesion_de_la_app_con_su_codigo_y_su_chat(dos):
-    """La fila que queda: el `ref` de la App (no el texto del formulario), el código que la App
-    traía y la sesión del panel que lo pidió."""
+    """La fila que queda: el `ref` de la sesión (sin los espacios que traía el formulario, que se
+    limpian al guardar), el código que la App traía y la sesión del panel que lo pidió."""
     r = quitar(1, "  11  ")
     assert "hecho=sesion_quitada" in _donde(r), _donde(r)
     vivas = _vivas(dos, 1)
