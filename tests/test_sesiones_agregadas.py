@@ -381,7 +381,10 @@ def test_las_agregadas_se_quedan_al_cambiar_el_cliente(dos):
 def test_buscar_agregar_y_sacar_son_solo_de_la_casa(dos, registro):
     assert "hecho=sesion_agregada" in _donde(agregar(1, 21))
     registro.busqueda = {"sesiones": [OTRA], "hay_mas": False}
+    registro.pedidos.clear()
     bloque = _bloque(_ver("ver", p=1, sq="ana"))
+    assert all(r.split("?")[0] != "/api/lucy/sesiones/buscar" for r in _rutas_al_registro(registro)), \
+        "la sesión de solo ver buscó en el registro con un `sq` escrito a mano"
     for control in ("<form", "<button", "<input", "<select", "buscar-sesion",
                     "Agregar a este proyecto", "Sacar", "Quitar", "Devolver"):
         assert control not in bloque, f"el bloque de solo ver trae {control!r}"
