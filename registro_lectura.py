@@ -21,9 +21,9 @@ la tabla del diseño 3.8) y cuánto suman los renglones pintados
 
 Desde la parte 11, `con_las_quitadas` es la otra regla pura del bloque: saca de
 las listas y de los totales las sesiones que la casa quitó de ESTE proyecto, y
-arma la lista «Quitadas» para devolverlas. `sesion_por_ref` busca una sesión
-entre lo que la App devolvió; es lo único para lo que sirve el identificador que
-llega del formulario.
+arma la lista «Quitadas» para devolverlas (solo con las que la App devuelve en
+esa lectura). `sesion_por_ref` busca una sesión entre lo que la App devolvió; es
+lo único para lo que sirve el identificador que llega del formulario.
 """
 from __future__ import annotations
 
@@ -298,8 +298,10 @@ def con_las_quitadas(respuesta, quitadas) -> dict:
     queda falso, así que la página no dibuja ningún control. Un diccionario
     vacío es otra cosa: la tabla está y este proyecto no tiene ninguna quitada.
 
-    Cada quitada sale con lo que la App devuelve de ella en ESTA lectura (para
-    nombrarla) o, si ya no la devuelve, con el código que se guardó al quitarla.
+    En «Quitadas» sale SOLO lo que la App devolvió en ESTA lectura (diseño 3.4:
+    si la App ya no la devuelve, la fila de la quitada no hace nada y no se ve),
+    y con la App sin contestar no sale ninguna. El código guardado al quitarla no
+    se pinta: queda en la tabla para lo que lo necesite después.
     """
     if quitadas is None:
         return {**respuesta, "quitadas": [], "quitadas_disponibles": False}
@@ -314,8 +316,6 @@ def con_las_quitadas(respuesta, quitadas) -> dict:
     salida["sesiones"] = [r for r in pintadas if not r["es_trabajo"]]
     salida["trabajos"] = [r for r in pintadas if r["es_trabajo"]]
     salida["totales"] = totales_de_sesiones(pintadas)
-    salida["quitadas"] = [
-        {"ref": ref, "codigo": (de_la_app[ref]["codigo"] if ref in de_la_app else codigo),
-         "renglon": de_la_app.get(ref)}
-        for ref, codigo in quitadas.items()]
+    salida["quitadas"] = [{"ref": ref, "renglon": de_la_app[ref]}
+                          for ref in quitadas if ref in de_la_app]
     return salida

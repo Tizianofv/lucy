@@ -65,6 +65,11 @@ def _armar(pr, ta, co, personas, fechas=None, carpetas=None, notas=None):
                            participantes=personas, fechas=fechas, carpetas=carpetas, notas=notas)
 
 
+# Lo que el doble de `sesiones_quitadas_de_proyectos` devuelve: `{proyecto_id: {ref: codigo}}`. Por
+# omisión, nada; una prueba que quiera pintar la lista «Quitadas» lo llena con `monkeypatch`.
+QUITADAS_DEL_MODELO: dict = {}
+
+
 class BaseQueNoSeToca:
     """Reemplaza `web.app.db`: lo que la página lee sale del modelo; CUALQUIER otra
     cosa que se le pida a la base es un fallo de la prueba (una ruta que debía
@@ -122,12 +127,14 @@ class BaseQueNoSeToca:
             return db.tareas_con_filtro
         if nombre == "sesiones_quitadas_de_proyectos":
             # FINGIDO, declarado: la tabla `sesiones_de_proyecto` está (la base de esta prueba es la de
-            # después de la migración) y NINGÚN proyecto tiene sesiones quitadas. Un mundo que quiera
-            # medir el filtrado de las quitadas usa la base de SQLite con su SQL real
-            # (`tests/test_sesiones_quitadas.py`), no este doble.
-            async def _sin_quitadas():
-                return {}
-            return _sin_quitadas
+            # después de la migración) y devuelve lo que diga `QUITADAS_DEL_MODELO` (por omisión,
+            # ninguna: ningún proyecto tiene sesiones quitadas). Lo que se pinta de una quitada sale del
+            # renglón que la App devolvió, así que una prueba que quiera ver la lista «Quitadas» llena
+            # ese diccionario. Un mundo que quiera medir el filtrado con el SQL real usa la base de
+            # SQLite (`tests/test_sesiones_quitadas.py`), no este doble.
+            async def _quitadas():
+                return QUITADAS_DEL_MODELO
+            return _quitadas
         if nombre in {n for n in dir(db) if n.isupper()}:    # constantes (largos, estados…)
             return getattr(db, nombre)
         raise AssertionError(f"la ruta tocó la base: db.{nombre}")

@@ -447,6 +447,41 @@ def test_lo_que_manda_el_registro_sale_escapado(registro, monkeypatch, campo):
         assert "&lt;b&gt;hostil&lt;/b&gt;" in bloque, f"{campo!r} no salió escapado: {bloque}"
 
 
+def _campos_que_quitadas_pinta() -> list[str]:
+    """Los campos que la plantilla escribe en la lista «Quitadas», sacados de su fuente: los
+    `q.renglon.…` del renglón, más el `ref` de la decisión (el `value` del formulario de devolver).
+    """
+    fuente = open("web/plantillas/proyectos.html", encoding="utf-8").read()
+    trozo = fuente.split("<h3>Quitadas</h3>", 1)[1].split("{% endfor %}", 1)[0]
+    return sorted(set(re.findall(r"q\.renglon\.(\w+)", trozo)) | {"ref"})
+
+
+@pytest.mark.parametrize("campo", _campos_que_quitadas_pinta())
+def test_lo_que_la_lista_quitadas_pinta_sale_escapado(registro, monkeypatch, campo):
+    """Cada campo que la lista «Quitadas» escribe, con un valor hostil: sale escapado.
+
+    «Quitadas» (parte 11) pinta los mismos campos que la lista con otros nombres de variable
+    (`q.renglon.…`), y solo sale si la fila está quitada de este proyecto: por eso necesita su
+    propio recorrido y no alcanza con el de arriba. El campo en juego es el ÚNICO con algo en la
+    fila (la plantilla esconde unos detrás de otros).
+    """
+    fila = dict.fromkeys(_claves_que_el_lector_lee())
+    fila.update(cancelada=False, es_trabajo=False, ref=11, horas=3)
+    fila[campo] = HOSTIL
+    monkeypatch.setattr(pp, "QUITADAS_DEL_MODELO",
+                        {1: {registro_lectura._ref(fila["ref"]): "s011"}})
+    registro.sesiones = _respuesta(sesiones=(fila,))
+    bloque = _bloque(_abrir(monkeypatch))
+    assert "<h3>Quitadas</h3>" in bloque, bloque
+    en_quitadas = bloque.split("<h3>Quitadas</h3>", 1)[1]
+    assert HOSTIL not in en_quitadas, f"{campo!r} salió crudo en «Quitadas»: {en_quitadas}"
+
+    renglon = registro_lectura._renglon(fila) or {}
+    if any("hostil" in v for v in renglon.values() if isinstance(v, str)):
+        assert "&lt;b&gt;hostil&lt;/b&gt;" in en_quitadas, (
+            f"{campo!r} no salió escapado en «Quitadas»: {en_quitadas}")
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Lo que la App dice de una ficha (y que no es «no tiene sesiones»)
 # ═══════════════════════════════════════════════════════════════════════

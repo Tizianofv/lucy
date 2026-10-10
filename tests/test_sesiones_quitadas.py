@@ -104,6 +104,13 @@ def _cliente(con="casa") -> Navegador:
     return c
 
 
+def _cliente_de(chat) -> Navegador:
+    """La cookie de la CASA de ese chat, entre o no al panel."""
+    c = Navegador(panel.app)
+    c.cookies.set(panel.COOKIE, auth.crear_token(chat, auth.VIDA_SESION))
+    return c
+
+
 def _ver(con="casa", **consulta) -> str:
     r = _cliente(con).get("/proyectos", params=consulta)
     assert r.status_code == 200, r.text[:400]
@@ -329,15 +336,21 @@ def test_quitadas_las_lista_y_las_devuelve(dos):
     assert [f["borrado_en"] is not None for f in _filas(dos, 1)] == [True]
 
 
-def test_una_quitada_que_la_app_ya_no_devuelve_sale_por_su_codigo_guardado(dos, registro):
-    """El nombre de una quitada sale de lo que la App devuelve; si ya no la devuelve, del código
-    que se guardó al quitarla (el diseño 3.4, y el encargo de esta parte)."""
+def test_una_quitada_que_la_app_ya_no_devuelve_no_se_ve(dos, registro, monkeypatch):
+    """Una quitada que la App ya no devuelve NO sale en «Quitadas» (el diseño 3.4: su fila se queda
+    guardada y no hace nada), y con la App sin contestar no sale ninguna: no se sabe cuáles
+    devuelve. La decisión guardada no se toca."""
     quitar(1, 11)
+    assert "s011" in _quitadas(_bloque(_ver(p=1))), "con la App devolviéndola, tiene que salir"
+
     registro.sesiones = _respuesta(sesiones=(TRABAJO,))          # la App ya no la trae
-    lista = _quitadas(_bloque(_ver(p=1)))
-    assert "Ya no está en el registro" in lista, lista
-    assert "s011" in lista, lista
-    assert "Grabación" not in lista, "la nombró con datos que la App ya no devuelve"
+    bloque = _bloque(_ver(p=1))
+    assert "Quitadas" not in bloque, bloque
+    assert "s011" not in bloque
+
+    monkeypatch.setattr(config, "REGISTRO_URL", "http://127.0.0.1:1")   # y sin la App, tampoco
+    assert "Quitadas" not in _bloque(_ver(p=1))
+    assert [f["sesion_ref"] for f in _vivas(dos, 1)] == ["11"], "la decisión se perdió"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -356,6 +369,40 @@ def test_quitar_y_devolver_son_solo_de_la_casa(dos):
     for r in (quitar(1, 12, con="ver"), devolver(1, 11, con="ver")):
         assert r.status_code == 401
     assert _filas(dos) == antes and len(_huellas(dos)) == 1
+
+
+def test_un_chat_de_la_casa_que_no_esta_permitido_no_puede_quitar_ni_devolver(dos, registro, monkeypatch):
+    """La cookie de la casa de un chat que no entra al panel: 401 en las dos rutas, nada escrito y
+    sin preguntarle nada al registro (la puerta de la ruta corta antes: con ella debilitada, la
+    ruta llega a pedirle las sesiones al registro)."""
+    quitar(1, 11)                                            # con el dueño, para tener una quitada
+    ajeno = 700100999
+    monkeypatch.setattr(config, "CHAT_IDS_PERMITIDOS", (DUENO,))
+    monkeypatch.setattr(config, "NOMBRES_POR_CHAT", {DUENO: "Dueño"})
+    assert not auth.puede_entrar(ajeno)
+
+    antes = _filas(dos)
+    registro.pedidos.clear()
+    cliente = _cliente_de(ajeno)
+    for ruta in ("quitar", "devolver"):
+        r = cliente.post(f"/proyectos/1/sesiones/{ruta}", data={"ref": 12}, follow_redirects=False)
+        assert r.status_code == 401, (ruta, r.status_code)
+    assert registro.pedidos == [], "la ruta le preguntó al registro antes de mirar quién entra"
+    assert _filas(dos) == antes, "escribió con un chat que no entra"
+
+
+def test_las_dos_funciones_de_db_rechazan_a_quien_no_entra(dos, monkeypatch):
+    """El mismo rechazo por debajo de la ruta: un chat que no entra al panel y ninguno (`None`)."""
+    ajeno = 700100999
+    monkeypatch.setattr(config, "CHAT_IDS_PERMITIDOS", (DUENO,))
+    monkeypatch.setattr(config, "NOMBRES_POR_CHAT", {DUENO: "Dueño"})
+    antes = _filas(dos)
+    for chat in (ajeno, None):
+        with pytest.raises(db.SesionSinSesion):
+            _correr(db.quitar_sesion_de_proyecto(1, 11, "s011", chat))
+        with pytest.raises(db.SesionSinSesion):
+            _correr(db.devolver_sesion_de_proyecto(1, 11, chat))
+    assert _filas(dos) == antes and _huellas(dos) == []
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -409,8 +456,9 @@ def test_una_sesion_que_la_app_no_devuelve_no_se_quita(dos):
     assert _filas(dos) == []
 
 
-def test_lo_que_se_guarda_es_el_identificador_de_la_app_no_el_del_formulario(dos):
-    # El mismo identificador, escrito en el formulario de otra forma: lo que queda es el de la App.
+def test_lo_que_se_guarda_es_la_sesion_de_la_app_con_su_codigo_y_su_chat(dos):
+    """La fila que queda: el `ref` de la App (no el texto del formulario), el código que la App
+    traía y la sesión del panel que lo pidió."""
     r = quitar(1, "  11  ")
     assert "hecho=sesion_quitada" in _donde(r), _donde(r)
     vivas = _vivas(dos, 1)
@@ -431,6 +479,36 @@ def test_devolver_lo_que_no_estaba_quitado_no_cambia_nada(dos):
     r = devolver(1, 11)
     assert "error=sesion_no_esta" in _donde(r), _donde(r)
     assert _filas(dos) == [] and _huellas(dos) == []
+
+
+def test_la_misma_sesion_se_quita_en_los_dos_proyectos_cada_una_con_su_proyecto(dos):
+    """El lado de la ESCRITURA de «dos proyectos del mismo cliente»: quitar la misma sesión en el 1
+    y después en el 2 guarda las DOS decisiones, cada una con su `proyecto_id`, y devolver en el 1
+    no toca la del 2 («ya estaba quitada» mira en ESTE proyecto)."""
+    assert "hecho=sesion_quitada" in _donde(quitar(1, 11)), "el 1 no la guardó"
+    assert "hecho=sesion_quitada" in _donde(quitar(2, 11)), "el 2 la vio quitada en el 1"
+    assert sorted((f["proyecto_id"], f["sesion_ref"]) for f in _vivas(dos)) == [(1, "11"), (2, "11")]
+
+    assert "hecho=sesion_devuelta" in _donde(devolver(1, 11))
+    assert [(f["proyecto_id"], f["borrado_en"] is None) for f in _filas(dos)] == \
+        [(1, False), (2, True)], _filas(dos)
+    assert "s011" not in _pintadas(_bloque(_ver(p=2))), "devolver en el 1 tocó la del 2"
+    assert "s011" in _quitadas(_bloque(_ver(p=2)))
+
+
+def test_la_migracion_y_el_esquema_dicen_lo_mismo_de_la_tabla():
+    """Una base nueva sale de `db/schema.sql` y la de producción, de la migración: el DDL de las
+    dos, igual salvo `IF NOT EXISTS` — el `CHECK` del modo y el índice único parcial incluidos."""
+    import test_base_m2 as b2
+
+    suyas = [a for a in g._migraciones()
+             if "CREATE TABLE IF NOT EXISTS sesiones_de_proyecto" in a.read_text(encoding="utf-8")]
+    assert len(suyas) == 1, suyas
+    esquema = (g._ROOT / "db" / "schema.sql").read_text(encoding="utf-8")
+    de_la_migracion = suyas[0].read_text(encoding="utf-8")
+    assert ([b2._normal(s).replace("if not exists ", "")
+             for s in b2._ddl(de_la_migracion, "sesiones_de_proyecto")]
+            == [b2._normal(s) for s in b2._ddl(esquema, "sesiones_de_proyecto")])
 
 
 def test_el_indice_deja_una_sola_decision_viva_y_la_borrada_no_estorba(dos):

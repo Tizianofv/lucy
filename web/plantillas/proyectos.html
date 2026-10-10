@@ -942,24 +942,20 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         </div>
         {% else %}<p class="vacio">El registro no tiene sesiones ni trabajos de este cliente.</p>{% endif %}
         {#- LAS QUITADAS (parte 11, 9-oct-2026): lo que la casa sacó de la lista, para poder
-            devolverlo. Cada una se nombra con lo que el registro devuelve de ella en ESTA lectura
-            y, si ya no la devuelve, con el código que se guardó al quitarla. Se ven las dos
-            sesiones; el botón de devolver es solo de la casa. -#}
+            devolverlo. Sale SOLO lo que el registro devolvió en ESTA lectura: una quitada que ya
+            no devuelve no se ve (diseño 3.4), y con el registro sin contestar no sale ninguna.
+            Se ven las dos sesiones; el botón de devolver es solo de la casa. -#}
         {% if registro.quitadas %}
         <div class="etapa quitadas"><h3>Quitadas</h3>
           <p class="nota">Estas no están en la lista ni en los totales.</p>
           {% for q in registro.quitadas %}
           <div class="renglon">
-            {% if q.renglon %}
             {% if q.renglon.fecha %}<span class="cuando">{{ q.renglon.fecha|dia_corto }}</span>{% endif %}
             {% set partes = [] %}
             {% if q.renglon.sala %}{% set _ = partes.append(q.renglon.sala) %}{% endif %}
             {% if q.renglon.horas %}{% set _ = partes.append(q.renglon.horas ~ ' h') %}{% endif %}
             {% if q.renglon.concepto %}{% set _ = partes.append(q.renglon.concepto) %}{% endif %}
             <span class="que">{{ partes|join(' · ') or 'Sesión del registro' }}{% if q.renglon.codigo %}<span class="cod">{{ q.renglon.codigo }}</span>{% endif %}</span>
-            {% else %}
-            <span class="que">Ya no está en el registro{% if q.codigo %}<span class="cod">{{ q.codigo }}</span>{% endif %}</span>
-            {% endif %}
             {% if not solo_ver %}
             <form class="quitar" method="post" action="/proyectos/{{ m.id }}/sesiones/devolver">
               <input type="hidden" name="ref" value="{{ q.ref }}">
