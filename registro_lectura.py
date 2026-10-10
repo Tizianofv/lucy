@@ -28,6 +28,9 @@ entre lo que la App devolvió; es lo único para lo que sirve el identificador d
 Desde la parte 13, `sesiones_de_cliente` pide además las sesiones que la casa agregó a mano (con
 `&sesion=`): las del cliente y las pedidas vienen en la misma llamada (diseño 3.9). Y
 `buscar_sesiones` es la otra puerta del lector: la búsqueda del bloque (diseño 3.6).
+
+Desde la parte 14, `horas_de_estudio` es la cifra de «Cómo va»: suma las horas de las sesiones
+pintadas y cuenta cuántas son, de la misma lista del bloque.
 """
 from __future__ import annotations
 
@@ -134,6 +137,18 @@ def _horas(valor) -> str | None:
     if isinstance(valor, bool) or not isinstance(valor, (int, float)):
         return None
     return f"{valor:g}"
+
+
+def _horas_en_numero(texto) -> Decimal | None:
+    """Las horas de un renglón como cantidad, o None si lo que trae no es un número de horas (ni
+    `inf` ni `nan`: no son una cantidad)."""
+    if not isinstance(texto, str):
+        return None
+    try:
+        numero = Decimal(texto)
+    except InvalidOperation:
+        return None
+    return numero if numero.is_finite() else None
 
 
 def _ref(valor) -> str | None:
@@ -245,6 +260,29 @@ def totales_de_sesiones(renglones) -> dict:
         cobrado += aporta[1] or 0
         por_cobrar += aporta[2] or 0
     return {"facturado": facturado, "cobrado": cobrado, "por_cobrar": por_cobrar}
+
+
+def horas_de_estudio(respuesta) -> dict | None:
+    """«N h de estudio en M sesiones»: la suma de las horas de las sesiones pintadas y cuántas son,
+    o None cuando esa cifra no se pinta.
+
+    Lo que suma es `respuesta["sesiones"]`, la lista ya con las quitadas fuera y las agregadas
+    dentro; los trabajos van en su propia lista y no entran, y las canceladas tampoco (`_renglon`
+    las deja caer). Una sesión sin horas cuenta como sesión y no suma. No se pinta cuando el
+    registro no contestó, no pudo ligar las del cliente o no se le preguntó (`estado` distinto de
+    `ok`): ahí la lista está incompleta y «N h» sería mentira. Tampoco cuando no hay ninguna sesión
+    que pintar: «0 h de estudio en 0 sesiones» es verdad, pero es ruido. La suma va en `Decimal`
+    (las horas se suman exactas) y el número sale con la misma regla con que el bloque pinta las
+    horas de un renglón: `:g`, sin ceros de cola.
+    """
+    if respuesta["estado"] != "ok" or not respuesta["sesiones"]:
+        return None
+    total = Decimal(0)
+    for renglon in respuesta["sesiones"]:
+        horas = _horas_en_numero(renglon["horas"])
+        if horas is not None:
+            total += horas
+    return {"horas": f"{float(total):g}", "sesiones": len(respuesta["sesiones"])}
 
 
 def _renglon(fila) -> dict | None:

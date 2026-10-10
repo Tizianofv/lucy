@@ -1243,6 +1243,11 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
                 sesiones=list(agregadas.get(pid, {})) if agregadas is not None else ()),
             None if quitadas is None else quitadas.get(pid, {}),
             None if agregadas is None else agregadas.get(pid, {}))
+        # «CÓMO VA» (parte 14, 9-oct-2026): «N h de estudio en M sesiones», de la MISMA lectura de
+        # arriba (ni un pedido más al registro), sobre la lista ya con las quitadas fuera y las
+        # agregadas dentro. Es None —la cifra no se pinta— cuando el registro no contestó, no pudo
+        # ligar las del cliente o no se le preguntó, y cuando no hay ninguna sesión que pintar.
+        registro["estudio"] = registro_lectura.horas_de_estudio(registro)
     # LA BÚSQUEDA DE UNA SESIÓN (parte 13, 9-oct-2026): solo la sesión de la casa y solo en un
     # proyecto; el texto se limpia antes de salir (`registro_lectura.buscar_sesiones`). Es un
     # pedido aparte, y solo cuando hay algo que buscar.
