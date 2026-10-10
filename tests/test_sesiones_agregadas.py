@@ -417,6 +417,21 @@ def test_agregar_en_solo_ver_y_sin_sesion_no_escribe(dos):
     assert _filas(dos) == [] and _huellas(dos) == []
 
 
+def test_las_funciones_de_db_de_agregar_y_sacar_rechazan_a_quien_no_entra(dos, monkeypatch):
+    """El mismo rechazo por debajo de la ruta (la segunda puerta de «solo la casa»): un chat que no
+    entra al panel y ninguno (`None`)."""
+    ajeno = 700100999
+    monkeypatch.setattr(config, "CHAT_IDS_PERMITIDOS", (DUENO,))
+    monkeypatch.setattr(config, "NOMBRES_POR_CHAT", {DUENO: "Dueño"})
+    antes = _filas(dos)
+    for chat in (ajeno, None):
+        with pytest.raises(db.SesionSinSesion):
+            _correr(db.agregar_sesion_a_proyecto(1, 21, "x021", chat))
+        with pytest.raises(db.SesionSinSesion):
+            _correr(db.sacar_sesion_agregada_de_proyecto(1, 21, chat))
+    assert _filas(dos) == antes and _huellas(dos) == []
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Garantía: funciona sin JavaScript
 # ═══════════════════════════════════════════════════════════════════════
