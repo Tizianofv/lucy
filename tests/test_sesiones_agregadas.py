@@ -158,6 +158,11 @@ def _listas(bloque: str) -> str:
     return bloque.split('<div class="cifras">')[0]
 
 
+def _quitadas(bloque: str) -> str:
+    """El trozo de la lista «Quitadas», o ''."""
+    return bloque.split("<h3>Quitadas</h3>", 1)[1] if "<h3>Quitadas</h3>" in bloque else ""
+
+
 def _avisos(bloque: str) -> str:
     return bloque.split('<div class="etapa avisos-sesion">', 1)[1] if "avisos-sesion" in bloque else ""
 
@@ -277,6 +282,27 @@ def test_agregar_una_que_estaba_quitada_la_devuelve(dos):
     assert [(f["modo"], f["borrado_en"] is not None) for f in _filas(dos, 1)] == [("quitada", True)]
 
 
+def test_una_quitada_que_el_registro_no_devuelve_no_se_devuelve(dos, registro):
+    """Antes de devolver hay que preguntarle al registro: una quitada que ya no devuelve se queda
+    como estaba (su fila, viva), en vez de deshacer la decisión de la casa sin que nadie lo pida."""
+    assert "hecho=sesion_quitada" in _donde(quitar(1, 11))
+    registro.sesiones = _respuesta(sesiones=(TRABAJO,))          # el registro ya no la devuelve
+    registro.otras = []
+    registro.pedidos.clear()
+    r = agregar(1, 11)
+    assert "error=sesion_agregar_no_esta" in _donde(r), _donde(r)
+    assert registro.pedidos, "no le preguntó al registro antes de decidir"
+    assert [f["borrado_en"] for f in _filas(dos, 1)] == [None], "deshizo la decisión sin preguntar"
+    assert [f["sesion_ref"] for f in _vivas(dos, 1)] == ["11"]
+    assert "s011" not in _listas(_bloque(_ver(p=1)))
+
+    # Y cuando el registro la vuelve a devolver, sigue quitada (hasta que se pida devolverla).
+    registro.sesiones = _respuesta(sesiones=(SESION, TRABAJO))
+    assert "s011" not in _listas(_bloque(_ver(p=1))), "la quitada se devolvió sola"
+    assert "hecho=sesion_devuelta" in _donde(agregar(1, 11))
+    assert "s011" in _listas(_bloque(_ver(p=1)))
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Garantía: nunca quitada y agregada a la vez (la base lo impide); quitar una agregada la saca
 # ═══════════════════════════════════════════════════════════════════════
@@ -372,6 +398,63 @@ def test_las_agregadas_se_quedan_al_cambiar_el_cliente(dos):
     assert "x021" in _listas(_bloque(_ver(p=1)))
     assert [f["sesion_ref"] for f in _vivas(dos, 1)] == ["21"]
     assert [f["borrado_en"] for f in _filas(dos, 1)] == [None], "la decisión se tocó"
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Lo que la App contesta de la ficha: solo se pinta lo que se pidió, y cada frase es verdad
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_con_puede_ligar_falso_solo_sale_lo_que_se_pidio(dos, registro):
+    """La App contestó que no puede ligar las del cliente: de lo que mandó solo valen las que Lucy
+    pidió una por una (`&sesion=`), y una que venga de más no se pinta."""
+    assert "hecho=sesion_agregada" in _donde(agregar(1, 21))        # la 21 queda agregada a mano
+    registro.sesiones = _respuesta(sesiones=(SESION,), puede_ligar=False, motivo="sin_telefono")
+    bloque = _bloque(_ver(p=1))
+    assert "no puede ligar las sesiones de este cliente" in bloque, bloque
+    assert "x021" in _listas(bloque), "no salió la sesión que se pidió"
+    assert "s011" not in bloque, "salió una sesión del cliente que la App mandó de más"
+
+
+def test_si_todas_las_del_cliente_estan_quitadas_lo_dice(dos):
+    """La lista vacía porque están quitadas no se cuenta como «el registro no tiene»."""
+    assert "hecho=sesion_quitada" in _donde(quitar(1, 11))
+    bloque = _bloque(_ver(p=1))                                    # queda el trabajo 12
+    assert "El registro no tiene sesiones ni trabajos de este cliente." not in bloque, bloque
+
+    assert "hecho=sesion_quitada" in _donde(quitar(1, 12))
+    bloque = _bloque(_ver(p=1))
+    assert "Todas las sesiones de este cliente están quitadas." in bloque, bloque
+    assert "El registro no tiene sesiones ni trabajos de este cliente." not in bloque, bloque
+    assert "s011" in _quitadas(bloque) and "t012" in _quitadas(bloque), bloque
+
+
+def test_sin_sesiones_del_cliente_lo_dice(dos, registro):
+    """Cuando la App contestó y no devolvió ninguna del cliente, sí se dice."""
+    registro.sesiones = _respuesta(sesiones=())
+    bloque = _bloque(_ver(p=1))
+    assert "El registro no tiene sesiones ni trabajos de este cliente." in bloque, bloque
+    assert "Todas las sesiones de este cliente están quitadas." not in bloque, bloque
+
+
+def test_sin_cliente_sin_agregadas_no_se_le_pregunta(dos, registro):
+    registro.pedidos.clear()
+    bloque = _bloque(_ver(p=3))
+    assert "Este proyecto no tiene cliente, así que no se le pregunta al registro." in bloque, bloque
+    assert "solo salen las sesiones agregadas a mano" not in bloque, bloque
+    assert registro.pedidos == []
+
+
+def test_sin_cliente_con_agregada_la_frase_es_la_verdadera(dos, registro):
+    """Con agregadas y sin cliente SÍ se le pregunta (por esas sesiones): la frase lo dice."""
+    registro.sesiones = _respuesta(sesiones=())
+    assert "hecho=sesion_agregada" in _donde(agregar(3, 21))
+    registro.pedidos.clear()
+    bloque = _bloque(_ver(p=3))
+    assert "Este proyecto no tiene cliente: solo salen las sesiones agregadas a mano." in bloque, bloque
+    assert "Este proyecto no tiene cliente, así que no se le pregunta al registro." not in bloque, bloque
+    assert "x021" in _listas(bloque), bloque
+    assert any("sesion=21" in r for r in _rutas_al_registro(registro)), \
+        "no se le preguntó al registro por la agregada"
 
 
 # ═══════════════════════════════════════════════════════════════════════

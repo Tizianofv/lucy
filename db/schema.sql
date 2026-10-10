@@ -415,14 +415,15 @@ CREATE UNIQUE INDEX participantes_una_vez_por_tarea
   ON participantes (tarea_id, noco_id)
   WHERE borrado_en IS NULL AND tarea_id IS NOT NULL;
 
--- LAS DECISIONES SOBRE LAS SESIONES DE UN PROYECTO (parte 11 de la página completa del proyecto,
--- 9-oct-2026; migración 2026-10-09_sesiones_de_proyecto.sql). Una fila por decisión a mano de la
--- casa sobre la lista que el registro del estudio le manda a Lucy: `quitada` (esta parte) o
--- `agregada` (el vocabulario entero lo fija el CHECK; la parte 13 construye la agregada).
+-- LAS DECISIONES SOBRE LAS SESIONES DE UN PROYECTO (partes 11 y 13 de la página completa del
+-- proyecto, 9-oct-2026; migración 2026-10-09_sesiones_de_proyecto.sql). Una fila por decisión a
+-- mano de la casa sobre la lista que el registro del estudio le manda a Lucy: `quitada` o
+-- `agregada` (el vocabulario entero lo fija el CHECK).
 --
 -- `sesion_ref` es el identificador ESTABLE de la sesión del registro (el `ref` que manda la App:
 -- el Id de su fila), guardado como texto; `codigo`, el código que la sesión tenía al decidir: se
--- guarda y hoy no se pinta. No se copia ningún otro dato de la sesión
+-- guarda, y se pinta en el aviso de una agregada que la App ya no devuelve o devolvió cancelada
+-- (parte 13). No se copia ningún otro dato de la sesión
 -- (ni fecha, ni sala, ni nombre, ni un monto): el dinero y lo demás los sigue diciendo la App en
 -- cada lectura (diseño 3.3). El índice único es parcial, igual que
 -- `participantes_una_vez_por_proyecto`: una sola decisión viva por proyecto y sesión, y devolver

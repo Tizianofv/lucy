@@ -85,14 +85,14 @@ def pintar_modelo(modelo: dict, areas=AREAS, **consulta) -> str:
     async def _areas():
         return list(areas)
 
-    async def _quitadas():
+    async def _sin_la_tabla():
         return None                       # sin la tabla: el bloque sale sin controles
 
     guardado = (db.pagina_de_proyectos, db.areas, db.sesiones_quitadas_de_proyectos,
                 db.sesiones_agregadas_de_proyectos)
     db.pagina_de_proyectos, db.areas = _pagina, _areas
-    db.sesiones_quitadas_de_proyectos = _quitadas
-    db.sesiones_agregadas_de_proyectos = _quitadas
+    db.sesiones_quitadas_de_proyectos = _sin_la_tabla
+    db.sesiones_agregadas_de_proyectos = _sin_la_tabla
     dar_recibo("/proyectos", **consulta)         # mide CÓMO se pinta: como si un POST hubiera mandado aquí
     try:
         r = _cliente(config.CHAT_ID_DUENO).get("/proyectos", params=consulta)

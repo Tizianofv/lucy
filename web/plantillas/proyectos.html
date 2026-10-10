@@ -914,9 +914,11 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     <section class="bloque sesiones-p" id="sesiones-y-trabajos">
       <div class="encabezado"><h2>Sesiones y trabajos de este proyecto</h2></div>
       {#- Lo que el registro contestó de la FICHA, cuando no se pudo ligar o no hay: el aviso sale
-          igual aunque haya renglones, porque son las sesiones que la casa agregó a mano. -#}
+          igual aunque haya renglones, porque son las sesiones que la casa agregó a mano. «No se le
+          pregunta al registro» solo cuando de verdad no se le preguntó (parte 13: con agregadas y
+          sin cliente sí se le pregunta, por esas sesiones). -#}
       {% if registro.estado == 'sin_ligar' %}<p class="vacio">{% if registro.motivo == 'sin_telefono' %}El registro no puede ligar las sesiones de este cliente: la ficha no tiene teléfono allá.{% else %}El registro no puede ligar las sesiones de este cliente.{% endif %}</p>
-      {% elif registro.estado == 'sin_cliente' %}<p class="vacio">Este proyecto no tiene cliente, así que no se le pregunta al registro.</p>
+      {% elif registro.estado == 'sin_cliente' %}<p class="vacio">{% if registro.se_le_pregunto %}Este proyecto no tiene cliente: solo salen las sesiones agregadas a mano.{% else %}Este proyecto no tiene cliente, así que no se le pregunta al registro.{% endif %}</p>
       {% elif registro.estado != 'ok' %}<p class="vacio">No se pudo consultar el registro.</p>{% endif %}
       {% if registro.sesiones or registro.trabajos %}
       {% for lista, titulo in [(registro.sesiones, 'Sesiones'), (registro.trabajos, 'Trabajos')] %}
@@ -965,7 +967,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         <div class="cifra"><b>RD$ {{ registro.totales.cobrado|pesos }}</b><span>cobrado</span></div>
         <div class="cifra roja"><b>RD$ {{ registro.totales.por_cobrar|pesos }}</b><span>por cobrar</span></div>
       </div>
-      {% elif registro.estado == 'ok' %}<p class="vacio">El registro no tiene sesiones ni trabajos de este cliente.</p>{% endif %}
+      {% elif registro.quitadas %}<p class="vacio">Todas las sesiones de este cliente están quitadas.</p>
+      {% elif registro.estado == 'ok' and not registro.avisos %}<p class="vacio">El registro no tiene sesiones ni trabajos de este cliente.</p>{% endif %}
       {#- LAS QUITADAS (parte 11, 9-oct-2026): lo que la casa sacó de la lista, para poder
           devolverlo. Sale SOLO lo que el registro devolvió en ESTA lectura: una quitada que ya
           no devuelve no se ve (diseño 3.4), y con el registro sin contestar no sale ninguna.

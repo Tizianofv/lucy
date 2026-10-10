@@ -277,9 +277,11 @@ def _renglon(fila) -> dict | None:
 
 
 def _vacio(estado: str, motivo: str = "") -> dict:
-    """La respuesta sin renglones, con su estado y su motivo."""
+    """La respuesta sin renglones, con su estado y su motivo. `se_le_pregunto` falso: no se llamó
+    al registro."""
     return {"estado": estado, "motivo": motivo, "sesiones": [], "trabajos": [],
-            "totales": totales_de_sesiones([]), "no_halladas": [], "canceladas": []}
+            "totales": totales_de_sesiones([]), "no_halladas": [], "canceladas": [],
+            "se_le_pregunto": False}
 
 
 def _canceladas(filas) -> list[str]:
@@ -303,9 +305,12 @@ async def sesiones_de_cliente(noco_id, sesiones=()) -> dict:
 
     `sesiones` son los `ref` de las sesiones que la casa agregó a mano: viajan como `&sesion=`
     repetido y vuelven en la misma respuesta que las del cliente (diseño 3.9). Un `ref` que la App
-    no tiene sale en `no_halladas`; los cancelados, en `canceladas`.
+    no tiene sale en `no_halladas`; los cancelados, en `canceladas`. Con la App diciendo que no
+    puede ligar las del cliente, de lo que mande solo valen esas pedidas: cualquier otra se
+    descarta.
 
-    Sin ficha no le pregunta a nadie, salvo que haya sesiones agregadas que pedir.
+    Sin ficha no le pregunta a nadie, salvo que haya sesiones agregadas que pedir; `se_le_pregunto`
+    dice cuál de las dos cosas pasó.
     """
     refs = _lista_de_refs(sesiones)
     con_ficha = isinstance(noco_id, int) and not isinstance(noco_id, bool) and noco_id > 0
@@ -323,7 +328,14 @@ async def sesiones_de_cliente(noco_id, sesiones=()) -> dict:
         log.warning("el registro contestó una forma que no conozco")
         return _vacio("no_se_pudo")
     renglones = [r for r in (_renglon(fila) for fila in filas) if r]
-    if len(renglones) != len(filas):
+    canceladas = _canceladas(filas)
+    if not puede_ligar:
+        # La App no ligó las del cliente: de lo que mandó valen solo las que se pidieron una por
+        # una (`&sesion=`). Otra que haya venido de más no se pinta.
+        pedidas = set(refs)
+        renglones = [r for r in renglones if r["ref"] in pedidas]
+        canceladas = [r for r in canceladas if r in pedidas]
+    elif len(renglones) != len(filas):
         log.info("el registro mandó %d renglón(es) que no se pintan de %d",
                  len(filas) - len(renglones), len(filas))
     # Con ficha que no se puede ligar es `sin_ligar`; sin ficha (y con sesiones pedidas),
@@ -335,7 +347,7 @@ async def sesiones_de_cliente(noco_id, sesiones=()) -> dict:
             "trabajos": [r for r in renglones if r["es_trabajo"]],
             "totales": totales_de_sesiones(renglones),
             "no_halladas": _lista_de_refs(datos.get("no_halladas")),
-            "canceladas": _canceladas(filas)}
+            "canceladas": canceladas, "se_le_pregunto": True}
 
 
 def _candidato(fila) -> dict | None:

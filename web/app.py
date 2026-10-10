@@ -2473,9 +2473,10 @@ def _error_de_sesion(e: Exception) -> str:
 @auth.puerta(auth.PUERTA_SIEMPRE)
 async def agregar_sesion_de_proyecto(request: Request, pid: int):
     """Agregar a la lista de ESTE proyecto una sesión del registro que no entra sola (la decisión se
-    guarda; al registro no se le escribe nada). La sesión se vuelve a pedir al registro por su
-    identificador y se guarda lo que el registro devuelva: una que no está no se agrega. Una que ya
-    entra sola no guarda nada, y una que estaba quitada se devuelve (diseño 3.3)."""
+    guarda; al registro no se le escribe nada). La sesión se pide al registro por su identificador y
+    solo con lo que devuelva se decide: una que no devuelve (o con el registro sin contestar) no se
+    agrega ni se devuelve, una que ya entra sola no guarda nada, una que estaba quitada se devuelve
+    y el resto se agrega (diseño 3.3)."""
     chat = _sesion(request)
     if not auth.puede_entrar(chat):
         return _fuera(request)
@@ -2490,8 +2491,24 @@ async def agregar_sesion_de_proyecto(request: Request, pid: int):
         ref = db.ref_de_sesion_que_vale(formulario.get("ref"))
     except db.RefDeSesionNoVale:
         return _a_las_sesiones(pid, "error=sesion_agregar_invalida")
-    # Agregar una que estaba quitada es devolverla: la fila de la quitada se va y la sesión vuelve
-    # a entrar por el cliente. No hace falta pedirle nada al registro.
+    # El registro tiene que devolver esa sesión ANTES de tocar nada: si no la devuelve, no se
+    # agrega ni se deshace una decisión que la casa ya tomó. Primero se le pregunta por las del
+    # cliente (así se sabe si ya entra sola) y, si no está ahí, por esa sesión.
+    del_cliente = await registro_lectura.sesiones_de_cliente(ficha)
+    if del_cliente["estado"] not in ("ok", "sin_cliente", "sin_ligar"):
+        return _a_las_sesiones(pid, "error=sesion_agregar_sin_registro")
+    entra_sola = registro_lectura.sesion_por_ref(del_cliente, ref)
+    if entra_sola is not None:
+        sesion = entra_sola
+    else:
+        detalle = await registro_lectura.sesiones_de_cliente(ficha, sesiones=[ref])
+        if detalle["estado"] not in ("ok", "sin_cliente", "sin_ligar"):
+            return _a_las_sesiones(pid, "error=sesion_agregar_sin_registro")
+        sesion = registro_lectura.sesion_por_ref(detalle, ref)
+    if sesion is None:
+        return _a_las_sesiones(pid, "error=sesion_agregar_no_esta")
+    # Con la sesión confirmada: una que estaba quitada se devuelve; una que ya entra sola no
+    # guarda nada; el resto se agrega.
     quitadas = await db.sesiones_quitadas_de_proyectos()
     if quitadas is not None and ref in quitadas.get(pid, {}):
         try:
@@ -2504,20 +2521,8 @@ async def agregar_sesion_de_proyecto(request: Request, pid: int):
                         pid, clave)
             return _a_las_sesiones(pid, f"error={clave}")
         return _a_las_sesiones(pid, "hecho=sesion_devuelta")
-    # ¿Ya entra sola? Se le pregunta al registro por las sesiones del cliente: si está ahí, ya está
-    # en la lista y no se guarda nada.
-    del_cliente = await registro_lectura.sesiones_de_cliente(ficha)
-    if del_cliente["estado"] not in ("ok", "sin_cliente", "sin_ligar"):
-        return _a_las_sesiones(pid, "error=sesion_agregar_sin_registro")
-    if registro_lectura.sesion_por_ref(del_cliente, ref) is not None:
+    if entra_sola is not None:
         return _a_las_sesiones(pid, "error=sesion_agregar_igual")
-    # Se vuelve a pedir esa sesión al registro, y se guarda lo que devuelva.
-    detalle = await registro_lectura.sesiones_de_cliente(ficha, sesiones=[ref])
-    if detalle["estado"] not in ("ok", "sin_cliente", "sin_ligar"):
-        return _a_las_sesiones(pid, "error=sesion_agregar_sin_registro")
-    sesion = registro_lectura.sesion_por_ref(detalle, ref)
-    if sesion is None:
-        return _a_las_sesiones(pid, "error=sesion_agregar_no_esta")
     try:
         guardado = await db.agregar_sesion_a_proyecto(pid, sesion["ref"], sesion["codigo"], chat)
     except db.SesionSinSesion:
