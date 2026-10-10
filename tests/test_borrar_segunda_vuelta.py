@@ -60,8 +60,9 @@ HECHOS_DE_ANTES = {"proyecto_nuevo", "grupo_creado", "grupo_quitado", "responsab
                    # Las notas (parte 6, 8-oct-2026): igual, las ampara el recibo.
                    "nota", "nota_editada",
                    # Las sesiones que se quitan de un proyecto (parte 11, 9-oct-2026): igual, las
-                   # ampara el recibo; la de quitar solo sale si la base escribió la decisión.
-                   "sesion_quitada", "sesion_devuelta"}
+                   # ampara el recibo; la de quitar solo sale si la base escribió la decisión. La 13
+                   # agrega las dos de agregar una del registro y de sacar una agregada a mano.
+                   "sesion_quitada", "sesion_devuelta", "sesion_agregada", "sesion_sacada"}
 
 
 def _claves(texto: str, campo: str) -> dict[str, bool]:

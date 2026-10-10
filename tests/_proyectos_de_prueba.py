@@ -68,6 +68,8 @@ def _armar(pr, ta, co, personas, fechas=None, carpetas=None, notas=None):
 # Lo que el doble de `sesiones_quitadas_de_proyectos` devuelve: `{proyecto_id: {ref: codigo}}`. Por
 # omisión, nada; una prueba que quiera pintar la lista «Quitadas» lo llena con `monkeypatch`.
 QUITADAS_DEL_MODELO: dict = {}
+# Lo mismo para las AGREGADAS a mano (parte 13): `{proyecto_id: {ref: codigo}}`. Por omisión, nada.
+AGREGADAS_DEL_MODELO: dict = {}
 
 
 class BaseQueNoSeToca:
@@ -135,6 +137,12 @@ class BaseQueNoSeToca:
             async def _quitadas():
                 return QUITADAS_DEL_MODELO
             return _quitadas
+        if nombre == "sesiones_agregadas_de_proyectos":
+            # FINGIDO, declarado: lo mismo que el de arriba, para las AGREGADAS a mano (parte 13).
+            # La lectura de las del cliente sale del lector de verdad (o de su doble en la red).
+            async def _agregadas():
+                return AGREGADAS_DEL_MODELO
+            return _agregadas
         if nombre in {n for n in dir(db) if n.isupper()}:    # constantes (largos, estados…)
             return getattr(db, nombre)
         raise AssertionError(f"la ruta tocó la base: db.{nombre}")

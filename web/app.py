@@ -1130,6 +1130,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
                     grupo: Aviso[str] = "", borrar_proyecto: Navegacion[int] = 0,
                     borrado: Aviso[int] = 0, borrada: Aviso[int] = 0,
                     filtro: Navegacion[str] = "", quien: Navegacion[str] = "",
+                    sq: Navegacion[str] = "",
                     editar_nota: Navegacion[int] = 0, borrar_nota: Navegacion[int] = 0):
     """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
@@ -1172,6 +1173,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         quitar_grupo = grupo = ""
         borrar_proyecto = borrado = borrada = 0
         editar_nota = borrar_nota = 0
+        sq = ""
     modelo = await db.pagina_de_proyectos()
     visibles = _filtrar_por_busqueda(modelo, q)
     elegido = p or nombre_guardado or area_guardada or creado
@@ -1224,20 +1226,33 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
     # SOLO al abrir un proyecto, y solo si tiene ficha de cliente. Listar proyectos no le pregunta
     # nada, y un proyecto sin cliente tampoco. Si el registro no contesta, la página carga igual y
     # lo dice (`registro_lectura.sesiones_de_cliente` no levanta).
-    # LAS QUITADAS DE ESTE PROYECTO (parte 11, 9-oct-2026): la decisión de la casa sobre esa lista
-    # (`sesiones_de_proyecto`) se lee aparte, tolerante a la tabla sin migrar (42P01 → None); con
-    # `con_las_quitadas` salen de las listas y de los totales, y quedan en «Quitadas» para
-    # devolverlas. Sin la tabla, el bloque sale como hoy y sin ningún control.
+    # LAS DECISIONES DE LA CASA SOBRE ESA LISTA (partes 11 y 13, 9-oct-2026): las quitadas y las
+    # agregadas a mano (`sesiones_de_proyecto`) se leen aparte, tolerantes a la tabla sin migrar
+    # (42P01 → None). Las agregadas se le piden al registro en la MISMA llamada (`&sesion=`), y
+    # `con_las_decisiones` saca las quitadas de las listas y de los totales, arma «Quitadas» para
+    # devolverlas y los avisos de las agregadas que el registro ya no devuelve o están canceladas.
+    # Sin la tabla, el bloque sale como hoy y sin ningún control.
     registro = None
     if vista["tipo"] == "proyecto":
+        pid = vista["proyecto"]["id"]
         quitadas = await db.sesiones_quitadas_de_proyectos()
-        registro = registro_lectura.con_las_quitadas(
-            await registro_lectura.sesiones_de_cliente(vista["proyecto"].get("cliente_noco_id")),
-            None if quitadas is None else quitadas.get(vista["proyecto"]["id"], {}))
+        agregadas = await db.sesiones_agregadas_de_proyectos()
+        registro = registro_lectura.con_las_decisiones(
+            await registro_lectura.sesiones_de_cliente(
+                vista["proyecto"].get("cliente_noco_id"),
+                sesiones=list(agregadas.get(pid, {})) if agregadas is not None else ()),
+            None if quitadas is None else quitadas.get(pid, {}),
+            None if agregadas is None else agregadas.get(pid, {}))
+    # LA BÚSQUEDA DE UNA SESIÓN (parte 13, 9-oct-2026): solo la sesión de la casa y solo en un
+    # proyecto; el texto se limpia antes de salir (`registro_lectura.buscar_sesiones`). Es un
+    # pedido aparte, y solo cuando hay algo que buscar.
+    busqueda_sesiones = None
+    if de_la_casa and vista["tipo"] == "proyecto":
+        busqueda_sesiones = await _buscar_sesiones_para_la_pagina(sq)
     return plantillas.TemplateResponse(
         request, "proyectos.html",
         {"solo_ver": solo_ver,
-         "registro": registro,
+         "registro": registro, "busqueda_sesiones": busqueda_sesiones,
          "filtro": filtro, "quien": quien, "tareas_p": tareas_p, "personas_filtro": personas_filtro,
          "ofrece_mias": bool(mi_nombre), "sufijo_filtro": sufijo_filtro,
          "consulta_filtro": ("?" + sufijo_filtro[1:]) if sufijo_filtro else "",
@@ -1306,6 +1321,20 @@ async def _buscar_personas_para_la_pagina(pq: str, pdonde: str) -> dict | None:
     except noco_lectura.NocoNoContesta as e:
         return {"donde": pdonde, "q": texto, "personas": [], "error": str(e)}
     return {"donde": pdonde, "q": texto, "personas": personas, "error": ""}
+
+
+async def _buscar_sesiones_para_la_pagina(sq: str) -> dict | None:
+    """La búsqueda de una sesión del registro que se dibuja SIN JavaScript (diseño 3.6): `None` si
+    no hay nada que buscar. El texto se limpia y el pedido lo hace `registro_lectura.buscar_sesiones`
+    (solo LEE); si el registro no contesta se dice, y nunca se inventa una lista vacía que parezca
+    «esa sesión no está»."""
+    texto = sq.strip()
+    if not texto:
+        return None
+    resultado = await registro_lectura.buscar_sesiones(texto)
+    if resultado["estado"] == "sin_texto":
+        return None
+    return {"q": texto, **resultado}
 
 
 def _noco_id_de(formulario) -> tuple:
@@ -2413,13 +2442,20 @@ async def borrar_nota_de_proyecto(request: Request, pid: int, nid: int):
         f"/proyectos?hecho=nota_borrada&borrada={nid}&p={pid}#notas-del-proyecto", status_code=303)
 
 
-# LAS SESIONES QUE SE QUITAN DE UN PROYECTO (parte 11, 9-oct-2026). Las dos rutas son sesión de la
-# casa (`auth.puede_entrar`; solo ver y sin sesión: 401). QUITAR le vuelve a preguntar al registro
-# por las sesiones de ese cliente (un GET: al registro no se le manda ninguna escritura) y guarda el
-# identificador que ESA lectura devolvió para la sesión pedida —el `ref` del formulario solo sirve
-# para buscarla entre lo que la App devolvió—: una sesión que el registro no devuelve no se quita.
-# DEVOLVER deshace la decisión con lo que ya está guardado, sin preguntarle a nadie. Lo escrito
-# nunca viaja en la dirección.
+# LAS SESIONES QUE SE QUITAN DE UN PROYECTO, SE AGREGAN Y SE DEVUELVEN (partes 11 y 13, 9-oct-2026).
+# Las rutas son sesión de la casa (`auth.puede_entrar`; solo ver y sin sesión: 401). AGREGAR vuelve a
+# pedirle al registro esa sesión por su identificador y guarda lo que devuelva: una que no existe no
+# se agrega. QUITAR una que entró sola le vuelve a preguntar al registro por las sesiones de ese
+# cliente (un GET: al registro no se le manda ninguna escritura) y guarda el identificador que ESA
+# lectura devolvió —el `ref` del formulario solo sirve para buscarla entre lo que la App devolvió—;
+# una sesión AGREGADA a mano se saca de su propia fila, sin preguntarle a nadie (su identificador ya
+# está guardado), que es lo mismo que hace el botón «Sacar» del aviso. DEVOLVER deshace la decisión
+# de haberla quitado con lo que ya está guardado. Lo escrito nunca viaja en la dirección.
+
+def _a_las_sesiones(pid: int, clave: str) -> RedirectResponse:
+    """Vuelve a la página del proyecto, al bloque de las sesiones, con su aviso."""
+    return RedirectResponse(f"/proyectos?{clave}&p={pid}#sesiones-y-trabajos", status_code=303)
+
 
 def _error_de_sesion(e: Exception) -> str:
     """La CLAVE de `?error=` para lo que rechazó una escritura de sesión. Una excepción que no es
@@ -2433,37 +2469,116 @@ def _error_de_sesion(e: Exception) -> str:
     return "sesion_base"
 
 
-@app.post("/proyectos/{pid}/sesiones/quitar")
+@app.post("/proyectos/{pid}/sesiones/agregar")
 @auth.puerta(auth.PUERTA_SIEMPRE)
-async def quitar_sesion_de_proyecto(request: Request, pid: int):
-    """Quitar de la lista de ESTE proyecto una sesión del registro (la decisión se guarda; al
-    registro no se le borra nada). Sin el campo `ref`, o con una sesión que el registro no devuelve,
-    no se quita nada."""
+async def agregar_sesion_de_proyecto(request: Request, pid: int):
+    """Agregar a la lista de ESTE proyecto una sesión del registro que no entra sola (la decisión se
+    guarda; al registro no se le escribe nada). La sesión se vuelve a pedir al registro por su
+    identificador y se guarda lo que el registro devuelva: una que no está no se agrega. Una que ya
+    entra sola no guarda nada, y una que estaba quitada se devuelve (diseño 3.3)."""
     chat = _sesion(request)
     if not auth.puede_entrar(chat):
         return _fuera(request)
     formulario = await request.form()
     if "ref" not in formulario:
-        return RedirectResponse(
-            f"/proyectos?error=sesion_invalida&p={pid}#sesiones-y-trabajos", status_code=303)
+        return _a_las_sesiones(pid, "error=sesion_agregar_invalida")
     try:
         ficha = await db.ficha_de_cliente_de_proyecto(pid)
     except db.SesionNoEsta:
-        return RedirectResponse(
-            f"/proyectos?error=sesion_no_esta&p={pid}#sesiones-y-trabajos", status_code=303)
+        return _a_las_sesiones(pid, "error=sesion_no_esta")
+    try:
+        ref = db.ref_de_sesion_que_vale(formulario.get("ref"))
+    except db.RefDeSesionNoVale:
+        return _a_las_sesiones(pid, "error=sesion_agregar_invalida")
+    # Agregar una que estaba quitada es devolverla: la fila de la quitada se va y la sesión vuelve
+    # a entrar por el cliente. No hace falta pedirle nada al registro.
+    quitadas = await db.sesiones_quitadas_de_proyectos()
+    if quitadas is not None and ref in quitadas.get(pid, {}):
+        try:
+            await db.devolver_sesion_de_proyecto(pid, ref, chat)
+        except db.SesionSinSesion:
+            return _fuera(request)
+        except Exception as e:
+            clave = _error_de_sesion(e)
+            log.warning("Panel de proyectos: devolver una sesión al agregarla a #%s rechazado (%s)",
+                        pid, clave)
+            return _a_las_sesiones(pid, f"error={clave}")
+        return _a_las_sesiones(pid, "hecho=sesion_devuelta")
+    # ¿Ya entra sola? Se le pregunta al registro por las sesiones del cliente: si está ahí, ya está
+    # en la lista y no se guarda nada.
+    del_cliente = await registro_lectura.sesiones_de_cliente(ficha)
+    if del_cliente["estado"] not in ("ok", "sin_cliente", "sin_ligar"):
+        return _a_las_sesiones(pid, "error=sesion_agregar_sin_registro")
+    if registro_lectura.sesion_por_ref(del_cliente, ref) is not None:
+        return _a_las_sesiones(pid, "error=sesion_agregar_igual")
+    # Se vuelve a pedir esa sesión al registro, y se guarda lo que devuelva.
+    detalle = await registro_lectura.sesiones_de_cliente(ficha, sesiones=[ref])
+    if detalle["estado"] not in ("ok", "sin_cliente", "sin_ligar"):
+        return _a_las_sesiones(pid, "error=sesion_agregar_sin_registro")
+    sesion = registro_lectura.sesion_por_ref(detalle, ref)
+    if sesion is None:
+        return _a_las_sesiones(pid, "error=sesion_agregar_no_esta")
+    try:
+        guardado = await db.agregar_sesion_a_proyecto(pid, sesion["ref"], sesion["codigo"], chat)
+    except db.SesionSinSesion:
+        return _fuera(request)
+    except db.SesionesSinTabla:
+        return _a_las_sesiones(pid, "error=sesion_agregar_sin_tabla")
+    except db.SesionNoEsta:
+        return _a_las_sesiones(pid, "error=sesion_no_esta")
+    except Exception:
+        log.exception("Panel de proyectos: falló la base al agregar una sesión a #%s", pid)
+        return _a_las_sesiones(pid, "error=sesion_agregar_base")
+    if not guardado:
+        return _a_las_sesiones(pid, "error=sesion_agregar_igual")
+    return _a_las_sesiones(pid, "hecho=sesion_agregada")
+
+
+@app.post("/proyectos/{pid}/sesiones/quitar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def quitar_sesion_de_proyecto(request: Request, pid: int):
+    """Quitar de la lista de ESTE proyecto una sesión del registro (la decisión se guarda; al
+    registro no se le borra nada). Sin el campo `ref`, o con una sesión que el registro no devuelve,
+    no se quita nada. Una sesión que la casa AGREGÓ a mano se saca de su propia fila."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    formulario = await request.form()
+    if "ref" not in formulario:
+        return _a_las_sesiones(pid, "error=sesion_invalida")
+    try:
+        ficha = await db.ficha_de_cliente_de_proyecto(pid)
+    except db.SesionNoEsta:
+        return _a_las_sesiones(pid, "error=sesion_no_esta")
+    # Una sesión AGREGADA a mano sale de su propia fila, sin preguntarle al registro: su
+    # identificador ya está guardado. Es el mismo camino del botón «Sacar» del aviso (una agregada
+    # que el registro ya no devuelve no se podría buscar entre lo que devolvió).
+    try:
+        ref = db.ref_de_sesion_que_vale(formulario.get("ref"))
+    except db.RefDeSesionNoVale:
+        ref = None
+    agregadas = await db.sesiones_agregadas_de_proyectos()
+    if ref is not None and agregadas is not None and ref in agregadas.get(pid, {}):
+        try:
+            await db.sacar_sesion_agregada_de_proyecto(pid, ref, chat)
+        except db.SesionSinSesion:
+            return _fuera(request)
+        except Exception as e:
+            clave = _error_de_sesion(e)
+            log.warning("Panel de proyectos: sacar una sesión agregada de #%s rechazado (%s)",
+                        pid, clave)
+            return _a_las_sesiones(pid, f"error={clave}")
+        return _a_las_sesiones(pid, "hecho=sesion_sacada")
     # Sin cliente la página no ofrece quitar (no le pregunta al registro a quién); un POST a mano
     # tampoco quita nada, y una App que no contesta tampoco: no se guarda una decisión a ciegas.
     if ficha is None:
-        return RedirectResponse(
-            f"/proyectos?error=sesion_sin_cliente&p={pid}#sesiones-y-trabajos", status_code=303)
+        return _a_las_sesiones(pid, "error=sesion_sin_cliente")
     respuesta = await registro_lectura.sesiones_de_cliente(ficha)
     if respuesta["estado"] != "ok":
-        return RedirectResponse(
-            f"/proyectos?error=sesion_sin_registro&p={pid}#sesiones-y-trabajos", status_code=303)
+        return _a_las_sesiones(pid, "error=sesion_sin_registro")
     sesion = registro_lectura.sesion_por_ref(respuesta, formulario.get("ref"))
     if sesion is None:
-        return RedirectResponse(
-            f"/proyectos?error=sesion_no_esta&p={pid}#sesiones-y-trabajos", status_code=303)
+        return _a_las_sesiones(pid, "error=sesion_no_esta")
     try:
         cambio = await db.quitar_sesion_de_proyecto(pid, sesion["ref"], sesion["codigo"], chat)
     except db.SesionSinSesion:

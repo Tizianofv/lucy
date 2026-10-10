@@ -19,11 +19,15 @@ El dinero lo calcula la App; acá solo se decide cómo se pinta (`dinero_de_sesi
 la tabla del diseño 3.8) y cuánto suman los renglones pintados
 (`totales_de_sesiones`). Las dos son funciones puras, sin red ni base.
 
-Desde la parte 11, `con_las_quitadas` es la otra regla pura del bloque: saca de
-las listas y de los totales las sesiones que la casa quitó de ESTE proyecto, y
-arma la lista «Quitadas» para devolverlas (solo con las que la App devuelve en
-esa lectura). `sesion_por_ref` busca una sesión entre lo que la App devolvió; es
-lo único para lo que sirve el identificador que llega del formulario.
+Desde la parte 11, `con_las_decisiones` es la otra regla pura del bloque: saca de las listas y de
+los totales las sesiones que la casa quitó de ESTE proyecto (y arma la lista «Quitadas» para
+devolverlas, con lo que la App devolvió en esa lectura), y calcula los avisos de las que la casa
+agregó a mano y la App ya no devuelve o devolvió canceladas. `sesion_por_ref` busca una sesión
+entre lo que la App devolvió; es lo único para lo que sirve el identificador de un formulario.
+
+Desde la parte 13, `sesiones_de_cliente` pide además las sesiones que la casa agregó a mano (con
+`&sesion=`): las del cliente y las pedidas vienen en la misma llamada (diseño 3.9). Y
+`buscar_sesiones` es la otra puerta del lector: la búsqueda del bloque (diseño 3.6).
 """
 from __future__ import annotations
 
@@ -42,6 +46,21 @@ log = logging.getLogger("lucy.registro")
 # persona con la página de un proyecto abierta. Elegido, no medido.
 TIEMPO_LIMITE = 8.0
 
+# Los caracteres con los que se armaría una consulta propia: la misma regla que el buscador de
+# personas de Noco. Se repite acá porque de `noco_lectura` solo se puede usar lo público (lo
+# vigila `tests/test_noco_lectura.py::test_G13_...`).
+_QUITAR_DEL_TEXTO = ",()~"
+
+
+def _limpio(texto) -> str:
+    """El texto de la búsqueda sin los caracteres con los que se armaría una consulta propia, con
+    los espacios colapsados. Lo que no sea texto se trata como vacío."""
+    if not isinstance(texto, str):
+        return ""
+    for molde in _QUITAR_DEL_TEXTO:
+        texto = texto.replace(molde, " ")
+    return " ".join(texto.split())
+
 
 class RegistroNoContesta(RuntimeError):
     """El registro no contestó, contestó algo que no se entiende, o falta configurarlo."""
@@ -59,21 +78,22 @@ def _configurado() -> tuple[str, str]:
     return base, llave
 
 
-async def _get(parametros: dict[str, str]) -> dict:
-    """La única puerta de salida: un GET a `/api/lucy/sesiones` del registro.
+async def _get(ruta: str, parametros: list[tuple[str, str]]) -> dict:
+    """La única puerta de salida: un GET a una ruta `/api/lucy/…` del registro.
 
-    La llave va en la cabecera y en ningún otro sitio, y `follow_redirects=False`
-    va escrito: una redirección no se sigue, así que la llave no puede terminar
-    en otro servidor. Un fallo al pedir —el de la red o el de una dirección mal
-    escrita— sale como `RegistroNoContesta`, y en el log de Lucy solo queda el
-    TIPO del fallo: ni la llave ni el texto crudo del error se escriben.
+    Los parámetros van como pares y no como diccionario porque `sesion` se manda repetido (una
+    vez por cada sesión agregada). La llave va en la cabecera y en ningún otro sitio, y
+    `follow_redirects=False` va escrito: una redirección no se sigue, así que la llave no puede
+    terminar en otro servidor. Un fallo al pedir —el de la red o el de una dirección mal
+    escrita— sale como `RegistroNoContesta`, y en el log de Lucy solo queda el TIPO del fallo: ni
+    la llave ni el texto crudo del error se escriben.
     """
     base, llave = _configurado()
     try:
         async with httpx.AsyncClient(timeout=TIEMPO_LIMITE,
                                      follow_redirects=False) as cliente:
             respuesta = await cliente.get(
-                f"{base}/api/lucy/sesiones", params=parametros,
+                f"{base}{ruta}", params=parametros,
                 headers={"X-Lucy-Llave": llave, "Accept": "application/json"})
     except Exception as e:                                    # noqa: BLE001
         log.warning("el registro no contestó (%s)", type(e).__name__)
@@ -131,6 +151,26 @@ def _ref(valor) -> str | None:
     if isinstance(valor, str):
         return valor.strip() or None
     return None
+
+
+def _lista_de_refs(valor) -> list[str]:
+    """Los identificadores de una lista, en texto y sin repetir, en el orden en que vienen.
+
+    Acepta una lista, una tupla o un solo valor (que envuelve). Lo que no sirva como identificador
+    (`_ref` lo decide) se cae.
+    """
+    if isinstance(valor, (str, int)) and not isinstance(valor, bool):
+        valor = [valor]
+    if not isinstance(valor, (list, tuple)):
+        return []
+    vistos: set[str] = set()
+    salida: list[str] = []
+    for x in valor:
+        r = _ref(x)
+        if r is not None and r not in vistos:
+            vistos.add(r)
+            salida.append(r)
+    return salida
 
 
 def _dinero(valor) -> Decimal | None:
@@ -239,20 +279,42 @@ def _renglon(fila) -> dict | None:
 def _vacio(estado: str, motivo: str = "") -> dict:
     """La respuesta sin renglones, con su estado y su motivo."""
     return {"estado": estado, "motivo": motivo, "sesiones": [], "trabajos": [],
-            "totales": totales_de_sesiones([])}
+            "totales": totales_de_sesiones([]), "no_halladas": [], "canceladas": []}
 
 
-async def sesiones_de_cliente(noco_id) -> dict:
-    """Las sesiones y los trabajos de esa ficha del cliente, ya partidos en dos
-    listas por `es_trabajo`, con los tres totales del bloque.
+def _canceladas(filas) -> list[str]:
+    """Los `ref` de las filas que la App devolvió marcadas como canceladas.
 
-    Sin ficha (`None` o algo que no es un Id) no le pregunta a nadie: un
-    proyecto sin cliente no tiene de quién traerlas.
+    Los renglones cancelados no se pintan (`_renglon` los deja caer), así que sin esto no se podría
+    avisar de una sesión agregada cancelada (diseño 3.4).
     """
-    if isinstance(noco_id, bool) or not isinstance(noco_id, int) or noco_id <= 0:
+    salida: list[str] = []
+    for fila in filas:
+        if isinstance(fila, dict) and fila.get("cancelada"):
+            r = _ref(fila.get("ref"))
+            if r is not None and r not in salida:
+                salida.append(r)
+    return salida
+
+
+async def sesiones_de_cliente(noco_id, sesiones=()) -> dict:
+    """Las sesiones y los trabajos de esa ficha del cliente, partidos en dos listas por
+    `es_trabajo`, con los tres totales del bloque.
+
+    `sesiones` son los `ref` de las sesiones que la casa agregó a mano: viajan como `&sesion=`
+    repetido y vuelven en la misma respuesta que las del cliente (diseño 3.9). Un `ref` que la App
+    no tiene sale en `no_halladas`; los cancelados, en `canceladas`.
+
+    Sin ficha no le pregunta a nadie, salvo que haya sesiones agregadas que pedir.
+    """
+    refs = _lista_de_refs(sesiones)
+    con_ficha = isinstance(noco_id, int) and not isinstance(noco_id, bool) and noco_id > 0
+    if not con_ficha and not refs:
         return _vacio("sin_cliente")
+    parametros = ([("persona", str(noco_id))] if con_ficha else []) + \
+        [("sesion", r) for r in refs]
     try:
-        datos = await _get({"persona": str(noco_id)})
+        datos = await _get("/api/lucy/sesiones", parametros)
     except RegistroNoContesta:
         return _vacio("no_se_pudo")
     puede_ligar = datos.get("puede_ligar")
@@ -260,16 +322,67 @@ async def sesiones_de_cliente(noco_id) -> dict:
     if not isinstance(puede_ligar, bool) or not isinstance(filas, list):
         log.warning("el registro contestó una forma que no conozco")
         return _vacio("no_se_pudo")
-    if not puede_ligar:
-        return _vacio("sin_ligar", _texto(datos.get("motivo_sin_ligar")) or "")
     renglones = [r for r in (_renglon(fila) for fila in filas) if r]
     if len(renglones) != len(filas):
         log.info("el registro mandó %d renglón(es) que no se pintan de %d",
                  len(filas) - len(renglones), len(filas))
-    return {"estado": "ok", "motivo": "",
+    # Con ficha que no se puede ligar es `sin_ligar`; sin ficha (y con sesiones pedidas),
+    # `sin_cliente`: lo que la App contestó de las pedidas se pinta igual.
+    estado = "ok" if puede_ligar else ("sin_ligar" if con_ficha else "sin_cliente")
+    return {"estado": estado,
+            "motivo": (_texto(datos.get("motivo_sin_ligar")) or "") if estado == "sin_ligar" else "",
             "sesiones": [r for r in renglones if not r["es_trabajo"]],
             "trabajos": [r for r in renglones if r["es_trabajo"]],
-            "totales": totales_de_sesiones(renglones)}
+            "totales": totales_de_sesiones(renglones),
+            "no_halladas": _lista_de_refs(datos.get("no_halladas")),
+            "canceladas": _canceladas(filas)}
+
+
+def _candidato(fila) -> dict | None:
+    """Un renglón de la búsqueda (diseño 3.6) con lo que la página pinta, o None si no sirve.
+
+    Trae el `nombre` de quien reservó, que el bloque no tiene, y el `ref` con el que se agrega: una
+    candidata sin `ref` no se pinta.
+    """
+    if not isinstance(fila, dict):
+        return None
+    ref = _ref(fila.get("ref"))
+    if ref is None:
+        return None
+    return {
+        "ref": ref,
+        "fecha": _dia(fila.get("fecha")),
+        "sala": _texto(fila.get("sala_mostrar")) or _texto(fila.get("sala")),
+        "horas": _horas(fila.get("horas")),
+        "concepto": _texto(fila.get("servicio")),
+        "codigo": _texto(fila.get("codigo")),
+        "nombre": _texto(fila.get("nombre")),
+        "es_trabajo": fila.get("es_trabajo") is True,
+    }
+
+
+async def buscar_sesiones(texto) -> dict:
+    """Las candidatas que el registro devuelve para un texto (diseño 3.6): hasta 20 sesiones o
+    trabajos con su fecha, su sala o trabajo, su concepto, su código y el nombre de quien reservó.
+
+    El texto se manda LIMPIO (`_limpio`: los caracteres con los que se armaría una consulta propia
+    no viajan), como ya hace el buscador de personas. Sin texto que buscar no se le pregunta a nadie
+    (`sin_texto`), y si el registro no contesta se dice (`no_se_pudo`).
+    """
+    limpio = _limpio(texto)
+    if not limpio:
+        return {"estado": "sin_texto", "sesiones": [], "hay_mas": False}
+    try:
+        datos = await _get("/api/lucy/sesiones/buscar", [("q", limpio)])
+    except RegistroNoContesta:
+        return {"estado": "no_se_pudo", "sesiones": [], "hay_mas": False}
+    filas = datos.get("sesiones")
+    hay_mas = datos.get("hay_mas")
+    if not isinstance(filas, list) or not isinstance(hay_mas, bool):
+        log.warning("el registro contestó una forma que no conozco")
+        return {"estado": "no_se_pudo", "sesiones": [], "hay_mas": False}
+    renglones = [r for r in (_candidato(f) for f in filas) if r]
+    return {"estado": "ok", "sesiones": renglones, "hay_mas": hay_mas}
 
 
 def sesion_por_ref(respuesta, ref) -> dict | None:
@@ -288,27 +401,43 @@ def sesion_por_ref(respuesta, ref) -> dict | None:
     return None
 
 
-def con_las_quitadas(respuesta, quitadas) -> dict:
-    """La respuesta del bloque con las sesiones que la casa quitó, fuera de las
-    listas Y de los totales, y con la lista «Quitadas» para devolverlas.
+def _avisos_de_agregadas(agregadas, respuesta) -> list[dict]:
+    """Un aviso por cada sesión agregada a mano que la App contestó y no pintó: porque ya no la
+    devuelve (`no_halladas`) o porque está cancelada. Cada uno con su `codigo` guardado y su `ref`
+    para poder sacarla (diseño 3.4). Los motivos salen de lo que la App contestó en esta lectura."""
+    no_halladas = set(respuesta.get("no_halladas") or [])
+    canceladas = set(respuesta.get("canceladas") or [])
+    avisos = []
+    for ref, codigo in agregadas.items():
+        if ref in no_halladas:
+            avisos.append({"ref": ref, "codigo": codigo, "motivo": "no_esta"})
+        elif ref in canceladas:
+            avisos.append({"ref": ref, "codigo": codigo, "motivo": "cancelada"})
+    return avisos
 
-    `quitadas` es `{ref: codigo}` de las decisiones vivas de ESTE proyecto, o
-    `None` si la tabla todavía no existe (la migración sin aplicar): entonces no
-    se filtra nada, no sale ninguna lista de quitadas y `quitadas_disponibles`
-    queda falso, así que la página no dibuja ningún control. Un diccionario
-    vacío es otra cosa: la tabla está y este proyecto no tiene ninguna quitada.
 
-    En «Quitadas» sale SOLO lo que la App devolvió en ESTA lectura (diseño 3.4:
-    si la App ya no la devuelve, la fila de la quitada no hace nada y no se ve),
-    y con la App sin contestar no sale ninguna. El código guardado al quitarla no
-    se pinta: queda en la tabla para lo que lo necesite después.
+def con_las_decisiones(respuesta, quitadas, agregadas) -> dict:
+    """La respuesta del bloque con las decisiones de la casa aplicadas: las sesiones que la casa
+    quitó de ESTE proyecto, fuera de las listas Y de los totales (con su lista «Quitadas» para
+    devolverlas), y los avisos de las que agregó a mano y la App ya no devuelve o están canceladas.
+
+    `quitadas`/`agregadas` son `{ref: codigo}` de las decisiones vivas de ESTE proyecto, o `None`
+    si la tabla todavía no existe (la migración sin aplicar): entonces no se filtra nada, no sale
+    ninguna lista ni ningún aviso y `decisiones_disponibles` queda falso, así que la página no
+    dibuja ningún control. Un diccionario vacío es otra cosa: la tabla está y este proyecto no
+    tiene ninguna.
+
+    En «Quitadas» sale SOLO lo que la App devolvió en ESTA lectura (diseño 3.4: si la App ya no la
+    devuelve, la fila de la quitada no hace nada y no se ve), y con la App sin contestar no sale
+    ninguna. El código guardado al quitarla no se pinta: queda para los avisos de la parte 13.
     """
     if quitadas is None:
-        return {**respuesta, "quitadas": [], "quitadas_disponibles": False}
-    salida = {**respuesta, "quitadas": [], "quitadas_disponibles": True}
-    if respuesta["estado"] != "ok":
-        # Sin la respuesta de la App no hay renglones que filtrar ni nada que
-        # nombrar: no se afirma qué se quitó.
+        return {**respuesta, "quitadas": [], "avisos": [], "decisiones_disponibles": False}
+    quitadas = quitadas or {}
+    salida = {**respuesta, "quitadas": [], "avisos": [], "decisiones_disponibles": True}
+    if respuesta["estado"] not in ("ok", "sin_cliente", "sin_ligar"):
+        # Sin la respuesta de la App no hay renglones que filtrar ni nada que nombrar: no se
+        # afirma qué se quitó ni qué falta.
         return salida
     todas = respuesta["sesiones"] + respuesta["trabajos"]
     pintadas = [r for r in todas if r["ref"] not in quitadas]
@@ -318,4 +447,5 @@ def con_las_quitadas(respuesta, quitadas) -> dict:
     salida["totales"] = totales_de_sesiones(pintadas)
     salida["quitadas"] = [{"ref": ref, "renglon": de_la_app[ref]}
                           for ref in quitadas if ref in de_la_app]
+    salida["avisos"] = _avisos_de_agregadas(agregadas or {}, respuesta)
     return salida

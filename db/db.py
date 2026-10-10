@@ -1790,28 +1790,31 @@ async def borrar_nota_de_proyecto(nota_id: int, proyecto_id: int, chat_id: int) 
                               "nota borrada desde el panel de proyectos", antes.get("bandeja_id"))
 
 
-# ── LAS SESIONES QUE SE QUITAN DE UN PROYECTO (`sesiones_de_proyecto`, parte 11 del diseño de la
-# página completa del proyecto, 9-oct-2026) ─────────────────────────────────────────────────
+# ── LAS SESIONES QUE SE QUITAN DE UN PROYECTO, SE AGREGAN Y SE DEVUELVEN (`sesiones_de_proyecto`,
+# partes 11 y 13 del diseño de la página completa del proyecto, 9-oct-2026) ──────────────────
 #
 # LA DECISIÓN DE LA CASA, no el dato de la sesión. Lucy le pregunta al registro las sesiones del
 # cliente de un proyecto (`registro_lectura.sesiones_de_cliente`, parte 9) y lo único que guarda es
-# lo que la casa decidió a mano sobre esa lista: `quitada` (esta parte) o `agregada` (parte 13). El
-# dato de la sesión —fecha, sala, horas, concepto, y el dinero— NO se copia: lo sigue diciendo la
+# lo que la casa decidió a mano sobre esa lista: `quitada` (parte 11) o `agregada` (parte 13). El
+# dato de la sesión —fecha, sala, horas, concepto y el dinero— no se copia: lo sigue diciendo la
 # App en cada lectura, y por eso lo que cambia allá se ve acá la próxima vez que se abra el
 # proyecto. Tampoco se le manda nada: `registro_lectura` solo sabe GET.
 #
 # EL IDENTIFICADOR QUE SE GUARDA es el `ref` que la App devolvió para esa sesión, pasado a texto
 # (`ref_de_sesion_que_vale`), nunca el código de 4 letras (según el mapa de la App, no se sabe que
-# no se repita) ni nada que venga de un formulario: la ruta de quitar vuelve a preguntarle a la App
-# y guarda lo que ESA lectura devolvió para esa sesión, así que una sesión que la App no devuelve
-# no se puede quitar.
+# no se repita) ni nada que venga de un formulario: las rutas de quitar y de agregar le vuelven a
+# preguntar a la App y guardan lo que esa lectura devolvió para esa sesión, así que una que la App
+# no devuelve no se puede quitar ni agregar. Sacar (devolver una quitada, o sacar una agregada) sí
+# usa el `ref` guardado, porque deshace una decisión que la casa ya tomó.
 #
-# UNA SOLA DECISIÓN VIVA por proyecto y sesión (el índice único parcial de la tabla): quitar dos
-# veces lo mismo no escribe ni deja huella la segunda, y devolver una quitada le pone `borrado_en`
-# (nunca un `DELETE`), así que se puede volver a quitar después.
+# Una decisión viva por proyecto y sesión (el índice único parcial de la tabla): quitar dos veces
+# lo mismo no escribe ni deja huella la segunda, y sacar una decisión le pone `borrado_en` sin
+# borrar la fila, así que se puede volver a decidir sobre esa sesión después. Por eso una sesión no
+# puede quedar a la vez quitada y agregada.
 LARGO_REF_SESION = 200
 # El código que la sesión tenía al decidir: uno que no quepa acá no es un código, así que se guarda
-# sin él (no se recorta ni se inventa). Se guarda y hoy no se pinta.
+# sin él (no se recorta ni se inventa). Se pinta en el aviso de una agregada que la App ya no
+# devuelve o devolvió cancelada (parte 13).
 LARGO_CODIGO_SESION = 40
 
 
@@ -1859,8 +1862,9 @@ def ref_de_sesion_que_vale(valor) -> str:
 
 
 def _codigo_de_sesion_guardable(codigo) -> str | None:
-    """El código que la sesión tenía al decidir, o `None`: se guarda y hoy no se pinta. Lo que no
-    sea un texto que quepa en `LARGO_CODIGO_SESION` se guarda sin código."""
+    """El código que la sesión tenía al decidir, o `None`. Lo que no sea un texto que quepa en
+    `LARGO_CODIGO_SESION` se guarda sin código. Se pinta en el aviso de una agregada que la App ya
+    no devuelve o está cancelada."""
     if not isinstance(codigo, str):
         return None
     limpio = codigo.strip()
@@ -1874,21 +1878,20 @@ def _tabla_ausente(e: Exception) -> bool:
         return False
 
 
-async def sesiones_quitadas_de_proyectos() -> dict[int, dict[str, str | None]] | None:
-    """`{proyecto_id: {sesion_ref: codigo}}` de las decisiones VIVAS `quitada` de los proyectos
-    VIVOS, la más nueva primero, o `None` si la tabla todavía no existe (la migración
-    `2026-10-09_sesiones_de_proyecto.sql` sin aplicar, SQLSTATE 42P01): entonces la página carga con
-    el bloque de sesiones como hoy y sin ningún control para quitar. UNA LECTURA APARTE con su
-    propia conexión, igual que `notas_de_proyectos` (un error deja abortada la transacción de la
-    conexión donde ocurre). El código puede ser `None` (la App no lo mandó cuando se quitó)."""
+async def _mapa_de_decisiones_de_sesiones(modo: str) -> dict[int, dict[str, str | None]] | None:
+    """`{proyecto_id: {sesion_ref: codigo}}` de las decisiones vivas de ese `modo` sobre los
+    proyectos vivos, la más nueva primero, o `None` si la tabla todavía no existe (SQLSTATE 42P01):
+    entonces la página carga como hoy y sin ningún control. Lectura aparte con su propia conexión,
+    igual que `notas_de_proyectos` (un error deja abortada la transacción donde ocurre). El código
+    puede ser `None` (la App no lo mandó al decidir)."""
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         try:
             await cur.execute(
                 "SELECT s.proyecto_id, s.sesion_ref, s.codigo "
                 "  FROM sesiones_de_proyecto s JOIN proyectos p ON p.id = s.proyecto_id "
-                " WHERE s.modo = 'quitada' AND s.borrado_en IS NULL AND p.borrado_en IS NULL "
-                " ORDER BY s.creado_en DESC, s.id DESC")
+                " WHERE s.modo = %s AND s.borrado_en IS NULL AND p.borrado_en IS NULL "
+                " ORDER BY s.creado_en DESC, s.id DESC", (modo,))
             filas = await cur.fetchall()
         except Exception as e:
             if _tabla_ausente(e):
@@ -1898,6 +1901,19 @@ async def sesiones_quitadas_de_proyectos() -> dict[int, dict[str, str | None]] |
     for f in filas:
         salida.setdefault(f["proyecto_id"], {})[f["sesion_ref"]] = f["codigo"]
     return salida
+
+
+async def sesiones_quitadas_de_proyectos() -> dict[int, dict[str, str | None]] | None:
+    """Los `ref` de las sesiones quitadas de cada proyecto, con su código, o `None` si la tabla
+    todavía no existe (ver `_mapa_de_decisiones_de_sesiones`)."""
+    return await _mapa_de_decisiones_de_sesiones("quitada")
+
+
+async def sesiones_agregadas_de_proyectos() -> dict[int, dict[str, str | None]] | None:
+    """Los `ref` de las sesiones que la casa agregó a mano a cada proyecto, con su código (parte
+    13), o `None` si la tabla todavía no existe. Con esos `ref` la página le pide al registro, en
+    la misma llamada de las del cliente, las que devuelve."""
+    return await _mapa_de_decisiones_de_sesiones("agregada")
 
 
 async def ficha_de_cliente_de_proyecto(proyecto_id: int) -> int | None:
@@ -1936,8 +1952,8 @@ async def quitar_sesion_de_proyecto(proyecto_id: int, sesion_ref, codigo, chat_i
 
     `sesion_ref` es el `ref` que DEVOLVIÓ la App: la ruta se lo pasa después de volver a
     preguntarle al registro por las sesiones de ese cliente. `codigo` es el código que la sesión
-    tenía al decidir: se guarda y hoy no se pinta. La fila y su huella `crear` (actor `panel`) van
-    en la misma transacción."""
+    tenía al decidir: se guarda, y se pinta en el aviso de una agregada que la App ya no devuelve o
+    está cancelada. La fila y su huella `crear` (actor `panel`) van en la misma transacción."""
     from web.auth import puede_entrar
 
     ref = ref_de_sesion_que_vale(sesion_ref)
@@ -1972,14 +1988,12 @@ async def quitar_sesion_de_proyecto(proyecto_id: int, sesion_ref, codigo, chat_i
         return True
 
 
-async def devolver_sesion_de_proyecto(proyecto_id: int, sesion_ref, chat_id: int) -> bool:
-    """Devuelve a la lista una sesión quitada de ESE proyecto: deshace la decisión (le pone
-    `borrado_en`; nunca un `DELETE`). `True` si la devolvió. `SesionSinSesion`, `RefDeSesionNoVale`,
-    `SesionNoEsta` (esa sesión no estaba quitada de ese proyecto) y `SesionesSinTabla`. Huella
-    `borrar` con la fila entera de antes, actor `panel`, en la misma transacción.
-
-    No le pregunta nada a la App: el identificador ya está guardado, y devolver no depende de que
-    el registro conteste."""
+async def _deshacer_la_decision_viva(proyecto_id: int, sesion_ref, modo: str, chat_id: int,
+                                     motivo: str) -> bool:
+    """Saca la decisión viva de ese `modo` de ese proyecto (le pone `borrado_en`, no borra la fila)
+    y deja su huella `borrar` con la fila entera de antes, actor `panel`, en la misma transacción.
+    `True` si la sacó. `SesionSinSesion`, `RefDeSesionNoVale`, `SesionNoEsta` (no estaba) y
+    `SesionesSinTabla`. Al registro no le pregunta nada: el identificador ya está guardado."""
     from web.auth import puede_entrar
 
     ref = ref_de_sesion_que_vale(sesion_ref)
@@ -1990,23 +2004,84 @@ async def devolver_sesion_de_proyecto(proyecto_id: int, sesion_ref, chat_id: int
         try:
             await cur.execute(
                 "SELECT * FROM sesiones_de_proyecto "
-                " WHERE proyecto_id = %s AND sesion_ref = %s AND modo = 'quitada' AND borrado_en IS NULL",
-                (proyecto_id, ref))
+                " WHERE proyecto_id = %s AND sesion_ref = %s AND modo = %s AND borrado_en IS NULL",
+                (proyecto_id, ref, modo))
             antes = await cur.fetchone()
         except Exception as e:
             if _tabla_ausente(e):
                 raise SesionesSinTabla("sesiones_de_proyecto no existe todavía") from e
             raise
         if antes is None:
-            raise SesionNoEsta("esa sesión no estaba quitada de ese proyecto")
+            raise SesionNoEsta("esa sesión no estaba en la lista de ese proyecto")
         antes = dict(antes)
         escrita = await conn.execute(
             "UPDATE sesiones_de_proyecto SET borrado_en = now() "
             " WHERE id = %s AND borrado_en IS NULL", (antes["id"],))
         if escrita.rowcount == 0:
-            raise SesionNoEsta("esa sesión ya no estaba quitada de ese proyecto")
-        await _huella_de_sesion(conn, "borrar", antes["id"], antes, None,
-                                "sesión devuelta a la lista del proyecto desde el panel")
+            raise SesionNoEsta("esa sesión ya no estaba en la lista de ese proyecto")
+        await _huella_de_sesion(conn, "borrar", antes["id"], antes, None, motivo)
+        return True
+
+
+async def devolver_sesion_de_proyecto(proyecto_id: int, sesion_ref, chat_id: int) -> bool:
+    """Devuelve a la lista una sesión QUITADA de ESE proyecto: deshace la decisión. `True` si la
+    devolvió. `SesionSinSesion`, `RefDeSesionNoVale`, `SesionNoEsta` (esa sesión no estaba quitada de
+    ese proyecto) y `SesionesSinTabla` (ver `_deshacer_la_decision_viva`)."""
+    return await _deshacer_la_decision_viva(
+        proyecto_id, sesion_ref, "quitada", chat_id,
+        "sesión devuelta a la lista del proyecto desde el panel")
+
+
+async def sacar_sesion_agregada_de_proyecto(proyecto_id: int, sesion_ref, chat_id: int) -> bool:
+    """Saca de la lista una sesión que la casa había agregado a mano a ESE proyecto: deshace esa
+    decisión. `True` si la sacó. Las mismas excepciones que `devolver_sesion_de_proyecto`, con
+    `SesionNoEsta` si esa sesión no estaba agregada a ese proyecto. Lo usa el botón «Sacar» del
+    aviso de una agregada que el registro ya no devuelve o devolvió cancelada."""
+    return await _deshacer_la_decision_viva(
+        proyecto_id, sesion_ref, "agregada", chat_id,
+        "sesión agregada sacada de la lista del proyecto desde el panel")
+
+
+async def agregar_sesion_a_proyecto(proyecto_id: int, sesion_ref, codigo, chat_id: int) -> bool:
+    """Agrega a mano una sesión del registro a la lista de ESE proyecto vivo: guarda la decisión
+    (`modo='agregada'`). `True` si se guardó, `False` si ya había una decisión viva para esa sesión
+    en ese proyecto (no escribe ni deja huella). `SesionSinSesion` (no entra al panel),
+    `RefDeSesionNoVale`, `SesionNoEsta` (el proyecto no está) y `SesionesSinTabla`.
+
+    `sesion_ref` es el `ref` que devolvió la App al volver a pedirle la sesión, y `codigo` el que
+    traía, para poder nombrarla si un día la App ya no la devuelve. Agregar una que estaba quitada
+    es devolverla, y no pasa por acá (la ruta la desvía). La fila y su huella `crear` (actor
+    `panel`) van en la misma transacción."""
+    from web.auth import puede_entrar
+
+    ref = ref_de_sesion_que_vale(sesion_ref)
+    if chat_id is None or not puede_entrar(chat_id):
+        raise SesionSinSesion("quien lo pide no entra al panel")
+    guardable = _codigo_de_sesion_guardable(codigo)
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute("SELECT id FROM proyectos WHERE id = %s AND borrado_en IS NULL", (proyecto_id,))
+        if await cur.fetchone() is None:
+            raise SesionNoEsta("ese proyecto no está")
+        try:
+            await cur.execute(
+                "SELECT id FROM sesiones_de_proyecto "
+                " WHERE proyecto_id = %s AND sesion_ref = %s AND borrado_en IS NULL",
+                (proyecto_id, ref))
+            if await cur.fetchone() is not None:
+                return False
+            await cur.execute(
+                "INSERT INTO sesiones_de_proyecto "
+                "  (proyecto_id, sesion_ref, codigo, modo, creado_por_chat_id) "
+                "VALUES (%s, %s, %s, 'agregada', %s) RETURNING *",
+                (proyecto_id, ref, guardable, chat_id))
+            fila = dict(await cur.fetchone())
+        except Exception as e:
+            if _tabla_ausente(e):
+                raise SesionesSinTabla("sesiones_de_proyecto no existe todavía") from e
+            raise
+        await _huella_de_sesion(conn, "crear", fila["id"], None, fila,
+                                "sesión agregada a la lista del proyecto desde el panel")
         return True
 
 

@@ -944,7 +944,11 @@ def _rutas_post_de_proyectos(con_tareas: bool = False):
                                                 "borrar_nota_de_proyecto",
                                                 # parte 11 (9-oct-2026): quitar una sesión del
                                                 # registro de la lista del proyecto, y devolverla
-                                                "quitar_sesion_de_proyecto", "devolver_sesion_de_proyecto")):
+                                                "quitar_sesion_de_proyecto", "devolver_sesion_de_proyecto",
+                                                # parte 13 (9-oct-2026): agregar una del registro a la
+                                                # lista del proyecto, y sacar una agregada a mano
+                                                "agregar_sesion_a_proyecto",
+                                                "sacar_sesion_agregada_de_proyecto")):
                         escribe.append((f"db.{n.func.attr}", ()))
                     if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                             and n.func.attr == "puede_entrar"):
@@ -971,8 +975,14 @@ def test_toda_ruta_post_de_proyectos_pide_sesion_y_escribe_por_una_puerta_con_ac
         "/proyectos/{pid}/notas/{nid}/borrar": {"db.borrar_nota_de_proyecto"},
         # 9-oct-2026, parte 11: quitar una sesión de la lista del proyecto y devolverla. Escriben por
         # SUS dos funciones de `db` (guardan la decisión y dejan su huella; a la App no se le escribe).
-        "/proyectos/{pid}/sesiones/quitar": {"db.quitar_sesion_de_proyecto"},
+        # Parte 13: quitar una sesión AGREGADA a mano la saca de su propia fila (`db.sacar_...`), y
+        # agregar una del registro pasa por `db.agregar_...`.
+        "/proyectos/{pid}/sesiones/quitar": {"db.quitar_sesion_de_proyecto",
+                                             "db.sacar_sesion_agregada_de_proyecto"},
         "/proyectos/{pid}/sesiones/devolver": {"db.devolver_sesion_de_proyecto"},
+        # Agregar una del registro a la lista (parte 13), y devolver la quitada si ya estaba quitada.
+        "/proyectos/{pid}/sesiones/agregar": {"db.agregar_sesion_a_proyecto",
+                                              "db.devolver_sesion_de_proyecto"},
         "/proyectos/{pid}/area": {"crud.editar"},
         "/proyectos/{pid}/responsable": {"crud.editar"},
         "/proyectos/{pid}/estado": {"crud.editar"},

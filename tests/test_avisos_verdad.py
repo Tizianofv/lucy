@@ -73,7 +73,11 @@ NAVEGACION_QUE_HABLA = {("/proyectos", "p"), ("/proyectos", "q"), ("/movimientos
                         # `filtro` de un proyecto (parte 2, 8-oct-2026): con «Pendientes» o «Vencidas» y nada que
                         # mostrar la lista dice «Ninguna tarea pendiente con este filtro.» Es el estado de la lista,
                         # no un aviso de que algo se hizo.
-                        ("/proyectos", "filtro")}
+                        ("/proyectos", "filtro"),
+                        # `sq` de un proyecto (parte 13, 9-oct-2026): el texto del buscador de una sesión del
+                        # registro. Como `q`: dice el estado de la búsqueda («Ninguna sesión con «x»», «No se pudo
+                        # consultar el registro»), no que algo se haya hecho.
+                        ("/proyectos", "sq")}
 # Parámetros de aviso que SOLO acompañan a otro y no pintan nada por sí solos en un mundo de
 # prueba (su texto sale con `hecho=…`, o depende de un estado que el mundo no reproduce); su
 # prueba de estado es `test_borrar_segunda_vuelta.py` / `test_grupos.py` / `test_tarea_derivada.py`.

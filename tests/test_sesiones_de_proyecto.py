@@ -151,6 +151,12 @@ def _publicas():
 _SIN_RED: set[str] = set()
 
 
+# Las DOS puertas del lector, declaradas una por una: las sesiones de una ficha (parte 9) y la
+# búsqueda (parte 13). Una ruta nueva hacia afuera cae acá sin que nadie se acuerde de agregarla.
+_SIN_RED: set[str] = set()
+_RUTAS_DEL_LECTOR = {"/api/lucy/sesiones", "/api/lucy/sesiones/buscar"}
+
+
 async def test_lo_que_sale_del_modulo_es_un_get_al_registro(registro):
     """Cada función pública, llamada de verdad, y cada pedido que salió mirado.
 
@@ -171,7 +177,7 @@ async def test_lo_que_sale_del_modulo_es_un_get_al_registro(registro):
 
     for pedido in registro.pedidos:
         assert pedido["metodo"] == "GET", f"el lector mandó un {pedido['metodo']}"
-        assert pedido["ruta"].split("?")[0] == "/api/lucy/sesiones", pedido["ruta"]
+        assert pedido["ruta"].split("?")[0] in _RUTAS_DEL_LECTOR, pedido["ruta"]
         assert pedido["cabeceras"]["Host"] == registro.url.replace("http://", ""), (
             "el pedido salió a otro sitio que el registro")
         assert LLAVE not in pedido["ruta"], "la llave viajó en la URL"
@@ -548,10 +554,12 @@ async def test_la_pregunta_lleva_la_ficha_del_cliente(registro):
 # ═══════════════════════════════════════════════════════════════════════
 
 def _sin_los_controles(bloque: str) -> str:
-    """El bloque sin los formularios (parte 11: quitar y devolver son de la casa). Lo que se
-    compara entre las dos sesiones es lo que se VE —los renglones, el dinero y los totales—, que
-    no cambia; los controles son lo único que la sesión de solo ver no lleva."""
-    return " ".join(re.sub(r"<form\b.*?</form>", " ", bloque, flags=re.S).split())
+    """El bloque sin los formularios (parte 11: quitar y devolver son de la casa) ni el buscador
+    (parte 13: es del mismo lado, y va al final del bloque). Lo que se compara entre las dos sesiones
+    es lo que se VE —los renglones, el dinero, los totales, «Quitadas» y los avisos—, que no cambia;
+    los controles son lo único que la sesión de solo ver no lleva."""
+    sin_formularios = re.sub(r"<form\b.*?</form>", " ", bloque, flags=re.S)
+    return " ".join(sin_formularios.split('<div class="buscar-sesion">')[0].split())
 
 
 def test_el_bloque_se_ve_igual_en_la_casa_y_en_solo_ver(registro, monkeypatch):

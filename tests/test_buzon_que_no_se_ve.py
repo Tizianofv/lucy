@@ -4137,10 +4137,15 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # por el `TypeError: __mro_entries__ must return a tuple` de `fastapi.testclient` — reproducido
     # sobre una copia limpia de `1e63a58`, no es de este trabajo.
     # Medida corriendo la prueba: 153 en disco, 106 EXENTOS, 47 VIGILADOS.
-    assert medido == {"en disco": 153, "exentos": 106, "vigilados": 47}, (
+    # 9-oct-2026, rama `trabajo/proyecto-completo-13` (parte 13: buscar una sesión y agregarla):
+    # +1 en disco y +1 EXENTO por `tests/test_sesiones_agregadas.py` (nuevo); VIGILADOS sin cambio (se
+    # tocaron `web/app.py`, `db/db.py` y `registro_lectura.py`, ya vigilados, y
+    # `web/plantillas/proyectos.html` y `tests/_app_de_registro.py`, que no son vigilados).
+    # Medida corriendo la prueba: 154 en disco, 107 EXENTOS, 47 VIGILADOS.
+    assert medido == {"en disco": 154, "exentos": 107, "vigilados": 47}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "9-oct-2026 (proyecto-completo-11) era {'en disco': 153, "
-        "'exentos': 106, 'vigilados': 47}. La aserción de fondo —cero "
+        "9-oct-2026 (proyecto-completo-13) era {'en disco': 154, "
+        "'exentos': 107, 'vigilados': 47}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

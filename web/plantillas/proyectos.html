@@ -166,6 +166,15 @@ h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balan
 .sesiones-p .renglon form{margin:0;display:inline-flex;align-items:center}
 .sesiones-p .quitadas{margin-top:1rem;border-top:1px solid var(--linea);padding-top:.7rem}
 .sesiones-p .quitadas .que{font-weight:400;color:var(--suave)}
+/* AGREGAR UNA SESIÓN (parte 13, 9-oct-2026): el buscador —como el de personas, funciona sin
+   JavaScript (un GET a esta misma página)—, sus candidatas y el aviso de una agregada que el
+   registro ya no devuelve o está cancelada. */
+.sesiones-p .buscar-sesion{margin-top:1rem;border-top:1px solid var(--linea);padding-top:.8rem}
+.sesiones-p .buscar-sesion form{display:flex;gap:.4rem;align-items:center;margin:0;flex-wrap:wrap}
+.sesiones-p .buscar-sesion input[type=text]{font:inherit;padding:.45rem .65rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0;flex:1 1 12rem}
+.sesiones-p .sugerencias{margin-top:.5rem}
+.sesiones-p .candidata .que{font-weight:500}
+.sesiones-p .avisos-sesion .que{color:var(--vencida)}
 .entrega-en{margin:.7rem 0 0;font-size:.88rem;color:var(--suave)}
 .entrega-en.roja{color:var(--vencida);font-weight:600}
 .quienes{display:flex;flex-wrap:wrap;gap:.4rem 1.4rem;font-size:.95rem}
@@ -707,6 +716,12 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'sesion_sin_registro' %}<p class="aviso">No se pudo consultar el registro ahora: la sesión NO se quitó. Intenta otra vez en un momento.</p>
     {% elif error == 'sesion_sin_tabla' %}<p class="aviso">Las sesiones todavía no se pueden quitar: falta actualizar la base de datos. NO se cambió nada.</p>
     {% elif error == 'sesion_base' %}<p class="aviso">La base de datos falló y no se pudo confirmar si se guardó: mira la lista antes de volver a intentarlo.</p>
+    {% elif error == 'sesion_agregar_invalida' %}<p class="aviso">Esa sesión no se puede agregar así: NO se guardó nada.</p>
+    {% elif error == 'sesion_agregar_no_esta' %}<p class="aviso">Esa sesión no está en el registro: NO se agregó nada.</p>
+    {% elif error == 'sesion_agregar_igual' %}<p class="aviso">Esa sesión ya está en la lista de este proyecto: no se guardó nada.</p>
+    {% elif error == 'sesion_agregar_sin_registro' %}<p class="aviso">No se pudo consultar el registro ahora: la sesión NO se agregó. Intenta otra vez en un momento.</p>
+    {% elif error == 'sesion_agregar_sin_tabla' %}<p class="aviso">Las sesiones todavía no se pueden agregar: falta actualizar la base de datos. NO se cambió nada.</p>
+    {% elif error == 'sesion_agregar_base' %}<p class="aviso">La base de datos falló y no se pudo confirmar si se guardó: mira la lista antes de volver a intentarlo.</p>
     {% elif error == 'responsable' %}<p class="aviso">Ese responsable no vale: se escoge entre {{ nombres_responsable|join(', ') }}.</p>
     {% elif error == 'grupo' %}<p class="aviso">Ese grupo no existe.</p>
     {% elif error == 'estado' %}<p class="aviso">No se pudo cambiar el estado del proyecto.</p>
@@ -761,6 +776,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif hecho == 'nota_borrada' and nota_borrada_en_papelera %}<p class="aviso ok">Nota borrada. Está en la <a href="/papelera">Papelera</a>; se restaura desde ahí.</p>
     {% elif hecho == 'sesion_quitada' %}<p class="aviso ok">Sesión quitada de la lista. Está en «Quitadas»; se devuelve desde ahí.</p>
     {% elif hecho == 'sesion_devuelta' %}<p class="aviso ok">Sesión devuelta a la lista.</p>
+    {% elif hecho == 'sesion_agregada' %}<p class="aviso ok">Sesión agregada a este proyecto.</p>
+    {% elif hecho == 'sesion_sacada' %}<p class="aviso ok">Se sacó de la lista.</p>
     {% elif hecho == 'responsable' %}<p class="aviso ok">Responsable guardado.</p>
     {% elif hecho == 'cerrado' %}<p class="aviso ok">Proyecto cerrado. Está en «cerrados» en la lista de la izquierda.</p>
     {% elif hecho == 'cliente' %}<p class="aviso ok">Cliente guardado.</p>
@@ -889,89 +906,146 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {#- LAS SESIONES Y TRABAJOS (parte 9, 9-oct-2026): lo que el registro del estudio tiene a nombre
         del cliente de este proyecto, partido en dos listas por `es_trabajo`, con la columna de dinero
         y los tres totales (parte 10, 9-oct-2026). Se le pregunta a la App al abrir el proyecto
-        (`registro_lectura.sesiones_de_cliente`); las canceladas no llegan hasta acá. Se ve igual en la
-        sesión de la casa y en la de solo ver: no tiene ningún control. -#}
+        (`registro_lectura.sesiones_de_cliente`); las canceladas no llegan hasta acá. Desde la parte 13
+        se le piden además, en la misma llamada (`&sesion=`), las que la casa AGREGÓ a mano, y salen los
+        avisos de las que el registro ya no devuelve o están canceladas y el buscador para agregar. Lo
+        que SE VE (los renglones, el dinero, los totales, «Quitadas» y los avisos) es igual en las dos
+        sesiones; los controles (Quitar, Devolver, Sacar y el buscador) son solo de la casa. -#}
     <section class="bloque sesiones-p" id="sesiones-y-trabajos">
       <div class="encabezado"><h2>Sesiones y trabajos de este proyecto</h2></div>
-      {% if registro.estado == 'ok' %}
-        {% if registro.sesiones or registro.trabajos %}
-        {% for lista, titulo in [(registro.sesiones, 'Sesiones'), (registro.trabajos, 'Trabajos')] %}
-        {% if lista %}
-        <div class="etapa"><h3>{{ titulo }}</h3>
-          {% for r in lista %}
-          <div class="renglon">
-            {% if r.fecha %}<span class="cuando">{{ r.fecha|dia_corto }}</span>{% endif %}
-            {% set partes = [] %}
-            {% if r.sala %}{% set _ = partes.append(r.sala) %}{% endif %}
-            {% if r.horas %}{% set _ = partes.append(r.horas ~ ' h') %}{% endif %}
-            {% if r.concepto %}{% set _ = partes.append(r.concepto) %}{% endif %}
-            {% if partes or r.codigo %}<span class="que">{{ partes|join(' · ') }}{% if r.codigo %}<span class="cod">{{ r.codigo }}</span>{% endif %}</span>{% endif %}
-            {% if r.atendio %}<span class="quien">atendió {{ r.atendio }}</span>
-            {% elif r.asignado %}<span class="quien">{{ r.asignado }}</span>
-            {% elif r.es_trabajo %}<span class="quien">sin asignar</span>{% endif %}
-            {#- La columna de dinero (parte 10, 9-oct-2026): lo que decide `registro_lectura.dinero_de_sesion`
-                para la tabla del diseño (3.8). Sin total todavía: «—». Lo que no encaja: sus cifras sin
-                color y el aviso, sin adivinar. -#}
-            {% set d = r.dinero %}
-            {% if d.caso == 'revisar' %}<span class="plata">RD$ {{ d.cifras|map('pesos')|join(' · RD$ ') }}<small>revísala en el registro</small></span>
-            {% elif d.caso == 'sin_total' %}<span class="plata">—</span>
-            {% else %}<span class="plata {{ d.clase }}">RD$ {{ d.monto|pesos }}{% if d.caso == 'debe_con_abono' %}<small>pagó RD$ {{ d.abonado|pesos }} de {{ d.total|pesos }}</small>{% endif %}</span>{% endif %}
-            {% if r.estado %}<span class="est">{{ r.estado }}</span>{% endif %}
-            {#- QUITAR DE LA LISTA (parte 11, 9-oct-2026): solo la sesión de la casa, y solo si la
-                tabla de las decisiones está en la base (`quitadas_disponibles`); sin ella el bloque
-                sale como hoy. Un renglón sin `ref` (la App no lo mandó) no se puede quitar. El
-                formulario lleva el `ref` que devolvió el registro; la ruta vuelve a preguntarle y
-                guarda lo que ESA lectura devuelva. -#}
-            {% if not solo_ver and registro.quitadas_disponibles and r.ref %}
-            <form class="quitar" method="post" action="/proyectos/{{ m.id }}/sesiones/quitar">
-              <input type="hidden" name="ref" value="{{ r.ref }}">
-              <button class="btn-linea">Quitar</button>
-            </form>
-            {% endif %}
-          </div>
-          {% endfor %}
+      {#- Lo que el registro contestó de la FICHA, cuando no se pudo ligar o no hay: el aviso sale
+          igual aunque haya renglones, porque son las sesiones que la casa agregó a mano. -#}
+      {% if registro.estado == 'sin_ligar' %}<p class="vacio">{% if registro.motivo == 'sin_telefono' %}El registro no puede ligar las sesiones de este cliente: la ficha no tiene teléfono allá.{% else %}El registro no puede ligar las sesiones de este cliente.{% endif %}</p>
+      {% elif registro.estado == 'sin_cliente' %}<p class="vacio">Este proyecto no tiene cliente, así que no se le pregunta al registro.</p>
+      {% elif registro.estado != 'ok' %}<p class="vacio">No se pudo consultar el registro.</p>{% endif %}
+      {% if registro.sesiones or registro.trabajos %}
+      {% for lista, titulo in [(registro.sesiones, 'Sesiones'), (registro.trabajos, 'Trabajos')] %}
+      {% if lista %}
+      <div class="etapa"><h3>{{ titulo }}</h3>
+        {% for r in lista %}
+        <div class="renglon">
+          {% if r.fecha %}<span class="cuando">{{ r.fecha|dia_corto }}</span>{% endif %}
+          {% set partes = [] %}
+          {% if r.sala %}{% set _ = partes.append(r.sala) %}{% endif %}
+          {% if r.horas %}{% set _ = partes.append(r.horas ~ ' h') %}{% endif %}
+          {% if r.concepto %}{% set _ = partes.append(r.concepto) %}{% endif %}
+          {% if partes or r.codigo %}<span class="que">{{ partes|join(' · ') }}{% if r.codigo %}<span class="cod">{{ r.codigo }}</span>{% endif %}</span>{% endif %}
+          {% if r.atendio %}<span class="quien">atendió {{ r.atendio }}</span>
+          {% elif r.asignado %}<span class="quien">{{ r.asignado }}</span>
+          {% elif r.es_trabajo %}<span class="quien">sin asignar</span>{% endif %}
+          {#- La columna de dinero (parte 10, 9-oct-2026): lo que decide `registro_lectura.dinero_de_sesion`
+              para la tabla del diseño (3.8). Sin total todavía: «—». Lo que no encaja: sus cifras sin
+              color y el aviso, sin adivinar. -#}
+          {% set d = r.dinero %}
+          {% if d.caso == 'revisar' %}<span class="plata">RD$ {{ d.cifras|map('pesos')|join(' · RD$ ') }}<small>revísala en el registro</small></span>
+          {% elif d.caso == 'sin_total' %}<span class="plata">—</span>
+          {% else %}<span class="plata {{ d.clase }}">RD$ {{ d.monto|pesos }}{% if d.caso == 'debe_con_abono' %}<small>pagó RD$ {{ d.abonado|pesos }} de {{ d.total|pesos }}</small>{% endif %}</span>{% endif %}
+          {% if r.estado %}<span class="est">{{ r.estado }}</span>{% endif %}
+          {#- QUITAR DE LA LISTA (partes 11 y 13, 9-oct-2026): solo la sesión de la casa, y solo si la
+              tabla de las decisiones está en la base (`decisiones_disponibles`); sin ella el bloque
+              sale como hoy. Un renglón sin `ref` (la App no lo mandó) no se puede quitar. El formulario
+              lleva el `ref` que devolvió el registro; la ruta vuelve a preguntarle y guarda lo que ESA
+              lectura devuelva. Una sesión AGREGADA a mano se saca de su propia fila, sin preguntarle a
+              nadie: es el mismo camino del botón «Sacar» del aviso. -#}
+          {% if not solo_ver and registro.decisiones_disponibles and r.ref %}
+          <form class="quitar" method="post" action="/proyectos/{{ m.id }}/sesiones/quitar">
+            <input type="hidden" name="ref" value="{{ r.ref }}">
+            <button class="btn-linea">Quitar</button>
+          </form>
+          {% endif %}
         </div>
-        {% endif %}
         {% endfor %}
-        {#- Los tres totales: la suma de lo que aportan los renglones pintados (`registro.totales`),
-            ya sin las quitadas. -#}
-        <div class="cifras">
-          <div class="cifra"><b>RD$ {{ registro.totales.facturado|pesos }}</b><span>facturado</span></div>
-          <div class="cifra"><b>RD$ {{ registro.totales.cobrado|pesos }}</b><span>cobrado</span></div>
-          <div class="cifra roja"><b>RD$ {{ registro.totales.por_cobrar|pesos }}</b><span>por cobrar</span></div>
+      </div>
+      {% endif %}
+      {% endfor %}
+      {#- Los tres totales: la suma de lo que aportan los renglones pintados (`registro.totales`),
+          ya sin las quitadas y con las agregadas. -#}
+      <div class="cifras">
+        <div class="cifra"><b>RD$ {{ registro.totales.facturado|pesos }}</b><span>facturado</span></div>
+        <div class="cifra"><b>RD$ {{ registro.totales.cobrado|pesos }}</b><span>cobrado</span></div>
+        <div class="cifra roja"><b>RD$ {{ registro.totales.por_cobrar|pesos }}</b><span>por cobrar</span></div>
+      </div>
+      {% elif registro.estado == 'ok' %}<p class="vacio">El registro no tiene sesiones ni trabajos de este cliente.</p>{% endif %}
+      {#- LAS QUITADAS (parte 11, 9-oct-2026): lo que la casa sacó de la lista, para poder
+          devolverlo. Sale SOLO lo que el registro devolvió en ESTA lectura: una quitada que ya
+          no devuelve no se ve (diseño 3.4), y con el registro sin contestar no sale ninguna.
+          Se ven las dos sesiones; el botón de devolver es solo de la casa. -#}
+      {% if registro.quitadas %}
+      <div class="etapa quitadas"><h3>Quitadas</h3>
+        <p class="nota">Estas no están en la lista ni en los totales.</p>
+        {% for q in registro.quitadas %}
+        <div class="renglon">
+          {% if q.renglon.fecha %}<span class="cuando">{{ q.renglon.fecha|dia_corto }}</span>{% endif %}
+          {% set partes = [] %}
+          {% if q.renglon.sala %}{% set _ = partes.append(q.renglon.sala) %}{% endif %}
+          {% if q.renglon.horas %}{% set _ = partes.append(q.renglon.horas ~ ' h') %}{% endif %}
+          {% if q.renglon.concepto %}{% set _ = partes.append(q.renglon.concepto) %}{% endif %}
+          <span class="que">{{ partes|join(' · ') or 'Sesión del registro' }}{% if q.renglon.codigo %}<span class="cod">{{ q.renglon.codigo }}</span>{% endif %}</span>
+          {% if not solo_ver %}
+          <form class="quitar" method="post" action="/proyectos/{{ m.id }}/sesiones/devolver">
+            <input type="hidden" name="ref" value="{{ q.ref }}">
+            <button class="btn-linea">Devolver</button>
+          </form>
+          {% endif %}
         </div>
-        {% else %}<p class="vacio">El registro no tiene sesiones ni trabajos de este cliente.</p>{% endif %}
-        {#- LAS QUITADAS (parte 11, 9-oct-2026): lo que la casa sacó de la lista, para poder
-            devolverlo. Sale SOLO lo que el registro devolvió en ESTA lectura: una quitada que ya
-            no devuelve no se ve (diseño 3.4), y con el registro sin contestar no sale ninguna.
-            Se ven las dos sesiones; el botón de devolver es solo de la casa. -#}
-        {% if registro.quitadas %}
-        <div class="etapa quitadas"><h3>Quitadas</h3>
-          <p class="nota">Estas no están en la lista ni en los totales.</p>
-          {% for q in registro.quitadas %}
-          <div class="renglon">
-            {% if q.renglon.fecha %}<span class="cuando">{{ q.renglon.fecha|dia_corto }}</span>{% endif %}
+        {% endfor %}
+      </div>
+      {% endif %}
+      {#- LOS AVISOS DE LAS AGREGADAS (parte 13, 9-oct-2026): una sesión que la casa agregó a mano y
+          que la App contestó que ya no devuelve (`no_halladas`) o que está cancelada, con su código
+          guardado. Sale SOLO cuando la App contestó (`registro.avisos`): con la App caída no se
+          afirma nada de ninguna. «Sacar» quita esa decisión sin preguntarle a nadie. -#}
+      {% if registro.avisos %}
+      <div class="etapa avisos-sesion">
+        {% for a in registro.avisos %}
+        <div class="renglon aviso-agregada">
+          <span class="que">{% if a.motivo == 'cancelada' %}1 sesión agregada está cancelada{% else %}1 sesión agregada ya no está en el registro{% endif %}{% if a.codigo %} (código {{ a.codigo }}){% endif %}</span>
+          {% if not solo_ver %}
+          <form class="quitar" method="post" action="/proyectos/{{ m.id }}/sesiones/quitar">
+            <input type="hidden" name="ref" value="{{ a.ref }}">
+            <button class="btn-linea">Sacar</button>
+          </form>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {#- EL BUSCADOR DE UNA SESIÓN (parte 13, 9-oct-2026): como el de personas, funciona sin
+          JavaScript (un GET a esta misma página con `?sq=`), y es solo de la sesión de la casa.
+          Cada candidata trae el `ref` que el registro le dio; «Agregar» lo manda a la ruta, que
+          vuelve a pedir esa sesión y guarda lo que devuelva. -#}
+      {% if not solo_ver and registro.decisiones_disponibles and registro.estado != 'no_se_pudo' %}
+      <div class="buscar-sesion">
+        <form class="buscar-sesion" method="get" action="/proyectos" role="search">
+          <input type="text" name="sq" value="{{ busqueda_sesiones.q if busqueda_sesiones else '' }}" placeholder="Buscar una sesión por su código o por quien reservó…" aria-label="Buscar una sesión del registro">
+          <input type="hidden" name="p" value="{{ m.id }}">
+          <button class="btn-linea">Buscar</button>
+        </form>
+        {% if busqueda_sesiones %}
+        {% if busqueda_sesiones.estado == 'no_se_pudo' %}<p class="vacio">No se pudo consultar el registro.</p>
+        {% elif busqueda_sesiones.sesiones %}
+        <div class="sugerencias">
+          {% for c in busqueda_sesiones.sesiones %}
+          <div class="renglon candidata">
+            {% if c.fecha %}<span class="cuando">{{ c.fecha|dia_corto }}</span>{% endif %}
             {% set partes = [] %}
-            {% if q.renglon.sala %}{% set _ = partes.append(q.renglon.sala) %}{% endif %}
-            {% if q.renglon.horas %}{% set _ = partes.append(q.renglon.horas ~ ' h') %}{% endif %}
-            {% if q.renglon.concepto %}{% set _ = partes.append(q.renglon.concepto) %}{% endif %}
-            <span class="que">{{ partes|join(' · ') or 'Sesión del registro' }}{% if q.renglon.codigo %}<span class="cod">{{ q.renglon.codigo }}</span>{% endif %}</span>
-            {% if not solo_ver %}
-            <form class="quitar" method="post" action="/proyectos/{{ m.id }}/sesiones/devolver">
-              <input type="hidden" name="ref" value="{{ q.ref }}">
-              <button class="btn-linea">Devolver</button>
+            {% if c.sala %}{% set _ = partes.append(c.sala) %}{% endif %}
+            {% if c.horas %}{% set _ = partes.append(c.horas ~ ' h') %}{% endif %}
+            {% if c.concepto %}{% set _ = partes.append(c.concepto) %}{% endif %}
+            {% if partes or c.codigo %}<span class="que">{{ partes|join(' · ') }}{% if c.codigo %}<span class="cod">{{ c.codigo }}</span>{% endif %}</span>{% endif %}
+            {% if c.es_trabajo %}<span class="est">Trabajo</span>{% endif %}
+            {% if c.nombre %}<span class="quien">{{ c.nombre }}</span>{% endif %}
+            <form class="agregar-sesion" method="post" action="/proyectos/{{ m.id }}/sesiones/agregar">
+              <input type="hidden" name="ref" value="{{ c.ref }}">
+              <button class="btn-linea">Agregar a este proyecto</button>
             </form>
-            {% endif %}
           </div>
           {% endfor %}
         </div>
+        {% if busqueda_sesiones.hay_mas %}<p class="nota">Hay más de 20: escribe más para acotar la búsqueda.</p>{% endif %}
+        {% else %}<p class="vacio">Ninguna sesión con «{{ busqueda_sesiones.q }}».</p>{% endif %}
         {% endif %}
-      {% elif registro.estado == 'sin_ligar' %}
-      <p class="vacio">{% if registro.motivo == 'sin_telefono' %}El registro no puede ligar las sesiones de este cliente: la ficha no tiene teléfono allá.{% else %}El registro no puede ligar las sesiones de este cliente.{% endif %}</p>
-      {% elif registro.estado == 'sin_cliente' %}
-      <p class="vacio">Este proyecto no tiene cliente, así que no se le pregunta al registro.</p>
-      {% else %}
-      <p class="vacio">No se pudo consultar el registro.</p>
+      </div>
       {% endif %}
     </section>
 

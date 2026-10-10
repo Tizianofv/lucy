@@ -73,11 +73,11 @@ def pintar_modelo(modelo: dict, areas=AREAS, **consulta) -> str:
     """La página con ESE modelo: la ruta real y la plantilla real, con la base
     reemplazada por el modelo ya armado.
 
-    También se doblan las DOS lecturas que la ruta hace aparte de `pagina_de_proyectos`:
-    `areas` (el menú de grupos) y, desde la parte 11, `sesiones_quitadas_de_proyectos`
-    (la decisión de la casa sobre las sesiones del proyecto). Sin eso la ruta tocaría el
-    `pool` del proceso —el que haya dejado el último archivo de pruebas que lo pisó— y
-    esta página se pinta justamente para medir QUÉ PINTA, sin base.
+    También se doblan las TRES lecturas que la ruta hace aparte de `pagina_de_proyectos`:
+    `areas` (el menú de grupos) y, desde las partes 11 y 13, `sesiones_quitadas_de_proyectos` y
+    `sesiones_agregadas_de_proyectos` (las decisiones de la casa sobre las sesiones del proyecto).
+    Sin eso la ruta tocaría el `pool` del proceso —el que haya dejado el último archivo de pruebas
+    que lo pisó— y esta página se pinta justamente para medir QUÉ PINTA, sin base.
     """
     async def _pagina(hoy=None):
         return modelo
@@ -88,14 +88,17 @@ def pintar_modelo(modelo: dict, areas=AREAS, **consulta) -> str:
     async def _quitadas():
         return None                       # sin la tabla: el bloque sale sin controles
 
-    guardado = (db.pagina_de_proyectos, db.areas, db.sesiones_quitadas_de_proyectos)
+    guardado = (db.pagina_de_proyectos, db.areas, db.sesiones_quitadas_de_proyectos,
+                db.sesiones_agregadas_de_proyectos)
     db.pagina_de_proyectos, db.areas = _pagina, _areas
     db.sesiones_quitadas_de_proyectos = _quitadas
+    db.sesiones_agregadas_de_proyectos = _quitadas
     dar_recibo("/proyectos", **consulta)         # mide CÓMO se pinta: como si un POST hubiera mandado aquí
     try:
         r = _cliente(config.CHAT_ID_DUENO).get("/proyectos", params=consulta)
     finally:
-        db.pagina_de_proyectos, db.areas, db.sesiones_quitadas_de_proyectos = guardado
+        (db.pagina_de_proyectos, db.areas, db.sesiones_quitadas_de_proyectos,
+         db.sesiones_agregadas_de_proyectos) = guardado
     assert r.status_code == 200, r.text[:300]
     return r.text
 
@@ -616,7 +619,7 @@ def test_la_pagina_no_promete_nada_que_no_hace(mundo):
     # en `tests/test_escrituras_proyecto.py` y `tests/test_escrituras_tarea.py`).
     permitidas = re.compile(
         r"/proyectos/(nuevo|\d+/(nombre|area|responsable|estado|tareas|cliente|personas(/\d+/quitar)?|"
-        r"notas(/\d+/(editar|borrar))?)|"
+        r"notas(/\d+/(editar|borrar))?|sesiones/(quitar|devolver|agregar))|"
         r"tarea/\d+/(hecha|reabrir|titulo|borrar|responsable|comentar|comentario/\d+/editar|"
         r"personas(/\d+/quitar)?))")
     for consulta in ({"p": 1}, {"p": 3}, {"g": "CDS"}, {"sin_grupo": 1}, {"nuevo": "CDS"}, {},

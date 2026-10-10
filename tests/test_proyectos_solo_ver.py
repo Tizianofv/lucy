@@ -595,6 +595,8 @@ COBERTURA = (VISTAS + list(A_MANO.values()) + [
     {"p": 1, "filtro": "pendientes"}, {"p": 1, "filtro": "vencidas"}, {"p": 1, "filtro": "mias"},
     {"p": 1, "filtro": "persona", "quien": "Dueño", "pq": "ab", "pdonde": "proyecto"},
     {"p": 1, "filtro": "persona", "quien": "Dueño", "t": 10},
+    # Buscar una sesión del registro (parte 13, 9-oct-2026): el buscador del bloque y sus candidatas.
+    {"p": 1, "sq": "ana"},
 ])
 
 
@@ -606,11 +608,11 @@ def _paginas_de_la_casa(consultas=COBERTURA) -> list[str]:
 @contextlib.contextmanager
 def _con_el_bloque_de_sesiones():
     """Para el censo de controles: la plantilla solo dibuja el bloque de sesiones —y con él los
-    botones de quitar y devolver (parte 11)— cuando el registro contesta y hay algo pintado. Esto es
-    un doble DECLARADO de las dos lecturas del bloque (el lector del registro y las decisiones de la
-    casa): afirma la FORMA que devuelven (partes 9 y 11), no lo que la App contesta. Sin esto el
-    censo diría que esos controles no los pinta ninguna página de prueba, que es justo lo que el
-    censo existe para no dejar pasar."""
+    botones de quitar y devolver (parte 11) y el buscador y «Agregar» (parte 13)— cuando el registro
+    contesta y hay algo pintado. Esto es un doble DECLARADO de las tres lecturas del bloque (el
+    lector del registro, la búsqueda y las decisiones de la casa): afirma la FORMA que devuelven
+    (partes 9, 11 y 13), no lo que la App contesta. Sin esto el censo diría que esos controles no
+    los pinta ninguna página de prueba, que es justo lo que el censo existe para no dejar pasar."""
     def _renglon(**campos):
         return registro_lectura._renglon({"cancelada": False, "es_trabajo": False, **campos})
 
@@ -620,7 +622,13 @@ def _con_el_bloque_de_sesiones():
     async def _lector(noco_id, *a, **k):
         return {"estado": "ok", "motivo": "",
                 "sesiones": [pintada], "trabajos": [quitada],
-                "totales": registro_lectura.totales_de_sesiones([pintada, quitada])}
+                "totales": registro_lectura.totales_de_sesiones([pintada, quitada]),
+                "no_halladas": ["14"], "canceladas": []}      # la agregada 14: sale el aviso
+
+    async def _buscar(texto):
+        return {"estado": "ok", "hay_mas": False, "sesiones": [registro_lectura._candidato(
+            {"ref": 13, "codigo": "c013", "es_trabajo": False, "fecha": "2026-10-09",
+             "servicio": "Voces", "nombre": "Ana"})]}
 
     class _Base(pp.BaseQueNoSeToca):
         def __getattr__(self, nombre):
@@ -628,15 +636,22 @@ def _con_el_bloque_de_sesiones():
                 async def _quitadas():
                     return {1: {"11": "s011"}}
                 return _quitadas
+            if nombre == "sesiones_agregadas_de_proyectos":
+                async def _agregadas():
+                    return {1: {"14": "a014"}}
+                return _agregadas
             return super().__getattr__(nombre)
 
-    guardado = (registro_lectura.sesiones_de_cliente, pp.BaseQueNoSeToca)
+    guardado = (registro_lectura.sesiones_de_cliente, registro_lectura.buscar_sesiones,
+                pp.BaseQueNoSeToca)
     registro_lectura.sesiones_de_cliente = _lector
+    registro_lectura.buscar_sesiones = _buscar
     pp.BaseQueNoSeToca = _Base
     try:
         yield
     finally:
-        registro_lectura.sesiones_de_cliente, pp.BaseQueNoSeToca = guardado
+        (registro_lectura.sesiones_de_cliente, registro_lectura.buscar_sesiones,
+         pp.BaseQueNoSeToca) = guardado
 
 
 def test_el_modelo_de_prueba_hace_correr_todos_los_controles_de_la_plantilla(monkeypatch):
