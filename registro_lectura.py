@@ -268,14 +268,16 @@ def horas_de_estudio(respuesta) -> dict | None:
 
     Lo que suma es `respuesta["sesiones"]`, la lista ya con las quitadas fuera y las agregadas
     dentro; los trabajos van en su propia lista y no entran, y las canceladas tampoco (`_renglon`
-    las deja caer). Una sesión sin horas cuenta como sesión y no suma. No se pinta cuando el
-    registro no contestó, no pudo ligar las del cliente o no se le preguntó (`estado` distinto de
-    `ok`): ahí la lista está incompleta y «N h» sería mentira. Tampoco cuando no hay ninguna sesión
-    que pintar: «0 h de estudio en 0 sesiones» es verdad, pero es ruido. La suma va en `Decimal`
-    (las horas se suman exactas) y el número sale con la misma regla con que el bloque pinta las
-    horas de un renglón: `:g`, sin ceros de cola.
+    las deja caer). Una sesión sin horas cuenta como sesión y no suma. La cifra sale con tal de que
+    el registro haya contestado (`se_le_pregunto`) y haya al menos una sesión en esa lista, sin
+    mirar de qué estado se trata: así sale también con el proyecto sin cliente y con la ficha que
+    no se pudo ligar, cuando el registro devolvió las sesiones que la casa agregó a mano. No sale
+    cuando el registro no contestó, cuando no se le preguntó ni cuando no hay ninguna sesión que
+    pintar: «0 h de estudio en 0 sesiones» es verdad, pero es ruido. La suma va en `Decimal` (las
+    horas se suman exactas) y el número sale con la misma regla con que el bloque pinta las horas
+    de un renglón: `:g`, sin ceros de cola.
     """
-    if respuesta["estado"] != "ok" or not respuesta["sesiones"]:
+    if not respuesta["se_le_pregunto"] or not respuesta["sesiones"]:
         return None
     total = Decimal(0)
     for renglon in respuesta["sesiones"]:

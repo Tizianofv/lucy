@@ -8,11 +8,14 @@ QUÉ SE VIGILA, una prueba por garantía:
     lista «Sesiones»: ni los trabajos ni las canceladas cuentan;
   · una sesión sin horas cuenta como sesión y no suma;
   · el número sale como el bloque pinta las horas de un renglón («3 h», «1.5 h»);
-  · cuando el registro no contestó, no pudo ligar las del cliente o no se le preguntó,
-    la cifra NO se pinta (nada de «0 h»); y con el registro contestando y ninguna
-    sesión que pintar, tampoco;
+  · la cifra sale con tal de que el registro haya contestado y la lista «Sesiones» tenga al
+    menos una: sale también con el proyecto sin cliente y con la ficha sin ligar cuando el
+    registro devolvió las agregadas a mano, sea cual sea el estado;
+  · NO sale si el registro no contestó (con y sin agregadas), si no se le preguntó, o si no
+    hay ninguna sesión que pintar (nada de «0 h»);
   · se ve igual en la sesión de la casa y en la de solo ver;
-  · la función que suma, sola, con sus bordes (decimales y horas que no son un número).
+  · la función que suma, sola, con sus bordes (decimales, horas que no son un número y
+    horas booleanas, que no son un 1).
 
 CÓMO. Igual que `tests/test_sesiones_de_proyecto.py`: la App se dobla EN LA RED (un
 servidor HTTP de verdad en 127.0.0.1) y la página se pinta por la ruta real y la
@@ -124,30 +127,56 @@ def test_una_sola_sesion_lo_dice_en_singular(registro, monkeypatch):
     assert "3 h de estudio en 1 sesión" in _como_va(_abrir(monkeypatch))
 
 
+def test_las_horas_booleanas_no_cuentan_como_un_uno(registro, monkeypatch):
+    """`horas: true` no es un número: la sesión cuenta y no suma (si contara, sería 1 h)."""
+    registro.sesiones = _respuesta(sesiones=(
+        {**SESION, "ref": 31, "codigo": "s031", "horas": True},
+        {**SESION, "ref": 32, "codigo": "s032", "horas": False}))
+    _con_decisiones(monkeypatch, quitadas=(), agregadas=())
+    html = _abrir(monkeypatch)
+    assert "s031" in _las_sesiones(html) and "s032" in _las_sesiones(html)
+    assert "0 h de estudio en 2 sesiones" in _como_va(html)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # Garantía: sin dato no se pinta (y nunca un «0 h»)
 # ═══════════════════════════════════════════════════════════════════════
 
 @pytest.mark.parametrize("como", ["502", "401"])
-def test_sin_la_respuesta_del_registro_no_se_pinta_la_cifra(registro, monkeypatch, como):
+@pytest.mark.parametrize("agregadas", [(), (AGREGADA_REF,)])
+def test_sin_la_respuesta_del_registro_no_se_pinta_la_cifra(registro, monkeypatch, como, agregadas):
+    """Sin respuesta no hay cifra, tampoco con una agregada que pedir: no se afirma nada."""
     registro.forzada = _forzar(int(como))
+    registro.otras = [AGREGADA]
+    _con_decisiones(monkeypatch, quitadas=(), agregadas=agregadas)
     html = _abrir(monkeypatch)
     assert "h de estudio" not in html
     assert "No se pudo consultar el registro." in html
 
 
-def test_sin_poder_ligar_las_del_cliente_no_se_pinta_aunque_haya_agregadas(registro, monkeypatch):
-    """Con la ficha sin ligar, la lista trae las agregadas pero la cifra no se pinta: lo que hay
-    es una lista incompleta, no un «0 h»."""
+def test_sin_poder_ligar_con_una_agregada_la_cifra_sale(registro, monkeypatch):
+    """Con la ficha sin ligar, el registro contestó y devolvió la agregada que se le pidió: la
+    lista la pinta, así que la cifra sale."""
     registro.sesiones = _respuesta(sesiones=(), puede_ligar=False, motivo="sin_telefono")
     registro.otras = [AGREGADA]
     _con_decisiones(monkeypatch, quitadas=())
     html = _abrir(monkeypatch)
     assert "a025" in _las_sesiones(html), "la agregada sí se pinta"
-    assert "h de estudio" not in _como_va(html)
+    assert "2.5 h de estudio en 1 sesión" in _como_va(html)
 
 
-def test_sin_cliente_no_se_le_pregunta_al_registro_ni_hay_cifra(registro, monkeypatch):
+def test_sin_cliente_con_una_agregada_la_cifra_sale(registro, monkeypatch):
+    """El proyecto sin cliente sí le pregunta al registro por la agregada; contestó y hay una
+    sesión pintada, así que la cifra sale."""
+    registro.otras = [AGREGADA]
+    _con_decisiones(monkeypatch, quitadas=())
+    html = _abrir(monkeypatch, noco_id=None)
+    assert [p["ruta"] for p in registro.pedidos] == ["/api/lucy/sesiones?sesion=25"]
+    assert "a025" in _las_sesiones(html), "la agregada sí se pinta"
+    assert "2.5 h de estudio en 1 sesión" in _como_va(html)
+
+
+def test_sin_cliente_y_sin_agregadas_no_se_le_pregunta_al_registro_ni_hay_cifra(registro, monkeypatch):
     html = _abrir(monkeypatch, noco_id=None)
     assert registro.pedidos == []
     assert "h de estudio" not in _como_va(html)
@@ -180,33 +209,52 @@ def test_la_cifra_es_la_misma_en_la_casa_y_en_solo_ver(registro, monkeypatch):
 # La función que suma, sola, con sus bordes
 # ═══════════════════════════════════════════════════════════════════════
 
-def _suma(*horas: str | None, estado: str = "ok"):
+def _cifra(sesiones, *, contesto=True, estado="ok"):
+    """La cifra con esa lista de sesiones. `contesto` falso imita al registro que no contestó (o al
+    que no se le preguntó); el `estado` no lo mira la función."""
     return registro_lectura.horas_de_estudio(
-        {"estado": estado, "sesiones": [{"horas": h} for h in horas]})
+        {"estado": estado, "se_le_pregunto": contesto, "sesiones": sesiones})
+
+
+def _con_horas(*valores):
+    return [{"horas": v} for v in valores]
 
 
 def test_la_suma_con_decimales_y_sin_ceros_de_cola():
-    assert _suma("3", "1.5", "2.25") == {"horas": "6.75", "sesiones": 3}
-    assert _suma("3", "1.5") == {"horas": "4.5", "sesiones": 2}
-    assert _suma("1.5", "1.5") == {"horas": "3", "sesiones": 2}
-    assert _suma("0.1", "0.2") == {"horas": "0.3", "sesiones": 2}
-    assert _suma("14") == {"horas": "14", "sesiones": 1}
+    assert _cifra(_con_horas("3", "1.5", "2.25")) == {"horas": "6.75", "sesiones": 3}
+    assert _cifra(_con_horas("3", "1.5")) == {"horas": "4.5", "sesiones": 2}
+    assert _cifra(_con_horas("1.5", "1.5")) == {"horas": "3", "sesiones": 2}
+    assert _cifra(_con_horas("0.1", "0.2")) == {"horas": "0.3", "sesiones": 2}
+    assert _cifra(_con_horas("14")) == {"horas": "14", "sesiones": 1}
 
 
 def test_una_sesion_sin_horas_cuenta_y_no_suma():
-    assert _suma("3", None) == {"horas": "3", "sesiones": 2}
-    assert _suma(None, None) == {"horas": "0", "sesiones": 2}
+    assert _cifra(_con_horas("3", None)) == {"horas": "3", "sesiones": 2}
+    assert _cifra(_con_horas(None, None)) == {"horas": "0", "sesiones": 2}
 
 
 @pytest.mark.parametrize("basura", ["muchas", "", "inf", "nan", "-", "1,5"])
 def test_horas_que_no_son_un_numero_cuentan_y_no_suman(basura):
-    assert _suma(basura, "2") == {"horas": "2", "sesiones": 2}
+    assert _cifra(_con_horas(basura, "2")) == {"horas": "2", "sesiones": 2}
+
+
+def test_horas_booleanas_cuentan_y_no_suman():
+    """Un `true` no es una hora: si contara como número daría 1 (`f"{True:g}"` es «1»)."""
+    assert _cifra(_con_horas(True, False)) == {"horas": "0", "sesiones": 2}
+    assert _cifra(_con_horas(True, "2")) == {"horas": "2", "sesiones": 2}
+
+
+@pytest.mark.parametrize("estado", ["ok", "sin_ligar", "sin_cliente"])
+def test_con_el_registro_contestando_y_sesiones_pintadas_la_funcion_da_la_cifra(estado):
+    """El estado no decide: con el registro contestando y una sesión pintada, la cifra sale."""
+    assert _cifra(_con_horas("3"), estado=estado) == {"horas": "3", "sesiones": 1}
 
 
 @pytest.mark.parametrize("estado", ["no_se_pudo", "sin_ligar", "sin_cliente"])
 def test_sin_la_respuesta_del_registro_la_funcion_no_devuelve_cifra(estado):
-    assert _suma("3", estado=estado) is None
+    assert _cifra(_con_horas("3"), contesto=False, estado=estado) is None
+    assert _cifra([], contesto=False, estado=estado) is None
 
 
 def test_sin_ninguna_sesion_la_funcion_no_devuelve_cifra():
-    assert _suma() is None
+    assert _cifra([]) is None

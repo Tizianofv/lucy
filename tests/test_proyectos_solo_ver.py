@@ -620,7 +620,9 @@ def _con_el_bloque_de_sesiones():
     quitada = _renglon(ref=12, servicio="Mezcla", codigo="t012", fecha="2026-10-09")
 
     async def _lector(noco_id, *a, **k):
-        return {"estado": "ok", "motivo": "",
+        # `se_le_pregunto` va porque el lector de verdad SIEMPRE lo trae (parte 9): la parte 14 lee
+        # ese campo para la cifra de las horas de estudio.
+        return {"estado": "ok", "motivo": "", "se_le_pregunto": True,
                 "sesiones": [pintada], "trabajos": [quitada],
                 "totales": registro_lectura.totales_de_sesiones([pintada, quitada]),
                 "no_halladas": ["14"], "canceladas": []}      # la agregada 14: sale el aviso
