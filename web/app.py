@@ -1326,8 +1326,8 @@ async def _buscar_personas_para_la_pagina(pq: str, pdonde: str) -> dict | None:
 async def _buscar_sesiones_para_la_pagina(sq: str) -> dict | None:
     """La búsqueda de una sesión del registro que se dibuja SIN JavaScript (diseño 3.6): `None` si
     no hay nada que buscar. El texto se limpia y el pedido lo hace `registro_lectura.buscar_sesiones`
-    (solo LEE); si el registro no contesta se dice, y nunca se inventa una lista vacía que parezca
-    «esa sesión no está»."""
+    (solo LEE); si el registro no contesta se dice, y una lista vacía no se disfraza de «esa sesión
+    no está»."""
     texto = sq.strip()
     if not texto:
         return None
