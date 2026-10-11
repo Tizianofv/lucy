@@ -288,7 +288,7 @@ NOMBRE = "Cliente X"
 
 @pytest.mark.parametrize("con", ["casa", "ver"])
 @pytest.mark.parametrize("unida", [False, True])
-def test_en_el_camino_de_exito_nada_del_cliente_llega_al_registro_ni_a_la_salida(
+def test_en_el_camino_de_exito_nada_del_cliente_llega_a_los_registradores_ni_a_stdout_ni_stderr(
         mundo, noco, caplog, capsys, con, unida):
     _con_cliente(mundo)
     if unida:
