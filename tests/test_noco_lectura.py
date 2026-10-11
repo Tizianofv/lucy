@@ -22,9 +22,10 @@ LAS TRES GARANTÍAS, cada una con lo que la haría falsa:
   · **G14 — el buscador no deja meter condiciones.** El texto pasa por `_limpio`
     antes de armar el `where`, y se comprueba por la ruta real del panel, no
     solo por la función.
-  · **G16 — nunca se piden teléfono, correo ni `bsuid`.** Lo que sale lleva
-    `fields=Id,nombre` y nada más, y lo que VUELVE también: una fila de Noco con
-    columnas de más sale de este módulo con dos claves.
+  · **G16 — las columnas que se piden son dos juegos fijos y `bsuid` no está en
+    ninguno.** `buscar_personas` y `persona` piden `Id,nombre`; `contacto` pide
+    `Id,telefono,email,unida_a`. Lo que VUELVE también se acota: una fila de Noco
+    con columnas de más sale de este módulo con las claves de su función.
 
 LA FRONTERA DEL CENSO (la prueba del final), dicha en una línea para poder
 predecirla sin correrla: es culpable todo `.py` del repositorio, fuera de
@@ -326,7 +327,7 @@ async def test_G13_todo_lo_que_sale_del_modulo_es_un_get_a_noco(noco):
 
 
 async def test_G16_lo_que_sale_pide_un_nombre_y_nada_mas(noco):
-    """Las columnas que se piden son `Id,nombre`, en TODOS los pedidos.
+    """Las columnas que piden `buscar_personas` y `persona` son `Id,nombre`.
 
     Se mira lo que salió, no lo que dice el código: se llaman las funciones
     públicas y se leen los `fields` de los pedidos que llegaron al transporte.
@@ -344,6 +345,26 @@ async def test_G16_lo_que_sale_pide_un_nombre_y_nada_mas(noco):
         for prohibido in ("telefono", "email", "bsuid", "phone", "mail"):
             assert prohibido not in str(pedido.url).lower(), (
                 f"el pedido nombra {prohibido!r}: {pedido.url}")
+
+
+async def test_G16_contacto_pide_su_juego_de_columnas_y_no_bsuid(noco):
+    noco.filas = [{"Id": 7, "telefono": "8090000000", "email": "a@b.invalid"}]
+    await noco_lectura.contacto(7)
+    assert noco.params()["fields"] == "Id,telefono,email,unida_a"
+    assert "bsuid" not in str(noco.donde().url).lower()
+
+
+async def test_G16_contacto_con_una_fila_sucia_devuelve_solo_telefono_y_correo(noco):
+    noco.filas = [{"Id": 7, "nombre": "Ana", "telefono": " 8090000000 ", "email": "a@b.invalid",
+                   "bsuid": "xx-99"}]
+    assert await noco_lectura.contacto(7) == {"telefono": "8090000000", "email": "a@b.invalid"}
+
+
+@pytest.mark.parametrize("malo", [0, -1, True, "7", None, 7.0])
+async def test_contacto_pide_un_entero_positivo_y_no_sale_a_la_red(noco, malo):
+    with pytest.raises(ValueError):
+        await noco_lectura.contacto(malo)
+    assert noco.pedidos == []
 
 
 async def test_G16_una_fila_con_columnas_de_mas_sale_con_dos_claves(noco):
@@ -761,6 +782,7 @@ _LLAMADAS_INOCUAS = {
     "os.environ.get", "os.environ.get().strip", "os.environ.get().strip().rstrip",
     "<Constant>.join", "texto.replace", "texto.split", "nombre.strip",
     "fila.get", "datos.get", "respuesta.json",
+    "range", "valor.strip",
 }
 
 # La red: lo único que sale del módulo. Cada una, una vez, y solo en `_get`.

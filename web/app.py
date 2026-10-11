@@ -1248,6 +1248,13 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         # agregadas dentro. Es None —la cifra no se pinta— cuando el registro no contestó, no pudo
         # ligar las del cliente o no se le preguntó, y cuando no hay ninguna sesión que pintar.
         registro["estudio"] = registro_lectura.horas_de_estudio(registro)
+    # El teléfono y el correo del cliente, de Noco; sin ellos si no contesta.
+    contacto_del_cliente = None
+    if vista["tipo"] == "proyecto" and vista["proyecto"].get("cliente_noco_id") is not None:
+        try:
+            contacto_del_cliente = await noco_lectura.contacto(vista["proyecto"]["cliente_noco_id"])
+        except noco_lectura.NocoNoContesta:
+            contacto_del_cliente = None
     # LA BÚSQUEDA DE UNA SESIÓN (parte 13, 9-oct-2026): solo la sesión de la casa y solo en un
     # proyecto; el texto se limpia antes de salir (`registro_lectura.buscar_sesiones`). Es un
     # pedido aparte, y solo cuando hay algo que buscar.
@@ -1258,6 +1265,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         request, "proyectos.html",
         {"solo_ver": solo_ver,
          "registro": registro, "busqueda_sesiones": busqueda_sesiones,
+         "contacto_del_cliente": contacto_del_cliente,
          "filtro": filtro, "quien": quien, "tareas_p": tareas_p, "personas_filtro": personas_filtro,
          "ofrece_mias": bool(mi_nombre), "sufijo_filtro": sufijo_filtro,
          "consulta_filtro": ("?" + sufijo_filtro[1:]) if sufijo_filtro else "",

@@ -2,10 +2,11 @@
 
 QUÉ ES ESTO, Y QUÉ NO. El CRM de CDS vive en un NocoDB que no es de Lucy: ahí
 están los clientes de Natalia y de la App de registro. Este módulo es la única
-parte de Lucy que lo mira, y lo mira **solo para leer un nombre**:
-`buscar_personas` para el buscador del panel y `persona` para volver a pedir la
-ficha por su Id antes de guardarla (`db.poner_cliente`, E2: el nombre que se
-guarda es el que Noco devuelve, nunca el que mandó el navegador).
+parte de Lucy que lo mira, y lo mira para leer: `buscar_personas` para el
+buscador del panel, `persona` para volver a pedir la ficha por su Id antes de
+guardarla (`db.poner_cliente`, E2: el nombre que se guarda es el que Noco
+devuelve, nunca el que mandó el navegador) y `contacto` para enseñar el teléfono
+y el correo del cliente de un proyecto.
 
 LA GARANTÍA QUE SOSTIENE TODO LO DEMÁS, y por la que este archivo está escrito
 así: **Lucy no escribe en Noco, punto.** El token de Railway
@@ -15,8 +16,9 @@ da el código, y por eso:
 
   · `_get` es la única función de este módulo que llama a la red, y solo sabe
     hacer GET;
-  · `_get` es además la que decide qué columnas salen (`fields`), para que
-    ningún camino de arriba pueda pedir teléfono, correo ni `bsuid`;
+  · `_get` es además la que decide qué columnas salen (`fields`): quien llama
+    elige entre dos juegos fijos de este archivo, nunca escribe una columna, y
+    `bsuid` no está en ninguno;
   · **fuera de este archivo nadie obtiene la URL ni el token por las formas
     que la prueba ve** (`os` y sus alias, `environ`/`getenv` con clave constante,
     imports del lector). Ningún
@@ -82,9 +84,14 @@ TIEMPO_LIMITE = 8.0
 # `limit` que se le pide a Noco: no se traen 733 fichas para enseñar 20.
 TOPE_BUSQUEDA = 20
 
-# Las ÚNICAS columnas que salen de Lucy hacia Noco. Nunca teléfono, correo ni
-# `bsuid`: el panel enseña un nombre y con un nombre se elige.
+# Las columnas de `buscar_personas` y `persona`: un nombre, con el que se elige.
 COLUMNAS = "Id,nombre"
+
+# Las columnas de `contacto`: teléfono y correo principales y la marca de ficha unida a otra.
+COLUMNAS_CONTACTO = "Id,telefono,email,unida_a"
+
+# Cuántas fichas unidas se siguen desde la del cliente antes de darse por vencido.
+TOPE_SALTOS = 10
 
 # Las tres variables del servicio `lucy`. Se leen por su nombre desde acá y
 # desde ningún otro archivo del repositorio (lo comprueba la prueba del censo).
@@ -156,7 +163,7 @@ def _ficha(fila) -> dict | None:
     1. Traducir el `Id`/`nombre` de Noco a lo que el resto de Lucy espera
        (`{id, nombre}`, §4 del diseño).
     2. **No dejar pasar nada más.** El diccionario que sale de acá tiene dos
-       claves y siempre las mismas: aunque Noco devolviera la fila entera
+       claves: aunque Noco devolviera la fila entera
        —teléfono, correo, `bsuid`— por no respetar el `fields`, o porque mañana
        alguien cambie el `fields`, lo que sale de este módulo sigue siendo un
        nombre. Es la última puerta, y por eso se arma acá y no con un `dict(fila)`.
@@ -176,8 +183,9 @@ def _ficha(fila) -> dict | None:
     return {"id": ident, "nombre": nombre.strip()}
 
 
-async def _get(ruta: str, parametros: dict[str, str]) -> dict:
-    """LA ÚNICA PUERTA DE SALIDA. Lo único de este repositorio que le habla a
+async def _get(ruta: str, parametros: dict[str, str],
+               con_contacto: bool = False) -> dict:
+    """LA PUERTA DE SALIDA. Lo único de este repositorio que le habla a
     Noco, y solo sabe hacer GET.
 
     Qué decide acá y no en quien llama, a propósito:
@@ -185,9 +193,10 @@ async def _get(ruta: str, parametros: dict[str, str]) -> dict:
       · **El método.** Se escribe `cliente.get(...)`, literal. No hay un
         parámetro «método» que alguien pueda llenar con «POST» desde arriba, ni
         un `request(...)` con el verbo en una variable.
-      · **Las columnas.** `fields` lo pone esta función, siempre `Id,nombre`.
-        Si lo pusiera quien llama, agregar un `fields=` en un camino de arriba
-        sería pedir teléfonos sin tocar este archivo.
+      · **Las columnas.** `fields` lo pone esta función: `COLUMNAS`, o
+        `COLUMNAS_CONTACTO` si quien llama lo pide con `con_contacto`. Si lo
+        pusiera quien llama, agregar un `fields=` en un camino de arriba sería
+        pedir otras columnas sin tocar este archivo.
       · **El token.** Va en la cabecera `xc-token` y en ningún otro sitio: ni en
         la URL, ni en un registro, ni en el mensaje de un error.
 
@@ -200,7 +209,8 @@ async def _get(ruta: str, parametros: dict[str, str]) -> dict:
     """
     base, tabla, token = _configurado()
     url = f"{base}/api/v2/tables/{tabla}/{ruta}"
-    pedido = {**parametros, "fields": COLUMNAS}
+    pedido = {**parametros,
+              "fields": COLUMNAS_CONTACTO if con_contacto else COLUMNAS}
     try:
         async with httpx.AsyncClient(timeout=TIEMPO_LIMITE) as cliente:
             respuesta = await cliente.get(
@@ -276,3 +286,34 @@ async def persona(noco_id: int) -> dict | None:
     })
     fichas = _fichas(datos)
     return fichas[0] if fichas else None
+
+
+def _texto_o_none(valor) -> str | None:
+    """El texto recortado de un valor de Noco, o `None` si no hay texto."""
+    if not isinstance(valor, str) or not valor.strip():
+        return None
+    return valor.strip()
+
+
+async def contacto(noco_id: int) -> dict | None:
+    """El teléfono y el correo de la ficha con ese `Id`, siguiendo las fichas unidas."""
+    if isinstance(noco_id, bool) or not isinstance(noco_id, int) or noco_id <= 0:
+        raise ValueError("una ficha de Noco se pide por su Id: un entero positivo")
+    for _ in range(TOPE_SALTOS + 1):
+        datos = await _get("records", {
+            "where": f"(Id,eq,{noco_id})",
+            "limit": "1",
+        }, con_contacto=True)
+        if not datos["list"] or not isinstance(datos["list"][0], dict):
+            return None
+        fila = datos["list"][0]
+        unida = fila.get("unida_a")
+        if isinstance(unida, bool) or not isinstance(unida, int) or unida <= 0:
+            telefono = _texto_o_none(fila.get("telefono"))
+            email = _texto_o_none(fila.get("email"))
+            if telefono is None and email is None:
+                return None
+            return {"telefono": telefono, "email": email}
+        noco_id = unida
+    log.warning("Noco: la cadena de fichas unidas pasa del tope")
+    raise NocoNoContesta("la cadena de fichas unidas es más larga que el tope")

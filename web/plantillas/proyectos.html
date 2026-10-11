@@ -339,6 +339,11 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
    salir del campo o con Enter. Sin JavaScript el botón sigue ahí y es lo que
    envía el formulario. «Comentar» NO se esconde: es el botón de la maqueta. */
 .js form.resp button,.js form.renombrar button.guardar,.js .buscador button,.js .buscar-persona button,.js .quitar-cliente{display:none}
+.cliente-datos{display:flex;flex-direction:column;gap:.15rem;min-width:0}
+.cliente-datos .dato{font-size:.95rem;overflow-wrap:anywhere}
+.cliente-datos.chico .dato{font-size:.82rem}
+.cliente-datos .dato span{color:var(--suave)} .cliente-datos .dato b{font-weight:600}
+.cliente-bloque{display:flex;flex-direction:column;gap:.35rem;min-width:0}
 </style></head><body>
 
 {#- UNA FILA DE TAREA (Lucy 1.0, E6). Cada acción es un `<form method="post">`
@@ -821,12 +826,17 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       <noscript><a class="nota" href="/proyectos?p={{ m.id }}&amp;editar=nombre{{ sufijo_filtro }}">Cambiar el nombre</a></noscript>{% endif %}
       {#- El aviso va justo debajo del título, como en la maqueta. -#}
       {% if m.dormido %}<div class="aviso-dormido">Este proyecto lleva {{ m.dias_sin_movimiento }} días sin movimiento: ni tareas hechas ni comentarios.</div>{% endif %}
-      <div class="quienes">{% if solo_ver %}<span class="nota">Cliente: <b>{{ m.cliente or 'Sin cliente' }}</b></span> <span class="nota">Responsable: <b>{{ m.responsable or '—' }}</b></span>{% else %}
+      {#- TELÉFONO Y CORREO del cliente (11-oct-2026): salen de Noco al abrir el proyecto y se pintan como texto. -#}
+      {%- macro datos_del_cliente(c) -%}
+        {%- if c.telefono %}<span class="dato"><span>Teléfono:</span> <b>{{ c.telefono }}</b></span>{% endif -%}
+        {%- if c.email %}<span class="dato"><span>Correo:</span> <b>{{ c.email }}</b></span>{% endif -%}
+      {%- endmacro %}
+      <div class="quienes">{% if solo_ver %}{% if contacto_del_cliente %}<div class="cliente-datos chico"><span class="dato"><span>Cliente:</span> <b>{{ m.cliente }}</b></span>{{ datos_del_cliente(contacto_del_cliente) }}</div>{% else %}<span class="nota">Cliente: <b>{{ m.cliente or 'Sin cliente' }}</b></span>{% endif %} <span class="nota">Responsable: <b>{{ m.responsable or '—' }}</b></span>{% else %}
         {#- EL CLIENTE se busca entre las personas de Noco (opcional: se puede
             quitar). Con JavaScript, escribir ofrece coincidencias y elegir
             guarda; vaciar la caja quita el cliente. Sin JavaScript: «Buscar»
             y un botón por coincidencia. -#}
-        <div class="persona-campo cliente-campo">
+        {% if contacto_del_cliente %}<div class="cliente-bloque">{% endif %}<div class="persona-campo cliente-campo">
           <form class="buscar-persona" method="get" action="/proyectos" role="search">
             <label>Cliente <input class="campo-quien" type="text" name="pq" value="{% if busqueda and busqueda.donde == 'cliente' %}{{ busqueda.q }}{% else %}{{ m.cliente or '' }}{% endif %}" placeholder="Buscar en Noco… (sin cliente)" aria-label="Cliente del proyecto" data-buscar-persona="enviar" autocomplete="off"{% if m.cliente %} data-actual{% endif %}></label>
             {{ vista_oculta('cliente') }}
@@ -836,7 +846,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
             {{ sugerencias('cliente') }}
             {% if m.cliente %}<button class="btn-linea quitar-cliente" name="noco_id" value="">Quitar el cliente</button>{% endif %}
           </form>
-        </div>
+        </div>{% if contacto_del_cliente %}<div class="cliente-datos">{{ datos_del_cliente(contacto_del_cliente) }}</div></div>{% endif %}
         <form class="resp" method="post" action="/proyectos/{{ m.id }}/responsable" data-auto>
           <label for="resp-{{ m.id }}">Responsable</label>
           <select id="resp-{{ m.id }}" name="responsable">
