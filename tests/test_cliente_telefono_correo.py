@@ -279,3 +279,54 @@ async def test_una_cadena_que_pasa_del_tope_sube_no_contesta(noco):
     with pytest.raises(noco_lectura.NocoNoContesta):
         await noco_lectura.contacto(7)
     assert len(noco.pedidos) == noco_lectura.TOPE_SALTOS + 1
+
+
+# ── lo que se registra y se imprime, y el fallo que no es de red ────────────────────────
+
+NOMBRE = "Cliente X"
+
+
+@pytest.mark.parametrize("con", ["casa", "ver"])
+@pytest.mark.parametrize("unida", [False, True])
+def test_en_el_camino_de_exito_nada_del_cliente_llega_al_registro_ni_a_la_salida(
+        mundo, noco, caplog, capsys, con, unida):
+    _con_cliente(mundo)
+    if unida:
+        noco.fichas = {7: _ficha(7, unida_a=8), 8: _ficha(8, telefono=TELEFONO, email=CORREO)}
+    with caplog.at_level(logging.DEBUG, logger=""):
+        html = _abrir(con=con)
+    assert TELEFONO in html and CORREO in html
+    visto = caplog.text + "".join(r.getMessage() for r in caplog.records)
+    salida = capsys.readouterr()
+    for canario in (TELEFONO, CORREO, NOMBRE):
+        assert canario not in visto, f"{canario!r} llegó al registro"
+        assert canario not in salida.out + salida.err, f"{canario!r} llegó a la salida"
+
+
+class _Raro(Exception):
+    pass
+
+
+def test_una_excepcion_que_no_es_de_red_deja_la_parte_de_cliente_como_hoy(mundo, noco, monkeypatch, caplog):
+    _con_cliente(mundo)
+
+    async def rota(_):
+        raise _Raro("texto-secreto-de-la-excepcion")
+    monkeypatch.setattr(noco_lectura, "contacto", rota)
+    with caplog.at_level(logging.DEBUG, logger=""):
+        q = _quienes(_abrir())
+    assert "cliente-datos" not in q and NOMBRE in q
+    assert [r.getMessage() for r in caplog.records if r.name == "lucy.panel"] == [
+        "No se pudo leer el contacto del cliente en Noco."]
+    assert "texto-secreto" not in caplog.text and "_Raro" not in caplog.text
+
+
+@pytest.mark.parametrize("con", ["casa", "ver"])
+def test_una_url_base_que_httpx_rechaza_no_tumba_la_pagina(mundo, noco, monkeypatch, caplog, con):
+    _con_cliente(mundo)
+    monkeypatch.setenv("NOCODB_BASE", "https://noco.ejemplo.invalid:abc/api")
+    monkeypatch.setattr(noco_lectura, "httpx", HTTPX)       # el httpx de verdad, sin el transporte doblado
+    with caplog.at_level(logging.DEBUG, logger=""):
+        q = _quienes(_abrir(con=con))
+    assert "cliente-datos" not in q and NOMBRE in q
+    assert "abc" not in caplog.text and "InvalidURL" not in caplog.text

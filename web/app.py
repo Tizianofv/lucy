@@ -1248,12 +1248,13 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         # agregadas dentro. Es None —la cifra no se pinta— cuando el registro no contestó, no pudo
         # ligar las del cliente o no se le preguntó, y cuando no hay ninguna sesión que pintar.
         registro["estudio"] = registro_lectura.horas_de_estudio(registro)
-    # El teléfono y el correo del cliente, de Noco; sin ellos si no contesta.
+    # El teléfono y el correo del cliente, de Noco; con cualquier fallo se pinta solo el nombre.
     contacto_del_cliente = None
     if vista["tipo"] == "proyecto" and vista["proyecto"].get("cliente_noco_id") is not None:
         try:
             contacto_del_cliente = await noco_lectura.contacto(vista["proyecto"]["cliente_noco_id"])
-        except noco_lectura.NocoNoContesta:
+        except Exception:
+            log.warning("No se pudo leer el contacto del cliente en Noco.")
             contacto_del_cliente = None
     # LA BÚSQUEDA DE UNA SESIÓN (parte 13, 9-oct-2026): solo la sesión de la casa y solo en un
     # proyecto; el texto se limpia antes de salir (`registro_lectura.buscar_sesiones`). Es un

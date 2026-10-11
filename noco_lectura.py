@@ -202,7 +202,7 @@ async def _get(ruta: str, parametros: dict[str, str],
 
     Un fallo de red, un código de error, una respuesta que no es JSON o una que
     no tiene la forma que Noco tiene se levantan como `NocoNoContesta` con el
-    motivo. La forma que se espera —`{"list": [...], "pageInfo": {...}}`— es la
+    motivo; una URL base que httpx rechaza sube con la excepción de httpx. La forma que se espera —`{"list": [...], "pageInfo": {...}}`— es la
     del API v2 medido por la sala el 1-oct-2026 (HTTP 200 y
     `pageInfo.totalRows` = 733 con `limit=1&fields=Id`), no una suposición de
     este archivo; el doble de la prueba dice de dónde sale y su frontera.
