@@ -914,6 +914,32 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     </section>
     {% endif %}
 
+    <section class="bloque">
+      <div class="encabezado"><h2>Tareas</h2></div>
+      {#- LOS FILTROS: enlaces de lectura (GET) que el servidor dibuja; la lista sale de
+          `db.tareas_con_filtro` y las cifras de «Cómo va» no cambian. «Las mías» no se ofrece
+          en solo ver (esa sesión no dice de quién es). -#}
+      {% if m.n_total %}
+      {% set base = '/proyectos?p=' ~ m.id %}
+      <nav class="filtros" aria-label="Filtrar las tareas">
+        <a href="{{ base }}"{% if not filtro %} aria-current="true"{% endif %}>Todas</a>
+        <a href="{{ base }}&amp;filtro=pendientes"{% if filtro == 'pendientes' %} aria-current="true"{% endif %}>Pendientes</a>
+        <a href="{{ base }}&amp;filtro=vencidas"{% if filtro == 'vencidas' %} aria-current="true"{% endif %}>Vencidas</a>
+        {% if ofrece_mias %}<a href="{{ base }}&amp;filtro=mias"{% if filtro == 'mias' %} aria-current="true"{% endif %}>Las mías</a>{% endif %}
+        {% if personas_filtro %}<span class="nota">Por persona:</span>
+        {% for n in personas_filtro %}<a href="{{ base }}&amp;filtro=persona&amp;quien={{ n|urlencode }}"{% if filtro == 'persona' and quien == n %} aria-current="true"{% endif %}>{{ n }}</a>{% endfor %}{% endif %}
+      </nav>
+      {% endif %}
+      {{ lista_de_tareas(tareas_p.pendientes, tareas_p.otras, tareas_p.n_hechas, tareas_p.n_otras, 'Sin tareas todavía.' if not m.n_total else ('Ninguna tarea pendiente con este filtro.' if filtro else 'No queda nada pendiente.')) }}
+      {% if not m.cerrado and not solo_ver %}
+      <form class="nueva-tarea" method="post" action="/proyectos/{{ m.id }}/tareas">
+        <input name="titulo" type="text" required maxlength="{{ largo_titulo }}" placeholder="Nueva tarea" aria-label="Nueva tarea">
+        <input name="vence" type="date" aria-label="Fecha límite (opcional)">
+        <button class="guardar">Agregar tarea</button>
+      </form>
+      {% endif %}
+    </section>
+
     {#- LAS SESIONES Y TRABAJOS (parte 9, 9-oct-2026): lo que el registro del estudio tiene a nombre
         del cliente de este proyecto, partido en dos listas por `es_trabajo`, con la columna de dinero
         y los tres totales (parte 10, 9-oct-2026). Se le pregunta a la App al abrir el proyecto
@@ -1060,32 +1086,6 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         {% else %}<p class="vacio">Ninguna sesión con «{{ busqueda_sesiones.q }}».</p>{% endif %}
         {% endif %}
       </div>
-      {% endif %}
-    </section>
-
-    <section class="bloque">
-      <div class="encabezado"><h2>Tareas</h2></div>
-      {#- LOS FILTROS: enlaces de lectura (GET) que el servidor dibuja; la lista sale de
-          `db.tareas_con_filtro` y las cifras de «Cómo va» no cambian. «Las mías» no se ofrece
-          en solo ver (esa sesión no dice de quién es). -#}
-      {% if m.n_total %}
-      {% set base = '/proyectos?p=' ~ m.id %}
-      <nav class="filtros" aria-label="Filtrar las tareas">
-        <a href="{{ base }}"{% if not filtro %} aria-current="true"{% endif %}>Todas</a>
-        <a href="{{ base }}&amp;filtro=pendientes"{% if filtro == 'pendientes' %} aria-current="true"{% endif %}>Pendientes</a>
-        <a href="{{ base }}&amp;filtro=vencidas"{% if filtro == 'vencidas' %} aria-current="true"{% endif %}>Vencidas</a>
-        {% if ofrece_mias %}<a href="{{ base }}&amp;filtro=mias"{% if filtro == 'mias' %} aria-current="true"{% endif %}>Las mías</a>{% endif %}
-        {% if personas_filtro %}<span class="nota">Por persona:</span>
-        {% for n in personas_filtro %}<a href="{{ base }}&amp;filtro=persona&amp;quien={{ n|urlencode }}"{% if filtro == 'persona' and quien == n %} aria-current="true"{% endif %}>{{ n }}</a>{% endfor %}{% endif %}
-      </nav>
-      {% endif %}
-      {{ lista_de_tareas(tareas_p.pendientes, tareas_p.otras, tareas_p.n_hechas, tareas_p.n_otras, 'Sin tareas todavía.' if not m.n_total else ('Ninguna tarea pendiente con este filtro.' if filtro else 'No queda nada pendiente.')) }}
-      {% if not m.cerrado and not solo_ver %}
-      <form class="nueva-tarea" method="post" action="/proyectos/{{ m.id }}/tareas">
-        <input name="titulo" type="text" required maxlength="{{ largo_titulo }}" placeholder="Nueva tarea" aria-label="Nueva tarea">
-        <input name="vence" type="date" aria-label="Fecha límite (opcional)">
-        <button class="guardar">Agregar tarea</button>
-      </form>
       {% endif %}
     </section>
 

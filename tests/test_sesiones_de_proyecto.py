@@ -574,3 +574,16 @@ def test_el_bloque_se_ve_igual_en_la_casa_y_en_solo_ver(registro, monkeypatch):
     assert "s011" in ver
     for control in ("<form", "<button", "<a ", "<script", "<input", "<select"):
         assert control not in _bloque(ver), f"el bloque de solo ver trae {control}"
+
+
+@pytest.mark.parametrize("con", ["casa", "ver"])
+def test_el_bloque_sale_justo_despues_de_las_tareas_y_antes_de_la_actividad(registro, monkeypatch, con):
+    """Orden en la columna del centro, en la casa y en solo ver: Tareas, luego las sesiones, luego lo demás."""
+    registro.sesiones = _respuesta(sesiones=(SESION, TRABAJO))
+    html = _abrir(monkeypatch, con=con)
+    tareas = html.index('<section class="bloque">\n      <div class="encabezado"><h2>Tareas</h2>')
+    sesiones = html.index('<section class="bloque sesiones-p" id="sesiones-y-trabajos">')
+    actividad = html.index('<section class="bloque actividad-p" id="actividad-del-proyecto">')
+    assert tareas < sesiones < actividad
+    entre = html[tareas:sesiones]
+    assert entre.count("<section") == 1, "entre Tareas y las sesiones hay otro bloque"
