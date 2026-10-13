@@ -164,12 +164,84 @@ def test_E2_el_bloque_real_se_toma_entero():
     assert "Proyecto nuevo" not in b and "Tareas sin proyecto" not in b      # y no se pasa a la rama que sigue
 
 
-def test_E2_la_plantilla_de_la_vista_no_decide_el_estado_ni_cuenta():
+TEXTO_DE_PERSONA, DATO_DEL_MODELO, CONTROL = "texto de persona", "dato del modelo que no es texto", "control de presentación"
+# LA TABLA CERRADA de lo que puede haber entre llaves en la rama de la vista: texto normalizado EXACTO → clase.
+# Para añadir algo a la vista hay que declararlo aquí (y esta tabla se revisa en el testigo): no se deduce de palabras.
+TABLA_DE_LA_VISTA = {
+    "{{ q }}": TEXTO_DE_PERSONA,
+    "{{ x.clave if x.clave else 'Sin grupo' }}": TEXTO_DE_PERSONA,
+    "{{ m.nombre }}": TEXTO_DE_PERSONA,
+    "{{ m.cliente }}": TEXTO_DE_PERSONA,
+    "{{ m.proxima.titulo }}": TEXTO_DE_PERSONA,
+    "{{ loop.index }}": DATO_DEL_MODELO,
+    "{{ m.id }}": DATO_DEL_MODELO,
+    "{{ m.estado_calculado }}": DATO_DEL_MODELO,
+    "{{ m.n_pendientes }}": DATO_DEL_MODELO,
+    "{{ m.proxima.vence|dia_largo }}": DATO_DEL_MODELO,
+    "{{ 'vencida' if m.proxima.vencida }}": CONTROL,
+    "{{ 'venció el' if m.proxima.vencida else 'vence el' }}": CONTROL,
+    "{{ 's' if m.n_pendientes != 1 }}": CONTROL,
+    "{% set grupos_con = [] %}": CONTROL,
+    "{% for x in visibles.grupos + [visibles.sin_grupo] %}": CONTROL,
+    "{% set _ = grupos_con.append(x) %}": CONTROL,
+    "{% for x in grupos_con %}": CONTROL,
+    "{% for m in x.abiertos + x.cerrados %}": CONTROL,
+    "{% if x.abiertos or x.cerrados %}": CONTROL,
+    "{% if q %}": CONTROL,
+    "{% if m.cliente %}": CONTROL,
+    "{% if m.proxima %}": CONTROL,
+    "{% if m.proxima.vence %}": CONTROL,
+    "{% if m.proxima.grave %}": CONTROL,
+    "{% elif m.cerrado %}": CONTROL,
+    "{% if not grupos_con %}": CONTROL,
+    "{% else %}": CONTROL,
+    "{% endif %}": CONTROL,
+    "{% endfor %}": CONTROL,
+}
+
+
+def llaves_de(bloque: str) -> list:
+    """Cada `{{ … }}` y cada `{% … %}` del bloque (sin los comentarios `{# … #}`, que no se pintan), con el texto
+    normalizado: sin los guiones de espacio (`{%-`, `-%}`) y con los blancos colapsados."""
+    sin_comentarios = re.sub(r"{#.*?#}", "", bloque, flags=re.S)
+    salida = []
+    for m in re.finditer(r"{{.*?}}|{%.*?%}", sin_comentarios, re.S):
+        t = m.group(0)
+        t = re.sub(r"^({[{%])-", r"\1", t)
+        t = re.sub(r"-([}%]})$", r"\1", t)
+        salida.append(re.sub(r"\s+", " ", t).strip())
+    return salida
+
+
+def no_declaradas(bloque: str) -> list:
+    """Lo que hay entre llaves y NO es, por igualdad exacta, una entrada de `TABLA_DE_LA_VISTA`."""
+    return [t for t in llaves_de(bloque) if t not in TABLA_DE_LA_VISTA]
+
+
+def test_E2_la_tabla_cerrada_de_la_vista_cae_del_lado_estricto_con_una_entrada_inventada_de_cada_clase():
+    """QUÉ EXIGE: cada `{{ … }}` y cada `{% … %}` de la rama de la vista es, por igualdad exacta de texto normalizado, una entrada de la tabla cerrada `TABLA_DE_LA_VISTA` (con su clase: texto de persona, dato del modelo que no es texto, control de presentación) y, con `estado`, la ruta solo le pide a los módulos del proyecto y a las librerías de red que `web.app` trae las funciones que `LO_QUE_PIDE_LA_RUTA_CON_ESTADO` declara; lo no declarado cae en rojo.
+    QUÉ NO PROMETE: no vigila que la tabla declarada sea «correcta» (quien añada una entrada a la tabla puede añadir una decisión: es una lista que obliga a declarar, no a acertar) ni las lecturas por caminos que el espía no envuelve (funciones traídas con `from … import`, módulos que no son del proyecto ni de `LIBRERIAS_DE_RED`, lo que haga un hilo o una tarea aparte)."""
+    # todo lo declarado, junto, pasa; es lo que hay que poder escribir
+    assert no_declaradas(" ".join(TABLA_DE_LA_VISTA)) == []
+    # una entrada inventada de CADA clase cae, con la forma de las que el testigo usó
+    inventadas = {
+        TEXTO_DE_PERSONA: ["{{ m.descripcion }}", "{{ '' if q else '' }}", "{{ m.nombre|safe }}", "{{ q|upper }}"],
+        DATO_DEL_MODELO: ["{{ m.n_hechas }}", "{{ m.n_otras }}", "{{ m.estado_calculado|upper }}"],
+        CONTROL: ["{% if m.n_pendientes > 1000 %}", "{% if m.n_hechas > 1000 %}", "{% for t in m.pendientes %}", "{% set z = 1 %}"],
+    }
+    for clase, textos in inventadas.items():
+        for t in textos:
+            assert no_declaradas(f"antes {t} después") == [t], (clase, t)
+    # los guiones de espacio y los blancos no cambian la igualdad exacta, pero las palabras sí
+    assert no_declaradas("{%- if   q -%}  {{- q -}}  {%- endif -%}") == []
+    assert no_declaradas("{% if q and q %}") == ["{% if q and q %}"]
+
+
+def test_E2_la_plantilla_real_de_la_vista_solo_tiene_lo_declarado_y_la_tabla_no_tiene_sobrantes():
     bloque = bloque_de_la_vista((RAIZ / "web" / "plantillas" / "proyectos.html").read_text(encoding="utf-8"))
-    assert "m.estado_calculado" in bloque and "m.proxima" in bloque
-    for prohibido in ("n_hechas", "n_total", "n_vencidas", "'En curso'", "'Sin empezar'", "'Pausado'", "'Cerrado'",
-                      "pendientes[", "pendientes|", "|sort", "|first", "|length", "|count", "|sum", "estado ==", "estado !="):
-        assert prohibido not in bloque, prohibido
+    assert no_declaradas(bloque) == []
+    assert set(TABLA_DE_LA_VISTA) <= set(llaves_de(bloque)), set(TABLA_DE_LA_VISTA) - set(llaves_de(bloque))
+    assert "{{ m.estado_calculado }}" in llaves_de(bloque) and any("m.proxima" in t for t in llaves_de(bloque))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -327,34 +399,21 @@ def test_E5_el_grupo_escrito_por_una_persona_se_escapa(mundo):
     assert "<i>Grupo" not in h and "&lt;i&gt;Grupo&lt;/i&gt;" in h
 
 
-# Lo que la vista pinta que NO es un texto escrito por una persona (lo declaro uno por uno; lo que
-# no esté aquí y no repita un texto de persona hace fallar la prueba de abajo: cae del lado estricto).
-EXPRESIONES_QUE_NO_SON_TEXTO_DE_PERSONA = {
-    "loop.index", "m.id", "m.estado_calculado", "m.n_pendientes", "'s' if m.n_pendientes != 1",
-    "m.proxima.vence|dia_largo", "'vencida' if m.proxima.vencida",
-    "'venció el' if m.proxima.vencida else 'vence el'",
+# Los textos de persona de la tabla (`TABLA_DE_LA_VISTA`) y la prueba de escape que cada uno tiene en este archivo.
+LO_QUE_CUBREN_LAS_PRUEBAS_DE_ESCAPE = {
+    "{{ q }}": "test_E5_el_eco_de_la_busqueda_se_escapa_en_los_dos_sitios",
+    "{{ x.clave if x.clave else 'Sin grupo' }}": "test_E5_el_grupo_escrito_por_una_persona_se_escapa",
+    "{{ m.nombre }}": "test_E5_el_titulo_y_el_nombre_se_pintan_como_texto",
+    "{{ m.cliente }}": "test_E5_el_titulo_y_el_nombre_se_pintan_como_texto",
+    "{{ m.proxima.titulo }}": "test_E5_el_titulo_y_el_nombre_se_pintan_como_texto",
 }
-# Los orígenes de texto de persona que la vista repite: nombre de proyecto, cliente, título de la próxima,
-# nombre del grupo, y la búsqueda.
-ORIGENES_DE_TEXTO = (r"m\.nombre", r"m\.cliente", r"m\.proxima\.titulo", r"x\.clave", r"\bq\b")
 
 
-def test_E5_cada_expresion_de_la_vista_o_es_conocida_o_repite_un_texto_de_persona_y_se_escapa():
-    bloque = bloque_de_la_vista((RAIZ / "web" / "plantillas" / "proyectos.html").read_text(encoding="utf-8"))
-    expresiones = [e.strip() for e in re.findall(r"{{(.*?)}}", bloque, re.S)]
-    assert expresiones
-    sin_clasificar = []
-    for e in expresiones:
-        de_persona = any(re.search(o, e) for o in ORIGENES_DE_TEXTO)
-        assert not re.search(r"\|\s*(safe|tojson|urlencode)\b|Markup|autoescape", e), f"{e}: sale sin escapar"
-        if not de_persona and e.replace("-", "").strip() not in EXPRESIONES_QUE_NO_SON_TEXTO_DE_PERSONA \
-                and e.strip("- ") not in EXPRESIONES_QUE_NO_SON_TEXTO_DE_PERSONA:
-            sin_clasificar.append(e)
-    assert sin_clasificar == [], f"expresiones de la vista que no sé si son texto de una persona: {sin_clasificar}"
-    # y cada origen de texto que aparece en la vista tiene su prueba de escape de arriba
-    vistos = {o for o in ORIGENES_DE_TEXTO if any(re.search(o, e) for e in expresiones)}
-    assert vistos == set(ORIGENES_DE_TEXTO), set(ORIGENES_DE_TEXTO) - vistos
-    assert "autoescape" not in (RAIZ / "web" / "app.py").read_text(encoding="utf-8").split("plantillas = Jinja2Templates")[1][:300]
+def test_E5_cada_texto_de_persona_de_la_tabla_tiene_su_prueba_de_escape():
+    de_persona = {t for t, c in TABLA_DE_LA_VISTA.items() if c == TEXTO_DE_PERSONA}
+    assert de_persona == set(LO_QUE_CUBREN_LAS_PRUEBAS_DE_ESCAPE)
+    for prueba in set(LO_QUE_CUBREN_LAS_PRUEBAS_DE_ESCAPE.values()):
+        assert prueba in globals() and callable(globals()[prueba]), prueba
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -431,16 +490,46 @@ def test_E8_sin_el_parametro_no_sale_la_vista():
         assert 'class="estados"' not in h and "<h1>Estado de los proyectos</h1>" not in h, consulta
 
 
-class _Espia:
-    """Reemplaza `web.app.db`: anota cada cosa que la ruta le pide y la deja pasar a la de verdad."""
+class _Modulo:
+    """Un módulo envuelto: anota cada función (o clase) que `web.app` le pide y la deja pasar a la de verdad."""
 
-    def __init__(self, real):
-        self._real, self.pedidos = real, []
+    def __init__(self, nombre, real, anotar):
+        self._nombre, self._real, self._anotar = nombre, real, anotar
 
-    def __getattr__(self, nombre):
-        if not nombre.isupper():
-            self.pedidos.append(nombre)
-        return getattr(self._real, nombre)
+    def __getattr__(self, atributo):
+        valor = getattr(self._real, atributo)
+        if not atributo.startswith("__") and callable(valor):
+            self._anotar(f"{self._nombre}.{atributo}")
+        return valor
+
+
+# Librerías de red que `web.app` puede traer y que NO son del proyecto (frontera declarada: una librería
+# de red que no esté en esta lista y no sea del proyecto no la envuelve el espía).
+LIBRERIAS_DE_RED = ("httpx", "requests", "urllib", "aiohttp", "socket", "http")
+
+
+def modulos_por_los_que_la_ruta_puede_leer_hacia_fuera() -> dict:
+    """{nombre en `web.app`: módulo}. SALEN DEL MÓDULO REAL: cada global de `web.app` que es un módulo y o
+    es del proyecto (su archivo cuelga de la raíz del repositorio: `db`, `config`, `noco_lectura`,
+    `registro_lectura`, `auth`, `_menu`, `avisos_mod`, `crud`…) o es una librería de red de
+    `LIBRERIAS_DE_RED` (`httpx`). Las funciones de cada uno no se teclean: son sus atributos llamables."""
+    import types
+    encontrados = {}
+    for nombre, valor in vars(panel).items():
+        if not isinstance(valor, types.ModuleType):
+            continue
+        archivo = getattr(valor, "__file__", None)
+        del_proyecto = bool(archivo) and Path(archivo).resolve().is_relative_to(RAIZ)
+        if del_proyecto or valor.__name__.split(".")[0] in LIBRERIAS_DE_RED:
+            encontrados[nombre] = valor
+    return encontrados
+
+
+def espiar_la_ruta(monkeypatch) -> list:
+    pedidos = []
+    for nombre, modulo in modulos_por_los_que_la_ruta_puede_leer_hacia_fuera().items():
+        monkeypatch.setattr(panel, nombre, _Modulo(nombre, modulo, pedidos.append))
+    return pedidos
 
 
 PARAMETROS_QUE_ABREN_OTRAS_COSAS = {
@@ -451,40 +540,84 @@ PARAMETROS_QUE_ABREN_OTRAS_COSAS = {
 }
 
 
-def test_E8_con_la_vista_no_se_lee_nada_que_la_vista_no_use(mundo, monkeypatch):
-    """La ruta, con `estado=1` y los parámetros que en otra vista harían leer la base o Noco, pide a `db`
-    EXACTAMENTE lo que la lista necesita y no hace ninguna búsqueda en Noco. (La lista de lo que pide sale de
-    lo que la ruta de verdad toca, no de una lista tecleada.)"""
-    _sembrar_casos(mundo)
-    espia = _Espia(db)
-    monkeypatch.setattr(panel, "db", espia)
-    noco = []
+# Lo que la ruta le pide a esos módulos cuando la vista es la de estado, SIN contar lo que hace en cualquier vista
+# dentro del proceso (el menú, la sesión, los nombres de responsable): lo único que lee hacia fuera es la base,
+# y solo la lista de proyectos y la de grupos. Declarado leyendo la ruta; si la ruta pide algo más, rojo.
+LO_QUE_PIDE_LA_RUTA_CON_ESTADO = {
+    "db.pagina_de_proyectos", "db.areas",                                  # la base: lo único que la vista usa
+    "auth.puede_entrar", "auth.validar", "_menu.pantallas", "config.opciones_de_responsable",   # en el proceso
+}
 
-    async def _noco(texto):
-        noco.append(texto)
+
+def _sin_red_de_verdad(monkeypatch):
+    """Si algún camino llegara a la red, que sea un doble que cuenta (y no la red)."""
+    import noco_lectura
+    import registro_lectura
+    llamadas = []
+
+    async def _noco(*a, **k):
+        llamadas.append("noco")
         return []
-    monkeypatch.setattr(panel.noco_lectura, "buscar_personas", _noco)
+
+    async def _registro(*a, **k):
+        llamadas.append("registro")
+        return {}
+    for nombre in ("buscar_personas", "persona", "contacto"):
+        monkeypatch.setattr(noco_lectura, nombre, _noco)
+    monkeypatch.setattr(registro_lectura, "buscar_sesiones", _registro)       # (`sesiones_de_cliente` sin cliente no sale a la red)
+    return llamadas
+
+
+def test_E8_con_la_vista_la_ruta_no_pide_a_ningun_modulo_nada_que_la_vista_no_use(mundo, monkeypatch):
+    """QUÉ EXIGE: cada `{{ … }}` y cada `{% … %}` de la rama de la vista es, por igualdad exacta de texto normalizado, una entrada de la tabla cerrada `TABLA_DE_LA_VISTA` (con su clase: texto de persona, dato del modelo que no es texto, control de presentación) y, con `estado`, la ruta solo le pide a los módulos del proyecto y a las librerías de red que `web.app` trae las funciones que `LO_QUE_PIDE_LA_RUTA_CON_ESTADO` declara; lo no declarado cae en rojo.
+    QUÉ NO PROMETE: no vigila que la tabla declarada sea «correcta» (quien añada una entrada a la tabla puede añadir una decisión: es una lista que obliga a declarar, no a acertar) ni las lecturas por caminos que el espía no envuelve (funciones traídas con `from … import`, módulos que no son del proyecto ni de `LIBRERIAS_DE_RED`, lo que haga un hilo o una tarea aparte).
+
+    Los módulos envueltos SALEN de `web.app` (`modulos_por_los_que_la_ruta_puede_leer_hacia_fuera`): sus globales que
+    son módulos del proyecto o de `LIBRERIAS_DE_RED`; las funciones de cada uno, de sus atributos llamables."""
+    _sembrar_casos(mundo)
+    assert {"db", "noco_lectura", "registro_lectura", "config", "auth", "_menu", "httpx"} <= set(
+        modulos_por_los_que_la_ruta_puede_leer_hacia_fuera())
+    red = _sin_red_de_verdad(monkeypatch)
+    pedidos = espiar_la_ruta(monkeypatch)
     h = ver(mundo, estado=1, **PARAMETROS_QUE_ABREN_OTRAS_COSAS)
     assert 'class="estados"' in centro(h)
-    assert set(espia.pedidos) == {"pagina_de_proyectos", "areas"}, sorted(set(espia.pedidos))
-    assert noco == []
+    assert set(pedidos) == LO_QUE_PIDE_LA_RUTA_CON_ESTADO, sorted(set(pedidos) ^ LO_QUE_PIDE_LA_RUTA_CON_ESTADO)
+    assert red == []
 
 
-def test_E8_el_espia_sirve_los_mismos_parametros_sin_la_vista_si_hacen_leer(mundo, monkeypatch):
-    """Control: sin `estado`, esos parámetros SÍ hacen leer (si el espía no viera nada, la prueba de arriba no probaría)."""
+def test_E8_el_espia_ve_lo_que_sin_la_vista_esos_parametros_si_hacen_leer(mundo, monkeypatch):
+    """Control: sin `estado`, los mismos parámetros SÍ llevan a Noco, a las cuentas de borrar, etc. (si el espía no
+    viera nada, la prueba de arriba no probaría)."""
     _sembrar_casos(mundo)
-    espia = _Espia(db)
-    monkeypatch.setattr(panel, "db", espia)
-    noco = []
-
-    async def _noco(texto):
-        noco.append(texto)
-        return []
-    monkeypatch.setattr(panel.noco_lectura, "buscar_personas", _noco)
+    red = _sin_red_de_verdad(monkeypatch)
+    pedidos = espiar_la_ruta(monkeypatch)
     ver(mundo, p=1, pq="ab", pdonde="cliente", quitar_grupo="CDS", borrar_proyecto=1)
-    assert {"contenido_para_borrar_grupo", "contenido_de_proyecto"} <= set(espia.pedidos) and noco == ["ab"]
+    assert {"db.contenido_para_borrar_grupo", "db.contenido_de_proyecto", "noco_lectura.buscar_personas"} <= set(pedidos)
+    assert red and set(red) == {"noco"}      # la búsqueda de personas (y, con cliente, el contacto)
 
 
 def test_E8_el_parametro_gana_a_los_demas_y_no_los_dibuja():
     h = pintar("casa", estado=1, p=1, nuevo="CDS", borrar_proyecto=1)
     assert 'class="estados"' in centro(h) and "Proyecto nuevo" not in centro(h) and "Borrar" not in centro(h)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# La guarda de solo ver acepta el campo escondido de la vista, y solo ese
+# ═══════════════════════════════════════════════════════════════════════
+
+_BUSCADOR = '<form class="buscador" method="get" action="/proyectos"><input type="search" name="q" value=""> {extra}</form>'
+
+
+@pytest.mark.parametrize("extra,sobra", [
+    ('<input type="hidden" name="estado" value="1">', False),       # el de la vista
+    ('<input type="hidden" name="estado" value="2">', True),        # otro valor
+    ('<input type="hidden" name="estado" value="">', True),
+    ('<input type="hidden" name="estado">', True),                  # sin valor
+    ('<input name="estado" value="1">', True),                      # sin type
+    ('<input type="text" name="estado" value="1">', True),          # no escondido
+    ('<input type="hidden" name="p" value="1">', True),             # otro campo
+    ('<input type="hidden" name="estado" value="1"><input type="hidden" name="nuevo" value="CDS">', True),
+])
+def test_la_guarda_de_solo_ver_acepta_exactamente_el_campo_escondido_de_la_vista(extra, sobra):
+    sobran = sv.controles_que_sobran(_BUSCADOR.format(extra=extra), "")
+    assert bool(sobran) is sobra, (extra, sobran)
