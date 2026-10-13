@@ -329,10 +329,9 @@ def test_G5_las_palabras_del_estado_no_estan_escritas_en_ningun_otro_sitio():
     assert donde == {"db/db.py": set(palabras)}, donde
 
 
-def test_G5_la_plantilla_solo_pinta_el_estado_del_modelo():
+def test_G5_la_plantilla_pinta_el_estado_del_modelo_tal_cual():
     html = (RAIZ / "web" / "plantillas" / "proyectos.html").read_text(encoding="utf-8")
-    assert "{{ m.estado_calculado }}" in html
-    assert not re.search(r"{%[^%]*(n_hechas|n_pendientes)[^%]*(==|!=|>|<)[^%]*0[^%]*%}\s*{{?\s*['\"]?(Sin empezar|En curso)", html)
+    assert html.count("m.estado_calculado") == 1 and "{{ m.estado_calculado }}" in html
 
 
 # ═══════════════════════════════════════════════════════════════════════
