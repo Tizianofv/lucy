@@ -219,10 +219,12 @@ def test_O7_buscar_acorta_la_lista_sin_cambiarle_el_orden(mundo):
 
 
 def _estados_de_tarea_que_existen() -> list[str]:
-    """Los estados de tarea que hay, SACADOS de lo real: el comentario de `tareas.estado` en
-    `db/schema.sql` (`pendiente | hecha | pospuesta`) más el que producción tuvo y el esquema no declara
-    (`descartada`/`descartado`: lo que dicen `db._repartir` y el comentario de `ESTADO_PENDIENTE`) y uno que nadie declaró.
-    Frontera: `tareas.estado` no tiene CHECK; cualquier texto que no sea `pendiente` cae en «otras»."""
+    """Los estados de tarea que esta prueba ejercita. La lista sale de DOS cosas, y de nada más:
+    (1) el comentario de `tareas.estado` en `db/schema.sql` (`pendiente | hecha | pospuesta`), leído con
+    una expresión regular; (2) tres textos escritos a mano aquí: `descartada` y `descartado` (los nombres que
+    usan `db._repartir` y el comentario de `ESTADO_PENDIENTE`) y `estado-que-nadie-declaro`, inventado.
+    NO es la lista de lo que hay en producción: no se consultó. `tareas.estado` no tiene CHECK en la base,
+    así que cualquier texto que no sea `pendiente` cae en «otras» y no cuenta como pendiente."""
     esquema = (RAIZ / "db" / "schema.sql").read_text(encoding="utf-8")
     declarados = re.search(r"estado\s+TEXT NOT NULL DEFAULT 'pendiente',\s*--\s*([a-z]+(?: \| [a-z]+)+)",
                            esquema).group(1).split(" | ")
@@ -230,7 +232,8 @@ def _estados_de_tarea_que_existen() -> list[str]:
 
 
 def test_O10_solo_cuentan_las_pendientes_vivas_para_el_orden(mundo):
-    """Un proyecto con 1 pendiente y 3 tareas de cada estado que existe no sube sobre uno con 2 pendientes, y
+    """Un proyecto con 1 pendiente y 3 tareas de cada estado de `_estados_de_tarea_que_existen` (esquema más
+    tres textos escritos a mano; no es la lista de producción) no sube sobre uno con 2 pendientes, y
     uno cuyas pendientes están en la papelera no cuenta ninguna. Si el orden contara cualquier otra
     cosa (hechas, descartadas, cualquier otro estado, borradas, el total), esta lista cambia."""
     estados = _estados_de_tarea_que_existen()
