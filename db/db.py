@@ -4529,6 +4529,18 @@ def _nota_del_modelo(f: dict, nombres: dict) -> dict:
     return {"id": f["id"], "autor": autor, "creado_en": f["creado_en"], "texto": f["contenido"]}
 
 
+def orden_en_la_lista(m: dict) -> tuple:
+    """LA PUERTA ÚNICA del orden de los proyectos dentro de un grupo (`armar_pagina`), la lista de la
+    izquierda y la vista «Estado de los proyectos» (13-oct-2026, Tiziano: «ordenar los proyectos en
+    cantidad de tareas pendientes, que sea automatico»). `m` es el modelo de un proyecto.
+
+    Los ABIERTOS (también los pausados): el que más tareas pendientes tiene, primero (`n_pendientes`,
+    la cifra de `situacion_de_proyecto`); a igual cantidad, por nombre sin mayúsculas, y a igual
+    nombre, por `id`: el orden es el mismo en cada carga. Los CERRADOS no se ordenan por pendientes
+    (siguen por nombre, como siempre) y van en su propia lista. Un proyecto sin tareas cuenta 0."""
+    return (0 if m["cerrado"] else -m["n_pendientes"], m["nombre"].casefold(), m["id"])
+
+
 def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
                  hoy: date, participantes=(), fechas=None, carpetas=None, notas=None,
                  actividad=None) -> dict:
@@ -4645,7 +4657,7 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
 
     def _grupo(clave, color):
         mios = sorted((m for m in modelo_proyectos.values() if m["area"] == clave),
-                      key=lambda m: m["nombre"].casefold())
+                      key=orden_en_la_lista)
         pend, otras = _repartir(sueltas_por_area.get(clave, []))
         return {"clave": clave, "color": color_de_grupo(color),
                 "color_oscuro": color_oscuro_de_grupo(color),
