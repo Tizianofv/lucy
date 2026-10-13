@@ -271,7 +271,7 @@ class _Mirador(HTMLParser):
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         if tag == "form":
-            # La búsqueda de la lista es una LECTURA: GET a /proyectos con un solo campo, `q`.
+            # La búsqueda de la lista es una LECTURA: GET a /proyectos con un solo campo, `q` (y `estado=1` escondido en la vista de estado).
             es_busqueda = ((a.get("method") or "get").lower() == "get"
                            and (a.get("action") or "") == "/proyectos")
             self._form_permitido = es_busqueda
@@ -280,7 +280,10 @@ class _Mirador(HTMLParser):
             return
         if tag in _CAMPOS:
             if tag in ("input", "button") and self._form_permitido:
-                if tag == "input" and a.get("name") != "q":
+                # `q`, y dentro de «Estado de los proyectos» además `estado=1` escondido (el mismo
+                # GET de lectura: te deja en la vista); cualquier otro campo sobra.
+                es_estado = a.get("name") == "estado" and a.get("type") == "hidden" and a.get("value") == "1"
+                if tag == "input" and a.get("name") != "q" and not es_estado:
                     self.sobran.append(f"<input name={a.get('name')!r}> en la búsqueda")
                 return
             self.sobran.append(f"<{tag}>")
@@ -323,6 +326,7 @@ VISTAS = [
     {}, {"p": 1}, {"p": 2}, {"p": 3}, {"p": 4}, {"g": "CDS"}, {"sin_grupo": 1}, {"q": "disco"}, {"q": "zzz"},
     {"p": 1, "t": 10}, {"p": 1, "t": 11},
     {"g": "CDS", "t": 12}, {"sin_grupo": 1, "t": 13},      # el detalle de una tarea suelta («Meter en un proyecto»)
+    {"estado": 1}, {"estado": 1, "q": "disco"}, {"estado": 1, "q": "zzz"},     # la lista «Estado de los proyectos» (13-oct-2026)
 ]
 A_MANO = {
     "nuevo=CDS": {"nuevo": "CDS"},

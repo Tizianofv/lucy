@@ -1077,12 +1077,18 @@ def _filtrar_por_busqueda(modelo: dict, q: str) -> dict:
 
 def _vista_de_proyectos(modelo: dict, visibles: dict, *, p: int, g: str,
                         sin_grupo: int, tarea_creada: int,
-                        buscando: bool = False, nuevo: str = "") -> dict:
+                        buscando: bool = False, nuevo: str = "", estado: int = 0) -> dict:
     """Qué se enseña a la derecha: un proyecto, las tareas sueltas de un grupo
     o las de «Sin grupo». `{"tipo", ...}`; `tipo` es None si no hay nada que
     enseñar. Cuando la URL no dice (o dice algo que ya no existe) se enseña el
-    primer proyecto de la lista; sin proyectos, lo primero que haya suelto."""
+    primer proyecto de la lista; sin proyectos, lo primero que haya suelto.
+    Con `estado` (`?estado=1`) se enseña LA LISTA DE TODOS los proyectos con su
+    estado y su próxima tarea (`{"tipo": "estado"}`): es una vista de lectura y
+    gana a las demás; lo que dice de cada proyecto sale del modelo, que a su vez
+    sale de `db.situacion_de_proyecto`."""
     proyectos = modelo["proyectos"]
+    if estado:
+        return {"tipo": "estado"}
     if nuevo and not buscando:
         grupo = next((x for x in modelo["grupos"] if x["clave"] == nuevo), None)
         if grupo is not None:
@@ -1130,13 +1136,14 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
                     grupo: Aviso[str] = "", borrar_proyecto: Navegacion[int] = 0,
                     borrado: Aviso[int] = 0, borrada: Aviso[int] = 0,
                     filtro: Navegacion[str] = "", quien: Navegacion[str] = "",
-                    sq: Navegacion[str] = "",
+                    sq: Navegacion[str] = "", estado: Navegacion[int] = 0,
                     editar_nota: Navegacion[int] = 0, borrar_nota: Navegacion[int] = 0):
     """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
     (`?g=`), las de «Sin grupo» (`?sin_grupo=1`) o el formulario de un proyecto
     nuevo (`?nuevo=<grupo>`). `?q=` filtra la lista por el nombre del proyecto
-    o del cliente.
+    o del cliente. `?estado=1` enseña la lista de todos los proyectos con su
+    estado y su próxima tarea (solo lectura; la ven las dos sesiones).
 
     ESTA RUTA SOLO LEE. Las escrituras son POST aparte, cada una un
     `<form method="post">` de la plantilla: las del proyecto (`/proyectos/nuevo`,
@@ -1174,12 +1181,18 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         borrar_proyecto = borrado = borrada = 0
         editar_nota = borrar_nota = 0
         sq = ""
+    if estado:
+        # «Estado de los proyectos» solo lee la lista de proyectos: lo que abriría otra cosa o haría
+        # otra lectura (la búsqueda de personas en Noco, las cuentas de borrar un grupo o un
+        # proyecto, los avisos de «borrado») se apaga ANTES, como en solo ver. `q` se queda.
+        pq = pdonde = quitar_grupo = grupo = hecho = ""
+        borrar_proyecto = borrado = borrada = 0
     modelo = await db.pagina_de_proyectos()
     visibles = _filtrar_por_busqueda(modelo, q)
     elegido = p or nombre_guardado or area_guardada or creado
     vista = _vista_de_proyectos(modelo, visibles, p=elegido, g=g,
                                 sin_grupo=sin_grupo, tarea_creada=tarea_creada,
-                                buscando=bool(q.strip()), nuevo=nuevo)
+                                buscando=bool(q.strip()), nuevo=nuevo, estado=estado)
     # Los enlaces de la barra salen del menú de verdad (`web/menu.py`). Un menú
     # ilegible NO se traga acá: el único sitio que lo hace es el armado del
     # prompt, y `base.html`, que es ese menú, también tumba las demás pantallas.
