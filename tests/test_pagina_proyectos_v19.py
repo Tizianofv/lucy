@@ -101,6 +101,11 @@ def test_la_lista_separa_los_proyectos_con_una_raya_y_oscurece_los_no_selecciona
             == "color-mix(in srgb, var(--tinta) 3%, var(--papel))")
 
 
+def test_hay_un_espacio_entre_un_proyecto_y_el_siguiente_de_la_lista(mundo):
+    html = ver(mundo)
+    assert _regla(html, ".grupo a.proy ~ a.proy")["margin-top"] == ".4rem"
+
+
 def test_el_seleccionado_lleva_el_fondo_de_su_color_que_se_degrada_y_acd_en_tres_colores(mundo):
     html = ver(mundo)
     css = _css(html)

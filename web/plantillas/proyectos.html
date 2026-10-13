@@ -72,6 +72,8 @@ nav.grupos{display:flex;flex-direction:column;gap:1.1rem}
 .grupo a.proy:not([aria-current="true"]){background:color-mix(in srgb, var(--tinta) 7%, var(--papel))}
 .grupo a.proy:not([aria-current="true"]):hover{background:color-mix(in srgb, var(--tinta) 3%, var(--papel))}
 .grupo a.proy:last-of-type{border-bottom:0}
+/* Un espacio entre un proyecto y el siguiente de la lista (pedido de Tiziano, 13-oct-2026); `~` y no `+` porque entre ellos puede haber otros elementos. */
+.grupo a.proy ~ a.proy{margin-top:.4rem}
 .grupo a.proy[aria-current="true"]{background:color-mix(in srgb, var(--color) 16%, var(--papel));box-shadow:inset 4px 0 0 var(--color);font-weight:600;color:color-mix(in srgb, var(--color) 70%, var(--tinta))}
 .grupo a.proy[aria-current="true"] .sub{color:color-mix(in srgb, var(--color) 55%, var(--suave))}
 /* El seleccionado lleva el fondo de su color, que se va degradando hacia la
