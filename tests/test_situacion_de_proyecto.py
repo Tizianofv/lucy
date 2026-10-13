@@ -39,8 +39,8 @@ import pytest
 
 import config
 import db.db as db
-from test_buzon_que_no_se_ve import _py_en_disco
 from test_pagina_proyectos import _dia, gente, mundo, ver  # noqa: F401  (fixtures y ayudas de la página)
+from test_buzon_que_no_se_ve import _py_en_disco   # DESPUÉS de la línea de arriba: importado antes, rompe starlette
 
 HOY = date(2026, 10, 10)
 RAIZ = Path(__file__).resolve().parent.parent
