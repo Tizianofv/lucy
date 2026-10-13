@@ -39,10 +39,12 @@ import pytest
 
 import config
 import db.db as db
+from test_buzon_que_no_se_ve import _py_en_disco
 from test_pagina_proyectos import _dia, gente, mundo, ver  # noqa: F401  (fixtures y ayudas de la página)
 
 HOY = date(2026, 10, 10)
 RAIZ = Path(__file__).resolve().parent.parent
+PLANTILLAS = RAIZ / "web" / "plantillas"
 
 
 def _dia_rd(n: int, hora: int = 12) -> datetime:
@@ -273,12 +275,16 @@ def test_G4_un_cerrado_sigue_enseñando_sus_pendientes_como_hoy(mundo):
 # ═══════════════════════════════════════════════════════════════════════
 
 def _archivos_de_produccion(sufijos):
-    """Todo lo que no es prueba ni carpeta oculta ni entorno virtual: la lista SALE DEL DISCO."""
-    for p in RAIZ.rglob("*"):
-        rel = p.relative_to(RAIZ).parts
-        if p.suffix in sufijos and p.is_file() and rel[0] not in ("tests", "venv", ".venv", "node_modules") \
-                and not any(x.startswith(".") for x in rel):
-            yield p
+    """Todo el código que no es prueba: los `.py` los da LA puerta de los barridos del repositorio
+    (`_py_en_disco`: no entra en entornos virtuales ni cachés) y las plantillas se leen de su carpeta.
+    La lista SALE DEL DISCO. Frontera: no hay `.js` ni `.html` fuera de `web/plantillas/` (medido con
+    `find` el 13-oct-2026)."""
+    if ".py" in sufijos:
+        for p in _py_en_disco(RAIZ):
+            if p.relative_to(RAIZ).parts[0] != "tests":
+                yield p
+    if ".html" in sufijos:
+        yield from sorted(PLANTILLAS.glob("*.html"))
 
 
 def _quien_llama(nombre):
@@ -321,7 +327,7 @@ def test_G5_solo_repartir_ordena_y_solo_la_funcion_unica_reparte_a_un_proyecto()
 def test_G5_las_palabras_del_estado_no_estan_escritas_en_ningun_otro_sitio():
     palabras = ("Sin empezar", "En curso", "Pausado")
     donde = {}
-    for p in _archivos_de_produccion({".py", ".html", ".js"}):
+    for p in _archivos_de_produccion({".py", ".html"}):
         texto = p.read_text(encoding="utf-8")
         for w in palabras:
             if f'"{w}"' in texto or f"'{w}'" in texto or f">{w}<" in texto:
