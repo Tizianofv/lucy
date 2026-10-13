@@ -323,6 +323,7 @@ VISTAS = [
     {}, {"p": 1}, {"p": 2}, {"p": 3}, {"p": 4}, {"g": "CDS"}, {"sin_grupo": 1}, {"q": "disco"}, {"q": "zzz"},
     {"p": 1, "t": 10}, {"p": 1, "t": 11},
     {"g": "CDS", "t": 12}, {"sin_grupo": 1, "t": 13},      # el detalle de una tarea suelta («Meter en un proyecto»)
+    {"estado": 1}, {"estado": 1, "q": "disco"}, {"estado": 1, "q": "zzz"},     # la lista «Estado de los proyectos» (13-oct-2026)
 ]
 A_MANO = {
     "nuevo=CDS": {"nuevo": "CDS"},

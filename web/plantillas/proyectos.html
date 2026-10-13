@@ -298,6 +298,19 @@ a.quitar-grupo:hover{background:color-mix(in srgb, var(--vencida) 14%, transpare
 .quitar-aviso p{margin:0 0 .5rem}
 .quitar-aviso .botones{display:flex;gap:.5rem}
 a.nuevo-grupo{display:inline-block;font-size:.86rem;color:var(--suave);text-decoration:none;padding:.3rem .6rem;border-radius:8px}
+/* LA VISTA «ESTADO DE LOS PROYECTOS» (`?estado=1`): una lista, no una tabla, para que a 400 px no haya
+   desplazamiento de lado: cada renglón se parte en líneas. */
+a.ver-estado{display:block;font-size:.9rem;font-weight:600;color:var(--tinta);text-decoration:none;padding:.45rem .6rem;margin-bottom:.9rem;border:1px solid var(--linea);border-radius:9px}
+a.ver-estado[aria-current="true"]{border-color:var(--marca);color:var(--marca)}
+.estados{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.estados li{display:flex;flex-wrap:wrap;align-items:baseline;gap:.2rem .7rem;padding:.6rem 0;border-bottom:1px solid var(--linea)}
+.estados .nombre{font-weight:600;text-decoration:none;color:var(--tinta);overflow-wrap:anywhere;flex:1 1 12rem;min-width:0}
+.estados .nombre .sub{display:block;font-size:.76rem;color:var(--suave);font-weight:400}
+.estados .proxima{flex:2 1 16rem;min-width:0;font-size:.9rem;overflow-wrap:anywhere}
+.estados .proxima .cuando{color:var(--suave);white-space:nowrap}
+.estados .proxima .cuando.vencida{color:var(--vencida);font-weight:600}
+.estados .sin-proxima{color:var(--suave)}
+.estados .cuenta-p{font-size:.8rem;color:var(--suave);white-space:nowrap}
 a.nuevo-grupo:hover{color:var(--tinta);background:color-mix(in srgb, var(--suave) 12%, transparent)}
 .nuevo-grupo-form{display:flex;flex-direction:column;gap:.6rem;font-size:.86rem}
 .nuevo-grupo-form label{display:flex;flex-direction:column;gap:.25rem}
@@ -654,6 +667,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       <button class="btn-linea">Buscar</button>
       {% if q %}<a class="quitar-filtro" href="/proyectos">Quitar el filtro</a>{% endif %}
     </form>
+    <a class="ver-estado" href="/proyectos?estado=1" aria-current="{{ 'true' if vista.tipo == 'estado' else 'false' }}">Estado de los proyectos</a>
     <nav class="grupos" aria-label="Proyectos por grupo">
       {% for g in visibles.grupos %}{{ bloque_grupo(g, False, vista) }}{% endfor %}
       {% set sg = visibles.sin_grupo %}
@@ -1288,6 +1302,40 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {{ lista_de_tareas(s.pendientes, s.otras, s.n_hechas, s.n_otras, 'No queda nada pendiente.') }}
     </section>
     </div>
+
+    {% elif vista.tipo == 'estado' %}
+    {#- ESTADO DE LOS PROYECTOS (pieza 2, 13-oct-2026). SOLO LEE y no calcula nada: el estado y la próxima
+        son los del modelo de cada proyecto, los dos de `db.situacion_de_proyecto`
+        (por `armar_pagina`). La lista es la de la izquierda (`visibles`): con `?q=` se acorta igual. -#}
+    {% set grupos_con = [] %}
+    {% for x in visibles.grupos + [visibles.sin_grupo] %}{% if x.abiertos or x.cerrados %}{% set _ = grupos_con.append(x) %}{% endif %}{% endfor %}
+    <div class="cabeza">
+      <div class="migas"><b>Proyectos</b> / Estado</div>
+      <h1>Estado de los proyectos</h1>
+      <div class="meta"><span class="nota">Cada proyecto con su estado y su próxima tarea pendiente: la que sale primera en su lista.{% if q %} Solo los de «{{ q }}».{% endif %}</span></div>
+    </div>
+    {% for x in grupos_con %}
+    <section class="bloque" id="estado-{{ loop.index }}">
+      <div class="encabezado"><h2>{{ x.clave if x.clave else 'Sin grupo' }}</h2></div>
+      <ul class="estados">
+        {% for m in x.abiertos + x.cerrados %}
+        <li>
+          <a class="nombre" href="/proyectos?p={{ m.id }}">{{ m.nombre }}{% if m.cliente %}<span class="sub">{{ m.cliente }}</span>{% endif %}</a>
+          <span class="pastilla">{{ m.estado_calculado }}</span>
+          <span class="proxima">
+            {%- if m.proxima %}Próxima: {{ m.proxima.titulo }}
+              {%- if m.proxima.vence %} <span class="cuando {{ 'vencida' if m.proxima.vencida }}">· {{ 'venció el' if m.proxima.vencida else 'vence el' }} {{ m.proxima.vence|dia_largo }}</span>{% else %} <span class="cuando">· sin fecha</span>{% endif %}
+              {%- if m.proxima.grave %} <span class="pastilla roja">Grave</span>{% endif %}
+            {%- elif m.cerrado %}<span class="sin-proxima">Cerrado: sin próxima tarea</span>
+            {%- else %}<span class="sin-proxima">Nada pendiente</span>{% endif -%}
+          </span>
+          <span class="cuenta-p">{{ m.n_pendientes }} pendiente{{ 's' if m.n_pendientes != 1 }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+    {% endfor %}
+    {% if not grupos_con %}<p class="vacio">{% if q %}Ningún proyecto ni cliente con «{{ q }}».{% else %}Todavía no hay proyectos.{% endif %}</p>{% endif %}
 
     {% else %}
     <p class="vacio">{% if q %}Ningún proyecto ni cliente con «{{ q }}».{% else %}Todavía no hay proyectos ni tareas sueltas que enseñar.{% endif %}</p>

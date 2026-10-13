@@ -337,7 +337,9 @@ def test_G5_las_palabras_del_estado_no_estan_escritas_en_ningun_otro_sitio():
 
 def test_G5_la_plantilla_pinta_el_estado_del_modelo_tal_cual():
     html = (RAIZ / "web" / "plantillas" / "proyectos.html").read_text(encoding="utf-8")
-    assert html.count("m.estado_calculado") == 1 and "{{ m.estado_calculado }}" in html
+    # Se pinta en dos sitios (la cabecera del proyecto y la vista «Estado de los proyectos») y en los dos
+    # es el valor tal cual, sin ninguna condición alrededor.
+    assert html.count("m.estado_calculado") == html.count("{{ m.estado_calculado }}") == 2
 
 
 # ═══════════════════════════════════════════════════════════════════════
