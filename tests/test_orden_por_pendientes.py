@@ -194,13 +194,70 @@ def test_O6_nadie_mas_ordena_los_proyectos_de_un_grupo():
 
 
 def test_O7_buscar_acorta_la_lista_sin_cambiarle_el_orden(mundo):
-    _sembrar(mundo)
-    mundo.proyecto(30, "Dos c", area="CDS")
-    mundo.tarea(300, "x", proyecto=30)
-    mundo.tarea(301, "y", proyecto=30)
+    """Los datos distinguen los cuatro criterios que un filtro podría aplicar: por pendientes, por nombre,
+    por id y al revés. Los tres que casan con «plan» van, por pendientes, C, A, B; por nombre
+    serían A, B, C; por id, B, C, A. Y uno que NO casa se cuela entre ellos por pendientes."""
+    mundo.proyecto(2, "Plan C", area="CDS")      # 3 pendientes
+    mundo.proyecto(3, "Plan A", area="CDS")      # 2
+    mundo.proyecto(1, "Plan B", area="CDS")      # 1
+    mundo.proyecto(4, "Otro", area="CDS")        # 2, no casa con «plan»
+    n = 100
+    for pid, c in ((2, 3), (3, 2), (1, 1), (4, 2)):
+        for _ in range(c):
+            n += 1
+            mundo.tarea(n, f"t{n}", proyecto=pid)
     todo = _izquierda(ver(mundo))["cds"]["abiertos"]
-    con_q = _izquierda(ver(mundo, q="dos"))["cds"]["abiertos"]
-    assert con_q == [i for i in todo if i in {3, 4, 30}] and len(con_q) == 3
+    assert todo == [2, 4, 3, 1]                              # sin buscar: 3, 2 («Otro»), 2 («Plan A»), 1
+    esperado = [2, 3, 1]
+    assert [i for i in todo if i != 4] == esperado
+    nombre = {2: "Plan C", 3: "Plan A", 1: "Plan B"}
+    assert esperado != sorted(esperado, key=nombre.get)       # no es por nombre ([3, 1, 2])
+    assert esperado != sorted(esperado)                       # ni por id ([1, 2, 3])
+    assert esperado != sorted(esperado, reverse=True)         # ni por id al revés ([3, 2, 1])
+    assert _izquierda(ver(mundo, q="plan"))["cds"]["abiertos"] == esperado
+    assert [i for i, _ in _estado(ver(mundo, estado=1, q="plan"))["CDS"]] == esperado
+
+
+def _estados_de_tarea_que_existen() -> list[str]:
+    """Los estados de tarea que hay, SACADOS de lo real: el comentario de `tareas.estado` en
+    `db/schema.sql` (`pendiente | hecha | pospuesta`) más el que producción tuvo y el esquema no declara
+    (`descartada`/`descartado`: lo que dicen `db._repartir` y el comentario de `ESTADO_PENDIENTE`) y uno que nadie declaró.
+    Frontera: `tareas.estado` no tiene CHECK; cualquier texto que no sea `pendiente` cae en «otras»."""
+    esquema = (RAIZ / "db" / "schema.sql").read_text(encoding="utf-8")
+    declarados = re.search(r"estado\s+TEXT NOT NULL DEFAULT 'pendiente',\s*--\s*([a-z]+(?: \| [a-z]+)+)",
+                           esquema).group(1).split(" | ")
+    return sorted({*declarados, "descartada", "descartado", "estado-que-nadie-declaro"})
+
+
+def test_O10_solo_cuentan_las_pendientes_vivas_para_el_orden(mundo):
+    """Un proyecto con 1 pendiente y 3 tareas de cada estado que existe no sube sobre uno con 2 pendientes, y
+    uno cuyas pendientes están en la papelera no cuenta ninguna. Si el orden contara cualquier otra
+    cosa (hechas, descartadas, cualquier otro estado, borradas, el total), esta lista cambia."""
+    estados = _estados_de_tarea_que_existen()
+    assert {"pendiente", "hecha", "pospuesta", "descartada"} <= set(estados)
+    n = 100
+    mundo.proyecto(1, "Medio", area="CDS")                   # 2 pendientes: va primero
+    for _ in range(2):
+        n += 1
+        mundo.tarea(n, f"t{n}", proyecto=1)
+    ids = {}
+    for k, e in enumerate(x for x in estados if x != "pendiente"):
+        pid = 10 + k
+        ids[pid] = e
+        mundo.proyecto(pid, f"Con {e}", area="CDS")          # 1 pendiente + 3 de ese estado
+        n += 1
+        mundo.tarea(n, f"t{n}", proyecto=pid)
+        for _ in range(3):
+            n += 1
+            mundo.tarea(n, f"t{n}", proyecto=pid, estado=e,
+                        completado=_dia(-1) if e == "hecha" else None)
+    mundo.proyecto(2, "Borradas", area="CDS")                # 0 vivas: 5 pendientes en la papelera
+    for _ in range(5):
+        n += 1
+        mundo.tarea(n, f"t{n}", proyecto=2, borrada=True)
+    con_uno = sorted(ids, key=lambda pid: f"Con {ids[pid]}".casefold())
+    assert _izquierda(ver(mundo))["cds"]["abiertos"] == [1, *con_uno, 2]
+    assert [n for _, n in _estado(ver(mundo, estado=1))["CDS"]] == [2] + [1] * len(con_uno) + [0]
 
 
 def test_O8_el_selector_de_meter_en_un_proyecto_sigue_alfabetico(mundo):
