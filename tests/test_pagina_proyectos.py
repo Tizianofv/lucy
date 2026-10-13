@@ -719,6 +719,7 @@ def test_las_rutas_que_vuelven_con_un_aviso_enseñan_el_proyecto_del_que_hablan(
     mundo.proyecto(1, "Alfa", area="CDS")             # el que se enseña si nada elige
     mundo.proyecto(2, "Zeta", area="CDS")
     mundo.tarea(20, "de Zeta", proyecto=2)
+    mundo.tarea(21, "de Alfa", proyecto=1)             # los dos con 1 pendiente: el orden sigue siendo por nombre
     assert titulo_de(ver(mundo)) == "Alfa"
     # `nombre_guardado`, `area_guardada` y `creado` también ESCOGEN el proyecto: sin recibo
     # (recarga, dirección vieja) conservan esa parte y pierden el aviso; con él, las dos.
