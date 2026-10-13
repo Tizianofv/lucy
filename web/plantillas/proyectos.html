@@ -664,8 +664,10 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
   <aside data-region="izquierda">
     <form class="buscador" method="get" action="/proyectos" role="search">
       <input class="buscar" type="search" name="q" value="{{ q }}" placeholder="Buscar cliente o proyecto…" aria-label="Buscar cliente o proyecto">
+      {#- Buscar DENTRO de «Estado de los proyectos» te deja en ella (la lista del centro se acorta). -#}
+      {% if vista.tipo == 'estado' %}<input type="hidden" name="estado" value="1">{% endif %}
       <button class="btn-linea">Buscar</button>
-      {% if q %}<a class="quitar-filtro" href="/proyectos">Quitar el filtro</a>{% endif %}
+      {% if q %}<a class="quitar-filtro" href="/proyectos{{ '?estado=1' if vista.tipo == 'estado' }}">Quitar el filtro</a>{% endif %}
     </form>
     <a class="ver-estado" href="/proyectos?estado=1" aria-current="{{ 'true' if vista.tipo == 'estado' else 'false' }}">Estado de los proyectos</a>
     <nav class="grupos" aria-label="Proyectos por grupo">
@@ -1584,6 +1586,9 @@ document.addEventListener("keydown", function (e) {
   /* En la caja del buscador, Enter no recarga la página: ya filtra al escribir. */
   var buscador = e.target.closest && e.target.closest("input.buscar, input[data-buscar-persona]");
   if (buscador && e.key === "Enter") {
+    /* En «Estado de los proyectos» la lista del centro no se filtra al escribir: Enter envía el
+       formulario (lleva `estado=1` escondido) y el servidor acorta la vista. */
+    if (buscador.form && buscador.form.querySelector('input[name="estado"]')) return;
     e.preventDefault();
     return;
   }

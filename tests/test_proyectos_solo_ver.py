@@ -271,7 +271,7 @@ class _Mirador(HTMLParser):
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         if tag == "form":
-            # La búsqueda de la lista es una LECTURA: GET a /proyectos con un solo campo, `q`.
+            # La búsqueda de la lista es una LECTURA: GET a /proyectos con un solo campo, `q` (y `estado=1` escondido en la vista de estado).
             es_busqueda = ((a.get("method") or "get").lower() == "get"
                            and (a.get("action") or "") == "/proyectos")
             self._form_permitido = es_busqueda
@@ -280,7 +280,10 @@ class _Mirador(HTMLParser):
             return
         if tag in _CAMPOS:
             if tag in ("input", "button") and self._form_permitido:
-                if tag == "input" and a.get("name") != "q":
+                # `q`, y dentro de «Estado de los proyectos» además `estado=1` escondido (el mismo
+                # GET de lectura: te deja en la vista); cualquier otro campo sobra.
+                es_estado = a.get("name") == "estado" and a.get("type") == "hidden" and a.get("value") == "1"
+                if tag == "input" and a.get("name") != "q" and not es_estado:
                     self.sobran.append(f"<input name={a.get('name')!r}> en la búsqueda")
                 return
             self.sobran.append(f"<{tag}>")

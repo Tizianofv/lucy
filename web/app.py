@@ -1181,6 +1181,12 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         borrar_proyecto = borrado = borrada = 0
         editar_nota = borrar_nota = 0
         sq = ""
+    if estado:
+        # «Estado de los proyectos» solo lee la lista de proyectos: lo que abriría otra cosa o haría
+        # otra lectura (la búsqueda de personas en Noco, las cuentas de borrar un grupo o un
+        # proyecto, los avisos de «borrado») se apaga ANTES, como en solo ver. `q` se queda.
+        pq = pdonde = quitar_grupo = grupo = hecho = ""
+        borrar_proyecto = borrado = borrada = 0
     modelo = await db.pagina_de_proyectos()
     visibles = _filtrar_por_busqueda(modelo, q)
     elegido = p or nombre_guardado or area_guardada or creado
