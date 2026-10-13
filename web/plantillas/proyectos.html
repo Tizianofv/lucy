@@ -341,9 +341,13 @@ form.marcar button.marca:focus-visible{outline:2px solid var(--color);outline-of
 .fila form.renombrar input{font:inherit;font-weight:500;flex:1 1 10rem}
 form.renombrar textarea,form.comentar textarea{font:inherit;flex:1 1 14rem;min-width:0;min-height:2.6rem;resize:vertical;padding:.45rem .65rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
 form.comentar{width:100%;margin-top:.6rem;align-items:flex-end;gap:.5rem}
-form.nueva-tarea input{font:inherit;padding:.45rem .65rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0}
+form.nueva-tarea input,form.nueva-tarea select{font:inherit;padding:.45rem .65rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);min-width:0}
 form.nueva-tarea{margin-top:.8rem;width:100%;gap:.5rem}
 form.nueva-tarea input[name=titulo]{flex:1 1 12rem}
+form.nueva-tarea select{color:var(--tinta);background:var(--bg)}
+/* La fecha de una tarea ya creada: se guarda con su botón (no al escoger, que un campo de fecha dispara «change» a mitad de escribir). */
+form.fecha-t{display:inline-flex;gap:.35rem;align-items:center;margin:0;font-size:.92rem;color:var(--suave);flex-wrap:wrap}
+form.fecha-t input{font:inherit;font-size:.92rem;color:var(--tinta);background:var(--papel);border:1px solid var(--linea);border-radius:8px;padding:.3rem .55rem}
 form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar button.guardar{font:600 .88rem var(--texto);padding:.45rem .9rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
 .comentarios-n{flex:none}
 .borrar-x{color:var(--suave);text-decoration:none;font-size:1.15rem;line-height:1;padding:.1rem .35rem;border-radius:6px;flex:none}
@@ -488,6 +492,22 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         {% if t.responsable and t.responsable not in nombres_responsable %}<option value="" selected disabled>{{ t.responsable }}</option>{% endif %}
         {% for n in nombres_responsable %}<option value="{{ n }}" {%- if t.responsable == n %} selected{% endif %}>{{ n }}</option>{% endfor %}
       </select>
+      <button class="btn-linea">Guardar</button>
+    </form>
+    {% endif %}
+    {#- LA FECHA DE LA TAREA se cambia aquí mismo (Tiziano, 13-oct-2026), solo en las
+        pendientes (`db.mover_vence` no mueve las demás) y solo para quien puede escribir.
+        Es el campo de día y hora de `/tareas` y la misma puerta (`_vence_con_hora_valido` →
+        `db.mover_vence`): dejarlo vacío QUITA la fecha (eso solo se envía con el botón: vacío no
+        se guarda solo). Se guarda con su botón o al salir del campo si cambió, como los demás
+        campos de texto (`data-auto`; al escoger no, porque un campo de fecha avisa de cada cambio
+        mientras se teclea). `form.marcar`: guardar no mueve la página. `prev_vence` es lo que se
+        pintó: si no cambió, el servidor no escribe. -#}
+    {% if not solo_ver and t.es_pendiente %}
+    <form class="fecha-t marcar" method="post" action="/proyectos/tarea/{{ t.id }}/fecha{{ consulta_filtro }}" data-auto>
+      <label for="ft-{{ t.id }}">Fecha</label>
+      <input type="hidden" name="prev_vence" value="{{ t.vence_en|para_el_campo }}">
+      <input id="ft-{{ t.id }}" type="datetime-local" name="vence" value="{{ t.vence_en|para_el_campo }}" min="{{ piso_fecha }}T00:00">
       <button class="btn-linea">Guardar</button>
     </form>
     {% endif %}
@@ -753,6 +773,9 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'tarea_igual' %}<p class="aviso">No cambió nada: ya estaba así, o ya no está.</p>
     {% elif error == 'tarea_titulo' %}<p class="aviso">El título no puede quedar vacío ni pasar de {{ largo_titulo }} caracteres.</p>
     {% elif error == 'tarea_fecha' %}<p class="aviso">No se entendió la fecha.</p>
+    {% elif error == 'tarea_fecha_cambio' %}<p class="aviso">La fecha no se entendió: la tarea sigue con la fecha que tenía.</p>
+    {% elif error == 'tarea_fecha_igual' %}<p class="aviso">No cambió nada: la tarea ya tenía esa fecha, o ya no está pendiente.</p>
+    {% elif error == 'tarea_nueva_responsable' %}<p class="aviso">Ese responsable no vale: se escoge entre {{ nombres_responsable|join(', ') }}. La tarea NO se creó.</p>
     {% elif error == 'tarea_comentario' %}<p class="aviso">El comentario no puede quedar vacío ni pasar de {{ largo_comentario }} caracteres.</p>
     {% elif error == 'tarea_proyecto' %}<p class="aviso">Ese proyecto ya no existe o está en la papelera: la tarea NO se movió.</p>
     {% elif error == 'tarea_con_proyecto' %}<p class="aviso">Esa tarea ya está en un proyecto: no se movió.</p>
@@ -816,6 +839,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif hecho == 'tarea_proyecto' %}<p class="aviso ok">Tarea metida en el proyecto.</p>{% if sala_no %}
     <p class="aviso">Es de {{ nombre_code }}, pero el proyecto no es del grupo «{{ area_tecnica }}»: la sala de control NO la verá.</p>{% endif %}
     {% elif hecho == 'tarea_responsable' %}<p class="aviso ok">Responsable de la tarea guardado.</p>
+    {% elif hecho == 'tarea_fecha' %}<p class="aviso ok">Fecha de la tarea guardada.</p>
+    {% elif hecho == 'tarea_fecha_quitada' %}<p class="aviso ok">Fecha de la tarea quitada: queda sin fecha.</p>
     {% elif hecho == 'comentario' %}<p class="aviso ok">Comentario guardado.</p>
     {% elif hecho == 'comentario_editado' %}<p class="aviso ok">Comentario editado.</p>{% endif %}
     {% if nombre_guardado %}<p class="aviso ok">Nombre guardado.</p>{% endif %}
@@ -953,6 +978,14 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       <form class="nueva-tarea" method="post" action="/proyectos/{{ m.id }}/tareas">
         <input name="titulo" type="text" required maxlength="{{ largo_titulo }}" placeholder="Nueva tarea" aria-label="Nueva tarea">
         <input name="vence" type="date" aria-label="Fecha límite (opcional)">
+        {#- EL RESPONSABLE SE ESCOGE AL CREAR (Tiziano, 13-oct-2026). Las opciones son las de
+            `/tareas` (`config.opciones_de_responsable`, por NOMBRE); sale escogido el del
+            proyecto, que es quien recibía la tarea antes de que hubiera desplegable (si ya no
+            puede serlo, no está en la lista y sale «sin responsable», lo mismo que hace la ruta). -#}
+        <select name="responsable" aria-label="Responsable (opcional)">
+          <option value="" {%- if not m.responsable or m.responsable not in nombres_responsable %} selected{% endif %}>sin responsable</option>
+          {% for n in nombres_responsable %}<option value="{{ n }}" {%- if m.responsable == n %} selected{% endif %}>{{ n }}</option>{% endfor %}
+        </select>
         <button class="guardar">Agregar tarea</button>
       </form>
       {% endif %}

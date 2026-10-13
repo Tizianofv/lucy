@@ -62,7 +62,11 @@ HECHOS_DE_ANTES = {"proyecto_nuevo", "grupo_creado", "grupo_quitado", "responsab
                    # Las sesiones que se quitan de un proyecto (parte 11, 9-oct-2026): igual, las
                    # ampara el recibo; la de quitar solo sale si la base escribió la decisión. La 13
                    # agrega las dos de agregar una del registro y de sacar una agregada a mano.
-                   "sesion_quitada", "sesion_devuelta", "sesion_agregada", "sesion_sacada"}
+                   "sesion_quitada", "sesion_devuelta", "sesion_agregada", "sesion_sacada",
+                   # La fecha de una tarea ya creada (13-oct-2026): igual que `tarea_responsable`, las
+                   # ampara el recibo (la ruta solo redirige con ellas después de que `db.mover_vence`
+                   # escribió).
+                   "tarea_fecha", "tarea_fecha_quitada"}
 
 
 def _claves(texto: str, campo: str) -> dict[str, bool]:

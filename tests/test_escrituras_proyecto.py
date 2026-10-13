@@ -1238,8 +1238,13 @@ _ATRIBUTOS = {
               "data-buscar-persona", "autocomplete",
               # `data-elegida` (1-oct-2026): el campo escondido donde queda el Id de la
               # persona o del cliente ESCOGIDOS en la ventanita; solo marca cuál es.
-              "data-elegida"},
-    "select": {"id", "name", "required"},
+              "data-elegida",
+              # `id` (13-oct-2026): el campo de fecha de una tarea ya creada lo nombra un
+              # `<label for>`; el `id` no cambia lo que se envía.
+              "id"},
+    # `aria-label` (13-oct-2026): el desplegable de responsable de «Nueva tarea» se nombra
+    # igual que sus hermanos de esa fila (el título y la fecha); no cambia lo que se envía.
+    "select": {"id", "name", "required", "aria-label"},
     "option": {"value", "selected", "disabled"},
     # `title` y `aria-label` (E6): el botón redondo de marcar hecha (○ o ✓) no
     # tiene texto; su nombre para quien lo lee en voz alta viaja en `aria-label`,

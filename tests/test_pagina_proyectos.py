@@ -620,7 +620,7 @@ def test_la_pagina_no_promete_nada_que_no_hace(mundo):
     permitidas = re.compile(
         r"/proyectos/(nuevo|\d+/(nombre|area|responsable|estado|tareas|cliente|personas(/\d+/quitar)?|"
         r"notas(/\d+/(editar|borrar))?|sesiones/(quitar|devolver|agregar))|"
-        r"tarea/\d+/(hecha|reabrir|titulo|borrar|responsable|comentar|comentario/\d+/editar|"
+        r"tarea/\d+/(hecha|reabrir|titulo|borrar|responsable|fecha|comentar|comentario/\d+/editar|"
         r"personas(/\d+/quitar)?))")
     for consulta in ({"p": 1}, {"p": 3}, {"g": "CDS"}, {"sin_grupo": 1}, {"nuevo": "CDS"}, {},
                      {"p": 1, "t": 10}):
