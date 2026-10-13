@@ -4483,6 +4483,43 @@ def _resumen(pendientes: list[dict], otras: list[dict]) -> dict:
     }
 
 
+def situacion_de_proyecto(estado_guardado, filas: list[dict]) -> dict:
+    """LA PUERTA ÚNICA de la situación de un proyecto: su estado y su próxima tarea. Quien necesite
+    decir «cómo está este proyecto» o «qué sigue» llama aquí; ningún otro sitio lo decide
+    (`armar_pagina` la usa para la página, y de ella saca también el reparto y las cifras).
+
+    `estado_guardado` es `proyectos.estado` tal cual está en la base (puede ser un texto fuera del
+    vocabulario: `estado_calculado` lo trata como abierto). `filas` son las tareas VIVAS del proyecto
+    ya hechas por `_fila_de_tarea` (una por tarea; las que no son `pendiente` cuentan como «otras»).
+
+    Devuelve un diccionario con:
+      `estado`        una de las cuatro palabras de `estado_calculado`: «Sin empezar», «En curso»,
+                      «Pausado» o «Cerrado»;
+      `pendientes`    las tareas pendientes, en el orden de `_orden_de_pendientes`; `otras`, el resto
+                      (`_repartir`);
+      `n_total`, `n_hechas`, `n_otras`, `n_pendientes`, `n_vencidas`, `pct`   las cifras de `_resumen`;
+      `proxima`       la PRIMERA de `pendientes` si el proyecto NO está cerrado, y `None` si está
+                      cerrado o no tiene ninguna pendiente (un proyecto en pausa sí dice cuál sigue).
+                      Es `{id, titulo, vence, vencida, grave}`: `vence` es el día de Santo Domingo
+                      (`date`) o `None`, `vencida` y `grave` son booleanos.
+
+    DEFECTOS CONOCIDOS de las cuatro palabras, que se quedan así por decisión de Tiziano
+    (13-oct-2026): un proyecto con todas sus tareas hechas y sin cerrar dice «En curso» (no hay
+    palabra para «por cerrar»), y uno con tareas pendientes —también vencidas— y ninguna hecha dice
+    «Sin empezar». «Pausado» y «Cerrado» son lo que dice el estado guardado, no lo que hagan las
+    tareas. No es una frase escrita a mano por nadie."""
+    pendientes, otras = _repartir(filas)
+    resumen = _resumen(pendientes, otras)
+    estado = estado_calculado(estado_guardado, resumen["n_hechas"])
+    proxima = None
+    if estado_guardado != ESTADO_PROYECTO_CERRADO and pendientes:
+        f = pendientes[0]
+        proxima = {"id": f["id"], "titulo": f["titulo"], "vence": f["dia"],
+                   "vencida": bool(f["vencida"]), "grave": bool(f["grave"])}
+    return {"estado": estado, "pendientes": pendientes, "otras": otras,
+            "proxima": proxima, **resumen}
+
+
 def _nota_del_modelo(f: dict, nombres: dict) -> dict:
     """Una fila de `notas_de_proyectos()` → lo que sabe la plantilla. `autor` es el NOMBRE, o «Autor sin
     nombre» (se sabe el chat pero no tiene nombre en `NOMBRES_POR_CHAT`), o «Autor desconocido»: la página
@@ -4554,8 +4591,8 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
     claves = {a["clave"] for a in areas}
     modelo_proyectos: dict[int, dict] = {}
     for pid, p in vivos.items():
-        pendientes, otras = _repartir(del_proyecto[pid])
-        resumen = _resumen(pendientes, otras)
+        # El estado, el reparto, las cifras y la próxima tarea: UNA sola decisión.
+        situacion = situacion_de_proyecto(p["estado"], del_proyecto[pid])
         ultimo = ultimo_movimiento(p["creado_en"], ultimas.get(pid, []))
         dias = dias_sin_movimiento(ultimo, hoy)
         propias = (fechas or {}).get(pid)
@@ -4571,14 +4608,17 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
             # Telegram pudo guardar un estado libre antes de que existiera la
             # puerta (`crud.PUERTAS["proyectos"]["estado"]`): se ve, no se oculta.
             "estado_conocido": p["estado"] in ESTADOS_PROYECTO,
-            "estado_calculado": estado_calculado(p["estado"], resumen["n_hechas"]),
+            "estado_calculado": situacion["estado"],
+            "proxima": situacion["proxima"],
             "cliente": (p["cliente_nombre"] or None),
             # La ficha de Noco del cliente (parte 9): con ella se le piden al registro las sesiones
             # del proyecto, y sin ella (o sin ficha) la página no le pregunta nada.
             "cliente_noco_id": p.get("cliente_noco_id"),
             "personas": personas_de_proyecto.get(pid, []),
             "responsable": nombres.get(p["responsable_chat_id"]),
-            "pendientes": pendientes, "otras": otras, **resumen,
+            "pendientes": situacion["pendientes"], "otras": situacion["otras"],
+            **{k: situacion[k] for k in ("n_total", "n_hechas", "n_otras", "n_pendientes",
+                                         "n_vencidas", "pct")},
             "ultimo": ultimo, "dias_sin_movimiento": dias,
             "dormido": esta_dormido(p["estado"], dias),
             # Las fechas (parte 4). Sin las columnas (`fechas` es None, o el proyecto no salió en la
