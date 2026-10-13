@@ -219,8 +219,8 @@ def no_declaradas(bloque: str) -> list:
 
 
 def test_E2_la_tabla_cerrada_de_la_vista_cae_del_lado_estricto_con_una_entrada_inventada_de_cada_clase():
-    """QUÉ EXIGE: cada `{{ … }}` y cada `{% … %}` de la rama de la vista es, por igualdad exacta de texto normalizado, una entrada de la tabla cerrada `TABLA_DE_LA_VISTA` (con su clase: texto de persona, dato del modelo que no es texto, control de presentación) y, con `estado`, la ruta solo le pide a los módulos del proyecto y a las librerías de red que `web.app` trae las funciones que `LO_QUE_PIDE_LA_RUTA_CON_ESTADO` declara; lo no declarado cae en rojo.
-    QUÉ NO PROMETE: no vigila que la tabla declarada sea «correcta» (quien añada una entrada a la tabla puede añadir una decisión: es una lista que obliga a declarar, no a acertar) ni las lecturas por caminos que el espía no envuelve (funciones traídas con `from … import`, módulos que no son del proyecto ni de `LIBRERIAS_DE_RED`, lo que haga un hilo o una tarea aparte)."""
+    """QUÉ EXIGE: cada `{{ … }}` y cada `{% … %}` de la rama de la vista es, por igualdad exacta de texto normalizado, una entrada de la tabla cerrada `TABLA_DE_LA_VISTA` (con su clase: texto de persona, dato del modelo que no es texto, control de presentación) y, con `estado`, las funciones (atributos llamables) que la ruta pide directamente a un módulo envuelto son solo las que `LO_QUE_PIDE_LA_RUTA_CON_ESTADO` declara; lo no declarado cae en rojo. Los módulos envueltos son los globales de `web.app` que son módulos del proyecto o de `LIBRERIAS_DE_RED`; los demás módulos de `web.app` (p. ej. `asyncio`, `re`, `logging`) no se envuelven.
+    QUÉ NO PROMETE: no vigila que la tabla declarada sea «correcta» (quien añada una entrada a la tabla puede añadir una decisión: es una lista que obliga a declarar, no a acertar) ni lo que la ruta pida a través de un OBJETO de un módulo (p. ej. `db.pool.<método>()`: el espía solo anota atributos llamables y `db.pool` no lo es), ni lo que pida a módulos que no son del proyecto ni de `LIBRERIAS_DE_RED` (p. ej. `asyncio`), ni las lecturas por caminos que el espía no envuelve (funciones traídas con `from … import`, lo que haga un hilo o una tarea aparte). Tampoco vigila que la prueba de escape declarada para cada texto de persona de la tabla escape de verdad ese texto: la tabla solo obliga a declarar una prueba y a que exista; que escape lo vigila cada prueba de escape por su cuenta."""
     # todo lo declarado, junto, pasa; es lo que hay que poder escribir
     assert no_declaradas(" ".join(TABLA_DE_LA_VISTA)) == []
     # una entrada inventada de CADA clase cae, con la forma de las que el testigo usó
@@ -399,7 +399,8 @@ def test_E5_el_grupo_escrito_por_una_persona_se_escapa(mundo):
     assert "<i>Grupo" not in h and "&lt;i&gt;Grupo&lt;/i&gt;" in h
 
 
-# Los textos de persona de la tabla (`TABLA_DE_LA_VISTA`) y la prueba de escape que cada uno tiene en este archivo.
+# Los textos de persona de la tabla (`TABLA_DE_LA_VISTA`) y la prueba de este archivo que cada uno DECLARA como su prueba de escape.
+# Solo se comprueba que esté declarada y exista; que de verdad escape ese texto lo vigila cada una por su cuenta.
 LO_QUE_CUBREN_LAS_PRUEBAS_DE_ESCAPE = {
     "{{ q }}": "test_E5_el_eco_de_la_busqueda_se_escapa_en_los_dos_sitios",
     "{{ x.clave if x.clave else 'Sin grupo' }}": "test_E5_el_grupo_escrito_por_una_persona_se_escapa",
@@ -409,7 +410,7 @@ LO_QUE_CUBREN_LAS_PRUEBAS_DE_ESCAPE = {
 }
 
 
-def test_E5_cada_texto_de_persona_de_la_tabla_tiene_su_prueba_de_escape():
+def test_E5_cada_texto_de_persona_de_la_tabla_tiene_declarada_una_prueba_de_escape_que_existe():
     de_persona = {t for t, c in TABLA_DE_LA_VISTA.items() if c == TEXTO_DE_PERSONA}
     assert de_persona == set(LO_QUE_CUBREN_LAS_PRUEBAS_DE_ESCAPE)
     for prueba in set(LO_QUE_CUBREN_LAS_PRUEBAS_DE_ESCAPE.values()):
@@ -569,8 +570,8 @@ def _sin_red_de_verdad(monkeypatch):
 
 
 def test_E8_con_la_vista_la_ruta_no_pide_a_ningun_modulo_nada_que_la_vista_no_use(mundo, monkeypatch):
-    """QUÉ EXIGE: cada `{{ … }}` y cada `{% … %}` de la rama de la vista es, por igualdad exacta de texto normalizado, una entrada de la tabla cerrada `TABLA_DE_LA_VISTA` (con su clase: texto de persona, dato del modelo que no es texto, control de presentación) y, con `estado`, la ruta solo le pide a los módulos del proyecto y a las librerías de red que `web.app` trae las funciones que `LO_QUE_PIDE_LA_RUTA_CON_ESTADO` declara; lo no declarado cae en rojo.
-    QUÉ NO PROMETE: no vigila que la tabla declarada sea «correcta» (quien añada una entrada a la tabla puede añadir una decisión: es una lista que obliga a declarar, no a acertar) ni las lecturas por caminos que el espía no envuelve (funciones traídas con `from … import`, módulos que no son del proyecto ni de `LIBRERIAS_DE_RED`, lo que haga un hilo o una tarea aparte).
+    """QUÉ EXIGE: cada `{{ … }}` y cada `{% … %}` de la rama de la vista es, por igualdad exacta de texto normalizado, una entrada de la tabla cerrada `TABLA_DE_LA_VISTA` (con su clase: texto de persona, dato del modelo que no es texto, control de presentación) y, con `estado`, las funciones (atributos llamables) que la ruta pide directamente a un módulo envuelto son solo las que `LO_QUE_PIDE_LA_RUTA_CON_ESTADO` declara; lo no declarado cae en rojo. Los módulos envueltos son los globales de `web.app` que son módulos del proyecto o de `LIBRERIAS_DE_RED`; los demás módulos de `web.app` (p. ej. `asyncio`, `re`, `logging`) no se envuelven.
+    QUÉ NO PROMETE: no vigila que la tabla declarada sea «correcta» (quien añada una entrada a la tabla puede añadir una decisión: es una lista que obliga a declarar, no a acertar) ni lo que la ruta pida a través de un OBJETO de un módulo (p. ej. `db.pool.<método>()`: el espía solo anota atributos llamables y `db.pool` no lo es), ni lo que pida a módulos que no son del proyecto ni de `LIBRERIAS_DE_RED` (p. ej. `asyncio`), ni las lecturas por caminos que el espía no envuelve (funciones traídas con `from … import`, lo que haga un hilo o una tarea aparte). Tampoco vigila que la prueba de escape declarada para cada texto de persona de la tabla escape de verdad ese texto: la tabla solo obliga a declarar una prueba y a que exista; que escape lo vigila cada prueba de escape por su cuenta.
 
     Los módulos envueltos SALEN de `web.app` (`modulos_por_los_que_la_ruta_puede_leer_hacia_fuera`): sus globales que
     son módulos del proyecto o de `LIBRERIAS_DE_RED`; las funciones de cada uno, de sus atributos llamables."""
