@@ -37,7 +37,7 @@ import pytest
 
 import config
 import db.db as db
-from test_pagina_proyectos import _dia, gente, mundo, ver, titulo_de  # noqa: F401
+from test_pagina_proyectos import _dia, gente, mundo, ver, titulo_de, modelo_de_filas  # noqa: F401
 from test_buzon_que_no_se_ve import _py_en_disco   # DESPUÉS de la línea de arriba: importado antes, rompe starlette
 import test_proyectos_solo_ver as sv
 import web.avisos  # noqa: F401
@@ -120,6 +120,15 @@ def test_O2_el_empate_es_por_nombre_y_luego_por_id_y_no_depende_de_como_se_sembr
     primera = _izquierda(ver(mundo))["cds"]["abiertos"]
     assert primera == [7, 3, 5, 9]                           # Mas (1); luego «igual» ×3 por id
     assert _izquierda(ver(mundo))["cds"]["abiertos"] == primera
+
+
+@pytest.mark.parametrize("llegan", [(9, 3, 5), (5, 9, 3), (3, 5, 9)])
+def test_O2_con_el_mismo_nombre_gana_el_id_llegue_la_lista_como_llegue(llegan):
+    """Postgres no promete el orden de `SELECT ... FROM proyectos` (no lleva ORDER BY): el desempate final
+    es el `id`, no el sitio de la fila. (SQLite devuelve por id y no lo ve: se arma el modelo a mano.)"""
+    m = modelo_de_filas(proyectos=[dict(id=i, nombre="Igual", area="CDS") for i in llegan])
+    cds = next(g for g in m["grupos"] if g["clave"] == "CDS")
+    assert [p["id"] for p in cds["abiertos"]] == [3, 5, 9]
 
 
 def test_O3_los_cerrados_siguen_por_nombre_y_aparte(mundo):
