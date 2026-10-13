@@ -360,6 +360,18 @@ def test_dejar_la_misma_fecha_dice_que_no_cambio_nada_y_no_escribe(mt):
     assert not any("guardada" in a or "quitada" in a for a in avisos)
 
 
+def test_guardar_sin_tocar_el_campo_no_recorta_los_segundos_de_una_fecha_que_los_tiene(mt):
+    """El campo del navegador enseña minutos: una tarea con `09:30:45` (la puso el chat) se pinta `09:30`.
+    Guardar sin tocarlo NO la mueve a `09:30:00`: lo evita `prev_vence`, lo que se pintó."""
+    mt.con.execute("UPDATE tareas SET vence_en = '2026-10-14T09:30:45-04:00' WHERE id = 10")
+    mt.con.commit()
+    campos = {c["name"]: c for c in _form_fecha(ver(mt, p=2, t=10), 10)["campos"]}
+    assert campos["vence"]["value"] == campos["prev_vence"]["value"] == "2026-10-14T09:30"
+    antes = foto(mt)
+    r = post("/proyectos/tarea/10/fecha", {"vence": "2026-10-14T09:30", "prev_vence": "2026-10-14T09:30"})
+    assert "error=tarea_fecha_igual" in r.headers["location"] and foto(mt) == antes
+
+
 @pytest.mark.parametrize("malo", ["mañana", "2026-10-20", "2026-10-20T25:99", "2019-12-31T10:00",
                                   "2026-10-20T09:30+05:00", "2026-10-20 09:30", "x" * 300, "0000-01-01T00:00"])
 def test_una_fecha_que_no_se_entiende_no_cambia_nada_y_la_pagina_lo_dice(mt, malo):
