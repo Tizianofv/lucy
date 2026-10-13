@@ -337,9 +337,11 @@ def test_G5_las_palabras_del_estado_no_estan_escritas_en_ningun_otro_sitio():
 
 def test_G5_la_plantilla_pinta_el_estado_del_modelo_tal_cual():
     html = (RAIZ / "web" / "plantillas" / "proyectos.html").read_text(encoding="utf-8")
-    # Se pinta en dos sitios (la cabecera del proyecto y la vista «Estado de los proyectos») y en los dos
-    # es el valor tal cual, sin ninguna condición alrededor.
-    assert html.count("m.estado_calculado") == html.count("{{ m.estado_calculado }}") == 2
+    # Se pinta en dos sitios (la cabecera del proyecto y la vista «Estado de los proyectos») y en los dos es
+    # la expresión tal cual, dentro de su pastilla (sin filtro ni cuenta en la expresión). Una condición ALREDEDOR de la pastilla
+    # no la mira esta prueba; en la vista de estado la mira `test_E2_la_plantilla_de_la_vista_no_decide…`.
+    assert html.count("m.estado_calculado") == 2
+    assert html.count('<span class="pastilla">{{ m.estado_calculado }}</span>') == 2
 
 
 # ═══════════════════════════════════════════════════════════════════════
