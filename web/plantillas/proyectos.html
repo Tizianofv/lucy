@@ -958,6 +958,49 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {% endif %}
     </section>
 
+    {#- LAS NOTAS Y DECISIONES (parte 6, 8-oct-2026): lo que se anota en el proyecto, por la página o
+        por Telegram (`notas.proyecto_id`), la más nueva primero. Cada nota dice su autor por NOMBRE
+        (`n.autor`; sin autor conocido lo dice, no inventa uno) y su día; el número de chat no se
+        escribe. «Cambiar» y «Borrar» salen en todas las notas a la sesión de la casa (cualquiera de la casa puede, como en
+        los comentarios); el formulario y la pregunta de borrar los dibuja el
+        servidor (`?editar_nota=`, `?borrar_nota=`). En solo ver se leen y no hay ningún control. Sin la
+        columna en la base (`m.notas_disponibles` falso) no se dibuja nada de esto. -#}
+    {% if m.notas_disponibles and (m.notas or not solo_ver) %}
+    <section class="bloque notas-p" id="notas-del-proyecto">
+      <div class="encabezado"><h2>Notas y decisiones</h2></div>
+      {% for n in m.notas %}
+      <div class="nota-item" id="nota-{{ n.id }}">
+        <small>{{ n.autor or 'Autor desconocido' }} · {{ n.creado_en|hora_rd }}</small>
+        {% if not solo_ver and editar_nota == n.id %}
+        <form class="renombrar" method="post" action="/proyectos/{{ m.id }}/notas/{{ n.id }}/editar" data-auto>
+          <textarea name="texto" required maxlength="{{ largo_nota }}" aria-label="Cambiar la nota">{{ n.texto }}</textarea>
+          <button class="guardar">Guardar</button>
+          <a class="btn-linea" href="/proyectos?p={{ m.id }}#nota-{{ n.id }}">Cancelar</a>
+        </form>
+        {% else %}
+        <p class="texto">{{ n.texto }}</p>
+        {% if not solo_ver %}
+        {% if borrar_nota == n.id %}
+        <form class="confirmar" method="post" action="/proyectos/{{ m.id }}/notas/{{ n.id }}/borrar">
+          <span>¿Borrar esta nota?</span>
+          <button class="btn-lleno">Sí, borrar la nota</button><a class="btn-linea" href="/proyectos?p={{ m.id }}#nota-{{ n.id }}">No</a>
+        </form>
+        {% else %}
+        <div class="nota-acciones"><a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar_nota={{ n.id }}#nota-{{ n.id }}">Cambiar</a><a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;borrar_nota={{ n.id }}#nota-{{ n.id }}">Borrar</a></div>
+        {% endif %}
+        {% endif %}
+        {% endif %}
+      </div>
+      {% else %}<p class="vacio">Todavía no hay notas.</p>{% endfor %}
+      {% if not solo_ver %}
+      <form class="comentar" method="post" action="/proyectos/{{ m.id }}/notas" data-auto>
+        <textarea name="texto" required maxlength="{{ largo_nota }}" placeholder="Escribe una nota o una decisión" aria-label="Nueva nota"></textarea>
+        <button class="guardar">Escribir la nota</button>
+      </form>
+      {% endif %}
+    </section>
+    {% endif %}
+
     {#- LAS SESIONES Y TRABAJOS (parte 9, 9-oct-2026): lo que el registro del estudio tiene a nombre
         del cliente de este proyecto, partido en dos listas por `es_trabajo`, con la columna de dinero
         y los tres totales (parte 10, 9-oct-2026). Se le pregunta a la App al abrir el proyecto
@@ -1106,49 +1149,6 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       </div>
       {% endif %}
     </section>
-
-    {#- LAS NOTAS Y DECISIONES (parte 6, 8-oct-2026): lo que se anota en el proyecto, por la página o
-        por Telegram (`notas.proyecto_id`), la más nueva primero. Cada nota dice su autor por NOMBRE
-        (`n.autor`; sin autor conocido lo dice, no inventa uno) y su día; el número de chat no se
-        escribe. «Cambiar» y «Borrar» salen en todas las notas a la sesión de la casa (cualquiera de la casa puede, como en
-        los comentarios); el formulario y la pregunta de borrar los dibuja el
-        servidor (`?editar_nota=`, `?borrar_nota=`). En solo ver se leen y no hay ningún control. Sin la
-        columna en la base (`m.notas_disponibles` falso) no se dibuja nada de esto. -#}
-    {% if m.notas_disponibles and (m.notas or not solo_ver) %}
-    <section class="bloque notas-p" id="notas-del-proyecto">
-      <div class="encabezado"><h2>Notas y decisiones</h2></div>
-      {% for n in m.notas %}
-      <div class="nota-item" id="nota-{{ n.id }}">
-        <small>{{ n.autor or 'Autor desconocido' }} · {{ n.creado_en|hora_rd }}</small>
-        {% if not solo_ver and editar_nota == n.id %}
-        <form class="renombrar" method="post" action="/proyectos/{{ m.id }}/notas/{{ n.id }}/editar" data-auto>
-          <textarea name="texto" required maxlength="{{ largo_nota }}" aria-label="Cambiar la nota">{{ n.texto }}</textarea>
-          <button class="guardar">Guardar</button>
-          <a class="btn-linea" href="/proyectos?p={{ m.id }}#nota-{{ n.id }}">Cancelar</a>
-        </form>
-        {% else %}
-        <p class="texto">{{ n.texto }}</p>
-        {% if not solo_ver %}
-        {% if borrar_nota == n.id %}
-        <form class="confirmar" method="post" action="/proyectos/{{ m.id }}/notas/{{ n.id }}/borrar">
-          <span>¿Borrar esta nota?</span>
-          <button class="btn-lleno">Sí, borrar la nota</button><a class="btn-linea" href="/proyectos?p={{ m.id }}#nota-{{ n.id }}">No</a>
-        </form>
-        {% else %}
-        <div class="nota-acciones"><a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar_nota={{ n.id }}#nota-{{ n.id }}">Cambiar</a><a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;borrar_nota={{ n.id }}#nota-{{ n.id }}">Borrar</a></div>
-        {% endif %}
-        {% endif %}
-        {% endif %}
-      </div>
-      {% else %}<p class="vacio">Todavía no hay notas.</p>{% endfor %}
-      {% if not solo_ver %}
-      <form class="comentar" method="post" action="/proyectos/{{ m.id }}/notas" data-auto>
-        <textarea name="texto" required maxlength="{{ largo_nota }}" placeholder="Escribe una nota o una decisión" aria-label="Nueva nota"></textarea>
-        <button class="guardar">Escribir la nota</button>
-      </form>
-      {% endif %}
-    </section>
-    {% endif %}
 
     {#- LA ACTIVIDAD (parte 7, 8-oct-2026): lo que ha pasado en el proyecto, la más nueva primero, SIN
         decir quién lo hizo y sin ningún dato de persona (ni responsable, ni cliente, ni el autor de un
