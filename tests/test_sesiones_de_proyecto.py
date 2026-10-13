@@ -577,13 +577,19 @@ def test_el_bloque_se_ve_igual_en_la_casa_y_en_solo_ver(registro, monkeypatch):
 
 
 @pytest.mark.parametrize("con", ["casa", "ver"])
-def test_el_bloque_sale_justo_despues_de_las_tareas_y_antes_de_la_actividad(registro, monkeypatch, con):
-    """Orden en la columna del centro, en la casa y en solo ver: Tareas, luego las sesiones, luego lo demás."""
+def test_el_bloque_sale_despues_de_tareas_y_de_las_notas_y_antes_de_la_actividad(
+        registro, monkeypatch, con):
+    """Orden en la columna del centro, en la casa y en solo ver (13-oct-2026, pedido de Tiziano): Tareas, luego
+    Notas y decisiones (si el proyecto las muestra), luego las sesiones, luego la actividad. Antes (7f962ce)
+    las sesiones iban justo debajo de Tareas y las notas después; este test decía «entre Tareas y las sesiones
+    no hay otro bloque»."""
     registro.sesiones = _respuesta(sesiones=(SESION, TRABAJO))
     html = _abrir(monkeypatch, con=con)
     tareas = html.index('<section class="bloque">\n      <div class="encabezado"><h2>Tareas</h2>')
     sesiones = html.index('<section class="bloque sesiones-p" id="sesiones-y-trabajos">')
     actividad = html.index('<section class="bloque actividad-p" id="actividad-del-proyecto">')
     assert tareas < sesiones < actividad
-    entre = html[tareas:sesiones]
-    assert entre.count("<section") == 1, "entre Tareas y las sesiones hay otro bloque"
+    entre = [c.strip() for c in re.findall(r'<section class="bloque([^"]*)"', html[tareas:sesiones])]
+    assert entre == [""] + (["notas-p"] if "notas-del-proyecto" in html else []), entre
+    if "notas-del-proyecto" in html:
+        assert tareas < html.index('id="notas-del-proyecto"') < sesiones
