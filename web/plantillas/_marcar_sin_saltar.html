@@ -40,7 +40,7 @@
    siempre tras un 4xx, `irA`) se va sola: suelta lo escrito (los formularios de la cola se
    sueltan), avisa qué no se mandó y se va con «Continuar» en el aviso fijo. Las salidas que no
    controla (atrás entre documentos, cerrar la pestaña, escribir otra dirección) piden confirmación
-   del navegador (`beforeunload`, puesto solo mientras hay algo pendiente). Sin nada pendiente,
+   del navegador (`beforeunload`, puesto solo mientras hay algo sin terminar). Sin nada sin terminar,
    todo se va como siempre y no se pide nada.
    LO QUE SE PROMETE Y LO QUE NO: nada de lo que la persona ESCRIBE o manda guardar se pierde sin
    aviso. Un pedido de VER otra cosa (enlace, búsqueda, «atrás») que esperaba en la cola puede
@@ -135,7 +135,7 @@ function hayGuardadosSinSaltar() {
   return false;
 }
 /* Lo que la página NO controla (atrás entre documentos, cerrar, otra dirección): mientras hay algo
-   pendiente, el navegador pide confirmar. Se pone y se quita según haya o no (no estorba al navegador
+   sin terminar, el navegador pide confirmar. Se pone y se quita según haya o no (no estorba al navegador
    cuando no hay nada). Solo Proyectos. */
 function alSalirSinSaltar(e) {
   if (saliendoSinSaltar || !hayGuardadosSinSaltar()) return;
@@ -151,7 +151,7 @@ function vigilarSalidaSinSaltar() {
 }
 /* La página va a irse (`accion`). Ningún pedido sale después: si hay guardados en la cola no se mandan, sus
    formularios se sueltan con lo escrito y el aviso fijo lo dice; si hay uno en camino, el aviso dice que no se
-   sabrá si llegó. La persona se va con «Continuar». Sin nada pendiente se va enseguida (y las lecturas que
+   sabrá si llegó. La persona se va con «Continuar». Sin nada sin terminar se va enseguida (y las lecturas que
    esperaban se descartan). */
 function irSinSaltar(accion, texto) {
   var enCola = 0, enCamino = escribiendoSinSaltar, k, dicho = texto;
@@ -458,7 +458,7 @@ function alEnviarSinSaltar(e) {
   if (form.dataset.nativo !== undefined) { delete form.dataset.nativo; return; }   // el envío de siempre que pidió la pieza
   var d = datosDelEnvio(form, e.submitter);
   if (d.metodo === "otro" || (d.target && d.target !== "_self")) return;
-  if (!destinoSinSaltar(d.accion, d.metodo)) {                    // sale de la página: con un guardado pendiente no se va sola
+  if (!destinoSinSaltar(d.accion, d.metodo)) {                    // sale de la página: con un guardado sin terminar no se va sola
     if (hayGuardadosSinSaltar()) {
       e.preventDefault();
       irSinSaltar(function () { envioDeSiempre(form, e.submitter); }, "Este envío sale de la página.");
