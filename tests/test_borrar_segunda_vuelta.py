@@ -63,6 +63,10 @@ HECHOS_DE_ANTES = {"proyecto_nuevo", "grupo_creado", "grupo_quitado", "responsab
                    # ampara el recibo; la de quitar solo sale si la base escribió la decisión. La 13
                    # agrega las dos de agregar una del registro y de sacar una agregada a mano.
                    "sesion_quitada", "sesion_devuelta", "sesion_agregada", "sesion_sacada"}
+# La fecha de una tarea ya creada (13-oct-2026): como `tarea_responsable`, las ampara el recibo y no una
+# condición de estado en la plantilla. Van en su propia lista (no en HECHOS_DE_ANTES) y el censo comprueba
+# además que la ruta solo redirige con ellas DESPUÉS de `db.mover_vence`.
+HECHOS_CON_RECIBO_DE_ESTE_TRABAJO = {"tarea_fecha", "tarea_fecha_quitada"}
 
 
 def _claves(texto: str, campo: str) -> dict[str, bool]:
@@ -76,8 +80,15 @@ def test_censo_cada_aviso_de_este_trabajo_esta_en_la_plantilla_y_con_su_condicio
     p = (PLANTILLAS / "proyectos.html").read_text(encoding="utf-8")
     hechos = {m.group(1): bool(m.group(2)) for m in re.finditer(r"hecho == '(\w+)'( and )?", p)}
     # una clave de `hecho` que no es de antes ni de este trabajo: alguien agregó un aviso sin decidir
-    nuevas = set(hechos) - HECHOS_DE_ANTES - HECHOS_DE_ESTE_TRABAJO["proyectos.html"]
+    nuevas = (set(hechos) - HECHOS_DE_ANTES - HECHOS_DE_ESTE_TRABAJO["proyectos.html"]
+              - HECHOS_CON_RECIBO_DE_ESTE_TRABAJO)
     assert nuevas == set(), nuevas
+    assert HECHOS_CON_RECIBO_DE_ESTE_TRABAJO <= set(hechos)
+    app_src = (_ROOT / "web" / "app.py").read_text(encoding="utf-8")
+    ruta = app_src[app_src.index("async def cambiar_fecha_de_tarea_desde_proyectos"):]
+    ruta = ruta[:ruta.index("\n@app.")]
+    for k in HECHOS_CON_RECIBO_DE_ESTE_TRABAJO:
+        assert ruta.count(f'"{k}"') == 1 and ruta.index(f'"{k}"') > ruta.index("await db.mover_vence"), k
     for k in HECHOS_DE_ESTE_TRABAJO["proyectos.html"]:
         assert hechos.get(k) is True, f"el aviso «{k}» no lleva una condición de estado (`and …`)"
     for archivo, claves in ERRORES_DE_ESTE_TRABAJO.items():

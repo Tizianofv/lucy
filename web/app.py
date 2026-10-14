@@ -1778,8 +1778,9 @@ async def borrar_proyecto_desde_proyectos(request: Request, pid: int):
 @app.post("/proyectos/{pid}/tareas")
 @auth.puerta(auth.PUERTA_SIEMPRE)
 async def agregar_tarea_al_proyecto(request: Request, pid: int):
-    """Agregar una tarea DENTRO de un proyecto (título y fecha opcional). Nace
-    con el responsable del proyecto (P10). Escribe por la MISMA puerta que el
+    """Agregar una tarea DENTRO de un proyecto (título, fecha y responsable
+    opcionales). El responsable se escoge en el formulario (13-oct-2026); si el
+    envío no trae el campo, nace con el del proyecto (P10). Escribe por la MISMA puerta que el
     formulario de `/tareas/nueva`: `db.crear_tarea_desde_el_panel`, que a su vez
     vuelve a mirar que el proyecto admita tareas (un cerrado no las recibe). El
     título pasa por `db.titulo_de_tarea_que_vale`. Si el responsable del
@@ -1802,9 +1803,24 @@ async def agregar_tarea_al_proyecto(request: Request, pid: int):
     ok, vence_en = _vence_valido(str(formulario.get("vence", "")))
     if not ok:
         return RedirectResponse(f"{base}&error=tarea_fecha", status_code=303)
-    responsable = await db.responsable_de_proyecto(pid)
-    if responsable is not None and not config.puede_ser_responsable(responsable):
-        responsable = None
+    if "responsable" in formulario:
+        # EL RESPONSABLE SE ESCOGE AL CREAR (Tiziano, 13-oct-2026). Llega por
+        # NOMBRE y lo lee `_responsable_por_nombre` (la puerta de traducción de
+        # `crud.PUERTAS`, la misma de los demás desplegables de la página);
+        # quién puede serlo lo decide `config.puede_ser_responsable`, que
+        # `db.crear_tarea_desde_el_panel` vuelve a preguntar. Vacío = «sin
+        # responsable», una respuesta de verdad. Un nombre que no vale NO crea
+        # la tarea (no se cambia por el del proyecto sin decirlo).
+        vale, responsable = _responsable_por_nombre(str(formulario.get("responsable", "")))
+        if not vale or (responsable is not None
+                        and not config.puede_ser_responsable(responsable)):
+            return RedirectResponse(f"{base}&error=tarea_nueva_responsable", status_code=303)
+    else:
+        # Sin el campo (un formulario viejo en caché, un envío a mano): la tarea
+        # nace con el responsable del proyecto, como siempre.
+        responsable = await db.responsable_de_proyecto(pid)
+        if responsable is not None and not config.puede_ser_responsable(responsable):
+            responsable = None
     try:
         tid = await db.crear_tarea_desde_el_panel(
             chat, titulo, vence_en, None, responsable, proyecto_id=pid)
@@ -1953,6 +1969,56 @@ async def cambiar_responsable_de_tarea_desde_proyectos(request: Request, tid: in
     cambio = await db.asignar_responsable(tid, chat)
     return RedirectResponse(await _volver_a_la_tarea(
         tid, t=tid, **({"hecho": "tarea_responsable"} if cambio else {"error": "tarea_igual"})),
+        status_code=303)
+
+
+@app.post("/proyectos/tarea/{tid}/fecha")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def cambiar_fecha_de_tarea_desde_proyectos(request: Request, tid: int):
+    """La fecha de una tarea pendiente (en su detalle; Tiziano, 13-oct-2026).
+
+    POR LA MISMA PUERTA QUE `/tareas`: el campo se lee con
+    `_vence_con_hora_valido` (día y hora de Santo Domingo; vacío QUITA la fecha)
+    y se escribe con `db.mover_vence`, que solo mueve pendientes, cuenta la
+    posposición, no toca los avisos y deja la huella `panel`/`editar` que
+    `deshacer` sabe revertir. Esta ruta no decide qué fecha vale ni qué se
+    escribe (salvo que un envío sin el campo `vence` no pide nada, como en
+    `/tareas`). `prev_vence` es lo que se pintó: si el campo dice lo mismo no se
+    escribe (el navegador recorta los segundos). El aviso dice lo que pasó:
+    guardada, quitada, «no se mandó fecha», «no se tocó», «no se entendió» (la
+    fecha anterior sigue) o, si `mover_vence` no escribió, UNA de tres causas:
+    ya no está pendiente, ya estaba sin fecha, ya tenía exactamente esa fecha."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    formulario = await request.form()
+    if "vence" not in formulario:
+        # Un envío SIN el campo no pide nada (no es «vacío = quitar»): como en
+        # `/tareas`, que ignora los campos que no vienen.
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, t=tid, error="tarea_fecha_falta"), status_code=303)
+    pedido = str(formulario.get("vence", "")).strip()
+    # LA REGLA DE `guardar_tareas`, entera: un `prev_vence` ausente vale "" (como allá).
+    if pedido == str(formulario.get("prev_vence", "")).strip():
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, t=tid, error="tarea_fecha_sin_tocar"), status_code=303)
+    vale, vence_en = _vence_con_hora_valido(pedido)
+    if not vale:
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, t=tid, error="tarea_fecha_cambio"), status_code=303)
+    if not await db.mover_vence(tid, vence_en):
+        # `mover_vence` no dice por qué no escribió (y `/tareas` la comparte): se lee la tarea y se dice
+        # UNA causa, nunca «esto o aquello».
+        fila = await db.estado_y_fecha_de_tarea(tid)
+        if fila is None or fila["borrada"] or fila["estado"] != db.ESTADO_PENDIENTE:
+            clave = "tarea_fecha_no_pendiente"
+        elif fila["vence_en"] is None:
+            clave = "tarea_fecha_ya_sin"
+        else:
+            clave = "tarea_fecha_ya_igual"
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, t=tid, error=clave), status_code=303)
+    return RedirectResponse(await _volver_a_la_tarea(
+        tid, t=tid, hecho="tarea_fecha" if vence_en is not None else "tarea_fecha_quitada"),
         status_code=303)
 
 

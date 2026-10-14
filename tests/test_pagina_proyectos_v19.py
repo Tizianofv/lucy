@@ -388,10 +388,13 @@ def test_con_javascript_cada_campo_que_se_guarda_solo_pierde_su_boton_salvo_come
     # (Sin `cambiar-grupo` ni `resp-tarea`: se quitaron de la página el 1-oct-2026.)
     # `resp marcar` es el responsable de la tarea (7-oct-2026): guarda sin mover la
     # página (`form.marcar`) y su botón lo esconde la misma regla `form.resp`.
-    assert set(vistos) == {"resp", "resp marcar", "renombrar", "comentar"}, vistos
+    # `fecha-t marcar` es la fecha de una tarea pendiente (13-oct-2026): su botón se QUEDA a la
+    # vista como el de «Comentar», porque vaciar el campo (quitar la fecha) no se guarda solo y el
+    # botón es la única forma de enviarlo.
+    assert set(vistos) == {"resp", "resp marcar", "renombrar", "comentar", "fecha-t marcar"}, vistos
     for clase in sorted(vistos):
         esconde = any(_lo_esconde(selectores, c, "guardar") for c in clase.split())
-        assert esconde == (clase != "comentar"), (clase, selectores)
+        assert esconde == (clase not in ("comentar", "fecha-t marcar")), (clase, selectores)
     assert ".js .buscador button" in selectores
 
 

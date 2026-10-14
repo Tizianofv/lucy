@@ -1280,6 +1280,21 @@ _ESTILO_DEL_GRUPO = re.compile(
     r"(display:contents;)?--claro:#[0-9a-fA-F]{3,8};--oscuro:#[0-9a-fA-F]{3,8}")
 
 
+def _EXCEPCION_DE_ATRIBUTO(tag, n, a, accion) -> bool:
+    """Lo NUEVO del 13-oct-2026, y nada más (no se afloja la tabla para todos los elementos):
+    · `id` del `<input type="datetime-local">` de la fecha de una tarea ya creada (`ft-<id>`,
+      en el formulario `/proyectos/tarea/<id>/fecha`): lo nombra un `<label for>`;
+    · `aria-label` del `<select name="responsable">` de «Nueva tarea» (`/proyectos/<id>/tareas`),
+      que se nombra como sus hermanos de esa fila. Ninguno cambia lo que se envía."""
+    if tag == "input" and n == "id":
+        return (a.get("type") == "datetime-local" and re.fullmatch(r"ft-\d+", a.get("id") or "") is not None
+                and re.fullmatch(r"/proyectos/tarea/\d+/fecha(\?.*)?", accion or "") is not None)
+    if tag == "select" and n == "aria-label":
+        return (a.get("name") == "responsable"
+                and re.fullmatch(r"/proyectos/\d+/tareas", accion or "") is not None)
+    return False
+
+
 class _LectorDeFormularios(HTMLParser):
     """Lee los formularios y, a la vez, junta `problemas`: todo lo que no sea el
     HTML simple de la regla de arriba. FRONTERA: NO es un navegador. Lo que
@@ -1349,7 +1364,7 @@ class _LectorDeFormularios(HTMLParser):
             self._mal(f"{donde}: elemento no permitido <{tag}>")
             return
         for n in nombres:
-            if n not in _ATRIBUTOS[tag]:
+            if n not in _ATRIBUTOS[tag] and not _EXCEPCION_DE_ATRIBUTO(tag, n, a, self._f["accion"]):
                 self._mal(f"{donde}: <{tag}> con atributo no permitido {n!r}")
         if tag == "input" and a.get("type", "text") not in _TIPOS_DE_INPUT:
             self._mal(f"{donde}: <input> con type {a.get('type')!r}")
@@ -1792,6 +1807,10 @@ _ATAQUES = {
         '<noscript><form class="renombrar" hidden method="post" action="/proyectos/2/nombre">'
         '<input type="text" name="nombre" value="x"><button>Guardar</button></form></noscript>'),
     # Lo que el lector no sabe clasificar cae en el cubo estricto.
+    # 13-oct-2026: las dos excepciones nuevas son SOLO para lo nuevo; en cualquier otro sitio siguen prohibidas.
+    "x11_id_en_otro_input": _con("<button class", '<input type="text" name="c" id="q"><button class'),
+    "x12_id_de_fecha_en_otro_formulario": _con("<button class", '<input type="datetime-local" name="c" id="ft-3"><button class'),
+    "x13_aria_label_en_otro_select": _con('<select id="r"', '<select aria-label="x" id="r"'),
     "x1_atributo_desconocido": _con("<button class", '<button data-x="1" class'),
     "x2_formaction": _con("<button class", '<button formaction="/otra" class'),
     "x3_form_que_apunta_a_otro": _con('<select id="r"', '<select form="otro" id="r"'),

@@ -572,7 +572,9 @@ _TAREAS_DE_2 = ["/proyectos/tarea/10/hecha", "/proyectos/tarea/10/titulo",
                 "/proyectos/tarea/11/reabrir", "/proyectos/tarea/11/titulo",
                 "/proyectos/tarea/12/hecha", "/proyectos/tarea/12/titulo", "/proyectos/2/tareas"]
 _DETALLE_10 = ["/proyectos/tarea/10/comentar", "/proyectos/tarea/10/comentario/50/editar",
-               "/proyectos/tarea/10/personas", "/proyectos/tarea/10/responsable"]
+               "/proyectos/tarea/10/personas", "/proyectos/tarea/10/responsable",
+               # La fecha de una tarea pendiente (13-oct-2026): solo en el detalle abierto.
+               "/proyectos/tarea/10/fecha"]
 
 # La ventanita de «+ Proyecto en X» (1-oct-2026) la escribe el servidor en CADA
 # vista, una por grupo de la lista de la izquierda: un formulario
@@ -597,7 +599,8 @@ _VISTAS_DE_TAREAS = {
     "detalle_suelta": ({"g": "CDS", "t": 30}, ["/proyectos/tarea/30/hecha", "/proyectos/tarea/30/titulo",
                                                "/proyectos/tarea/30/comentar", "/proyectos/tarea/30/personas",
                                                "/proyectos/tarea/30/proyecto",
-                                               "/proyectos/tarea/30/responsable"] + _V),
+                                               "/proyectos/tarea/30/responsable",
+                                               "/proyectos/tarea/30/fecha"] + _V),
     "sin_grupo": ({"sin_grupo": 1}, ["/proyectos/tarea/31/hecha", "/proyectos/tarea/31/titulo"] + _V),
     "nuevo": ({"nuevo": "CDS"}, ["/proyectos/nuevo"] + _V),
     # (Las vistas `derivada` y `derivada_suelta`, que abrían los renglones de «¿sale
@@ -642,7 +645,10 @@ def test_cada_formulario_de_tarea_enviado_como_el_navegador_escribe_en_la_tarea_
         form = forms[i]
         if not _ES_DE_TAREA.fullmatch(form["accion"]):
             continue                          # los del proyecto: `tests/test_escrituras_proyecto.py`
-        escoger = _otra_opcion if form["accion"].endswith(("/responsable", "/proyecto")) else _la_marcada
+        # (En «Nueva tarea» la persona CAMBIA el responsable, como en el de la tarea: así un
+        # `name` mal escrito, o un desplegable que no llega a la ruta, se nota.)
+        escoger = (_otra_opcion if form["accion"].endswith(("/responsable", "/proyecto", "/tareas"))
+                   else _la_marcada)
         if form["accion"].endswith("/hecha") and _lleva_derivada(form):
             # El responsable de la tarea nueva lo CAMBIA la persona: así, un
             # `name` mal escrito (la hija nacería sin responsable) se nota.
@@ -666,7 +672,8 @@ def test_cada_formulario_de_tarea_enviado_como_el_navegador_escribe_en_la_tarea_
             assert (t["titulo"], t["proyecto_id"]) == ("Escrito en titulo", pid), donde
             # La fecha que escribió la persona en SU campo llega a la tarea.
             assert str(t["vence_en"]).startswith(FECHA_ESCRITA), donde
-            assert t["responsable_chat_id"] == gente.dueno, donde         # el del proyecto 2
+            elegido = _otra_opcion(next(c for c in form["campos"] if c["tipo"] == "select"))
+            assert t["responsable_chat_id"] == chat_de[_valor(elegido)] != gente.dueno, donde  # el que escogió
             probados += 1
             continue
         tid, accion = int(coincide.group(1)), coincide.group(2)
@@ -737,6 +744,10 @@ def test_cada_formulario_de_tarea_enviado_como_el_navegador_escribe_en_la_tarea_
             elif accion == "responsable":
                 elegido = _otra_opcion(next(c for c in form["campos"] if c["tipo"] == "select"))
                 assert t["responsable_chat_id"] == chat_de[_valor(elegido)], donde
+            elif accion == "fecha":
+                # La fecha que escribió la persona en SU campo llega a la tarea (hora de Santo Domingo).
+                assert t["vence_en"] is not None and str(t["vence_en"]).startswith(FECHA_Y_HORA_ESCRITA[:10]), donde
+                assert "09:30" in str(t["vence_en"]), donde
             else:
                 raise AssertionError(f"formulario sin intención declarada: {form['accion']}")
         probados += 1
@@ -772,7 +783,8 @@ def test_el_envio_escribe_algo_en_todo_control_que_la_persona_llena_en_todas_las
                 assert _escrito(c) != "", (consulta, form["accion"], c)
     # (Ya no entra `datetime-local`: era el del renglón de la tarea derivada, que
     # la página no ofrece desde el 1-oct-2026.)
-    assert vistos == {"text", "date", "textarea"}, vistos
+    # (`datetime-local` volvió el 13-oct-2026: es la fecha de una tarea pendiente, en su detalle.)
+    assert vistos == {"text", "date", "textarea", "datetime-local"}, vistos
 
 
 # ── Cada elemento editable en el sitio tiene su formulario, y el servidor lo dibuja sin JS ──
@@ -927,7 +939,7 @@ def _rutas_post_de_tareas():
                                   if k.arg == "actor" and isinstance(k.value, ast.Constant))
                     escribe.append((f"crud.{n.func.attr}({n.args[0].value})", actor))
                 elif n.func.attr in ("marcar_tarea_hecha", "cerrar_y_derivar", "reabrir_tarea",
-                                     "asignar_responsable", "comentar_tarea", "editar_comentario",
+                                     "asignar_responsable", "mover_vence", "comentar_tarea", "editar_comentario",
                                      "crear_tarea_desde_el_panel", "agregar_participante",
                                      "quitar_participante"):
                     escribe.append((f"db.{n.func.attr}", ()))
@@ -942,8 +954,8 @@ def test_toda_ruta_post_de_tarea_pide_sesion_y_escribe_por_una_puerta_con_actor_
     assert {r["ruta"] for r in rutas.values()} == {
         "/proyectos/{pid}/tareas", "/proyectos/tarea/{tid}/hecha", "/proyectos/tarea/{tid}/reabrir",
         "/proyectos/tarea/{tid}/titulo", "/proyectos/tarea/{tid}/borrar",
-        "/proyectos/tarea/{tid}/responsable", "/proyectos/tarea/{tid}/comentar",
-        "/proyectos/tarea/{tid}/comentario/{cid}/editar",
+        "/proyectos/tarea/{tid}/responsable", "/proyectos/tarea/{tid}/fecha",
+        "/proyectos/tarea/{tid}/comentar", "/proyectos/tarea/{tid}/comentario/{cid}/editar",
         # E7 (1-oct-2026): las personas de la tarea.
         "/proyectos/tarea/{tid}/personas", "/proyectos/tarea/{tid}/personas/{xid}/quitar",
         # Meter una tarea suelta en un proyecto (5-oct-2026): por `crud.editar`.
@@ -959,7 +971,7 @@ def test_toda_ruta_post_de_tarea_pide_sesion_y_escribe_por_una_puerta_con_actor_
     # en un solo sitio (Tiziano, 1-oct-2026).
     assert {r["escribe"][0][0] for r in rutas.values()} == {
         "db.crear_tarea_desde_el_panel", "db.cerrar_y_derivar", "db.reabrir_tarea", "crud.editar(tareas)",
-        "crud.borrar(tareas)", "db.asignar_responsable", "db.comentar_tarea", "db.editar_comentario",
+        "crud.borrar(tareas)", "db.asignar_responsable", "db.mover_vence", "db.comentar_tarea", "db.editar_comentario",
         "db.agregar_participante", "db.quitar_participante"}
 
 
