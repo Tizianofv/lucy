@@ -85,9 +85,11 @@ def _fuentes(raiz):
 
 
 def imports_de_terceros(fuentes, propios):
-    """{paquete de primer nivel: {"archivos": {...}, "candidatos": {módulos completos}}}
-    de lo que no es estándar ni propio. Para `from a.b import c` los candidatos
-    son `a.b` y `a.b.c` (puede ser un submódulo); para `import a.b.c`, `a.b.c`."""
+    """{paquete de primer nivel: {"archivos": {...}, "usos": [(archivo, candidatos)]}}
+    de lo que no es estándar ni propio. Cada `import` es un uso aparte (si no,
+    un `google.auth` bueno taparía un `google.cloud` malo). Para `from a.b import
+    c` los candidatos son `a.b` y `a.b.c` (puede ser un submódulo); para
+    `import a.b.c`, `a.b.c`."""
     vistos = {}
     for rel, texto in fuentes:
         for n in ast.walk(ast.parse(texto)):
@@ -100,9 +102,9 @@ def imports_de_terceros(fuentes, propios):
             for completo, candidatos in pares:
                 t = completo.split(".")[0]
                 if t not in sys.stdlib_module_names and t not in propios:
-                    v = vistos.setdefault(t, {"archivos": set(), "candidatos": set()})
+                    v = vistos.setdefault(t, {"archivos": set(), "usos": []})
                     v["archivos"].add(str(rel))
-                    v["candidatos"].update(candidatos)
+                    v["usos"].append((str(rel), tuple(candidatos)))
     return vistos
 
 
@@ -143,9 +145,16 @@ def sin_declarar(imports, declarados, exentos):
             continue
         if _es_espacio_compartido(top):
             por_modulo = por_modulo or _modulos_por_distribucion()
-            dists = set()
-            for c in info["candidatos"]:
-                dists |= por_modulo.get(c, set())
+            sueltos = []
+            todas = set()
+            for archivo, candidatos in info["usos"]:
+                d = set().union(*(por_modulo.get(c, set()) for c in candidatos))
+                todas |= d
+                if not (d & declarados):
+                    sueltos.append(archivo)
+            if sueltos:
+                malos[top] = (sorted(todas), sorted(set(sueltos)))
+            continue
         else:
             dists = {_nombre(d) for d in quien.get(top, [])}
         if not (dists & declarados):
@@ -191,6 +200,10 @@ def test_un_subpaquete_de_espacio_compartido_no_instalado_cae_como_no_declarado(
     assert set(sin_declarar(nuevo, declarados, EXENTOS)) == {"google"}
     nuevo = imports_de_terceros([(Path("x.py"), "import google.cloud.storage")], propios)
     assert set(sin_declarar(nuevo, declarados, EXENTOS)) == {"google"}
+    # un uso bueno en OTRO archivo no tapa al malo
+    mezcla = imports_de_terceros([(Path("a.py"), "from google.oauth2 import service_account"),
+                                  (Path("b.py"), "from google.cloud import storage")], propios)
+    assert sin_declarar(mezcla, declarados, EXENTOS) == {"google": (["google-auth"], ["b.py"])}
     # y lo que sí es de google-auth sigue pasando, de las dos formas
     ok = imports_de_terceros([(Path("x.py"), "from google.oauth2 import service_account\nimport google.auth.transport.requests")], propios)
     assert sin_declarar(ok, declarados, EXENTOS) == {}
