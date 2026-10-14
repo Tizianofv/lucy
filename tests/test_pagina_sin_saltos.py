@@ -508,6 +508,7 @@ def test_n1_una_lectura_en_la_cola_se_descarta_si_el_envio_de_siempre_se_va():
 _CENSO_PENDIENTE_JS = r"""
 var datos = JSON.parse(%s);
 %s
+var base = pedidos.length;
 var filas = datos.map(function (d) {
   salidas.length = 0; var antes = pedidos.length;
   var e;
@@ -515,7 +516,8 @@ var filas = datos.map(function (d) {
     var extra = {}; if (d.target !== null) extra.target = d.target; if (d.download) extra.download = "";
     e = clic(enlace(d.href, extra));
   } else {
-    e = enviar(formulario(d.href, d.metodo, [], d.target !== null ? {target: d.target} : {}));
+    var ff = formulario(d.href, d.metodo, [], d.target !== null ? {target: d.target} : {}); ff.clases = (d.clase || "").split(" ");
+    e = enviar(ff);
   }
   var fila = {prevenido: e.defaultPrevented, avisos: avisosPuestos.length, nuevos: pedidos.length - antes,
               navego: salidas.filter(function (x) { return x[0] === "ir" || x[0] === "requestSubmit" || x[0] === "submit"; }).length,
@@ -523,6 +525,11 @@ var filas = datos.map(function (d) {
   if (avisosPuestos.length) { avisosPuestos[0].continuar(); }
   fila.tras = salidas.filter(function (x) { return x[0] === "ir" || x[0] === "requestSubmit"; }).length;
   fila.pendiente = typeof __oyW.beforeunload;
+  /* LIMPIEZA entre elementos (cada uno se juzga solo): lo que quedó en el aire se da por perdido, el aviso se cierra y la
+     página se da por no ida (como si el navegador la mostrara de nuevo). */
+  pedidos.slice(base).forEach(function (p) { p.f.rechazar(new Error("x")); });
+  while (avisosPuestos.length) avisosPuestos[0].cerrar();
+  dispararVentana("pageshow", {persisted: true});
   return fila;
 });
 JSON.stringify(filas)
@@ -610,6 +617,31 @@ def test_n5_el_oyente_de_salida_por_si_solo_no_pide_nada_si_no_hay_nada_pendient
     esc = ('var e = {prevented: false, preventDefault: function () { this.prevented = true; }}; var v = alSalirSinSaltar(e);'
            ' salidas.push(["sale", e.prevented, v === undefined]);')
     assert ["sale", False, True] in correr(CASA(), esc)["salidas"]
+
+
+@hay_osascript
+def test_b_despues_de_continuar_no_sale_ningun_pedido_y_el_formulario_queda_con_lo_escrito():
+    """Sonda continuar+nuevo del testigo: tras «Continuar» el envío C ya no sale."""
+    esc = ('enviar(formulario("/proyectos/1/notas", "post", [])); clic(enlace("/tareas")); avisosPuestos[0].continuar();'
+           ' var C = formulario("/proyectos/1/descripcion", "post", [["descripcion", "C"]]); C.controles = [{type: "text", tagName: "INPUT", readOnly: false}];'
+           ' __e = enviar(C); var G = clic(enlace("/proyectos?p=2")); salidas.push(["C", C.controles[0].readOnly, C.dataset.enCamino, G.defaultPrevented]);'
+           ' irAlSitio("/proyectos?p=7"); dispararVentana("popstate", {state: null});')
+    r = correr(CASA(), esc)
+    assert r["prevenido"] is True and [p[1] for p in r["pedidos"]] == ["/proyectos/1/notas"]       # ni C, ni el enlace, ni «atrás»
+    assert ["C", False, None, True] in r["salidas"]                                                  # C quedó sin bloquear, con lo escrito
+
+
+@hay_osascript
+def test_b_si_la_pagina_vuelve_a_mostrarse_desde_la_cache_se_recalcula_la_vigilancia_y_se_puede_seguir():
+    esc = ('enviar(formulario("/proyectos/1/notas", "post", [])); clic(enlace("/tareas")); avisosPuestos[0].continuar();'
+           ' function salir() { var e = {prevented: false, preventDefault: function () { this.prevented = true; }}; dispararVentana("beforeunload", e); return e.prevented; }'
+           ' salidas.push(["tras Continuar", salir()]);'
+           ' dispararVentana("pageshow", {persisted: false}); salidas.push(["pageshow normal", salir()]);'
+           ' dispararVentana("pageshow", {persisted: true}); salidas.push(["pageshow de la cache", salir()]);'
+           ' __e = enviar(formulario("/proyectos/1/descripcion", "post", [])); salidas.push(["pedidos", pedidos.length]);')
+    r = correr(CASA(), esc)
+    dicho = {x[0]: x[1] for x in r["salidas"] if x[0] in ("tras Continuar", "pageshow normal", "pageshow de la cache", "pedidos")}
+    assert dicho == {"tras Continuar": False, "pageshow normal": False, "pageshow de la cache": True, "pedidos": 1}   # (el guardado A sigue en el aire; el nuevo espera su turno)
 
 
 @hay_osascript
@@ -1016,5 +1048,6 @@ def test_las_tres_pantallas_que_usan_la_pieza_traen_la_misma_y_proyectos_la_arra
     # los oyentes de la pieza se registran en un solo sitio
     codigo = sin_comentarios_de_js(pieza)
     assert sorted(re.findall(r'addEventListener\("(\w+)", (\w+)\)', codigo)) == [
-        ("beforeunload", "alSalirSinSaltar"), ("click", "alHacerClicSinSaltar"), ("popstate", "alVolverSinSaltar"),
-        ("submit", "alEnviarSinSaltar")]
+        ("beforeunload", "alSalirSinSaltar"), ("click", "alHacerClicSinSaltar"), ("click", "alSalirPorEnlaceSinSaltar"),
+        ("pageshow", "alMostrarseSinSaltar"), ("popstate", "alVolverSinSaltar"), ("submit", "alEnviarSinSaltar"),
+        ("submit", "alSalirPorFormularioSinSaltar")]

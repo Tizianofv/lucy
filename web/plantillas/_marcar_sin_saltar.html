@@ -61,7 +61,7 @@
    dijeron (su aviso) se lee en el aviso fijo.
    EL AVISO FIJO (arriba, fuera de las regiones) no lo quita ningún repintado: se queda hasta
    que la persona lo cierra («Entendido» o «Mirar cómo quedó»). Si llegan varios, se leen todos. */
-var turnoSinSaltar = 0, escribiendoSinSaltar = 0, colaSinSaltar = [], vistaSinSaltar = "", raizSinSaltar = "", avisoSinSaltar = null, mensajesAviso = [], accionAviso = null, saliendoSinSaltar = false, vigilandoSalida = false, TIEMPO_ENVIO_SINSALTAR = 30000;
+var turnoSinSaltar = 0, escribiendoSinSaltar = 0, colaSinSaltar = [], vistaSinSaltar = "", raizSinSaltar = "", avisoSinSaltar = null, mensajesAviso = [], accionAviso = null, saliendoSinSaltar = false, vigilandoSalida = false, salidasVigiladas = false, TIEMPO_ENVIO_SINSALTAR = 30000;
 function irA(url) { var a = document.createElement("a"); a.href = url; a.click(); }
 /* Lo que sigue solo lo hace la pantalla de Proyectos (`iniciarSinSaltos`); las de Tareas
    conservan lo suyo: ni `<details>` abiertos, ni título, ni campos a medias. */
@@ -136,7 +136,7 @@ function hayGuardadosSinSaltar() {
 }
 /* Lo que la página NO controla (atrás entre documentos, cerrar, otra dirección): mientras hay algo
    sin terminar, el navegador pide confirmar. Se pone y se quita según haya o no (no estorba al navegador
-   cuando no hay nada). Solo Proyectos. */
+   cuando no hay nada). En las dos pantallas que usan la pieza (Proyectos y Tareas). */
 function alSalirSinSaltar(e) {
   if (saliendoSinSaltar || !hayGuardadosSinSaltar()) return;
   e.preventDefault();
@@ -144,7 +144,7 @@ function alSalirSinSaltar(e) {
   return "";
 }
 function vigilarSalidaSinSaltar() {
-  if (!enProyectosSinSaltar()) return;
+  if (!salidasVigiladas) return;
   var debe = hayGuardadosSinSaltar() && !saliendoSinSaltar;
   if (debe && !vigilandoSalida) { window.addEventListener("beforeunload", alSalirSinSaltar); vigilandoSalida = true; }
   else if (!debe && vigilandoSalida) { window.removeEventListener("beforeunload", alSalirSinSaltar); vigilandoSalida = false; }
@@ -442,6 +442,7 @@ function alEnviarMarcar(e) {
   var form = e.target;
   if (!form || !form.dataset || !form.classList || !form.classList.contains("marcar")) return false;
   if (form.dataset.nativo !== undefined) { delete form.dataset.nativo; return false; }
+  if (saliendoSinSaltar) { e.preventDefault(); return true; }      // la página ya se va: no sale ningún pedido nuevo
   if (typeof window === "undefined" || !window.fetch || !window.URLSearchParams || !window.DOMParser) return false;
   e.preventDefault();
   if (form.dataset.enviado === undefined) {
@@ -452,54 +453,100 @@ function alEnviarMarcar(e) {
 }
 /* LOS OYENTES DE PROYECTOS (una vez por página): todo formulario y todo enlace de la
    pantalla que `destinoSinSaltar` deja pasar se pide por detrás; lo que no, sigue su camino. */
+/* Un formulario que SALE de la pantalla: con un guardado sin terminar no se va solo. */
+function saleFormularioSinSaltar(e, form) {
+  if (!hayGuardadosSinSaltar()) return;
+  e.preventDefault();
+  irSinSaltar(function () { envioDeSiempre(form, e.submitter); }, "Este envío sale de la página.");
+}
+/* Un enlace que SALE de la pantalla (http/https): con un guardado sin terminar no se va solo. */
+function saleEnlaceSinSaltar(e, a) {
+  var v;
+  try { v = new URL(a.getAttribute("href"), window.location.href); } catch (x) { return; }
+  if (v.origin !== "null" && hayGuardadosSinSaltar()) {
+    e.preventDefault();
+    irSinSaltar(function () { irA(a.getAttribute("href")); }, "Este enlace sale de la página.");
+  }
+}
+/* El enlace que se tocó, si es un clic normal que navega en esta pestaña; si no, nada. */
+function enlaceDelClicSinSaltar(e) {
+  if (e.defaultPrevented || e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return null;
+  var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+  if (!a) return null;
+  var fuera = a.getAttribute("target");
+  if ((fuera && fuera !== "_self") || a.hasAttribute("download")) return null;
+  return a;
+}
 function alEnviarSinSaltar(e) {
   var form = e.target;
   if (e.defaultPrevented || !form || !form.getAttribute || !form.dataset) return;
   if (form.dataset.nativo !== undefined) { delete form.dataset.nativo; return; }   // el envío de siempre que pidió la pieza
+  if (saliendoSinSaltar) { e.preventDefault(); return; }          // la página ya se va: no sale ningún pedido nuevo (el formulario queda con lo escrito)
   var d = datosDelEnvio(form, e.submitter);
   if (d.metodo === "otro" || (d.target && d.target !== "_self")) return;
-  if (!destinoSinSaltar(d.accion, d.metodo)) {                    // sale de la página: con un guardado sin terminar no se va sola
-    if (hayGuardadosSinSaltar()) {
-      e.preventDefault();
-      irSinSaltar(function () { envioDeSiempre(form, e.submitter); }, "Este envío sale de la página.");
-    }
-    return;
-  }
+  if (!destinoSinSaltar(d.accion, d.metodo)) { saleFormularioSinSaltar(e, form); return; }
   e.preventDefault();
   if (form.dataset.enCamino !== undefined) return;
   form.dataset.enCamino = "";
   marcarSinSaltar(form, e.submitter);
 }
 function alHacerClicSinSaltar(e) {
-  if (e.defaultPrevented || e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
-  var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+  var a = enlaceDelClicSinSaltar(e);
   if (!a) return;
-  var fuera = a.getAttribute("target");
-  if ((fuera && fuera !== "_self") || a.hasAttribute("download")) return;
   var u = destinoSinSaltar(a.getAttribute("href"), "get");
-  if (!u) {                                                        // sale de la página (el menú, «‹ Inicio», Tareas, Papelera…)
-    var v;
-    try { v = new URL(a.getAttribute("href"), window.location.href); } catch (x) { return; }
-    if (v.origin !== "null" && hayGuardadosSinSaltar()) {
-      e.preventDefault();
-      irSinSaltar(function () { irA(a.getAttribute("href")); }, "Este enlace sale de la página.");
-    }
-    return;
-  }
+  if (!u) { saleEnlaceSinSaltar(e, a); return; }                    // sale de la página (el menú, «‹ Inicio», Tareas, Papelera…)
   var destino = u.pathname + u.search;
   if (a.getAttribute("href").charAt(0) === "#") return;        // un ancla suelta de esta misma pantalla la maneja el navegador
   e.preventDefault();
+  if (saliendoSinSaltar) return;                               // la página ya se va: no sale ningún pedido nuevo
   pedirOEsperar({url: destino, historia: "agregar"});
+}
+/* LAS SALIDAS DE LAS PANTALLAS DE TAREAS (que solo marcan por detrás): todo enlace y todo formulario que no
+   es de marcar las deja (carga una página nueva); con un marcar en camino o en cola no se van solos. */
+function alSalirPorEnlaceSinSaltar(e) {
+  var a = enlaceDelClicSinSaltar(e);
+  if (!a || a.getAttribute("href").charAt(0) === "#") return;
+  saleEnlaceSinSaltar(e, a);
+}
+function alSalirPorFormularioSinSaltar(e) {
+  var form = e.target;
+  if (e.defaultPrevented || !form || !form.getAttribute || !form.dataset) return;
+  if (form.dataset.nativo !== undefined) { delete form.dataset.nativo; return; }
+  if (saliendoSinSaltar) { e.preventDefault(); return; }
+  var fuera = form.getAttribute("target");
+  if (fuera && fuera !== "_self") return;
+  saleFormularioSinSaltar(e, form);
 }
 function alVolverSinSaltar(e) {
   var aqui = window.location.pathname + window.location.search;
-  if (aqui === vistaSinSaltar) return;                         // solo cambió el ancla
+  if (aqui === vistaSinSaltar || saliendoSinSaltar) return;    // solo cambió el ancla, o la página ya se va
   pedirOEsperar({url: aqui, historia: "ninguna", vuelta: e && e.state && typeof e.state.y === "number" ? e.state : null});
+}
+/* Si la página vuelve a mostrarse sin haberse ido (`pageshow` desde la caché del navegador), ya no se va: la
+   vigilancia de salida se recalcula. */
+function alMostrarseSinSaltar(e) {
+  if (!e || !e.persisted) return;
+  saliendoSinSaltar = false;
+  vigilarSalidaSinSaltar();
+}
+function vigilarSalidasSinSaltar() {
+  if (salidasVigiladas) return;
+  salidasVigiladas = true;
+  window.addEventListener("pageshow", alMostrarseSinSaltar);
+}
+/* Las pantallas de Tareas (que solo marcan por detrás) llaman esto: sus enlaces y formularios que salen pasan por
+   la puerta, y se vigila lo que no controlan. Nada más cambia en ellas. */
+function iniciarSalidasSinSaltar() {
+  if (!conLoQueHaceFalta()) return;
+  vigilarSalidasSinSaltar();
+  document.addEventListener("submit", alSalirPorFormularioSinSaltar);
+  document.addEventListener("click", alSalirPorEnlaceSinSaltar);
 }
 function iniciarSinSaltos(raiz) {
   if (!conLoQueHaceFalta()) return;
   raizSinSaltar = raiz;
   vistaSinSaltar = window.location.pathname + window.location.search;
+  vigilarSalidasSinSaltar();
   document.addEventListener("submit", alEnviarSinSaltar);
   document.addEventListener("click", alHacerClicSinSaltar);
   window.addEventListener("popstate", alVolverSinSaltar);

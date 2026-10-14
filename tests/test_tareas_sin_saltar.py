@@ -401,6 +401,94 @@ def test_js_si_guardo_y_no_se_puede_pintar_va_a_la_pagina_sin_reenviar(tareas, p
     assert len(r["pedidos"]) == 1 and r["salidas"] == [["ir", URL_FINAL]]
 
 
+def _lo_que_se_toca_en_tareas(tareas, pantalla):
+    """Todo `<a href>` y `<form>` de la pantalla, sacado de la página dibujada por la ruta real."""
+    from test_pagina_sin_saltos import _Censo
+    html = tareas.cliente.get("/tareas" if pantalla == "tareas" else "/tareas/1").text
+    c = _Censo()
+    c.feed(html)
+    return [dict(zip(("tag", "href", "metodo", "target", "download", "clase", "id"), t)) | {"es": t[0]} for t in sorted(c.visto, key=str)]
+
+
+_MARCAR_EN_CAMINO = 'var A = formulario("/tareas", "post", []); A.clases = ["marcar"]; enviar(A);'
+
+
+@hay_osascript
+@pytest.mark.parametrize("pantalla", ["tareas", "detalle"])
+def test_a_con_un_marcar_en_camino_los_enlaces_y_formularios_que_salen_de_tareas_no_se_van_solos(tareas, pantalla):
+    """SONDA `tareas-enlace` DEL TESTIGO. La lista sale de lo real de las dos plantillas. Con un marcar en camino:
+    cada enlace (menú, títulos de tarea, Papelera…) y cada formulario que no es de marcar se evita, avisa y se va solo
+    con «Continuar»; un formulario de marcar espera su turno en la cola (no sale de la página)."""
+    from test_pagina_sin_saltos import _CENSO_PENDIENTE_JS
+    lista = _lo_que_se_toca_en_tareas(tareas, pantalla)
+    assert any(d["tag"] == "a" for d in lista) and any(d["tag"] == "form" for d in lista), lista
+    g = _scripts_de_tareas(tareas)[pantalla]
+    from _sin_saltar import correr_en_navegador
+    r = correr_en_navegador(g, _CENSO_PENDIENTE_JS % (json.dumps(json.dumps(lista)), _MARCAR_EN_CAMINO))
+    vistos = {"enlace": 0, "marcar": 0, "otro-formulario": 0}
+    for f, d in zip(r, lista):
+        nombre = (d["tag"], d["href"], d["clase"])
+        if d["tag"] == "a" and (d["target"] not in (None, "_self") or d["download"] or d["href"].startswith("#")):
+            assert not f["prevenido"] and f["avisos"] == 0, (nombre, f)
+        elif d["tag"] == "form" and "marcar" in d["clase"].split():
+            vistos["marcar"] += 1
+            assert f["prevenido"] is True and f["nuevos"] == 0 and f["avisos"] == 0 and f["navego"] == 0, (nombre, f)   # espera su turno
+        else:
+            vistos["enlace" if d["tag"] == "a" else "otro-formulario"] += 1
+            assert f["prevenido"] is True and f["navego"] == 0 and f["nuevos"] == 0 and f["avisos"] == 1 and f["tras"] == 1, (nombre, f)
+            assert "sigue en camino" in f["mensaje"], (nombre, f)
+    assert vistos["enlace"] >= 3 and vistos["marcar"] >= 1, vistos          # el menú, algún título; y el censo ve un marcar
+
+
+@hay_osascript
+@pytest.mark.parametrize("pantalla", ["tareas", "detalle"])
+def test_a_pareja_sin_nada_en_camino_todo_se_va_como_hoy(tareas, pantalla):
+    from test_pagina_sin_saltos import _CENSO_PENDIENTE_JS
+    from _sin_saltar import correr_en_navegador
+    lista = _lo_que_se_toca_en_tareas(tareas, pantalla)
+    r = correr_en_navegador(_scripts_de_tareas(tareas)[pantalla], _CENSO_PENDIENTE_JS % (json.dumps(json.dumps(lista)), ""))
+    for f, d in zip(r, lista):
+        if d["tag"] == "form" and "marcar" in d["clase"].split():
+            assert f["prevenido"] is True and f["avisos"] == 0            # el marcar de siempre: por detrás
+        else:
+            assert f["prevenido"] is False and f["avisos"] == 0 and f["tras"] == 0, ((d["tag"], d["href"]), f)
+
+
+@hay_osascript
+@pytest.mark.parametrize("pantalla", ["tareas", "detalle"])
+def test_a_beforeunload_en_tareas_se_pone_con_un_marcar_en_camino_y_se_quita_al_terminar(tareas, pantalla):
+    esc = ('function salir() { var e = {prevented: false, preventDefault: function () { this.prevented = true; }};'
+           ' dispararVentana("beforeunload", e); return [e.prevented, (__oyW.beforeunload || []).length]; }'
+           ' salidas.push(["sin nada", salir()]); enviar(formulario("/tareas", "post", [])); '
+           ' salidas.push(["x", 0]);')
+    g = _scripts_de_tareas(tareas)[pantalla]
+    esc = ('function salir() { var e = {prevented: false, preventDefault: function () { this.prevented = true; }};'
+           ' dispararVentana("beforeunload", e); return [e.prevented, (__oyW.beforeunload || []).length]; }'
+           ' salidas.push(["sin nada", salir()]); var A = formulario("/tareas", "post", []); A.clases = ["marcar"]; enviar(A);'
+           ' salidas.push(["en camino", salir()]); responder(0, "PAG"); salidas.push(["terminado", salir()]);')
+    r = _jxa(g, esc)
+    dicho = {x[0]: x[1] for x in r["salidas"] if x[0] in ("sin nada", "en camino", "terminado")}
+    assert dicho == {"sin nada": [False, 0], "en camino": [True, 1], "terminado": [False, 0]}
+
+
+@hay_osascript
+def test_a_tras_continuar_en_tareas_un_formulario_que_sale_tampoco_se_envia(tareas):
+    g = _scripts_de_tareas(tareas)["tareas"]
+    esc = (_MARCAR_EN_CAMINO + ' clic(enlace("/tareas/1")); avisosPuestos[0].continuar(); salidas.length = 0;'
+           ' __e = enviar(formulario("/tareas/1/comentar", "post", []));')
+    r = _jxa(g, esc)
+    assert r["prevenido"] is True and r["salidas"] == []
+
+
+@hay_osascript
+def test_a_tras_continuar_en_tareas_no_sale_ningun_marcar_nuevo(tareas):
+    g = _scripts_de_tareas(tareas)["tareas"]
+    esc = (_MARCAR_EN_CAMINO + ' var L = enlace("/tareas/1"); clic(L); avisosPuestos[0].continuar();'
+           ' var C = formulario("/tareas", "post", []); C.clases = ["marcar"]; __e = enviar(C);')
+    r = _jxa(g, esc)
+    assert r["prevenido"] is True and len(r["pedidos"]) == 1
+
+
 @hay_osascript
 @pytest.mark.parametrize("pantalla", ["tareas", "detalle"])
 def test_js_un_formulario_marcar_que_sale_de_la_pantalla_pasa_por_la_puerta_de_irse_con_algo_pendiente(tareas, pantalla):
