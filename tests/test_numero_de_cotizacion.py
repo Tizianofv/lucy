@@ -217,10 +217,22 @@ def test_un_anio_que_no_es_anio_no_toca_la_base(anio):
 
 # ── 6. Una sola puerta ──────────────────────────────────────────────────────────────────────────────
 
+def _texto_fijo(nodo):
+    """El texto de una constante de texto, o de varias unidas con `+`; `None` si el nodo es otra cosa."""
+    if isinstance(nodo, ast.Constant) and isinstance(nodo.value, str):
+        return nodo.value
+    if isinstance(nodo, ast.BinOp) and isinstance(nodo.op, ast.Add):
+        izq, der = _texto_fijo(nodo.left), _texto_fijo(nodo.right)
+        if izq is not None and der is not None:
+            return izq + der
+    return None
+
+
 def _textos_que_escriben_la_serie(archivos, raiz) -> list[tuple[str, int, str]]:
     """(archivo, línea, texto) de toda constante de texto de un `.py` fuera de `tests/` que nombra
-    `serie_cotizaciones` y trae INSERT, UPDATE, DELETE o REPLACE. Las constantes se juntan con `ast`, así
-    que un texto partido en pedazos pegados con `+` o entre paréntesis sigue siendo UNA constante."""
+    `serie_cotizaciones` y trae INSERT, UPDATE, DELETE o REPLACE. Se juntan los pedazos que el parser
+    pega solo (paréntesis) y los que `_texto_fijo` pega (constantes unidas con `+`).
+    FRONTERA (no se persigue): el nombre de la tabla en una variable, f-strings y SQL armado en ejecución."""
     hallados = []
     for ruta in archivos:
         rel = ruta.relative_to(raiz).as_posix()
@@ -231,9 +243,13 @@ def _textos_que_escriben_la_serie(archivos, raiz) -> list[tuple[str, int, str]]:
         docstrings = {id(n.body[0].value) for n in ast.walk(arbol)
                       if isinstance(n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
                       and n.body and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)}
+        absorbidos: set[int] = set()   # pedazos ya contados dentro de un `+` (ast.walk baja del padre al hijo)
         for nodo in ast.walk(arbol):
-            if isinstance(nodo, ast.Constant) and isinstance(nodo.value, str) and id(nodo) not in docstrings:
-                v = nodo.value
+            if id(nodo) in absorbidos or id(nodo) in docstrings:
+                continue
+            v = _texto_fijo(nodo)
+            if v is not None:
+                absorbidos.update(id(h) for h in ast.walk(nodo))
                 if re.search(r"serie_cotizaciones", v, re.I) and re.search(r"\b(INSERT|UPDATE|DELETE|REPLACE)\b", v, re.I):
                     hallados.append((rel, nodo.lineno, v))
     return hallados
@@ -252,6 +268,22 @@ def test_la_busqueda_de_la_puerta_unica_ve_un_escritor_inventado(tmp_path):
         encoding="utf-8")
     hallados = _textos_que_escriben_la_serie([tmp_path / "otro.py"], tmp_path)
     assert [v for _, _, v in hallados] == ["UPDATE serie_cotizaciones SET ultimo = 99"]
+
+
+def test_la_guarda_ve_el_texto_partido_con_mas(tmp_path):
+    (tmp_path / "suma.py").write_text(
+        'A = "UPDATE serie_" + "cotizaciones " + "SET ultimo = 0"\n', encoding="utf-8")
+    hallados = _textos_que_escriben_la_serie([tmp_path / "suma.py"], tmp_path)
+    assert [v for _, _, v in hallados] == ["UPDATE serie_cotizaciones SET ultimo = 0"]
+
+
+def test_la_frontera_de_la_guarda_no_lo_ve_a_proposito(tmp_path):
+    """Casos que la guarda NO ve, a propósito (no se persiguen variables ni f-strings): si un día los
+    ve, esta prueba avisa para que se cambie la frase de la frontera."""
+    (tmp_path / "frontera.py").write_text(
+        'T = "serie_cotizaciones"\nA = "UPDATE " + T + " SET ultimo = 0"\nB = f"UPDATE {T} SET ultimo = 0"\n',
+        encoding="utf-8")
+    assert _textos_que_escriben_la_serie([tmp_path / "frontera.py"], tmp_path) == []
 
 
 # ── 8. El humo mira las dos tablas ──────────────────────────────────────────────────────────────────
