@@ -625,7 +625,8 @@ def test_b_despues_de_continuar_no_sale_ningun_pedido_y_el_formulario_queda_con_
     esc = ('enviar(formulario("/proyectos/1/notas", "post", [])); clic(enlace("/tareas")); avisosPuestos[0].continuar();'
            ' var C = formulario("/proyectos/1/descripcion", "post", [["descripcion", "C"]]); C.controles = [{type: "text", tagName: "INPUT", readOnly: false}];'
            ' __e = enviar(C); var G = clic(enlace("/proyectos?p=2")); salidas.push(["C", C.controles[0].readOnly, C.dataset.enCamino, G.defaultPrevented]);'
-           ' irAlSitio("/proyectos?p=7"); dispararVentana("popstate", {state: null});')
+           ' irAlSitio("/proyectos?p=7"); dispararVentana("popstate", {state: null});'
+           ' responder(0, "PAG-A");')                      # y cuando A termina, nada de lo tocado después de «Continuar» sale
     r = correr(CASA(), esc)
     assert r["prevenido"] is True and [p[1] for p in r["pedidos"]] == ["/proyectos/1/notas"]       # ni C, ni el enlace, ni «atrás»
     assert ["C", False, None, True] in r["salidas"]                                                  # C quedó sin bloquear, con lo escrito

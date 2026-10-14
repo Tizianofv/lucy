@@ -484,9 +484,9 @@ def test_a_tras_continuar_en_tareas_un_formulario_que_sale_tampoco_se_envia(tare
 def test_a_tras_continuar_en_tareas_no_sale_ningun_marcar_nuevo(tareas):
     g = _scripts_de_tareas(tareas)["tareas"]
     esc = (_MARCAR_EN_CAMINO + ' var L = enlace("/tareas/1"); clic(L); avisosPuestos[0].continuar();'
-           ' var C = formulario("/tareas", "post", []); C.clases = ["marcar"]; __e = enviar(C);')
+           ' var C = formulario("/tareas", "post", []); C.clases = ["marcar"]; __e = enviar(C); responder(0, "PAG");')
     r = _jxa(g, esc)
-    assert r["prevenido"] is True and len(r["pedidos"]) == 1
+    assert r["prevenido"] is True and len(r["pedidos"]) == 1       # y cuando el marcar en el aire termina, C no sale
 
 
 @hay_osascript
