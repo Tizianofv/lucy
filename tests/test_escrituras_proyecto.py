@@ -814,10 +814,12 @@ def test_un_estado_libre_que_dejo_telegram_se_ve_y_se_corrige_al_cerrar_o_reabri
 
 
 # Una sentencia que crea o altera la tabla `proyectos` (con o sin `public.`, con o sin comillas, con o sin
-# `ONLY`) y trae un `CHECK (estado`. NO agarra otra tabla que solo nombra a `proyectos` en una llave foránea.
+# `ONLY` o `IF EXISTS`) y trae un `CHECK (estado` o `CHECK ((estado`. NO agarra otra tabla que solo nombra a
+# `proyectos` en una llave foránea. FRONTERA (dicha, no cerrada): NO ve un CHECK que mezcla `estado` con otra
+# condición (`CHECK (id > 0 AND estado IN …)`) ni SQL armado al vuelo.
 _CHECK_DE_ESTADO_EN_PROYECTOS = re.compile(
-    r'(?:ALTER\s+TABLE(?:\s+ONLY)?|CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s+(?:"?\w+"?\s*\.\s*)?"?proyectos"?(?!\w)'
-    r'[^;]*CHECK\s*\(\s*estado', re.I | re.S)
+    r'(?:ALTER\s+TABLE(?:\s+IF\s+EXISTS)?(?:\s+ONLY)?|CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s+(?:"?\w+"?\s*\.\s*)?"?proyectos"?(?!\w)'
+    r'[^;]*CHECK\s*\(\s*(?:\(\s*)*estado', re.I | re.S)
 
 
 @pytest.mark.parametrize("sql,agarra", [
@@ -827,10 +829,13 @@ _CHECK_DE_ESTADO_EN_PROYECTOS = re.compile(
     ("ALTER TABLE ONLY public.proyectos ADD CONSTRAINT x CHECK ( estado IN ('a'));", True),
     ("CREATE TABLE IF NOT EXISTS proyectos (id INT, CONSTRAINT x CHECK (estado IN ('a')));", True),
     ("CREATE TABLE cotizaciones (proyecto_id BIGINT REFERENCES proyectos(id), CHECK (estado IN ('a')));", False),
+    ("ALTER TABLE IF EXISTS public.proyectos ADD CONSTRAINT x CHECK (estado IN ('a'));", True),
+    ("ALTER TABLE proyectos ADD CONSTRAINT x CHECK ((estado IN ('a')));", True),
+    ("ALTER TABLE proyectos ADD CONSTRAINT x CHECK (id > 0 AND estado IN ('a'));", False),   # no lo ve, a propósito (frontera)
     ("ALTER TABLE proyectos_viejos ADD CONSTRAINT x CHECK (estado IN ('a'));", False),
     ("ALTER TABLE tareas ADD COLUMN proyecto_id BIGINT REFERENCES public.proyectos(id); CREATE TABLE z (CHECK (estado IN ('a')));", False),
 ])
-def test_la_busqueda_de_un_check_de_estado_en_proyectos_ve_lo_que_debe(sql, agarra):
+def test_la_busqueda_de_un_check_simple_de_estado_en_proyectos_ve_lo_que_dice_y_no_mas(sql, agarra):
     assert bool(_CHECK_DE_ESTADO_EN_PROYECTOS.search(sql)) is agarra
 
 
