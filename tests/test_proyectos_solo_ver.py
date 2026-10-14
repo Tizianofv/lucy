@@ -270,7 +270,10 @@ class _Mirador(HTMLParser):
         if valor.startswith("#") or valor == self.enlace_a_la_app:
             return True
         ruta = re.split(r"[?#]", valor, 1)[0]
-        return ruta in self.rutas_de_ver
+        # Una ruta con parámetros (`/proyectos/{pid}/cotizaciones/{cid}/pdf`) se compara con su forma: cada
+        # `{…}` es un número. Ninguna otra cosa cambia: la ruta tiene que ser una de las de ver.
+        return ruta in self.rutas_de_ver or any(
+            re.fullmatch(re.sub(r"\{[^}]+\}", "[0-9]+", r), ruta) for r in self.rutas_de_ver)
 
     def handle_data(self, data):
         if self._guion is not None:
@@ -372,6 +375,16 @@ A_MANO = {
     "editar_comentario": {"p": 1, "t": 10, "editar_comentario": 100},
     "derivar": {"p": 1, "t": 10, "derivar": 10, "derivadas": "5,6"},
     "sigue": {"p": 1, "sigue": 11},                              # 14-oct-2026: el recuadro de «la tarea que sigue» (la 11 está hecha)
+    # 14-oct-2026, pieza 5 de las cotizaciones: la ventana de «Nueva cotización» (casa; en solo ver no se arma), un
+    # borrador abierto como formulario (el 2), una enviada abierta como hoja (la 1) y la misma como «Corregir»
+    # (solo la casa), con los avisos de guardado y los de rechazo (en solo ver se apagan: no hay recibo de nada).
+    "cotizacion=nueva": {"p": 1, "cotizacion": "nueva"},
+    "cotizacion borrador": {"p": 1, "cotizacion": 2},
+    "cotizacion enviada": {"p": 1, "cotizacion": 1},
+    "cotizacion corregir": {"p": 1, "cotizacion": 1, "corregir": 1},
+    "cotizacion guardada enviada": {"p": 1, "cotizacion": 1, "hecho": "cotizacion_enviada"},
+    "cotizacion guardada borrador": {"p": 1, "cotizacion": 2, "hecho": "cotizacion_borrador"},
+    "cotizacion rechazada": {"p": 1, "cotizacion": "nueva", "error": "cotizacion_sin_opciones"},
     "busqueda de personas": {"p": 1, "t": 10, "pq": "ab", "pdonde": "cliente"},
     "todo junto": {"p": 1, "t": 10, "nuevo": "CDS", "confirmar": "cerrar", "editar": "nombre",
                    "editar_tarea": 10, "confirmar_borrar": 10, "editar_comentario": 100,
@@ -550,6 +563,11 @@ _HUECO = "\x00"
 
 def _fuente_sin_jinja() -> str:
     fuente = open("web/plantillas/proyectos.html", encoding="utf-8").read()
+    # Las plantillas que ésta incluye también dibujan controles (la lista y la ventana de las cotizaciones, 14-oct-2026):
+    # salen del `{% include "…" %}` de la propia plantilla, no de una lista. Se salta solo la pieza de guion.
+    for incluida in re.findall(r'\{%\s*include\s+"([^"]+)"', fuente):
+        if incluida != "_marcar_sin_saltar.html":
+            fuente += "\n" + open("web/plantillas/" + incluida, encoding="utf-8").read()
     fuente = re.sub(r"\{#.*?#\}", "", fuente, flags=re.S)
     fuente = re.sub(r"\{%.*?%\}", "", fuente, flags=re.S)
     return re.sub(r"\{\{.*?\}\}", _HUECO, fuente, flags=re.S)

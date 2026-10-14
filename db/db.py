@@ -2384,6 +2384,10 @@ def codigo_de_cotizacion(anio: int, numero: int) -> str:
 # El candado de edición es `cambiado_en`: se escribe solo si sigue siendo el que el formulario leyó.
 ACCIONES_DE_COTIZACION = ("borrador", "enviar")
 _NUMERO_EN_PALABRAS = {2: "dos", 3: "tres", 4: "cuatro", 5: "cinco", 6: "seis"}
+# Los dos textos que SE REHACEN en cada guardado (con la validez y con el número de opciones). Los usa
+# `condiciones_con_sus_textos_al_dia` y también la ventana de la cotización (`cotizaciones.py`): una sola fuente.
+TEXTO_DE_VALIDEZ_DE_COTIZACION = "Esta cotización tiene validez de {dias} días a partir de la fecha de emisión."
+TEXTO_DE_ALTERNATIVAS_DE_COTIZACION = "Las {palabra} opciones son alternativas: se selecciona una sola para el proyecto."
 LARGO_PARA_NOMBRE_DE_COTIZACION = 200
 LARGO_PARA_TELEFONO_DE_COTIZACION = 40
 
@@ -2417,11 +2421,11 @@ def condiciones_con_sus_textos_al_dia(contenido_json: str, validez_dias: int) ->
     hechas = []
     for c in contenido["condiciones"]:
         if c["clave"] == "validez":
-            c = {**c, "texto": f"Esta cotización tiene validez de {validez_dias} días a partir de la fecha de emisión."}
+            c = {**c, "texto": TEXTO_DE_VALIDEZ_DE_COTIZACION.format(dias=validez_dias)}
         elif c["clave"] == "alternativas":
             if n < 2:
                 continue
-            c = {**c, "texto": f"Las {_NUMERO_EN_PALABRAS[n]} opciones son alternativas: se selecciona una sola para el proyecto."}
+            c = {**c, "texto": TEXTO_DE_ALTERNATIVAS_DE_COTIZACION.format(palabra=_NUMERO_EN_PALABRAS[n])}
         hechas.append(c)
     contenido["condiciones"] = hechas
     return json.dumps(contenido, ensure_ascii=False)
@@ -2622,6 +2626,29 @@ async def cotizaciones_de_proyectos() -> dict[int, list[dict]] | None:
                                    for op in contenido["opciones"]]
         salida.setdefault(f["proyecto_id"], []).append(f)
     return salida
+
+
+SENTENCIA_DE_LA_QUE_TOCA_DE_COTIZACION = "SELECT ultimo FROM serie_cotizaciones WHERE anio = %s"
+
+
+async def numero_que_sigue_de_cotizacion(anio: int | None = None) -> int | None:
+    """El número que se le pondría a la próxima cotización del año (`ultimo + 1`, o 1 si la serie no ha
+    empezado), o `None` si falta la tabla. SOLO LEE: la ventana de «Nueva cotización» lo enseña como
+    «número automático»; el de verdad se saca al guardar (`siguiente_numero_de_cotizacion`) y puede ser
+    otro si alguien guarda antes."""
+    anio = hoy_rd().year if anio is None else anio
+    if not _anio_de_cotizacion_que_vale(anio):
+        raise ValueError("el año de la serie no es un año")
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(SENTENCIA_DE_LA_QUE_TOCA_DE_COTIZACION, (anio,))
+            fila = await cur.fetchone()
+        except Exception as e:
+            if _tabla_ausente(e):
+                return None
+            raise
+    return (int(fila["ultimo"]) if fila else 0) + 1
 
 
 # ── AGREGAR TAREAS A UN PROYECTO (pieza 2 del diseño «proyectos», 29-sep-2026) ─

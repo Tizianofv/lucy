@@ -672,7 +672,7 @@ def test_la_casa_ve_un_enlace_con_cambiar_y_sin_copiar(uno):
             'Abrir la carpeta</a>') in html
     seccion = _seccion(html)
     assert ">Cambiar</a>" in seccion and "Copiar" not in seccion and "carpeta-texto" not in seccion
-    assert "solo sirve en la computadora" not in seccion and "<script" in html and html.count("<script") == 1
+    assert "solo sirve en la computadora" not in seccion and "<script" in html and len(re.findall(r"<script(?![^>]*guion-cotizaciones)", html)) == 1
 
 
 def test_la_casa_ve_una_ruta_como_texto_con_copiar_y_la_advertencia(uno):
@@ -872,7 +872,10 @@ def test_la_pagina_carga_con_la_base_sin_migrar_y_no_dibuja_la_carpeta(uno, monk
     for consulta in ({"p": 1}, {"p": 1, "editar": "carpeta"}, {}, {"g": "CDS"}):
         html = ver(uno, **consulta)
         assert "Carpeta del proyecto" not in html and "/proyectos/1/carpeta" not in html
-        assert "editar=carpeta" not in html and "carpeta-p" not in html.split("</style>", 1)[1]
+        # (La sección puede salir igual, con las cotizaciones y sin la carpeta: desde la pieza 5 de las
+        # cotizaciones se dibuja si hay algo que enseñar. Lo que NO puede salir es nada de la carpeta.)
+        assert "editar=carpeta" not in html and "carpeta-contenido" not in html.split("</style>", 1)[1]
+        assert "Todavía no hay carpeta." not in html
     assert 'id="de-que-se-trata"' in ver(uno, p=1)                    # el resto de la página sigue
     assert "Empezó" in ver(uno, p=1)                                    # y las fechas (migración anterior) también
 
@@ -1019,7 +1022,7 @@ _FOTO = ("JSON.stringify({boton: __boton.textContent, escribio: __llamadas.escri
 
 def _guion_y_texto(m, valor):
     html = _pintar(m, valor)
-    guiones = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
+    guiones = re.findall(r"<script(?![^>]*guion-cotizaciones)[^>]*>(.*?)</script>", html, re.S)
     assert len(guiones) == 2, len(guiones)                 # el de siempre y el de «Copiar», que es aparte
     assert 'id="guion-copiar-carpeta"' in html.split("</script>", 1)[1]
     texto = unescape(re.search(r'<code class="carpeta-texto">(.*?)</code>', html, re.S).group(1))
@@ -1077,14 +1080,14 @@ def test_el_guion_de_copiar_no_manda_nada_ni_toca_formularios_ni_la_direccion(un
 
 def test_el_guion_de_marcar_tareas_sigue_siendo_el_primero_y_el_unico_de_siempre(uno):
     html = _pintar(uno, RUTA)
-    guiones = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
+    guiones = re.findall(r"<script(?![^>]*guion-cotizaciones)[^>]*>(.*?)</script>", html, re.S)
     from _sin_saltar import la_pieza_de
     pieza, resto = la_pieza_de(guiones[0])
     assert "marcarSinSaltar" in guiones[0] and "copiar" not in resto.lower().replace("copiar el", "")
     assert "marcarSinSaltar" not in guiones[1]
     # Con un enlace, o sin carpeta, la página lleva el guion de siempre y nada más.
-    assert len(re.findall(r"<script", _pintar(uno, DRIVE))) == 1
-    assert len(re.findall(r"<script", _pintar(uno, None))) == 1
+    assert len(re.findall(r"<script(?![^>]*guion-cotizaciones)", _pintar(uno, DRIVE))) == 1
+    assert len(re.findall(r"<script(?![^>]*guion-cotizaciones)", _pintar(uno, None))) == 1
 
 
 def test_el_boton_de_copiar_esta_fuera_de_los_formularios_y_sin_js_no_se_ve(uno):

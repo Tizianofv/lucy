@@ -127,6 +127,65 @@ h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balan
 .carpeta-p input{font:inherit;padding:.45rem .6rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
 .carpeta-p .botones{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
 .carpeta-p button.guardar{font:600 .88rem var(--texto);padding:.5rem 1rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
+/* LAS COTIZACIONES (pieza 5, 14-oct-2026): la lista de cotizaciones y su ventana; las clases son las de la maqueta aprobada. */
+.cotiz{margin-top:1rem;padding-top:.9rem;border-top:1px solid var(--linea)}
+.cotiz-enc{display:flex;align-items:center;justify-content:space-between}
+.cotiz-enc h3{font:700 .95rem var(--display);margin:0}
+.cotiz-mas{font-size:1.15rem;font-weight:600;line-height:1;padding:.1rem .45rem;border-radius:6px;color:var(--color);background:none;border:1px solid var(--linea);cursor:pointer;text-decoration:none;display:inline-block}
+.cotiz-mas.activo{background:var(--color);color:#fff;border-color:var(--color)}
+.cotiz ul{list-style:none;margin:.6rem 0 0;padding:0;display:flex;flex-direction:column;gap:.4rem}
+.cotiz li{border:1px solid var(--linea);border-radius:10px;padding:.5rem .6rem;font-size:.82rem;background:var(--bg)}
+.cotiz li b{font-weight:600}
+.cotiz li .sub{color:var(--suave);display:block}
+.cotiz .pild{float:right;font-size:.7rem;font-weight:600;padding:.05rem .45rem;border-radius:999px;background:#e3f1ec;color:var(--ok)}
+.cotiz .pild.borr{background:var(--dormido-fondo);color:var(--dormido)}
+.cotiz a.cz-codigo{text-decoration:none}
+.cotiz a.cz-pdf{display:inline-block;margin-top:.2rem;font-size:.76rem;font-weight:600;color:var(--color);text-decoration:none}
+.cotiz .vacio{margin-top:.6rem}
+.cotiz .aviso{margin:.6rem 0 0;font-size:.85rem}
+.cotiz .aviso.ok{border-left-color:var(--ok)}
+.velo{position:fixed;inset:0;background:rgb(16 22 20 / .45);z-index:50;display:flex;align-items:flex-start;justify-content:center;padding:4vh 16px;overflow:auto}
+.cz-ventana{background:var(--papel);border-radius:16px;box-shadow:0 20px 60px rgb(0 0 0 / .25);width:min(1180px,100%);display:flex;flex-direction:column;font-size:15px;color:var(--tinta)}
+.cz-ventana .aviso{margin:.6rem 1.3rem 0}
+.ventana-enc{display:flex;align-items:center;gap:1rem;padding:1rem 1.3rem;border-bottom:1px solid var(--linea)}
+.ventana-enc h2{font:700 1.2rem var(--display);margin:0}
+.ventana-enc .num{color:var(--suave);font-size:.85rem}
+.ventana-enc .cerrar{margin-left:auto;font-size:1.3rem;color:var(--suave);text-decoration:none;line-height:1}
+.ventana-cuerpo{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0}
+.ventana-cuerpo.una{grid-template-columns:minmax(0,1fr)}
+@media (max-width:900px){.ventana-cuerpo{grid-template-columns:1fr}}
+.cz-form{display:flex;flex-direction:column}
+.form-c{padding:1.1rem 1.3rem;display:flex;flex-direction:column;gap:1.1rem;border-right:1px solid var(--linea);max-height:74vh;overflow:auto}
+.form-c h4{font:700 .78rem var(--texto);letter-spacing:.06em;text-transform:uppercase;color:var(--suave);margin:0 0 .5rem}
+.rej{display:grid;grid-template-columns:1fr 1fr;gap:.6rem .8rem}
+.rej label,.op label{display:flex;flex-direction:column;gap:.25rem;font-size:.78rem;color:var(--suave)}
+.form-c input,.form-c textarea,.form-c select{font:inherit;font-size:.88rem;padding:.45rem .6rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);width:100%;box-sizing:border-box}
+.form-c textarea{min-height:3.6rem;resize:vertical}
+.cz-opciones{display:flex;flex-direction:column;gap:.7rem}
+.auto{font-size:.72rem;color:var(--suave)}
+.op{border:1px solid var(--linea);border-radius:12px;padding:.8rem;display:flex;flex-direction:column;gap:.6rem;background:var(--papel)}
+.op-enc{display:flex;align-items:center;gap:.6rem}
+.op-enc .n{font:700 .8rem var(--texto);color:var(--marca);letter-spacing:.05em;white-space:nowrap}
+.op-enc input{flex:1}
+.op-enc .x{background:none;border:0;color:var(--suave);cursor:pointer;font-size:1rem;display:none}
+.con-js .op-enc .x{display:inline-block}
+.renglon-bloque{display:flex;flex-direction:column;gap:.5rem}
+.renglon{display:grid;grid-template-columns:minmax(0,1fr) 8.5rem;gap:.5rem;align-items:start}
+.renglon .total{display:flex;align-items:center;gap:.3rem;font-size:.85rem;color:var(--suave)}
+.mas-linea{background:none;border:1px dashed var(--linea);border-radius:8px;padding:.4rem .7rem;color:var(--color);font:600 .8rem var(--texto);cursor:pointer;align-self:flex-start}
+.mas-linea{display:none}
+.con-js .mas-linea{display:inline-block}
+.con-js .cz-sobra{display:none}
+.cond{display:flex;flex-direction:column;gap:.35rem}
+.cond label{flex-direction:row;align-items:center;gap:.5rem;font-size:.84rem;color:var(--tinta);display:flex}
+.cond label[hidden]{display:none}
+.cond input[type=checkbox]{width:auto;accent-color:var(--color)}
+.cond .cz-texto-propio{flex:1}
+.ventana-pie{display:flex;align-items:center;gap:.6rem;padding:.9rem 1.3rem;border-top:1px solid var(--linea);flex-wrap:wrap}
+.ventana-pie .izq{margin-right:auto;font-size:.78rem;color:var(--suave)}
+.btn-prim{font:600 .88rem var(--texto);padding:.55rem 1.05rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
+.previa{padding:1.1rem 1.3rem;background:var(--bg);max-height:74vh;overflow:auto}
+.previa .rot{font:700 .72rem var(--texto);letter-spacing:.06em;text-transform:uppercase;color:var(--suave);margin:0 0 .6rem}
 .notas-p .nota-item{border-top:1px solid var(--linea);padding:.6rem 0}
 .notas-p .nota-item:first-of-type{border-top:0;padding-top:0}
 .notas-p .nota-item small{color:var(--suave);font-size:.78rem}
@@ -1311,11 +1370,17 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
         (`m.carpeta_disponible` falso) no se dibuja nada de esto. -#}
     {% set enlace_carpeta = m.carpeta|enlace_de_carpeta %}
     {% set copiar_carpeta = false %}
-    {% if m.carpeta_disponible and (m.carpeta or not solo_ver) %}
+    {#- LAS COTIZACIONES (pieza 5, 14-oct-2026) van DENTRO de esta sección, debajo de la carpeta: la sección
+        sale también cuando hay cotizaciones que enseñar aunque la carpeta no esté (la casa siempre las ve,
+        con su «+»; solo ver, solo si hay alguna). Sin la tabla de cotizaciones (`cz` es `None`) no sale nada
+        de ellas y la página queda como antes. -#}
+    {% set ver_carpeta = m.carpeta_disponible and (m.carpeta or not solo_ver) %}
+    {% set ver_cotizaciones = cz and (cz.lista or not solo_ver) %}
+    {% if ver_carpeta or ver_cotizaciones %}
     <section class="bloque carpeta-p" id="carpeta-del-proyecto" data-ancla>
-      <div class="encabezado"><h2>Carpeta del proyecto</h2>
-        {% if not solo_ver and editar != 'carpeta' %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar=carpeta{{ sufijo_filtro }}#carpeta-del-proyecto">{{ 'Cambiar' if m.carpeta else 'Poner' }}</a>{% endif %}</div>
-      {% if not solo_ver and editar == 'carpeta' %}
+      <div class="encabezado">{% if ver_carpeta %}<h2>Carpeta del proyecto</h2>{% else %}<h2>Cotizaciones</h2>{% endif %}
+        {% if ver_carpeta and not solo_ver and editar != 'carpeta' %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar=carpeta{{ sufijo_filtro }}#carpeta-del-proyecto">{{ 'Cambiar' if m.carpeta else 'Poner' }}</a>{% endif %}</div>
+      {% if not ver_carpeta %}{% elif not solo_ver and editar == 'carpeta' %}
       <form class="carpeta-editar" method="post" action="/proyectos/{{ m.id }}/carpeta" data-auto>
         <label>Dónde vive el proyecto <input type="text" name="carpeta" maxlength="{{ largo_carpeta }}" value="{{ m.carpeta or '' }}" placeholder="Dirección de la carpeta en Drive o ruta en la computadora" aria-label="Carpeta del proyecto"></label>
         <p class="nota">Pega la dirección de la carpeta en Drive (empieza por http:// o https://) y se abre con un clic, o escribe la ruta de la carpeta en la computadora. Hasta {{ largo_carpeta }} caracteres. Se guarda al salir del campo si cambió; para dejarla vacía, usa «Guardar» con el campo vacío. Si la dejas vacía, el proyecto queda sin carpeta.</p>
@@ -1329,6 +1394,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
         {% if not solo_ver %}<button type="button" class="btn-linea copiar" data-copiar-carpeta>Copiar</button>{% endif %}
         <p class="nota">Esta ruta solo sirve en la computadora donde existe la carpeta.</p></div>
       {% else %}<p class="vacio">Todavía no hay carpeta.</p>{% endif %}
+      {% if ver_cotizaciones %}{% include "_cotizaciones_del_proyecto.html" %}{% endif %}
     </section>
     {% endif %}
     {#- CERRAR EL PROYECTO. La confirmación la dibuja el servidor (`?confirmar=cerrar`).
@@ -1785,5 +1851,170 @@ document.addEventListener("click", function (e) {
     portapapeles.writeText(texto.textContent).then(function () { decir("Copiado"); }, aMano);
   } catch (x) { aMano(); }
 });
+</script>{% endif %}
+{#- EL GUION DE LA VENTANA DE LAS COTIZACIONES (pieza 5): «+ Agregar renglón / opción / condición», «✕» de una
+    opción y «Así va a salir» rehecho mientras se escribe. Solo sale en la sesión de la casa y si existe la
+    tabla de cotizaciones; va FUERA de `<main>` (una región repintada no vuelve a correr sus guiones) y todo
+    escucha en el documento. Sin JavaScript nada de esto hace falta: el servidor dibuja casillas de sobra
+    y la vista previa es la del último guardado. No manda nada a ningún servidor. -#}
+{% if cz_activas %}<script id="guion-cotizaciones">
+document.documentElement.classList.add("con-js");
+(function () {
+/*PURAS*/
+function pesosDeLaHoja(texto) {
+  var t = String(texto).replace(/\s+/g, "");
+  if (!/^(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]+)?$/.test(t)) return null;
+  var partes = t.replace(/,/g, "").split(".");
+  var entero = partes[0].replace(/^0+(?=[0-9])/, ""), dec = partes[1] || "";
+  if (dec.length > 2) return null;
+  while (dec.length < 2) dec += "0";
+  entero = entero.replace(/\B(?=([0-9]{3})+(?![0-9]))/g, ",");
+  return "RD$" + entero + (dec === "00" ? "" : "." + dec);
+}
+function fechaEnPalabrasDeLaHoja(iso, meses) {
+  var m = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/.exec(String(iso));
+  if (!m || Number(m[2]) < 1 || Number(m[2]) > 12) return "";
+  return Number(m[3]) + " de " + meses[Number(m[2]) - 1] + " de " + m[1];
+}
+/*FIN DE LAS PURAS*/
+  function uno(sel, en) { return (en || document).querySelector(sel); }
+  function todos(sel, en) { return Array.prototype.slice.call((en || document).querySelectorAll(sel)); }
+  function valor(form, nombre) { var c = form.elements[nombre]; return c ? c.value : ""; }
+  function siguienteIndice(nombres, regla) {
+    var mayor = -1;
+    nombres.forEach(function (n) { var m = regla.exec(n); if (m && Number(m[1]) > mayor) mayor = Number(m[1]); });
+    return mayor + 1;
+  }
+  function nombresDe(en) { return todos("[name]", en).map(function (c) { return c.name; }); }
+  function agregar(form, que, desde) {
+    var plantilla = uno('template[data-cz-plantilla="' + que + '"]', form.parentNode);
+    if (!plantilla) return;
+    var o = "0", r = "0", c = "0", lugar, donde = "beforebegin";
+    if (que === "opcion") {
+      o = String(siguienteIndice(nombresDe(form), /^op-([0-9]+)-nombre$/));
+      lugar = desde;                                   // el propio botón «+ Agregar opción»
+    } else if (que === "renglon") {
+      var op = desde.closest(".cz-op");
+      var nombre = uno("[name$='-nombre']", op).name;
+      o = /^op-([0-9]+)-nombre$/.exec(nombre)[1];
+      r = String(siguienteIndice(nombresDe(op), /-r-([0-9]+)-descripcion$/));
+      lugar = desde;
+    } else {
+      c = String(siguienteIndice(nombresDe(form), /^cond-extra-([0-9]+)-texto$/));
+      lugar = desde;
+    }
+    lugar.insertAdjacentHTML(donde, plantilla.innerHTML.replace(/__O__/g, o).replace(/__R__/g, r).replace(/__C__/g, c));
+  }
+  function numerarOpciones(form) {
+    var n = 0;
+    todos(".cz-op", form).forEach(function (op) {
+      if (op.classList.contains("cz-sobra")) return;
+      n += 1;
+      var et = uno("[data-cz-n]", op);
+      if (et) et.textContent = "OPCIÓN " + n;
+    });
+  }
+  function leer(form) {
+    var opciones = [];
+    todos(".cz-op", form).forEach(function (op) {
+      var nombre = uno("[name$='-nombre']", op).value.trim(), renglones = [];
+      todos(".renglon-bloque", op).forEach(function (b) {
+        var d = uno("[name$='-descripcion']", b).value.trim(), t = uno("[name$='-total']", b).value.trim();
+        var det = uno("[name$='-detalle']", b).value.trim();
+        if (d || t || det) renglones.push({ descripcion: d, detalle: det, total: t });
+      });
+      if (nombre || renglones.length) opciones.push({ nombre: nombre, renglones: renglones });
+    });
+    return opciones;
+  }
+  function el(etiqueta, clase, texto, hijos) {
+    var n = document.createElement(etiqueta);
+    if (clase) n.className = clase;
+    if (texto !== undefined && texto !== null) n.textContent = texto;
+    (hijos || []).forEach(function (h) { n.appendChild(h); });
+    return n;
+  }
+  function rehacer(form) {
+    var previa = form.querySelector("[data-cz-previa]");
+    var hoja = previa && uno(".hoja", previa);
+    if (!hoja) return;
+    var datos = JSON.parse(previa.getAttribute("data-cz-datos"));
+    var opciones = leer(form), codigo = uno(".cod", hoja).textContent;     // el código lo puso el servidor
+    // Los textos de «validez» y «alternativas» salen de las MISMAS plantillas que usa el servidor.
+    var dias = valor(form, "validez");
+    var textoValidez = datos.validez.replace("{dias}", dias);
+    var palabra = datos.palabras[String(Math.min(Math.max(opciones.length, 2), 6))];
+    var textoAlternativas = datos.alternativas.replace("{palabra}", palabra);
+    todos("[data-cz-condicion]", form).forEach(function (l) {
+      var t = uno("[data-cz-texto]", l), clave = l.getAttribute("data-cz-condicion");
+      if (clave === "validez") t.textContent = textoValidez;
+      if (clave === "alternativas") { t.textContent = textoAlternativas; l.hidden = opciones.length < 2; }
+    });
+    var logo = el("img", "logo-h");
+    logo.src = "/logo-cds.png"; logo.alt = "";
+    var para = [[datos.para[0], valor(form, "para-nombre").trim()]];
+    if (valor(form, "para-telefono").trim()) para.push([datos.para[1], valor(form, "para-telefono").trim()]);
+    para.push([datos.para[2], fechaEnPalabrasDeLaHoja(valor(form, "fecha"), datos.meses)]);
+    para.push([datos.para[3], dias + " días"]);
+    var cuerpo = [logo, el("hr"), el("h1", "", datos.titulo), el("div", "cod", codigo),
+                  el("div", "para", "", [].concat.apply([], para.map(function (p) { return [el("small", "", p[0]), el("b", "", p[1])]; })))];
+    opciones.forEach(function (op, i) {
+      cuerpo.push(el("div", "op-t", datos.opcion.replace("{n}", i + 1).replace("{nombre}", op.nombre)));
+      var filas = [el("tr", "", "", [el("th", "", datos.encabezados[0]), el("th", "", datos.encabezados[1])])];
+      op.renglones.forEach(function (r) {
+        var total = pesosDeLaHoja(r.total);
+        var celda = el("td", "", "", [el("b", "", r.descripcion)]);
+        if (r.detalle) celda.appendChild(el("span", "", r.detalle));
+        filas.push(el("tr", "", "", [celda, el("td", "", "", [el("b", "", total === null ? r.total : total)])]));
+      });
+      if (op.renglones.length > 1) {
+        var suma = 0, valido = true;
+        op.renglones.forEach(function (r) { if (pesosDeLaHoja(r.total) === null) valido = false; else suma += Number(r.total.replace(/,/g, "")); });
+        if (valido) filas.push(el("tr", "tot", "", [el("td", "", "", [el("b", "", datos.total_de_la_opcion)]),
+                                                     el("td", "", "", [el("b", "", pesosDeLaHoja(suma.toFixed(2)))])]));
+      }
+      cuerpo.push(el("table", "", "", filas));
+    });
+    var marcadas = [];
+    todos("[data-cz-condicion]", form).forEach(function (l) {
+      if (!l.hidden && uno("input[type=checkbox]", l).checked) marcadas.push(uno("[data-cz-texto]", l).textContent);
+    });
+    todos(".cz-propia", form).forEach(function (l) {
+      var t = uno(".cz-texto-propio", l).value.trim();
+      if (t && uno("input[type=checkbox]", l).checked) marcadas.push(t);
+    });
+    if (marcadas.length) {
+      cuerpo.push(el("div", "op-t cond-h", datos.condiciones));
+      cuerpo.push(el("ul", "", "", marcadas.map(function (t) { return el("li", "", t); })));
+    }
+    var pie = el("div", "pie", datos.pie[0]);
+    pie.appendChild(el("br")); pie.appendChild(document.createTextNode(datos.pie[1]));
+    cuerpo.push(pie);
+    while (hoja.firstChild) hoja.removeChild(hoja.firstChild);
+    cuerpo.forEach(function (n) { hoja.appendChild(n); });
+  }
+  document.addEventListener("click", function (e) {
+    var t = e.target && e.target.closest ? e.target : null;
+    if (!t) return;
+    var mas = t.closest("[data-cz-agregar]");
+    var quitar = t.closest("[data-cz-quitar]");
+    var form = (mas || quitar) && (mas || quitar).closest("form.cz-form");
+    if (!form) return;
+    e.preventDefault();
+    if (mas) agregar(form, mas.getAttribute("data-cz-agregar"), mas);
+    else quitar.closest(".cz-op").remove();
+    numerarOpciones(form);
+    rehacer(form);
+  });
+  function alCambiar(e) {
+    var form = e.target && e.target.closest ? e.target.closest("form.cz-form") : null;
+    if (form) rehacer(form);
+  }
+  document.addEventListener("input", alCambiar);
+  document.addEventListener("change", alCambiar);
+  // La ventana que ya vino abierta: los números de las opciones y la vista previa, desde el primer momento.
+  function alCargar() { todos("form.cz-form").forEach(function (f) { numerarOpciones(f); rehacer(f); }); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", alCargar); else alCargar();
+})();
 </script>{% endif %}
 </body></html>

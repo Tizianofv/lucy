@@ -165,6 +165,8 @@ async def main() -> int:
         # que la línea de arriba es la que dice si falta; ésta corre el SELECT con sus columnas y el JOIN
         # contra la base de verdad. Es una LECTURA; `guardar_cotizacion` escribe y no se prueba acá.
         ("cotizaciones_de_proyectos", lambda: db.cotizaciones_de_proyectos()),
+        # El número que la ventana de «Nueva cotización» enseña (pieza 5): un SELECT de la serie. LECTURA.
+        ("numero_que_sigue_de_cotizacion", lambda: db.numero_que_sigue_de_cotizacion()),
     ]
 
     rojas = []

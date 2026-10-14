@@ -519,7 +519,7 @@ function ventanaDeMentira(conSoporte) {
 
 def _guion_de(mundo) -> str:
     """El `<script>` de la página servida (la sin proyectos también lo lleva)."""
-    guiones = re.findall(r"<script[^>]*>(.*?)</script>", ver(mundo), re.S)
+    guiones = re.findall(r"<script(?![^>]*guion-cotizaciones)[^>]*>(.*?)</script>", ver(mundo), re.S)
     assert len(guiones) == 1
     return guiones[0]
 
