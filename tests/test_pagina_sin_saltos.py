@@ -97,12 +97,20 @@ class _Censo(HTMLParser):
                             a.get("class") or "", a.get("id") or ""))
 
 
+def paginas_de(con: str) -> list[str]:
+    """TODAS las páginas que la plantilla puede dibujar con la sesión `con`: las consultas de `sv.COBERTURA`
+    (la lista con la que `test_proyectos_solo_ver.py` exige que ningún control de la plantilla quede sin pintar,
+    `sitios_sin_cubrir`), con el bloque de sesiones del registro dibujado. No es una lista corta escogida aquí."""
+    with sv._con_el_bloque_de_sesiones():
+        return [sv._pintar(con, **c) for c in sv.COBERTURA]
+
+
 def lo_que_se_toca(con: str) -> list[dict]:
     """La lista de todo lo que se toca en `con` («casa» o «ver») en TODAS las vistas y las direcciones
     armadas a mano de `test_proyectos_solo_ver.py`. Sale del HTML que dibuja el servidor."""
     c = _Censo()
-    for consulta in sv.VISTAS + list(sv.A_MANO.values()):
-        c.feed(sv._pintar(con, **consulta))
+    for html in paginas_de(con):
+        c.feed(html)
     return [dict(zip(("tag", "href", "metodo", "target", "download", "clase", "id"), t)) | {"es": t[0]}
             for t in sorted(c.visto, key=str)]
 
@@ -193,8 +201,8 @@ def test_todo_lo_que_se_toca_se_queda_en_la_pagina_o_sale_a_proposito(con):
 def los_botones_con_nombre() -> list[dict]:
     """Todo botón con nombre de todo formulario que la casa ve (de la página dibujada): el envío depende de él."""
     c = _Censo()
-    for consulta in sv.VISTAS + list(sv.A_MANO.values()):
-        c.feed(sv._pintar("casa", **consulta))
+    for html in paginas_de("casa"):
+        c.feed(html)
     return [dict(accion=a, metodo=m, nombre=n, valor=v) for a, m, n, v in sorted(c.botones)]
 
 
@@ -239,6 +247,17 @@ def test_un_control_inventado_lo_atrapa_el_censo(inventado):
     inventado = {**inventado, "es": inventado["tag"]}
     filas = pasar_por_los_oyentes("casa", [inventado])
     assert problemas_del_censo(filas) != [], filas
+
+
+@hay_osascript
+def test_el_censo_ve_un_boton_con_formaction_dentro_de_un_formulario():
+    """Q2 del testigo (n15b): `<button formaction="/otra/3/borrar">` en el formulario de nuevo grupo. Un
+    botón así cambia a dónde va el envío; el censo lo cuenta como destino y lo acusa si no está declarado."""
+    c = _Censo()
+    c.feed('<form method="post" action="/proyectos/grupos"><button formaction="/otra/3/borrar">x</button></form>')
+    lista = [dict(zip(("tag", "href", "metodo", "target", "download", "clase", "id"), t)) | {"es": t[0]} for t in sorted(c.visto, key=str)]
+    assert {d["href"] for d in lista} == {"/proyectos/grupos", "/otra/3/borrar"}
+    assert problemas_del_censo(pasar_por_los_oyentes("casa", lista)) != []
 
 
 @hay_osascript
@@ -328,7 +347,7 @@ def test_agregar_una_persona_sin_escogerla_no_sale_y_lo_dice_el_guion_de_la_pagi
     assert r["prevenido"] is True and r["pedidos"] == []
 
 
-AVISO_SIN_CONFIRMAR = "No se pudo confirmar si se guardó. No se volvió a enviar para no duplicarlo; lo que tenías escrito sigue aquí. "
+AVISO_SIN_CONFIRMAR = "No se pudo confirmar si se guardó. No se volvió a enviar para no duplicarlo; lo que tenías escrito sigue aquí."
 
 
 @hay_osascript
@@ -357,7 +376,7 @@ def test_h1_un_post_sin_respuesta_o_con_5xx_no_se_reenvia_y_la_persona_lo_lee_si
     if modo == "texto-corto":
         assert r["salidas"] == [["ir", "http://x.test/proyectos?p=1"]]
     else:
-        assert r["salidas"] == [["aviso", AVISO_SIN_CONFIRMAR, "/proyectos?p=1"]]       # y NADA de submit / requestSubmit
+        assert r["salidas"] == [["aviso", [AVISO_SIN_CONFIRMAR], "/proyectos?p=1"]]       # y NADA de submit / requestSubmit
     assert r["escritos"] == []
 
 
@@ -371,12 +390,57 @@ def test_un_post_que_el_servidor_rechazo_con_4xx_no_escribio_nada_y_se_envia_com
     assert r["historia"] == [] and r["cen"] == "VIEJA"
 
 
+def _con_controles(nombre):
+    return ('%s.controles = [{type: "text", tagName: "INPUT", readOnly: false}, {type: "hidden", tagName: "INPUT", readOnly: false},'
+            ' {type: "select-one", tagName: "SELECT", disabled: false}];' % nombre)
+
+
+@hay_osascript
+def test_h4_un_formulario_que_ya_se_mando_o_espera_en_la_cola_no_deja_escribir_y_se_suelta_al_terminar():
+    """SONDAS 2 Y 5 DEL TESTIGO: el texto que se teclea en un formulario ya mandado se perdía. Ahora no se puede
+    teclear (texto en solo lectura, desplegable desactivado; lo escondido no se toca) hasta que su envío termina."""
+    esc = ('var A = formulario("/proyectos/1/notas", "post", []); enviar(A);'
+           ' var B = formulario("/proyectos/1/descripcion", "post", [["descripcion", "x"]]); ' + _con_controles("B") +
+           ' __e = enviar(B); var c = B.controles;'
+           ' salidas.push(["bloqueado", c[0].readOnly, c[1].readOnly, c[2].disabled]);'
+           ' responder(0, "PAG-A"); salidas.push(["B corriendo", c[0].readOnly]); sinRed(1);'
+           ' salidas.push(["suelto", c[0].readOnly, c[2].disabled]);')
+    r = correr(CASA(), esc)
+    assert ["bloqueado", True, False, True] in r["salidas"]              # en la cola ya está bloqueado (el escondido, no)
+    assert ["B corriendo", True] in r["salidas"]
+    assert ["suelto", False, False] in r["salidas"]                      # terminó (aquí con aviso: el formulario sigue ahí)
+
+
+@hay_osascript
+def test_h4_la_lectura_pisada_en_la_cola_suelta_su_formulario():
+    esc = ('var A = formulario("/proyectos/1/notas", "post", []); enviar(A);'
+           ' var G = formulario("/proyectos", "get", [["q", "a"]]); ' + _con_controles("G") + ' enviar(G); var c = G.controles;'
+           ' var G2 = formulario("/proyectos", "get", [["q", "b"]]); enviar(G2); salidas.push(["suelto", c[0].readOnly, G.dataset.enCamino]);')
+    assert ["suelto", False, None] in correr(CASA(), esc)["salidas"]
+
+
+@hay_osascript
+def test_sonda_4_un_enlace_entre_dos_guardados_la_pagina_termina_en_el_enlace_y_los_avisos_se_leen():
+    """SONDA 4 DEL TESTIGO: POST A, enlace a p=2, POST B. La página termina en lo último que se pidió ver (p=2);
+    los guardados no la mueven y su aviso se lee."""
+    esc = ('enviar(formulario("/proyectos/1/notas", "post", [["contenido", "A"]]));'
+           ' clic(enlace("/proyectos?p=2"));'
+           ' __e = enviar(formulario("/proyectos/tarea/10/comentar", "post", [["texto", "B"]]));'
+           ' paginas["PAG-A"] = {avisos: ["Nota guardada."]}; paginas["PAG-B"] = {avisos: ["Comentario guardado."]};'
+           ' responder(0, "PAG-A"); responder(1, "PAG-B"); responder(2, "PAG-2");')
+    r = correr(CASA(), esc)
+    assert [(p[0], p[1]) for p in r["pedidos"]] == [("POST", "/proyectos/1/notas"), ("POST", "/proyectos/tarea/10/comentar"), ("GET", "/proyectos?p=2")]
+    assert r["cen"] == "PAG-2" and r["donde"] == "/proyectos?p=2"
+    ultimo = [x for x in r["salidas"] if x[0] == "aviso"][-1]
+    assert ultimo[1] == ["Nota guardada.", "Comentario guardado."]
+
+
 @hay_osascript
 def test_un_guardado_de_la_cola_rechazado_cuyo_formulario_ya_no_esta_se_avisa_y_no_se_envia_a_ciegas():
     esc = ('var A = formulario("/proyectos/1/notas", "post", []); enviar(A); var B = formulario("/proyectos/1/descripcion", "post", [["descripcion", "x"]]);'
            ' __e = enviar(B); responder(0, "PAG-A"); B.isConnected = false; responder(1, "ENTRAR", {ok: false, status: 401});')
     r = correr(CASA(), esc)
-    assert [x[0] for x in r["salidas"]] == ["aviso"] and r["salidas"][0][1] == "No se guardó: el servidor no aceptó el envío. "
+    assert [x[0] for x in r["salidas"]] == ["aviso"] and r["salidas"][0][1] == ["No se guardó: el servidor no aceptó el envío."]
 
 
 @hay_osascript
@@ -387,11 +451,25 @@ def test_el_envio_nativo_que_pidio_la_pieza_no_vuelve_a_pasar_por_ella():
 
 
 @hay_osascript
-def test_el_aviso_de_no_confirmado_se_quita_cuando_la_pagina_se_vuelve_a_pintar():
-    esc = ('var f = formulario("/proyectos/1/notas", "post", []); enviar(f); sinRed(0);'
-           ' __e = clic(enlace("/proyectos?p=2")); responder(1, "PAG-2");')
+def test_h3_el_aviso_de_no_confirmado_no_lo_quita_ningun_repintado_y_los_dos_se_leen():
+    """SONDA DEL TESTIGO (H3): otro guardado se repinta antes de que la persona lea el aviso. El aviso se
+    queda; si llega un segundo, se leen los dos; se cierra con «Entendido»."""
+    esc = ('var A = formulario("/proyectos/1/notas", "post", []); enviar(A); sinRed(0);'
+           ' var B = formulario("/proyectos/1/descripcion", "post", []); enviar(B); responder(1, "PAG-B");'      # B se repinta
+           ' var C = formulario("/proyectos/1/carpeta", "post", []); enviar(C); sinRed(2);'
+           ' salidas.push(["abiertos", avisosPuestos.length]); avisosPuestos[0].cerrar(); salidas.push(["abiertos", avisosPuestos.length]);')
     r = correr(CASA(), esc)
-    assert [s[0] for s in r["salidas"]] == ["aviso", "aviso quitado"] and r["cen"] == "PAG-2"
+    avisos = [x for x in r["salidas"] if x[0] == "aviso"]
+    assert avisos[0][1] == [AVISO_SIN_CONFIRMAR] and avisos[-1][1] == [AVISO_SIN_CONFIRMAR, AVISO_SIN_CONFIRMAR]    # el repintado de B no lo quitó
+    assert r["cen"] == "PAG-B"
+    assert [x for x in r["salidas"] if x[0] == "abiertos"] == [["abiertos", 1], ["abiertos", 0]]
+
+
+@hay_osascript
+def test_el_enlace_mirar_como_quedo_tambien_cierra_el_aviso():
+    esc = ('enviar(formulario("/proyectos/1/notas", "post", [])); sinRed(0);'
+           ' avisosPuestos[0].hijos.filter(function (h) { return h.tag === "a"; })[0].onclick(); salidas.push(["abiertos", avisosPuestos.length]);')
+    assert ["abiertos", 0] in correr(CASA(), esc)["salidas"]
 
 
 @hay_osascript

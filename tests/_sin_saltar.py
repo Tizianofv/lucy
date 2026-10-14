@@ -54,7 +54,8 @@ PERMITIDO_EN_LA_PIEZA = (
     ("window.fetch", 2), ("window.FormData", 1),
     # elementos nuevos: el enlace suelto (ir sin reenviar), el aviso fijo de «no se pudo confirmar» con su
     # enlace para mirar cómo quedó, y el guion de «Copiar» que la página nueva trae y ésta no.
-    ('document.createElement("a")', 2), ('document.createElement("div")', 1), ('document.createElement("script")', 1),
+    ('document.createElement("a")', 2), ('document.createElement("div")', 2), ('document.createElement("button")', 1),
+    ('document.createElement("script")', 1),
 )
 PROHIBIDO_EN_LA_PIEZA = re.compile(
     r"fetch|XMLHttpRequest|sendBeacon|WebSocket|EventSource|localStorage|sessionStorage|\.submit\(|"
@@ -178,7 +179,8 @@ DOMParser.prototype.parseFromString = function (texto) {
   var p = paginas[texto] || {};
   var roles = p.regiones || ["izquierda", "centro"];
   var regs = roles.map(function (r) { var n = nodo(r, 0, texto, (p.detalles || {})[r], (p.campos || {})[r]); if (p.sinScroll) n.scrollHeight = 700; return n; });
-  return {title: p.titulo || "", querySelectorAll: function (s) { return s === "[data-region]" ? regs : []; },
+  var avisos = (p.avisos || []).map(function (t) { return {textContent: " " + t + " "}; });
+  return {title: p.titulo || "", querySelectorAll: function (s) { return s === "[data-region]" ? regs : (s === "p.aviso" ? avisos : []); },
           querySelector: function (s) { return s === "#guion-copiar-carpeta" && p.copiar ? {textContent: "COPIAR-DEL-SERVIDOR"} : null; }};
 };
 var __filas = null, __fase = "antes";
@@ -188,7 +190,8 @@ var document = {
   activeElement: null,
   body: {firstChild: {}, parentNode: null,
     appendChild: function (n) { salidas.push(["guion-nuevo", n.id, n.textContent]); },
-    insertBefore: function (n, ref) { n.parentNode = document.body; avisosPuestos.push(n); salidas.push(["aviso", n.textContent, n.hijos[0].atributos.href]); },
+    insertBefore: function (n, ref) { n.parentNode = document.body; avisosPuestos.push(n); salidas.push(["aviso", n.hijos.filter(function (h) { return h.tag === "div"; }).map(function (h) { return h.textContent; }),
+      n.hijos.filter(function (h) { return h.tag === "a"; })[0].atributos.href]); n.cerrar = function () { n.hijos.filter(function (h) { return h.tag === "button"; })[0].onclick(); }; },
     removeChild: function (n) { avisosPuestos.splice(avisosPuestos.indexOf(n), 1); salidas.push(["aviso quitado"]); }},
   addEventListener: function (t, f) { (__oy[t] = __oy[t] || []).push(f); },
   querySelector: function () { return null; },
@@ -228,6 +231,7 @@ function formulario(accion, metodo, campos, extra) {
     getAttribute: function (k) { return this.atributos[k] === undefined ? null : this.atributos[k]; },
     classList: {contains: function (c) { return (f.clases || []).indexOf(c) >= 0; }},
     querySelector: function (s) { return s === "button" ? boton : null; },
+    querySelectorAll: function () { return this.controles || []; },
     closest: function () { return null; },
     isConnected: true,
     submit: function () { salidas.push(["submit", this.action]); },

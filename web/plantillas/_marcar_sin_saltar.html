@@ -34,10 +34,18 @@
        con un enlace, SIN reenviar. (El aviso de «guardado» se gastó en la lectura de por
        detrás: esa página llega sin el aviso, nunca con uno falso.)
    NADA DE LO QUE LA PERSONA HACE SE TRAGA: un guardado que llega mientras otro va en camino
-   se arma con lo que tenía en ese momento y sale después, en orden, una vez. Al repintar
-   tras un guardado, lo que se estaba escribiendo en otro campo vuelve a su sitio (con el
-   foco), salvo en los formularios que ya van en camino. */
-var turnoSinSaltar = 0, escribiendoSinSaltar = 0, colaSinSaltar = [], vistaSinSaltar = "", raizSinSaltar = "", avisoSinSaltar = null;
+   se arma con lo que tenía en ese momento y sale después, en orden, una vez. Y un formulario
+   que ya se mandó (por detrás o en la cola) queda BLOQUEADO para escribir (sus campos de
+   texto, solo lectura; sus desplegables, desactivados) hasta que su envío termine: no se puede
+   teclear en él algo que después se pierda. Al repintar tras un guardado, lo que se estaba
+   escribiendo en otro campo (de un formulario que no se mandó) vuelve a su sitio con el foco.
+   LA PÁGINA TERMINA EN LO ÚLTIMO QUE LA PERSONA PIDIÓ VER: una lectura (enlace, búsqueda, «atrás»)
+   tocada mientras hay guardados en camino espera a que TODOS los guardados terminen y sale al
+   final; los guardados que terminan con una lectura esperando no mueven la página, y lo que
+   dijeron (su aviso) se lee en el aviso fijo.
+   EL AVISO FIJO (arriba, fuera de las regiones) no lo quita ningún repintado: se queda hasta
+   que la persona lo cierra («Entendido» o «Mirar cómo quedó»). Si llegan varios, se leen todos. */
+var turnoSinSaltar = 0, escribiendoSinSaltar = 0, colaSinSaltar = [], vistaSinSaltar = "", raizSinSaltar = "", avisoSinSaltar = null, mensajesAviso = [];
 function irA(url) { var a = document.createElement("a"); a.href = url; a.click(); }
 /* Lo que sigue solo lo hace la pantalla de Proyectos (`iniciarSinSaltos`); las de Tareas
    conservan lo suyo: ni `<details>` abiertos, ni título, ni campos a medias. */
@@ -45,20 +53,54 @@ function enProyectosSinSaltar() { return raizSinSaltar !== ""; }
 function quitarAvisoSinSaltar() {
   if (avisoSinSaltar && avisoSinSaltar.parentNode) avisoSinSaltar.parentNode.removeChild(avisoSinSaltar);
   avisoSinSaltar = null;
+  mensajesAviso = [];
 }
-/* El aviso de «sin confirmar»: va FUERA de las regiones (no se borra al repintar), siempre a la
-   vista (fijo en el borde de arriba), y con un enlace a esta misma vista para mirar cómo quedó. */
+/* El aviso fijo: FUERA de las regiones (ningún repintado lo borra), siempre a la vista, con todos los
+   mensajes que lleguen, un botón «Entendido» y un enlace a esta misma vista para mirar cómo quedó
+   (los dos lo cierran). */
 function avisarSinSaltar(texto) {
-  quitarAvisoSinSaltar();
-  var d = document.createElement("div"), a = document.createElement("a");
+  mensajesAviso.push(texto);
+  var viejo = avisoSinSaltar;
+  if (viejo && viejo.parentNode) viejo.parentNode.removeChild(viejo);
+  var d = document.createElement("div"), a = document.createElement("a"), b = document.createElement("button"), i, m;
   d.setAttribute("role", "alert");
   d.setAttribute("style", "position:fixed;inset:0 0 auto 0;z-index:9999;padding:.8rem 1rem;background:#fff3cd;color:#222;border-bottom:2px solid #b00020;font:600 14px sans-serif");
-  d.textContent = texto + " ";
+  for (i = 0; i < mensajesAviso.length; i++) {
+    m = document.createElement("div");
+    m.textContent = mensajesAviso[i];
+    d.appendChild(m);
+  }
   a.setAttribute("href", window.location.pathname + window.location.search);
   a.textContent = "Mirar cómo quedó";
+  a.onclick = quitarAvisoSinSaltar;
+  b.textContent = "Entendido";
+  b.onclick = quitarAvisoSinSaltar;
   d.appendChild(a);
+  d.appendChild(b);
   document.body.insertBefore(d, document.body.firstChild);
   avisoSinSaltar = d;
+}
+/* Bloquea los campos de un formulario que ya se mandó; devuelve lo que bloqueó para soltarlo. */
+function bloquearCampos(form) {
+  var hechos = [], campos, i, c;
+  if (!enProyectosSinSaltar() || !form || !form.querySelectorAll) return hechos;
+  campos = form.querySelectorAll("input, textarea, select");
+  for (i = 0; i < campos.length; i++) {
+    c = campos[i];
+    if (/^(hidden|checkbox|radio|submit|button|file)$/.test(c.type || "")) continue;
+    if (c.tagName === "SELECT") { if (!c.disabled) { c.disabled = true; hechos.push({campo: c, select: true}); } }
+    else if (!c.readOnly) { c.readOnly = true; hechos.push({campo: c, select: false}); }
+  }
+  return hechos;
+}
+function soltarPedido(p) {
+  var i, h;
+  if (p.form && p.form.dataset) delete p.form.dataset.enCamino;
+  for (i = 0; p.bloqueados && i < p.bloqueados.length; i++) {
+    h = p.bloqueados[i];
+    if (h.select) h.campo.disabled = false; else h.campo.readOnly = false;
+  }
+  p.bloqueados = [];
 }
 function llavesDeCampos(regiones) {
   var lista = [], cuenta = {};
@@ -129,7 +171,6 @@ function pintarSinSaltar(url, texto, ctx) {
     rf = filas[f].getBoundingClientRect();
     if (rf.height > 0 && rf.bottom > tope + 4) anclas.push({id: filas[f].id, y: rf.top});
   }
-  quitarAvisoSinSaltar();
   for (i = 0; i < pares.length; i++) {
     pares[i].puesta = document.importNode(pares[i].nueva, true);
     if (pares[i].abiertos.length) {
@@ -206,11 +247,15 @@ function sinSaltar(p) {
     if (terminado) return;
     terminado = true;
     if (esPost) escribiendoSinSaltar--;
-    if (p.form && p.form.dataset) delete p.form.dataset.enCamino;
+    soltarPedido(p);
     if (boton) boton.disabled = false;
   };
+  /* Sale lo que sigue en la cola: los guardados en su orden, y la lectura (si hay) al final de todos. */
   var despues = function () {
-    if (!escribiendoSinSaltar && colaSinSaltar.length) sinSaltar(colaSinSaltar.shift());
+    if (escribiendoSinSaltar || !colaSinSaltar.length) return;
+    var k, i = 0;
+    for (k = 0; k < colaSinSaltar.length; k++) if (colaSinSaltar[k].cuerpo !== undefined) { i = k; break; }
+    sinSaltar(colaSinSaltar.splice(i, 1)[0]);
   };
   /* Lo de siempre: solo cuando no puede duplicar nada (un GET, o un POST que el servidor rechazó). */
   var normal = function () {
@@ -234,6 +279,14 @@ function sinSaltar(p) {
     r.text().then(function (texto) {
       terminar();
       if (mio !== turnoSinSaltar) { despues(); return; }          // llegó tarde: la persona ya pidió otra cosa (solo un GET puede quedar atrás: nada nuevo sale mientras un POST está en camino)
+      if (esPost && colaSinSaltar.some(function (q) { return q.cuerpo === undefined; })) {
+        /* Hay una lectura esperando: la página va a terminar en ella. Este guardado no la mueve; lo que dijo
+           (su aviso) se lee en el aviso fijo. */
+        var dichos = new DOMParser().parseFromString(texto, "text/html").querySelectorAll("p.aviso"), n;
+        for (n = 0; n < dichos.length; n++) avisarSinSaltar(dichos[n].textContent.trim());
+        despues();
+        return;
+      }
       try { pintarSinSaltar(r.url, texto, p); } catch (e) { irA(r.url); }
       despues();
     }, function () { terminar(); irA(r.url); despues(); });          // la respuesta buena se cortó: ya se guardó, se va a ella
@@ -279,21 +332,25 @@ function marcarSinSaltar(form, envia) {
   var u = d.metodo === "otro" ? null : destinoSinSaltar(d.accion, d.metodo);
   if (!u) { envioDeSiempre(form, envia); return; }
   var datos = datosDelFormulario(form, envia);
+  var pedido;
   if (d.metodo === "post") {
-    pedirOEsperar({url: u.pathname + u.search, cuerpo: datos, form: form, envia: envia, historia: "reemplazar"});
+    pedido = {url: u.pathname + u.search, cuerpo: datos, form: form, envia: envia, historia: "reemplazar"};
   } else {
     var qs = datos.toString();
-    pedirOEsperar({url: u.pathname + (qs ? "?" + qs : ""), form: form, envia: envia, historia: "agregar"});
+    pedido = {url: u.pathname + (qs ? "?" + qs : ""), form: form, envia: envia, historia: "agregar"};
   }
+  pedido.bloqueados = bloquearCampos(form);          // ya se mandó: no se puede teclear en él algo que se pierda
+  pedirOEsperar(pedido);
 }
-/* Mientras un POST está en camino, lo que se toca espera su turno y sale después, en orden. Dos
-   lecturas (GET) seguidas se reducen a la última; un guardado nunca se descarta. */
+/* Mientras un POST está en camino, lo que se toca espera su turno. Los guardados salen en orden y nunca
+   se descartan; una lectura (GET) espera al final de todos, y otra lectura posterior la reemplaza. */
 function pedirOEsperar(p) {
   if (escribiendoSinSaltar || colaSinSaltar.length) {
-    var ultimo = colaSinSaltar[colaSinSaltar.length - 1];
-    if (p.cuerpo === undefined && ultimo && ultimo.cuerpo === undefined) {
-      if (ultimo.form && ultimo.form.dataset) delete ultimo.form.dataset.enCamino;   // el que se pisa queda libre
-      colaSinSaltar.pop();
+    var k;
+    if (p.cuerpo === undefined) {
+      for (k = colaSinSaltar.length - 1; k >= 0; k--) {
+        if (colaSinSaltar[k].cuerpo === undefined) { soltarPedido(colaSinSaltar[k]); colaSinSaltar.splice(k, 1); }   // el que se pisa queda libre
+      }
     }
     colaSinSaltar.push(p);
     return;
