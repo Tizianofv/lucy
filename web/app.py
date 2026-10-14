@@ -51,10 +51,11 @@ from decimal import Decimal
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
-                               RedirectResponse)
+                               RedirectResponse, Response)
 from fastapi.templating import Jinja2Templates
 
 import config
+import cotizaciones
 import db.db as db
 import noco_lectura
 import registro_lectura
@@ -2223,6 +2224,31 @@ async def logo_cds(request: Request):
         return _fuera(request)
     return FileResponse(LOGO_CDS, media_type="image/png",
                         headers={"Cache-Control": "private, max-age=86400"})
+
+
+@app.get("/proyectos/{pid}/cotizaciones/{cid}/pdf")
+@auth.puerta(auth.PUERTA_VER)
+async def pdf_de_una_cotizacion(request: Request, pid: int, cid: int):
+    """El PDF de UNA cotización de UN proyecto (pieza 4 del diseño «Cotizaciones en Proyectos»).
+
+    Lo bajan las dos sesiones: la de la casa y la de solo ver (Tiziano, 14-oct-2026: solo ver ve las
+    cotizaciones y baja su PDF; lo que no puede es escribir). Sin ninguna de las dos: 401. Es una LECTURA:
+    el PDF se arma en el momento desde lo guardado (`cotizaciones.hoja_de_cotizacion` →
+    `pdf_de_cotizacion`), nada se escribe. 404 si la cotización no existe, está borrada, no es de ESE
+    proyecto (la búsqueda es por el proyecto de la ruta, no por el número solo) o falta la tabla.
+    `attachment` con el código como nombre: `COT-2026-001.pdf`."""
+    if not (auth.puede_entrar(_sesion(request))
+            or auth.validar_ver(request.cookies.get(COOKIE_VER))):
+        return _fuera(request)
+    de_proyectos = await db.cotizaciones_de_proyectos()
+    cot = next((c for c in (de_proyectos or {}).get(pid, []) if c["id"] == cid), None)
+    if cot is None:
+        return Response("No existe esa cotización.", status_code=404,
+                        media_type="text/plain; charset=utf-8")
+    pdf = cotizaciones.pdf_de_cotizacion(cotizaciones.hoja_de_cotizacion(cot))
+    return Response(pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{cot["codigo"]}.pdf"',
+        "Cache-Control": "private, no-store"})
 
 
 @app.get("/personas/buscar")

@@ -4181,10 +4181,13 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 14-oct-2026, rama `trabajo/cotizaciones-3`: +1 en disco y +1 EXENTO por `tests/test_guardar_cotizacion.py`
     # (nuevo, exento por rol); VIGILADOS sin cambio (se tocaron `db/db.py` y `tools/humo.py`, ya vigilados).
     # Medida corriendo la prueba sobre `07bbcce` + esta rama: 171, 123, 48.
-    assert medido == {"en disco": 171, "exentos": 123, "vigilados": 48}, (
+    # 14-oct-2026, rama `trabajo/cotizaciones-4`: +2 en disco, +1 EXENTO y +1 VIGILADO por
+    # `tests/test_hoja_y_pdf_de_cotizacion.py` (nuevo, exento por rol) y `cotizaciones.py` (nuevo, vigilado: no
+    # lee la lista cruda de `config`). Medida corriendo la prueba sobre `24d5615` + esta rama: 173, 124, 49.
+    assert medido == {"en disco": 173, "exentos": 124, "vigilados": 49}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "14-oct-2026 (cotizaciones-3) era {'en disco': 171, "
-        "'exentos': 123, 'vigilados': 48}. La aserción de fondo —cero "
+        "14-oct-2026 (cotizaciones-4) era {'en disco': 173, "
+        "'exentos': 124, 'vigilados': 49}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "
