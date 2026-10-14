@@ -500,13 +500,13 @@ def test_en_la_pagina_real_solo_el_enlace_de_la_carpeta_lleva_el_valor_y_solo_si
         assert unescape(re.search(r'<code class="carpeta-texto">(.*?)</code>', seccion, re.S).group(1)) == valor
     # El guion de «Copiar» solo existe en la casa y solo con texto (no enlace).
     assert ('id="guion-copiar-carpeta"' in html) == (quien == "casa" and not es_enlace and bool(valor.strip()))
-    if quien == "ver":
-        assert "<script" not in html and "data-copiar-carpeta" not in html
+    if quien == "ver":      # (el único guion de solo ver es el de la pieza de sin saltar: `controles_que_sobran`)
+        assert html.count("<script") == 1 and '<script id="guion-copiar-carpeta"' not in html and "data-copiar-carpeta" not in html
 
 
 def _seccion(html: str) -> str:
     """Solo el bloque de la carpeta (el CSS de la página también dice «carpeta-texto» y «copiar»)."""
-    m = re.search(r'<section class="bloque carpeta-p" id="carpeta-del-proyecto">.*?</section>', html, re.S)
+    m = re.search(r'<section class="bloque carpeta-p" id="carpeta-del-proyecto"[^>]*>.*?</section>', html, re.S)
     return m.group(0) if m else ""
 
 
@@ -565,7 +565,15 @@ def test_en_ninguna_plantilla_la_carpeta_llega_a_un_href_sin_pasar_por_el_filtro
     con_expresion = []
     for ruta in sorted((_ROOT / "web" / "plantillas").glob("*.html")):
         texto = ruta.read_text(encoding="utf-8")
-        if ruta.name != "proyectos.html":
+        if ruta.name == "_marcar_sin_saltar.html":
+            # La pieza de sin saltar NO pinta la carpeta: solo nombra el guion de «Copiar» (un `<script>`
+            # que trae la página nueva y la vieja no tiene). Esas son sus únicas líneas de código con la palabra.
+            from _sin_saltar import sin_comentarios_de_js
+            codigo = [l.strip() for l in sin_comentarios_de_js(texto.split("#}", 1)[1]).splitlines() if "carpeta" in l.lower()]
+            assert codigo == ['var guion = nuevo.querySelector("#guion-copiar-carpeta");',
+                              'if (guion && !document.getElementById("guion-copiar-carpeta")) {',
+                              's.id = "guion-copiar-carpeta";'], codigo
+        elif ruta.name != "proyectos.html":
             assert "carpeta" not in texto.lower(), ruta.name        # ninguna otra plantilla pinta este dato
         for atributo in re.finditer(r"\b([\w:-]+)\s*=\s*(\"[^\"]*\"|'[^']*')", re.sub(r"\{#.*?#\}", "", texto, flags=re.S)):
             for expresion in re.findall(r"\{\{\s*([^}]*?)\s*\}\}", atributo.group(2)):
@@ -689,7 +697,7 @@ def test_solo_ver_ve_el_enlace_o_el_texto_y_ningun_control_ni_guion(uno):
     seccion = _seccion(html)
     assert f'<code class="carpeta-texto">{RUTA}</code>' in seccion and "Esta ruta solo sirve en la computadora" in seccion
     assert "Copiar" not in seccion and "<button" not in seccion and "<form" not in seccion
-    assert "<script" not in html
+    assert html.count("<script") == 1          # el de la pieza de sin saltar, que `controles_que_sobran` exige entero
     # La dirección escrita a mano no abre el formulario.
     html = pagina_ver(uno, p=1, editar="carpeta")
     assert 'name="carpeta"' not in html and "/proyectos/1/carpeta" not in html
@@ -712,7 +720,7 @@ def test_la_plantilla_sola_tampoco_dibuja_controles_de_la_carpeta_en_solo_ver(un
         html = pagina_ver(uno, p=1)
         assert 'name="carpeta"' not in html and "/proyectos/1/carpeta" not in html
         assert "editar=carpeta" not in html and "Copiar" not in html and "data-copiar-carpeta" not in html
-        assert "guion-copiar-carpeta" not in html
+        assert '<script id="guion-copiar-carpeta"' not in html      # (la pieza de sin saltar nombra ese guion, no lo trae)
 
 
 def test_solo_ver_y_sin_sesion_no_escriben(uno):
@@ -1070,7 +1078,9 @@ def test_el_guion_de_copiar_no_manda_nada_ni_toca_formularios_ni_la_direccion(un
 def test_el_guion_de_marcar_tareas_sigue_siendo_el_primero_y_el_unico_de_siempre(uno):
     html = _pintar(uno, RUTA)
     guiones = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
-    assert "marcarSinSaltar" in guiones[0] and "copiar" not in guiones[0].lower().replace("copiar el", "")
+    from _sin_saltar import la_pieza_de
+    pieza, resto = la_pieza_de(guiones[0])
+    assert "marcarSinSaltar" in guiones[0] and "copiar" not in resto.lower().replace("copiar el", "")
     assert "marcarSinSaltar" not in guiones[1]
     # Con un enlace, o sin carpeta, la página lleva el guion de siempre y nada más.
     assert len(re.findall(r"<script", _pintar(uno, DRIVE))) == 1

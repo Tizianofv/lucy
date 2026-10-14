@@ -16,9 +16,12 @@ intentan a mano, Lucy lo rechaza»):
      «guardado», «creado», «hecha»… no sale ningún aviso de esos.
 
 LA FRONTERA DE LA CAPA 2: el detector mira el HTML ya pintado (etiquetas,
-atributos y enlaces). No ejecuta JavaScript; por eso la página de ver NO lleva
-ningún `<script>` y eso también se exige. Un control que se fabricara con
-JavaScript queda fuera de lo que esto ve.
+atributos y enlaces). No ejecuta JavaScript; por eso la página de ver lleva UN solo
+`<script>` (13-oct-2026, «la página no se mueve al tocar algo»): la pieza única de
+sin saltar (`web/plantillas/_marcar_sin_saltar.html`) y su arranque, y NADA más; cualquier otro
+guion, o ése con una letra distinta, sobra. Un control que se fabricara con JavaScript queda
+fuera de lo que esto ve: que la pieza no escribe nada en solo ver se vigila en
+`tests/test_marcar_sin_saltar.py` (en esta sesión no hay formulario que haga POST).
 
 Correr:  python3 -m pytest tests/test_proyectos_solo_ver.py -q
 """
@@ -261,6 +264,7 @@ class _Mirador(HTMLParser):
         self.enlace_a_la_app = enlace_a_la_app
         self.sobran: list[str] = []
         self._form_permitido = False
+        self._guion: list[str] | None = None
 
     def _destino_ok(self, valor: str) -> bool:
         if valor.startswith("#") or valor == self.enlace_a_la_app:
@@ -268,8 +272,15 @@ class _Mirador(HTMLParser):
         ruta = re.split(r"[?#]", valor, 1)[0]
         return ruta in self.rutas_de_ver
 
+    def handle_data(self, data):
+        if self._guion is not None:
+            self._guion.append(data)
+
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
+        if tag == "script" and not a:
+            self._guion = []          # se juzga al cerrarlo: tiene que ser EXACTAMENTE el de la pieza
+            return
         if tag == "form":
             # La búsqueda de la lista es una LECTURA: GET a /proyectos con un solo campo, `q` (y `estado=1` escondido en la vista de estado).
             es_busqueda = ((a.get("method") or "get").lower() == "get"
@@ -310,6 +321,21 @@ class _Mirador(HTMLParser):
     def handle_endtag(self, tag):
         if tag == "form":
             self._form_permitido = False
+        if tag == "script" and self._guion is not None:
+            texto, self._guion = "".join(self._guion), None
+            if not _es_el_guion_de_solo_ver(texto):
+                self.sobran.append("<script> que no es el de la pieza de sin saltar")
+
+
+def _es_el_guion_de_solo_ver(texto: str) -> bool:
+    """El único guion que solo ver puede llevar: la pieza (entera, del archivo real) más su arranque
+    `iniciarSinSaltos("/proyectos");`, y nada más (salvo comentarios y espacios)."""
+    from _sin_saltar import la_pieza_de, sin_comentarios_de_js
+    try:
+        _, resto = la_pieza_de(texto)
+    except AssertionError:
+        return False
+    return sin_comentarios_de_js(resto).strip() == 'iniciarSinSaltos("/proyectos");'
 
 
 def controles_que_sobran(html: str, enlace_a_la_app: str = "") -> list[str]:
@@ -369,7 +395,7 @@ def test_la_pagina_de_ver_no_ofrece_nada_que_cambie_algo(consulta, monkeypatch):
     monkeypatch.setattr(config, "REGISTRO_URL", "https://registro.example.test")
     html = _pintar("ver", **consulta)
     assert controles_que_sobran(html, "https://registro.example.test/#inicio") == []
-    assert "<script" not in html and "fetch(" not in html
+    assert html.count("<script") == 1 and html.count("fetch(") == 1       # el de la pieza (controles_que_sobran lo exige entero)
 
 
 def test_la_pagina_de_ver_dice_lo_que_hay_pero_no_lo_que_se_puede_hacer(monkeypatch):

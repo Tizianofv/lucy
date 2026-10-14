@@ -1,97 +1,564 @@
-{# LA PIEZA ÚNICA de «marcar o desmarcar sin que la página se mueva». La incluyen
+{# LA PIEZA ÚNICA de «tocar algo sin que la página se mueva». La incluyen
    (`{% include "_marcar_sin_saltar.html" %}`, dentro de su <script>) TODAS las
-   pantallas que marcan algo como hecho: Proyectos (`proyectos.html`), la lista
-   de Tareas (`tareas.html`) y el detalle de una tarea (`tarea_detalle.html`).
-   Una sola copia: si mañana se cambia, cambia para las tres, y
-   `tests/test_tareas_sin_saltar.py` exige que ninguna pantalla que marca
-   escriba su propia versión. #}
-/* MARCAR O DESMARCAR NO MUEVE LA PÁGINA. El formulario que marca (`form.marcar`)
-   se envía igual (el MISMO POST a la misma ruta, que escribe y contesta con la
-   misma redirección de siempre), pero sin dejar la página: el navegador sigue la
-   redirección y baja la página que el servidor decidió mostrar (la misma de
-   antes, con sus mismos avisos y sin lo que la persona tenía abierto), y con ELLA
-   se cambian las regiones de la pantalla (`data-region`: en Proyectos la columna
-   de la izquierda y el centro, en las pantallas de Tareas el cuerpo). No hay un
-   segundo pedido ni se calcula nada aquí: contadores, dónde queda la tarea y el
-   aviso son los de siempre. Lo único que se guarda y se devuelve es el
-   desplazamiento de cada región y de la ventana, y la fila de referencia
-   (`data-ancla`, la primera que se veía arriba, sin contar la tocada ni las
-   marcadas) vuelve al mismo sitio de la pantalla. Si el POST ni llega o el
-   servidor contesta un error, se envía el formulario de siempre y se ve lo que
-   diga el servidor; si el POST contestó bien pero la página no se puede poner
-   aquí (ya se guardó), se va a esa misma página con un enlace, SIN reenviar el
-   POST: nunca queda una tarea dibujada como hecha sin que lo esté, ni un error
-   sobre algo que sí se guardó. */
-function marcarSinSaltar(form) {
-  var boton = form.querySelector("button");
-  if (boton) boton.disabled = true;
-  var normal = function () { if (boton) boton.disabled = false; form.submit(); };
-  var irA = function (url) { var a = document.createElement("a"); a.href = url; a.click(); };
-  var pintar = function (url, texto) {
-    var nuevo = new DOMParser().parseFromString(texto, "text/html");
-    var viejas = document.querySelectorAll("[data-region]"), nuevas = nuevo.querySelectorAll("[data-region]");
-    if (!viejas.length || nuevas.length !== viejas.length) throw new Error("no es esta pantalla");
-    var pares = [], i, j, hallada;
-    for (i = 0; i < viejas.length; i++) {
-      hallada = null;
-      for (j = 0; j < nuevas.length; j++) {
-        if (nuevas[j].getAttribute("data-region") === viejas[i].getAttribute("data-region")) hallada = nuevas[j];
+   pantallas que la usan: Proyectos (`proyectos.html`, en la sesión de la casa y en
+   la de solo ver), la lista de Tareas (`tareas.html`) y el detalle de una tarea
+   (`tarea_detalle.html`). Una sola copia: si mañana se cambia, cambia para las
+   tres, y `tests/test_tareas_sin_saltar.py` exige que ninguna pantalla escriba su
+   propia versión. #}
+/* TOCAR ALGO NO MUEVE LA PÁGINA. Todo lo que se toca llega aquí por una sola
+   función, `sinSaltar`, que pide la página al servidor por detrás (`fetch`),
+   cambia las regiones de la pantalla (`data-region`: en Proyectos la columna de la
+   izquierda y el centro, en las pantallas de Tareas el cuerpo) por las que trae la
+   respuesta, y devuelve el desplazamiento. Hay tres entradas, todas a esa misma
+   función:
+     · un formulario (`marcarSinSaltar`): el MISMO POST (o GET) a la misma ruta, con
+       los mismos campos y el botón que lo envió; escribe y contesta con la misma
+       redirección de siempre; el navegador la sigue y baja la página que el servidor
+       decidió mostrar. No hay un segundo pedido ni se calcula nada aquí;
+     · un enlace de la propia página (`alHacerClicSinSaltar`): un GET a su dirección;
+     · el botón «atrás» del navegador (`alVolverSinSaltar`): un GET a la dirección
+       que vuelve a estar en la barra.
+   Lo único que se guarda y se devuelve es el desplazamiento de cada región y de la
+   ventana, y una fila de referencia (`data-ancla`).
+
+   UN GUARDADO SE MANDA UNA SOLA VEZ, pase lo que pase. Qué pasa con cada final:
+     · un GET (enlace, búsqueda, «atrás») que no llega o falla: se hace de la forma de
+       siempre (no duplica nada);
+     · un POST que no llegó respuesta, o que el servidor contestó 5xx: NO se reenvía (pudo
+       guardarse); la persona lee, dentro de la página y sin perder lo que escribió, que no
+       hay confirmación, con un enlace para mirar cómo quedó. Reintentar es cosa de ella;
+     · un POST que el servidor rechazó con 4xx (401: la sesión venció): no escribió nada, así
+       que se envía de la forma de siempre, con el botón que lo envió (`requestSubmit`);
+       si el formulario ya no está en la página (salió de la cola y se repintó), se avisa;
+     · un POST que contestó bien pero la página no se puede poner: se va a esa misma página
+       (`irA`: un enlace suelto que se pulsa, el navegador la carga de nuevo), SIN reenviar. (El
+       aviso de «guardado» se gastó en la lectura de por detrás: esa página llega sin el aviso,
+       nunca con uno falso.)
+   NINGÚN PEDIDO SALE DESPUÉS DE QUE LA PÁGINA EMPEZÓ A IRSE. Mientras haya un guardado en camino o
+   en la cola, ninguna salida de la página que ella controla (sus enlaces hacia otras pantallas
+   —el menú, «‹ Inicio», Tareas, Papelera—, un formulario que sale de la pantalla, el envío de
+   siempre tras un 4xx, `irA`) se va sola: suelta lo escrito (los formularios de la cola se
+   sueltan), avisa qué no se mandó y se va con «Continuar» en el aviso fijo. Las salidas que no
+   controla (atrás entre documentos, cerrar la pestaña, escribir otra dirección) piden confirmación
+   del navegador (`beforeunload`, puesto solo mientras hay algo sin terminar). Sin nada sin terminar,
+   todo se va como siempre y no se pide nada.
+   LO QUE SE PROMETE Y LO QUE NO: nada de lo que la persona ESCRIBE o manda guardar se pierde sin
+   aviso. Un pedido de VER otra cosa (enlace, búsqueda, «atrás») que esperaba en la cola puede
+   descartarse cuando la página tiene que irse, y entonces la página termina donde la manda el
+   guardado (o donde la lleva «Continuar»).
+   CADA GUARDADO TIENE UN TIEMPO MÁXIMO (`TIEMPO_ENVIO_SINSALTAR`, 30 s: decisión de diseño, NO
+   medida): si vence sin respuesta, se trata como «sin confirmar» (aviso fijo, el formulario se
+   suelta con lo escrito, la cola sigue) y una respuesta que llegue después se ignora.
+   LO QUE LA PERSONA ESCRIBE O MANDA GUARDAR NO SE TRAGA: un guardado que llega mientras otro va en camino
+   se arma con lo que tenía en ese momento y sale después, en orden, una vez. Y un formulario
+   que ya se mandó (por detrás o en la cola) queda BLOQUEADO para escribir (sus campos de
+   texto, solo lectura; sus desplegables, desactivados) hasta que su envío termine: no se puede
+   teclear en él algo que después se pierda. Al repintar tras un guardado, lo que se estaba
+   escribiendo en otro campo (de un formulario que no se mandó) vuelve a su sitio con el foco.
+   LA PÁGINA TERMINA EN LO ÚLTIMO QUE LA PERSONA PIDIÓ VER: una lectura (enlace, búsqueda, «atrás»)
+   tocada mientras hay guardados en camino espera a que TODOS los guardados terminen y sale al
+   final; los guardados que terminan con una lectura esperando no mueven la página, y lo que
+   dijeron (su aviso) se lee en el aviso fijo.
+   EL AVISO FIJO (arriba, fuera de las regiones) no lo quita ningún repintado: se queda hasta
+   que la persona lo cierra («Entendido» o «Mirar cómo quedó»). Si llegan varios, se leen todos. */
+var turnoSinSaltar = 0, escribiendoSinSaltar = 0, colaSinSaltar = [], vistaSinSaltar = "", raizSinSaltar = "", avisoSinSaltar = null, mensajesAviso = [], accionAviso = null, etiquetaAviso = "Continuar", saliendoSinSaltar = false, vigilandoSalida = false, salidasVigiladas = false, TIEMPO_ENVIO_SINSALTAR = 30000;
+function irA(url) { var a = document.createElement("a"); a.href = url; a.click(); }
+/* Lo que sigue solo lo hace la pantalla de Proyectos (`iniciarSinSaltos`); las de Tareas
+   conservan lo suyo: ni `<details>` abiertos, ni título, ni campos a medias. */
+function enProyectosSinSaltar() { return raizSinSaltar !== ""; }
+function quitarAvisoSinSaltar() {
+  if (avisoSinSaltar && avisoSinSaltar.parentNode) avisoSinSaltar.parentNode.removeChild(avisoSinSaltar);
+  avisoSinSaltar = null;
+  mensajesAviso = [];
+  accionAviso = null;
+  etiquetaAviso = "Continuar";
+}
+/* El aviso fijo: FUERA de las regiones (ningún repintado lo borra), siempre a la vista, con todos los
+   mensajes que lleguen, un botón «Entendido» y un enlace a esta misma vista para mirar cómo quedó
+   (los dos lo cierran; ninguno de los dos va a ningún sitio) y, si la página tiene que irse, «Continuar»
+   (que es lo único que la hace irse). */
+function avisarSinSaltar(texto, accion, etiqueta) {
+  mensajesAviso.push(texto);
+  if (accion) { accionAviso = accion; etiquetaAviso = etiqueta || "Continuar"; }
+  var viejo = avisoSinSaltar;
+  if (viejo && viejo.parentNode) viejo.parentNode.removeChild(viejo);
+  var d = document.createElement("div"), a = document.createElement("a"), b = document.createElement("button"), i, m;
+  d.setAttribute("role", "alert");
+  d.setAttribute("style", "position:fixed;inset:0 0 auto 0;z-index:9999;padding:.8rem 1rem;background:#fff3cd;color:#222;border-bottom:2px solid #b00020;font:600 14px sans-serif");
+  for (i = 0; i < mensajesAviso.length; i++) {
+    m = document.createElement("div");
+    m.textContent = mensajesAviso[i];
+    d.appendChild(m);
+  }
+  a.setAttribute("href", window.location.pathname + window.location.search);
+  a.textContent = "Mirar cómo quedó";
+  a.onclick = quitarAvisoSinSaltar;
+  b.textContent = "Entendido";
+  b.onclick = quitarAvisoSinSaltar;
+  d.appendChild(a);
+  d.appendChild(b);
+  if (accionAviso) {         // la página tiene que irse y la persona decide cuándo
+    var c = document.createElement("button");
+    c.textContent = etiquetaAviso;
+    c.onclick = function () { var ir = accionAviso; quitarAvisoSinSaltar(); ir(); };
+    d.appendChild(c);
+  }
+  document.body.insertBefore(d, document.body.firstChild);
+  avisoSinSaltar = d;
+}
+/* LA ÚNICA FORMA de rechazar algo porque la página ya se va (tras «Continuar»): UNA función para todos los sitios
+   (enviar, marcar, enlaces, «atrás»), para que no se separen. Nada se traga: el aviso fijo dice que no se mandó, lo
+   escrito queda como está, y hay una salida clara (recargar la página) por si la navegación no ocurre. */
+function rechazarPorIrseSinSaltar(e) {
+  if (e && e.preventDefault) e.preventDefault();
+  var dicho = "La página se está yendo; esto no se mandó. Si no cambia, copia lo que escribiste y recarga la página (al recargar se pierde lo que no se mandó).";
+  if (mensajesAviso.indexOf(dicho) >= 0) return;                    // ya se dijo: no se repite en cada toque
+  avisarSinSaltar(dicho, function () { irA(window.location.href); }, "Recargar la página");
+}
+/* Bloquea los campos de un formulario que ya se mandó; devuelve lo que bloqueó para soltarlo. */
+function bloquearCampos(form) {
+  var hechos = [], campos, i, c;
+  if (!enProyectosSinSaltar() || !form || !form.querySelectorAll) return hechos;
+  campos = form.querySelectorAll("input, textarea, select");
+  for (i = 0; i < campos.length; i++) {
+    c = campos[i];
+    if (/^(hidden|checkbox|radio|submit|button|file)$/.test(c.type || "")) continue;
+    if (c.tagName === "SELECT") { if (!c.disabled) { c.disabled = true; hechos.push({campo: c, select: true}); } }
+    else if (!c.readOnly) { c.readOnly = true; hechos.push({campo: c, select: false}); }
+  }
+  return hechos;
+}
+function soltarPedido(p) {
+  var i, h;
+  if (p.form && p.form.dataset) delete p.form.dataset.enCamino;
+  for (i = 0; p.bloqueados && i < p.bloqueados.length; i++) {
+    h = p.bloqueados[i];
+    if (h.select) h.campo.disabled = false; else h.campo.readOnly = false;
+  }
+  p.bloqueados = [];
+}
+/* ¿Hay un guardado en camino o esperando en la cola? */
+function hayGuardadosSinSaltar() {
+  var k;
+  if (escribiendoSinSaltar > 0) return true;
+  for (k = 0; k < colaSinSaltar.length; k++) if (colaSinSaltar[k].cuerpo !== undefined) return true;
+  return false;
+}
+/* Lo que la página NO controla (atrás entre documentos, cerrar, otra dirección): mientras hay algo
+   sin terminar, el navegador pide confirmar. Se pone y se quita según haya o no (no estorba al navegador
+   cuando no hay nada). En las dos pantallas que usan la pieza (Proyectos y Tareas). */
+function alSalirSinSaltar(e) {
+  if (saliendoSinSaltar || !hayGuardadosSinSaltar()) return;
+  e.preventDefault();
+  e.returnValue = "";
+  return "";
+}
+function vigilarSalidaSinSaltar() {
+  if (!salidasVigiladas) return;
+  var debe = hayGuardadosSinSaltar() && !saliendoSinSaltar;
+  if (debe && !vigilandoSalida) { window.addEventListener("beforeunload", alSalirSinSaltar); vigilandoSalida = true; }
+  else if (!debe && vigilandoSalida) { window.removeEventListener("beforeunload", alSalirSinSaltar); vigilandoSalida = false; }
+}
+/* La página va a irse (`accion`). Ningún pedido sale después: si hay guardados en la cola no se mandan, sus
+   formularios se sueltan con lo escrito y el aviso fijo lo dice; si hay uno en camino, el aviso dice que no se
+   sabrá si llegó. La persona se va con «Continuar». Sin nada sin terminar se va enseguida (y las lecturas que
+   esperaban se descartan). */
+function irSinSaltar(accion, texto) {
+  var enCola = 0, enCamino = escribiendoSinSaltar, k, dicho = texto;
+  for (k = 0; k < colaSinSaltar.length; k++) {
+    if (colaSinSaltar[k].cuerpo !== undefined) enCola++;
+    soltarPedido(colaSinSaltar[k]);
+  }
+  colaSinSaltar = [];
+  if (!enCola && !enCamino) { accion(); return; }
+  if (enCola) dicho += " Había " + enCola + (enCola === 1 ? " cambio esperando: NO se mandó" : " cambios esperando: NO se mandaron");
+  if (enCamino) dicho += (enCola ? ". " : " ") + "Un guardado sigue en camino: si te vas ahora no sabrás si llegó";
+  avisarSinSaltar(dicho + "; lo que tenías escrito sigue aquí. Toca «Continuar» para ir a la página.",
+                  function () { saliendoSinSaltar = true; vigilarSalidaSinSaltar(); accion(); });
+  vigilarSalidaSinSaltar();
+}
+function llavesDeCampos(regiones) {
+  var lista = [], cuenta = {};
+  regiones.forEach(function (r) {
+    var campos = r.querySelectorAll("input, textarea"), i, c, k;
+    for (i = 0; i < campos.length; i++) {
+      c = campos[i];
+      if (!c.form || /^(hidden|checkbox|radio|submit|button|file)$/.test(c.type || "")) continue;
+      k = ((c.form.getAttribute("action") || "").split("?")[0]) + "|" + c.name;
+      cuenta[k] = (cuenta[k] || 0) + 1;
+      lista.push({llave: k + "|" + cuenta[k], campo: c});
+    }
+  });
+  return lista;
+}
+/* Pinta la página `texto` (la que contestó el servidor a `url`) en lugar de la que
+   hay. `ctx.form`: el formulario tocado (si hubo); `ctx.historia`: qué se hace con
+   la dirección de la barra («reemplazar» tras guardar, «agregar» al ir a otro sitio,
+   «ninguna» al volver con «atrás»); `ctx.vuelta`: el desplazamiento que tenía la
+   entrada del historial a la que se vuelve. Lanza si la respuesta no es una
+   pantalla como ésta (quien llama va entonces a esa página sin reenviar nada). */
+function pintarSinSaltar(url, texto, ctx) {
+  var nuevo = new DOMParser().parseFromString(texto, "text/html");
+  var viejas = document.querySelectorAll("[data-region]"), nuevas = nuevo.querySelectorAll("[data-region]");
+  if (!viejas.length || nuevas.length !== viejas.length) throw new Error("no es esta pantalla");
+  var pares = [], i, j, k, hallada, abiertos, lista;
+  for (i = 0; i < viejas.length; i++) {
+    hallada = null;
+    for (j = 0; j < nuevas.length; j++) {
+      if (nuevas[j].getAttribute("data-region") === viejas[i].getAttribute("data-region")) hallada = nuevas[j];
+    }
+    if (!hallada) throw new Error("no es esta pantalla");
+    /* Lo que la persona abrió con su dedo (los `<details>` de «N hechas», «N cerrados»)
+       sigue abierto tras guardar, si la página trae los mismos: nunca se cierra lo que el
+       servidor abrió. Al ir a otra pantalla no se hereda (son otros). Solo Proyectos. */
+    abiertos = [];
+    if (ctx.historia === "reemplazar" && enProyectosSinSaltar()) {
+      lista = viejas[i].querySelectorAll("details");
+      for (k = 0; k < lista.length; k++) abiertos.push(!!lista[k].open);
+    }
+    pares.push({vieja: viejas[i], nueva: hallada, arriba: viejas[i].scrollTop, abiertos: abiertos});
+  }
+  var y = window.pageYOffset, x = window.pageXOffset;
+  /* Lo que se estaba escribiendo en OTRO campo (no el del formulario que se acaba de guardar, ni
+     uno cuyo formulario ya va en camino) y que el servidor no cambió: se recuerda para devolverlo. */
+  var sucios = [], activo = document.activeElement;
+  if (ctx.historia === "reemplazar" && enProyectosSinSaltar()) {
+    llavesDeCampos(viejas).forEach(function (l) {
+      var c = l.campo;
+      if (c.form === ctx.form || (c.form.dataset && c.form.dataset.enCamino !== undefined)) return;
+      if (c.value !== c.defaultValue) sucios.push({llave: l.llave, valor: c.value, defecto: c.defaultValue, foco: c === activo});
+    });
+  }
+  /* Los puntos de referencia: las filas con `data-ancla` (sin contar las que contienen
+     otra, ni la tocada si es de las que se mueven, ni una marcada para guardar) que se
+     ven arriba de lo que se ve (en pantalla angosta el centro empieza muy arriba de la
+     ventana). Al final, la primera que sigue en la página nueva se deja exactamente
+     donde estaba (el aviso de arriba y la fila que se va empujarían todo lo demás); si
+     ninguna sigue, queda la ventana donde estaba. */
+  var tocada = ctx.form && ctx.form.closest ? ctx.form.closest("[data-ancla]") : null;
+  var sinMover = ctx.form && ctx.form.classList && ctx.form.classList.contains("marcar") ? tocada : null;
+  var filas = document.querySelectorAll("[data-ancla][id]"), anclas = [], f, rf, region, tope;
+  for (f = 0; f < filas.length && anclas.length < 8; f++) {
+    if (filas[f] === sinMover || filas[f].querySelector("[data-ancla]") ||
+        filas[f].querySelector("input:checked:not(:disabled)")) continue;
+    region = filas[f].closest("[data-region]");
+    tope = Math.max(region ? region.getBoundingClientRect().top : 0, 0);
+    rf = filas[f].getBoundingClientRect();
+    if (rf.height > 0 && rf.bottom > tope + 4) anclas.push({id: filas[f].id, y: rf.top});
+  }
+  for (i = 0; i < pares.length; i++) {
+    pares[i].puesta = document.importNode(pares[i].nueva, true);
+    if (pares[i].abiertos.length) {
+      lista = pares[i].puesta.querySelectorAll("details");
+      if (lista.length === pares[i].abiertos.length) {
+        for (k = 0; k < lista.length; k++) if (pares[i].abiertos[k]) lista[k].open = true;
       }
-      if (!hallada) throw new Error("no es esta pantalla");
-      pares.push({vieja: viejas[i], nueva: hallada, arriba: viejas[i].scrollTop});
     }
-    var y = window.pageYOffset, x = window.pageXOffset;
-    /* El punto de referencia: la primera fila (que no sea la tocada ni una marcada
-       para guardar) que se ve arriba de lo que se ve (en pantalla angosta el centro
-       empieza muy arriba de la ventana); al final se deja exactamente donde estaba
-       (el aviso de arriba y la fila que se va empujarían todo lo demás). */
-    var tocada = form.closest("[data-ancla]"), filas = document.querySelectorAll("[data-ancla][id]");
-    var ancla = null, anclaY = 0, f, rf, region, tope;
-    for (f = 0; f < filas.length && !ancla; f++) {
-      if (filas[f] === tocada || filas[f].querySelector("input:checked:not(:disabled)")) continue;
-      region = filas[f].closest("[data-region]");
-      tope = Math.max(region ? region.getBoundingClientRect().top : 0, 0);
-      rf = filas[f].getBoundingClientRect();
-      if (rf.height > 0 && rf.bottom > tope + 4) { ancla = filas[f].id; anclaY = rf.top; }
-    }
-    for (i = 0; i < pares.length; i++) {
-      pares[i].puesta = document.importNode(pares[i].nueva, true);
-      pares[i].vieja.replaceWith(pares[i].puesta);
-      pares[i].puesta.scrollTop = pares[i].arriba;
-    }
+    pares[i].vieja.replaceWith(pares[i].puesta);
+    pares[i].puesta.scrollTop = pares[i].arriba;
+  }
+  if (sucios.length) {
+    llavesDeCampos(pares.map(function (q) { return q.puesta; })).forEach(function (l) {
+      sucios.forEach(function (s) {
+        if (s.llave !== l.llave || l.campo.defaultValue !== s.defecto) return;      // si el servidor cambió ese campo, vale lo del servidor
+        l.campo.value = s.valor;
+        if (s.foco) {
+          l.campo.focus();
+          if (l.campo.setSelectionRange) l.campo.setSelectionRange(s.valor.length, s.valor.length);
+        }
+      });
+    });
+  }
+  if (nuevo.title && enProyectosSinSaltar()) document.title = nuevo.title;
+  /* Un guion que la página nueva trae y esta no (el de la carpeta sale solo si el proyecto
+     tiene una ruta que copiar) NO correría: está fuera de las regiones y no se cambia.
+     Se pone una vez, con su texto. */
+  var guion = nuevo.querySelector("#guion-copiar-carpeta");
+  if (guion && !document.getElementById("guion-copiar-carpeta")) {
+    var s = document.createElement("script");
+    s.id = "guion-copiar-carpeta";
+    s.textContent = guion.textContent;
+    document.body.appendChild(s);
+  }
+  if (ctx.vuelta) {
+    window.scrollTo(ctx.vuelta.x, ctx.vuelta.y);
+  } else {
     window.scrollTo(x, y);
-    var puesta = ancla && document.getElementById(ancla);
-    if (puesta && puesta.getBoundingClientRect().height > 0) {
-      var corre = puesta.getBoundingClientRect().top - anclaY;
+    for (i = 0; i < anclas.length; i++) {
+      var puesta = document.getElementById(anclas[i].id);
+      if (!puesta || !(puesta.getBoundingClientRect().height > 0)) continue;
+      var corre = puesta.getBoundingClientRect().top - anclas[i].y;
       var suya = puesta.closest("[data-region]");
       if (suya && suya.scrollHeight > suya.clientHeight) suya.scrollTop += corre;   // pantalla ancha: la región tiene su desplazamiento
       else window.scrollTo(window.pageXOffset, window.pageYOffset + corre);         // si no, es la ventana
+      break;
     }
-    var donde = new URL(url);
-    history.replaceState(null, "", donde.pathname + donde.search);
-  };
-  fetch(form.action, {method: "POST", body: new URLSearchParams(new FormData(form)), credentials: "same-origin"})
-    .then(function (r) {
-      if (!r.ok) throw new Error("POST " + r.status);
-      return r.text().then(function (texto) {
-        try { pintar(r.url, texto); } catch (e) { irA(r.url); }
-      });
-    })
-    .catch(normal);
+  }
+  var donde = new URL(url, window.location.href), destino = donde.pathname + donde.search;
+  if (ctx.historia === "agregar" && destino !== vistaSinSaltar) {
+    history.replaceState({x: x, y: y}, "");        // la entrada que se deja recuerda dónde estaba la persona
+    history.pushState(null, "", destino);
+  } else if (ctx.historia !== "ninguna") {
+    history.replaceState(null, "", destino);
+  }
+  vistaSinSaltar = destino;
 }
-/* El oyente de «enviar» de las pantallas que marcan: lo llama el de Proyectos
-   (que tiene más cosas que atender) y lo registra tal cual el de las pantallas
-   de Tareas. Devuelve si se hizo cargo; sin lo que hace falta en el navegador
+/* El envío de siempre del navegador, con EXACTAMENTE lo que llevaría: el botón que lo envió
+   incluido (`requestSubmit(botón)`; `submit()` no lo manda). */
+function envioDeSiempre(form, envia) {
+  if (form.dataset) { delete form.dataset.enviado; form.dataset.nativo = ""; }
+  if (form.requestSubmit) form.requestSubmit(envia || undefined); else form.submit();
+}
+/* Hace UN pedido (`p.url`; con `p.cuerpo` es un POST) y pinta lo que contesta.
+   `p.form` es el formulario tocado y `p.envia` el botón que lo envió (o nada, si fue un
+   enlace o «atrás»). Los finales están en el comentario de arriba. */
+function sinSaltar(p) {
+  var esPost = p.cuerpo !== undefined;
+  var boton = p.form ? p.form.querySelector("button") : null;
+  if (boton) boton.disabled = true;
+  var mio = ++turnoSinSaltar, terminado = false, vencido = false, reloj = null;
+  if (esPost) { escribiendoSinSaltar++; vigilarSalidaSinSaltar(); }
+  var terminar = function () {
+    if (terminado) return;
+    terminado = true;
+    clearTimeout(reloj);
+    if (esPost) { escribiendoSinSaltar--; }
+    soltarPedido(p);
+    if (boton) boton.disabled = false;
+    vigilarSalidaSinSaltar();
+  };
+  /* Sale lo que sigue en la cola: los guardados en su orden, y la lectura (si hay) al final de todos. */
+  var despues = function () {
+    if (escribiendoSinSaltar || !colaSinSaltar.length) return;
+    var k, i = 0;
+    for (k = 0; k < colaSinSaltar.length; k++) if (colaSinSaltar[k].cuerpo !== undefined) { i = k; break; }
+    sinSaltar(colaSinSaltar.splice(i, 1)[0]);
+  };
+  /* Lo de siempre: solo cuando no puede duplicar nada (un GET, o un POST que el servidor rechazó). */
+  var normal = function () {
+    terminar();
+    if (mio !== turnoSinSaltar) { despues(); return; }              // si la persona ya pidió otra cosa, ésta no la pisa
+    if (p.form && p.form.isConnected === false) { avisarSinSaltar("No se guardó: el servidor no aceptó el envío."); despues(); return; }
+    irSinSaltar(function () { if (p.form) envioDeSiempre(p.form, p.envia); else irA(p.url); },
+                esPost ? "El servidor no aceptó el envío (la sesión pudo vencer)." : "No se pudo cargar la página.");
+  };
+  var sinConfirmar = function () {
+    terminar();
+    avisarSinSaltar("No se pudo confirmar si se guardó. No se volvió a enviar para no duplicarlo; lo que tenías escrito sigue aquí.");
+    despues();
+  };
+  var respuesta = function (r) {
+    if (vencido) return;                                           // ya se dio por no confirmado: lo que llegue tarde se ignora
+    if (!r.ok) {
+      if (esPost && r.status >= 500) sinConfirmar(); else normal();
+      return;
+    }
+    r.text().then(function (texto) {
+      if (vencido) return;
+      terminar();
+      if (mio !== turnoSinSaltar) { despues(); return; }          // llegó tarde: la persona ya pidió otra cosa (solo un GET puede quedar atrás: nada nuevo sale mientras un POST está en camino)
+      if (esPost && colaSinSaltar.some(function (q) { return q.cuerpo === undefined; })) {
+        /* Hay una lectura esperando: la página va a terminar en ella. Este guardado no la mueve; lo que dijo
+           (su aviso) se lee en el aviso fijo. */
+        var dichos = new DOMParser().parseFromString(texto, "text/html").querySelectorAll("p.aviso"), n;
+        for (n = 0; n < dichos.length; n++) avisarSinSaltar(dichos[n].textContent.trim());
+        despues();
+        return;
+      }
+      try { pintarSinSaltar(r.url, texto, p); } catch (e) {
+        irSinSaltar(function () { irA(r.url); }, "Se guardó, pero la página nueva no se pudo poner.");
+        return;
+      }
+      despues();
+    }, function () {                                                 // la respuesta buena se cortó: ya se guardó, se va a ella
+      if (vencido) return;
+      terminar();
+      irSinSaltar(function () { irA(r.url); }, "Se guardó, pero la respuesta se cortó.");
+    });
+  };
+  var opciones = esPost ? {method: "POST", body: p.cuerpo, credentials: "same-origin"} : {credentials: "same-origin"};
+  if (esPost) reloj = setTimeout(function () { vencido = true; sinConfirmar(); }, TIEMPO_ENVIO_SINSALTAR);
+  fetch(p.url, opciones).then(respuesta, function () { if (vencido) return; if (esPost) sinConfirmar(); else normal(); });
+}
+/* LA PUERTA ÚNICA de qué se queda en la página: la dirección (ya resuelta) o nada. Un
+   GET (enlace, buscador) se queda si va a la MISMA pantalla; un POST, si va a una ruta
+   de la raíz de esta pantalla (`/proyectos/...`). Todo lo demás (el menú de arriba,
+   «‹ Inicio», otro sitio) sale de la página a propósito: no se toca. */
+function destinoSinSaltar(href, metodo) {
+  var u;
+  try { u = new URL(href, window.location.href); } catch (e) { return null; }
+  if (u.origin !== window.location.origin) return null;
+  if (metodo === "post") {
+    /* (Las pantallas de Tareas no declaran raíz: su formulario marca y ya.) */
+    return (raizSinSaltar === "" || u.pathname === raizSinSaltar || u.pathname.indexOf(raizSinSaltar + "/") === 0) ? u : null;
+  }
+  return u.pathname === window.location.pathname ? u : null;
+}
+function conLoQueHaceFalta() {
+  return typeof window !== "undefined" && !!window.fetch && !!window.URLSearchParams && !!window.DOMParser &&
+    !!window.FormData && !!window.history && !!window.history.pushState;
+}
+/* A dónde y cómo va un envío: lo del formulario, salvo lo que el botón que lo envió cambie
+   (`formaction`, `formmethod`, `formtarget`), igual que el navegador. */
+function datosDelEnvio(form, envia) {
+  var del = function (k) { return envia && envia.getAttribute ? envia.getAttribute(k) : null; };
+  var metodo = (del("formmethod") || form.getAttribute("method") || "get").toLowerCase();
+  return {metodo: metodo === "post" ? "post" : (metodo === "get" ? "get" : "otro"),
+          accion: del("formaction") || form.action, target: del("formtarget") || form.getAttribute("target")};
+}
+/* Los datos del formulario como los envía el navegador, con el botón que lo envió
+   (los resultados de la búsqueda de personas y «Quitar el cliente» van en su botón). */
+function datosDelFormulario(form, envia) {
+  var datos = new URLSearchParams(new FormData(form));
+  if (envia && envia.name && !envia.disabled) datos.append(envia.name, envia.value);
+  return datos;
+}
+function marcarSinSaltar(form, envia) {
+  var d = datosDelEnvio(form, envia);
+  var u = d.metodo === "otro" ? null : destinoSinSaltar(d.accion, d.metodo);
+  if (!u) { irSinSaltar(function () { envioDeSiempre(form, envia); }, "Este envío sale de la página."); return; }
+  var datos = datosDelFormulario(form, envia);
+  var pedido;
+  if (d.metodo === "post") {
+    pedido = {url: u.pathname + u.search, cuerpo: datos, form: form, envia: envia, historia: "reemplazar"};
+  } else {
+    var qs = datos.toString();
+    pedido = {url: u.pathname + (qs ? "?" + qs : ""), form: form, envia: envia, historia: "agregar"};
+  }
+  pedido.bloqueados = bloquearCampos(form);          // ya se mandó: no se puede teclear en él algo que se pierda
+  pedirOEsperar(pedido);
+}
+/* Mientras un POST está en camino, lo que se toca espera su turno. Los guardados salen en orden y nunca
+   se descartan; una lectura (GET) espera al final de todos, y otra lectura posterior la reemplaza. */
+function pedirOEsperar(p) {
+  if (escribiendoSinSaltar || colaSinSaltar.length) {
+    var k;
+    if (p.cuerpo === undefined) {
+      for (k = colaSinSaltar.length - 1; k >= 0; k--) {
+        if (colaSinSaltar[k].cuerpo === undefined) { soltarPedido(colaSinSaltar[k]); colaSinSaltar.splice(k, 1); }   // el que se pisa queda libre
+      }
+    }
+    colaSinSaltar.push(p);
+    vigilarSalidaSinSaltar();
+    return;
+  }
+  sinSaltar(p);
+}
+/* El oyente de «enviar» de las pantallas que marcan (Tareas): lo registra tal cual
+   cada una. Devuelve si se hizo cargo; sin lo que hace falta en el navegador
    (`fetch`, `URLSearchParams`, `DOMParser`) no se hace cargo y el envío es el de
    siempre. Un formulario ya enviado no se vuelve a enviar mientras se espera. */
 function alEnviarMarcar(e) {
   var form = e.target;
   if (!form || !form.dataset || !form.classList || !form.classList.contains("marcar")) return false;
+  if (form.dataset.nativo !== undefined) { delete form.dataset.nativo; return false; }
+  if (saliendoSinSaltar) { rechazarPorIrseSinSaltar(e); return true; }      // la página ya se va: no sale ningún pedido nuevo
   if (typeof window === "undefined" || !window.fetch || !window.URLSearchParams || !window.DOMParser) return false;
   e.preventDefault();
   if (form.dataset.enviado === undefined) {
     form.dataset.enviado = "";
-    marcarSinSaltar(form);
+    marcarSinSaltar(form, e.submitter);
   }
   return true;
+}
+/* LOS OYENTES DE PROYECTOS (una vez por página): todo formulario y todo enlace de la
+   pantalla que `destinoSinSaltar` deja pasar se pide por detrás; lo que no, sigue su camino. */
+/* Un formulario que SALE de la pantalla: con un guardado sin terminar no se va solo. */
+function saleFormularioSinSaltar(e, form) {
+  if (!hayGuardadosSinSaltar()) return;
+  e.preventDefault();
+  irSinSaltar(function () { envioDeSiempre(form, e.submitter); }, "Este envío sale de la página.");
+}
+/* Un enlace que SALE de la pantalla (http/https): con un guardado sin terminar no se va solo. */
+function saleEnlaceSinSaltar(e, a) {
+  var v;
+  try { v = new URL(a.getAttribute("href"), window.location.href); } catch (x) { return; }
+  if (v.origin !== "null" && hayGuardadosSinSaltar()) {
+    e.preventDefault();
+    irSinSaltar(function () { irA(a.getAttribute("href")); }, "Este enlace sale de la página.");
+  }
+}
+/* El enlace que se tocó, si es un clic normal que navega en esta pestaña; si no, nada. */
+function enlaceDelClicSinSaltar(e) {
+  if (e.defaultPrevented || e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return null;
+  var a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+  if (!a) return null;
+  var fuera = a.getAttribute("target");
+  if ((fuera && fuera !== "_self") || a.hasAttribute("download")) return null;
+  return a;
+}
+function alEnviarSinSaltar(e) {
+  var form = e.target;
+  if (e.defaultPrevented || !form || !form.getAttribute || !form.dataset) return;
+  if (form.dataset.nativo !== undefined) { delete form.dataset.nativo; return; }   // el envío de siempre que pidió la pieza
+  if (saliendoSinSaltar) { rechazarPorIrseSinSaltar(e); return; }          // la página ya se va: no sale ningún pedido nuevo (el formulario queda con lo escrito)
+  var d = datosDelEnvio(form, e.submitter);
+  if (d.metodo === "otro" || (d.target && d.target !== "_self")) return;
+  if (!destinoSinSaltar(d.accion, d.metodo)) { saleFormularioSinSaltar(e, form); return; }
+  e.preventDefault();
+  if (form.dataset.enCamino !== undefined) return;
+  form.dataset.enCamino = "";
+  marcarSinSaltar(form, e.submitter);
+}
+function alHacerClicSinSaltar(e) {
+  var a = enlaceDelClicSinSaltar(e);
+  if (!a) return;
+  var u = destinoSinSaltar(a.getAttribute("href"), "get");
+  if (!u) { saleEnlaceSinSaltar(e, a); return; }                    // sale de la página (el menú, «‹ Inicio», Tareas, Papelera…)
+  var destino = u.pathname + u.search;
+  if (a.getAttribute("href").charAt(0) === "#") return;        // un ancla suelta de esta misma pantalla la maneja el navegador
+  if (saliendoSinSaltar) { rechazarPorIrseSinSaltar(e); return; }      // la página ya se va: no sale ningún pedido nuevo
+  e.preventDefault();
+  pedirOEsperar({url: destino, historia: "agregar"});
+}
+/* LAS SALIDAS DE LAS PANTALLAS DE TAREAS (que solo marcan por detrás): todo enlace y todo formulario que no
+   es de marcar las deja (carga una página nueva); con un marcar en camino o en cola no se van solos. */
+function alSalirPorEnlaceSinSaltar(e) {
+  var a = enlaceDelClicSinSaltar(e);
+  if (!a || a.getAttribute("href").charAt(0) === "#") return;
+  saleEnlaceSinSaltar(e, a);
+}
+function alSalirPorFormularioSinSaltar(e) {
+  var form = e.target;
+  if (e.defaultPrevented || !form || !form.getAttribute || !form.dataset) return;
+  if (form.dataset.nativo !== undefined) { delete form.dataset.nativo; return; }
+  if (saliendoSinSaltar) { rechazarPorIrseSinSaltar(e); return; }
+  var fuera = form.getAttribute("target");
+  if (fuera && fuera !== "_self") return;
+  saleFormularioSinSaltar(e, form);
+}
+function alVolverSinSaltar(e) {
+  var aqui = window.location.pathname + window.location.search;
+  if (aqui === vistaSinSaltar) return;                         // solo cambió el ancla
+  if (saliendoSinSaltar) { rechazarPorIrseSinSaltar(e); return; }   // la página ya se va
+  pedirOEsperar({url: aqui, historia: "ninguna", vuelta: e && e.state && typeof e.state.y === "number" ? e.state : null});
+}
+/* Si la página vuelve a mostrarse sin haberse ido (`pageshow` desde la caché del navegador), ya no se va: la
+   vigilancia de salida se recalcula. */
+function alMostrarseSinSaltar(e) {
+  if (!e || !e.persisted) return;
+  saliendoSinSaltar = false;
+  vigilarSalidaSinSaltar();
+}
+function vigilarSalidasSinSaltar() {
+  if (salidasVigiladas) return;
+  salidasVigiladas = true;
+  window.addEventListener("pageshow", alMostrarseSinSaltar);
+}
+/* Las pantallas de Tareas (que solo marcan por detrás) llaman esto: sus enlaces y formularios que salen pasan por
+   la puerta, y se vigila lo que no controlan. Nada más cambia en ellas. */
+function iniciarSalidasSinSaltar() {
+  if (!conLoQueHaceFalta()) return;
+  vigilarSalidasSinSaltar();
+  document.addEventListener("submit", alSalirPorFormularioSinSaltar);
+  document.addEventListener("click", alSalirPorEnlaceSinSaltar);
+}
+function iniciarSinSaltos(raiz) {
+  if (!conLoQueHaceFalta()) return;
+  raizSinSaltar = raiz;
+  vistaSinSaltar = window.location.pathname + window.location.search;
+  vigilarSalidasSinSaltar();
+  document.addEventListener("submit", alEnviarSinSaltar);
+  document.addEventListener("click", alHacerClicSinSaltar);
+  window.addEventListener("popstate", alVolverSinSaltar);
 }

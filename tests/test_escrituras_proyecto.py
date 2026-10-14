@@ -32,6 +32,7 @@ import types
 
 import pytest
 
+from _sin_saltar import la_pieza_de
 from test_grupo_ia import _archivos_de_texto, _ROOT       # (pone el entorno de prueba)
 from test_pagina_proyectos import (_cliente, _dia, gente, mundo, titulo_de,  # noqa: F401
                                    tareas_en, ver)
@@ -599,21 +600,13 @@ def test_js_el_comentario_que_se_vuelve_a_editar_va_a_la_ruta_de_editar(mundo):
 
 
 def la_funcion_de_marcar(codigo: str) -> tuple[str, str]:
-    """(el texto de `function marcarSinSaltar(form) {...}`, el código SIN ella).
-    Es el SEGUNDO pedido de red que el script puede hacer (6-oct-2026, Tiziano:
-    marcar una tarea no puede mover la página): se envía el mismo formulario
-    `form.marcar` y se pinta la página que contesta el servidor. Se saca entera, con
-    las llaves emparejadas, y se le aplican las MISMAS prohibiciones que al resto
-    del guion, salvo ese POST (`tests/test_marcar_sin_saltar.py`)."""
-    m = re.search(r"function marcarSinSaltar\(form\) \{", codigo)
-    assert m, "no está la función que marca sin recargar"
-    nivel, k = 0, m.end() - 1
-    while True:
-        nivel += {"{": 1, "}": -1}.get(codigo[k], 0)
-        if nivel == 0:
-            break
-        k += 1
-    return codigo[m.start():k + 1], codigo[:m.start()] + codigo[k + 1:]
+    """(la pieza única de «tocar algo sin que la página se mueva», el código SIN ella).
+    Es el SEGUNDO pedido de red que el script puede hacer (6-oct-2026, Tiziano: marcar una
+    tarea no puede mover la página; 13-oct-2026: ni tocar nada de Proyectos): se pide por
+    detrás la página que el servidor decidió y se pinta. La pieza se saca entera (su texto sale de
+    la plantilla, `tests/_sin_saltar.py`) y se le aplican las MISMAS prohibiciones que al resto
+    del guion, salvo lo que tiene permitido, uno por uno (`tests/test_marcar_sin_saltar.py`)."""
+    return la_pieza_de(codigo)
 
 
 def sin_el_unico_pedido_permitido(codigo: str) -> str:

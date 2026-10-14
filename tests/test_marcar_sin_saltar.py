@@ -8,8 +8,8 @@ el centro (`.envoltura > main`, con su propio desplazamiento) y la ventana queda
 donde los dejara el ancla, no donde estaba la persona.
 
 EL ARREGLO: el guion de la página (`marcarSinSaltar`, hoy en la pieza única
-`_marcar_sin_saltar.html` que también usan las pantallas de Tareas; ver
-`tests/test_tareas_sin_saltar.py`) envía EL
+`_marcar_sin_saltar.html` que también usan las pantallas de Tareas y, desde el 13-oct-2026, todo enlace
+y formulario de Proyectos; ver `tests/test_tareas_sin_saltar.py` y `tests/test_pagina_sin_saltos.py`) envía EL
 MISMO formulario (mismo POST, misma ruta). El navegador sigue la redirección del
 servidor y baja la página que el servidor decidió mostrar (la de antes, con sus
 avisos y sin los estados viejos de la URL); con ESA página, sin pedir nada más, se
@@ -30,13 +30,13 @@ pintarla. NO vigila el alto ni el desplazamiento reales: eso es de un navegador 
 a mano; los números van en el reporte del trabajo)."""
 from __future__ import annotations
 
-import ast
 import re
 from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 
-from test_escrituras_proyecto import _correr_en_jxa, _script_de_la_pagina, hay_osascript, la_funcion_de_marcar
+from test_escrituras_proyecto import _script_de_la_pagina, hay_osascript
+from _sin_saltar import correr, lo_prohibido_en_la_pieza  # noqa: F401
 from test_escrituras_tarea import mt, post, tarea  # noqa: F401
 from test_grupo_ia import _ROOT
 from _navegador import dar_recibo
@@ -133,174 +133,67 @@ def test_todos_los_formularios_que_marcan_son_los_que_intercepta_el_guion(mt):
     assert len(re.findall(r'<form class="marcar" method="post" action="/proyectos/tarea/\{\{ t\.id \}\}/(?:hecha|reabrir)(?:\{\{ consulta_filtro \}\})?"', fuente)) == 2
 
 
-# LAS MISMAS PROHIBICIONES que el resto del guion (la unión de las listas de
-# `test_pagina_proyectos._JS_QUE_DECIDIRIA`, `test_escrituras_proyecto`,
-# `test_pagina_proyectos_maqueta` y `test_personas_y_cliente`) más las formas de
-# escribir lo mismo de otro modo. La función tiene PERMITIDO solo esto, uno por uno:
-PERMITIDO_EN_LA_FUNCION = (
-    # el único pedido de red: POST al `action` del propio formulario, con SUS campos.
-    ('fetch(form.action, {method: "POST", body: new URLSearchParams(new FormData(form)), credentials: "same-origin"})', 1),
-    # la caída al envío de siempre.
-    ("form.submit()", 1),
-)
-PROHIBIDO = re.compile(
-    r"fetch|XMLHttpRequest|sendBeacon|WebSocket|EventSource|localStorage|sessionStorage|\.submit\(|"
-    r"\blocation\b|\.action|FormData|innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval|Function\b|"
-    r"import\(|(?<![.\w])(self|globalThis|top|parent|frames)\b|\bwindow\s*\[|\bthis\b|Reflect|Object\.|"
-    r"\[\s*[\"'`]|setTimeout|setInterval|\.open\(|postMessage|navigator|\.cookie")
+# LAS PROHIBICIONES de la pieza (las mismas que las del resto del guion, con lo permitido declarado
+# uno por uno) viven en `tests/test_pagina_sin_saltos.py`, sección 3: ahora la pieza hace más de un
+# pedido (un enlace, un formulario, «atrás») y se vigila ENTERA, no una sola función.
 
 
-def lo_prohibido_en(funcion: str) -> list[str]:
-    """Quita los comentarios y los pedidos PERMITIDOS (comprobando cuántas veces
-    están) y devuelve lo prohibido que quede en el texto."""
-    codigo = re.sub(r"\s+", " ", re.sub(r"/\*.*?\*/", "", funcion, flags=re.S))
-    for permitido, veces in PERMITIDO_EN_LA_FUNCION:
-        assert codigo.count(permitido) == veces, (permitido, codigo.count(permitido))
-        codigo = codigo.replace(permitido, "")
-    return [m.group(0) for m in PROHIBIDO.finditer(codigo)]
+# ── El guion corrido de verdad (JavaScriptCore) con el navegador de mentira de `tests/_sin_saltar.py` ──
+# FRONTERA: no es un navegador; no mide pixeles ni alto. Comprueba lo que el guion HACE con lo que ve:
+# impedir el envío normal, UN POST y ningún otro pedido, pintar lo que trajo el servidor (cada nodo
+# nuevo nace de LA página que contestó), devolver el desplazamiento y qué hace si algo falla.
+
+def _marcar(escenario_extra: str = "") -> str:
+    return ('var f = formulario("/proyectos/tarea/10/hecha", "post", []); f.clases = ["marcar"]; __e = enviar(f);'
+            + escenario_extra)
 
 
-def test_la_funcion_de_marcar_tiene_las_mismas_prohibiciones_que_el_resto_del_guion(mundo):
-    """FRONTERA, dicha: es un análisis de TEXTO. Ve el nombre `fetch` (o `location`,
-    `.action`, `XMLHttpRequest`...) escrito de cualquier forma con ese nombre, con
-    espacios, en una rama muerta o como `window.fetch`, y el acceso por corchetes con
-    texto. NO ve un nombre armado en tiempo de ejecución sin ninguna de esas
-    palabras (p. ej. una cadena que se junta y se evalúa: `eval`, `Function`,
-    `import(`, `this`, `Reflect` y `Object.` también están prohibidos para cerrar
-    esa puerta). Que el guion haga en un navegador solo lo que dice se comprueba
-    con el guion corrido (abajo), no con este texto."""
-    f, _ = la_funcion_de_marcar(_script_de_la_pagina(mundo))
-    assert lo_prohibido_en(f) == []
-
-
-@pytest.mark.parametrize("meter", [
-    'location.href = "/otra";', 'window["fetch"]("/borrar", {method: "POST"});', 'new WebSocket("ws://x");',
-    'fetch ("/otra");', 'var u = window.fetch;', 'form.action = "/otra";', 'new XMLHttpRequest();',
-    'document.cookie = "x";', 'if (false) { navigator.sendBeacon("/x"); }', "var g = self['fe' + 'tch'];",
-    'new FormData(form);', 'form.submit();'])
-def test_lo_prohibido_no_se_cuela_en_la_funcion_ni_en_una_rama_muerta(mundo, meter):
-    f, _ = la_funcion_de_marcar(_script_de_la_pagina(mundo))
-    roto = f.replace("var boton =", "if (false) { " + meter + " }\n  var boton =", 1)
-    assert roto != f
-    try:
-        quedan = lo_prohibido_en(roto)
-    except AssertionError:        # un permitido repetido también es una puerta cerrada
-        return
-    assert quedan, meter
-
-
-# ── El guion corrido de verdad (JavaScriptCore) con un DOM de mentira ──────────
-# FRONTERA: no es un navegador; no mide pixeles ni alto. Comprueba lo que el guion
-# HACE con lo que ve: impedir el envío normal, UN POST y ningún otro pedido, pintar
-# lo que trajo el servidor (cada nodo nuevo nace de LA página que contestó),
-# devolver el desplazamiento y qué hace si algo falla. Las «promesas» son
-# sincrónicas (`ok`/`bad`).
-
-_MENTIRAS = r"""
-function ok(v) { return {then: function (f) { if (!f) return this;
-  try { var r = f(v); return (r && r.then) ? r : ok(r); } catch (e) { return bad(e); } },
-  catch: function () { return this; }}; }
-function bad(e) { return {then: function () { return this; },
-  catch: function (g) { try { var r = g(e); return (r && r.then) ? r : ok(r); } catch (x) { return bad(x); } }}; }
-function URL(u) {
-  var a = u.split("#")[0].split("?"), q = {}, orden = [];
-  this.pathname = a[0].replace(/^https?:\/\/[^\/]+/, "");
-  this.search = a[1] ? "?" + a[1] : "";
-}
-function FormData(f) {}
-function URLSearchParams(x) {}
-var llamadas = {posts: [], otros: [], submit: 0, replace: [], scrollTo: [], evitado: 0, ir: []};
-var modo = "ok";
-var vivos = {};
-function nodo(rol, y, desde) {
-  return {rol: rol, desde: desde, scrollTop: y, scrollHeight: 3000, clientHeight: 700,
-    getAttribute: function (a) { return a === "data-region" ? rol : null; },
-    querySelector: function () { return null; }, querySelectorAll: function () { return []; },
-    closest: function () { return null; },
-    getBoundingClientRect: function () { return {top: 0, bottom: 0, height: 0}; },
-    replaceWith: function (n) { vivos[rol === "izquierda" ? "aside" : "main"] = n; }};
-}
-vivos.aside = nodo("izquierda", 300, "VIEJA"); vivos.main = nodo("centro", 1200, "VIEJA");
-document.querySelector = function () { return null; };
-document.querySelectorAll = function (s) { return s === "[data-region]" ? [vivos.aside, vivos.main] : []; };
-document.getElementById = function () { return null; };
-document.importNode = function (n) { if (modo === "importar-falla") throw new Error("x"); return n; };
-document.createElement = function (t) { return {tag: t, click: function () { llamadas.ir.push(this.href); }}; };
-function DOMParser() {}
-DOMParser.prototype.parseFromString = function (texto) {
-  return {querySelectorAll: function (s) {
-    if (modo === "no-es-proyectos" || s !== "[data-region]") return [];
-    return [nodo("izquierda", 0, texto), nodo("centro", 0, texto)]; }}; };
-var history = {replaceState: function (a, b, u) { llamadas.replace.push(u); }};
-var fetch = function (url, op) {
-  if (op && op.method === "POST") {
-    llamadas.posts.push(url);
-    if (modo === "red") return bad(new Error("sin red"));
-    return ok({ok: modo !== "500", status: modo === "500" ? 500 : 200,
-      url: "http://x.test/proyectos?p=2&hecho=tarea_hecha",
-      text: function () { return ok("PAGINA-DEL-SERVIDOR"); }});
-  }
-  llamadas.otros.push(url);
-  return bad(new Error("un segundo pedido"));
-};
-var window = {fetch: fetch, URLSearchParams: URLSearchParams, DOMParser: DOMParser, pageYOffset: 50, pageXOffset: 0,
-  scrollTo: function (x, y) { llamadas.scrollTo.push([x, y]); }};
-function formularioDeMarcar() {
-  var boton = {disabled: false};
-  return {classList: {contains: function (c) { return c === "marcar"; }}, dataset: {},
-    action: "/proyectos/tarea/10/hecha", boton: boton,
-    querySelector: function (s) { return s === "button" ? boton : null; },
-    closest: function () { return null; },
-    submit: function () { llamadas.submit++; }};
-}
-function enviar(form) {
-  var e = {target: form, preventDefault: function () { llamadas.evitado++; }};
-  oyentes.submit(e);
-}
-"""
-
-_FOTO = ('JSON.stringify({posts: llamadas.posts, otros: llamadas.otros, evitado: llamadas.evitado,'
-         ' recarga: llamadas.submit, ir: llamadas.ir, aside: vivos.aside.scrollTop, main: vivos.main.scrollTop,'
-         ' asideDe: vivos.aside.desde, mainDe: vivos.main.desde, ventana: llamadas.scrollTo,'
-         ' url: llamadas.replace, boton: f.boton.disabled})')
-
-
-def _jxa(mundo, escenario: str) -> dict:
-    return _correr_en_jxa(_script_de_la_pagina(mundo), _MENTIRAS + escenario)
+URL_FINAL = "http://x.test/proyectos?p=2&hecho=tarea_hecha"
 
 
 @hay_osascript
 def test_js_marcar_pinta_lo_que_trajo_el_servidor_sin_un_segundo_pedido(mundo):
-    r = _jxa(mundo, 'var f = formularioDeMarcar(); enviar(f);' + _FOTO)
-    assert r == {"posts": ["/proyectos/tarea/10/hecha"], "otros": [], "evitado": 1, "recarga": 0, "ir": [],
-                 # lo pintado nació de LA página que contestó el servidor (no de la vieja)…
-                 "asideDe": "PAGINA-DEL-SERVIDOR", "mainDe": "PAGINA-DEL-SERVIDOR",
-                 # …y el desplazamiento (de las dos columnas y de la ventana) es el de antes.
-                 "aside": 300, "main": 1200, "ventana": [[0, 50]],
-                 "url": ["/proyectos?p=2&hecho=tarea_hecha"], "boton": True}
+    r = correr(_script_de_la_pagina(mundo), _marcar('responder(0, "PAGINA-DEL-SERVIDOR", {url: %r});' % URL_FINAL))
+    assert r["pedidos"] == [["POST", "/proyectos/tarea/10/hecha", ""]] and r["prevenido"] is True
+    # lo pintado nació de LA página que contestó el servidor (no de la vieja)…
+    assert r["izq"] == "PAGINA-DEL-SERVIDOR" and r["cen"] == "PAGINA-DEL-SERVIDOR"
+    # …el desplazamiento (de las dos columnas y de la ventana) es el de antes…
+    assert r["izqTop"] == 300 and r["cenTop"] == 1200 and r["ventana"] == [[0, 50]]
+    # …la dirección es la verdadera y marcar no suma una entrada al historial…
+    assert r["historia"] == [["replace", None, "/proyectos?p=2&hecho=tarea_hecha"]]
+    # …y no se recarga ni se va a ningún sitio.
+    assert r["salidas"] == []
 
 
 @hay_osascript
-@pytest.mark.parametrize("modo", ["red", "500"])
-def test_js_si_el_post_no_llega_o_falla_se_envia_el_formulario_de_siempre(mundo, modo):
-    r = _jxa(mundo, 'modo = %r; var f = formularioDeMarcar(); enviar(f);' % modo + _FOTO)
-    assert r["posts"] == ["/proyectos/tarea/10/hecha"] and r["otros"] == []
-    assert r["recarga"] == 1 and r["evitado"] == 1 and r["ir"] == []
-    assert r["asideDe"] == "VIEJA" and r["mainDe"] == "VIEJA" and r["url"] == []    # nada se pintó
-    assert r["boton"] is False                                                      # y el botón queda usable
+@pytest.mark.parametrize("modo", ["red", "500", "401"])
+def test_js_si_el_post_no_llega_o_falla_nunca_se_reenvia_un_guardado_que_pudo_llegar(mundo, modo):
+    """Sin respuesta (red) o con 5xx el POST pudo llegar: NO se reenvía, se lee un aviso. Con 4xx (401: la sesión
+    venció) el servidor no escribió nada y se envía el formulario de siempre (con su botón)."""
+    cierre = {"red": "sinRed(0);", "500": 'responder(0, "ERROR", {ok: false, status: 500});',
+              "401": 'responder(0, "ENTRAR", {ok: false, status: 401});'}[modo]
+    r = correr(_script_de_la_pagina(mundo), _marcar(cierre))
+    assert [p[0] for p in r["pedidos"]] == ["POST"]
+    assert r["izq"] == "VIEJA" and r["cen"] == "VIEJA" and r["historia"] == []        # nada se pintó
+    if modo == "401":
+        assert r["salidas"] == [["requestSubmit", "/proyectos/tarea/10/hecha", None]]
+    else:
+        assert [x[0] for x in r["salidas"]] == ["aviso"]                              # ni submit ni requestSubmit
+    assert r["escritos"] == []
 
 
 @hay_osascript
-@pytest.mark.parametrize("modo", ["no-es-proyectos", "importar-falla"])
+@pytest.mark.parametrize("modo", ["otra-pantalla", "importar-falla"])
 def test_js_si_guardo_y_no_se_puede_pintar_va_a_la_pagina_sin_reenviar_el_post(mundo, modo):
-    """El POST contestó bien (ya se guardó): no se reenvía (daría «ya estaba»), se
-    va a la MISMA página que contestó el servidor, con un enlace."""
-    r = _jxa(mundo, 'modo = %r; var f = formularioDeMarcar(); enviar(f);' % modo + _FOTO)
-    assert r["posts"] == ["/proyectos/tarea/10/hecha"] and r["otros"] == []
-    assert r["recarga"] == 0 and r["ir"] == ["http://x.test/proyectos?p=2&hecho=tarea_hecha"]
+    """El POST contestó bien (ya se guardó): no se reenvía (daría «ya estaba»), se va a la MISMA página que
+    contestó el servidor, con un enlace."""
+    previo = 'paginas["PAG"] = {regiones: ["cuerpo"]};' if modo == "otra-pantalla" else "reemplazos.__importar_falla = true;"
+    r = correr(_script_de_la_pagina(mundo), previo + _marcar('responder(0, "PAG", {url: %r});' % URL_FINAL))
+    assert len(r["pedidos"]) == 1 and r["salidas"] == [["ir", URL_FINAL]]
 
 
 @hay_osascript
 def test_js_un_segundo_envio_del_mismo_formulario_no_manda_otro_post(mundo):
-    r = _jxa(mundo, 'var f = formularioDeMarcar(); modo = "red"; enviar(f); enviar(f);' + _FOTO)
-    assert len(r["posts"]) == 1 and r["evitado"] == 2
+    r = correr(_script_de_la_pagina(mundo), 'var f = formulario("/proyectos/tarea/10/hecha", "post", []); f.clases = ["marcar"];'
+                                            ' enviar(f); __e = enviar(f);')
+    assert len(r["pedidos"]) == 1 and r["prevenido"] is True

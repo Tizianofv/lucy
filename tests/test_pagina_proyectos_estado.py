@@ -427,7 +427,8 @@ def test_E6_la_vista_no_ofrece_nada_que_escriba(con):
     assert sv.controles_que_sobran(h, "") == [] or con == "casa"
     vista = centro(h)
     assert "<form" not in vista and "<button" not in vista and 'method="post"' not in vista
-    assert "<script" not in h and "fetch(" not in h if con == "ver" else True
+    if con == "ver":     # el único guion de solo ver es el de la pieza (lo exige `controles_que_sobran`)
+        assert h.count("<script") == 1 and h.count("fetch(") == 1
 
 
 def test_E6_pintarla_no_escribe_en_la_base(mundo):

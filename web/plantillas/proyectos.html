@@ -858,7 +858,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% set g = vista.grupo %}
     {% set gc = g if g else visibles.sin_grupo %}
     <div class="gc" style="display:contents;--claro:{{ gc.color }};--oscuro:{{ gc.color_oscuro }}">
-    <div class="cabeza" id="proyecto-{{ m.id }}" data-edita>
+    <div class="cabeza" id="proyecto-{{ m.id }}" data-edita data-ancla>
       <div class="migas"><span><b>{{ g.clave if g else 'Sin grupo' }}</b> / Proyecto</span>
       </div>
       {#- El nombre se cambia con doble clic (el script de abajo solo muestra el
@@ -925,7 +925,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         falso) no se dibuja nada de esto. En solo ver se leen, y solo las que tienen algo. -#}
     {% set hay_fechas = m.fechas_disponibles and (m.inicio or m.entrega or m.termina_cuando) %}
     {% if m.descripcion or hay_fechas or not solo_ver %}
-    <section class="bloque de-que-se-trata" id="de-que-se-trata">
+    <section class="bloque de-que-se-trata" id="de-que-se-trata" data-ancla>
       <div class="encabezado"><h2>De qué se trata</h2>
         {% if not solo_ver and editar != 'descripcion' %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar=descripcion{{ sufijo_filtro }}">{{ 'Cambiar' if m.descripcion else 'Escribir' }}</a>{% endif %}</div>
       {% if not solo_ver and editar == 'descripcion' %}
@@ -939,7 +939,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       {% elif m.descripcion %}<p class="descripcion">{{ m.descripcion }}</p>
       {% else %}<p class="vacio">Todavía no hay nada escrito.</p>{% endif %}
       {% if m.fechas_disponibles and (not solo_ver or hay_fechas) %}
-      <div class="fechas-p" id="fechas-del-proyecto">
+      <div class="fechas-p" id="fechas-del-proyecto" data-ancla>
         {% if not solo_ver and editar == 'fechas' %}
         <form class="fechas-editar" method="post" action="/proyectos/{{ m.id }}/fechas">
           <label>Empezó <input type="date" name="inicio" value="{{ m.inicio.isoformat() if m.inicio else '' }}" aria-label="Fecha de inicio del proyecto"></label>
@@ -1003,10 +1003,10 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         servidor (`?editar_nota=`, `?borrar_nota=`). En solo ver se leen y no hay ningún control. Sin la
         columna en la base (`m.notas_disponibles` falso) no se dibuja nada de esto. -#}
     {% if m.notas_disponibles and (m.notas or not solo_ver) %}
-    <section class="bloque notas-p" id="notas-del-proyecto">
+    <section class="bloque notas-p" id="notas-del-proyecto" data-ancla>
       <div class="encabezado"><h2>Notas y decisiones</h2></div>
       {% for n in m.notas %}
-      <div class="nota-item" id="nota-{{ n.id }}">
+      <div class="nota-item" id="nota-{{ n.id }}" data-ancla>
         <small>{{ n.autor or 'Autor desconocido' }} · {{ n.creado_en|hora_rd }}</small>
         {% if not solo_ver and editar_nota == n.id %}
         <form class="renombrar" method="post" action="/proyectos/{{ m.id }}/notas/{{ n.id }}/editar" data-auto>
@@ -1046,7 +1046,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         avisos de las que el registro ya no devuelve o están canceladas y el buscador para agregar. Lo
         que SE VE (los renglones, el dinero, los totales, «Quitadas» y los avisos) es igual en las dos
         sesiones; los controles (Quitar, Devolver, Sacar y el buscador) son solo de la casa. -#}
-    <section class="bloque sesiones-p" id="sesiones-y-trabajos">
+    <section class="bloque sesiones-p" id="sesiones-y-trabajos" data-ancla>
       <div class="encabezado"><h2>Sesiones y trabajos de este proyecto</h2></div>
       {#- Lo que el registro contestó de la FICHA, cuando no se pudo ligar o no hay: el aviso sale
           igual aunque haya renglones, porque son las sesiones que la casa agregó a mano. «No se le
@@ -1192,7 +1192,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
         comentario o una nota): la frase sale de la huella (`db.actividad_de_renglones`). Solo lectura:
         no hay ningún control, ni en la casa ni en solo ver. El tope (`db.TOPE_ACTIVIDAD`) lo pone la
         consulta; aquí no se recorta nada. -#}
-    <section class="bloque actividad-p" id="actividad-del-proyecto">
+    <section class="bloque actividad-p" id="actividad-del-proyecto" data-ancla>
       <div class="encabezado"><h2>Actividad</h2></div>
       {% if m.actividad %}
       <ul>
@@ -1265,7 +1265,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% set enlace_carpeta = m.carpeta|enlace_de_carpeta %}
     {% set copiar_carpeta = false %}
     {% if m.carpeta_disponible and (m.carpeta or not solo_ver) %}
-    <section class="bloque carpeta-p" id="carpeta-del-proyecto">
+    <section class="bloque carpeta-p" id="carpeta-del-proyecto" data-ancla>
       <div class="encabezado"><h2>Carpeta del proyecto</h2>
         {% if not solo_ver and editar != 'carpeta' %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar=carpeta{{ sufijo_filtro }}#carpeta-del-proyecto">{{ 'Cambiar' if m.carpeta else 'Poner' }}</a>{% endif %}</div>
       {% if not solo_ver and editar == 'carpeta' %}
@@ -1356,7 +1356,7 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
       <div class="meta"><span class="nota">Cada proyecto con su estado y su próxima tarea pendiente: la que sale primera en su lista.{% if q %} Solo los de «{{ q }}».{% endif %}</span></div>
     </div>
     {% for x in grupos_con %}
-    <section class="bloque" id="estado-{{ loop.index }}">
+    <section class="bloque" id="estado-{{ loop.index }}" data-ancla>
       <div class="encabezado"><h2>{{ x.clave if x.clave else 'Sin grupo' }}</h2></div>
       <ul class="estados">
         {% for m in x.abiertos + x.cerrados %}
@@ -1666,7 +1666,6 @@ document.addEventListener("change", function (e) {
 document.addEventListener("submit", function (e) {
   var form = e.target;
   if (!form || !form.dataset) return;
-  if (alEnviarMarcar(e)) return;
   /* «Agregar» sin persona escogida no se envía, y dice por qué. (Un botón de
      resultado de la búsqueda sin JavaScript sí: trae su `noco_id`.) */
   if (form.dataset.pidePersona !== undefined) {
@@ -1695,6 +1694,17 @@ document.addEventListener("focusout", function (e) {
   if (campo.value === campo.defaultValue) return;          // no cambió: no hay nada que guardar
   form.requestSubmit();
 });
+/* TOCAR ALGO NO MUEVE LA PÁGINA: los enlaces y formularios de esta pantalla se piden por
+   detrás y se pinta lo que contesta el servidor (la pieza única, arriba). Va al FINAL: los
+   oyentes de arriba (el doble clic, la ventanita, el «¿seguro?», «Agregar» sin persona)
+   deciden primero, y los que dejan pasar el envío o el clic llegan aquí. */
+iniciarSinSaltos("/proyectos");
+</script>{% else %}<script>
+/* SOLO VER: la misma pieza, para que ir de un proyecto a otro o abrir una tarea no mueva la
+   página. En esta sesión no hay formularios que escriban (solo los buscadores, que son GET) ni
+   otro guion. */
+{% include "_marcar_sin_saltar.html" %}
+iniciarSinSaltos("/proyectos");
 </script>{% endif %}
 {#- EL GUION DE «COPIAR» (carpeta del proyecto, parte 5): aparte del de arriba a propósito, para no
     tocar el que marca tareas sin que la página salte. Solo sale si la página dibujó el botón (una
