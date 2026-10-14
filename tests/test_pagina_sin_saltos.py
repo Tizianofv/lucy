@@ -606,6 +606,13 @@ def test_n5_beforeunload_se_pone_con_pendientes_y_se_quita_sin_ellos_y_pide_conf
 
 
 @hay_osascript
+def test_n5_el_oyente_de_salida_por_si_solo_no_pide_nada_si_no_hay_nada_pendiente():
+    esc = ('var e = {prevented: false, preventDefault: function () { this.prevented = true; }}; var v = alSalirSinSaltar(e);'
+           ' salidas.push(["sale", e.prevented, v === undefined]);')
+    assert ["sale", False, True] in correr(CASA(), esc)["salidas"]
+
+
+@hay_osascript
 def test_n5_con_continuar_ya_no_se_pide_confirmar():
     esc = ('enviar(formulario("/proyectos/1/notas", "post", [])); clic(enlace("/tareas")); avisosPuestos[0].continuar();'
            ' var e = {prevented: false, preventDefault: function () { this.prevented = true; }}; dispararVentana("beforeunload", e);'
