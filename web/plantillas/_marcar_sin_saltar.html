@@ -334,7 +334,7 @@ function sinSaltar(p) {
     });
   };
   var opciones = esPost ? {method: "POST", body: p.cuerpo, credentials: "same-origin"} : {credentials: "same-origin"};
-  if (esPost) reloj = setTimeout(function () { if (terminado) return; vencido = true; sinConfirmar(); }, TIEMPO_ENVIO_SINSALTAR);
+  if (esPost) reloj = setTimeout(function () { vencido = true; sinConfirmar(); }, TIEMPO_ENVIO_SINSALTAR);
   fetch(p.url, opciones).then(respuesta, function () { if (vencido) return; if (esPost) sinConfirmar(); else normal(); });
 }
 /* LA PUERTA ÚNICA de qué se queda en la página: la dirección (ya resuelta) o nada. Un

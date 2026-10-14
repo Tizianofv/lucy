@@ -56,7 +56,7 @@ PERMITIDO_EN_LA_PIEZA = (
     # enlace para mirar cómo quedó, y el guion de «Copiar» que la página nueva trae y ésta no.
     ('document.createElement("a")', 2), ('document.createElement("div")', 2), ('document.createElement("button")', 2),
     # el tiempo máximo de un guardado (decisión de diseño, no medida)
-    ('setTimeout(function () { if (terminado) return;', 1),
+    ('setTimeout(function () { vencido = true;', 1),
     ('document.createElement("script")', 1),
 )
 PROHIBIDO_EN_LA_PIEZA = re.compile(

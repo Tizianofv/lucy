@@ -520,6 +520,13 @@ def test_n2_un_guardado_colgado_vence_se_suelta_y_la_cola_sigue_y_lo_que_llegue_
 
 
 @hay_osascript
+@pytest.mark.parametrize("tarde", ['responder(0, "ENTRAR", {ok: false, status: 401});', 'responder(0, "x", {ok: false, status: 500});', "sinRed(0);"])
+def test_n2_un_rechazo_o_un_fallo_que_llega_despues_de_vencer_no_hace_nada_mas(tarde):
+    r = correr(CASA(), 'enviar(formulario("/proyectos/1/notas", "post", [])); correrTimers();' + tarde)
+    assert [x[0] for x in r["salidas"]] == ["aviso"]            # solo el aviso de sin confirmar: ni envío de siempre ni segundo aviso
+
+
+@hay_osascript
 def test_n2_un_guardado_que_contesta_a_tiempo_apaga_su_reloj():
     r = correr(CASA(), 'enviar(formulario("/proyectos/1/notas", "post", [])); responder(0, "PAG-A"); correrTimers();')
     assert [x for x in r["salidas"] if x[0] == "aviso"] == [] and r["cen"] == "PAG-A"
