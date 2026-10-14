@@ -403,6 +403,17 @@ def test_js_si_guardo_y_no_se_puede_pintar_va_a_la_pagina_sin_reenviar(tareas, p
 
 @hay_osascript
 @pytest.mark.parametrize("pantalla", ["tareas", "detalle"])
+def test_js_un_formulario_marcar_que_sale_de_la_pantalla_pasa_por_la_puerta_de_irse_con_algo_pendiente(tareas, pantalla):
+    g = _scripts_de_tareas(tareas)[pantalla]
+    esc = ('var A = formulario("/tareas", "post", []); A.clases = ["marcar"]; enviar(A);'
+           ' var S = formulario("https://otro.example.test/x", "post", []); S.clases = ["marcar"]; __e = enviar(S);'
+           ' salidas.push(["antes", salidas.filter(function (x) { return x[0] === "submit" || x[0] === "requestSubmit"; }).length]); avisosPuestos[0].continuar();')
+    r = _jxa(g, esc)
+    assert r["prevenido"] is True and ["antes", 0] in r["salidas"] and ["requestSubmit", "https://otro.example.test/x", None] in r["salidas"]
+
+
+@hay_osascript
+@pytest.mark.parametrize("pantalla", ["tareas", "detalle"])
 def test_js_un_segundo_envio_del_mismo_formulario_no_manda_otro_post(tareas, pantalla):
     g = _scripts_de_tareas(tareas)[pantalla]
     r = _jxa(g, 'var f = formulario("/tareas", "post", []); f.clases = ["marcar"]; enviar(f); __e = enviar(f);')

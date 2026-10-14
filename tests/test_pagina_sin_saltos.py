@@ -504,6 +504,125 @@ def test_n1_una_lectura_en_la_cola_se_descarta_si_el_envio_de_siempre_se_va():
     assert [p[1] for p in r["pedidos"]] == ["/proyectos/1/notas"] and r["salidas"] == [["requestSubmit", "/proyectos/1/notas", None]]
 
 
+# ── N5: las salidas de la página con algo pendiente ───────────────────────────────────────────────
+_CENSO_PENDIENTE_JS = r"""
+var datos = JSON.parse(%s);
+%s
+var filas = datos.map(function (d) {
+  salidas.length = 0; var antes = pedidos.length;
+  var e;
+  if (d.tag === "a") {
+    var extra = {}; if (d.target !== null) extra.target = d.target; if (d.download) extra.download = "";
+    e = clic(enlace(d.href, extra));
+  } else {
+    e = enviar(formulario(d.href, d.metodo, [], d.target !== null ? {target: d.target} : {}));
+  }
+  var fila = {prevenido: e.defaultPrevented, avisos: avisosPuestos.length, nuevos: pedidos.length - antes,
+              navego: salidas.filter(function (x) { return x[0] === "ir" || x[0] === "requestSubmit" || x[0] === "submit"; }).length,
+              mensaje: avisosPuestos.length ? avisosPuestos[0].hijos.filter(function (h) { return h.tag === "div"; }).map(function (h) { return h.textContent; }).join(" | ") : ""};
+  if (avisosPuestos.length) { avisosPuestos[0].continuar(); }
+  fila.tras = salidas.filter(function (x) { return x[0] === "ir" || x[0] === "requestSubmit"; }).length;
+  fila.pendiente = typeof __oyW.beforeunload;
+  return fila;
+});
+JSON.stringify(filas)
+"""
+_CON_PENDIENTES = ('var A = formulario("/proyectos/1/notas", "post", []); enviar(A);'
+                   ' var B = formulario("/proyectos/1/descripcion", "post", [["descripcion", "B"]]); enviar(B);')
+
+
+def _salidas_del_censo():
+    """Lo que SALE de la página y la pieza no toma (de la lista real del censo): el menú, «‹ Inicio», los
+    enlaces de texto a Tareas y Papelera, lo que abre otra pestaña."""
+    lista = lo_que_se_toca("casa")
+    declarados = {(t, h) for t, h, _ in lo_que_sale_a_proposito()}
+    salen = [f for f in pasar_por_los_oyentes("casa", lista) if not f["prevenido"]]
+    assert {(f["tag"], f["href"]) for f in salen} == declarados and len(salen) >= 6, salen
+    return [{k: v for k, v in f.items() if k not in ("prevenido", "pedidos")} for f in salen]
+
+
+@hay_osascript
+def test_n5_con_un_guardado_en_camino_y_otro_en_cola_ninguna_salida_de_la_pagina_se_va_sola():
+    """Cada enlace/formulario que sale de la página (la lista sale del censo real). Con A en camino y B en cola:
+    no se va (se evita el clic), B no sale, el aviso lo dice y se va solo con «Continuar». Lo que abre otra
+    pestaña (`target=_blank`) no se toca."""
+    filas = _salidas_del_censo()
+    r = correr_en_navegador(guion_de("casa", p=1), _CENSO_PENDIENTE_JS % (json.dumps(json.dumps(filas)), _CON_PENDIENTES))
+    primera = True
+    for f, d in zip(r, filas):
+        nombre = (d["tag"], d["href"])
+        if d["target"] not in (None, "_self"):
+            assert not f["prevenido"] and f["avisos"] == 0 and f["tras"] == 0, (nombre, f)
+            continue
+        assert f["prevenido"] is True and f["navego"] == 0 and f["nuevos"] == 0, (nombre, f)          # no se fue ni salió B
+        # (la primera salida suelta la cola y lo dice; las siguientes ya solo encuentran el guardado en camino)
+        assert f["avisos"] == 1 and "sigue en camino" in f["mensaje"], (nombre, f)
+        assert ("Había 1 cambio esperando: NO se mandó" in f["mensaje"]) == primera, (nombre, f)
+        primera = False
+        assert f["tras"] == 1, (nombre, f)                                                             # y se fue con «Continuar»
+
+
+@hay_osascript
+def test_n5_pareja_sin_nada_pendiente_las_salidas_se_van_como_siempre():
+    filas = _salidas_del_censo()
+    r = correr_en_navegador(guion_de("casa", p=1), _CENSO_PENDIENTE_JS % (json.dumps(json.dumps(filas)), ""))
+    for f, d in zip(r, filas):
+        assert f["prevenido"] is False and f["avisos"] == 0 and f["tras"] == 0, ((d["tag"], d["href"]), f)
+
+
+@hay_osascript
+def test_n5_el_menu_con_un_guardado_en_camino_y_otro_en_cola_sonda_del_testigo():
+    r = correr(CASA(), _CON_PENDIENTES + '__e = clic(enlace("/tareas")); salidas.push(["pedidos", pedidos.length]);')
+    assert r["prevenido"] is True and ["pedidos", 1] in r["salidas"] and not [x for x in r["salidas"] if x[0] == "ir"]
+    assert [x for x in r["salidas"] if x[0] == "aviso"]
+
+
+@hay_osascript
+def test_n5_un_enlace_a_otro_sitio_o_un_correo_no_se_toca_ni_con_algo_pendiente():
+    for href in ("mailto:a@example.test", "javascript:alert(1)"):
+        r = correr(CASA(), _CON_PENDIENTES + '__e = clic(enlace(%s));' % json.dumps(href))
+        assert r["prevenido"] is False
+
+
+@hay_osascript
+def test_n5_un_formulario_que_sale_de_la_pantalla_pasa_por_la_puerta_con_algo_pendiente():
+    esc = (_CON_PENDIENTES + '__e = enviar(formulario("/otra/3/borrar", "post", []), {name: "x", value: "1", disabled: false});'
+           ' salidas.push(["antes", salidas.filter(function (x) { return x[0] === "requestSubmit"; }).length]); avisosPuestos[0].continuar();')
+    r = correr(CASA(), esc)
+    assert r["prevenido"] is True and ["antes", 0] in r["salidas"] and ["requestSubmit", "/otra/3/borrar", "x"] in r["salidas"]
+
+
+@hay_osascript
+def test_n5_beforeunload_se_pone_con_pendientes_y_se_quita_sin_ellos_y_pide_confirmar_solo_entonces():
+    esc = ('function salir() { var e = {prevented: false, preventDefault: function () { this.prevented = true; }};'
+           ' dispararVentana("beforeunload", e); return [e.prevented, (__oyW.beforeunload || []).length]; }'
+           ' salidas.push(["sin nada", salir()]);'
+           ' enviar(formulario("/proyectos/1/notas", "post", [])); salidas.push(["en camino", salir()]);'
+           ' enviar(formulario("/proyectos/1/descripcion", "post", [])); responder(0, "PAG-A"); salidas.push(["B en camino", salir()]);'
+           ' responder(1, "PAG-B"); salidas.push(["terminado", salir()]);')
+    r = correr(CASA(), esc)
+    dicho = {x[0]: x[1] for x in r["salidas"] if x[0] in ("sin nada", "en camino", "B en camino", "terminado")}
+    assert dicho == {"sin nada": [False, 0], "en camino": [True, 1], "B en camino": [True, 1], "terminado": [False, 0]}
+
+
+@hay_osascript
+def test_n5_con_continuar_ya_no_se_pide_confirmar():
+    esc = ('enviar(formulario("/proyectos/1/notas", "post", [])); clic(enlace("/tareas")); avisosPuestos[0].continuar();'
+           ' var e = {prevented: false, preventDefault: function () { this.prevented = true; }}; dispararVentana("beforeunload", e);'
+           ' salidas.push(["sale", e.prevented, (__oyW.beforeunload || []).length]);')
+    assert ["sale", False, 0] in correr(CASA(), esc)["salidas"]
+
+
+@hay_osascript
+def test_n5_la_cola_queda_vacia_tras_decidir_irse():
+    """s01 del testigo: si la cola no se vacía, una lectura posterior queda detrás de lo que ya no va a salir."""
+    esc = ('paginas["PAG"] = {regiones: ["cuerpo"]}; enviar(formulario("/proyectos/1/notas", "post", []));'
+           ' enviar(formulario("/proyectos/1/descripcion", "post", [])); responder(0, "PAG", {url: "http://x.test/proyectos?p=2"});'
+           ' __e = clic(enlace("/proyectos?p=5"));')
+    r = correr(CASA(), esc)
+    assert r["pedidos"][-1][1] == "/proyectos?p=5"        # salió enseguida: no quedó detrás de nada
+
+
 # ── N2: tiempo máximo por guardado ────────────────────────────────────────────────────────────────
 @hay_osascript
 def test_n2_un_guardado_colgado_vence_se_suelta_y_la_cola_sigue_y_lo_que_llegue_tarde_se_ignora():
@@ -890,4 +1009,5 @@ def test_las_tres_pantallas_que_usan_la_pieza_traen_la_misma_y_proyectos_la_arra
     # los oyentes de la pieza se registran en un solo sitio
     codigo = sin_comentarios_de_js(pieza)
     assert sorted(re.findall(r'addEventListener\("(\w+)", (\w+)\)', codigo)) == [
-        ("click", "alHacerClicSinSaltar"), ("popstate", "alVolverSinSaltar"), ("submit", "alEnviarSinSaltar")]
+        ("beforeunload", "alSalirSinSaltar"), ("click", "alHacerClicSinSaltar"), ("popstate", "alVolverSinSaltar"),
+        ("submit", "alEnviarSinSaltar")]

@@ -34,16 +34,22 @@
        (`irA`: un enlace suelto que se pulsa, el navegador la carga de nuevo), SIN reenviar. (El
        aviso de «guardado» se gastó en la lectura de por detrás: esa página llega sin el aviso,
        nunca con uno falso.)
-   NINGÚN PEDIDO SALE DESPUÉS DE QUE LA PÁGINA EMPEZÓ A IRSE. Tres caminos hacen que la página se
-   vaya (`irA`, el envío de siempre de un 4xx, ir a un enlace que falló). Si en ese momento hay
-   otros guardados en la cola, NINGUNO sale: sus formularios se sueltan con lo escrito, el aviso
-   fijo dice cuántos no se mandaron, y la página se va solo cuando la persona toca «Continuar»
-   en el aviso. Si no hay nada en la cola, se va enseguida. Las lecturas que esperaban se descartan
-   (la página se va de todos modos).
+   NINGÚN PEDIDO SALE DESPUÉS DE QUE LA PÁGINA EMPEZÓ A IRSE. Mientras haya un guardado en camino o
+   en la cola, ninguna salida de la página que ella controla (sus enlaces hacia otras pantallas
+   —el menú, «‹ Inicio», Tareas, Papelera—, un formulario que sale de la pantalla, el envío de
+   siempre tras un 4xx, `irA`) se va sola: suelta lo escrito (los formularios de la cola se
+   sueltan), avisa qué no se mandó y se va con «Continuar» en el aviso fijo. Las salidas que no
+   controla (atrás entre documentos, cerrar la pestaña, escribir otra dirección) piden confirmación
+   del navegador (`beforeunload`, puesto solo mientras hay algo pendiente). Sin nada pendiente,
+   todo se va como siempre y no se pide nada.
+   LO QUE SE PROMETE Y LO QUE NO: nada de lo que la persona ESCRIBE o manda guardar se pierde sin
+   aviso. Un pedido de VER otra cosa (enlace, búsqueda, «atrás») que esperaba en la cola puede
+   descartarse cuando la página tiene que irse, y entonces la página termina donde la manda el
+   guardado (o donde la lleva «Continuar»).
    CADA GUARDADO TIENE UN TIEMPO MÁXIMO (`TIEMPO_ENVIO_SINSALTAR`, 30 s: decisión de diseño, NO
    medida): si vence sin respuesta, se trata como «sin confirmar» (aviso fijo, el formulario se
    suelta con lo escrito, la cola sigue) y una respuesta que llegue después se ignora.
-   NADA DE LO QUE LA PERSONA HACE SE TRAGA: un guardado que llega mientras otro va en camino
+   LO QUE LA PERSONA ESCRIBE O MANDA GUARDAR NO SE TRAGA: un guardado que llega mientras otro va en camino
    se arma con lo que tenía en ese momento y sale después, en orden, una vez. Y un formulario
    que ya se mandó (por detrás o en la cola) queda BLOQUEADO para escribir (sus campos de
    texto, solo lectura; sus desplegables, desactivados) hasta que su envío termine: no se puede
@@ -55,7 +61,7 @@
    dijeron (su aviso) se lee en el aviso fijo.
    EL AVISO FIJO (arriba, fuera de las regiones) no lo quita ningún repintado: se queda hasta
    que la persona lo cierra («Entendido» o «Mirar cómo quedó»). Si llegan varios, se leen todos. */
-var turnoSinSaltar = 0, escribiendoSinSaltar = 0, colaSinSaltar = [], vistaSinSaltar = "", raizSinSaltar = "", avisoSinSaltar = null, mensajesAviso = [], accionAviso = null, TIEMPO_ENVIO_SINSALTAR = 30000;
+var turnoSinSaltar = 0, escribiendoSinSaltar = 0, colaSinSaltar = [], vistaSinSaltar = "", raizSinSaltar = "", avisoSinSaltar = null, mensajesAviso = [], accionAviso = null, saliendoSinSaltar = false, vigilandoSalida = false, TIEMPO_ENVIO_SINSALTAR = 30000;
 function irA(url) { var a = document.createElement("a"); a.href = url; a.click(); }
 /* Lo que sigue solo lo hace la pantalla de Proyectos (`iniciarSinSaltos`); las de Tareas
    conservan lo suyo: ni `<details>` abiertos, ni título, ni campos a medias. */
@@ -121,19 +127,45 @@ function soltarPedido(p) {
   }
   p.bloqueados = [];
 }
+/* ¿Hay un guardado en camino o esperando en la cola? */
+function hayGuardadosSinSaltar() {
+  var k;
+  if (escribiendoSinSaltar > 0) return true;
+  for (k = 0; k < colaSinSaltar.length; k++) if (colaSinSaltar[k].cuerpo !== undefined) return true;
+  return false;
+}
+/* Lo que la página NO controla (atrás entre documentos, cerrar, otra dirección): mientras hay algo
+   pendiente, el navegador pide confirmar. Se pone y se quita según haya o no (no estorba al navegador
+   cuando no hay nada). Solo Proyectos. */
+function alSalirSinSaltar(e) {
+  if (saliendoSinSaltar || !hayGuardadosSinSaltar()) return;
+  e.preventDefault();
+  e.returnValue = "";
+  return "";
+}
+function vigilarSalidaSinSaltar() {
+  if (!enProyectosSinSaltar()) return;
+  var debe = hayGuardadosSinSaltar() && !saliendoSinSaltar;
+  if (debe && !vigilandoSalida) { window.addEventListener("beforeunload", alSalirSinSaltar); vigilandoSalida = true; }
+  else if (!debe && vigilandoSalida) { window.removeEventListener("beforeunload", alSalirSinSaltar); vigilandoSalida = false; }
+}
 /* La página va a irse (`accion`). Ningún pedido sale después: si hay guardados en la cola no se mandan, sus
-   formularios se sueltan con lo escrito y el aviso fijo lo dice; la persona se va con «Continuar». Sin
-   guardados esperando, se va enseguida (y las lecturas que esperaban se descartan). */
+   formularios se sueltan con lo escrito y el aviso fijo lo dice; si hay uno en camino, el aviso dice que no se
+   sabrá si llegó. La persona se va con «Continuar». Sin nada pendiente se va enseguida (y las lecturas que
+   esperaban se descartan). */
 function irSinSaltar(accion, texto) {
-  var guardados = 0, k;
+  var enCola = 0, enCamino = escribiendoSinSaltar, k, dicho = texto;
   for (k = 0; k < colaSinSaltar.length; k++) {
-    if (colaSinSaltar[k].cuerpo !== undefined) guardados++;
+    if (colaSinSaltar[k].cuerpo !== undefined) enCola++;
     soltarPedido(colaSinSaltar[k]);
   }
   colaSinSaltar = [];
-  if (!guardados) { accion(); return; }
-  avisarSinSaltar(texto + " Había " + guardados + (guardados === 1 ? " cambio esperando: NO se mandó" : " cambios esperando: NO se mandaron") +
-                  "; lo que tenías escrito sigue aquí. Toca «Continuar» para ir a la página.", accion);
+  if (!enCola && !enCamino) { accion(); return; }
+  if (enCola) dicho += " Había " + enCola + (enCola === 1 ? " cambio esperando: NO se mandó" : " cambios esperando: NO se mandaron");
+  if (enCamino) dicho += (enCola ? ". " : " ") + "Un guardado sigue en camino: si te vas ahora no sabrás si llegó";
+  avisarSinSaltar(dicho + "; lo que tenías escrito sigue aquí. Toca «Continuar» para ir a la página.",
+                  function () { saliendoSinSaltar = true; vigilarSalidaSinSaltar(); accion(); });
+  vigilarSalidaSinSaltar();
 }
 function llavesDeCampos(regiones) {
   var lista = [], cuenta = {};
@@ -275,14 +307,15 @@ function sinSaltar(p) {
   var boton = p.form ? p.form.querySelector("button") : null;
   if (boton) boton.disabled = true;
   var mio = ++turnoSinSaltar, terminado = false, vencido = false, reloj = null;
-  if (esPost) escribiendoSinSaltar++;
+  if (esPost) { escribiendoSinSaltar++; vigilarSalidaSinSaltar(); }
   var terminar = function () {
     if (terminado) return;
     terminado = true;
     clearTimeout(reloj);
-    if (esPost) escribiendoSinSaltar--;
+    if (esPost) { escribiendoSinSaltar--; }
     soltarPedido(p);
     if (boton) boton.disabled = false;
+    vigilarSalidaSinSaltar();
   };
   /* Sale lo que sigue en la cola: los guardados en su orden, y la lectura (si hay) al final de todos. */
   var despues = function () {
@@ -373,7 +406,7 @@ function datosDelFormulario(form, envia) {
 function marcarSinSaltar(form, envia) {
   var d = datosDelEnvio(form, envia);
   var u = d.metodo === "otro" ? null : destinoSinSaltar(d.accion, d.metodo);
-  if (!u) { envioDeSiempre(form, envia); return; }
+  if (!u) { irSinSaltar(function () { envioDeSiempre(form, envia); }, "Este envío sale de la página."); return; }
   var datos = datosDelFormulario(form, envia);
   var pedido;
   if (d.metodo === "post") {
@@ -396,6 +429,7 @@ function pedirOEsperar(p) {
       }
     }
     colaSinSaltar.push(p);
+    vigilarSalidaSinSaltar();
     return;
   }
   sinSaltar(p);
@@ -423,7 +457,14 @@ function alEnviarSinSaltar(e) {
   if (e.defaultPrevented || !form || !form.getAttribute || !form.dataset) return;
   if (form.dataset.nativo !== undefined) { delete form.dataset.nativo; return; }   // el envío de siempre que pidió la pieza
   var d = datosDelEnvio(form, e.submitter);
-  if (d.metodo === "otro" || (d.target && d.target !== "_self") || !destinoSinSaltar(d.accion, d.metodo)) return;
+  if (d.metodo === "otro" || (d.target && d.target !== "_self")) return;
+  if (!destinoSinSaltar(d.accion, d.metodo)) {                    // sale de la página: con un guardado pendiente no se va sola
+    if (hayGuardadosSinSaltar()) {
+      e.preventDefault();
+      irSinSaltar(function () { envioDeSiempre(form, e.submitter); }, "Este envío sale de la página.");
+    }
+    return;
+  }
   e.preventDefault();
   if (form.dataset.enCamino !== undefined) return;
   form.dataset.enCamino = "";
@@ -436,7 +477,15 @@ function alHacerClicSinSaltar(e) {
   var fuera = a.getAttribute("target");
   if ((fuera && fuera !== "_self") || a.hasAttribute("download")) return;
   var u = destinoSinSaltar(a.getAttribute("href"), "get");
-  if (!u) return;
+  if (!u) {                                                        // sale de la página (el menú, «‹ Inicio», Tareas, Papelera…)
+    var v;
+    try { v = new URL(a.getAttribute("href"), window.location.href); } catch (x) { return; }
+    if (v.origin !== "null" && hayGuardadosSinSaltar()) {
+      e.preventDefault();
+      irSinSaltar(function () { irA(a.getAttribute("href")); }, "Este enlace sale de la página.");
+    }
+    return;
+  }
   var destino = u.pathname + u.search;
   if (a.getAttribute("href").charAt(0) === "#") return;        // un ancla suelta de esta misma pantalla la maneja el navegador
   e.preventDefault();
