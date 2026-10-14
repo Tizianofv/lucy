@@ -286,10 +286,11 @@ def _sin_la_pieza(guion: str) -> str:
 
 
 # (Las prohibiciones de los guiones propios de la pantalla: lo que no es la pieza no escribe ni pide nada.)
-_PROHIBIDO_EN_EL_RESTO = re.compile(
+_PROHIBIDO_EN_EL_RESTO = re.compile(      # la misma lista que tenía `lo_prohibido_en` de 46bf55b (con `setTimeout`, `this`, `self/top/...`)
     r"fetch|XMLHttpRequest|sendBeacon|WebSocket|EventSource|localStorage|sessionStorage|\.submit\(|\blocation\b|\.action|"
-    r"FormData|innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval|Function\b|import\(|\bwindow\s*\[|Reflect|"
-    r"Object\.|\[\s*[\"'`]|setInterval|\.open\(|postMessage|navigator|\.cookie")
+    r"FormData|innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval|Function\b|import\(|"
+    r"(?<![.\w])(self|globalThis|top|parent|frames)\b|\bwindow\s*\[|\bthis\b|Reflect|"
+    r"Object\.|\[\s*[\"'`]|setTimeout|setInterval|\.open\(|postMessage|navigator|\.cookie")
 
 
 def test_las_pantallas_de_tareas_no_hacen_pedidos_fuera_de_la_pieza(tareas):
@@ -360,18 +361,34 @@ def test_js_un_envio_hace_un_post_y_pinta_lo_que_trajo_el_servidor(tareas, panta
 
 @hay_osascript
 @pytest.mark.parametrize("pantalla", ["tareas", "detalle"])
-@pytest.mark.parametrize("modo", ["red", "500"])
-def test_js_si_el_post_falla_se_envia_el_formulario_de_siempre(tareas, pantalla, modo):
-    """En una pantalla de Tareas un 500 se trata como siempre (se envía el formulario de siempre): el
-    NO reenviar un 5xx es de Proyectos, donde se crean cosas (`tests/test_marcar_sin_saltar.py`)."""
+@pytest.mark.parametrize("modo", ["red", "500", "401"])
+def test_js_si_el_post_falla_no_se_reenvia_lo_que_pudo_llegar(tareas, pantalla, modo):
+    """CAMBIÓ PARA TAREAS el 13-oct-2026 (pedido de la sala: «un guardado se manda UNA vez»): `/tareas` crea
+    tareas derivadas, así que un reenvío duplicaría. Sin respuesta o con 5xx se lee un aviso; con 4xx se envía
+    el formulario de siempre."""
     g = _scripts_de_tareas(tareas)[pantalla]
-    cierre = "sinRed(0);" if modo == "red" else 'responder(0, "ERROR", {ok: false, status: 500});'
+    cierre = {"red": "sinRed(0);", "500": 'responder(0, "ERROR", {ok: false, status: 500});',
+              "401": 'responder(0, "ENTRAR", {ok: false, status: 401});'}[modo]
     r = _jxa(g, _marca("/tareas") + cierre)
-    assert len(r["pedidos"]) == 1 and r["izq"] == "VIEJA" and r["historia"] == []
-    if modo == "red":
-        assert r["salidas"] == [["submit", "/tareas"]]
+    assert len(r["pedidos"]) == 1 and r["izq"] == "VIEJA" and r["historia"] == [] and r["escritos"] == []
+    if modo == "401":
+        assert r["salidas"] == [["requestSubmit", "/tareas", None]]
     else:
-        assert r["salidas"] == [] and r["escritos"] == ["open", "ERROR", "close"]
+        assert [x[0] for x in r["salidas"]] == ["aviso"]
+
+
+@hay_osascript
+@pytest.mark.parametrize("pantalla", ["tareas", "detalle"])
+def test_js_las_pantallas_de_tareas_no_cambian_titulo_ni_details_ni_campos(tareas, pantalla):
+    """Q5: lo que la pieza hace solo en Proyectos (título, `<details>` abiertos, campos a medias) NO ocurre en
+    Tareas ni en el detalle de una tarea."""
+    g = _scripts_de_tareas(tareas)[pantalla]
+    esc = ('vivos.centro.detalles = [{open: true}]; paginas["PAG"] = {titulo: "OTRO", detalles: {centro: [{open: false}]}};'
+           'var o = campo("text", "x", "a medias", "", "/tareas"); vivos.centro.campos = [o];'
+           'var n = campo("text", "x", "", "", "/tareas"); paginas["PAG"].campos = {centro: [n]};'
+           + _marca("/tareas") + 'responder(0, "PAG"); salidas.push(["despues", document.title, vivos.centro.detalles[0].open, n.value]);')
+    r = _jxa(g, esc)
+    assert ["despues", "TITULO-VIEJO", False, ""] in r["salidas"]
 
 
 @hay_osascript

@@ -73,9 +73,23 @@ class _Censo(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.visto: set[tuple] = set()
+        self.botones: set[tuple] = set()        # (action, método, nombre, valor) de los botones con nombre
+        self._form: dict = {}
+
+    def handle_endtag(self, tag):
+        if tag == "form":
+            self._form = {}
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
+        if tag == "form":
+            self._form = a
+        if tag in ("button", "input") and self._form and (a.get("type") or "submit") == "submit":
+            if a.get("name"):
+                self.botones.add((self._form.get("action") or "", (self._form.get("method") or "get").lower(), a["name"], a.get("value") or ""))
+            if a.get("formaction"):      # un botón que cambia a dónde va el envío es otro destino que el censo tiene que ver
+                self.visto.add(("form", a["formaction"], (a.get("formmethod") or self._form.get("method") or "get").lower(),
+                                a.get("formtarget") or self._form.get("target"), False, a.get("class") or "", a.get("id") or ""))
         if tag == "a" and "href" in a:
             self.visto.add(("a", a["href"], "", a.get("target"), "download" in a, a.get("class") or "", a.get("id") or ""))
         elif tag == "form":
@@ -126,6 +140,9 @@ def lo_que_sale_a_proposito() -> list[tuple[str, str, str]]:
     declarados = [("a", p.ruta, f"el menú de arriba: «{p.nombre}» (sale de `web/menu.py`, el `<nav>` real)")
                   for p in menu.pantallas() if p.ruta != "/proyectos"]
     declarados += [
+        # (los enlaces de texto de la página hacia otras pantallas, uno por uno)
+        ("a", "/tareas", "enlace de texto «Tareas» (las sueltas): es otra pantalla"),
+        ("a", "/papelera", "enlace de texto hacia la Papelera: es otra pantalla"),
         ("a", REGISTRO + "/#inicio", "«‹ Inicio»: vuelve a la App de registro"),
         ("a", "https://drive.example.test/carpetas/disco-uno", "«Abrir la carpeta» (Drive): abre otra pestaña"),
     ]
@@ -171,6 +188,38 @@ def test_todo_lo_que_se_toca_se_queda_en_la_pagina_o_sale_a_proposito(con):
     # Y la de solo ver no trae ningún POST en lo que se queda (no hay formulario que escriba).
     if con == "ver":
         assert not [f for f in quedan if f["tag"] == "form" and f["metodo"] == "post"]
+
+
+def los_botones_con_nombre() -> list[dict]:
+    """Todo botón con nombre de todo formulario que la casa ve (de la página dibujada): el envío depende de él."""
+    c = _Censo()
+    for consulta in sv.VISTAS + list(sv.A_MANO.values()):
+        c.feed(sv._pintar("casa", **consulta))
+    return [dict(accion=a, metodo=m, nombre=n, valor=v) for a, m, n, v in sorted(c.botones)]
+
+
+@hay_osascript
+def test_el_respaldo_manda_el_boton_que_envio_en_todo_formulario_que_depende_de_el():
+    """H1: «Elegir» una persona y «Quitar el cliente» llevan `name="noco_id"`; `submit()` no manda el botón y
+    elegir a alguien se volvía quitar el cliente. Cada formulario con botón con nombre sale de la página
+    dibujada; cuando el servidor lo rechaza (4xx) el respaldo es `requestSubmit(ese botón)`."""
+    botones = los_botones_con_nombre()
+    assert {(b["nombre"], b["valor"]) for b in botones} >= {("noco_id", ""), ("noco_id", "900")}, botones     # «Quitar el cliente» y «Elegir»
+    for b in botones:
+        if destino_es_de_la_pantalla(b):
+            esc = ('var f = formulario(%s, %s, []); var bt = {name: %s, value: %s, disabled: false}; __e = enviar(f, bt);'
+                   ' responder(0, "X", {ok: false, status: 401});'
+                   % (json.dumps(b["accion"]), json.dumps(b["metodo"]), json.dumps(b["nombre"]), json.dumps(b["valor"])))
+            r = correr(CASA(), esc)
+            assert [s for s in r["salidas"] if s[0] in ("requestSubmit", "submit")] == [["requestSubmit", b["accion"], b["nombre"]]], b
+            # y por detrás el botón viaja en lo que se manda
+            r = correr(CASA(), esc.replace('responder(0, "X", {ok: false, status: 401});', ""))
+            enviado = r["pedidos"][0]
+            assert (b["nombre"] + "=" + b["valor"]) in ((enviado[2] or "") + "&" + enviado[1]), (b, enviado)
+
+
+def destino_es_de_la_pantalla(b: dict) -> bool:
+    return b["accion"].startswith("/proyectos")
 
 
 @hay_osascript
@@ -279,28 +328,62 @@ def test_agregar_una_persona_sin_escogerla_no_sale_y_lo_dice_el_guion_de_la_pagi
     assert r["prevenido"] is True and r["pedidos"] == []
 
 
+AVISO_SIN_CONFIRMAR = "No se pudo confirmar si se guardó. No se volvió a enviar para no duplicarlo; lo que tenías escrito sigue aquí. "
+
+
 @hay_osascript
 @pytest.mark.parametrize("modo", ["red", "401", "404"])
-@pytest.mark.parametrize("que", ["post", "link"])
-def test_si_el_pedido_no_llega_o_el_servidor_dice_que_no_se_hace_lo_de_siempre(modo, que):
-    toque = ('var f = formulario("/proyectos/1/nombre", "post", [["nombre", "X"]]); __e = enviar(f);' if que == "post"
-             else 'var f = formulario("/x", "get", []); __e = clic(enlace("/proyectos?p=2"));')
-    cierre = ('sinRed(0);' if modo == "red" else
-              'responder(0, "ENTRAR", {ok: false, status: %s});' % modo)
-    r = correr(CASA(), toque + cierre)
-    if que == "post":
-        assert r["salidas"] == [["submit", "/proyectos/1/nombre"]], r              # el envío de siempre, una vez
-    else:
-        assert r["salidas"] == [["ir", "/proyectos?p=2"]], r                       # ir a la página, de la forma de siempre
-    assert r["historia"] == [] and r["cen"] == "VIEJA" and r["escritos"] == []     # nada se pintó, nada quedó a medias
+def test_un_get_que_no_llega_o_el_servidor_rechaza_se_hace_de_la_forma_de_siempre(modo):
+    """Un GET (enlace, búsqueda) no duplica nada: se hace como siempre. Con el botón de la búsqueda, si lo hubo."""
+    cierre = 'sinRed(0);' if modo == "red" else 'responder(0, "ENTRAR", {ok: false, status: %s});' % modo
+    r = correr(CASA(), '__e = clic(enlace("/proyectos?p=2"));' + cierre)
+    assert r["salidas"] == [["ir", "/proyectos?p=2"]] and r["historia"] == [] and r["cen"] == "VIEJA"
 
 
 @hay_osascript
-def test_un_post_que_llego_y_el_servidor_fallo_no_se_reenvia_se_enseña_lo_que_dijo():
-    r = correr(CASA(), 'var f = formulario("/proyectos/1/notas", "post", [["contenido", "hola"]]); __e = enviar(f);'
-                       ' responder(0, "<p>Error del servidor</p>", {ok: false, status: 500});')
-    assert len(r["pedidos"]) == 1 and r["salidas"] == []                           # ni un segundo POST ni `submit()`
-    assert r["escritos"] == ["open", "<p>Error del servidor</p>", "close"]
+@pytest.mark.parametrize("modo", ["red", "500", "503", "texto-corto"])
+def test_h1_un_post_sin_respuesta_o_con_5xx_no_se_reenvia_y_la_persona_lo_lee_sin_perder_lo_escrito(modo):
+    """SONDA DEL TESTIGO (H1): el POST pudo llegar y perderse solo la respuesta. Nada se reenvía (ni
+    `submit()` ni `requestSubmit()`), la página no se repinta (lo escrito sigue ahí) y se lee un aviso fijo con
+    un enlace a esta misma vista para mirar cómo quedó."""
+    cierre = {"red": "sinRed(0);", "500": 'responder(0, "<p>error</p>", {ok: false, status: 500});',
+              "503": 'responder(0, "x", {ok: false, status: 503});', "texto-corto": ""}[modo]
+    if modo == "texto-corto":       # la respuesta es buena pero se corta: ya se guardó, se va a la página (GET), nunca otro POST
+        cierre = ('pedidos[0].f.resolver({ok: true, status: 200, url: "http://x.test/proyectos?p=1", text: function () {'
+                  ' var f = new Futuro(); f.rechazar(new Error("corte")); return f; }});')
+    r = correr(CASA(), 'var f = formulario("/proyectos/1/notas", "post", [["contenido", "lo que escribí"]]); __e = enviar(f); '
+                       'var __b = f.boton.disabled;' + cierre)
+    assert [p[0] for p in r["pedidos"]] == ["POST"] and r["cen"] == "VIEJA" and r["historia"] == []
+    if modo == "texto-corto":
+        assert r["salidas"] == [["ir", "http://x.test/proyectos?p=1"]]
+    else:
+        assert r["salidas"] == [["aviso", AVISO_SIN_CONFIRMAR, "/proyectos?p=1"]]       # y NADA de submit / requestSubmit
+    assert r["escritos"] == []
+
+
+@hay_osascript
+@pytest.mark.parametrize("modo", ["401", "404"])
+def test_un_post_que_el_servidor_rechazo_con_4xx_no_escribio_nada_y_se_envia_como_siempre_con_su_boton(modo):
+    esc = ('var f = formulario("/proyectos/1/cliente", "post", [["a", "1"]]); var b = {name: "noco_id", value: "7", disabled: false};'
+           ' __e = enviar(f, b); responder(0, "ENTRAR", {ok: false, status: %s}); salidas.push(["nativo", f.dataset.nativo, f.dataset.enviado]);' % modo)
+    r = correr(CASA(), esc)
+    assert r["salidas"] == [["requestSubmit", "/proyectos/1/cliente", "noco_id"], ["nativo", "", None]]
+    assert r["historia"] == [] and r["cen"] == "VIEJA"
+
+
+@hay_osascript
+def test_el_envio_nativo_que_pidio_la_pieza_no_vuelve_a_pasar_por_ella():
+    esc = ('var f = formulario("/proyectos/1/cliente", "post", [["a", "1"]]); f.dataset.nativo = ""; __e = enviar(f);')
+    r = correr(CASA(), esc)
+    assert r["pedidos"] == [] and r["prevenido"] is False
+
+
+@hay_osascript
+def test_el_aviso_de_no_confirmado_se_quita_cuando_la_pagina_se_vuelve_a_pintar():
+    esc = ('var f = formulario("/proyectos/1/notas", "post", []); enviar(f); sinRed(0);'
+           ' __e = clic(enlace("/proyectos?p=2")); responder(1, "PAG-2");')
+    r = correr(CASA(), esc)
+    assert [s[0] for s in r["salidas"]] == ["aviso", "aviso quitado"] and r["cen"] == "PAG-2"
 
 
 @hay_osascript
@@ -320,10 +403,85 @@ def test_si_guardo_y_no_se_puede_pintar_se_va_a_esa_pagina_sin_reenviar(tipo):
 
 
 @hay_osascript
-def test_dos_toques_al_mismo_guardado_mandan_un_solo_pedido_y_otro_guardado_en_camino_no_sale():
-    r = correr(CASA(), 'var f = formulario("/proyectos/tarea/10/hecha", "post", []); var g = formulario("/proyectos/tarea/11/hecha", "post", []);'
-                       ' enviar(f); enviar(f); __e = enviar(g);')
-    assert len(r["pedidos"]) == 1 and r["prevenido"] is True                       # g se evitó (el navegador no lo manda solo)
+def test_dos_toques_al_mismo_guardado_mandan_un_solo_pedido():
+    r = correr(CASA(), 'var f = formulario("/proyectos/tarea/10/hecha", "post", []); enviar(f); __e = enviar(f);')
+    assert len(r["pedidos"]) == 1 and r["prevenido"] is True
+
+
+@hay_osascript
+def test_h2_un_guardado_que_llega_mientras_otro_va_en_camino_se_guarda_con_lo_que_tenia_y_sale_despues_en_orden_una_vez():
+    """SONDA DEL TESTIGO (H2): un POST en camino y, mientras, un campo automático (`requestSubmit`) manda su
+    formulario. Antes B se tragaba; ahora sale cuando A termina, con los datos de ESE momento, una sola vez."""
+    esc = ('var A = formulario("/proyectos/1/notas", "post", [["contenido", "nota A"]]); enviar(A);'
+           ' var B = formulario("/proyectos/tarea/10/comentar", "post", [["texto", "comentario B"]]); __e = enviar(B);'
+           ' B.campos[0][1] = "lo que escribí DESPUÉS"; var C = formulario("/proyectos/1/descripcion", "post", [["descripcion", "C"]]); enviar(C);'
+           ' salidas.push(["en camino", pedidos.length]); responder(0, "PAG-A");'
+           ' salidas.push(["tras A", pedidos.length]); responder(1, "PAG-B"); salidas.push(["tras B", pedidos.length]); responder(2, "PAG-C");')
+    r = correr(CASA(), esc)
+    assert r["prevenido"] is True
+    assert r["pedidos"] == [["POST", "/proyectos/1/notas", "contenido=nota%20A"],
+                            ["POST", "/proyectos/tarea/10/comentar", "texto=comentario%20B"],     # con lo que tenía al enviar
+                            ["POST", "/proyectos/1/descripcion", "descripcion=C"]]                 # y en orden, cada uno una vez
+    assert [x for x in r["salidas"] if x[0] in ("en camino", "tras A", "tras B")] == [["en camino", 1], ["tras A", 2], ["tras B", 3]]
+    assert r["cen"] == "PAG-C"
+
+
+@hay_osascript
+def test_lo_que_se_escribe_en_otro_campo_mientras_se_guarda_no_desaparece_al_repintar():
+    """El texto de un campo que NO es del formulario guardado vuelve a su sitio (con el foco); el campo del
+    formulario guardado y los de formularios que ya van en camino muestran lo que dice el servidor."""
+    esc = ('var otro = campo("text", "contenido", "lo que voy escribiendo", "", "/proyectos/1/notas");'
+           ' var guardado = campo("text", "texto", "ya guardado", "", "/proyectos/tarea/10/comentar");'
+           ' var enCamino = campo("text", "descripcion", "texto en camino", "", "/proyectos/1/descripcion"); enCamino.form.dataset.enCamino = "";'
+           ' document.activeElement = otro;'
+           ' vivos.centro.campos = [otro, guardado, enCamino];'
+           ' var nuevoOtro = campo("text", "contenido", "", "", "/proyectos/1/notas?x=1"), nuevoG = campo("text", "texto", "", "", "/proyectos/tarea/10/comentar"),'
+           ' nuevoC = campo("text", "descripcion", "", "", "/proyectos/1/descripcion");'
+           ' paginas["PAG-X"] = {campos: {centro: [nuevoOtro, nuevoG, nuevoC]}};'
+           ' var f = formulario("/proyectos/tarea/10/comentar", "post", [["texto", "ya guardado"]]); guardado.form.boton = f.boton;'
+           ' __e = enviar(f); f.closest = function () { return null; };'
+           ' responder(0, "PAG-X"); salidas.push(["campos", nuevoOtro.value, nuevoG.value, nuevoC.value, nuevoOtro.focos, nuevoOtro.rangos]);')
+    # `guardado.form` no es el formulario enviado (`f`): para el censo de campos lo es por la prueba de abajo
+    r = correr(CASA(), esc.replace("guardado.form.boton = f.boton;", "guardado.form = f;"))
+    campos = [x for x in r["salidas"] if x[0] == "campos"][0]
+    assert campos[1:] == ["lo que voy escribiendo", "", "", 1, [[22, 22]]]
+
+
+@hay_osascript
+def test_no_se_repone_un_campo_que_el_servidor_ya_cambio():
+    esc = ('var otro = campo("text", "contenido", "mi borrador", "", "/proyectos/1/notas"); vivos.centro.campos = [otro];'
+           ' var nuevo = campo("text", "contenido", "lo del servidor", "lo del servidor", "/proyectos/1/notas"); paginas["PAG-Y"] = {campos: {centro: [nuevo]}};'
+           ' __e = enviar(formulario("/proyectos/tarea/10/hecha", "post", [])); responder(0, "PAG-Y"); salidas.push(["campo", nuevo.value]);')
+    r = correr(CASA(), esc)
+    assert ["campo", "lo del servidor"] in r["salidas"]
+
+
+@hay_osascript
+def test_al_ir_a_otra_pantalla_no_se_arrastra_lo_escrito():
+    esc = ('var otro = campo("text", "contenido", "borrador", "", "/proyectos/1/notas"); vivos.centro.campos = [otro];'
+           ' var nuevo = campo("text", "contenido", "", "", "/proyectos/1/notas"); paginas["PAG-Z"] = {campos: {centro: [nuevo]}};'
+           ' __e = clic(enlace("/proyectos?p=2")); responder(0, "PAG-Z"); salidas.push(["campo", nuevo.value]);')
+    assert ["campo", ""] in correr(CASA(), esc)["salidas"]
+
+
+@hay_osascript
+def test_el_boton_que_cambia_a_donde_va_el_envio_se_respeta_igual_que_en_el_navegador():
+    boton = lambda **a: json.dumps({"name": "x", "value": "1", "disabled": False, "atributos": a})   # noqa: E731
+    def b(**a):
+        return ('{name: "x", value: "1", disabled: false, getAttribute: function (k) { return %s[k] === undefined ? null : %s[k]; }}'
+                % (json.dumps(a), json.dumps(a)))
+    # formaction a otra pantalla: sale de la página, no se toca
+    r = correr(CASA(), 'var f = formulario("/proyectos/1/nombre", "post", []); __e = enviar(f, %s);' % b(formaction="/otra/3/borrar"))
+    assert r["prevenido"] is False and r["pedidos"] == []
+    # formaction dentro de la pantalla: el POST va ahí, no al `action` del formulario
+    r = correr(CASA(), 'var f = formulario("/otra/3/borrar", "post", []); __e = enviar(f, %s);' % b(formaction="/proyectos/1/estado"))
+    assert [p[1] for p in r["pedidos"]] == ["/proyectos/1/estado"]
+    # formmethod=get: se manda en la dirección
+    r = correr(CASA(), 'var f = formulario("/proyectos/1/estado", "post", [["q", "z"]]); __e = enviar(f, %s);' % b(formmethod="get", formaction="/proyectos"))
+    assert [(p[0], p[1]) for p in r["pedidos"]] == [("GET", "/proyectos?q=z&x=1")]
+    # formtarget=_blank: lo del navegador
+    r = correr(CASA(), 'var f = formulario("/proyectos/1/estado", "post", []); __e = enviar(f, %s);' % b(formtarget="_blank"))
+    assert r["prevenido"] is False and r["pedidos"] == []
 
 
 @hay_osascript

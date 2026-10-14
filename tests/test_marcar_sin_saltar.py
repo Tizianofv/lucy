@@ -167,18 +167,19 @@ def test_js_marcar_pinta_lo_que_trajo_el_servidor_sin_un_segundo_pedido(mundo):
 
 @hay_osascript
 @pytest.mark.parametrize("modo", ["red", "500", "401"])
-def test_js_si_el_post_no_llega_o_falla_se_envia_el_formulario_de_siempre(mundo, modo):
-    """Sin respuesta (red) o con un 4xx (401: la sesión venció) se envía el formulario de siempre y se ve lo
-    que diga el servidor. Un 5xx es otra cosa (el POST SÍ llegó): no se reenvía, se enseña lo que dijo."""
+def test_js_si_el_post_no_llega_o_falla_nunca_se_reenvia_un_guardado_que_pudo_llegar(mundo, modo):
+    """Sin respuesta (red) o con 5xx el POST pudo llegar: NO se reenvía, se lee un aviso. Con 4xx (401: la sesión
+    venció) el servidor no escribió nada y se envía el formulario de siempre (con su botón)."""
     cierre = {"red": "sinRed(0);", "500": 'responder(0, "ERROR", {ok: false, status: 500});',
               "401": 'responder(0, "ENTRAR", {ok: false, status: 401});'}[modo]
     r = correr(_script_de_la_pagina(mundo), _marcar(cierre))
     assert [p[0] for p in r["pedidos"]] == ["POST"]
     assert r["izq"] == "VIEJA" and r["cen"] == "VIEJA" and r["historia"] == []        # nada se pintó
-    if modo == "500":
-        assert r["salidas"] == [] and r["escritos"] == ["open", "ERROR", "close"]     # no se reenvía
+    if modo == "401":
+        assert r["salidas"] == [["requestSubmit", "/proyectos/tarea/10/hecha", None]]
     else:
-        assert r["salidas"] == [["submit", "/proyectos/tarea/10/hecha"]] and r["escritos"] == []
+        assert [x[0] for x in r["salidas"]] == ["aviso"]                              # ni submit ni requestSubmit
+    assert r["escritos"] == []
 
 
 @hay_osascript

@@ -42,20 +42,19 @@ PERMITIDO_EN_LA_PIEZA = (
     # el único pedido de red: a la dirección que decidió la puerta (`destinoSinSaltar`); con cuerpo
     # (un POST) solo para un formulario, sin él es un GET.
     ("fetch(p.url, opciones)", 1),
-    # la caída al envío de siempre de un formulario, y la caída de un enlace por un ancla suelta.
-    ("form.submit()", 2),
-    # el servidor falló (5xx) a un POST que SÍ llegó: se enseña lo que dijo en vez de reenviarlo.
-    ("document.open()", 1), ("document.write(texto)", 1), ("document.close()", 1),
+    # el envío de siempre de un formulario cuando el navegador no sabe `requestSubmit` (con el botón que
+    # lo envió si lo sabe: `form.requestSubmit(envia || undefined)`).
+    ("form.submit()", 1),
     # el formulario leído: sus campos y su dirección (solo lectura).
-    ("new FormData(form)", 1), ("form.action", 2),
+    ("new FormData(form)", 1), ("form.action", 1),
     # leer dónde está la página (nunca escribirlo: ir a otro sitio se hace con un enlace suelto).
-    ("window.location.href", 2), ("window.location.origin", 1), ("window.location.pathname", 3),
-    ("window.location.search", 2),
+    ("window.location.href", 2), ("window.location.origin", 1), ("window.location.pathname", 4),
+    ("window.location.search", 3),
     # preguntar si el navegador sabe hacerlo (nunca llamarlo fuera de `fetch(p.url, opciones)`).
     ("window.fetch", 2), ("window.FormData", 1),
-    # dos elementos nuevos: el enlace suelto (ir sin reenviar) y el guion de «Copiar» que la página
-    # nueva trae y ésta no.
-    ('document.createElement("a")', 1), ('document.createElement("script")', 1),
+    # elementos nuevos: el enlace suelto (ir sin reenviar), el aviso fijo de «no se pudo confirmar» con su
+    # enlace para mirar cómo quedó, y el guion de «Copiar» que la página nueva trae y ésta no.
+    ('document.createElement("a")', 2), ('document.createElement("div")', 1), ('document.createElement("script")', 1),
 )
 PROHIBIDO_EN_LA_PIEZA = re.compile(
     r"fetch|XMLHttpRequest|sendBeacon|WebSocket|EventSource|localStorage|sessionStorage|\.submit\(|"
@@ -157,11 +156,17 @@ function responder(i, texto, extra) {
 }
 function sinRed(i) { pedidos[i].f.rechazar(new Error("sin red")); }
 var salidas = [], reemplazos = {}, vivos = {}, ventanaScroll = [], escritos = [], timerCola = [];
-function nodo(rol, y, desde, detalles) {
-  var n = {rol: rol, desde: desde, scrollTop: y, scrollHeight: 3000, clientHeight: 700, detalles: detalles || [],
+function campo(tipo, nombre, valor, defecto, accion) {
+  /* un campo de texto de un formulario de mentira (su `form` sabe su `action`) */
+  var f = {dataset: {}, getAttribute: function (k) { return k === "action" ? accion : null; }};
+  return {type: tipo, name: nombre, value: valor, defaultValue: defecto, form: f, focos: 0, rangos: [],
+    focus: function () { this.focos++; }, setSelectionRange: function (a, b) { this.rangos.push([a, b]); }};
+}
+function nodo(rol, y, desde, detalles, campos) {
+  var n = {rol: rol, desde: desde, scrollTop: y, scrollHeight: 3000, clientHeight: 700, detalles: detalles || [], campos: campos || [],
     getAttribute: function (a) { return a === "data-region" ? rol : null; },
     querySelector: function () { return null; },
-    querySelectorAll: function (s) { return s === "details" ? this.detalles : []; },
+    querySelectorAll: function (s) { return s === "details" ? this.detalles : (s === "input, textarea" ? this.campos : []); },
     closest: function () { return null; },
     getBoundingClientRect: function () { return {top: 0, bottom: 0, height: 0}; },
     replaceWith: function (n2) { vivos[rol] = n2; __fase = "despues"; }};
@@ -172,7 +177,7 @@ function DOMParser() {}
 DOMParser.prototype.parseFromString = function (texto) {
   var p = paginas[texto] || {};
   var roles = p.regiones || ["izquierda", "centro"];
-  var regs = roles.map(function (r) { var n = nodo(r, 0, texto, (p.detalles || {})[r]); if (p.sinScroll) n.scrollHeight = 700; return n; });
+  var regs = roles.map(function (r) { var n = nodo(r, 0, texto, (p.detalles || {})[r], (p.campos || {})[r]); if (p.sinScroll) n.scrollHeight = 700; return n; });
   return {title: p.titulo || "", querySelectorAll: function (s) { return s === "[data-region]" ? regs : []; },
           querySelector: function (s) { return s === "#guion-copiar-carpeta" && p.copiar ? {textContent: "COPIAR-DEL-SERVIDOR"} : null; }};
 };
@@ -180,7 +185,11 @@ var __filas = null, __fase = "antes";
 var document = {
   documentElement: {className: "", classList: {add: function () {}}},
   title: "TITULO-VIEJO",
-  body: {appendChild: function (n) { salidas.push(["guion-nuevo", n.id, n.textContent]); }},
+  activeElement: null,
+  body: {firstChild: {}, parentNode: null,
+    appendChild: function (n) { salidas.push(["guion-nuevo", n.id, n.textContent]); },
+    insertBefore: function (n, ref) { n.parentNode = document.body; avisosPuestos.push(n); salidas.push(["aviso", n.textContent, n.hijos[0].atributos.href]); },
+    removeChild: function (n) { avisosPuestos.splice(avisosPuestos.indexOf(n), 1); salidas.push(["aviso quitado"]); }},
   addEventListener: function (t, f) { (__oy[t] = __oy[t] || []).push(f); },
   querySelector: function () { return null; },
   querySelectorAll: function (s) {
@@ -189,9 +198,14 @@ var document = {
     return []; },
   getElementById: function (id) { return reemplazos[id] || null; },
   importNode: function (n) { if (reemplazos.__importar_falla) throw new Error("x"); return n; },
-  createElement: function (t) { var n = {tag: t, click: function () { salidas.push(["ir", this.href]); }}; return n; },
-  open: function () { escritos.push("open"); }, write: function (t) { escritos.push(t); }, close: function () { escritos.push("close"); }
+  createElement: function (t) {
+    var n = {tag: t, atributos: {}, hijos: [], parentNode: null, textContent: "",
+      click: function () { salidas.push(["ir", this.href]); },
+      setAttribute: function (k, v) { this.atributos[k] = v; }, getAttribute: function (k) { return this.atributos[k] === undefined ? null : this.atributos[k]; },
+      appendChild: function (h) { this.hijos.push(h); h.parentNode = this; }};
+    return n; }
 };
+var avisosPuestos = [];
 function roles_vivos() { return [vivos.izquierda, vivos.centro]; }
 vivos.izquierda = nodo("izquierda", 300, "VIEJA"); vivos.centro = nodo("centro", 1200, "VIEJA");
 var window = {fetch: fetch, URLSearchParams: URLSearchParams, DOMParser: DOMParser, FormData: FormData, history: historia,
@@ -215,7 +229,9 @@ function formulario(accion, metodo, campos, extra) {
     classList: {contains: function (c) { return (f.clases || []).indexOf(c) >= 0; }},
     querySelector: function (s) { return s === "button" ? boton : null; },
     closest: function () { return null; },
-    submit: function () { salidas.push(["submit", this.action]); }};
+    isConnected: true,
+    submit: function () { salidas.push(["submit", this.action]); },
+    requestSubmit: function (b) { salidas.push(["requestSubmit", this.action, b && b.name !== undefined ? b.name : null]); }};
   for (var k in (extra || {})) f.atributos[k] = extra[k];
   return f;
 }
