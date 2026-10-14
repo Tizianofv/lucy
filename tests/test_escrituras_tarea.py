@@ -253,13 +253,13 @@ def _adonde(r) -> str:
 def test_marcar_hecha_escribe_con_huella_de_panel_y_vuelve_a_la_tarea(mt):
     antes = foto(mt)
     r = post("/proyectos/tarea/10/hecha")
-    assert r.status_code == 303 and _adonde(r) == "/proyectos?p=2&hecho=tarea_hecha#tarea-10"
+    assert r.status_code == 303 and _adonde(r) == "/proyectos?p=2&hecho=tarea_hecha&sigue=10#tarea-10"
     t = tarea(mt, 10)
     assert t["estado"] == "hecha" and t["completado_en"] is not None
     h, = huellas(mt)
     assert (h["actor"], h["accion"], h["registro_id"]) == ("panel", "editar", 10)
     assert igual_salvo(antes, foto(mt), tareas={10}, log_acciones={h["id"]})
-    html = ver(mt, p=2, hecho="tarea_hecha")
+    html = ver(mt, p=2, hecho="tarea_hecha", sigue=10)
     assert "Tarea marcada como hecha." in html
 
 
@@ -959,7 +959,9 @@ def test_toda_ruta_post_de_tarea_pide_sesion_y_escribe_por_una_puerta_con_actor_
         # E7 (1-oct-2026): las personas de la tarea.
         "/proyectos/tarea/{tid}/personas", "/proyectos/tarea/{tid}/personas/{xid}/quitar",
         # Meter una tarea suelta en un proyecto (5-oct-2026): por `crud.editar`.
-        "/proyectos/tarea/{tid}/proyecto"}
+        "/proyectos/tarea/{tid}/proyecto",
+        # «La tarea que sigue» (14-oct-2026): por `db.cerrar_y_derivar`, que anota de cuál viene.
+        "/proyectos/tarea/{tid}/siguiente"}
     for nombre, r in rutas.items():
         assert r["sesion"], f"{nombre} no pide sesión"
         assert len(r["escribe"]) == 1, f"{nombre} escribe por {r['escribe']}"
@@ -1056,8 +1058,11 @@ def test_hermanos_las_dos_pantallas_arman_y_escriben_la_derivada_con_lo_mismo():
                    for n in ast.walk(fns[fn]))
 
     cierran = {n for n in fns if usa(n, "cerrar_y_derivar")}
-    assert cierran == {"guardar_tareas", "marcar_tarea_hecha_desde_proyectos"}, cierran
-    for n in sorted(cierran):
+    # `agregar_tarea_siguiente` (14-oct-2026) es el tercero: NO cierra nada (`exige_hecha=True`) y pide
+    # la fecha SIN hora, como «Nueva tarea»; por eso lee con las piezas de «Nueva tarea» y no con
+    # `_derivadas_pedidas` (que exige día y hora). Lo vigila `test_tarea_siguiente.py`.
+    assert cierran == {"guardar_tareas", "marcar_tarea_hecha_desde_proyectos", "agregar_tarea_siguiente"}, cierran
+    for n in sorted(cierran - {"agregar_tarea_siguiente"}):
         assert usa(n, "_derivadas_pedidas"), f"{n} no valida la derivada por la pieza común"
     # Lo ÚNICO que cambia entre las dos es cómo se lee el responsable, porque
     # las dos páginas lo escriben distinto (chat / nombre), no qué se decide.

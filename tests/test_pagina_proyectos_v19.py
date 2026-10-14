@@ -336,7 +336,9 @@ def test_la_fila_de_la_tarea_tiene_las_caritas_y_el_coment_de_la_maqueta(mundo):
     css = _css(html)
     caritas = _regla(html, ".caritas .ini")
     assert caritas["border"] == "2px solid var(--papel)" and caritas["margin-left"] == "-.35rem"
-    assert "text-decoration:underline" not in css                     # el título no se subraya al pasar el ratón
+    # el título no se subraya al pasar el ratón: ninguna regla del título (o de la fila) subraya
+    reglas = re.findall(r"([^{}]+)\{([^}]*)\}", css)
+    assert not [s for s, cuerpo in reglas if "titulo" in s and "underline" in cuerpo]
 
 
 def test_la_marca_de_hecha_se_dibuja_como_la_casilla_de_la_maqueta(mundo):

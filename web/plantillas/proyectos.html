@@ -363,6 +363,25 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 .cliente-datos.chico .dato{font-size:.82rem}
 .cliente-datos .dato span{color:var(--suave)} .cliente-datos .dato b{font-weight:600}
 .cliente-bloque{display:flex;flex-direction:column;gap:.35rem;min-width:0}
+.sigue{margin:.55rem 0 .55rem 0;border:1px solid var(--color);border-left-width:4px;border-radius:10px;background:color-mix(in srgb,var(--color) 7%,var(--papel));padding:.75rem .9rem;display:flex;flex-direction:column;gap:.55rem}
+.sigue-enc{font-size:.9rem}.sigue-enc b{color:var(--color)}
+.sigue form{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:0}
+.sigue input[type=text]{flex:1 1 16rem;font:inherit;padding:.45rem .65rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
+.sigue input[type=date],.sigue select{font:inherit;font-size:.85rem;padding:.4rem .5rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
+.sigue .guardar{font:600 .88rem var(--texto);padding:.45rem .9rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
+.sigue .no{font-size:.85rem;color:var(--suave);text-decoration:underline}
+.sigue small{color:var(--suave);font-size:.76rem}
+.viene-de{display:block;font-size:.74rem;color:var(--suave);margin:.15rem 0 0 1.8rem}
+section.bloque.de-que-se-trata{padding:.7rem 1rem}
+section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
+.de-que-se-trata .descripcion{margin:.1rem 0 .45rem;font-size:.92rem}
+.de-que-se-trata .fechas-p{display:flex;flex-direction:row;align-items:center;gap:.8rem;flex-wrap:wrap;margin-top:0}
+.de-que-se-trata .fechas-p dl.datos{display:flex;flex-wrap:wrap;gap:.2rem .35rem;margin:0;font-size:.84rem}
+.de-que-se-trata dl.datos dt{color:var(--suave);margin:0}
+.de-que-se-trata dl.datos dt::after{content:":"}
+.de-que-se-trata dl.datos dd{margin:0 .9rem 0 0;font-weight:600}
+.de-que-se-trata .fechas-p .botones{margin-left:auto}
+.de-que-se-trata .fechas-p .btn-linea{padding:.2rem .55rem;font-size:.76rem}
 </style></head><body>
 
 {#- UNA FILA DE TAREA (Lucy 1.0, E6). Cada acción es un `<form method="post">`
@@ -422,6 +441,26 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
 {% macro fila_tarea(t) %}
 {% set u = vuelta %}
 {% set abierta = t_abierta == t.id %}
+{#- «LA TAREA QUE SIGUE» (Tiziano, 14-oct-2026): al marcar una tarea hecha, ENCIMA de ella sale un
+    recuadro para agregar la que sigue. El servidor lo dibuja solo si `sigue_de` es esta tarea (la ruta
+    comprueba que de verdad está hecha, que es de este proyecto abierto y que la sesión es la de la casa).
+    Lleva el responsable de la tarea que se terminó ya escogido. «No, nada más» es un enlace de lectura. -#}
+{% if sigue_de == t.id and not solo_ver %}
+<div class="sigue" role="group" aria-label="Tarea siguiente">
+  <div class="sigue-enc"><b>✓ Marcaste hecha la de abajo.</b> ¿Terminar eso deja otra cosa por hacer?</div>
+  <form method="post" action="/proyectos/tarea/{{ t.id }}/siguiente{{ consulta_filtro }}">
+    <input name="titulo" type="text" required maxlength="{{ largo_titulo }}" placeholder="La tarea que sigue" aria-label="La tarea que sigue">
+    <input name="vence" type="date" aria-label="Fecha límite (opcional)">
+    <select name="responsable" aria-label="Responsable (opcional)">
+      <option value="" {%- if not t.responsable or t.responsable not in nombres_responsable %} selected{% endif %}>sin responsable</option>
+      {% for n in nombres_responsable %}<option value="{{ n }}" {%- if t.responsable == n %} selected{% endif %}>{{ n }}</option>{% endfor %}
+    </select>
+    <button class="guardar">Agregar tarea siguiente</button>
+    <a class="no" href="{{ u }}#tarea-{{ t.id }}">No, nada más</a>
+  </form>
+  <small>Se agrega a este mismo proyecto, con el mismo responsable de la que terminaste (lo puedes cambiar), y queda anotado de cuál viene.</small>
+</div>
+{% endif %}
 <div class="tarea {{ 'hecha' if t.es_hecha }} {{ 'vencida' if t.vencida }}" id="tarea-{{ t.id }}" data-tarea="{{ t.id }}" data-ancla>
   <div class="fila" data-edita>
     {% if solo_ver and t.es_hecha %}<span class="marca hecha-b" role="img" aria-label="Hecha">✓</span>
@@ -463,6 +502,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% else %}<a class="borrar-x" href="{{ u }}&amp;confirmar_borrar={{ t.id }}#tarea-{{ t.id }}" aria-label="Borrar la tarea" title="Borrar tarea">×</a>{% endif %}
     {% if t.de_proyecto_en_papelera %}<span class="de-papelera">Era de un proyecto que está en la papelera.</span>{% endif %}
   </div>
+  {#- «SIGUE DE» (14-oct-2026): de qué tarea nació esta. Si esa ya no está a la vista, se dice sin inventar el título. -#}
+  {% if t.deriva_de_id %}<span class="viene-de">↳ sigue de {% if t.deriva_de_titulo %}«{{ t.deriva_de_titulo }}»{% else %}una tarea que ya no está a la vista{% endif %}</span>{% endif %}
   {% if abierta %}
   <div class="detalle">
     {#- LAS PERSONAS DE LA TAREA, como en la maqueta. El responsable de la tarea
@@ -786,6 +827,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'tarea_responsable' %}<p class="aviso">Ese responsable no vale: se escoge entre {{ nombres_responsable|join(', ') }}.</p>
     {% elif error == 'tarea_rechazada' %}<p class="aviso">No se pudo crear la tarea.</p>
     {% elif error == 'tarea_derivada' %}<p class="aviso">La tarea nueva no se pudo crear (revisa el título, la fecha o el responsable): la tarea NO se marcó hecha.</p>
+    {% elif error == 'tarea_siguiente_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe la tarea que sigue. La tarea que marcaste sigue hecha.</p>
+    {% elif error == 'tarea_siguiente_no_hecha' %}<p class="aviso">Esa tarea ya no está hecha: no se agregó la que sigue.</p>
     {% elif error == 'tarea_derivada_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe la tarea nueva, así que la tarea NO se marcó hecha.</p>
     {% elif error == 'cliente' %}<p class="aviso">No se pudo poner ese cliente: la ficha ya no está en Noco o el proyecto ya no está.</p>
     {% elif error == 'cliente_noco' %}<p class="aviso">Noco no contestó: el cliente NO se cambió. Intenta otra vez en un momento.</p>

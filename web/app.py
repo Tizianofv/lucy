@@ -1131,6 +1131,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
                     confirmar_borrar: Navegacion[int] = 0,
                     editar_comentario: Navegacion[int] = 0,
                     derivar: Navegacion[int] = 0, derivadas: Aviso[str] = "",
+                    sigue: Aviso[int] = 0,
                     pq: Navegacion[str] = "", pdonde: Navegacion[str] = "",
                     nuevo_grupo: Navegacion[int] = 0, quitar_grupo: Navegacion[str] = "",
                     grupo: Aviso[str] = "", borrar_proyecto: Navegacion[int] = 0,
@@ -1174,7 +1175,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         # que cambie algo con `solo_ver`, y las rutas que escriben le dan 401 a
         # esta sesión: esto es lo que se ve, aquello es lo que se impide.
         area_guardada = creado = nombre_guardado = tarea_creada = sala_no = 0
-        editar_tarea = confirmar_borrar = editar_comentario = derivar = 0
+        editar_tarea = confirmar_borrar = editar_comentario = derivar = sigue = 0
         error = hecho = nuevo = confirmar = editar = derivadas = pq = pdonde = ""
         nuevo_grupo = 0
         quitar_grupo = grupo = ""
@@ -1233,8 +1234,17 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
                                         solo_ver=solo_ver)
         tareas_p = db.tareas_con_filtro(m, filtro, quien, mi_nombre)
         sufijo_filtro = _sufijo_de_filtro(filtro, quien)
+        # «LA TAREA QUE SIGUE» (14-oct-2026): el recuadro sale encima de la tarea que se acaba de marcar
+        # hecha. `sigue` es un AVISO (solo llega con el recibo del POST que la marcó) y además se
+        # comprueba el ESTADO: la tarea tiene que ser una hecha de ESTE proyecto, que no esté cerrado
+        # (no recibe tareas), y la sesión la de la casa. Si no, no hay recuadro y no se mueve nada.
+        if sigue and not m["cerrado"] and any(f["id"] == sigue and f["es_hecha"] for f in m["otras"]):
+            tareas_p = db.con_la_recien_hecha_en_su_sitio(m, tareas_p, sigue)
+        else:
+            sigue = 0
     else:
         filtro = quien = ""
+        sigue = 0
     # LAS SESIONES Y TRABAJOS DEL PROYECTO (parte 9, 9-oct-2026): se le preguntan al registro
     # SOLO al abrir un proyecto, y solo si tiene ficha de cliente. Listar proyectos no le pregunta
     # nada, y un proyecto sin cliente tampoco. Si el registro no contesta, la página carga igual y
@@ -1323,7 +1333,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          # Los renglones de la tarea derivada: cuál los tiene abiertos
          # (`?derivar=`), cuántos se pintan y el piso de fecha, las MISMAS
          # piezas que usa /tareas (`MAX_DERIVADAS`, `PISO_FECHA`).
-         "derivar": derivar, "max_derivadas": MAX_DERIVADAS,
+         "derivar": derivar, "max_derivadas": MAX_DERIVADAS, "sigue_de": sigue,
          "piso_fecha": PISO_FECHA, "derivadas": derivadas,
          "vuelta": _direccion_de_la_vista(vista) + sufijo_filtro,
          "largo_comentario": db.LARGO_COMENTARIO,
@@ -1891,7 +1901,76 @@ async def marcar_tarea_hecha_desde_proyectos(request: Request, tid: int):
     vuelta = {"hecho": "tarea_hecha"}
     if hijas:
         vuelta["derivadas"] = ",".join(str(i) for i in hijas)
+    elif cerrada:
+        # «¿Terminar eso deja otra cosa por hacer?» (14-oct-2026): la página enseña el recuadro de
+        # «la tarea que sigue» encima de la que se acaba de cerrar. Solo se pide si ESTE gesto la
+        # cerró, no salió ninguna hija y la tarea está en un proyecto vivo (las sueltas no tienen
+        # «proyecto» al que agregar la siguiente); la página vuelve a comprobar antes de dibujarlo.
+        donde = await db.donde_esta_la_tarea(tid)
+        if donde is not None and donde["proyecto_vivo"]:
+            vuelta["sigue"] = tid
     return RedirectResponse(await _volver_a_la_tarea(tid, **vuelta), status_code=303)
+
+
+@app.post("/proyectos/tarea/{tid}/siguiente")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def agregar_tarea_siguiente(request: Request, tid: int):
+    """«Agregar tarea siguiente»: la tarea que sale de una que se acaba de marcar hecha en la
+    página de Proyectos (Tiziano, 14-oct-2026). Título, fecha y responsable se leen y validan con
+    LAS MISMAS piezas que «Nueva tarea» (`db.titulo_de_tarea_que_vale`, `_vence_valido`,
+    `_responsable_por_nombre` + `config.puede_ser_responsable`) y se escriben por la puerta de la
+    tarea derivada, `db.cerrar_y_derivar`, que es la que ya anota de cuál viene (`deriva_de_id`),
+    deja su huella, mete la nueva en el MISMO proyecto y no deja crear en uno cerrado.
+
+    `exige_hecha=True`: si la madre ya no está hecha (alguien la reabrió), no se escribe nada y se
+    dice; esta ruta nunca cierra una tarea. Un rechazo vuelve a la misma tarea con el recuadro
+    abierto (`sigue=`) y una CLAVE de aviso; nunca devuelve lo escrito en la dirección.
+    Un campo `responsable` ausente (envío a mano) es «sin responsable», igual que vacío."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    formulario = await request.form()
+
+    async def con_el_recuadro(clave: str) -> RedirectResponse:
+        return RedirectResponse(await _volver_a_la_tarea(tid, error=clave, sigue=tid), status_code=303)
+
+    try:
+        titulo = db.titulo_de_tarea_que_vale(str(formulario.get("titulo", "")))
+    except ValueError:
+        return await con_el_recuadro("tarea_titulo")
+    ok, vence_en = _vence_valido(str(formulario.get("vence", "")))
+    if not ok:
+        return await con_el_recuadro("tarea_fecha")
+    vale, responsable = _responsable_por_nombre(str(formulario.get("responsable", "")))
+    if not vale or (responsable is not None and not config.puede_ser_responsable(responsable)):
+        return await con_el_recuadro("tarea_nueva_responsable")
+    try:
+        resultado = await db.cerrar_y_derivar(
+            chat, tid, [{"titulo": titulo, "vence_en": vence_en, "area": None,
+                         "responsable_chat_id": responsable}], exige_hecha=True)
+    except db.ProyectoNoAdmiteTareas as e:
+        log.warning("Panel de proyectos: tarea siguiente rechazada, el proyecto no admite tareas (%s)", e.clave)
+        return await con_el_recuadro("tarea_siguiente_cerrado")
+    except ValueError as e:
+        log.warning("Panel de proyectos: tarea siguiente rechazada: %s", e)
+        return await con_el_recuadro("tarea_nueva_responsable")
+    if resultado is None:
+        return RedirectResponse("/proyectos?error=tarea", status_code=303)
+    _, hijas = resultado
+    if not hijas:
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, error="tarea_siguiente_no_hecha"), status_code=303)
+    nueva = hijas[0]
+    vuelta = {"tarea_creada": nueva}
+    donde = await db.donde_esta_la_tarea(nueva)
+    if responsable == config.CHAT_ID_CODE and donde and donde["proyecto_id"] is not None:
+        try:
+            proyecto = await db.proyecto_para_tareas(donde["proyecto_id"])
+        except db.ProyectoNoAdmiteTareas:
+            proyecto = None
+        if proyecto is not None and not db.sala_ve(responsable, proyecto["area"]):
+            vuelta["sala_no"] = 1
+    return RedirectResponse(await _volver_a_la_tarea(nueva, **vuelta), status_code=303)
 
 
 @app.post("/proyectos/tarea/{tid}/reabrir")

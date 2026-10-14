@@ -4641,7 +4641,33 @@ def _fila_de_tarea(t: dict, hoy: date, nombres: dict, comentarios: dict) -> dict
         # Grave y todavía pendiente: la misma regla que /tareas. Con la
         # columna sin migrar nadie la trae y es False.
         "grave": bool(t.get("grave")) and estado == ESTADO_PENDIENTE,
+        # «Sigue de» (14-oct-2026): la tarea de la que nació esta, si nació de otra.
+        "deriva_de_id": t.get("deriva_de_id"),
+        "deriva_de_titulo": t.get("deriva_de_titulo"),
     }
+
+
+def con_la_recien_hecha_en_su_sitio(m: dict, tareas_p: dict, tid: int, hoy: date | None = None) -> dict:
+    """Las listas de la página (`tareas_con_filtro`) con la tarea `tid`, recién marcada hecha, EN
+    EL SITIO DONDE ESTABA entre las pendientes, para que el recuadro de «la que sigue» salga encima
+    de ella y la lista no se mueva al marcar (14-oct-2026). Sin esto la tarea caería al instante en
+    «N hechas», plegado, y el recuadro quedaría escondido. Se busca en el proyecto ENTERO (`m`), no
+    en lo filtrado: un filtro que esconde las hechas no puede esconder el recuadro.
+
+    El sitio es el que le daría `_orden_de_pendientes` si siguiera pendiente (la fecha cuenta como
+    vencida con la regla de `grupo_de_tarea` de HOY; «grave» no se recupera, porque solo vale
+    mientras está pendiente). Devuelve las mismas listas, sin tocar `m`; si `tid` no es una tarea
+    HECHA de `m`, las devuelve tal cual."""
+    fila = next((f for f in m["otras"] if f["id"] == tid and f["es_hecha"]), None)
+    if fila is None:
+        return tareas_p
+    hoy = hoy or hoy_rd()
+    como_pendiente = dict(fila, vencida=grupo_de_tarea(ESTADO_PENDIENTE, fila["vence_en"], hoy) == "atrasadas")
+    pendientes = sorted([*tareas_p["pendientes"], como_pendiente], key=_orden_de_pendientes)
+    otras = [f for f in tareas_p["otras"] if f["id"] != tid]
+    hechas = sum(1 for f in otras if f["es_hecha"])
+    return {"pendientes": [fila if f["id"] == tid else f for f in pendientes], "otras": otras,
+            "n_hechas": hechas, "n_otras": len(otras) - hechas}
 
 
 # Los filtros de las tareas de un proyecto (parte 2 de la página completa, 8-oct-2026). El
@@ -4992,6 +5018,14 @@ async def pagina_de_proyectos(hoy: date | None = None) -> dict:
     graves = await graves_de([t["id"] for t in tareas])
     for t in tareas:
         t["grave"] = t["id"] in graves
+    # «SIGUE DE» (14-oct-2026): de qué tarea nace cada una, de la misma lectura aparte que usa
+    # /tareas (`derivaciones`, tolerante a la columna sin migrar: `{}`). El título es el de la tarea
+    # madre si sigue viva; si no, queda en None y la página lo dice sin inventarlo.
+    hijas_de = await derivaciones()
+    titulo_de = {t["id"]: t["titulo"] for t in tareas}
+    for t in tareas:
+        t["deriva_de_id"] = hijas_de.get(t["id"])
+        t["deriva_de_titulo"] = titulo_de.get(t["deriva_de_id"])
     # LAS FECHAS DEL PROYECTO (parte 4): lectura aparte, tolerante a las columnas sin migrar
     # (`fechas_de_proyectos` devuelve `None` y la página no dibuja fechas).
     fechas = await fechas_de_proyectos()
@@ -7378,7 +7412,8 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
 
 
 async def cerrar_y_derivar(
-    chat_id: int, madre_id: int, derivadas: list[dict],
+    chat_id: int, madre_id: int, derivadas: list[dict], *,
+    exige_hecha: bool = False,
 ) -> tuple[bool, list[int]] | None:
     """Cierra UNA tarea y, en la MISMA transacción, crea las que salen de
     ella al marcarla hecha desde el panel. Devuelve `(se_cerro, [ids de las
@@ -7448,6 +7483,13 @@ async def cerrar_y_derivar(
     (`conn.transaction()` anidado) para que el error de una hija no aborte
     las que ya entraron antes en la misma transacción.
 
+    `exige_hecha=True` (14-oct-2026, «la tarea que sigue» de la página de
+    Proyectos, que se ofrece DESPUÉS de marcar hecha): la madre TIENE que estar
+    hecha en la base ahora mismo. Si no lo está (alguien la reabrió entre el
+    clic y el envío) no se escribe NADA -- ni se cierra la madre otra vez ni
+    se crea la hija -- y se devuelve `(False, [])`. Sin esto, esta puerta
+    cerraría una tarea que la persona ya había visto reabrir.
+
     QUIÉN LAS ANOTÓ es `chat_id` -- la sesión de quien guardó el formulario
     (`web/app.py::guardar_tareas`), no la madre ni su `bandeja_id`: es la
     misma persona escribiendo un renglón más, igual que
@@ -7468,6 +7510,9 @@ async def cerrar_y_derivar(
         if madre is None:
             # No existe, o está en la papelera: no hay de dónde derivar.
             return None
+
+        if exige_hecha and madre.get("estado") != ESTADO_HECHA:
+            return False, []
 
         # UN PROYECTO CERRADO NO RECIBE TAREAS, tampoco las derivadas (pieza 2
         # del diseño «proyectos»): por la MISMA puerta que el alta, y ANTES de

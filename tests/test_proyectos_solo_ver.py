@@ -371,6 +371,7 @@ A_MANO = {
     "confirmar_borrar": {"p": 1, "t": 10, "confirmar_borrar": 10},
     "editar_comentario": {"p": 1, "t": 10, "editar_comentario": 100},
     "derivar": {"p": 1, "t": 10, "derivar": 10, "derivadas": "5,6"},
+    "sigue": {"p": 1, "sigue": 11},                              # 14-oct-2026: el recuadro de «la tarea que sigue» (la 11 está hecha)
     "busqueda de personas": {"p": 1, "t": 10, "pq": "ab", "pdonde": "cliente"},
     "todo junto": {"p": 1, "t": 10, "nuevo": "CDS", "confirmar": "cerrar", "editar": "nombre",
                    "editar_tarea": 10, "confirmar_borrar": 10, "editar_comentario": 100,
