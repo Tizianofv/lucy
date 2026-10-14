@@ -1982,13 +1982,19 @@ async def cambiar_fecha_de_tarea_desde_proyectos(request: Request, tid: int):
     y se escribe con `db.mover_vence`, que solo mueve pendientes, cuenta la
     posposición, no toca los avisos y deja la huella `panel`/`editar` que
     `deshacer` sabe revertir. Esta ruta no decide qué fecha vale ni qué se
-    escribe. `prev_vence` es lo que se pintó: si el campo dice lo mismo no se
+    escribe (salvo que un envío sin el campo `vence` no pide nada, como en
+    `/tareas`). `prev_vence` es lo que se pintó: si el campo dice lo mismo no se
     escribe (el navegador recorta los segundos). El aviso dice lo que pasó:
     guardada, quitada, «no se entendió» (la fecha anterior sigue) o «no cambió
     nada»."""
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     formulario = await request.form()
+    if "vence" not in formulario:
+        # Un envío SIN el campo no pide nada (no es «vacío = quitar»): como en
+        # `/tareas`, que ignora los campos que no vienen.
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, t=tid, error="tarea_fecha_igual"), status_code=303)
     pedido = str(formulario.get("vence", "")).strip()
     if "prev_vence" in formulario and pedido == str(formulario.get("prev_vence", "")).strip():
         return RedirectResponse(await _volver_a_la_tarea(

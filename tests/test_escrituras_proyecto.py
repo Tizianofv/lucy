@@ -1238,13 +1238,8 @@ _ATRIBUTOS = {
               "data-buscar-persona", "autocomplete",
               # `data-elegida` (1-oct-2026): el campo escondido donde queda el Id de la
               # persona o del cliente ESCOGIDOS en la ventanita; solo marca cuál es.
-              "data-elegida",
-              # `id` (13-oct-2026): el campo de fecha de una tarea ya creada lo nombra un
-              # `<label for>`; el `id` no cambia lo que se envía.
-              "id"},
-    # `aria-label` (13-oct-2026): el desplegable de responsable de «Nueva tarea» se nombra
-    # igual que sus hermanos de esa fila (el título y la fecha); no cambia lo que se envía.
-    "select": {"id", "name", "required", "aria-label"},
+              "data-elegida"},
+    "select": {"id", "name", "required"},
     "option": {"value", "selected", "disabled"},
     # `title` y `aria-label` (E6): el botón redondo de marcar hecha (○ o ✓) no
     # tiene texto; su nombre para quien lo lee en voz alta viaja en `aria-label`,
@@ -1283,6 +1278,21 @@ _NACE_ESCONDIDO = {"renombrar"}
 # envoltorio de la vista lleva además `display:contents`.
 _ESTILO_DEL_GRUPO = re.compile(
     r"(display:contents;)?--claro:#[0-9a-fA-F]{3,8};--oscuro:#[0-9a-fA-F]{3,8}")
+
+
+def _EXCEPCION_DE_ATRIBUTO(tag, n, a, accion) -> bool:
+    """Lo NUEVO del 13-oct-2026, y nada más (no se afloja la tabla para todos los elementos):
+    · `id` del `<input type="datetime-local">` de la fecha de una tarea ya creada (`ft-<id>`,
+      en el formulario `/proyectos/tarea/<id>/fecha`): lo nombra un `<label for>`;
+    · `aria-label` del `<select name="responsable">` de «Nueva tarea» (`/proyectos/<id>/tareas`),
+      que se nombra como sus hermanos de esa fila. Ninguno cambia lo que se envía."""
+    if tag == "input" and n == "id":
+        return (a.get("type") == "datetime-local" and re.fullmatch(r"ft-\d+", a.get("id") or "") is not None
+                and re.fullmatch(r"/proyectos/tarea/\d+/fecha(\?.*)?", accion or "") is not None)
+    if tag == "select" and n == "aria-label":
+        return (a.get("name") == "responsable"
+                and re.fullmatch(r"/proyectos/\d+/tareas", accion or "") is not None)
+    return False
 
 
 class _LectorDeFormularios(HTMLParser):
@@ -1354,7 +1364,7 @@ class _LectorDeFormularios(HTMLParser):
             self._mal(f"{donde}: elemento no permitido <{tag}>")
             return
         for n in nombres:
-            if n not in _ATRIBUTOS[tag]:
+            if n not in _ATRIBUTOS[tag] and not _EXCEPCION_DE_ATRIBUTO(tag, n, a, self._f["accion"]):
                 self._mal(f"{donde}: <{tag}> con atributo no permitido {n!r}")
         if tag == "input" and a.get("type", "text") not in _TIPOS_DE_INPUT:
             self._mal(f"{donde}: <input> con type {a.get('type')!r}")

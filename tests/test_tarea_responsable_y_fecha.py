@@ -384,6 +384,16 @@ def test_una_fecha_que_no_se_entiende_no_cambia_nada_y_la_pagina_lo_dice(mt, mal
     assert not any("guardada" in a or "quitada" in a for a in avisos)
 
 
+def test_un_envio_sin_el_campo_vence_no_quita_la_fecha_ni_dice_que_la_quito(mt):
+    """La sonda del testigo: el campo AUSENTE no es «vacío = quitar»."""
+    for datos in ({}, {"prev_vence": "2026-10-14T12:00"}):
+        antes = foto(mt)
+        r = _cliente(config.CHAT_ID_DUENO).post("/proyectos/tarea/10/fecha", data=datos, follow_redirects=True)
+        assert foto(mt) == antes and tarea(mt, 10)["vence_en"] is not None, datos
+        avisos = _avisos(r.text)
+        assert avisos and not any("quitada" in a or "guardada" in a for a in avisos), avisos
+
+
 def test_sin_el_valor_previo_igual_se_mueve_y_vaciar_quita(mt):
     """`prev_vence` solo evita escribir lo que nadie tocó; un envío sin él no se queda sin responder."""
     post("/proyectos/tarea/10/fecha", {"vence": "2026-10-20T09:30"})
@@ -426,7 +436,9 @@ def test_una_direccion_escrita_a_mano_no_pinta_el_aviso(mt):
 ENTRADAS = [("2026-10-20T09:30", "2026-10-14T12:00"), ("", "2026-10-14T12:00"), ("2026-10-20", "2026-10-14T12:00"),
             ("basura", "2026-10-14T12:00"), ("2019-12-31T10:00", "2026-10-14T12:00"),
             ("2026-10-20T09:30:45", "2026-10-14T12:00"), ("2026-10-12T09:30", "2026-10-14T12:00"),
-            ("2026-10-14T12:00", "2026-10-14T12:00"), ("2026-10-30T09:30", "")]
+            ("2026-10-14T12:00", "2026-10-14T12:00"), ("2026-10-30T09:30", ""),
+            # Sin el campo `vence` (con y sin `prev_vence`): una entrada más, y el hermano no toca nada.
+            (None, "2026-10-14T12:00"), (None, None)]
 
 
 def _lo_que_quedo(m, tid: int) -> dict:
@@ -434,7 +446,8 @@ def _lo_que_quedo(m, tid: int) -> dict:
     hs = [{k: json.loads(h[k]) if h[k] else None for k in ("antes", "despues")} | {
         "actor": h["actor"], "accion": h["accion"], "motivo": h["motivo"]} for h in huellas(m)]
     return {"vence_en": t["vence_en"], "pospuesta_veces": t["pospuesta_veces"],
-            "estado": t["estado"], "huellas": hs}
+            "estado": t["estado"], "avisos_enviados": t["avisos_enviados"],
+            "anticipos_min": t["anticipos_min"], "huellas": hs}
 
 
 @pytest.mark.parametrize("pedido,previo", ENTRADAS)
@@ -443,17 +456,20 @@ def test_misma_entrada_misma_fila_y_misma_huella_que_el_panel_de_tareas(monkeypa
     resultados = []
     for ruta in ("tareas", "proyectos"):
         m = _mundo(monkeypatch, gente)
+        m.con.execute("UPDATE tareas SET avisos_enviados = '{0}', anticipos_min = '{0}' WHERE id = 10")
         if previo == "":
             m.con.execute("UPDATE tareas SET vence_en = NULL WHERE id = 10")
-            m.con.commit()
+        m.con.commit()
+        campos = {k: v for k, v in (("vence", pedido), ("prev_vence", previo)) if v is not None}
         if ruta == "tareas":
-            _cliente(config.CHAT_ID_DUENO).post("/tareas", data={"vence_10": pedido, "prev_vence_10": previo},
-                                                follow_redirects=False)
+            _cliente(config.CHAT_ID_DUENO).post(
+                "/tareas", data={f"{k}_10": v for k, v in campos.items()}, follow_redirects=False)
         else:
-            _cliente(config.CHAT_ID_DUENO).post("/proyectos/tarea/10/fecha",
-                                                data={"vence": pedido, "prev_vence": previo}, follow_redirects=False)
+            _cliente(config.CHAT_ID_DUENO).post("/proyectos/tarea/10/fecha", data=campos, follow_redirects=False)
         resultados.append(_lo_que_quedo(m, 10))
     assert resultados[0] == resultados[1], (pedido, previo)
+    if pedido is None:
+        assert resultados[0]["huellas"] == [] and resultados[0]["vence_en"] is not None, previo
     # y que la comparación no es vacía: las entradas buenas SÍ cambiaron algo
     if pedido in ("2026-10-20T09:30", "", "2026-10-20T09:30:45", "2026-10-12T09:30", "2026-10-30T09:30"):
         assert resultados[0]["huellas"], pedido
