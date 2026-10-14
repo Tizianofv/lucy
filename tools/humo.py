@@ -161,6 +161,10 @@ async def main() -> int:
         ("pagina_de_proyectos", lambda: db.pagina_de_proyectos()),
         # Las tablas de las cotizaciones (pieza 2): ver `_tablas_de_cotizaciones`. Una LECTURA.
         ("tablas de cotizaciones (sin tolerancia)", _tablas_de_cotizaciones),
+        # La lectura de las cotizaciones (pieza 3): TOLERA que la tabla no exista (devuelve `None`), así
+        # que la línea de arriba es la que dice si falta; ésta corre el SELECT con sus columnas y el JOIN
+        # contra la base de verdad. Es una LECTURA; `guardar_cotizacion` escribe y no se prueba acá.
+        ("cotizaciones_de_proyectos", lambda: db.cotizaciones_de_proyectos()),
     ]
 
     rojas = []

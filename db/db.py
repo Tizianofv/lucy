@@ -2367,6 +2367,263 @@ def codigo_de_cotizacion(anio: int, numero: int) -> str:
     return f"COT-{anio}-{numero:03d}"
 
 
+# ── GUARDAR Y LEER LAS COTIZACIONES (pieza 3 del diseño «Cotizaciones en Proyectos», 14-oct-2026) ─────
+#
+# UNA SOLA PUERTA para escribir `cotizaciones`: `guardar_cotizacion` (crear, editar un borrador, enviar,
+# corregir una enviada). Y UNA LECTURA APARTE, `cotizaciones_de_proyectos` (con su propia conexión: un
+# 42P01 deja abortada la transacción donde ocurre).
+#
+# Lo que decidió Tiziano (14-oct-2026, «1) Comienza hoy con el codigo 2) SI 3) Si»): la serie nace vacía;
+# una ENVIADA SÍ se puede corregir y conserva su número (no se congela: lo que queda es la huella `corregir`
+# en `log_acciones`, con lo de antes y lo de después); quien entra solo a ver LA VE y no escribe (acá:
+# `puede_entrar`, la sesión de la casa; la cookie de solo ver no llega a esta función).
+#
+# El año del número es el del día en que se guarda por primera vez (`hoy_rd().year`), no el de `fecha`:
+# corregir la fecha no cambia el número. Nombre y teléfono del cliente se COPIAN a la cotización al
+# guardar y se leen de la copia: si la ficha del cliente cambia, la cotización ya hecha no cambia.
+# El candado de edición es `cambiado_en`: se escribe solo si sigue siendo el que el formulario leyó.
+ACCIONES_DE_COTIZACION = ("borrador", "enviar")
+_NUMERO_EN_PALABRAS = {2: "dos", 3: "tres", 4: "cuatro", 5: "cinco", 6: "seis"}
+LARGO_PARA_NOMBRE_DE_COTIZACION = 200
+LARGO_PARA_TELEFONO_DE_COTIZACION = 40
+
+
+class CotizacionSinSesion(Exception):
+    """Quien guarda no entra al panel (la cookie de solo ver tampoco)."""
+
+
+class CotizacionNoEsta(Exception):
+    """El proyecto no existe o está en la papelera, o la cotización no es de ese proyecto."""
+
+
+class CotizacionCambio(Exception):
+    """El candado: la cotización cambió desde que se leyó. NO se guardó nada."""
+
+
+class CotizacionEnviadaSoloSeEnvia(Exception):
+    """Una enviada no vuelve a borrador: solo se corrige con `accion='enviar'`."""
+
+
+class CotizacionesSinTabla(Exception):
+    """Falta la migración de las cotizaciones (SQLSTATE 42P01)."""
+
+
+def condiciones_con_sus_textos_al_dia(contenido_json: str, validez_dias: int) -> str:
+    """Rehace los textos de las condiciones `validez` y `alternativas` con la validez y el número de
+    opciones de ESTE guardado (así nunca dicen «15 días» con la validez en 30). Con una sola opción
+    `alternativas` no se ofrece y se quita. `contenido_json` ya pasó por la puerta."""
+    contenido = json.loads(contenido_json)
+    n = len(contenido["opciones"])
+    hechas = []
+    for c in contenido["condiciones"]:
+        if c["clave"] == "validez":
+            c = {**c, "texto": f"Esta cotización tiene validez de {validez_dias} días a partir de la fecha de emisión."}
+        elif c["clave"] == "alternativas":
+            if n < 2:
+                continue
+            c = {**c, "texto": f"Las {_NUMERO_EN_PALABRAS[n]} opciones son alternativas: se selecciona una sola para el proyecto."}
+        hechas.append(c)
+    contenido["condiciones"] = hechas
+    return json.dumps(contenido, ensure_ascii=False)
+
+
+def _instante_de_cotizacion(valor) -> datetime:
+    """El `cambiado_en` que el formulario leyó: un `datetime` o su texto ISO."""
+    if isinstance(valor, str):
+        try:
+            valor = datetime.fromisoformat(valor)
+        except ValueError:
+            raise CotizacionNoVale("candado", "el candado de la cotización no se entiende") from None
+    if not isinstance(valor, datetime):
+        raise CotizacionNoVale("candado", "el candado de la cotización no se entiende")
+    return valor
+
+
+def _fecha_de_cotizacion(valor) -> date:
+    if isinstance(valor, str):
+        try:
+            return date.fromisoformat(valor)
+        except ValueError:
+            raise CotizacionNoVale("fecha", "la fecha no se entiende") from None
+    if isinstance(valor, date) and not isinstance(valor, datetime):
+        return valor
+    raise CotizacionNoVale("fecha", "la fecha no se entiende")
+
+
+def _validez_de_cotizacion(valor) -> int:
+    if isinstance(valor, bool) or not isinstance(valor, int) or valor not in VALIDEZ_DE_COTIZACION:
+        raise CotizacionNoVale("validez", "la validez tiene que ser de 7, 15 o 30 días")
+    return valor
+
+
+async def _huella_de_cotizacion(conn, accion: str, registro_id: int, antes, despues, motivo: str) -> None:
+    await conn.execute(
+        """
+        INSERT INTO log_acciones
+          (actor, accion, tabla, registro_id, antes, despues, motivo, bandeja_id)
+        VALUES ('panel', %s, 'cotizaciones', %s, %s, %s, %s, NULL)
+        """,
+        (accion, registro_id,
+         json.dumps(antes, default=str, ensure_ascii=False) if antes else None,
+         json.dumps(despues, default=str, ensure_ascii=False) if despues else None,
+         motivo))
+
+
+# Las dos sentencias que cambian una cotización YA hecha. Ninguna toca `proyecto_id`, `anio`, `numero` ni
+# `creado_*`; las dos exigen el candado. La de borrador exige además que SIGA siendo borrador: una enviada
+# no vuelve atrás. La de enviar guarda `enviada_en` de la primera vez (`coalesce`), también al corregir.
+SENTENCIA_DE_GUARDAR_BORRADOR = (
+    "UPDATE cotizaciones SET para_nombre = %s, para_telefono = %s, fecha = %s, validez_dias = %s, "
+    "contenido = %s, cambiado_en = now() "
+    "WHERE id = %s AND proyecto_id = %s AND cambiado_en = %s AND borrado_en IS NULL AND estado = 'borrador' "
+    "RETURNING id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en")
+SENTENCIA_DE_ENVIAR = (
+    "UPDATE cotizaciones SET estado = 'enviada', enviada_en = coalesce(enviada_en, now()), "
+    "para_nombre = %s, para_telefono = %s, fecha = %s, validez_dias = %s, contenido = %s, cambiado_en = now() "
+    "WHERE id = %s AND proyecto_id = %s AND cambiado_en = %s AND borrado_en IS NULL "
+    "RETURNING id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en")
+
+
+async def guardar_cotizacion(proyecto_id: int, chat_id: int, accion: str, contenido, validez_dias,
+                             *, cotizacion_id: int | None = None, cambiado_en=None,
+                             para_nombre: str | None = None, para_telefono: str | None = None,
+                             fecha=None) -> dict:
+    """Guarda UNA cotización de un proyecto VIVO y devuelve la fila (más `codigo` y `creada`).
+
+    `cotizacion_id=None` es una NUEVA: saca su número (`siguiente_numero_de_cotizacion`, año de
+    `hoy_rd()`) en la MISMA transacción que la fila. Con `cotizacion_id` es una existente y hace falta
+    `cambiado_en`, el candado que el formulario leyó: si ya no es ese, `CotizacionCambio` y no se escribe
+    nada. `accion='borrador'` deja borrador (sobre una enviada: `CotizacionEnviadaSoloSeEnvia`);
+    `accion='enviar'` deja enviada, también al CORREGIR una enviada, que conserva `anio`, `numero` y
+    `enviada_en`. `contenido` pasa por `contenido_de_cotizacion_que_vale` y los textos de `validez` y
+    `alternativas` se rehacen. `para_nombre`/`para_telefono`: lo que el formulario trae (se copian);
+    `None` en una nueva = el `cliente_nombre` del proyecto / sin teléfono, y en una existente = no tocar.
+    `fecha=None` = hoy en una nueva y no tocar en una existente. Errores: `CotizacionSinSesion`,
+    `CotizacionNoVale`, `CotizacionNoEsta`, `CotizacionCambio`, `CotizacionesSinTabla`. La fila y su huella
+    (`crear`/`editar`/`enviar`/`corregir`, actor `panel`) van en la misma transacción."""
+    from web.auth import puede_entrar
+
+    if chat_id is None or not puede_entrar(chat_id):
+        raise CotizacionSinSesion("quien guarda no entra al panel")
+    if accion not in ACCIONES_DE_COTIZACION:
+        raise CotizacionNoVale("accion", "la acción tiene que ser guardar borrador o enviar")
+    validez = _validez_de_cotizacion(validez_dias)
+    guardable = condiciones_con_sus_textos_al_dia(contenido_de_cotizacion_que_vale(contenido), validez)
+    nombre = None if para_nombre is None else _texto_de_cotizacion(
+        para_nombre, "para_nombre", LARGO_PARA_NOMBRE_DE_COTIZACION)
+    # `None` = no hay / no tocar; `""` = dejarlo sin teléfono (se guarda NULL)
+    telefono = None if para_telefono is None else _texto_de_cotizacion(
+        para_telefono, "para_telefono", LARGO_PARA_TELEFONO_DE_COTIZACION, minimo=0)
+    el_dia = None if fecha is None else _fecha_de_cotizacion(fecha)
+    if cotizacion_id is not None:
+        if cambiado_en is None:
+            raise CotizacionNoVale("candado", "falta el candado de la cotización")
+        candado = _instante_de_cotizacion(cambiado_en)
+
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute("SELECT id FROM proyectos WHERE id = %s AND borrado_en IS NULL", (proyecto_id,))
+        if await cur.fetchone() is None:
+            raise CotizacionNoEsta("ese proyecto no está")
+        try:
+            if cotizacion_id is None:
+                return await _crear_cotizacion(conn, cur, proyecto_id, chat_id, accion, guardable, validez,
+                                               nombre, telefono, el_dia)
+            return await _cambiar_cotizacion(conn, cur, proyecto_id, cotizacion_id, accion, guardable, validez,
+                                             nombre, telefono, el_dia, candado)
+        except Exception as e:
+            if _tabla_ausente(e):
+                raise CotizacionesSinTabla("cotizaciones no existe todavía") from e
+            raise
+
+
+async def _crear_cotizacion(conn, cur, proyecto_id, chat_id, accion, guardable, validez, nombre, telefono, el_dia):
+    if nombre is None:
+        await cur.execute("SELECT cliente_nombre FROM proyectos WHERE id = %s", (proyecto_id,))
+        de_la_ficha = (await cur.fetchone())["cliente_nombre"]
+        nombre = _texto_de_cotizacion(de_la_ficha, "para_nombre", LARGO_PARA_NOMBRE_DE_COTIZACION)
+    anio = hoy_rd().year
+    numero = await siguiente_numero_de_cotizacion(cur, anio)
+    enviada = accion == "enviar"
+    # Una sola línea a propósito: `tests/test_backup_alerta.py` lee las columnas de cada INSERT del código.
+    await cur.execute(
+        "INSERT INTO cotizaciones (proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_por_chat_id, enviada_en) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CASE WHEN %s THEN now() END) RETURNING id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en",
+        (proyecto_id, anio, numero, "enviada" if enviada else "borrador", nombre, telefono or None,
+         el_dia or hoy_rd(), validez, guardable, chat_id, enviada))
+    fila = dict(await cur.fetchone())
+    await _huella_de_cotizacion(conn, "crear", fila["id"], None, fila,
+                                "cotización creada desde el panel de proyectos" + (" y enviada" if enviada else ""))
+    return {**fila, "codigo": codigo_de_cotizacion(fila["anio"], fila["numero"]), "creada": True}
+
+
+async def _cambiar_cotizacion(conn, cur, proyecto_id, cotizacion_id, accion, guardable, validez,
+                              nombre, telefono, el_dia, candado):
+    await cur.execute(
+        "SELECT id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en FROM cotizaciones WHERE id = %s AND proyecto_id = %s AND borrado_en IS NULL",
+        (cotizacion_id, proyecto_id))
+    antes = await cur.fetchone()
+    if antes is None:
+        raise CotizacionNoEsta("esa cotización no está en ese proyecto")
+    antes = dict(antes)
+    parametros = (
+        antes["para_nombre"] if nombre is None else nombre,
+        antes["para_telefono"] if telefono is None else (telefono or None),
+        el_dia or antes["fecha"], validez, guardable, cotizacion_id, proyecto_id, candado)
+    if accion == "enviar":
+        await cur.execute(SENTENCIA_DE_ENVIAR, parametros)
+    else:
+        await cur.execute(SENTENCIA_DE_GUARDAR_BORRADOR, parametros)
+    fila = await cur.fetchone()
+    if fila is None:
+        if antes["estado"] == "enviada" and accion == "borrador":
+            raise CotizacionEnviadaSoloSeEnvia("una enviada no vuelve a borrador")
+        raise CotizacionCambio("la cotización cambió mientras se editaba")
+    fila = dict(fila)
+    if antes["estado"] == "enviada":
+        huella, motivo = "corregir", "cotización enviada corregida desde el panel (conserva su número)"
+    elif accion == "enviar":
+        huella, motivo = "enviar", "cotización enviada desde el panel de proyectos"
+    else:
+        huella, motivo = "editar", "borrador guardado desde el panel de proyectos"
+    await _huella_de_cotizacion(conn, huella, fila["id"], antes, fila, motivo)
+    return {**fila, "codigo": codigo_de_cotizacion(fila["anio"], fila["numero"]), "creada": False}
+
+
+async def cotizaciones_de_proyectos() -> dict[int, list[dict]] | None:
+    """`{proyecto_id: [cotización, ...]}` de las cotizaciones VIVAS de proyectos VIVOS, la más nueva
+    primero, o `None` si la tabla todavía no existe (SQLSTATE 42P01): entonces la página carga como hoy y
+    el bloque no sale. UNA LECTURA APARTE con su propia conexión. Nombre y teléfono salen de la COPIA que
+    se guardó, nunca de la ficha del cliente. Cada una trae `codigo`, `contenido` ya leído (dict),
+    `totales_por_opcion` (`Decimal`, la suma de los renglones de cada opción) y `cambiado_en` tal como
+    está en la base (el candado que la pantalla devuelve al guardar). Lo lee cualquier sesión que vea
+    Proyectos, también la de solo ver: la función no pide sesión."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(
+                "SELECT c.id, c.proyecto_id, c.anio, c.numero, c.estado, c.para_nombre, c.para_telefono, "
+                "c.fecha, c.validez_dias, c.contenido, c.creado_en, c.creado_por_chat_id, c.cambiado_en, "
+                "c.enviada_en "
+                "FROM cotizaciones c JOIN proyectos p ON p.id = c.proyecto_id "
+                "WHERE c.borrado_en IS NULL AND p.borrado_en IS NULL "
+                "ORDER BY c.creado_en DESC, c.id DESC")
+            filas = await cur.fetchall()
+        except Exception as e:
+            if _tabla_ausente(e):
+                return None
+            raise
+    salida: dict[int, list[dict]] = {}
+    for f in filas:
+        f = dict(f)
+        contenido = json.loads(f["contenido"])
+        f["contenido"] = contenido
+        f["codigo"] = codigo_de_cotizacion(f["anio"], f["numero"])
+        f["totales_por_opcion"] = [sum((Decimal(r["total"]) for r in op["renglones"]), Decimal("0"))
+                                   for op in contenido["opciones"]]
+        salida.setdefault(f["proyecto_id"], []).append(f)
+    return salida
+
+
 # ── AGREGAR TAREAS A UN PROYECTO (pieza 2 del diseño «proyectos», 29-sep-2026) ─
 #
 # UNA SOLA PUERTA para «¿a este proyecto se le pueden agregar tareas?»:
