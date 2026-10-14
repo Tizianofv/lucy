@@ -59,7 +59,7 @@
    tocada mientras hay guardados en camino espera a que TODOS los guardados terminen y sale al
    final; los guardados que terminan con una lectura esperando no mueven la página, y lo que
    dijeron (su aviso) se lee en el aviso fijo.
-   EL AVISO FIJO (arriba, fuera de las regiones) no lo quita ningún repintado: se queda hasta
+   EL AVISO FIJO (arriba, DEBAJO de la barra del menú sin taparla, fuera de las regiones) no lo quita ningún repintado: se queda hasta
    que la persona lo cierra («Entendido» o «Mirar cómo quedó»). Si llegan varios, se leen todos. */
 var turnoSinSaltar = 0, escribiendoSinSaltar = 0, colaSinSaltar = [], vistaSinSaltar = "", raizSinSaltar = "", avisoSinSaltar = null, mensajesAviso = [], accionAviso = null, etiquetaAviso = "Continuar", saliendoSinSaltar = false, vigilandoSalida = false, salidasVigiladas = false, TIEMPO_ENVIO_SINSALTAR = 30000;
 function irA(url) { var a = document.createElement("a"); a.href = url; a.click(); }
@@ -73,6 +73,13 @@ function quitarAvisoSinSaltar() {
   accionAviso = null;
   etiquetaAviso = "Continuar";
 }
+/* Dónde empieza el aviso fijo: justo DEBAJO de la barra de arriba (el `<header>` de la pantalla, pegado arriba
+   en Proyectos y en Tareas), para no taparle el menú. Se mide al sacar el aviso; sin barra, arriba del todo.
+   Es solo posición: la página no se mueve. */
+function bajoLaBarraSinSaltar() {
+  var h = document.querySelector("header"), y = h && h.getBoundingClientRect ? h.getBoundingClientRect().bottom : 0;
+  return y > 0 ? Math.round(y) : 0;
+}
 /* El aviso fijo: FUERA de las regiones (ningún repintado lo borra), siempre a la vista, con todos los
    mensajes que lleguen, un botón «Entendido» y un enlace a esta misma vista para mirar cómo quedó
    (los dos lo cierran; ninguno de los dos va a ningún sitio) y, si la página tiene que irse, «Continuar»
@@ -84,7 +91,7 @@ function avisarSinSaltar(texto, accion, etiqueta) {
   if (viejo && viejo.parentNode) viejo.parentNode.removeChild(viejo);
   var d = document.createElement("div"), a = document.createElement("a"), b = document.createElement("button"), i, m;
   d.setAttribute("role", "alert");
-  d.setAttribute("style", "position:fixed;inset:0 0 auto 0;z-index:9999;padding:.8rem 1rem;background:#fff3cd;color:#222;border-bottom:2px solid #b00020;font:600 14px sans-serif");
+  d.setAttribute("style", "position:fixed;inset:" + bajoLaBarraSinSaltar() + "px 0 auto 0;z-index:9999;padding:.8rem 1rem;background:#fff3cd;color:#222;border-bottom:2px solid #b00020;font:600 14px sans-serif");
   for (i = 0; i < mensajesAviso.length; i++) {
     m = document.createElement("div");
     m.textContent = mensajesAviso[i];
