@@ -327,10 +327,12 @@ def test_dos_toques_al_mismo_guardado_mandan_un_solo_pedido_y_otro_guardado_en_c
 
 
 @hay_osascript
-def test_dos_toques_a_la_misma_busqueda_mandan_un_solo_pedido():
+@pytest.mark.parametrize("sesion", ["casa", "ver"])
+def test_dos_toques_a_la_misma_busqueda_mandan_un_solo_pedido(sesion):
     """Una búsqueda (GET) no espera a ningún guardado, pero el mismo formulario no sale dos veces
-    mientras su pedido está en camino (lo vigila `enCamino`, no el contador de guardados)."""
-    r = correr(CASA(), 'var f = formulario("/proyectos", "get", [["q", "x"]]); enviar(f); __e = enviar(f);')
+    mientras su pedido está en camino. En la casa también lo frena el guion de la página (`enviado`); en
+    solo ver no hay otro guion: ahí lo vigila SOLO `enCamino` de la pieza."""
+    r = correr(CASA() if sesion == "casa" else VER(), 'var f = formulario("/proyectos", "get", [["q", "x"]]); enviar(f); __e = enviar(f);')
     assert len(r["pedidos"]) == 1 and r["prevenido"] is True
 
 
