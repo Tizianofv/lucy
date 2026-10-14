@@ -469,9 +469,11 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     <form class="marcar" method="post" action="/proyectos/tarea/{{ t.id }}/reabrir{{ consulta_filtro }}"><button class="marca hecha-b" title="Desmarcar: vuelve a pendiente" aria-label="Desmarcar la tarea: vuelve a pendiente">✓</button></form>
     {% elif t.es_pendiente %}
     {#- MARCAR HECHA ES DE UN CLIC: el botón (dibujado como la casilla de la
-        maqueta) envía este formulario. La maqueta no ofrece «la tarea que
-        sigue» (el «＋» y sus renglones se quitaron de esta página el 1-oct-2026,
-        decisión de Tiziano; la ruta y `/tareas` siguen haciéndolo). -#}
+        maqueta) envía este formulario. «La tarea que sigue» NO son renglones
+        escondidos en cada fila (eso se quitó el 1-oct-2026, decisión de Tiziano):
+        desde el 14-oct-2026 es el recuadro que el servidor dibuja ENCIMA de la
+        tarea recién marcada (`sigue_de`, más abajo), que se agrega por
+        `POST /proyectos/tarea/{id}/siguiente`. `/tareas` sigue con sus renglones. -#}
     <form class="marcar" method="post" action="/proyectos/tarea/{{ t.id }}/hecha{{ consulta_filtro }}">
       <button class="marca" title="Marcar hecha" aria-label="Marcar la tarea como hecha">○</button>
     </form>
