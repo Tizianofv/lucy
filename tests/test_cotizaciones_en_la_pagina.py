@@ -631,6 +631,19 @@ def test_el_censo_de_sin_saltar_ve_los_controles_nuevos_en_la_casa_y_en_solo_ver
     assert ("a", "/proyectos?p=1&cotizacion=nueva#cotizaciones") not in ver
 
 
+def test_el_estilo_de_la_lista_no_alcanza_a_la_hoja_de_la_vista_previa():
+    """La ventana vive DENTRO de `.cotiz`: una regla `.cotiz li` o `.cotiz ul` (descendiente) le daría caja y fondo
+    a las condiciones de la hoja (salían como cajas negras, medido en el navegador el 14-oct-2026). Las reglas de
+    la lista van con `>`: solo los hijos directos."""
+    hoja = open("web/plantillas/proyectos.html", encoding="utf-8").read()
+    estilos = hoja.split("<style>", 1)[1].split("</style>", 1)[0]
+    selectores = [x.strip() for x in re.findall(r"([^{}]+)\{", estilos)]
+    de_la_lista = [x for x in selectores if x.startswith(".cotiz ") or x.startswith(".cotiz>")]
+    assert de_la_lista, "no encontré las reglas de la lista"
+    descendientes = [x for x in de_la_lista if re.match(r"\.cotiz\s+(ul|li|b|\.pild|\.sub)\b", x)]
+    assert descendientes == [], descendientes
+
+
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 # 6. «BORRADOR» en el PDF de un borrador y no en el de una enviada
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
