@@ -127,6 +127,10 @@ class BaseQueNoSeToca:
             # NO es un doble: es la función REAL y pura de `db` (no toca la base; solo recorre las filas
             # del modelo que ya se entregaron). Se deja pasar para que la prueba corra el filtro de verdad.
             return db.tareas_con_filtro
+        if nombre == "con_la_recien_hecha_en_su_sitio":
+            # También la función REAL y pura (14-oct-2026): reordena las filas del modelo que ya se
+            # entregaron para que la tarea recién hecha no se mueva; no toca la base.
+            return db.con_la_recien_hecha_en_su_sitio
         if nombre == "sesiones_quitadas_de_proyectos":
             # FINGIDO, declarado: la tabla `sesiones_de_proyecto` está (la base de esta prueba es la de
             # después de la migración) y devuelve lo que diga `QUITADAS_DEL_MODELO` (por omisión,

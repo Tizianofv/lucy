@@ -336,7 +336,10 @@ def test_la_fila_de_la_tarea_tiene_las_caritas_y_el_coment_de_la_maqueta(mundo):
     css = _css(html)
     caritas = _regla(html, ".caritas .ini")
     assert caritas["border"] == "2px solid var(--papel)" and caritas["margin-left"] == "-.35rem"
-    assert "text-decoration:underline" not in css                     # el título no se subraya al pasar el ratón
+    # Ninguna regla de TODA la hoja subraya, salvo una declarada por su selector exacto: el enlace
+    # «No, nada más» del recuadro de la tarea que sigue (`.sigue .no`, 14-oct-2026).
+    sin_la_excepcion = re.sub(r"(?:^|(?<=[};]))\s*\.sigue \.no\s*\{[^}]*\}", "", css)
+    assert "text-decoration:underline" not in sin_la_excepcion
 
 
 def test_la_marca_de_hecha_se_dibuja_como_la_casilla_de_la_maqueta(mundo):

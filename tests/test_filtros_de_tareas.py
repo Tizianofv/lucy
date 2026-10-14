@@ -338,7 +338,7 @@ def test_marcar_hecha_y_desmarcar_vuelven_con_el_filtro_puesto(mundo, gente, fil
 def test_marcar_sin_filtro_vuelve_como_siempre(mundo, gente):
     _sembrar(mundo, gente)
     r = _cliente(config.CHAT_ID_DUENO).post("/proyectos/tarea/13/hecha", data={}, follow_redirects=False)
-    assert r.headers["location"] == "/proyectos?p=1&hecho=tarea_hecha#tarea-13"
+    assert r.headers["location"] == "/proyectos?p=1&hecho=tarea_hecha&sigue=13#tarea-13"
 
 
 @pytest.mark.parametrize("filtro,quien", FILTROS_PUESTOS)
