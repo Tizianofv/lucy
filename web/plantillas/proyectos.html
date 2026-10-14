@@ -458,7 +458,8 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     <button class="guardar">Agregar tarea siguiente</button>
     <a class="no" href="{{ u }}#tarea-{{ t.id }}">No, nada más</a>
   </form>
-  <small>Se agrega a este mismo proyecto, con el mismo responsable de la que terminaste (lo puedes cambiar), y queda anotado de cuál viene.</small>
+  {#- «con el mismo responsable» solo se dice si de verdad viene escogido (si ya no puede serlo sale «sin responsable») -#}
+  <small>Se agrega a este mismo proyecto{% if t.responsable and t.responsable in nombres_responsable %}, con el mismo responsable de la que terminaste (lo puedes cambiar){% endif %}, y queda anotado de cuál viene.</small>
 </div>
 {% endif %}
 <div class="tarea {{ 'hecha' if t.es_hecha }} {{ 'vencida' if t.vencida }}" id="tarea-{{ t.id }}" data-tarea="{{ t.id }}" data-ancla>
@@ -830,6 +831,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     {% elif error == 'tarea_rechazada' %}<p class="aviso">No se pudo crear la tarea.</p>
     {% elif error == 'tarea_derivada' %}<p class="aviso">La tarea nueva no se pudo crear (revisa el título, la fecha o el responsable): la tarea NO se marcó hecha.</p>
     {% elif error == 'tarea_siguiente_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe la tarea que sigue. La tarea que marcaste sigue hecha.</p>
+    {% elif error == 'tarea_siguiente_sin_proyecto' %}<p class="aviso">Esa tarea no está en un proyecto abierto: no se agregó la que sigue.</p>
     {% elif error == 'tarea_siguiente_no_hecha' %}<p class="aviso">Esa tarea ya no está hecha: no se agregó la que sigue.</p>
     {% elif error == 'tarea_derivada_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe la tarea nueva, así que la tarea NO se marcó hecha.</p>
     {% elif error == 'cliente' %}<p class="aviso">No se pudo poner ese cliente: la ficha ya no está en Noco o el proyecto ya no está.</p>

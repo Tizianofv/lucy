@@ -1944,6 +1944,15 @@ async def agregar_tarea_siguiente(request: Request, tid: int):
     vale, responsable = _responsable_por_nombre(str(formulario.get("responsable", "")))
     if not vale or (responsable is not None and not config.puede_ser_responsable(responsable)):
         return await con_el_recuadro("tarea_nueva_responsable")
+    # LA SIGUIENTE SE AGREGA «A ESTE MISMO PROYECTO»: una madre sin proyecto (suelta) o de un proyecto
+    # en la papelera no tiene a dónde, y la hija caería en «Sin grupo» sin que nadie lo pidiera.
+    # Se rechaza ANTES de escribir nada (`cerrar_y_derivar` sí deja crear hijas sueltas para /tareas).
+    donde_madre = await db.donde_esta_la_tarea(tid)
+    if donde_madre is None:
+        return RedirectResponse("/proyectos?error=tarea", status_code=303)
+    if donde_madre["proyecto_id"] is None or not donde_madre["proyecto_vivo"]:
+        return RedirectResponse(await _volver_a_la_tarea(
+            tid, error="tarea_siguiente_sin_proyecto"), status_code=303)
     try:
         resultado = await db.cerrar_y_derivar(
             chat, tid, [{"titulo": titulo, "vence_en": vence_en, "area": None,

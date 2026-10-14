@@ -308,3 +308,38 @@ def test_el_recuadro_y_la_linea_de_sigue_de_usan_los_estilos_de_la_maqueta(mt):
     html = ver(mt, p=2)
     assert _regla(html, ".sigue")["border-left-width"] == "4px"
     assert _regla(html, ".viene-de")["font-size"] == ".74rem"
+
+
+# ── Arreglos de la vuelta del testigo (14-oct-2026) ────────────────────────────────────────────
+
+def test_una_madre_sin_proyecto_no_recibe_la_siguiente_y_no_se_escribe_nada(mt):
+    mt.con.execute("UPDATE tareas SET estado='hecha' WHERE id = 30")          # suelta de CDS, hecha
+    mt.con.commit()
+    antes = foto(mt)
+    r = post("/proyectos/tarea/30/siguiente", {"titulo": "Caería en Sin grupo"})
+    assert _consulta_de(r).get("error") == "tarea_siguiente_sin_proyecto" and "tarea_creada" not in _consulta_de(r)
+    assert foto(mt) == antes
+    assert "no está en un proyecto abierto" in _pagina_a_la_que_manda(mt, r)
+
+
+def test_una_madre_de_un_proyecto_en_la_papelera_tampoco(mt):
+    mt.con.execute("UPDATE proyectos SET borrado_en = '2026-09-02T00:00:00+00:00' WHERE id = 1")
+    mt.con.execute("UPDATE tareas SET estado='hecha' WHERE id = 20")
+    mt.con.commit()
+    antes = foto(mt)
+    r = post("/proyectos/tarea/20/siguiente", {"titulo": "Sin proyecto vivo"})
+    assert _consulta_de(r).get("error") == "tarea_siguiente_sin_proyecto"
+    assert foto(mt) == antes
+
+
+def test_la_frase_del_recuadro_solo_promete_el_mismo_responsable_si_viene_escogido(mt, gente):
+    _mundo_con(mt, gente)
+    con = _recuadro(_pagina_a_la_que_manda(mt, post("/proyectos/tarea/70/hecha")))
+    assert "con el mismo responsable de la que terminaste" in con
+    sin = _recuadro(_pagina_a_la_que_manda(mt, post("/proyectos/tarea/71/hecha")))      # sin responsable
+    assert "mismo responsable" not in sin and "queda anotado de cuál viene" in sin
+    # Responsable que ya no puede serlo (no está en las opciones): sale «sin responsable» y la frase no lo promete.
+    mt.tarea(73, "Con un responsable ido", proyecto=2, responsable=999000111)
+    mt.con.commit()
+    ido = _recuadro(_pagina_a_la_que_manda(mt, post("/proyectos/tarea/73/hecha")))
+    assert ido is not None and "mismo responsable" not in ido
