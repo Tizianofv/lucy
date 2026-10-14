@@ -128,8 +128,10 @@ def test_la_salida_es_idempotente():
     ("NaN", "total_formato"), ("Infinity", "total_formato"), ("-Infinity", "total_formato"), ("1e3", "total_formato"),
     ("1,2", "total_formato"), ("1,23,456", "total_formato"), ("1234,567", "total_formato"), (",500", "total_formato"),
     ("5.", "total_formato"), ("5..0", "total_formato"), ("٣٤٥", "total_formato"), ("1_000", "total_formato"),
-    ("62500.001", "total_decimales"), ("1.005", "total_decimales"), ("0.001", "total_decimales"),
-    ("100,000,000", "total_alto"), ("99999999.995", "total_alto"), ("1" + "0" * 40, "total_alto"),
+    ("62500.001", "total_decimales"), ("62.500", "total_decimales"), ("1.500", "total_decimales"),
+    ("62.5000", "total_decimales"), ("0.100", "total_decimales"), ("1,000.000", "total_decimales"),
+    (Decimal("62.500"), "total_decimales"), ("1.005", "total_decimales"), ("0.001", "total_decimales"),
+    ("100,000,000", "total_alto"), ("99999999.995", "total_decimales"), ("100000000.00", "total_alto"), ("1" + "0" * 40, "total_alto"),
     (Decimal("NaN"), "total_formato"), (Decimal("Infinity"), "total_formato"), (Decimal("1E+100"), "total_alto"),
     (62500.0, "total_tipo"), (0.5, "total_tipo"), (True, "total_tipo"), (False, "total_tipo"), ([5], "total_tipo"),
     (b"5", "total_tipo"), ({"x": 1}, "total_tipo"),
@@ -306,4 +308,70 @@ def test_con_totales_inventados_lo_aceptado_es_dinero_valido_y_lo_demas_se_recha
         assert 0 < valor <= db.TOPE_TOTAL_DE_RENGLON
         assert valor == valor.quantize(Decimal("0.01")) and sale == f"{valor:.2f}"
         assert Decimal(escrito.strip().replace(",", "")) == valor
+        # Por el TEXTO: lo escrito no lleva más de dos cifras después del punto (62.500 no se guarda como 62.50).
+        assert len(escrito.strip().partition(".")[2]) <= 2, escrito
     assert aceptados > 100, "la semilla ya no ejercita el camino de aceptar"
+
+
+def test_62_punto_500_y_62_500_no_se_confunden():
+    """H1 del testigo: «62.500» (punto de miles al estilo de otros países) no se guarda como 62.50."""
+    assert db.total_de_cotizacion_que_vale("62,500") == "62500.00"
+    assert db.total_de_cotizacion_que_vale("62500") == "62500.00"
+    assert db.total_de_cotizacion_que_vale("62.50") == "62.50"
+    for escrito in ("62.500", "1.500", "62.5000"):
+        with pytest.raises(NoVale) as e:
+            db.total_de_cotizacion_que_vale(escrito)
+        assert e.value.clave == "total_decimales"
+
+
+# ── Lo que el PDF no puede escribir (H2 del testigo) ────────────────────────────────────────────────
+
+@pytest.mark.parametrize("escrito,sale", [
+    ("Diseño “comillas” y ‘simples’", "Diseño \"comillas\" y 'simples'"),
+    ("Ruta — raya – media ‐ guion", "Ruta - raya - media - guion"),
+    ("Espera… ya", "Espera... ya"),
+    ("„bajas“ ‚x‘", "\"bajas\" 'x'"),
+    ("Acentos áéíóú ñ ü ¿? ¡! « » º ½", "Acentos áéíóú ñ ü ¿? ¡! « » º ½"),
+])
+def test_las_formas_tipograficas_se_cambian_por_la_simple_y_latin1_se_queda(escrito, sale):
+    r = sin_float(db.contenido_de_cotizacion_que_vale(valido(opciones=[opcion(escrito, reng(escrito, escrito))])))
+    assert r["opciones"][0]["nombre"] == sale
+    assert r["opciones"][0]["renglones"][0]["detalle"] == sale
+    assert r["condiciones"] and db.contenido_de_cotizacion_que_vale(valido(condiciones=[cond(texto=escrito)]))
+
+
+@pytest.mark.parametrize("fuera", ["Piso 1 \U0001F600", "Euro € signo", "日本", "Ω", "a\u200bb", "™", "\u2022 punto"])
+def test_lo_que_queda_fuera_de_latin1_se_rechaza_con_clave_propia_en_todo_texto(fuera):
+    casos = [valido(opciones=[opcion(fuera)]), valido(opciones=[opcion("A", reng(fuera))]),
+             valido(opciones=[opcion("A", reng(detalle=fuera))]), valido(condiciones=[cond(texto=fuera)])]
+    for c in casos:
+        assert clave_del_rechazo(c) == "fuera_de_latin1", (fuera, c)
+
+
+def test_con_caracteres_inventados_lo_aceptado_es_latin1_y_lo_demas_se_rechaza_por_la_regla():
+    """Todo el plano básico desde U+0100 hasta U+30FF más una muestra de planos altos, con la semilla fija
+    de siempre: la salida nunca trae un carácter fuera de Latin-1, y cada rechazo es de una clave conocida."""
+    import unicodedata
+    azar = random.Random(20261014)
+    puntos = list(range(0x100, 0x3100)) + [azar.randint(0x10000, 0x1FFFF) for _ in range(500)]
+    aceptados = 0
+    for p in puntos:
+        c = chr(p)
+        if 0xD800 <= p <= 0xDFFF:
+            continue
+        try:
+            salida = sin_float(db.contenido_de_cotizacion_que_vale(valido(opciones=[opcion("A" + c + "b")])))
+        except NoVale as e:
+            assert e.clave in ("fuera_de_latin1", "caracteres"), (hex(p), e.clave)
+            continue
+        aceptados += 1
+        nombre = salida["opciones"][0]["nombre"]
+        assert all(ord(x) <= 0xFF for x in nombre), (hex(p), nombre)
+        if unicodedata.category(c) == "Pd":
+            assert nombre == "A-b"
+    assert aceptados > 10, "ninguna se aceptó: la regla de la forma simple dejó de ejercitarse"
+    # Toda raya (categoría Pd) y toda comilla tipográfica con nombre se acepta, sacadas de lo real.
+    rayas = [chr(p) for p in range(0x100, 0x3100) if unicodedata.category(chr(p)) == "Pd"]
+    assert len(rayas) >= 5
+    for c in rayas:
+        assert sin_float(db.contenido_de_cotizacion_que_vale(valido(opciones=[opcion("A" + c + "b")])))["opciones"][0]["nombre"] == "A-b"

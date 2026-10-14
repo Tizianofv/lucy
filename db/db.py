@@ -2139,7 +2139,7 @@ TOPE_TOTAL_DE_RENGLON = Decimal("99999999.99")
 # Dinero escrito a la dominicana: «62500», «62,500», «62,500.50», «62500.5». Solo dígitos ASCII (un
 # dígito de otro alfabeto también lo entiende `Decimal`), coma solo como separador de miles en grupos
 # de tres, punto para los centavos. Nada de signo, exponente, NaN ni Infinity: no encajan.
-_RE_DINERO_DE_COTIZACION = re.compile(r"^(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]+)?$")
+_RE_DINERO_DE_COTIZACION = re.compile(r"^(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.([0-9]+))?$")
 
 
 class CotizacionNoVale(ValueError):
@@ -2152,9 +2152,27 @@ class CotizacionNoVale(ValueError):
         self.clave = clave
 
 
+def _forma_simple_de_cotizacion(c: str) -> str:
+    """El PDF escribe con una letra de Latin-1 (los acentos y la «ñ» sí; «—», «€», «“» y los emoji no). Un
+    carácter fuera de Latin-1 se cambia por su forma simple cuando la REGLA la da: cualquier raya (categoría
+    `Pd`) → «-»; cualquier comilla tipográfica (su nombre Unicode dice QUOTATION MARK) → «"» si es doble o
+    «'» si es simple; y lo que Unicode descompone (NFKD) en puros signos de puntuación ASCII, como «…» → «...» (letras como «™» → «TM» no: se rechaza). Lo demás se deja
+    como está y la puerta lo rechaza."""
+    if ord(c) <= 0xFF:
+        return c
+    if unicodedata.category(c) == "Pd":
+        return "-"
+    nombre = unicodedata.name(c, "")
+    if "QUOTATION MARK" in nombre and "ANGLE" not in nombre:
+        return '"' if "DOUBLE" in nombre else "'"
+    compat = unicodedata.normalize("NFKD", c)
+    solo_signos = compat.isascii() and all(unicodedata.category(x).startswith("P") for x in compat)
+    return compat if solo_signos else c
+
+
 def _texto_de_cotizacion(crudo, campo: str, largo: int, *, minimo: int = 1, varias_lineas: bool = False) -> str:
     """Un texto del contenido: `str`, `\\r\\n` y `\\r` → `\\n`, sin espacios de alrededor, de `minimo` a
-    `largo` caracteres, sin NUL ni lo que no se codifique ni ningún carácter de control (`Cc`) ni
+    `largo` caracteres, sin NUL ni lo que no se codifique, con comillas tipográficas, rayas y «…» cambiadas por su forma simple (`_forma_simple_de_cotizacion`), sin nada fuera de Latin-1 (`fuera_de_latin1`), ni ningún carácter de control (`Cc`) ni
     separador de línea o de párrafo (`Zl`/`Zp`); con `varias_lineas` el `\\n` sí se deja."""
     if crudo is None:
         crudo = ""
@@ -2165,11 +2183,14 @@ def _texto_de_cotizacion(crudo, campo: str, largo: int, *, minimo: int = 1, vari
         limpio.encode("utf-8")
     except UnicodeEncodeError:
         raise CotizacionNoVale("caracteres", f"{campo}: lleva caracteres que no se pueden guardar") from None
+    limpio = "".join(_forma_simple_de_cotizacion(c) for c in limpio)
     for c in limpio:
         if varias_lineas and c == "\n":
             continue
         if unicodedata.category(c) in ("Cc", "Zl", "Zp"):
             raise CotizacionNoVale("caracteres", f"{campo}: lleva caracteres que no se pueden guardar")
+        if ord(c) > 0xFF:
+            raise CotizacionNoVale("fuera_de_latin1", f"{campo}: lleva caracteres que el PDF no puede escribir")
     if len(limpio) < minimo:
         raise CotizacionNoVale(f"{campo}_vacio", f"{campo}: no puede quedar vacío")
     if len(limpio) > largo:
@@ -2194,14 +2215,21 @@ def total_de_cotizacion_que_vale(crudo) -> str:
         escrito = str(crudo).strip()
         if not escrito:
             raise CotizacionNoVale("total_vacio", "el total no puede quedar vacío")
-        if not _RE_DINERO_DE_COTIZACION.match(escrito):
+        m = _RE_DINERO_DE_COTIZACION.match(escrito)
+        if not m:
             raise CotizacionNoVale("total_formato", "el total no se entiende como dinero")
+        # Se mira el TEXTO, no el valor: «62.500» vale lo mismo que «62.50» como número, pero quien lo
+        # escribió pudo querer sesenta y dos mil quinientos (así lo lee otro validador de Lucy).
+        if m.group(1) is not None and len(m.group(1)) > 2:
+            raise CotizacionNoVale("total_decimales", "el total no puede llevar más de dos decimales")
         valor = Decimal(escrito.replace(",", ""))
     if valor <= 0:
         raise CotizacionNoVale("total_cero", "el total tiene que ser mayor que cero")
     if valor > TOPE_TOTAL_DE_RENGLON:
         raise CotizacionNoVale("total_alto", "el total es demasiado grande")
     centavos = Decimal("0.01")
+    if valor.as_tuple().exponent < -2:      # un Decimal ya traído: se mira cómo viene escrito (62.500 no)
+        raise CotizacionNoVale("total_decimales", "el total no puede llevar más de dos decimales")
     if valor != valor.quantize(centavos):
         raise CotizacionNoVale("total_decimales", "el total no puede llevar más de dos decimales")
     return str(valor.quantize(centavos))

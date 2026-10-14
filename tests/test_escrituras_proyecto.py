@@ -813,6 +813,27 @@ def test_un_estado_libre_que_dejo_telegram_se_ve_y_se_corrige_al_cerrar_o_reabri
     assert "no es de la lista" not in ver(mundo, p=1)
 
 
+# Una sentencia que crea o altera la tabla `proyectos` (con o sin `public.`, con o sin comillas, con o sin
+# `ONLY`) y trae un `CHECK (estado`. NO agarra otra tabla que solo nombra a `proyectos` en una llave foránea.
+_CHECK_DE_ESTADO_EN_PROYECTOS = re.compile(
+    r'(?:ALTER\s+TABLE(?:\s+ONLY)?|CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s+(?:"?\w+"?\s*\.\s*)?"?proyectos"?(?!\w)'
+    r'[^;]*CHECK\s*\(\s*estado', re.I | re.S)
+
+
+@pytest.mark.parametrize("sql,agarra", [
+    ("ALTER TABLE proyectos ADD CONSTRAINT x CHECK (estado IN ('a'));", True),
+    ("ALTER TABLE public.proyectos ADD CONSTRAINT x CHECK (estado IN ('a'));", True),
+    ('ALTER TABLE "public"."proyectos" ADD CONSTRAINT x CHECK (estado IN (\'a\'));', True),
+    ("ALTER TABLE ONLY public.proyectos ADD CONSTRAINT x CHECK ( estado IN ('a'));", True),
+    ("CREATE TABLE IF NOT EXISTS proyectos (id INT, CONSTRAINT x CHECK (estado IN ('a')));", True),
+    ("CREATE TABLE cotizaciones (proyecto_id BIGINT REFERENCES proyectos(id), CHECK (estado IN ('a')));", False),
+    ("ALTER TABLE proyectos_viejos ADD CONSTRAINT x CHECK (estado IN ('a'));", False),
+    ("ALTER TABLE tareas ADD COLUMN proyecto_id BIGINT REFERENCES public.proyectos(id); CREATE TABLE z (CHECK (estado IN ('a')));", False),
+])
+def test_la_busqueda_de_un_check_de_estado_en_proyectos_ve_lo_que_debe(sql, agarra):
+    assert bool(_CHECK_DE_ESTADO_EN_PROYECTOS.search(sql)) is agarra
+
+
 def test_el_esquema_no_impide_un_estado_libre_y_por_eso_la_pagina_lo_tolera():
     """Qué tan común es un estado libre en producción NO se puede medir con una
     prueba (la base no se toca): lo que se prueba es el ESQUEMA. `estado` es
@@ -827,8 +848,7 @@ def test_el_esquema_no_impide_un_estado_libre_y_por_eso_la_pagina_lo_tolera():
     for migracion in (_ROOT / "db" / "migrations").glob("*.sql"):
         # Solo las sentencias que crean o alteran la tabla `proyectos` (no las de otra tabla que la
         # nombra en una llave foránea y tiene su propio `estado`, como `cotizaciones`).
-        assert not re.search(r"(?:ALTER\s+TABLE|CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s+proyectos\b[^;]*CHECK\s*\(\s*estado",
-                             migracion.read_text(encoding="utf-8"), re.I | re.S)
+        assert not _CHECK_DE_ESTADO_EN_PROYECTOS.search(migracion.read_text(encoding="utf-8"))
 
 
 # ═══════════════════════════════════════════════════════════════════════
