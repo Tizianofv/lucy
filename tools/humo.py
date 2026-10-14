@@ -53,6 +53,25 @@ async def _derivaciones_sin_tolerancia():
         return await cur.fetchall()
 
 
+async def _tablas_de_cotizaciones():
+    """Los dos SELECT de las tablas de las cotizaciones (pieza 2, 14-oct-2026), SIN tolerancia.
+
+    El contador (`db.siguiente_numero_de_cotizacion`) escribe en `serie_cotizaciones` con un
+    `INSERT ... ON CONFLICT (anio)`: sin la tabla, o sin su llave, la primera cotización no guardaría
+    nada y la suite (hermética, SQLite) no lo vería. Contra una base sin la migración
+    `db/migrations/2026-10-14_cotizaciones.sql`, esta línea revienta con «relation ... does not exist».
+    Son LECTURAS (`count(*)`); el contador no se ejecuta acá, porque humo.py no escribe en producción.
+    """
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=db.dict_row)
+        filas = {}
+        await cur.execute("SELECT count(*) AS n FROM serie_cotizaciones")
+        filas["serie_cotizaciones"] = (await cur.fetchone())["n"]
+        await cur.execute("SELECT count(*) AS n FROM cotizaciones")
+        filas["cotizaciones"] = (await cur.fetchone())["n"]
+        return filas
+
+
 async def main() -> int:
     if not os.environ.get("DATABASE_URL", "").strip():
         print("Falta DATABASE_URL.", file=sys.stderr)
@@ -140,6 +159,8 @@ async def main() -> int:
         # personas de cada proyecto y tarea, E7). Sin tolerancia a propósito: si
         # esa migración no está, esta línea es la que lo dice. Es una LECTURA.
         ("pagina_de_proyectos", lambda: db.pagina_de_proyectos()),
+        # Las tablas de las cotizaciones (pieza 2): ver `_tablas_de_cotizaciones`. Una LECTURA.
+        ("tablas de cotizaciones (sin tolerancia)", _tablas_de_cotizaciones),
     ]
 
     rojas = []
