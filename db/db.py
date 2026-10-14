@@ -2329,6 +2329,44 @@ def contenido_de_cotizacion_que_vale(crudo) -> str:
     return json.dumps({"opciones": opciones, "condiciones": condiciones}, ensure_ascii=False)
 
 
+# ── EL NÚMERO DE UNA COTIZACIÓN (pieza 2 del diseño «Cotizaciones en Proyectos», 14-oct-2026) ─────────
+#
+# UNA SOLA PUERTA para sacar un número: `siguiente_numero_de_cotizacion`. Un contador por año
+# (`serie_cotizaciones`) que se sube en la MISMA sentencia que lo lee: Postgres bloquea la fila hasta el
+# `COMMIT` del que la subió, así que dos guardados a la vez salen seguidos. `UNIQUE (anio, numero)` de
+# `cotizaciones` es la última puerta. La serie nace vacía (respuesta 1 de Tiziano): la primera de 2026 es
+# la 001. Quien la llama (pieza 3) lo hace en la misma transacción que el `INSERT` de la cotización.
+# Un borrador que no se usa gasta su número: no se reutilizan.
+SENTENCIA_DEL_NUMERO_DE_COTIZACION = (
+    "INSERT INTO serie_cotizaciones (anio, ultimo) VALUES (%s, 1) "
+    "ON CONFLICT (anio) DO UPDATE SET ultimo = serie_cotizaciones.ultimo + 1 "
+    "RETURNING ultimo")
+
+
+def _anio_de_cotizacion_que_vale(anio) -> bool:
+    return isinstance(anio, int) and not isinstance(anio, bool) and 2000 <= anio <= 9999
+
+
+async def siguiente_numero_de_cotizacion(cur, anio: int) -> int:
+    """El número que sigue en la serie de `anio` (1 si es la primera del año). Escribe en
+    `serie_cotizaciones`: llámala dentro de la transacción que guarda la cotización. `cur` es un cursor
+    con `row_factory=dict_row`. El año es el del día en que se guarda por primera vez, no el de `fecha`."""
+    if not _anio_de_cotizacion_que_vale(anio):
+        raise ValueError("el año de la serie no es un año")
+    await cur.execute(SENTENCIA_DEL_NUMERO_DE_COTIZACION, (anio,))
+    fila = await cur.fetchone()
+    return int(fila["ultimo"])
+
+
+def codigo_de_cotizacion(anio: int, numero: int) -> str:
+    """`COT-AAAA-NNN` (tres cifras como mínimo: la 1000 es `COT-2026-1000`)."""
+    if isinstance(numero, bool) or not isinstance(numero, int) or numero < 1:
+        raise ValueError("el número de la cotización no es un entero positivo")
+    if not _anio_de_cotizacion_que_vale(anio):
+        raise ValueError("el año de la cotización no es un año")
+    return f"COT-{anio}-{numero:03d}"
+
+
 # ── AGREGAR TAREAS A UN PROYECTO (pieza 2 del diseño «proyectos», 29-sep-2026) ─
 #
 # UNA SOLA PUERTA para «¿a este proyecto se le pueden agregar tareas?»:
