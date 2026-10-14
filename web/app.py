@@ -1994,11 +1994,12 @@ async def cambiar_fecha_de_tarea_desde_proyectos(request: Request, tid: int):
         # Un envío SIN el campo no pide nada (no es «vacío = quitar»): como en
         # `/tareas`, que ignora los campos que no vienen.
         return RedirectResponse(await _volver_a_la_tarea(
-            tid, t=tid, error="tarea_fecha_igual"), status_code=303)
+            tid, t=tid, error="tarea_fecha_falta"), status_code=303)
     pedido = str(formulario.get("vence", "")).strip()
-    if "prev_vence" in formulario and pedido == str(formulario.get("prev_vence", "")).strip():
+    # LA REGLA DE `guardar_tareas`, entera: un `prev_vence` ausente vale "" (como allá).
+    if pedido == str(formulario.get("prev_vence", "")).strip():
         return RedirectResponse(await _volver_a_la_tarea(
-            tid, t=tid, error="tarea_fecha_igual"), status_code=303)
+            tid, t=tid, error="tarea_fecha_sin_tocar"), status_code=303)
     vale, vence_en = _vence_con_hora_valido(pedido)
     if not vale:
         return RedirectResponse(await _volver_a_la_tarea(

@@ -774,6 +774,8 @@ form.nueva-tarea button.guardar,form.comentar button.guardar,form.renombrar butt
     {% elif error == 'tarea_titulo' %}<p class="aviso">El título no puede quedar vacío ni pasar de {{ largo_titulo }} caracteres.</p>
     {% elif error == 'tarea_fecha' %}<p class="aviso">No se entendió la fecha.</p>
     {% elif error == 'tarea_fecha_cambio' %}<p class="aviso">La fecha no se entendió: la tarea sigue con la fecha que tenía.</p>
+    {% elif error == 'tarea_fecha_falta' %}<p class="aviso">No se mandó ninguna fecha: la tarea sigue como estaba.</p>
+    {% elif error == 'tarea_fecha_sin_tocar' %}<p class="aviso">No cambió nada: no se tocó la fecha.</p>
     {% elif error == 'tarea_fecha_igual' %}<p class="aviso">No cambió nada: la tarea ya tenía esa fecha, o ya no está pendiente.</p>
     {% elif error == 'tarea_nueva_responsable' %}<p class="aviso">Ese responsable no vale: se escoge entre {{ nombres_responsable|join(', ') }}. La tarea NO se creó.</p>
     {% elif error == 'tarea_comentario' %}<p class="aviso">El comentario no puede quedar vacío ni pasar de {{ largo_comentario }} caracteres.</p>

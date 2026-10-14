@@ -356,7 +356,7 @@ def test_dejar_la_misma_fecha_dice_que_no_cambio_nada_y_no_escribe(mt):
         follow_redirects=True)
     assert foto(mt) == antes
     avisos = _avisos(r.text)
-    assert "No cambió nada: la tarea ya tenía esa fecha, o ya no está pendiente." in avisos, avisos
+    assert "No cambió nada: no se tocó la fecha." in avisos, avisos
     assert not any("guardada" in a or "quitada" in a for a in avisos)
 
 
@@ -369,7 +369,7 @@ def test_guardar_sin_tocar_el_campo_no_recorta_los_segundos_de_una_fecha_que_los
     assert campos["vence"]["value"] == campos["prev_vence"]["value"] == "2026-10-14T09:30"
     antes = foto(mt)
     r = post("/proyectos/tarea/10/fecha", {"vence": "2026-10-14T09:30", "prev_vence": "2026-10-14T09:30"})
-    assert "error=tarea_fecha_igual" in r.headers["location"] and foto(mt) == antes
+    assert "error=tarea_fecha_sin_tocar" in r.headers["location"] and foto(mt) == antes
 
 
 @pytest.mark.parametrize("malo", ["mañana", "2026-10-20", "2026-10-20T25:99", "2019-12-31T10:00",
@@ -394,12 +394,13 @@ def test_un_envio_sin_el_campo_vence_no_quita_la_fecha_ni_dice_que_la_quito(mt):
         assert avisos and not any("quitada" in a or "guardada" in a for a in avisos), avisos
 
 
-def test_sin_el_valor_previo_igual_se_mueve_y_vaciar_quita(mt):
-    """`prev_vence` solo evita escribir lo que nadie tocó; un envío sin él no se queda sin responder."""
+def test_sin_el_valor_previo_rige_la_regla_de_tareas_vacio_no_quita_y_un_valor_si_mueve(mt):
+    """Como en `guardar_tareas`: un `prev_vence` ausente vale "" . Un valor nuevo se mueve; vacío no quita."""
     post("/proyectos/tarea/10/fecha", {"vence": "2026-10-20T09:30"})
     assert "2026-10-20" in str(tarea(mt, 10)["vence_en"])
+    antes = foto(mt)
     post("/proyectos/tarea/10/fecha", {"vence": ""})
-    assert tarea(mt, 10)["vence_en"] is None
+    assert foto(mt) == antes and tarea(mt, 10)["vence_en"] is not None
 
 
 # ── 6. Lo que no es pendiente, no existe o es de otro proyecto ───────────
@@ -433,46 +434,91 @@ def test_una_direccion_escrita_a_mano_no_pinta_el_aviso(mt):
 
 # ── 3 (hermanos). Lo mismo que `/tareas` para la misma entrada ───────────
 
-ENTRADAS = [("2026-10-20T09:30", "2026-10-14T12:00"), ("", "2026-10-14T12:00"), ("2026-10-20", "2026-10-14T12:00"),
-            ("basura", "2026-10-14T12:00"), ("2019-12-31T10:00", "2026-10-14T12:00"),
-            ("2026-10-20T09:30:45", "2026-10-14T12:00"), ("2026-10-12T09:30", "2026-10-14T12:00"),
-            ("2026-10-14T12:00", "2026-10-14T12:00"), ("2026-10-30T09:30", ""),
-            # Sin el campo `vence` (con y sin `prev_vence`): una entrada más, y el hermano no toca nada.
-            (None, "2026-10-14T12:00"), (None, None)]
+import itertools
+
+# EL CRUCE COMPLETO, generado por producto (no una lista escogida): lo que llega en `vence` × lo que llega en
+# `prev_vence` × la tarea. Para cada celda, `/proyectos/tarea/N/fecha` y `POST /tareas` (`vence_N`, `prev_vence_N`)
+# tienen que dejar la MISMA fila entera y las MISMAS huellas.
+TAREAS_DEL_CRUCE = {                     # nombre -> (id, lo que el formulario pinta como guardado)
+    "pendiente_con_fecha": (10, "2026-10-14T12:00"),
+    "pendiente_sin_fecha": (12, ""),
+    "hecha": (11, "2026-10-05T12:00"),
+}
+VENCE = ["ausente", "vacio", "valido", "invalido", "igual_al_guardado"]
+PREV = ["ausente", "vacio", "igual_al_guardado", "distinto"]
+CRUCE = list(itertools.product(VENCE, PREV, sorted(TAREAS_DEL_CRUCE)))
+# Celdas que NO pueden ser iguales por una razón de fondo, una por una y con su razón. Hoy ninguna: las dos
+# rutas leen los mismos dos campos. Lo no declarado cae del lado estricto (tiene que ser igual).
+DISTINTAS: dict[tuple, str] = {}
+
+
+def _valor_de(clase: str, guardado: str):
+    return {"ausente": None, "vacio": "", "valido": "2026-10-20T09:30", "invalido": "basura",
+            "igual_al_guardado": guardado, "distinto": "2026-10-01T08:00"}[clase]
+
+
+def _aviso_esperado(vence, prev, cambio: bool) -> str:
+    if vence is None:
+        return "No se mandó ninguna fecha: la tarea sigue como estaba."
+    if vence == (prev or ""):
+        return "No cambió nada: no se tocó la fecha."
+    if vence == "basura":
+        return "La fecha no se entendió: la tarea sigue con la fecha que tenía."
+    if not cambio:
+        return "No cambió nada: la tarea ya tenía esa fecha, o ya no está pendiente."
+    return "Fecha de la tarea quitada: queda sin fecha." if vence == "" else "Fecha de la tarea guardada."
 
 
 def _lo_que_quedo(m, tid: int) -> dict:
     t = tarea(m, tid)
     hs = [{k: json.loads(h[k]) if h[k] else None for k in ("antes", "despues")} | {
         "actor": h["actor"], "accion": h["accion"], "motivo": h["motivo"]} for h in huellas(m)]
-    return {"vence_en": t["vence_en"], "pospuesta_veces": t["pospuesta_veces"],
-            "estado": t["estado"], "avisos_enviados": t["avisos_enviados"],
-            "anticipos_min": t["anticipos_min"], "huellas": hs}
+    return {"vence_en": t["vence_en"], "pospuesta_veces": t["pospuesta_veces"], "estado": t["estado"],
+            "avisos_enviados": t["avisos_enviados"], "anticipos_min": t["anticipos_min"], "huellas": hs}
 
 
-@pytest.mark.parametrize("pedido,previo", ENTRADAS)
-def test_misma_entrada_misma_fila_y_misma_huella_que_el_panel_de_tareas(monkeypatch, gente, pedido, previo):
+def test_el_cruce_es_el_producto_completo_y_las_distintas_estan_declaradas():
+    assert len(CRUCE) == len(VENCE) * len(PREV) * len(TAREAS_DEL_CRUCE) == 60
+    assert set(DISTINTAS) <= set(CRUCE) and all(DISTINTAS.values())
+
+
+@pytest.mark.parametrize("clase_vence,clase_prev,quien", CRUCE)
+def test_cada_celda_del_cruce_deja_lo_mismo_que_tareas_y_el_aviso_dice_lo_que_paso(
+        monkeypatch, gente, clase_vence, clase_prev, quien):
     from test_escrituras_tarea import _mundo
-    resultados = []
+    tid, guardado = TAREAS_DEL_CRUCE[quien]
+    vence, prev = _valor_de(clase_vence, guardado), _valor_de(clase_prev, guardado)
+    campos = {k: v for k, v in (("vence", vence), ("prev_vence", prev)) if v is not None}
+    inicial = resultados = None
+    avisos = []
+    quedaron = []
     for ruta in ("tareas", "proyectos"):
         m = _mundo(monkeypatch, gente)
-        m.con.execute("UPDATE tareas SET avisos_enviados = '{0}', anticipos_min = '{0}' WHERE id = 10")
-        if previo == "":
-            m.con.execute("UPDATE tareas SET vence_en = NULL WHERE id = 10")
+        m.con.execute("UPDATE tareas SET avisos_enviados = '{0}', anticipos_min = '{0}' WHERE id = ?", (tid,))
         m.con.commit()
-        campos = {k: v for k, v in (("vence", pedido), ("prev_vence", previo)) if v is not None}
+        inicial = _lo_que_quedo(m, tid)
+        c = _cliente(config.CHAT_ID_DUENO)
         if ruta == "tareas":
-            _cliente(config.CHAT_ID_DUENO).post(
-                "/tareas", data={f"{k}_10": v for k, v in campos.items()}, follow_redirects=False)
+            c.post("/tareas", data={f"{k}_{tid}": v for k, v in campos.items()}, follow_redirects=False)
         else:
-            _cliente(config.CHAT_ID_DUENO).post("/proyectos/tarea/10/fecha", data=campos, follow_redirects=False)
-        resultados.append(_lo_que_quedo(m, 10))
-    assert resultados[0] == resultados[1], (pedido, previo)
-    if pedido is None:
-        assert resultados[0]["huellas"] == [] and resultados[0]["vence_en"] is not None, previo
-    # y que la comparación no es vacía: las entradas buenas SÍ cambiaron algo
-    if pedido in ("2026-10-20T09:30", "", "2026-10-20T09:30:45", "2026-10-12T09:30", "2026-10-30T09:30"):
-        assert resultados[0]["huellas"], pedido
+            r = c.post(f"/proyectos/tarea/{tid}/fecha", data=campos, follow_redirects=True)
+            assert r.status_code == 200
+            avisos = _avisos(r.text)
+        quedaron.append(_lo_que_quedo(m, tid))
+    celda = (clase_vence, clase_prev, quien)
+    if celda in DISTINTAS:
+        pytest.skip(DISTINTAS[celda])
+    assert quedaron[0] == quedaron[1], celda
+    cambio = quedaron[1]["vence_en"] != inicial["vence_en"]
+    esperado = _aviso_esperado(vence, prev, cambio)
+    assert avisos.count(esperado) == 1, (celda, esperado, avisos)
+    # y ningún otro aviso de éxito o de "igual" contradice al esperado
+    otros = [a for a in avisos if a != esperado and ("Fecha de la tarea" in a or "No cambió" in a
+                                                       or "No se mandó" in a or "no se entendió" in a)]
+    assert otros == [], (celda, otros)
+    assert bool(quedaron[1]["huellas"]) == cambio, celda
+    if quien == "hecha":
+        assert not cambio, celda                 # una hecha nunca se mueve, entre en la celda que entre
 
 
 # ── 7. El filtro viaja ───────────────────────────────────────────────────
