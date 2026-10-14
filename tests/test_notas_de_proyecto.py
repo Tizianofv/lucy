@@ -161,7 +161,7 @@ def _lo_pintado(html: str) -> list[tuple[int, str, str]]:
     """`[(id, 'autor', 'texto')]` de cada nota del bloque, en el orden en que salen."""
     b = _bloque(html)
     salida = []
-    for m in re.finditer(r'<div class="nota-item" id="nota-(\d+)">\s*<small>(.*?) · .*?</small>(.*?)(?=<div class="nota-item"|$)',
+    for m in re.finditer(r'<div class="nota-item" id="nota-(\d+)"[^>]*>\s*<small>(.*?) · .*?</small>(.*?)(?=<div class="nota-item"|$)',
                          b, re.S):
         texto = re.search(r'<p class="texto">(.*?)</p>', m.group(3), re.S)
         salida.append((int(m.group(1)), m.group(2), texto.group(1) if texto else None))
@@ -442,7 +442,7 @@ def test_solo_ver_lee_las_notas_y_no_tiene_ningun_control(uno):
     for control in ("<form", "<textarea", "<button", "<input", "Cambiar", "Borrar", "editar_nota=", "borrar_nota=",
                     "/proyectos/1/notas"):
         assert control not in b, control
-    assert "<script" not in html
+    assert html.count("<script") == 1      # el de la pieza de sin saltar: `controles_que_sobran` lo exige entero
 
 
 def test_solo_ver_sin_notas_no_dibuja_el_bloque(uno):

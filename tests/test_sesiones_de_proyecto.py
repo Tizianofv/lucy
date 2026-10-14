@@ -586,8 +586,8 @@ def test_el_bloque_sale_despues_de_tareas_y_de_las_notas_y_antes_de_la_actividad
     registro.sesiones = _respuesta(sesiones=(SESION, TRABAJO))
     html = _abrir(monkeypatch, con=con)
     tareas = html.index('<section class="bloque">\n      <div class="encabezado"><h2>Tareas</h2>')
-    sesiones = html.index('<section class="bloque sesiones-p" id="sesiones-y-trabajos">')
-    actividad = html.index('<section class="bloque actividad-p" id="actividad-del-proyecto">')
+    sesiones = html.index('<section class="bloque sesiones-p" id="sesiones-y-trabajos"')
+    actividad = html.index('<section class="bloque actividad-p" id="actividad-del-proyecto"')
     assert tareas < sesiones < actividad
     entre = [c.strip() for c in re.findall(r'<section class="bloque([^"]*)"', html[tareas:sesiones])]
     assert entre == [""] + (["notas-p"] if "notas-del-proyecto" in html else []), entre
