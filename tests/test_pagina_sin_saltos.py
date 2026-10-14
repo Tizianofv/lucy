@@ -433,6 +433,8 @@ reemplazos["tarea-4"] = D;
 @pytest.mark.parametrize("region_con_scroll", [True, False])
 def test_la_fila_de_referencia_vuelve_a_su_sitio_al_marcar(region_con_scroll):
     esc = (_ANCLAS + 'paginas["PAG-M"] = {sinScroll: %s};' % ("false" if region_con_scroll else "true") +
+           # la tocada SIGUE en la página nueva pero en otro sitio (se fue a «hechas», 900 más abajo): no puede ser la referencia.
+           'reemplazos["tarea-2"] = B; rect["tarea-2"].despues = [900, 950];'
            'var f = formulario("/proyectos/tarea/2/hecha", "post", []); f.clases = ["marcar"]; f.closest = function () { return B; };'
            '__e = enviar(f); responder(0, "PAG-M");')
     r = correr(CASA(), esc)
