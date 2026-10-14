@@ -339,9 +339,10 @@ def test_dos_toques_a_la_misma_busqueda_mandan_un_solo_pedido(sesion):
 @hay_osascript
 def test_un_enlace_tocado_mientras_se_guarda_espera_a_que_termine_y_sale_despues():
     esc = ('var f = formulario("/proyectos/1/notas", "post", [["contenido", "x"]]); enviar(f);'
-           ' __e = clic(enlace("/proyectos?p=2")); var antes = pedidos.length; responder(0, "PAG-G");'
-           ' var __despues = pedidos.length; responder(1, "PAG-2");')
+           ' __e = clic(enlace("/proyectos?p=2")); salidas.push(["pedidos antes de que conteste el guardado", pedidos.length]);'
+           ' responder(0, "PAG-G"); salidas.push(["pedidos despues", pedidos.length]); responder(1, "PAG-2");')
     r = correr(CASA(), esc)
+    assert r["salidas"] == [["pedidos antes de que conteste el guardado", 1], ["pedidos despues", 2]]    # esperó su turno
     assert r["prevenido"] is True and [p[0] for p in r["pedidos"]] == ["POST", "GET"]
     assert r["cen"] == "PAG-2" and r["historia"][-1] == ["push", None, "/proyectos?p=2"]
 
