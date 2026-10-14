@@ -252,3 +252,20 @@ def test_la_busqueda_de_la_puerta_unica_ve_un_escritor_inventado(tmp_path):
         encoding="utf-8")
     hallados = _textos_que_escriben_la_serie([tmp_path / "otro.py"], tmp_path)
     assert [v for _, _, v in hallados] == ["UPDATE serie_cotizaciones SET ultimo = 99"]
+
+
+# ── 8. El humo mira las dos tablas ──────────────────────────────────────────────────────────────────
+
+def test_humo_lee_las_dos_tablas_de_las_cotizaciones_y_las_corre_en_su_lista():
+    """`tools/humo.py` corre contra la base de verdad; sin esto, una base sin la migración pasaba el humo
+    y la primera cotización fallaba al guardar. Se lee el archivo con `ast` (no se importa: al importarlo
+    arranca y se conecta). Las dos tablas, leídas con SELECT, y la función puesta en la lista `pruebas`."""
+    arbol = ast.parse((_ROOT / "tools" / "humo.py").read_text(encoding="utf-8"))
+    selects = {n.value for n in ast.walk(arbol) if isinstance(n, ast.Constant) and isinstance(n.value, str)
+               and n.value.startswith("SELECT")}
+    for tabla in ("serie_cotizaciones", "cotizaciones"):
+        assert any(re.fullmatch(rf"SELECT count\(\*\) AS n FROM {tabla}", s) for s in selects), (tabla, selects)
+    en_la_lista = [e for n in ast.walk(arbol) if isinstance(n, ast.Assign)
+                   and any(isinstance(x, ast.Name) and x.id == "pruebas" for x in n.targets)
+                   for e in ast.walk(n.value) if isinstance(e, ast.Name) and e.id == "_tablas_de_cotizaciones"]
+    assert en_la_lista, "la función del humo existe pero no está en la lista `pruebas`"
