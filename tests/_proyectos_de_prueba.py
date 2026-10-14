@@ -65,6 +65,14 @@ def _armar(pr, ta, co, personas, fechas=None, carpetas=None, notas=None):
                            participantes=personas, fechas=fechas, carpetas=carpetas, notas=notas)
 
 
+# Lo que el doble de `cotizaciones_de_proyectos` devuelve: `{proyecto_id: [cotización, ...]}`, con la forma de
+# `db.cotizaciones_de_proyectos` (contenido ya leído, como lo guarda la puerta).
+COTIZACIONES_DEL_MODELO: dict = {1: [dict(
+    id=1, proyecto_id=1, anio=2026, numero=1, codigo="COT-2026-001", estado="enviada",
+    para_nombre="Cliente de prueba", para_telefono="809-555-0101", fecha="2026-10-14", validez_dias=15,
+    contenido={"opciones": [{"nombre": "Una", "renglones": [
+                   {"descripcion": "Trabajo", "detalle": "", "total": "1000.00"}]}],
+               "condiciones": [{"clave": None, "texto": "Una condicion.", "marcada": True}]})]}
 # Lo que el doble de `sesiones_quitadas_de_proyectos` devuelve: `{proyecto_id: {ref: codigo}}`. Por
 # omisión, nada; una prueba que quiera pintar la lista «Quitadas» lo llena con `monkeypatch`.
 QUITADAS_DEL_MODELO: dict = {}
@@ -131,6 +139,14 @@ class BaseQueNoSeToca:
             # También la función REAL y pura (14-oct-2026): reordena las filas del modelo que ya se
             # entregaron para que la tarea recién hecha no se mueva; no toca la base.
             return db.con_la_recien_hecha_en_su_sitio
+        if nombre == "cotizaciones_de_proyectos":
+            # FINGIDO, declarado: lo que `db.cotizaciones_de_proyectos` leería. Una cotización del proyecto 1
+            # («Disco Uno»), la que la ruta del PDF necesita para contestar 200 con la cookie de solo ver
+            # (la prueba de las puertas le pega a toda ruta de ver con `{pid}` y `{cid}` en 1). El SQL
+            # real se prueba con SQLite en `tests/test_guardar_cotizacion.py`.
+            async def _cotizaciones():
+                return COTIZACIONES_DEL_MODELO
+            return _cotizaciones
         if nombre == "sesiones_quitadas_de_proyectos":
             # FINGIDO, declarado: la tabla `sesiones_de_proyecto` está (la base de esta prueba es la de
             # después de la migración) y devuelve lo que diga `QUITADAS_DEL_MODELO` (por omisión,

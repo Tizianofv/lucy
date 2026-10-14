@@ -142,7 +142,7 @@ def test_G2_1_la_lista_de_rutas_no_es_vacia_y_trae_los_tres_tipos():
     puertas = {_puerta_de(r) for r in panel.app.routes if hasattr(r, "endpoint")}
     assert puertas == {auth.PUERTA_SIEMPRE, auth.PUERTA_VER, auth.PUERTA_ENTRADA, auth.PUERTA_CODE}
     rutas_ver = sorted(r.path for r in panel.app.routes if _puerta_de(r) == auth.PUERTA_VER)
-    assert rutas_ver == ["/logo-cds.png", "/proyectos"]
+    assert rutas_ver == ["/logo-cds.png", "/proyectos", "/proyectos/{pid}/cotizaciones/{cid}/pdf"]
     escribe = [r for r in panel.app.routes if "POST" in _metodos(r)]
     assert len(escribe) >= 30
 
