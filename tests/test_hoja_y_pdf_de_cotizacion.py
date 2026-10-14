@@ -7,9 +7,13 @@ Qué se vigila:
      «Total de la opción» solo con más de un renglón, SOLO las condiciones marcadas, pie del estudio;
   2. el texto del PDF, leído de vuelta con `pypdf`, es el de `hoja_de_cotizacion` (sin blancos, en su orden),
      sin las condiciones desmarcadas; varias páginas si no caben, sin perder texto;
-  3. todo lo que la puerta del contenido deja pasar se dibuja con la letra de fábrica (la lista de caracteres
-     sale de preguntarle a la puerta, no de una lista tecleada), y «—» y las comillas tipográficas llegan al
-     PDF ya cambiadas por su forma simple;
+  3. todo carácter del plano básico (U+0020 a U+FFFF, sin sustitutos) que la puerta del contenido deja pasar
+     se dibuja con la letra de fábrica y se lee de vuelta en TODOS los campos (la lista sale de preguntarle a
+     la puerta carácter por carácter); fuera de ese plano solo se prueban tres tecleados (emoji, «☺», «😀»);
+     «—» y las comillas tipográficas llegan al PDF ya cambiadas por su forma simple;
+  3-bis. nada de lo que se dibuja se sale de la carta: nombre del cliente (tope de la puerta, 200), título de
+     la opción (tope, 120), teléfono, descripción, detalle, condición y los totales más grandes se ajustan en
+     varias líneas o ensanchan su columna (se mide cada `cell` y `multi_cell` que pinta el escritor);
   4. la vista previa HTML trae los mismos textos que la hoja, escapados;
   5. la ruta: `application/pdf` con `attachment` y el código como nombre; la bajan la casa y solo ver; sin
      sesión 401; 404 con la cotización de otro proyecto, una que no existe, una borrada o sin la tabla.
@@ -201,9 +205,10 @@ def test_con_muchas_opciones_y_renglones_hay_varias_paginas_y_no_se_pierde_texto
 # ── 3. La letra de fábrica y lo que la puerta deja pasar ────────────────────────────────────────────
 
 def _caracteres_que_la_puerta_acepta() -> list[str]:
-    """Todo lo de 0x20 a 0x10FFFF cercano que la PUERTA deja pasar, preguntándole a ella (no una lista
-    tecleada): se prueban Latin-1 completo y algunos de fuera, y lo que no acepta se descarta."""
-    candidatos = [chr(i) for i in range(0x20, 0x100)] + list("—–“”‘’…€™☺😀ÿŸ")
+    """Todo carácter de U+0020 a U+FFFF (menos los sustitutos, que ni se codifican) que la PUERTA deja pasar,
+    preguntándole a ella uno por uno en un nombre de opción y en una descripción. Fuera del plano básico no
+    se recorre: se agregan tres caracteres tecleados que la puerta debe rechazar o simplificar."""
+    candidatos = [chr(i) for i in range(0x20, 0x10000) if not 0xD800 <= i <= 0xDFFF] + list("☺😀€")
     aceptados = []
     for c in candidatos:
         try:
@@ -215,12 +220,17 @@ def _caracteres_que_la_puerta_acepta() -> list[str]:
     return aceptados
 
 
-def test_todo_lo_que_la_puerta_deja_pasar_se_dibuja_con_la_letra_de_fabrica():
+def _visibles(texto: str) -> str:
+    return "".join(ch for ch in texto if not ch.isspace() and unicodedata.category(ch) not in ("Cf", "Zs"))
+
+
+def test_todo_lo_que_la_puerta_deja_pasar_se_dibuja_con_la_letra_de_fabrica_en_todos_los_campos():
     aceptados = _caracteres_que_la_puerta_acepta()
     assert len(aceptados) >= 180, len(aceptados)        # Latin-1 imprimible más las formas que se simplifican
     todo = "".join(aceptados)
-    for campo in range(0, len(todo), 40):
-        trozo = todo[campo:campo + 40]
+    comparados = 0
+    for i in range(0, len(todo), 40):
+        trozo = todo[i:i + 40]
         contenido = {"opciones": [{"nombre": trozo, "renglones": [
             {"descripcion": trozo, "detalle": trozo, "total": "1500"}]}],
             "condiciones": [{"clave": None, "texto": trozo, "marcada": True}]}
@@ -228,9 +238,16 @@ def test_todo_lo_que_la_puerta_deja_pasar_se_dibuja_con_la_letra_de_fabrica():
         nombre = db._texto_de_cotizacion(trozo, "para_nombre", 200, minimo=0) or "x"    # como lo deja `guardar_cotizacion`
         pdf = cz.pdf_de_cotizacion(cz.hoja_de_cotizacion(_cot(para_nombre=nombre, contenido=guardado)))
         assert pdf.startswith(b"%PDF")
-        visibles = "".join(ch for ch in guardado["opciones"][0]["nombre"]
-                           if not ch.isspace() and unicodedata.category(ch) not in ("Cf", "Zs"))
-        assert _sin_blancos(visibles) in _sin_blancos(_texto_del_pdf(pdf)) or visibles == ""
+        leido = _sin_blancos(_texto_del_pdf(pdf))
+        op, r, cond = guardado["opciones"][0], guardado["opciones"][0]["renglones"][0], guardado["condiciones"][0]
+        for campo, valor in (("para_nombre", nombre), ("nombre de la opción", op["nombre"]),
+                             ("descripción", r["descripcion"]), ("detalle", r["detalle"]),
+                             ("condición", cond["texto"])):
+            visibles = _visibles(valor)
+            assert visibles, f"el trozo {i} dejó vacío el campo {campo}: la prueba no compara nada"
+            assert _sin_blancos(visibles) in leido, f"{campo} (trozo {i}) no se lee de vuelta del PDF"
+            comparados += 1
+    assert comparados >= 5 * 4
 
 
 def test_la_puerta_cambia_las_formas_tipograficas_y_el_pdf_las_lleva_ya_cambiadas():
@@ -394,3 +411,77 @@ def test_la_ruta_es_de_lectura_no_escribe_nada(con):
     _cliente("ver").get(_url(1, r["id"]))
     _cliente("casa").get(_url(1, r["id"]))
     assert (tg._fila(con), tg._cuantas(con, "log_acciones"), tg._cuantas(con, "serie_cotizaciones")) == antes
+
+
+# ── 3-bis. Nada se sale de la carta ─────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def espia_del_borde(monkeypatch):
+    """Anota cada `cell` y `multi_cell` que pinta el escritor y lo que le falta (o le sobra) al borde derecho."""
+    from fpdf import FPDF
+    dibujados: list[tuple] = []
+    cell, multi = FPDF.cell, FPDF.multi_cell
+
+    def espiar_cell(self, w=None, h=None, text="", *a, **k):
+        limite = self.w - self.r_margin
+        x = self.get_x()
+        ancho = (w if w else limite - x)
+        dibujados.append(("cell", text, x + ancho - limite, self.get_string_width(text) + 2 * self.c_margin - ancho))
+        return cell(self, w, h, text, *a, **k)
+
+    def espiar_multi(self, w, h=None, text="", *a, **k):
+        limite = self.w - self.r_margin
+        x = self.get_x()
+        ancho = (w if w else limite - x)
+        if not k.get("dry_run"):
+            dibujados.append(("multi_cell", text, x + ancho - limite, 0.0))
+        return multi(self, w, h, text, *a, **k)
+    monkeypatch.setattr(FPDF, "cell", espiar_cell)
+    monkeypatch.setattr(FPDF, "multi_cell", espiar_multi)
+    return dibujados
+
+
+def _lo_que_se_sale(dibujados) -> list:
+    # `[2]`: cuánto pasa el borde derecho de la carta la caja de la celda; `[3]`: cuánto pasa el texto de su caja
+    return [(t, texto[:40], round(a, 2), round(b, 2)) for t, texto, a, b in dibujados if a > 1e-6 or b > 1e-6]
+
+
+def _cot_al_tope_de_la_puerta(letra="W"):
+    nombre = letra * 200
+    c = _cot(para_nombre=nombre, para_telefono="9" * 40)
+    c["contenido"]["opciones"] = [
+        {"nombre": letra * 120, "renglones": [
+            {"descripcion": letra * 200, "detalle": letra * 1000, "total": "99999999.99"},
+            {"descripcion": "Otro", "detalle": "", "total": "99999999.99"}]},
+        {"nombre": ("Palabra " * 15).strip(), "renglones": [{"descripcion": "Dos " * 50, "detalle": "x y " * 250, "total": "5"}]}]
+    c["contenido"]["condiciones"] = [{"clave": None, "texto": letra * 300, "marcada": True},
+                                     {"clave": None, "texto": "Una condición " * 21, "marcada": True}]
+    return c
+
+
+@pytest.mark.parametrize("letra", ["W", "i", "Ñ"])
+def test_nada_de_lo_que_se_dibuja_se_sale_del_borde_de_la_carta_con_todo_al_tope_de_la_puerta(espia_del_borde, letra):
+    c = _cot_al_tope_de_la_puerta(letra)
+    # lo que ya acepta la puerta (nombre 200, opción 120, descripción 200, detalle 1000, condición 300)
+    db.contenido_de_cotizacion_que_vale(c["contenido"])
+    cz.pdf_de_cotizacion(cz.hoja_de_cotizacion(c))
+    assert len(espia_del_borde) > 20
+    assert _lo_que_se_sale(espia_del_borde) == []
+
+
+def test_el_nombre_y_el_titulo_largos_salen_enteros_en_el_pdf_y_en_varias_lineas():
+    c = _cot_al_tope_de_la_puerta("W")
+    pdf = cz.pdf_de_cotizacion(cz.hoja_de_cotizacion(c))
+    leido = _sin_blancos(_texto_del_pdf(pdf))
+    assert "W" * 200 in leido and "Opción1-" + "W" * 120 in leido
+    assert "RD$199,999,999.98" in leido           # el total de la opción 1 es la suma de dos tope: la columna creció
+
+
+def test_la_prueba_del_borde_ve_lo_que_se_sale(espia_del_borde):
+    """Entrada inventada para el espía: una celda de una línea con un texto largo SÍ se marca."""
+    from fpdf import FPDF
+    pdf = FPDF(unit="mm", format="Letter")
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(0, 5, "W" * 120)
+    assert _lo_que_se_sale(espia_del_borde) != []

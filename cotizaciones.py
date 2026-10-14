@@ -107,7 +107,7 @@ def textos_de_la_hoja(hoja: dict) -> list[str]:
 # ── El PDF ──────────────────────────────────────────────────────────────────────────────────────────
 
 _MARGEN = 20.0
-_ANCHO_DEL_TOTAL = 34.0
+_ANCHO_DEL_TOTAL = 34.0     # el mínimo: crece si algún total no cabe (ver `pdf_de_cotizacion`)
 _GRIS_TEXTO = (102, 102, 102)
 _NEGRO = (29, 29, 29)
 
@@ -117,7 +117,7 @@ def _altura(pdf: FPDF, ancho: float, alto_de_linea: float, texto: str) -> float:
     return pdf.multi_cell(ancho, alto_de_linea, texto, dry_run=True, output="HEIGHT")
 
 
-def _cabecera_de_la_tabla(pdf: FPDF, hoja: dict, ancho_desc: float) -> None:
+def _cabecera_de_la_tabla(pdf: FPDF, hoja: dict, ancho_desc: float, ancho_total: float) -> None:
     x = pdf.l_margin
     y = pdf.get_y()
     pdf.set_fill_color(*ROJO)
@@ -127,12 +127,12 @@ def _cabecera_de_la_tabla(pdf: FPDF, hoja: dict, ancho_desc: float) -> None:
     pdf.set_xy(x + 2, y)
     pdf.cell(ancho_desc - 2, 6, hoja["encabezados"][0])
     pdf.set_xy(x + ancho_desc, y)
-    pdf.cell(_ANCHO_DEL_TOTAL - 2, 6, hoja["encabezados"][1], align="R")
+    pdf.cell(ancho_total - 2, 6, hoja["encabezados"][1], align="R")
     pdf.set_y(y + 6)
 
 
-def _fila(pdf: FPDF, hoja: dict, ancho_desc: float, descripcion: str, detalle: str, total: str,
-          fuerte: bool = False) -> None:
+def _fila(pdf: FPDF, hoja: dict, ancho_desc: float, ancho_total: float, descripcion: str, detalle: str,
+          total: str) -> None:
     """Una fila de la tabla: descripción en negrita, detalle debajo, total a la derecha. Si no cabe en lo que
     queda de la página, salta de página y repite la cabecera."""
     x = pdf.l_margin
@@ -146,7 +146,7 @@ def _fila(pdf: FPDF, hoja: dict, ancho_desc: float, descripcion: str, detalle: s
     alto = h_desc + h_det + 4
     if pdf.will_page_break(alto):
         pdf.add_page()
-        _cabecera_de_la_tabla(pdf, hoja, ancho_desc)
+        _cabecera_de_la_tabla(pdf, hoja, ancho_desc, ancho_total)
     y = pdf.get_y()
     pdf.set_xy(x + 2, y + 2)
     pdf.set_font("Helvetica", "B", 10)
@@ -160,7 +160,7 @@ def _fila(pdf: FPDF, hoja: dict, ancho_desc: float, descripcion: str, detalle: s
     pdf.set_xy(x + ancho_desc, y + 2)
     pdf.set_font("Helvetica", "B", 10)
     pdf.set_text_color(*_NEGRO)
-    pdf.cell(_ANCHO_DEL_TOTAL - 2, 5, total, align="R")
+    pdf.cell(ancho_total - 2, 5, total, align="R")
     pdf.set_draw_color(230, 230, 230)
     pdf.set_line_width(0.2)
     pdf.line(x, y + alto, x + pdf.epw, y + alto)
@@ -194,9 +194,13 @@ def pdf_de_cotizacion(hoja: dict, logo: Path = LOGO_DE_LA_HOJA) -> bytes:
     pdf.cell(0, 5, hoja["codigo"], align="C", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(5)
 
-    # El bloque Para: fondo gris y raya roja a la izquierda.
+    # El bloque Para: fondo gris y raya roja a la izquierda. Cada valor puede ocupar varias líneas (un nombre
+    # de 200 caracteres no cabe en una): se mide antes de dibujar el fondo.
+    ancho_valor = pdf.epw - 8
+    pdf.set_font("Helvetica", "B", 10)
+    altos = [_altura(pdf, ancho_valor, 5.2, valor) for _, valor in hoja["para"]]
     y0 = pdf.get_y()
-    alto = 4 + len(hoja["para"]) * 9.2
+    alto = 4 + sum(3.2 + h + 0.8 for h in altos)
     pdf.set_fill_color(244, 244, 244)
     pdf.rect(x, y0, pdf.epw, alto, style="F")
     pdf.set_fill_color(*ROJO)
@@ -206,28 +210,35 @@ def pdf_de_cotizacion(hoja: dict, logo: Path = LOGO_DE_LA_HOJA) -> bytes:
         pdf.set_x(x + 5)
         pdf.set_font("Helvetica", "", 6.5)
         pdf.set_text_color(136, 136, 136)
-        pdf.cell(0, 3.2, etiqueta, new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(ancho_valor, 3.2, etiqueta, new_x="LMARGIN", new_y="NEXT")
         pdf.set_x(x + 5)
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(*_NEGRO)
-        pdf.cell(0, 5.2, valor, new_x="LMARGIN", new_y="NEXT")
+        pdf.multi_cell(ancho_valor, 5.2, valor, new_x="LMARGIN", new_y="NEXT")
         pdf.ln(0.8)
     pdf.set_y(y0 + alto + 7)
 
-    ancho_desc = pdf.epw - _ANCHO_DEL_TOTAL
+    # La columna del total crece si algún total no cabe en el mínimo (hasta RD$999,999,999.90 con 10 renglones).
+    pdf.set_font("Helvetica", "B", 10)
+    totales = [r["total"] for op in hoja["opciones"] for r in op["renglones"]]
+    totales += [op["total"]["total"] for op in hoja["opciones"] if op["total"]]
+    ancho_total = max([_ANCHO_DEL_TOTAL] + [pdf.get_string_width(t) + 6 for t in totales])
+    ancho_desc = pdf.epw - ancho_total
     for op in hoja["opciones"]:
         # El título de la opción no se queda solo al final de una página.
-        if pdf.will_page_break(7 + 6 + 20):
-            pdf.add_page()
         pdf.set_font("Helvetica", "B", 9)
+        alto_titulo = _altura(pdf, pdf.epw, 5, op["titulo"]) + 2
+        if pdf.will_page_break(alto_titulo + 6 + 20):
+            pdf.add_page()
         pdf.set_text_color(*ROJO)
         pdf.set_x(x)
-        pdf.cell(0, 7, op["titulo"], new_x="LMARGIN", new_y="NEXT")
-        _cabecera_de_la_tabla(pdf, hoja, ancho_desc)
+        pdf.multi_cell(pdf.epw, 5, op["titulo"], new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
+        _cabecera_de_la_tabla(pdf, hoja, ancho_desc, ancho_total)
         for r in op["renglones"]:
-            _fila(pdf, hoja, ancho_desc, r["descripcion"], r["detalle"], r["total"])
+            _fila(pdf, hoja, ancho_desc, ancho_total, r["descripcion"], r["detalle"], r["total"])
         if op["total"]:
-            _fila(pdf, hoja, ancho_desc, op["total"]["etiqueta"], "", op["total"]["total"])
+            _fila(pdf, hoja, ancho_desc, ancho_total, op["total"]["etiqueta"], "", op["total"]["total"])
         pdf.ln(4)
 
     if hoja["condiciones"]:
