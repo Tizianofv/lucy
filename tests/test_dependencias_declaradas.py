@@ -218,9 +218,9 @@ def test_solo_la_carpeta_tests_de_la_raiz_es_de_pruebas(tmp_path):
     assert vistos == {"cerebro/tests/b.py", "cerebro/c.py", "main.py"}, vistos
 
 
-def test_las_dependencias_que_trae_fpdf2_estan_declaradas_y_fijadas():
-    """Railway instala lo de requirements.txt: lo que fpdf2 arrastra va fijado a
-    lo que se probó, no a lo que resuelva pip ese día."""
+def test_las_dependencias_que_trae_fpdf2_estan_declaradas():
+    """Railway instala lo de requirements.txt. Que además estén fijadas a la versión
+    probada lo comprueba tests/test_pdf_humo.py (compara con lo instalado)."""
     traidas = {_nombre(r) for r in requires("fpdf2") if "extra ==" not in r}
     assert traidas, "fpdf2 ya no declara dependencias: revisa esta prueba"
     assert traidas <= declaradas(), traidas - declaradas()

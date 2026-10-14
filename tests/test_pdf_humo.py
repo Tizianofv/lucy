@@ -7,7 +7,7 @@ los acentos y la «ñ» salen, pero «—» no (levanta FPDFUnicodeEncodingExcep
 """
 import io
 import re
-from importlib.metadata import version
+from importlib.metadata import requires, version
 from pathlib import Path
 
 from fpdf import FPDF
@@ -28,11 +28,23 @@ def test_arma_un_pdf_de_una_pagina_en_memoria():
     assert lector.pages[0].extract_text().strip() == "Cotización Ñandú RD$ 62,500.00"
 
 
-def test_lo_instalado_es_la_version_fijada_en_requirements():
-    fijada = None
+def _pines():
+    """{nombre normalizado: versión} de las líneas `nombre==versión` de requirements.txt."""
+    pines = {}
     for linea in (RAIZ / "requirements.txt").read_text().splitlines():
-        m = re.match(r"^fpdf2==(\S+)\s*$", linea.split("#", 1)[0])
+        m = re.match(r"^([A-Za-z0-9._-]+)(?:\[[^\]]*\])?==(\S+)\s*$", linea.split("#", 1)[0])
         if m:
-            fijada = m.group(1)
-    assert fijada, "fpdf2 no está fijada con == en requirements.txt"
-    assert version("fpdf2") == fijada
+            pines[re.sub(r"[-_.]+", "-", m.group(1)).lower()] = m.group(2)
+    return pines
+
+
+def test_lo_instalado_es_la_version_fijada_en_requirements():
+    """fpdf2 y TODO lo que fpdf2 arrastra (sacado de su Requires-Dist, no tecleado)
+    está fijado en requirements.txt a la versión que hay instalada y se probó."""
+    pines = _pines()
+    nombres = ["fpdf2"] + [re.sub(r"[-_.]+", "-", re.match(r"[A-Za-z0-9._-]+", r).group(0)).lower()
+                           for r in requires("fpdf2") if "extra ==" not in r]
+    assert len(nombres) > 1
+    for n in nombres:
+        assert n in pines, f"{n} no está fijada con == en requirements.txt"
+        assert version(n) == pines[n], f"{n}: fijada {pines[n]}, instalada {version(n)}"
