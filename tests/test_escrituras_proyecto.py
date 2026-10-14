@@ -813,6 +813,32 @@ def test_un_estado_libre_que_dejo_telegram_se_ve_y_se_corrige_al_cerrar_o_reabri
     assert "no es de la lista" not in ver(mundo, p=1)
 
 
+# Una sentencia que crea o altera la tabla `proyectos` (con o sin `public.`, con o sin comillas, con o sin
+# `ONLY` o `IF EXISTS`) y trae un `CHECK (estado` o `CHECK ((estado`. NO agarra otra tabla que solo nombra a
+# `proyectos` en una llave foránea. FRONTERA (dicha, no cerrada): NO ve un CHECK que mezcla `estado` con otra
+# condición (`CHECK (id > 0 AND estado IN …)`) ni SQL armado al vuelo.
+_CHECK_DE_ESTADO_EN_PROYECTOS = re.compile(
+    r'(?:ALTER\s+TABLE(?:\s+IF\s+EXISTS)?(?:\s+ONLY)?|CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s+(?:"?\w+"?\s*\.\s*)?"?proyectos"?(?!\w)'
+    r'[^;]*CHECK\s*\(\s*(?:\(\s*)*estado', re.I | re.S)
+
+
+@pytest.mark.parametrize("sql,agarra", [
+    ("ALTER TABLE proyectos ADD CONSTRAINT x CHECK (estado IN ('a'));", True),
+    ("ALTER TABLE public.proyectos ADD CONSTRAINT x CHECK (estado IN ('a'));", True),
+    ('ALTER TABLE "public"."proyectos" ADD CONSTRAINT x CHECK (estado IN (\'a\'));', True),
+    ("ALTER TABLE ONLY public.proyectos ADD CONSTRAINT x CHECK ( estado IN ('a'));", True),
+    ("CREATE TABLE IF NOT EXISTS proyectos (id INT, CONSTRAINT x CHECK (estado IN ('a')));", True),
+    ("CREATE TABLE cotizaciones (proyecto_id BIGINT REFERENCES proyectos(id), CHECK (estado IN ('a')));", False),
+    ("ALTER TABLE IF EXISTS public.proyectos ADD CONSTRAINT x CHECK (estado IN ('a'));", True),
+    ("ALTER TABLE proyectos ADD CONSTRAINT x CHECK ((estado IN ('a')));", True),
+    ("ALTER TABLE proyectos ADD CONSTRAINT x CHECK (id > 0 AND estado IN ('a'));", False),   # no lo ve, a propósito (frontera)
+    ("ALTER TABLE proyectos_viejos ADD CONSTRAINT x CHECK (estado IN ('a'));", False),
+    ("ALTER TABLE tareas ADD COLUMN proyecto_id BIGINT REFERENCES public.proyectos(id); CREATE TABLE z (CHECK (estado IN ('a')));", False),
+])
+def test_la_busqueda_de_un_check_simple_de_estado_en_proyectos_ve_lo_que_dice_y_no_mas(sql, agarra):
+    assert bool(_CHECK_DE_ESTADO_EN_PROYECTOS.search(sql)) is agarra
+
+
 def test_el_esquema_no_impide_un_estado_libre_y_por_eso_la_pagina_lo_tolera():
     """Qué tan común es un estado libre en producción NO se puede medir con una
     prueba (la base no se toca): lo que se prueba es el ESQUEMA. `estado` es
@@ -825,7 +851,9 @@ def test_el_esquema_no_impide_un_estado_libre_y_por_eso_la_pagina_lo_tolera():
     assert re.search(r"estado\s+TEXT NOT NULL DEFAULT 'activo'", tabla)
     assert not re.search(r"CHECK\s*\(\s*estado", tabla, re.I)
     for migracion in (_ROOT / "db" / "migrations").glob("*.sql"):
-        assert not re.search(r"proyectos[^;]*CHECK\s*\(\s*estado", migracion.read_text(encoding="utf-8"), re.I | re.S)
+        # Solo las sentencias que crean o alteran la tabla `proyectos` (no las de otra tabla que la
+        # nombra en una llave foránea y tiene su propio `estado`, como `cotizaciones`).
+        assert not _CHECK_DE_ESTADO_EN_PROYECTOS.search(migracion.read_text(encoding="utf-8"))
 
 
 # ═══════════════════════════════════════════════════════════════════════

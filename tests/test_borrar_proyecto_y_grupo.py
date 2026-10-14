@@ -501,6 +501,10 @@ LO_QUE_APUNTA_A_UN_PROYECTO = {
     # Parte 11 (9-oct-2026): las decisiones sobre las sesiones del proyecto. Borrar el proyecto no
     # las toca: siguen ahí con su `proyecto_id` y vuelven con él desde la papelera.
     "sesiones_de_proyecto": "no se tocan: siguen nombrando al proyecto en la papelera, no se pierde nada",
+    # Cotizaciones (14-oct-2026, pieza 1): igual que las sesiones. Borrar el proyecto no las toca (siguen con
+    # su `proyecto_id`, y el código COT-… no se reutiliza) y vuelven con él desde la papelera. La llave no
+    # lleva `ON DELETE` porque ninguna ruta borra proyectos de verdad.
+    "cotizaciones": "no se tocan: siguen nombrando al proyecto en la papelera, no se pierde nada",
 }
 LO_QUE_APUNTA_A_UN_GRUPO = {
     "proyectos": "su `area` pasa a NULL (lo vivo, antes, se borra)",

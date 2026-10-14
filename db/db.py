@@ -15,6 +15,7 @@ import os
 import re
 import unicodedata
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from urllib.parse import urlsplit
 
 import psycopg
@@ -2111,6 +2112,221 @@ async def proyecto_vivo_con_nombre(cur, nombre: str, excluir_id: int | None = No
         (nombre, excluir_id or 0))
     fila = await cur.fetchone()
     return fila["id"] if fila else None
+
+
+# ── LAS COTIZACIONES DE UN PROYECTO: LA PUERTA DEL CONTENIDO (pieza 1 del diseño «Cotizaciones en
+# Proyectos», 14-oct-2026) ──────────────────────────────────────────────────────────────────────────
+#
+# `cotizaciones.contenido` es un JSON en TEXT (opciones, renglones y condiciones). UNA SOLA PUERTA,
+# `contenido_de_cotizacion_que_vale`, decide qué contenido vale y devuelve el texto que se guarda;
+# nada escribe `contenido` sin pasar por ella (las escrituras llegan en la pieza 3).
+#
+# Los vocabularios cerrados (estados, validez, claves de condición) se declaran UNA vez, acá, y la
+# prueba los compara con los CHECK de `db/schema.sql` y de la migración. Los topes de largo y de
+# cantidad son de diseño: no salen de medir cotizaciones reales (no hay ninguna en Lucy).
+ESTADOS_DE_COTIZACION = ("borrador", "enviada")
+VALIDEZ_DE_COTIZACION = (7, 15, 30)
+CLAVES_DE_CONDICION_DE_COTIZACION = ("validez", "alternativas", "deposito", "balance", "impuestos")
+MAX_OPCIONES_DE_COTIZACION = 6
+MAX_RENGLONES_DE_OPCION = 10
+MAX_CONDICIONES_DE_COTIZACION = 20
+LARGO_NOMBRE_DE_OPCION = 120
+LARGO_DESCRIPCION_DE_RENGLON = 200
+LARGO_DETALLE_DE_RENGLON = 1000
+LARGO_TEXTO_DE_CONDICION = 300
+TOPE_TOTAL_DE_RENGLON = Decimal("99999999.99")
+
+# Dinero escrito a la dominicana: «62500», «62,500», «62,500.50», «62500.5». Solo dígitos ASCII (un
+# dígito de otro alfabeto también lo entiende `Decimal`), coma solo como separador de miles en grupos
+# de tres, punto para los centavos. Nada de signo, exponente, NaN ni Infinity: no encajan.
+_RE_DINERO_DE_COTIZACION = re.compile(r"^(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.([0-9]+))?$")
+
+
+class CotizacionNoVale(ValueError):
+    """Un contenido de cotización que no puede quedar. `clave` dice por qué (`forma`, `sin_opciones`,
+    `total_cero`, …) para que una pantalla lo traduzca sin adivinar por el texto. El mensaje NUNCA
+    repite lo que se pidió."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+def _forma_simple_de_cotizacion(c: str) -> str:
+    """El PDF escribe con una letra de Latin-1 (los acentos y la «ñ» sí; «—», «€», «“» y los emoji no). Un
+    carácter fuera de Latin-1 se cambia por su forma simple cuando la REGLA la da: cualquier raya (categoría
+    `Pd`) → «-»; cualquier comilla tipográfica (su nombre Unicode dice QUOTATION MARK) → «"» si es doble o
+    «'» si es simple; y lo que Unicode descompone (NFKD) en puros signos de puntuación ASCII, como «…» → «...» (letras como «™» → «TM» no: se rechaza). Lo demás se deja
+    como está y la puerta lo rechaza."""
+    if ord(c) <= 0xFF:
+        return c
+    if unicodedata.category(c) == "Pd":
+        return "-"
+    nombre = unicodedata.name(c, "")
+    if "QUOTATION MARK" in nombre and "ANGLE" not in nombre:
+        return '"' if "DOUBLE" in nombre else "'"
+    compat = unicodedata.normalize("NFKD", c)
+    solo_signos = compat.isascii() and all(unicodedata.category(x).startswith("P") for x in compat)
+    return compat if solo_signos else c
+
+
+def _texto_de_cotizacion(crudo, campo: str, largo: int, *, minimo: int = 1, varias_lineas: bool = False) -> str:
+    """Un texto del contenido: `str`, `\\r\\n` y `\\r` → `\\n`, sin espacios de alrededor, de `minimo` a
+    `largo` caracteres, sin NUL ni lo que no se codifique, con comillas tipográficas, rayas y «…» cambiadas por su forma simple (`_forma_simple_de_cotizacion`), sin nada fuera de Latin-1 (`fuera_de_latin1`), ni ningún carácter de control (`Cc`) ni
+    separador de línea o de párrafo (`Zl`/`Zp`); con `varias_lineas` el `\\n` sí se deja."""
+    if crudo is None:
+        crudo = ""
+    if not isinstance(crudo, str):
+        raise CotizacionNoVale("tipo", f"{campo}: tiene que ser un texto")
+    limpio = crudo.replace("\r\n", "\n").replace("\r", "\n").strip()
+    try:
+        limpio.encode("utf-8")
+    except UnicodeEncodeError:
+        raise CotizacionNoVale("caracteres", f"{campo}: lleva caracteres que no se pueden guardar") from None
+    limpio = "".join(_forma_simple_de_cotizacion(c) for c in limpio)
+    for c in limpio:
+        if varias_lineas and c == "\n":
+            continue
+        if unicodedata.category(c) in ("Cc", "Zl", "Zp"):
+            raise CotizacionNoVale("caracteres", f"{campo}: lleva caracteres que no se pueden guardar")
+        if ord(c) > 0xFF:
+            raise CotizacionNoVale("fuera_de_latin1", f"{campo}: lleva caracteres que el PDF no puede escribir")
+    if len(limpio) < minimo:
+        raise CotizacionNoVale(f"{campo}_vacio", f"{campo}: no puede quedar vacío")
+    if len(limpio) > largo:
+        raise CotizacionNoVale(f"{campo}_largo", f"{campo}: no puede pasar de {largo} caracteres")
+    return limpio
+
+
+def total_de_cotizacion_que_vale(crudo) -> str:
+    """Lo escrito en «Total» → el texto del `Decimal` con dos decimales («62500.00»), o `CotizacionNoVale`.
+    Acepta `str`, `int` (no `bool`) y `Decimal`; un `float` NO (llega ya redondeado por la máquina y
+    el repo no pasa dinero por `float`). Mayor que cero, a lo sumo `TOPE_TOTAL_DE_RENGLON`, a lo sumo
+    dos decimales."""
+    if crudo is None:
+        raise CotizacionNoVale("total_vacio", "el total no puede quedar vacío")
+    if isinstance(crudo, bool) or not isinstance(crudo, (str, int, Decimal)):
+        raise CotizacionNoVale("total_tipo", "el total tiene que ser un texto o un número exacto")
+    if isinstance(crudo, (int, Decimal)):
+        valor = Decimal(crudo)
+        if not valor.is_finite():
+            raise CotizacionNoVale("total_formato", "el total no se entiende como dinero")
+    else:
+        escrito = str(crudo).strip()
+        if not escrito:
+            raise CotizacionNoVale("total_vacio", "el total no puede quedar vacío")
+        m = _RE_DINERO_DE_COTIZACION.match(escrito)
+        if not m:
+            raise CotizacionNoVale("total_formato", "el total no se entiende como dinero")
+        # Se mira el TEXTO, no el valor: «62.500» vale lo mismo que «62.50» como número, pero quien lo
+        # escribió pudo querer sesenta y dos mil quinientos (así lo lee otro validador de Lucy).
+        if m.group(1) is not None and len(m.group(1)) > 2:
+            raise CotizacionNoVale("total_decimales", "el total no puede llevar más de dos decimales")
+        valor = Decimal(escrito.replace(",", ""))
+    if valor <= 0:
+        raise CotizacionNoVale("total_cero", "el total tiene que ser mayor que cero")
+    if valor > TOPE_TOTAL_DE_RENGLON:
+        raise CotizacionNoVale("total_alto", "el total es demasiado grande")
+    centavos = Decimal("0.01")
+    if valor.as_tuple().exponent < -2:      # un Decimal ya traído: se mira cómo viene escrito (62.500 no)
+        raise CotizacionNoVale("total_decimales", "el total no puede llevar más de dos decimales")
+    if valor != valor.quantize(centavos):
+        raise CotizacionNoVale("total_decimales", "el total no puede llevar más de dos decimales")
+    return str(valor.quantize(centavos))
+
+
+def _vacio_de_cotizacion(valor) -> bool:
+    return valor is None or (isinstance(valor, str) and not valor.strip())
+
+
+def contenido_de_cotizacion_que_vale(crudo) -> str:
+    """El contenido que llega (de la ventana de la cotización) → el JSON en texto que se guarda, o
+    `CotizacionNoVale`. Forma de lo que llega y de lo que sale:
+
+        {"opciones": [{"nombre": "...", "renglones": [{"descripcion": "...", "detalle": "...",
+                                                        "total": "62500.00"}]}],
+         "condiciones": [{"clave": "validez"|"alternativas"|"deposito"|"balance"|"impuestos"|None,
+                          "texto": "...", "marcada": True}]}
+
+    Antes de validar se descartan lo vacío de sobra que dibuja el formulario sin JavaScript: el renglón
+    con descripción, detalle y total vacíos, la opción sin nombre y sin renglones con algo, la
+    condición sin clave y sin texto. Después: de 1 a `MAX_OPCIONES_DE_COTIZACION` opciones, cada una con
+    nombre y de 1 a `MAX_RENGLONES_DE_OPCION` renglones (descripción obligatoria, detalle opcional,
+    total por `total_de_cotizacion_que_vale`); condiciones con `marcada` booleana, la clave de la lista
+    cerrada `CLAVES_DE_CONDICION_DE_COTIZACION` o `None`, sin repetir clave y con texto. Ningún `float`
+    llega al JSON: el total sale como texto del `Decimal`. Los textos de las condiciones `validez` y
+    `alternativas` NO se rehacen acá: esta puerta no conoce la validez ni el número de opciones."""
+    if not isinstance(crudo, dict):
+        raise CotizacionNoVale("forma", "el contenido tiene que ser un diccionario con opciones y condiciones")
+    if set(crudo) - {"opciones", "condiciones"}:
+        raise CotizacionNoVale("forma", "el contenido trae campos que no existen")
+    opciones_crudas = crudo.get("opciones")
+    condiciones_crudas = crudo.get("condiciones")
+    if condiciones_crudas is None:
+        condiciones_crudas = []
+    if not isinstance(opciones_crudas, list) or not isinstance(condiciones_crudas, list):
+        raise CotizacionNoVale("forma", "las opciones y las condiciones tienen que ser listas")
+
+    opciones = []
+    for op in opciones_crudas:
+        if not isinstance(op, dict) or set(op) - {"nombre", "renglones"}:
+            raise CotizacionNoVale("forma", "una opción no tiene la forma de una opción")
+        renglones_crudos = op.get("renglones")
+        if renglones_crudos is None:
+            renglones_crudos = []
+        if not isinstance(renglones_crudos, list):
+            raise CotizacionNoVale("forma", "los renglones de una opción tienen que ser una lista")
+        con_algo = []
+        for r in renglones_crudos:
+            if not isinstance(r, dict) or set(r) - {"descripcion", "detalle", "total"}:
+                raise CotizacionNoVale("forma", "un renglón no tiene la forma de un renglón")
+            if all(_vacio_de_cotizacion(r.get(k)) for k in ("descripcion", "detalle", "total")):
+                continue
+            con_algo.append(r)
+        if _vacio_de_cotizacion(op.get("nombre")) and not con_algo:
+            continue
+        if len(con_algo) > MAX_RENGLONES_DE_OPCION:
+            raise CotizacionNoVale("renglones_de_mas", f"una opción no puede tener más de {MAX_RENGLONES_DE_OPCION} renglones")
+        if not con_algo:
+            raise CotizacionNoVale("sin_renglones", "cada opción necesita al menos un renglón")
+        renglones = []
+        for r in con_algo:
+            renglones.append({
+                "descripcion": _texto_de_cotizacion(r.get("descripcion"), "descripcion", LARGO_DESCRIPCION_DE_RENGLON),
+                "detalle": _texto_de_cotizacion(r.get("detalle"), "detalle", LARGO_DETALLE_DE_RENGLON,
+                                                minimo=0, varias_lineas=True),
+                "total": total_de_cotizacion_que_vale(r.get("total")),
+            })
+        opciones.append({"nombre": _texto_de_cotizacion(op.get("nombre"), "nombre", LARGO_NOMBRE_DE_OPCION),
+                         "renglones": renglones})
+    if not opciones:
+        raise CotizacionNoVale("sin_opciones", "la cotización necesita al menos una opción")
+    if len(opciones) > MAX_OPCIONES_DE_COTIZACION:
+        raise CotizacionNoVale("opciones_de_mas", f"no puede haber más de {MAX_OPCIONES_DE_COTIZACION} opciones")
+
+    condiciones, claves = [], set()
+    for c in condiciones_crudas:
+        if not isinstance(c, dict) or set(c) - {"clave", "texto", "marcada"}:
+            raise CotizacionNoVale("forma", "una condición no tiene la forma de una condición")
+        clave = c.get("clave")
+        if clave is not None and (not isinstance(clave, str) or clave not in CLAVES_DE_CONDICION_DE_COTIZACION):
+            raise CotizacionNoVale("condicion_clave", "una condición trae una clave que no existe")
+        if clave is None and _vacio_de_cotizacion(c.get("texto")):
+            continue
+        marcada = c.get("marcada")
+        if not isinstance(marcada, bool):
+            raise CotizacionNoVale("condicion_marcada", "una condición tiene que decir si va marcada (sí o no)")
+        if clave is not None:
+            if clave in claves:
+                raise CotizacionNoVale("condicion_repetida", "una condición está repetida")
+            claves.add(clave)
+        condiciones.append({"clave": clave,
+                            "texto": _texto_de_cotizacion(c.get("texto"), "condicion", LARGO_TEXTO_DE_CONDICION,
+                                                          varias_lineas=True),
+                            "marcada": marcada})
+    if len(condiciones) > MAX_CONDICIONES_DE_COTIZACION:
+        raise CotizacionNoVale("condiciones_de_mas", f"no puede haber más de {MAX_CONDICIONES_DE_COTIZACION} condiciones")
+    return json.dumps({"opciones": opciones, "condiciones": condiciones}, ensure_ascii=False)
 
 
 # ── AGREGAR TAREAS A UN PROYECTO (pieza 2 del diseño «proyectos», 29-sep-2026) ─
