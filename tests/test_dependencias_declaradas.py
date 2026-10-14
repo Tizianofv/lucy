@@ -27,9 +27,9 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
 
-# Carpetas que no son código de Lucy. `tests/` y `conftest.py` son pruebas: sus
+# `tests/` y `conftest.py` son pruebas: sus
 # dependencias van en requirements-dev.txt, que Railway no instala.
-_CARPETAS_FUERA = {"tests", "venv", ".venv", ".git", "__pycache__", "node_modules", "site-packages"}
+_CARPETAS_FUERA = {"tests"}
 
 # Importados por el código y NO declarados en requirements.txt, a propósito.
 # Cada uno debe seguir siendo cierto (lo exige test_los_exentos_siguen_siendo_ciertos):
@@ -57,24 +57,22 @@ def declaradas(ruta=None):
     return nombres
 
 
+def _py_del_codigo(raiz):
+    """Los `.py` que no son pruebas, por LA puerta de los barridos del repo
+    (`test_buzon_que_no_se_ve._py_en_disco`): no se mete en entornos virtuales."""
+    from test_buzon_que_no_se_ve import _py_en_disco
+    return [p for p in _py_en_disco(raiz)
+            if not (_CARPETAS_FUERA & set(p.relative_to(raiz).parts)) and p.name != "conftest.py"]
+
+
 def _propios(raiz):
-    out = set()
-    for p in raiz.iterdir():
-        if p.name in _CARPETAS_FUERA or p.name.startswith("."):
-            continue
-        if p.is_dir() and any(p.rglob("*.py")):
-            out.add(p.name)
-        elif p.suffix == ".py":
-            out.add(p.stem)
-    return out
+    """Lo que el repo define en su raíz: la primera pieza de la ruta de cada .py."""
+    return {p.relative_to(raiz).parts[0].removesuffix(".py") for p in _py_del_codigo(raiz)}
 
 
 def _fuentes(raiz):
-    for f in sorted(raiz.rglob("*.py")):
-        rel = f.relative_to(raiz)
-        if _CARPETAS_FUERA & set(rel.parts) or f.name == "conftest.py":
-            continue
-        yield rel, f.read_text()
+    for f in _py_del_codigo(raiz):
+        yield f.relative_to(raiz), f.read_text()
 
 
 def imports_de_terceros(fuentes, propios):
