@@ -527,6 +527,15 @@ def test_n2_un_rechazo_o_un_fallo_que_llega_despues_de_vencer_no_hace_nada_mas(t
 
 
 @hay_osascript
+def test_n2_si_vence_mientras_se_lee_el_cuerpo_de_la_respuesta_lo_leido_no_pinta():
+    esc = ('enviar(formulario("/proyectos/1/notas", "post", [])); var lectura = new Futuro();'
+           ' pedidos[0].f.resolver({ok: true, status: 200, url: "http://x.test/proyectos?p=1", text: function () { return lectura; }});'
+           ' correrTimers(); lectura.resolver("PAG-TARDE");')
+    r = correr(CASA(), esc)
+    assert r["cen"] == "VIEJA" and [x[0] for x in r["salidas"]] == ["aviso"]
+
+
+@hay_osascript
 def test_n2_un_guardado_que_contesta_a_tiempo_apaga_su_reloj():
     r = correr(CASA(), 'enviar(formulario("/proyectos/1/notas", "post", [])); responder(0, "PAG-A"); correrTimers();')
     assert [x for x in r["salidas"] if x[0] == "aviso"] == [] and r["cen"] == "PAG-A"
