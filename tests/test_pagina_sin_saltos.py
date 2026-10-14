@@ -632,12 +632,15 @@ def test_b_despues_de_continuar_no_sale_ningun_pedido_y_el_formulario_queda_con_
     assert ["C", False, None, True] in r["salidas"]                                                  # C quedó sin bloquear, con lo escrito
 
 
-AVISO_SE_VA = "La página se está yendo; esto no se mandó. Si no cambia, recarga la página."
+AVISO_SE_VA = "La página se está yendo; esto no se mandó. Si no cambia, copia lo que escribiste y recarga la página (al recargar se pierde lo que no se mandó)."
 
 
 def test_b_todo_rechazo_por_irse_pasa_por_la_unica_funcion_sacada_del_texto_de_la_pieza():
-    """Los hermanos no se separan: TODO `if (saliendoSinSaltar) {...}` de la pieza llama `rechazarPorIrseSinSaltar` (hoy 5
-    sitios: formulario de Proyectos, marcar, enlace, «atrás», formulario de Tareas que sale). La lista sale del texto."""
+    """LO QUE CUENTA ESTA PRUEBA, y nada más: los `if (saliendoSinSaltar) {…}` escritos con esa forma literal en el texto de la
+    pieza (hoy 5) llaman `rechazarPorIrseSinSaltar`. Un rechazo escrito de otra forma (otra condición, un alias) no lo ve. La
+    garantía de que cada sitio de verdad avisa la dan las pruebas de comportamiento por sitio:
+    `test_b_todo_rechazo_tras_continuar_deja_el_aviso_con_salida_clara_y_lo_escrito_intacto` (formulario, enlace y «atrás» de
+    Proyectos) y `test_b_todo_rechazo_tras_continuar_en_tareas_deja_el_aviso` (marcar y formulario que sale, en Tareas)."""
     codigo = sin_comentarios_de_js(texto_de_la_pieza())
     cuerpos = re.findall(r"if \(saliendoSinSaltar\) \{([^}]*)\}", codigo)
     assert len(cuerpos) == 5 and all("rechazarPorIrseSinSaltar(e)" in c for c in cuerpos), cuerpos

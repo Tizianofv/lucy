@@ -111,7 +111,7 @@ function avisarSinSaltar(texto, accion, etiqueta) {
    escrito queda como está, y hay una salida clara (recargar la página) por si la navegación no ocurre. */
 function rechazarPorIrseSinSaltar(e) {
   if (e && e.preventDefault) e.preventDefault();
-  var dicho = "La página se está yendo; esto no se mandó. Si no cambia, recarga la página.";
+  var dicho = "La página se está yendo; esto no se mandó. Si no cambia, copia lo que escribiste y recarga la página (al recargar se pierde lo que no se mandó).";
   if (mensajesAviso.indexOf(dicho) >= 0) return;                    // ya se dijo: no se repite en cada toque
   avisarSinSaltar(dicho, function () { irA(window.location.href); }, "Recargar la página");
 }

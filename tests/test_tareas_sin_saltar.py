@@ -482,7 +482,7 @@ def test_b_todo_rechazo_tras_continuar_en_tareas_deja_el_aviso(tareas, que):
     r = _jxa(g, _MARCAR_EN_CAMINO + ' clic(enlace("/tareas/1")); avisosPuestos[0].continuar(); salidas.length = 0;' + nuevo +
              ' var par = enlace("/tareas/2"); clic(par);')
     avisos = [x for x in r["salidas"] if x[0] == "aviso"]
-    assert avisos and "La página se está yendo; esto no se mandó. Si no cambia, recarga la página." in avisos[-1][1], r["salidas"]
+    assert avisos and "La página se está yendo; esto no se mandó. Si no cambia, copia lo que escribiste y recarga la página (al recargar se pierde lo que no se mandó)." in avisos[-1][1], r["salidas"]
 
 
 @hay_osascript
