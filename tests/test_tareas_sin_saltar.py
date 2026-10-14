@@ -402,7 +402,9 @@ def test_js_si_guardo_y_no_se_puede_pintar_va_a_la_pagina_sin_reenviar(tareas, p
 
 
 def _lo_que_se_toca_en_tareas(tareas, pantalla):
-    """Todo `<a href>` y `<form>` de la pantalla, sacado de la página dibujada por la ruta real."""
+    """Todo `<a href>` y `<form>` de la pantalla, sacado de la página dibujada por la ruta real. SOLO MIRA dos estados:
+    `/tareas` (la lista) y `/tareas/1` (el detalle de una tarea del mundo de prueba). Los otros estados del detalle
+    (`/area`, `/comentarios`, `/convertir-en-proyecto`, `/pasos`, `/primero`…) no están en esta lista."""
     from test_pagina_sin_saltos import _Censo
     html = tareas.cliente.get("/tareas" if pantalla == "tareas" else "/tareas/1").text
     c = _Censo()
@@ -416,7 +418,7 @@ _MARCAR_EN_CAMINO = 'var A = formulario("/tareas", "post", []); A.clases = ["mar
 @hay_osascript
 @pytest.mark.parametrize("pantalla", ["tareas", "detalle"])
 def test_a_con_un_marcar_en_camino_los_enlaces_y_formularios_que_salen_de_tareas_no_se_van_solos(tareas, pantalla):
-    """SONDA `tareas-enlace` DEL TESTIGO. La lista sale de lo real de las dos plantillas. Con un marcar en camino:
+    """SONDA `tareas-enlace` DEL TESTIGO. La lista sale de la página dibujada de `/tareas` y `/tareas/1` (SOLO esos dos estados; ver `_lo_que_se_toca_en_tareas`). Con un marcar en camino:
     cada enlace (menú, títulos de tarea, Papelera…) y cada formulario que no es de marcar se evita, avisa y se va solo
     con «Continuar»; un formulario de marcar espera su turno en la cola (no sale de la página)."""
     from test_pagina_sin_saltos import _CENSO_PENDIENTE_JS
@@ -472,12 +474,24 @@ def test_a_beforeunload_en_tareas_se_pone_con_un_marcar_en_camino_y_se_quita_al_
 
 
 @hay_osascript
+@pytest.mark.parametrize("que", ["marcar", "formulario-que-sale"])
+def test_b_todo_rechazo_tras_continuar_en_tareas_deja_el_aviso(tareas, que):
+    g = _scripts_de_tareas(tareas)["tareas"]
+    nuevo = ('var C = formulario("/tareas", "post", []); C.clases = ["marcar"]; __e = enviar(C);' if que == "marcar"
+             else '__e = enviar(formulario("/tareas/1/comentar", "post", []));')
+    r = _jxa(g, _MARCAR_EN_CAMINO + ' clic(enlace("/tareas/1")); avisosPuestos[0].continuar(); salidas.length = 0;' + nuevo +
+             ' var par = enlace("/tareas/2"); clic(par);')
+    avisos = [x for x in r["salidas"] if x[0] == "aviso"]
+    assert avisos and "La página se está yendo; esto no se mandó. Si no cambia, recarga la página." in avisos[-1][1], r["salidas"]
+
+
+@hay_osascript
 def test_a_tras_continuar_en_tareas_un_formulario_que_sale_tampoco_se_envia(tareas):
     g = _scripts_de_tareas(tareas)["tareas"]
     esc = (_MARCAR_EN_CAMINO + ' clic(enlace("/tareas/1")); avisosPuestos[0].continuar(); salidas.length = 0;'
            ' __e = enviar(formulario("/tareas/1/comentar", "post", []));')
     r = _jxa(g, esc)
-    assert r["prevenido"] is True and r["salidas"] == []
+    assert r["prevenido"] is True and not [x for x in r["salidas"] if x[0] in ("submit", "requestSubmit", "ir")]
 
 
 @hay_osascript

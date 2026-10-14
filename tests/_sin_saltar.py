@@ -48,7 +48,7 @@ PERMITIDO_EN_LA_PIEZA = (
     # el formulario leído: sus campos y su dirección (solo lectura).
     ("new FormData(form)", 1), ("form.action", 1),
     # leer dónde está la página (nunca escribirlo: ir a otro sitio se hace con un enlace suelto).
-    ("window.location.href", 3), ("window.location.origin", 1), ("window.location.pathname", 4),
+    ("window.location.href", 4), ("window.location.origin", 1), ("window.location.pathname", 4),
     ("window.location.search", 3),
     # preguntar si el navegador sabe hacerlo (nunca llamarlo fuera de `fetch(p.url, opciones)`).
     ("window.fetch", 2), ("window.FormData", 1),

@@ -61,7 +61,7 @@
    dijeron (su aviso) se lee en el aviso fijo.
    EL AVISO FIJO (arriba, fuera de las regiones) no lo quita ningún repintado: se queda hasta
    que la persona lo cierra («Entendido» o «Mirar cómo quedó»). Si llegan varios, se leen todos. */
-var turnoSinSaltar = 0, escribiendoSinSaltar = 0, colaSinSaltar = [], vistaSinSaltar = "", raizSinSaltar = "", avisoSinSaltar = null, mensajesAviso = [], accionAviso = null, saliendoSinSaltar = false, vigilandoSalida = false, salidasVigiladas = false, TIEMPO_ENVIO_SINSALTAR = 30000;
+var turnoSinSaltar = 0, escribiendoSinSaltar = 0, colaSinSaltar = [], vistaSinSaltar = "", raizSinSaltar = "", avisoSinSaltar = null, mensajesAviso = [], accionAviso = null, etiquetaAviso = "Continuar", saliendoSinSaltar = false, vigilandoSalida = false, salidasVigiladas = false, TIEMPO_ENVIO_SINSALTAR = 30000;
 function irA(url) { var a = document.createElement("a"); a.href = url; a.click(); }
 /* Lo que sigue solo lo hace la pantalla de Proyectos (`iniciarSinSaltos`); las de Tareas
    conservan lo suyo: ni `<details>` abiertos, ni título, ni campos a medias. */
@@ -71,14 +71,15 @@ function quitarAvisoSinSaltar() {
   avisoSinSaltar = null;
   mensajesAviso = [];
   accionAviso = null;
+  etiquetaAviso = "Continuar";
 }
 /* El aviso fijo: FUERA de las regiones (ningún repintado lo borra), siempre a la vista, con todos los
    mensajes que lleguen, un botón «Entendido» y un enlace a esta misma vista para mirar cómo quedó
    (los dos lo cierran; ninguno de los dos va a ningún sitio) y, si la página tiene que irse, «Continuar»
    (que es lo único que la hace irse). */
-function avisarSinSaltar(texto, accion) {
+function avisarSinSaltar(texto, accion, etiqueta) {
   mensajesAviso.push(texto);
-  if (accion) accionAviso = accion;
+  if (accion) { accionAviso = accion; etiquetaAviso = etiqueta || "Continuar"; }
   var viejo = avisoSinSaltar;
   if (viejo && viejo.parentNode) viejo.parentNode.removeChild(viejo);
   var d = document.createElement("div"), a = document.createElement("a"), b = document.createElement("button"), i, m;
@@ -98,12 +99,21 @@ function avisarSinSaltar(texto, accion) {
   d.appendChild(b);
   if (accionAviso) {         // la página tiene que irse y la persona decide cuándo
     var c = document.createElement("button");
-    c.textContent = "Continuar";
+    c.textContent = etiquetaAviso;
     c.onclick = function () { var ir = accionAviso; quitarAvisoSinSaltar(); ir(); };
     d.appendChild(c);
   }
   document.body.insertBefore(d, document.body.firstChild);
   avisoSinSaltar = d;
+}
+/* LA ÚNICA FORMA de rechazar algo porque la página ya se va (tras «Continuar»): UNA función para todos los sitios
+   (enviar, marcar, enlaces, «atrás»), para que no se separen. Nada se traga: el aviso fijo dice que no se mandó, lo
+   escrito queda como está, y hay una salida clara (recargar la página) por si la navegación no ocurre. */
+function rechazarPorIrseSinSaltar(e) {
+  if (e && e.preventDefault) e.preventDefault();
+  var dicho = "La página se está yendo; esto no se mandó. Si no cambia, recarga la página.";
+  if (mensajesAviso.indexOf(dicho) >= 0) return;                    // ya se dijo: no se repite en cada toque
+  avisarSinSaltar(dicho, function () { irA(window.location.href); }, "Recargar la página");
 }
 /* Bloquea los campos de un formulario que ya se mandó; devuelve lo que bloqueó para soltarlo. */
 function bloquearCampos(form) {
@@ -442,7 +452,7 @@ function alEnviarMarcar(e) {
   var form = e.target;
   if (!form || !form.dataset || !form.classList || !form.classList.contains("marcar")) return false;
   if (form.dataset.nativo !== undefined) { delete form.dataset.nativo; return false; }
-  if (saliendoSinSaltar) { e.preventDefault(); return true; }      // la página ya se va: no sale ningún pedido nuevo
+  if (saliendoSinSaltar) { rechazarPorIrseSinSaltar(e); return true; }      // la página ya se va: no sale ningún pedido nuevo
   if (typeof window === "undefined" || !window.fetch || !window.URLSearchParams || !window.DOMParser) return false;
   e.preventDefault();
   if (form.dataset.enviado === undefined) {
@@ -481,7 +491,7 @@ function alEnviarSinSaltar(e) {
   var form = e.target;
   if (e.defaultPrevented || !form || !form.getAttribute || !form.dataset) return;
   if (form.dataset.nativo !== undefined) { delete form.dataset.nativo; return; }   // el envío de siempre que pidió la pieza
-  if (saliendoSinSaltar) { e.preventDefault(); return; }          // la página ya se va: no sale ningún pedido nuevo (el formulario queda con lo escrito)
+  if (saliendoSinSaltar) { rechazarPorIrseSinSaltar(e); return; }          // la página ya se va: no sale ningún pedido nuevo (el formulario queda con lo escrito)
   var d = datosDelEnvio(form, e.submitter);
   if (d.metodo === "otro" || (d.target && d.target !== "_self")) return;
   if (!destinoSinSaltar(d.accion, d.metodo)) { saleFormularioSinSaltar(e, form); return; }
@@ -497,8 +507,8 @@ function alHacerClicSinSaltar(e) {
   if (!u) { saleEnlaceSinSaltar(e, a); return; }                    // sale de la página (el menú, «‹ Inicio», Tareas, Papelera…)
   var destino = u.pathname + u.search;
   if (a.getAttribute("href").charAt(0) === "#") return;        // un ancla suelta de esta misma pantalla la maneja el navegador
+  if (saliendoSinSaltar) { rechazarPorIrseSinSaltar(e); return; }      // la página ya se va: no sale ningún pedido nuevo
   e.preventDefault();
-  if (saliendoSinSaltar) return;                               // la página ya se va: no sale ningún pedido nuevo
   pedirOEsperar({url: destino, historia: "agregar"});
 }
 /* LAS SALIDAS DE LAS PANTALLAS DE TAREAS (que solo marcan por detrás): todo enlace y todo formulario que no
@@ -512,14 +522,15 @@ function alSalirPorFormularioSinSaltar(e) {
   var form = e.target;
   if (e.defaultPrevented || !form || !form.getAttribute || !form.dataset) return;
   if (form.dataset.nativo !== undefined) { delete form.dataset.nativo; return; }
-  if (saliendoSinSaltar) { e.preventDefault(); return; }
+  if (saliendoSinSaltar) { rechazarPorIrseSinSaltar(e); return; }
   var fuera = form.getAttribute("target");
   if (fuera && fuera !== "_self") return;
   saleFormularioSinSaltar(e, form);
 }
 function alVolverSinSaltar(e) {
   var aqui = window.location.pathname + window.location.search;
-  if (aqui === vistaSinSaltar || saliendoSinSaltar) return;    // solo cambió el ancla, o la página ya se va
+  if (aqui === vistaSinSaltar) return;                         // solo cambió el ancla
+  if (saliendoSinSaltar) { rechazarPorIrseSinSaltar(e); return; }   // la página ya se va
   pedirOEsperar({url: aqui, historia: "ninguna", vuelta: e && e.state && typeof e.state.y === "number" ? e.state : null});
 }
 /* Si la página vuelve a mostrarse sin haberse ido (`pageshow` desde la caché del navegador), ya no se va: la

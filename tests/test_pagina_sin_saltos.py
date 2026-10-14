@@ -632,6 +632,56 @@ def test_b_despues_de_continuar_no_sale_ningun_pedido_y_el_formulario_queda_con_
     assert ["C", False, None, True] in r["salidas"]                                                  # C quedó sin bloquear, con lo escrito
 
 
+AVISO_SE_VA = "La página se está yendo; esto no se mandó. Si no cambia, recarga la página."
+
+
+def test_b_todo_rechazo_por_irse_pasa_por_la_unica_funcion_sacada_del_texto_de_la_pieza():
+    """Los hermanos no se separan: TODO `if (saliendoSinSaltar) {...}` de la pieza llama `rechazarPorIrseSinSaltar` (hoy 5
+    sitios: formulario de Proyectos, marcar, enlace, «atrás», formulario de Tareas que sale). La lista sale del texto."""
+    codigo = sin_comentarios_de_js(texto_de_la_pieza())
+    cuerpos = re.findall(r"if \(saliendoSinSaltar\) \{([^}]*)\}", codigo)
+    assert len(cuerpos) == 5 and all("rechazarPorIrseSinSaltar(e)" in c for c in cuerpos), cuerpos
+
+
+def _rechazos():
+    """(nombre, guion, escenario que deja a la página yéndose y luego intenta algo) de cada sitio que rechaza."""
+    yendo = 'enviar(formulario("/proyectos/1/notas", "post", [])); clic(enlace("/tareas")); avisosPuestos[0].continuar(); salidas.length = 0;'
+    return [
+        ("formulario de Proyectos", "casa", yendo + '__e = enviar(formulario("/proyectos/1/descripcion", "post", [["descripcion", "C"]]));'),
+        ("enlace de Proyectos", "casa", yendo + '__e = clic(enlace("/proyectos?p=2"));'),
+        ("atras de Proyectos", "casa", yendo + 'irAlSitio("/proyectos?p=7"); dispararVentana("popstate", {state: null});'),
+    ]
+
+
+@hay_osascript
+@pytest.mark.parametrize("nombre,sesion,esc", _rechazos(), ids=lambda x: x if isinstance(x, str) and len(x) < 30 else "")
+def test_b_todo_rechazo_tras_continuar_deja_el_aviso_con_salida_clara_y_lo_escrito_intacto(nombre, sesion, esc):
+    """Sonda del testigo: antes C no salía y nadie lo decía. Ahora el aviso fijo dice que la página se está yendo y
+    que no se mandó, con un botón que recarga; la pareja sin «Continuar» no trae ese aviso."""
+    r = correr(CASA(), esc + ' salidas.push(["recargar", avisosPuestos.length && avisosPuestos[avisosPuestos.length - 1].hijos.filter(function (h) { return h.tag === "button"; }).map(function (h) { return h.textContent; })]);'
+                       ' avisosPuestos[avisosPuestos.length - 1].continuar(); ')
+    avisos = [x for x in r["salidas"] if x[0] == "aviso"]
+    assert avisos and AVISO_SE_VA in avisos[-1][1], (nombre, r["salidas"])
+    assert ["recargar", ["Entendido", "Recargar la página"]] in r["salidas"]
+    assert [x for x in r["salidas"] if x[0] == "ir"][-1][1].startswith("http://x.test/proyectos?p=")     # el botón recarga la dirección en que está
+
+
+@hay_osascript
+def test_b_pareja_sin_continuar_no_hay_aviso_de_que_la_pagina_se_va():
+    esc = ('enviar(formulario("/proyectos/1/notas", "post", [])); clic(enlace("/proyectos?p=2")); '
+           '__e = enviar(formulario("/proyectos/1/descripcion", "post", [["descripcion", "C"]])); irAlSitio("/proyectos?p=7"); dispararVentana("popstate", {state: null});')
+    r = correr(CASA(), esc)
+    assert not [x for x in r["salidas"] if x[0] == "aviso" and AVISO_SE_VA in x[1]]
+
+
+@hay_osascript
+def test_b_el_rechazo_no_se_repite_en_cada_toque():
+    esc = ('enviar(formulario("/proyectos/1/notas", "post", [])); clic(enlace("/tareas")); avisosPuestos[0].continuar();'
+           ' clic(enlace("/proyectos?p=2")); clic(enlace("/proyectos?p=3")); enviar(formulario("/proyectos/1/descripcion", "post", []));')
+    r = correr(CASA(), esc)
+    assert [x for x in r["salidas"] if x[0] == "aviso" and AVISO_SE_VA in x[1]][-1][1].count(AVISO_SE_VA) == 1
+
+
 @hay_osascript
 def test_b_si_la_pagina_vuelve_a_mostrarse_desde_la_cache_se_recalcula_la_vigilancia_y_se_puede_seguir():
     esc = ('enviar(formulario("/proyectos/1/notas", "post", [])); clic(enlace("/tareas")); avisosPuestos[0].continuar();'
