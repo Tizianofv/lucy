@@ -372,6 +372,14 @@ def test_un_post_que_el_servidor_rechazo_con_4xx_no_escribio_nada_y_se_envia_com
 
 
 @hay_osascript
+def test_un_guardado_de_la_cola_rechazado_cuyo_formulario_ya_no_esta_se_avisa_y_no_se_envia_a_ciegas():
+    esc = ('var A = formulario("/proyectos/1/notas", "post", []); enviar(A); var B = formulario("/proyectos/1/descripcion", "post", [["descripcion", "x"]]);'
+           ' __e = enviar(B); responder(0, "PAG-A"); B.isConnected = false; responder(1, "ENTRAR", {ok: false, status: 401});')
+    r = correr(CASA(), esc)
+    assert [x[0] for x in r["salidas"]] == ["aviso"] and r["salidas"][0][1] == "No se guardó: el servidor no aceptó el envío. "
+
+
+@hay_osascript
 def test_el_envio_nativo_que_pidio_la_pieza_no_vuelve_a_pasar_por_ella():
     esc = ('var f = formulario("/proyectos/1/cliente", "post", [["a", "1"]]); f.dataset.nativo = ""; __e = enviar(f);')
     r = correr(CASA(), esc)
