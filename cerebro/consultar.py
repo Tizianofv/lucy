@@ -93,6 +93,11 @@ TABLAS_DE_MAQUINARIA = {
                             "registro le manda a Lucy para un proyecto (cuál se "
                             "quitó de la lista): las escribe solo el panel y no "
                             "son un dato que Lucy consulte por Telegram",
+    "cotizaciones": "las cotizaciones de un proyecto (su contenido es un JSON en "
+                    "texto): las escribe solo el panel y Lucy no las consulta "
+                    "por Telegram en esta versión",
+    "serie_cotizaciones": "el contador de números de cotización, una fila por "
+                          "año: lo mueve solo el panel al guardar una nueva",
 }
 
 # ── Un comentario llega al modelo COMO DATO, no como orden ───────────────

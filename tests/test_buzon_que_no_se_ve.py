@@ -4166,10 +4166,14 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # que no son vigiladas). Medida corriendo la prueba: 162 en disco, 115 EXENTOS, 47 VIGILADOS.
     # 14-oct-2026, rama `trabajo/aviso-sin-tapar`: +1 en disco y +1 EXENTO por `tests/test_aviso_sin_tapar.py`
     # (nuevo); VIGILADOS sin cambio. Medida corriendo la prueba: 163 en disco, 116 EXENTOS, 47 VIGILADOS.
-    assert medido == {"en disco": 163, "exentos": 116, "vigilados": 47}, (
+    # 14-oct-2026, rama `trabajo/cotizaciones-1`: +3 en disco, +2 EXENTOS y +1 VIGILADO por
+    # `tests/test_cotizaciones_tablas.py` y `tests/test_contenido_de_cotizacion.py` (nuevos, exentos) y
+    # `tools/ensayo_cotizaciones.py` (nuevo, vigilado: no lee la lista cruda de `config`, solo arma SQL). Medida
+    # corriendo la prueba sobre `main` = 17bc51e más esta rama: 166 en disco, 118 EXENTOS, 48 VIGILADOS.
+    assert medido == {"en disco": 166, "exentos": 118, "vigilados": 48}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "14-oct-2026 (aviso-sin-tapar) era {'en disco': 163, "
-        "'exentos': 116, 'vigilados': 47}. La aserción de fondo —cero "
+        "14-oct-2026 (cotizaciones-1) era {'en disco': 166, "
+        "'exentos': 118, 'vigilados': 48}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

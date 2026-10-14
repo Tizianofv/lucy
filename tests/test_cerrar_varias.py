@@ -2337,14 +2337,20 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
     # el diseño no le da a Lucy ninguna herramienta para tocarla por Telegram. Lo
     # que eso deja sin juzgar acá: una herramienta del agente que escribiera en esa
     # tabla saldría verde en ESTA guarda. Hoy ninguna lo hace.
-    assert len(declaradas) == 21 and len(vigiladas) == 10, (
+    # 14-oct-2026 (pieza 1 de las cotizaciones de un proyecto): 21 → 23 por `cotizaciones` y
+    # `serie_cotizaciones`. Quedan FUERA de `crud.TABLAS`, como `sesiones_de_proyecto`: las escribirán SOLO
+    # las rutas del panel (piezas 2 y 3 del diseño, cada una con su huella de actor 'panel') y el diseño no
+    # le da a Lucy ninguna herramienta para tocarlas por Telegram (`cerebro/consultar.py` las declara
+    # maquinaria). Lo que eso deja sin juzgar acá: una herramienta del agente que escribiera en ellas saldría
+    # verde en ESTA guarda. Hoy ninguna lo hace: ni siquiera existe todavía código que las escriba.
+    assert len(declaradas) == 23 and len(vigiladas) == 10, (
         f"el reparto de tablas cambió: el esquema declara {len(declaradas)} y "
         f"`crud.TABLAS` vigila {len(vigiladas)} (el 1-oct-2026, E7, eran 20 y 10). "
         f"Las que quedan sin juzgar serían {sorted(sin_juzgar)}. No se afloja "
         f"este número: se decide si las nuevas entran en la vigilancia y se "
         f"actualiza la frontera.")
 
-    # Las once que la puerta VE y la guarda NO JUZGA, enumeradas. `log_acciones`
+    # Las trece que la puerta VE y la guarda NO JUZGA, enumeradas. `log_acciones`
     # está acá porque no es una tabla de dominio: es donde viven las huellas, y
     # se la mira aparte (`_Libro.huellas`). `backups` es donde escribe
     # `db/backup.py:360`, que es legítimo y por eso sigue verde. `areas` es el
@@ -2354,7 +2360,7 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
         "areas", "backups", "bandeja", "categorias_aprendidas",
         "comentarios_tarea", "consumos_estado", "correo_estado",
         "correo_reportado", "cuentas_propias", "log_acciones",
-        "sesiones_de_proyecto",
+        "sesiones_de_proyecto", "cotizaciones", "serie_cotizaciones",
     }, (f"cambió qué tablas quedan fuera del juicio de esta guarda: "
         f"{sorted(sin_juzgar)}. Una escritura a cualquiera de ellas se VE pero "
         f"no se exige que deje huella ni que salga en el parte.")

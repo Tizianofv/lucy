@@ -825,7 +825,10 @@ def test_el_esquema_no_impide_un_estado_libre_y_por_eso_la_pagina_lo_tolera():
     assert re.search(r"estado\s+TEXT NOT NULL DEFAULT 'activo'", tabla)
     assert not re.search(r"CHECK\s*\(\s*estado", tabla, re.I)
     for migracion in (_ROOT / "db" / "migrations").glob("*.sql"):
-        assert not re.search(r"proyectos[^;]*CHECK\s*\(\s*estado", migracion.read_text(encoding="utf-8"), re.I | re.S)
+        # Solo las sentencias que crean o alteran la tabla `proyectos` (no las de otra tabla que la
+        # nombra en una llave foránea y tiene su propio `estado`, como `cotizaciones`).
+        assert not re.search(r"(?:ALTER\s+TABLE|CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?)\s+proyectos\b[^;]*CHECK\s*\(\s*estado",
+                             migracion.read_text(encoding="utf-8"), re.I | re.S)
 
 
 # ═══════════════════════════════════════════════════════════════════════

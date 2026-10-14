@@ -444,6 +444,53 @@ CREATE UNIQUE INDEX sesiones_de_proyecto_una_vez
   ON sesiones_de_proyecto (proyecto_id, sesion_ref)
   WHERE borrado_en IS NULL;
 
+-- LAS COTIZACIONES DE UN PROYECTO (pieza 1 del diseño «Cotizaciones en Proyectos», 14-oct-2026;
+-- migración 2026-10-14_cotizaciones.sql). Una fila por cotización. El código que se ve es
+-- `COT-<anio>-<numero con 3 cifras>` y se calcula; `UNIQUE (anio, numero)` es la última puerta contra
+-- un número repetido. `estado` es `borrador` o `enviada` (el vocabulario lo fija el CHECK); una enviada
+-- se puede corregir con el mismo número, y el estado queda para saber cuál se mandó. `contenido` es
+-- JSON en TEXT (opciones, renglones, condiciones), validado por `db.contenido_de_cotizacion_que_vale`;
+-- TEXT y no JSONB para que la misma sentencia corra en SQLite en las pruebas.
+-- `serie_cotizaciones` es el contador por año y nace vacía: la serie empieza con el sistema.
+CREATE TABLE cotizaciones (
+  id                 BIGSERIAL PRIMARY KEY,
+  proyecto_id        BIGINT NOT NULL REFERENCES proyectos(id),
+  anio               SMALLINT NOT NULL,
+  numero             INT NOT NULL,
+  estado             TEXT NOT NULL DEFAULT 'borrador',
+  para_nombre        TEXT NOT NULL,
+  para_telefono      TEXT,
+  fecha              DATE NOT NULL,
+  validez_dias       SMALLINT NOT NULL,
+  contenido          TEXT NOT NULL,
+  creado_en          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  creado_por_chat_id BIGINT,
+  cambiado_en        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  enviada_en         TIMESTAMPTZ,
+  borrado_en         TIMESTAMPTZ,
+  CONSTRAINT cotizaciones_numero_unico
+    UNIQUE (anio, numero),
+  CONSTRAINT cotizaciones_numero_positivo
+    CHECK (numero >= 1),
+  CONSTRAINT cotizaciones_estado_valido
+    CHECK (estado IN ('borrador', 'enviada')),
+  CONSTRAINT cotizaciones_nombre_valido
+    CHECK (length(trim(para_nombre)) BETWEEN 1 AND 200),
+  CONSTRAINT cotizaciones_telefono_valido
+    CHECK (para_telefono IS NULL OR length(para_telefono) <= 40),
+  CONSTRAINT cotizaciones_validez_valida
+    CHECK (validez_dias IN (7, 15, 30)),
+  CONSTRAINT cotizaciones_enviada_con_fecha
+    CHECK ((estado = 'enviada') = (enviada_en IS NOT NULL))
+);
+
+CREATE TABLE serie_cotizaciones (
+  anio   SMALLINT PRIMARY KEY,
+  ultimo INT NOT NULL,
+  CONSTRAINT serie_cotizaciones_ultimo_valido
+    CHECK (ultimo >= 0)
+);
+
 -- LOS MICRO-PASOS (encargo 7, 22-sep-2026): una lista de chequeo DENTRO de
 -- una tarea, para cuando sigue siendo grande. Decisión de Tiziano, textual:
 -- «No, es una lista de chequeo» — así que NO es una tarea: sin fecha, sin

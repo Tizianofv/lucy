@@ -79,8 +79,10 @@ def _correr(coro):
 
 # ── El CHECK de verdad, leído del SQL ────────────────────────────────────
 
+# Solo el de `movimientos` (la restricción con nombre): otra tabla con su propio `estado` y su propio
+# CHECK (`cotizaciones`, 14-oct-2026) no es este contrato.
 _CHECK = re.compile(
-    r"CHECK\s*\(\s*estado\s+IN\s*\(([^)]*)\)", re.I)
+    r"CONSTRAINT\s+movimientos_estado_valido\s+CHECK\s*\(\s*estado\s+IN\s*\(([^)]*)\)", re.I)
 
 
 def _estados_del_sql(texto: str) -> tuple[str, ...]:
