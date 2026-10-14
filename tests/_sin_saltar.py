@@ -54,7 +54,9 @@ PERMITIDO_EN_LA_PIEZA = (
     ("window.fetch", 2), ("window.FormData", 1),
     # elementos nuevos: el enlace suelto (ir sin reenviar), el aviso fijo de «no se pudo confirmar» con su
     # enlace para mirar cómo quedó, y el guion de «Copiar» que la página nueva trae y ésta no.
-    ('document.createElement("a")', 2), ('document.createElement("div")', 2), ('document.createElement("button")', 1),
+    ('document.createElement("a")', 2), ('document.createElement("div")', 2), ('document.createElement("button")', 2),
+    # el tiempo máximo de un guardado (decisión de diseño, no medida)
+    ('setTimeout(function () { if (terminado) return;', 1),
     ('document.createElement("script")', 1),
 )
 PROHIBIDO_EN_LA_PIEZA = re.compile(
@@ -191,7 +193,8 @@ var document = {
   body: {firstChild: {}, parentNode: null,
     appendChild: function (n) { salidas.push(["guion-nuevo", n.id, n.textContent]); },
     insertBefore: function (n, ref) { n.parentNode = document.body; avisosPuestos.push(n); salidas.push(["aviso", n.hijos.filter(function (h) { return h.tag === "div"; }).map(function (h) { return h.textContent; }),
-      n.hijos.filter(function (h) { return h.tag === "a"; })[0].atributos.href]); n.cerrar = function () { n.hijos.filter(function (h) { return h.tag === "button"; })[0].onclick(); }; },
+      n.hijos.filter(function (h) { return h.tag === "a"; })[0].atributos.href]); n.cerrar = function () { n.hijos.filter(function (h) { return h.tag === "button"; })[0].onclick(); };
+      n.continuar = function () { n.hijos.filter(function (h) { return h.tag === "button"; })[1].onclick(); }; },
     removeChild: function (n) { avisosPuestos.splice(avisosPuestos.indexOf(n), 1); salidas.push(["aviso quitado"]); }},
   addEventListener: function (t, f) { (__oy[t] = __oy[t] || []).push(f); },
   querySelector: function () { return null; },

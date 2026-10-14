@@ -435,6 +435,96 @@ def test_sonda_4_un_enlace_entre_dos_guardados_la_pagina_termina_en_el_enlace_y_
     assert ultimo[1] == ["Nota guardada.", "Comentario guardado."]
 
 
+# ── N1: ningún pedido sale después de que la página empezó a irse ─────────────────────────────────
+# Los tres caminos que hacen que la página se vaya: `irA` tras un POST bueno que no se pudo pintar (otra pantalla
+# / respuesta cortada), y el envío de siempre tras un 4xx. La pareja de cada uno: sin nada en la cola, se va enseguida.
+_CAMINOS_QUE_SE_VAN = {
+    "no-se-pudo-pintar": ('paginas["PAG"] = {regiones: ["cuerpo"]};', 'responder(0, "PAG", {url: "http://x.test/proyectos?p=2"});',
+                          [["ir", "http://x.test/proyectos?p=2"]]),
+    "respuesta-cortada": ("", 'pedidos[0].f.resolver({ok: true, status: 200, url: "http://x.test/proyectos?p=2", text: function () {'
+                              ' var f = new Futuro(); f.rechazar(new Error("corte")); return f; }});', [["ir", "http://x.test/proyectos?p=2"]]),
+    "401": ("", 'responder(0, "ENTRAR", {ok: false, status: 401});', [["requestSubmit", "/proyectos/1/notas", None]]),
+}
+
+
+@hay_osascript
+@pytest.mark.parametrize("camino", list(_CAMINOS_QUE_SE_VAN))
+def test_n1_con_guardados_en_la_cola_la_pagina_no_se_va_sola_y_ninguno_sale(camino):
+    """SONDA 5 DEL TESTIGO. A recibe una respuesta que obliga a irse y B espera en la cola: B NO sale (saldría
+    desde la página que se va y podría perderse sin que la persona lo sepa); su formulario se suelta con lo
+    escrito; el aviso fijo dice que no se mandó; la página se va solo con «Continuar»."""
+    previo, cierre, destino = _CAMINOS_QUE_SE_VAN[camino]
+    esc = (previo + 'var A = formulario("/proyectos/1/notas", "post", []); enviar(A);'
+           ' var B = formulario("/proyectos/tarea/10/comentar", "post", [["texto", "B"]]); ' + _con_controles("B") + ' __e = enviar(B);'
+           + cierre + ' var c = B.controles; salidas.push(["B", c[0].readOnly, B.dataset.enCamino, pedidos.length]);'
+           ' salidas.push(["antes de Continuar", salidas.filter(function (x) { return x[0] === "ir" || x[0] === "requestSubmit"; }).length]);'
+           ' avisosPuestos[0].continuar(); ')
+    r = correr(CASA(), esc)
+    assert len(r["pedidos"]) == 1                                                    # B nunca salió
+    assert ["B", False, None, 1] in r["salidas"]                                      # B soltó su formulario, con lo escrito
+    assert ["antes de Continuar", 0] in r["salidas"]                                  # la página NO se fue sola
+    aviso = [x for x in r["salidas"] if x[0] == "aviso"][-1]
+    assert any("Había 1 cambio esperando: NO se mandó" in m and "Continuar" in m for m in aviso[1]), aviso
+    assert [x for x in r["salidas"] if x[0] in ("ir", "requestSubmit")] == destino   # y se fue al tocar «Continuar»
+
+
+@hay_osascript
+@pytest.mark.parametrize("camino", list(_CAMINOS_QUE_SE_VAN))
+def test_n1_pareja_sin_nada_en_la_cola_la_pagina_se_va_enseguida(camino):
+    previo, cierre, destino = _CAMINOS_QUE_SE_VAN[camino]
+    r = correr(CASA(), previo + 'var A = formulario("/proyectos/1/notas", "post", []); __e = enviar(A);' + cierre)
+    assert [x for x in r["salidas"] if x[0] in ("ir", "requestSubmit")] == destino and not [x for x in r["salidas"] if x[0] == "aviso"]
+    assert len(r["pedidos"]) == 1
+
+
+@hay_osascript
+def test_n1_dos_guardados_en_la_cola_dicen_cuantos_no_se_mandaron():
+    esc = ('paginas["PAG"] = {regiones: ["cuerpo"]}; enviar(formulario("/proyectos/1/notas", "post", []));'
+           ' enviar(formulario("/proyectos/1/descripcion", "post", [])); enviar(formulario("/proyectos/1/carpeta", "post", []));'
+           ' responder(0, "PAG", {url: "http://x.test/proyectos?p=2"});')
+    r = correr(CASA(), esc)
+    assert len(r["pedidos"]) == 1 and any("Había 2 cambios esperando: NO se mandaron" in m for x in r["salidas"] if x[0] == "aviso" for m in x[1])
+
+
+@hay_osascript
+def test_n1_una_lectura_en_la_cola_gana_sobre_un_guardado_que_obligaba_a_irse():
+    """Con una lectura esperando, un guardado cuya página no se puede poner no navega: la página termina en
+    lo último que la persona pidió ver (la lectura sale y pinta)."""
+    esc = ('paginas["PAG"] = {regiones: ["cuerpo"]}; enviar(formulario("/proyectos/1/notas", "post", [])); clic(enlace("/proyectos?p=3"));'
+           ' responder(0, "PAG", {url: "http://x.test/proyectos?p=2"}); responder(1, "PAG-3");')
+    r = correr(CASA(), esc)
+    assert [p[1] for p in r["pedidos"]] == ["/proyectos/1/notas", "/proyectos?p=3"] and r["salidas"] == [] and r["cen"] == "PAG-3"
+
+
+@hay_osascript
+def test_n1_una_lectura_en_la_cola_se_descarta_si_el_envio_de_siempre_se_va():
+    esc = ('enviar(formulario("/proyectos/1/notas", "post", [])); clic(enlace("/proyectos?p=3"));'
+           ' responder(0, "ENTRAR", {ok: false, status: 401});')
+    r = correr(CASA(), esc)
+    assert [p[1] for p in r["pedidos"]] == ["/proyectos/1/notas"] and r["salidas"] == [["requestSubmit", "/proyectos/1/notas", None]]
+
+
+# ── N2: tiempo máximo por guardado ────────────────────────────────────────────────────────────────
+@hay_osascript
+def test_n2_un_guardado_colgado_vence_se_suelta_y_la_cola_sigue_y_lo_que_llegue_tarde_se_ignora():
+    """TIEMPO_ENVIO_SINSALTAR es una decisión de diseño (30 s), no una medida. Aquí el reloj es el de mentira."""
+    esc = ('var A = formulario("/proyectos/1/notas", "post", []); ' + _con_controles("A") + ' enviar(A);'
+           ' var B = formulario("/proyectos/1/descripcion", "post", [["descripcion", "B"]]); enviar(B);'
+           ' var c = A.controles; salidas.push(["bloqueado", c[0].readOnly]); correrTimers();'
+           ' salidas.push(["tras vencer", c[0].readOnly, pedidos.length]); responder(0, "PAG-TARDE"); responder(1, "PAG-B");')
+    r = correr(CASA(), esc)
+    assert ["bloqueado", True] in r["salidas"] and ["tras vencer", False, 2] in r["salidas"]       # A suelto con lo escrito, B salió
+    aviso = [x for x in r["salidas"] if x[0] == "aviso"][-1]
+    assert aviso[1] == [AVISO_SIN_CONFIRMAR]
+    assert r["cen"] == "PAG-B"                                                                      # la respuesta tardía de A no pintó
+
+
+@hay_osascript
+def test_n2_un_guardado_que_contesta_a_tiempo_apaga_su_reloj():
+    r = correr(CASA(), 'enviar(formulario("/proyectos/1/notas", "post", [])); responder(0, "PAG-A"); correrTimers();')
+    assert [x for x in r["salidas"] if x[0] == "aviso"] == [] and r["cen"] == "PAG-A"
+
+
 @hay_osascript
 def test_un_guardado_de_la_cola_rechazado_cuyo_formulario_ya_no_esta_se_avisa_y_no_se_envia_a_ciegas():
     esc = ('var A = formulario("/proyectos/1/notas", "post", []); enviar(A); var B = formulario("/proyectos/1/descripcion", "post", [["descripcion", "x"]]);'

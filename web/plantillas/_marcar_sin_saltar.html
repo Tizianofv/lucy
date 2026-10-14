@@ -31,8 +31,18 @@
        que se envía de la forma de siempre, con el botón que lo envió (`requestSubmit`);
        si el formulario ya no está en la página (salió de la cola y se repintó), se avisa;
      · un POST que contestó bien pero la página no se puede poner: se va a esa misma página
-       con un enlace, SIN reenviar. (El aviso de «guardado» se gastó en la lectura de por
-       detrás: esa página llega sin el aviso, nunca con uno falso.)
+       (`irA`: un enlace suelto que se pulsa, el navegador la carga de nuevo), SIN reenviar. (El
+       aviso de «guardado» se gastó en la lectura de por detrás: esa página llega sin el aviso,
+       nunca con uno falso.)
+   NINGÚN PEDIDO SALE DESPUÉS DE QUE LA PÁGINA EMPEZÓ A IRSE. Tres caminos hacen que la página se
+   vaya (`irA`, el envío de siempre de un 4xx, ir a un enlace que falló). Si en ese momento hay
+   otros guardados en la cola, NINGUNO sale: sus formularios se sueltan con lo escrito, el aviso
+   fijo dice cuántos no se mandaron, y la página se va solo cuando la persona toca «Continuar»
+   en el aviso. Si no hay nada en la cola, se va enseguida. Las lecturas que esperaban se descartan
+   (la página se va de todos modos).
+   CADA GUARDADO TIENE UN TIEMPO MÁXIMO (`TIEMPO_ENVIO_SINSALTAR`, 30 s: decisión de diseño, NO
+   medida): si vence sin respuesta, se trata como «no se pudo confirmar» (aviso fijo, el formulario se
+   suelta con lo escrito, la cola sigue) y una respuesta que llegue después se ignora.
    NADA DE LO QUE LA PERSONA HACE SE TRAGA: un guardado que llega mientras otro va en camino
    se arma con lo que tenía en ese momento y sale después, en orden, una vez. Y un formulario
    que ya se mandó (por detrás o en la cola) queda BLOQUEADO para escribir (sus campos de
@@ -45,7 +55,7 @@
    dijeron (su aviso) se lee en el aviso fijo.
    EL AVISO FIJO (arriba, fuera de las regiones) no lo quita ningún repintado: se queda hasta
    que la persona lo cierra («Entendido» o «Mirar cómo quedó»). Si llegan varios, se leen todos. */
-var turnoSinSaltar = 0, escribiendoSinSaltar = 0, colaSinSaltar = [], vistaSinSaltar = "", raizSinSaltar = "", avisoSinSaltar = null, mensajesAviso = [];
+var turnoSinSaltar = 0, escribiendoSinSaltar = 0, colaSinSaltar = [], vistaSinSaltar = "", raizSinSaltar = "", avisoSinSaltar = null, mensajesAviso = [], accionAviso = null, TIEMPO_ENVIO_SINSALTAR = 30000;
 function irA(url) { var a = document.createElement("a"); a.href = url; a.click(); }
 /* Lo que sigue solo lo hace la pantalla de Proyectos (`iniciarSinSaltos`); las de Tareas
    conservan lo suyo: ni `<details>` abiertos, ni título, ni campos a medias. */
@@ -54,12 +64,15 @@ function quitarAvisoSinSaltar() {
   if (avisoSinSaltar && avisoSinSaltar.parentNode) avisoSinSaltar.parentNode.removeChild(avisoSinSaltar);
   avisoSinSaltar = null;
   mensajesAviso = [];
+  accionAviso = null;
 }
 /* El aviso fijo: FUERA de las regiones (ningún repintado lo borra), siempre a la vista, con todos los
    mensajes que lleguen, un botón «Entendido» y un enlace a esta misma vista para mirar cómo quedó
-   (los dos lo cierran). */
-function avisarSinSaltar(texto) {
+   (los dos lo cierran; ninguno de los dos va a ningún sitio) y, si la página tiene que irse, «Continuar»
+   (que es lo único que la hace irse). */
+function avisarSinSaltar(texto, accion) {
   mensajesAviso.push(texto);
+  if (accion) accionAviso = accion;
   var viejo = avisoSinSaltar;
   if (viejo && viejo.parentNode) viejo.parentNode.removeChild(viejo);
   var d = document.createElement("div"), a = document.createElement("a"), b = document.createElement("button"), i, m;
@@ -77,6 +90,12 @@ function avisarSinSaltar(texto) {
   b.onclick = quitarAvisoSinSaltar;
   d.appendChild(a);
   d.appendChild(b);
+  if (accionAviso) {         // la página tiene que irse y la persona decide cuándo
+    var c = document.createElement("button");
+    c.textContent = "Continuar";
+    c.onclick = function () { var ir = accionAviso; quitarAvisoSinSaltar(); ir(); };
+    d.appendChild(c);
+  }
   document.body.insertBefore(d, document.body.firstChild);
   avisoSinSaltar = d;
 }
@@ -101,6 +120,20 @@ function soltarPedido(p) {
     if (h.select) h.campo.disabled = false; else h.campo.readOnly = false;
   }
   p.bloqueados = [];
+}
+/* La página va a irse (`accion`). Ningún pedido sale después: si hay guardados en la cola no se mandan, sus
+   formularios se sueltan con lo escrito y el aviso fijo lo dice; la persona se va con «Continuar». Sin
+   guardados esperando, se va enseguida (y las lecturas que esperaban se descartan). */
+function irSinSaltar(accion, texto) {
+  var guardados = 0, k;
+  for (k = 0; k < colaSinSaltar.length; k++) {
+    if (colaSinSaltar[k].cuerpo !== undefined) guardados++;
+    soltarPedido(colaSinSaltar[k]);
+  }
+  colaSinSaltar = [];
+  if (!guardados) { accion(); return; }
+  avisarSinSaltar(texto + " Había " + guardados + (guardados === 1 ? " cambio esperando: NO se mandó" : " cambios esperando: NO se mandaron") +
+                  "; lo que tenías escrito sigue aquí. Toca «Continuar» para ir a la página.", accion);
 }
 function llavesDeCampos(regiones) {
   var lista = [], cuenta = {};
@@ -241,11 +274,12 @@ function sinSaltar(p) {
   var esPost = p.cuerpo !== undefined;
   var boton = p.form ? p.form.querySelector("button") : null;
   if (boton) boton.disabled = true;
-  var mio = ++turnoSinSaltar, terminado = false;
+  var mio = ++turnoSinSaltar, terminado = false, vencido = false, reloj = null;
   if (esPost) escribiendoSinSaltar++;
   var terminar = function () {
     if (terminado) return;
     terminado = true;
+    clearTimeout(reloj);
     if (esPost) escribiendoSinSaltar--;
     soltarPedido(p);
     if (boton) boton.disabled = false;
@@ -260,11 +294,10 @@ function sinSaltar(p) {
   /* Lo de siempre: solo cuando no puede duplicar nada (un GET, o un POST que el servidor rechazó). */
   var normal = function () {
     terminar();
-    if (mio === turnoSinSaltar) {                                  // si la persona ya pidió otra cosa, ésta no la pisa
-      if (p.form && p.form.isConnected !== false) envioDeSiempre(p.form, p.envia); else if (!p.form) irA(p.url);
-      else avisarSinSaltar("No se guardó: el servidor no aceptó el envío.");
-    }
-    despues();
+    if (mio !== turnoSinSaltar) { despues(); return; }              // si la persona ya pidió otra cosa, ésta no la pisa
+    if (p.form && p.form.isConnected === false) { avisarSinSaltar("No se guardó: el servidor no aceptó el envío."); despues(); return; }
+    irSinSaltar(function () { if (p.form) envioDeSiempre(p.form, p.envia); else irA(p.url); },
+                esPost ? "El servidor no aceptó el envío (la sesión pudo vencer)." : "No se pudo cargar la página.");
   };
   var sinConfirmar = function () {
     terminar();
@@ -272,11 +305,13 @@ function sinSaltar(p) {
     despues();
   };
   var respuesta = function (r) {
+    if (vencido) return;                                           // ya se dio por no confirmado: lo que llegue tarde se ignora
     if (!r.ok) {
       if (esPost && r.status >= 500) sinConfirmar(); else normal();
       return;
     }
     r.text().then(function (texto) {
+      if (vencido) return;
       terminar();
       if (mio !== turnoSinSaltar) { despues(); return; }          // llegó tarde: la persona ya pidió otra cosa (solo un GET puede quedar atrás: nada nuevo sale mientras un POST está en camino)
       if (esPost && colaSinSaltar.some(function (q) { return q.cuerpo === undefined; })) {
@@ -287,12 +322,20 @@ function sinSaltar(p) {
         despues();
         return;
       }
-      try { pintarSinSaltar(r.url, texto, p); } catch (e) { irA(r.url); }
+      try { pintarSinSaltar(r.url, texto, p); } catch (e) {
+        irSinSaltar(function () { irA(r.url); }, "Se guardó, pero la página nueva no se pudo poner.");
+        return;
+      }
       despues();
-    }, function () { terminar(); irA(r.url); despues(); });          // la respuesta buena se cortó: ya se guardó, se va a ella
+    }, function () {                                                 // la respuesta buena se cortó: ya se guardó, se va a ella
+      if (vencido) return;
+      terminar();
+      irSinSaltar(function () { irA(r.url); }, "Se guardó, pero la respuesta se cortó.");
+    });
   };
   var opciones = esPost ? {method: "POST", body: p.cuerpo, credentials: "same-origin"} : {credentials: "same-origin"};
-  fetch(p.url, opciones).then(respuesta, esPost ? sinConfirmar : normal);
+  if (esPost) reloj = setTimeout(function () { if (terminado) return; vencido = true; sinConfirmar(); }, TIEMPO_ENVIO_SINSALTAR);
+  fetch(p.url, opciones).then(respuesta, function () { if (vencido) return; if (esPost) sinConfirmar(); else normal(); });
 }
 /* LA PUERTA ÚNICA de qué se queda en la página: la dirección (ya resuelta) o nada. Un
    GET (enlace, buscador) se queda si va a la MISMA pantalla; un POST, si va a una ruta
