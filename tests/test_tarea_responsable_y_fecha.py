@@ -428,7 +428,8 @@ def test_la_tarea_de_otro_proyecto_vuelve_a_su_propio_proyecto_y_solo_cambia_ell
 def test_una_direccion_escrita_a_mano_no_pinta_el_aviso(mt):
     for clave in ("tarea_fecha", "tarea_fecha_quitada"):
         assert not any("Fecha de la tarea" in a for a in _avisos(ver(mt, p=2, t=10, hecho=clave))), clave
-    for clave in ("tarea_fecha_igual", "tarea_fecha_cambio", "tarea_nueva_responsable"):
+    for clave in ("tarea_fecha_no_pendiente", "tarea_fecha_ya_sin", "tarea_fecha_ya_igual", "tarea_fecha_falta",
+                  "tarea_fecha_sin_tocar", "tarea_fecha_cambio", "tarea_nueva_responsable"):
         assert _avisos(ver(mt, p=2, t=10, error=clave)) == [], clave
 
 
@@ -457,16 +458,33 @@ def _valor_de(clase: str, guardado: str):
             "igual_al_guardado": guardado, "distinto": "2026-10-01T08:00"}[clase]
 
 
-def _aviso_esperado(vence, prev, cambio: bool) -> str:
+# CAUSA → TEXTO, escrita a mano (no sale del código): cada causa tiene UN texto y ninguno lleva una «o» entre dos causas.
+TEXTO_DE_LA_CAUSA = {
+    "se_guardo": "Fecha de la tarea guardada.",
+    "se_quito": "Fecha de la tarea quitada: queda sin fecha.",
+    "no_se_mando_fecha": "No se mandó ninguna fecha: la tarea sigue como estaba.",
+    "no_se_toco_el_campo": "No cambió nada: no se tocó la fecha.",
+    "no_se_entendio": "La fecha no se entendió: la tarea sigue con la fecha que tenía.",
+    "ya_no_esta_pendiente": "La tarea ya no está pendiente: la fecha no se movió.",
+    "ya_tenia_esa_fecha": "La tarea ya tenía exactamente esa fecha: no se cambió nada.",
+    "ya_estaba_sin_fecha": "La tarea ya estaba sin fecha: no se cambió nada.",
+}
+
+
+def _causa(vence, prev, antes: dict, despues: dict) -> str:
+    """La causa de una celda, DEDUCIDA de lo que mandó la persona y del ESTADO DE LA BASE antes y después
+    (no de lo que respondió la ruta)."""
     if vence is None:
-        return "No se mandó ninguna fecha: la tarea sigue como estaba."
+        return "no_se_mando_fecha"
     if vence == (prev or ""):
-        return "No cambió nada: no se tocó la fecha."
+        return "no_se_toco_el_campo"
     if vence == "basura":
-        return "La fecha no se entendió: la tarea sigue con la fecha que tenía."
-    if not cambio:
-        return "No cambió nada: la tarea ya tenía esa fecha, o ya no está pendiente."
-    return "Fecha de la tarea quitada: queda sin fecha." if vence == "" else "Fecha de la tarea guardada."
+        return "no_se_entendio"
+    if despues["vence_en"] != antes["vence_en"]:
+        return "se_quito" if despues["vence_en"] is None else "se_guardo"
+    if antes["estado"] != "pendiente":
+        return "ya_no_esta_pendiente"
+    return "ya_estaba_sin_fecha" if antes["vence_en"] is None else "ya_tenia_esa_fecha"
 
 
 def _lo_que_quedo(m, tid: int) -> dict:
@@ -479,6 +497,7 @@ def _lo_que_quedo(m, tid: int) -> dict:
 
 def test_el_cruce_es_el_producto_completo_y_las_distintas_estan_declaradas():
     assert len(CRUCE) == len(VENCE) * len(PREV) * len(TAREAS_DEL_CRUCE) == 60
+    assert not any(" o " in t for t in TEXTO_DE_LA_CAUSA.values())
     assert set(DISTINTAS) <= set(CRUCE) and all(DISTINTAS.values())
 
 
@@ -510,12 +529,13 @@ def test_cada_celda_del_cruce_deja_lo_mismo_que_tareas_y_el_aviso_dice_lo_que_pa
         pytest.skip(DISTINTAS[celda])
     assert quedaron[0] == quedaron[1], celda
     cambio = quedaron[1]["vence_en"] != inicial["vence_en"]
-    esperado = _aviso_esperado(vence, prev, cambio)
-    assert avisos.count(esperado) == 1, (celda, esperado, avisos)
-    # y ningún otro aviso de éxito o de "igual" contradice al esperado
-    otros = [a for a in avisos if a != esperado and ("Fecha de la tarea" in a or "No cambió" in a
-                                                       or "No se mandó" in a or "no se entendió" in a)]
+    causa = _causa(vence, prev, inicial, quedaron[1])
+    esperado = TEXTO_DE_LA_CAUSA[causa]
+    assert avisos.count(esperado) == 1, (celda, causa, esperado, avisos)
+    # y ningún otro aviso de esta ruta contradice al esperado (todos los textos posibles, de una causa cada uno)
+    otros = [a for a in avisos if a != esperado and a in TEXTO_DE_LA_CAUSA.values()]
     assert otros == [], (celda, otros)
+    assert " o " not in esperado
     assert bool(quedaron[1]["huellas"]) == cambio, celda
     if quien == "hecha":
         assert not cambio, celda                 # una hecha nunca se mueve, entre en la celda que entre

@@ -5255,6 +5255,18 @@ async def donde_esta_la_tarea(tarea_id: int) -> dict | None:
         return None if fila is None else {**fila, "proyecto_vivo": bool(fila["proyecto_vivo"])}
 
 
+async def estado_y_fecha_de_tarea(tarea_id: int) -> dict | None:
+    """`{estado, vence_en, borrada}` de una tarea (también en la papelera), o `None` si no existe.
+    Solo lee. Lo usa la ruta de la fecha de Proyectos para decir POR QUÉ `mover_vence` no escribió."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT estado, vence_en, (borrado_en IS NOT NULL) AS borrada FROM tareas WHERE id = %s",
+            (tarea_id,))
+        fila = await cur.fetchone()
+        return None if fila is None else {**fila, "borrada": bool(fila["borrada"])}
+
+
 async def responsable_de_proyecto(proyecto_id: int) -> int | None:
     """El chat responsable de un proyecto vivo, o `None` (sin responsable, o el
     proyecto no existe). Una tarea nueva dentro del proyecto nace con él (P10).

@@ -1985,8 +1985,9 @@ async def cambiar_fecha_de_tarea_desde_proyectos(request: Request, tid: int):
     escribe (salvo que un envío sin el campo `vence` no pide nada, como en
     `/tareas`). `prev_vence` es lo que se pintó: si el campo dice lo mismo no se
     escribe (el navegador recorta los segundos). El aviso dice lo que pasó:
-    guardada, quitada, «no se entendió» (la fecha anterior sigue) o «no cambió
-    nada»."""
+    guardada, quitada, «no se mandó fecha», «no se tocó», «no se entendió» (la
+    fecha anterior sigue) o, si `mover_vence` no escribió, UNA de tres causas:
+    ya no está pendiente, ya estaba sin fecha, ya tenía exactamente esa fecha."""
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     formulario = await request.form()
@@ -2005,8 +2006,17 @@ async def cambiar_fecha_de_tarea_desde_proyectos(request: Request, tid: int):
         return RedirectResponse(await _volver_a_la_tarea(
             tid, t=tid, error="tarea_fecha_cambio"), status_code=303)
     if not await db.mover_vence(tid, vence_en):
+        # `mover_vence` no dice por qué no escribió (y `/tareas` la comparte): se lee la tarea y se dice
+        # UNA causa, nunca «esto o aquello».
+        fila = await db.estado_y_fecha_de_tarea(tid)
+        if fila is None or fila["borrada"] or fila["estado"] != db.ESTADO_PENDIENTE:
+            clave = "tarea_fecha_no_pendiente"
+        elif fila["vence_en"] is None:
+            clave = "tarea_fecha_ya_sin"
+        else:
+            clave = "tarea_fecha_ya_igual"
         return RedirectResponse(await _volver_a_la_tarea(
-            tid, t=tid, error="tarea_fecha_igual"), status_code=303)
+            tid, t=tid, error=clave), status_code=303)
     return RedirectResponse(await _volver_a_la_tarea(
         tid, t=tid, hecho="tarea_fecha" if vence_en is not None else "tarea_fecha_quitada"),
         status_code=303)
