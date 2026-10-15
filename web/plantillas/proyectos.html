@@ -2012,9 +2012,22 @@ function fechaEnPalabrasDeLaHoja(iso, meses) {
   }
   document.addEventListener("input", alCambiar);
   document.addEventListener("change", alCambiar);
+  /* «Guardar y descargar PDF» baja solo: el aviso de una cotización enviada trae el enlace del PDF con la marca
+     `data-bajar-ya`. Se pulsa UNA vez: primero se quita la marca, después se pulsa; sin marca no se pulsa nada.
+     Corre al cargar la página y cada vez que cambia el documento, porque la pieza de «sin saltar» repinta las
+     regiones sin volver a correr guiones (este ya está cargado en toda página de la casa). */
+  function bajarYa() {
+    var a = uno("a[data-bajar-ya]");
+    if (!a) return;
+    a.removeAttribute("data-bajar-ya");
+    a.click();
+  }
   // La ventana que ya vino abierta: los números de las opciones y la vista previa, desde el primer momento.
-  function alCargar() { todos("form.cz-form").forEach(function (f) { numerarOpciones(f); rehacer(f); }); }
+  function alCargar() { todos("form.cz-form").forEach(function (f) { numerarOpciones(f); rehacer(f); }); bajarYa(); }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", alCargar); else alCargar();
+  if (typeof MutationObserver !== "undefined" && document.body) {
+    new MutationObserver(bajarYa).observe(document.body, {childList: true, subtree: true});
+  }
 })();
 </script>{% endif %}
 </body></html>

@@ -829,12 +829,13 @@ _PALABRAS_DE_JS = {"var", "function", "return", "if", "else", "while", "for", "t
 # LO ÚNICO DEL NAVEGADOR QUE EL GUION PUEDE USAR (todo lo demás es rojo, y hay que mirarlo antes de agregarlo):
 # los globales que lee y las propiedades/métodos que llama sobre elementos, arreglos y textos. OJO: `innerHTML` e `insertAdjacentHTML` están permitidas y copian HTML que puede traer un pedido
 # (un `<img src>`): esta lista NO cierra eso.
-GLOBALES_PERMITIDOS = {"document", "Array", "JSON", "Math", "Number", "String"}
+GLOBALES_PERMITIDOS = {"document", "Array", "JSON", "Math", "MutationObserver", "Number", "String"}
 PROPIEDADES_PERMITIDAS = {
-    "add", "addEventListener", "alt", "apply", "appendChild", "call", "checked", "className", "classList", "closest",
-    "concat", "contains", "createElement", "createTextNode", "documentElement", "elements", "exec", "firstChild", "forEach",
-    "getAttribute", "hidden", "innerHTML", "insertAdjacentHTML", "length", "map", "max", "min", "name", "parentNode", "parse",
-    "preventDefault", "prototype", "push", "querySelector", "querySelectorAll", "readyState", "remove", "removeChild",
+    "add", "addEventListener", "alt", "apply", "appendChild", "body", "call", "checked", "className", "classList", "click",
+    "closest", "concat", "contains", "createElement", "createTextNode", "documentElement", "elements", "exec", "firstChild", "forEach",
+    "getAttribute", "hidden", "innerHTML", "insertAdjacentHTML", "length", "map", "max", "min", "name", "observe", "parentNode", "parse",
+    "preventDefault", "prototype", "push", "querySelector", "querySelectorAll", "readyState", "remove", "removeAttribute",
+    "removeChild",
     "replace", "slice", "split", "src", "target", "test", "textContent", "toFixed", "trim", "value"}
 
 
@@ -915,13 +916,15 @@ def test_el_guion_corrido_en_javascriptcore_no_pide_nada_al_cargar():
               "function XMLHttpRequest() { pedidos.push('xhr'); }\n"
               "var navigator = {sendBeacon: function () { pedidos.push('beacon'); }};\n"
               "var oyentes = {};\n"
-              "var document = {readyState: 'complete', documentElement: {classList: {add: function (c) { oyentes.clase = c; }}},\n"
-              "  addEventListener: function (t) { oyentes[t] = true; }, querySelectorAll: function () { return []; }};\n"
+              "var MutationObserver = function () { this.observe = function () { oyentes.observador = true; }; };\n"
+              "var document = {readyState: 'complete', documentElement: {classList: {add: function (c) { oyentes.clase = c; }}}, body: {},\n"
+              "  addEventListener: function (t) { oyentes[t] = true; }, querySelector: function () { return null; },\n"
+              "  querySelectorAll: function () { return []; }};\n"
               + guion + "\nJSON.stringify({pedidos: pedidos, oyentes: Object.keys(oyentes).sort()})")
     r = subprocess.run(["osascript", "-l", "JavaScript", "-e", codigo], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
     visto = json.loads(r.stdout.strip())
-    assert visto["pedidos"] == [] and visto["oyentes"] == ["change", "clase", "click", "input"], visto
+    assert visto["pedidos"] == [] and visto["oyentes"] == ["change", "clase", "click", "input", "observador"], visto
 
 
 # ── 10. Un estado que no se conoce sale con la marca ────────────────────────────────────────────────────
@@ -942,3 +945,85 @@ def test_el_pdf_de_un_estado_que_no_es_enviada_sale_con_marca(m, monkeypatch, es
     monkeypatch.setattr(db, "cotizaciones_de_proyectos", _con_otro_estado)
     pdf = _casa().get("/proyectos/1/cotizaciones/1/pdf")
     assert pdf.status_code == 200 and cz.MARCA_DE_BORRADOR in _texto_del_pdf(pdf.content)
+
+
+# ── 11. «Guardar y descargar PDF» baja solo: el guion pulsa una vez `a[data-bajar-ya]` ───────────────────
+
+# Un documento de mentira para JavaScriptCore. FRONTERA, dicha: NO es un navegador. Solo entiende selectores `a[atributo]`
+# (cualquier otro contesta «nada»: si el guion cambia de selector, no encuentra el enlace y la prueba se pone roja), cuenta los
+# clics y anota si la marca ya estaba quitada al pulsar. Que un clic de verdad sobre un `<a download>` baje el archivo, y que el
+# navegador deje bajar uno sin que la persona haya tocado en ese instante, NO se probó aquí: se mira en un navegador.
+_DOCUMENTO_DE_MENTIRA = r"""
+var clics = [], observadores = [], enlaces = [];
+function enlace(atributos) {
+  var a = {atributos: atributos, id: enlaces.length};
+  a.removeAttribute = function (n) { delete this.atributos[n]; };
+  a.click = function () { clics.push({id: this.id, marcaAlPulsar: "data-bajar-ya" in this.atributos}); };
+  enlaces.push(a);
+  return a;
+}
+function MutationObserver(f) { this.f = f; this.sobre = null; observadores.push(this); }
+MutationObserver.prototype.observe = function (nodo, opciones) { this.sobre = [nodo === document.body, opciones.childList, opciones.subtree]; };
+function repintar() { observadores.forEach(function (o) { o.f([]); }); }
+var document = {readyState: "complete", body: {}, documentElement: {classList: {add: function () {}}},
+  addEventListener: function () {}, querySelectorAll: function () { return []; },
+  querySelector: function (sel) {
+    var m = /^a\[([a-z-]+)\]$/.exec(sel);
+    if (!m) return null;
+    for (var i = 0; i < enlaces.length; i++) if (m[1] in enlaces[i].atributos) return enlaces[i];
+    return null;
+  }};
+"""
+
+
+def _correr_la_bajada(antes: str, despues: str) -> dict:
+    """Corre el guion REAL (sacado de `proyectos.html`) con `antes` puesto antes de que cargue y `despues` corrido
+    después; `despues` termina en una expresión JSON."""
+    if shutil.which("osascript") is None:
+        pytest.skip("no hay osascript")
+    programa = _DOCUMENTO_DE_MENTIRA + antes + "\n" + _guion_de_las_cotizaciones() + "\n" + despues
+    r = subprocess.run(["osascript", "-l", "JavaScript", "-e", programa], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout.strip())
+
+
+_CUENTA = "JSON.stringify({clics: clics, quedan: enlaces.map(function (a) { return 'data-bajar-ya' in a.atributos; })})"
+_AVISO = 'enlace({href: "/proyectos/1/cotizaciones/1/pdf", download: "", "data-bajar-ya": ""});'
+_EL_PDF_DE_LA_LISTA = 'enlace({href: "/proyectos/1/cotizaciones/2/pdf", download: ""});'
+
+
+@hay_osascript
+def test_con_la_marca_pulsa_una_sola_vez_y_la_quita_antes_de_pulsar():
+    v = _correr_la_bajada(_AVISO, _CUENTA)
+    assert v["clics"] == [{"id": 0, "marcaAlPulsar": False}], v
+    assert v["quedan"] == [False]
+
+
+@hay_osascript
+def test_sin_la_marca_no_pulsa_nada_ni_el_pdf_de_la_lista():
+    v = _correr_la_bajada(_EL_PDF_DE_LA_LISTA + 'enlace({href: "/x"});', _CUENTA)
+    assert v["clics"] == [] and v["quedan"] == [False, False], v
+    assert _correr_la_bajada("", _CUENTA)["clics"] == []
+
+
+@hay_osascript
+def test_repintada_la_pagina_sin_volver_a_correr_guiones_baja_una_vez_por_cada_aviso_nuevo():
+    """La pieza de «sin saltar» cambia las regiones y no corre guiones: el guion ya cargado se entera por el observador
+    del documento. Las veces que el observador avise sin aviso nuevo, no se pulsa; un aviso nuevo se pulsa una vez."""
+    v = _correr_la_bajada(_EL_PDF_DE_LA_LISTA, "repintar(); repintar();\n" + _AVISO + "\nrepintar(); repintar(); repintar();\n"
+                          + _AVISO + "\nrepintar(); repintar();\n" + _CUENTA)
+    assert v["clics"] == [{"id": 1, "marcaAlPulsar": False}, {"id": 2, "marcaAlPulsar": False}], v
+    assert v["quedan"] == [False, False, False]
+
+
+@hay_osascript
+def test_el_guion_se_entera_de_los_cambios_de_todo_el_documento():
+    v = _correr_la_bajada("", "JSON.stringify(observadores.map(function (o) { return o.sobre; }))")
+    assert v == [[True, True, True]], v                     # un solo observador, sobre `document.body`, con hijos y subárbol
+
+
+def test_el_selector_del_guion_es_el_de_la_marca_que_escribe_la_plantilla():
+    plantilla = open("web/plantillas/_cotizaciones_del_proyecto.html", encoding="utf-8").read()
+    enlaces = re.findall(r"<a\b[^>]*\bdata-bajar-ya\b[^>]*>", plantilla)
+    assert len(enlaces) == 1 and re.search(r"\bdownload\b", enlaces[0]) and 'href="/proyectos/' in enlaces[0], enlaces
+    assert len(re.findall(r'uno\("a\[data-bajar-ya\]"\)', _guion_de_las_cotizaciones())) == 1
