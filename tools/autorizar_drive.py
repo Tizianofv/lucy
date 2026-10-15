@@ -19,16 +19,20 @@ delante. Hace esto y nada más:
      Con `drive.file` la carpeta queda suelta en «Mi unidad»: moverla a
      «CDS y ACD» es un paso a mano de la casa.
 
+El identificador del cliente (`client_id`) SÍ sale impreso, dentro de la
+dirección de Google: en OAuth no es secreto (viaja por la barra de direcciones
+del navegador). El secreto del cliente, el código y el token no se imprimen.
+
 El REPOSITORIO ES PÚBLICO: el identificador y el secreto del cliente OAuth se
-leen del entorno (`GOOGLE_DRIVE_CLIENT_ID`, `GOOGLE_DRIVE_CLIENT_SECRET`) y no
+leen del entorno (`LUCY_DRIVE_CLIENT_ID`, `LUCY_DRIVE_CLIENT_SECRET`) y no
 están escritos en ningún sitio de aquí.
 
 Uso (lo corre la sala, no un agente de Lucy):
 
-    GOOGLE_DRIVE_CLIENT_ID=... GOOGLE_DRIVE_CLIENT_SECRET=... \\
+    LUCY_DRIVE_CLIENT_ID=... LUCY_DRIVE_CLIENT_SECRET=... \\
         python3 tools/autorizar_drive.py --salida "<carpeta>" [--crear-proyectos]
 
-Lo que deja en `--salida`: `GOOGLE_DRIVE_REFRESH_TOKEN` (el valor de la variable
+Lo que deja en `--salida`: `LUCY_DRIVE_REFRESH_TOKEN` (el valor de la variable
 de Railway del mismo nombre) y, si se pidió, `LUCY_DRIVE_CARPETA_PROYECTOS`.
 """
 from __future__ import annotations
@@ -44,8 +48,6 @@ import secrets
 import sys
 import urllib.parse
 
-import httpx
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import drive  # noqa: E402
 
@@ -53,7 +55,7 @@ URL_PERMISO = "https://accounts.google.com/o/oauth2/v2/auth"
 ESPERA_SEGUNDOS = 300
 MAX_PEDIDOS = 20          # el navegador también pide /favicon.ico y similares
 
-NOMBRE_TOKEN = "GOOGLE_DRIVE_REFRESH_TOKEN"
+NOMBRE_TOKEN = "LUCY_DRIVE_REFRESH_TOKEN"
 NOMBRE_CARPETA = "LUCY_DRIVE_CARPETA_PROYECTOS"
 
 
@@ -112,22 +114,20 @@ def esperar_codigo(servidor: http.server.HTTPServer, estado: str) -> str:
 
 async def canjear(cliente_id: str, secreto: str, codigo: str,
                   redireccion: str, verificador: str) -> str:
-    """El código por un refresh token. No devuelve ni imprime nada más."""
+    """El código por un refresh token. No devuelve ni imprime nada más.
+
+    Sale por `drive._pedir`, la misma puerta (y el mismo tope total de 15 s, sin
+    seguir redirecciones) que el resto: este guion no crea ningún cliente HTTP.
+    """
     try:
-        async with httpx.AsyncClient(timeout=drive.TIEMPO_LIMITE,
-                                     follow_redirects=False) as c:
-            r = await c.post(drive.URL_TOKEN, data={
+        cuerpo = await drive._pedir(
+            "token", "POST", drive.URL_TOKEN, autorizado=False,
+            formulario={
                 "grant_type": "authorization_code", "code": codigo,
                 "client_id": cliente_id, "client_secret": secreto,
                 "redirect_uri": redireccion, "code_verifier": verificador})
-    except httpx.HTTPError:
-        raise Falla("Google no contestó al canjear el código.") from None
-    if r.status_code != 200:
-        raise Falla(f"Google rechazó el código (HTTP {r.status_code}).")
-    try:
-        cuerpo = r.json()
-    except ValueError:
-        raise Falla("Google contestó algo que no es JSON.") from None
+    except drive.DriveError as e:
+        raise Falla(f"Google no dio el token: {e}.") from None
     token = cuerpo.get("refresh_token") if isinstance(cuerpo, dict) else None
     if not isinstance(token, str) or not token:
         raise Falla("Google no devolvió refresh token.")
@@ -150,9 +150,9 @@ def guardar(carpeta: str, nombre: str, valor: str) -> str:
 
 async def carpeta_proyectos(cliente_id: str, secreto: str, token: str) -> str:
     """Busca «Proyectos» en la raíz (entre lo que Lucy creó) o la crea."""
-    os.environ["GOOGLE_DRIVE_CLIENT_ID"] = cliente_id
-    os.environ["GOOGLE_DRIVE_CLIENT_SECRET"] = secreto
-    os.environ["GOOGLE_DRIVE_REFRESH_TOKEN"] = token
+    os.environ["LUCY_DRIVE_CLIENT_ID"] = cliente_id
+    os.environ["LUCY_DRIVE_CLIENT_SECRET"] = secreto
+    os.environ["LUCY_DRIVE_REFRESH_TOKEN"] = token
     try:
         hay = await drive.buscar_en("root", "Proyectos")
         if hay:
@@ -168,12 +168,12 @@ def main(argv=None) -> int:
                     help="carpeta (que ya existe) donde se guardan los archivos")
     ap.add_argument("--crear-proyectos", action="store_true")
     args = ap.parse_args(argv)
-    cliente_id = os.environ.get("GOOGLE_DRIVE_CLIENT_ID", "").strip()
-    secreto = os.environ.get("GOOGLE_DRIVE_CLIENT_SECRET", "").strip()
+    cliente_id = os.environ.get("LUCY_DRIVE_CLIENT_ID", "").strip()
+    secreto = os.environ.get("LUCY_DRIVE_CLIENT_SECRET", "").strip()
     try:
         if not cliente_id or not secreto:
-            raise Falla("Faltan GOOGLE_DRIVE_CLIENT_ID o "
-                        "GOOGLE_DRIVE_CLIENT_SECRET en el entorno.")
+            raise Falla("Faltan LUCY_DRIVE_CLIENT_ID o "
+                        "LUCY_DRIVE_CLIENT_SECRET en el entorno.")
         if not os.path.isdir(args.salida):
             raise Falla("La carpeta de --salida no existe.")
         for n in (NOMBRE_TOKEN, NOMBRE_CARPETA if args.crear_proyectos else ""):

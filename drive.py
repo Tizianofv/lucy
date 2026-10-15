@@ -15,7 +15,7 @@ con su causa, es la subida. El REPOSITORIO ES PÚBLICO: aquí no hay ni un
 identificador de cliente, ni un secreto, ni un token, ni el id de ninguna
 carpeta.
 
-LA PUERTA. `_pedir` es la ÚNICA función que crea un cliente HTTP, y lo hace
+LA PUERTA. `_hacer` (el cuerpo de `_pedir`) es la ÚNICA función que crea un cliente HTTP, y lo hace
 con `follow_redirects=False`, un tiempo máximo (`TIEMPO_LIMITE`) y nada más. Por
 ella pasan también los pedidos del token (`_token`). Un redireccionamiento NO se
 sigue: se cuenta como «Drive no contestó».
@@ -75,8 +75,8 @@ SUBIDA = "https://www.googleapis.com/upload/drive/v3"
 URL_TOKEN = "https://oauth2.googleapis.com/token"
 
 # Las tres variables del servicio `lucy`: se leen por su nombre desde aquí.
-VARIABLES = ("GOOGLE_DRIVE_CLIENT_ID", "GOOGLE_DRIVE_CLIENT_SECRET",
-             "GOOGLE_DRIVE_REFRESH_TOKEN")
+VARIABLES = ("LUCY_DRIVE_CLIENT_ID", "LUCY_DRIVE_CLIENT_SECRET",
+             "LUCY_DRIVE_REFRESH_TOKEN")
 
 # Cuánto se espera a Google por pedido. Es un número elegido (el diseño, §3.7),
 # no medido.
@@ -125,7 +125,7 @@ class DriveNoEsta(DriveError):
 def _id(valor) -> str:
     """Un id que puede ir en una URL o en una búsqueda. Si no lo es, no puede
     existir en Drive: se dice `DriveNoEsta` y no sale ningún pedido."""
-    if isinstance(valor, str) and (valor == "root" or _ID.match(valor)):
+    if isinstance(valor, str) and (valor == "root" or _ID.fullmatch(valor)):
         return valor
     raise DriveNoEsta()
 
@@ -145,9 +145,9 @@ def _credenciales() -> tuple[str, str, str]:
     # Claves escritas una por una: la guarda del repositorio (`tests/test_noco_
     # lectura.py`) solo deja leer el entorno por una clave constante.
     # `test_las_variables_leidas_son_las_declaradas` exige que sean `VARIABLES`.
-    valores = (os.environ.get("GOOGLE_DRIVE_CLIENT_ID", "").strip(),
-               os.environ.get("GOOGLE_DRIVE_CLIENT_SECRET", "").strip(),
-               os.environ.get("GOOGLE_DRIVE_REFRESH_TOKEN", "").strip())
+    valores = (os.environ.get("LUCY_DRIVE_CLIENT_ID", "").strip(),
+               os.environ.get("LUCY_DRIVE_CLIENT_SECRET", "").strip(),
+               os.environ.get("LUCY_DRIVE_REFRESH_TOKEN", "").strip())
     faltan = [n for n, v in zip(VARIABLES, valores) if not v]
     if faltan:
         # Nombres, nunca valores.
@@ -164,13 +164,27 @@ def _motivos(cuerpo) -> set:
         return set()
 
 
-async def _pedir(operacion: str, metodo: str, url: str, *, autorizado=True,
-                 params=None, json_=None, contenido=None, cabeceras=None,
-                 formulario=None) -> dict:
+async def _pedir(operacion: str, metodo: str, url: str, **como) -> dict:
     """LA PUERTA DE SALIDA: lo único de este repositorio que le habla a Drive
     (y a su servidor de tokens). Devuelve el JSON de una respuesta 2xx; todo lo
     demás sube como una de las cuatro excepciones.
+
+    EL TOPE ES TOTAL: `TIEMPO_LIMITE` cubre la operación entera, el pedido del
+    token incluido, no cada pedido por separado (diseño §3.7: 15 s en total).
     """
+    try:
+        return await asyncio.wait_for(
+            _hacer(operacion, metodo, url, **como), TIEMPO_LIMITE)
+    except asyncio.TimeoutError:
+        log.warning("drive: %s sin respuesta a tiempo", operacion)
+        raise DriveNoContesta() from None
+
+
+async def _hacer(operacion: str, metodo: str, url: str, *, autorizado=True,
+                 params=None, json_=None, contenido=None, cabeceras=None,
+                 formulario=None) -> dict:
+    """El cuerpo de `_pedir` (sin el tope): token, cliente HTTP y estados.
+    ÚNICA función que crea un cliente HTTP."""
     credencial = None
     if autorizado:
         credencial = await _token()
@@ -180,12 +194,10 @@ async def _pedir(operacion: str, metodo: str, url: str, *, autorizado=True,
     try:
         async with httpx.AsyncClient(timeout=TIEMPO_LIMITE,
                                      follow_redirects=False) as cliente:
-            respuesta = await asyncio.wait_for(
-                cliente.request(metodo, url, params=params, json=json_,
-                                content=contenido, data=formulario,
-                                headers=cab),
-                TIEMPO_LIMITE)
-    except (httpx.HTTPError, asyncio.TimeoutError):
+            respuesta = await cliente.request(
+                metodo, url, params=params, json=json_, content=contenido,
+                data=formulario, headers=cab)
+    except (httpx.HTTPError, httpx.InvalidURL, httpx.StreamError):
         log.warning("drive: %s sin respuesta", operacion)
         raise DriveNoContesta() from None
     estado = respuesta.status_code
@@ -226,7 +238,7 @@ async def _token() -> str:
 
 def _id_de(cuerpo: dict) -> str:
     ident = cuerpo.get("id")
-    if not isinstance(ident, str) or not _ID.match(ident):
+    if not isinstance(ident, str) or not _ID.fullmatch(ident):
         log.warning("drive: la respuesta no trae un id que sirva")
         raise DriveNoContesta()
     return ident
@@ -260,7 +272,7 @@ async def buscar_en(carpeta: str, nombre: str) -> list[dict]:
     salida = []
     for a in archivos:
         if (isinstance(a, dict) and isinstance(a.get("id"), str)
-                and _ID.match(a["id"]) and isinstance(a.get("name"), str)):
+                and _ID.fullmatch(a["id"]) and isinstance(a.get("name"), str)):
             salida.append({"id": a["id"], "nombre": a["name"]})
     return salida
 

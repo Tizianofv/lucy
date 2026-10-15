@@ -148,14 +148,62 @@ def _por_defecto(p):
     return _R(418, json={"msg": "ruta que el doble no conoce"})
 
 
+_LOCAL = {"127.0.0.1", "localhost", "::1"}
+
+
+def _vigilar_toda_la_red(monkeypatch, violaciones):
+    """UNA SOLA PUERTA, decidida por lo que pasa y no por cómo está escrito el
+    código: durante la prueba, cualquier salida a la red que NO sea el cliente
+    sancionado (el `AsyncClient` de `drive.httpx`, con transporte de mentira) se
+    anota y revienta. Lo que mira: los transportes REALES de httpx (síncrono y
+    asíncrono, así que `httpx.get`, `httpx.Client(...)` o un `AsyncClient` sacado
+    de otro sitio) y `socket` (resolver un nombre o conectar a algo que no sea
+    local, que es lo que haría `urllib`, `requests` o un `subprocess` en el mismo
+    proceso). FRONTERA: un hijo (`subprocess`) que salga a la red desde otro
+    proceso no pasa por aquí.
+    """
+    import socket
+
+    def anotar(que):
+        def f(*a, **k):
+            violaciones.append(que)
+            raise OSError("salida a la red que no es la puerta de drive.py")
+        return f
+
+    monkeypatch.setattr(HTTPX.HTTPTransport, "handle_request",
+                        anotar("transporte httpx sincrono real"))
+    monkeypatch.setattr(HTTPX.AsyncHTTPTransport, "handle_async_request",
+                        anotar("transporte httpx asincrono real"))
+    real_gai, real_connect = socket.getaddrinfo, socket.socket.connect
+
+    def gai(host, *a, **k):
+        if host not in _LOCAL:
+            violaciones.append(f"socket.getaddrinfo({host!r})")
+            raise OSError("salida a la red que no es la puerta de drive.py")
+        return real_gai(host, *a, **k)
+
+    def conectar(self, direccion, *a, **k):
+        if not (isinstance(direccion, tuple) and direccion[0] in _LOCAL):
+            violaciones.append(f"socket.connect({direccion!r})")
+            raise OSError("salida a la red que no es la puerta de drive.py")
+        return real_connect(self, direccion, *a, **k)
+
+    monkeypatch.setattr(socket, "getaddrinfo", gai)
+    monkeypatch.setattr(socket.socket, "connect", conectar)
+
+
 @pytest.fixture
 def google(monkeypatch):
     g = Google()
-    monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_ID", CLIENTE)
-    monkeypatch.setenv("GOOGLE_DRIVE_CLIENT_SECRET", SECRETO)
-    monkeypatch.setenv("GOOGLE_DRIVE_REFRESH_TOKEN", REFRESCO)
+    violaciones: list = []
+    _vigilar_toda_la_red(monkeypatch, violaciones)
+    monkeypatch.setenv("LUCY_DRIVE_CLIENT_ID", CLIENTE)
+    monkeypatch.setenv("LUCY_DRIVE_CLIENT_SECRET", SECRETO)
+    monkeypatch.setenv("LUCY_DRIVE_REFRESH_TOKEN", REFRESCO)
     monkeypatch.setattr(drive, "httpx", _ConDoble(HTTPX, g.cliente))
-    return g
+    yield g
+    assert violaciones == [], (
+        f"algo salió a la red por una puerta que no es la de drive.py: {violaciones}")
 
 
 # Cada función pública del módulo, llamada de las formas que existen. La lista
@@ -202,7 +250,7 @@ async def test_sin_una_variable_no_sale_ningun_pedido(google, monkeypatch,
 
 @pytest.mark.parametrize("op", _OPERACIONES, ids=_IDS_OP)
 async def test_una_variable_en_blanco_cuenta_como_falta(google, monkeypatch, op):
-    monkeypatch.setenv("GOOGLE_DRIVE_REFRESH_TOKEN", "   ")
+    monkeypatch.setenv("LUCY_DRIVE_REFRESH_TOKEN", "   ")
     with pytest.raises(drive.DriveSinConfigurar):
         await op[2]()
     assert google.pedidos == []
@@ -245,6 +293,10 @@ _ESCENARIOS_API = [
     ("200 sin lo esperado", _devuelve(200, json={}), drive.DriveNoContesta),
     ("200 con una lista", _devuelve(200, json=[1]), drive.DriveNoContesta),
     ("red caida", _sin_red, drive.DriveNoContesta),
+    ("url rechazada por httpx", lambda p: (_ for _ in ()).throw(
+        HTTPX.InvalidURL("mala")), drive.DriveNoContesta),
+    ("flujo ya consumido", lambda p: (_ for _ in ()).throw(
+        HTTPX.StreamConsumed()), drive.DriveNoContesta),
 ]
 
 
@@ -265,6 +317,24 @@ async def test_el_tiempo_vencido_es_no_contesta(google, monkeypatch, op):
     transporte de mentira, así que esta es la prueba de ese tope)."""
     monkeypatch.setattr(drive, "TIEMPO_LIMITE", 0.05)
     google.api = _lento
+    with pytest.raises(drive.DriveNoContesta):
+        await op[2]()
+
+
+@pytest.mark.parametrize("op", _OPERACIONES, ids=_IDS_OP)
+async def test_el_tope_de_tiempo_es_total_y_cuenta_el_token(google, monkeypatch, op):
+    """El token tarda 0.04 s y Drive 0.04 s; cada uno cabe en el tope (0.06 s)
+    pero juntos no: el diseño pide 15 s EN TOTAL por operación."""
+    monkeypatch.setattr(drive, "TIEMPO_LIMITE", 0.06)
+
+    async def tarda(p):
+        await asyncio.sleep(0.04)
+        if p.url.host == "oauth2.googleapis.com":
+            return _R(200, json={"access_token": ACCESO})
+        return _por_defecto(p)
+
+    google.token = tarda
+    google.api = tarda
     with pytest.raises(drive.DriveNoContesta):
         await op[2]()
 
@@ -405,7 +475,7 @@ def test_las_variables_leidas_son_las_declaradas():
               and n.func.attr == "get" and n.args
               and isinstance(n.args[0], ast.Constant)
               and isinstance(n.args[0].value, str)
-              and n.args[0].value.startswith("GOOGLE_DRIVE_")]
+              and n.args[0].value.startswith("LUCY_DRIVE_")]
     assert tuple(leidas) == drive.VARIABLES
 
 
@@ -425,8 +495,9 @@ def test_ningun_valor_de_credencial_esta_escrito_en_el_codigo():
 
 def test_solo_pedir_crea_un_cliente_http_y_no_sigue_redirecciones():
     """Frontera dicha: lee el TEXTO de `drive.py` (la conducta la vigilan las
-    pruebas de redirecciones de arriba). Exige que `AsyncClient` aparezca una
-    sola vez, dentro de `_pedir`, con `follow_redirects=False`."""
+    pruebas de redirecciones de arriba y `_vigilar_toda_la_red`, que reventan
+    cualquier otra salida a la red). Exige que `AsyncClient` aparezca una sola
+    vez, dentro de `_hacer`, con `follow_redirects=False`."""
     arbol = ast.parse((RAIZ / "drive.py").read_text(encoding="utf-8"))
     sitios = []
     for fn in ast.walk(arbol):
@@ -434,7 +505,7 @@ def test_solo_pedir_crea_un_cliente_http_y_no_sigue_redirecciones():
             for n in ast.walk(fn):
                 if isinstance(n, ast.Attribute) and n.attr == "AsyncClient":
                     sitios.append((fn.name, n))
-    assert [s[0] for s in sitios] == ["_pedir"]
+    assert [s[0] for s in sitios] == ["_hacer"]
     llamada = next(n for n in ast.walk(arbol) if isinstance(n, ast.Call)
                    and isinstance(n.func, ast.Attribute)
                    and n.func.attr == "AsyncClient")
@@ -485,7 +556,8 @@ async def test_buscar_descarta_filas_que_no_sirven(google):
     assert await drive.buscar_en("PADRE1", "a") == [{"id": "BUENO", "nombre": "a"}]
 
 
-_IDS_MALOS = ["x' or '1'='1", "../etc", "a b", "", 5, "a/b", "id?fields=*"]
+_IDS_MALOS = ["x' or '1'='1", "../etc", "a b", "", 5, "a/b", "id?fields=*",
+              "ABC\n", "ABC\n\n", "\nABC", "ABC\r\n"]
 
 
 @pytest.mark.parametrize("malo", _IDS_MALOS + [None])
@@ -592,7 +664,6 @@ def _cargar_guion():
 @pytest.fixture
 def guion(monkeypatch, google):
     g = _cargar_guion()
-    monkeypatch.setattr(g, "httpx", _ConDoble(HTTPX, google.cliente))
     return g
 
 
@@ -677,6 +748,27 @@ async def test_canjear_falla_con_una_frase_fija_sin_secretos(guion, google, resp
     _no_hay_secretos(str(e.value), "la frase")
 
 
+async def test_canjear_tiene_el_mismo_tope_total_que_el_cliente(guion, google, monkeypatch):
+    monkeypatch.setattr(drive, "TIEMPO_LIMITE", 0.05)
+    google.token = _lento
+    with pytest.raises(guion.Falla):
+        await guion.canjear(CLIENTE, SECRETO, CODIGO, "http://127.0.0.1:1", "VER")
+
+
+def test_el_guion_no_crea_ningun_cliente_http_propio():
+    """Frontera dicha: lee el texto. El guion no importa `httpx`; sale por
+    `drive._pedir`. La conducta (nada sale por otra puerta) la vigila
+    `_vigilar_toda_la_red` en las pruebas que usan `google`."""
+    arbol = ast.parse((RAIZ / "tools" / "autorizar_drive.py").read_text(encoding="utf-8"))
+    importados = {a.name for n in ast.walk(arbol)
+                  if isinstance(n, ast.Import) for a in n.names}
+    importados |= {(n.module or "") for n in ast.walk(arbol)
+                   if isinstance(n, ast.ImportFrom)}
+    assert not {m for m in importados
+                if m.split(".")[0] in {"httpx", "requests", "socket", "aiohttp"}
+                or m.startswith("urllib.request")}
+
+
 async def test_canjear_no_sigue_redirecciones(guion, google):
     google.token = _redirige(307)
     with pytest.raises(guion.Falla):
@@ -694,7 +786,7 @@ def test_guardar_escribe_solo_para_el_dueno_y_no_sobrescribe(guion, tmp_path):
 
 
 def _correr_guion(guion, monkeypatch, capsys, tmp_path, *extra):
-    for n in ("GOOGLE_DRIVE_REFRESH_TOKEN",):
+    for n in ("LUCY_DRIVE_REFRESH_TOKEN",):
         monkeypatch.setenv(n, "")      # para que monkeypatch los restaure
     monkeypatch.setattr(guion, "esperar_codigo", lambda servidor, estado: CODIGO)
     codigo = guion.main(["--salida", str(tmp_path), *extra])
@@ -715,8 +807,8 @@ def test_el_guion_entero_guarda_el_token_y_no_lo_imprime(
     _token_bueno(google)
     codigo, salida = _correr_guion(guion, monkeypatch, capsys, tmp_path)
     assert codigo == 0
-    assert (tmp_path / "GOOGLE_DRIVE_REFRESH_TOKEN").read_text() == REFRESCO
-    assert os.listdir(tmp_path) == ["GOOGLE_DRIVE_REFRESH_TOKEN"]
+    assert (tmp_path / "LUCY_DRIVE_REFRESH_TOKEN").read_text() == REFRESCO
+    assert os.listdir(tmp_path) == ["LUCY_DRIVE_REFRESH_TOKEN"]
     _no_hay_secretos(salida, "lo impreso")
     assert "https://accounts.google.com/o/oauth2/v2/auth?" in salida
     assert [p.url.host for p in google.pedidos] == ["oauth2.googleapis.com"]
@@ -754,7 +846,7 @@ def test_con_crear_proyectos_no_repite_una_carpeta_que_ya_existe(
 
 def test_el_guion_sin_cliente_en_el_entorno_no_sale_a_ninguna_parte(
         guion, google, monkeypatch, capsys, tmp_path):
-    monkeypatch.delenv("GOOGLE_DRIVE_CLIENT_SECRET")
+    monkeypatch.delenv("LUCY_DRIVE_CLIENT_SECRET")
     codigo, salida = _correr_guion(guion, monkeypatch, capsys, tmp_path)
     assert codigo == 1 and google.pedidos == []
     assert os.listdir(tmp_path) == []
@@ -762,10 +854,10 @@ def test_el_guion_sin_cliente_en_el_entorno_no_sale_a_ninguna_parte(
 
 def test_el_guion_no_pisa_un_token_que_ya_esta(guion, google, monkeypatch,
                                                capsys, tmp_path):
-    (tmp_path / "GOOGLE_DRIVE_REFRESH_TOKEN").write_text("viejo")
+    (tmp_path / "LUCY_DRIVE_REFRESH_TOKEN").write_text("viejo")
     codigo, _ = _correr_guion(guion, monkeypatch, capsys, tmp_path)
     assert codigo == 1 and google.pedidos == []
-    assert (tmp_path / "GOOGLE_DRIVE_REFRESH_TOKEN").read_text() == "viejo"
+    assert (tmp_path / "LUCY_DRIVE_REFRESH_TOKEN").read_text() == "viejo"
 
 
 def test_el_guion_con_google_rechazando_no_deja_archivos_ni_secretos(
