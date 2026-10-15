@@ -827,7 +827,8 @@ _PALABRAS_DE_JS = {"var", "function", "return", "if", "else", "while", "for", "t
                    "new", "typeof", "this", "try", "catch", "throw", "in", "of"}
 
 # LO ÚNICO DEL NAVEGADOR QUE EL GUION PUEDE USAR (todo lo demás es rojo, y hay que mirarlo antes de agregarlo):
-# los globales que lee y las propiedades/métodos que llama sobre elementos, arreglos y textos. Ninguno hace un pedido.
+# los globales que lee y las propiedades/métodos que llama sobre elementos, arreglos y textos. OJO: `innerHTML` e `insertAdjacentHTML` están permitidas y copian HTML que puede traer un pedido
+# (un `<img src>`): esta lista NO cierra eso.
 GLOBALES_PERMITIDOS = {"document", "Array", "JSON", "Math", "Number", "String"}
 PROPIEDADES_PERMITIDAS = {
     "add", "addEventListener", "alt", "apply", "appendChild", "call", "checked", "className", "classList", "closest",
@@ -867,8 +868,13 @@ def lo_que_el_guion_toca(codigo: str) -> tuple[set[str], set[str]]:
 def test_el_guion_solo_usa_los_nombres_del_navegador_que_no_hacen_pedidos():
     """Decide por los NOMBRES que el guion usa. Cualquier nombre que no esté en las dos listas cerradas
     (`fetch`, `XMLHttpRequest`, `navigator.sendBeacon`, `location`, `window`, `open`, `submit`, `WebSocket`, `Image`,
-    `eval`…) lo pone rojo, sin tener que conocerlo de antemano. Los dos únicos pedidos que quedan son del
-    navegador y de esta misma página: el logo de la vista previa (`img.src`, siempre `/logo-cds.png`) y nada más."""
+    `eval`…) lo pone rojo, sin tener que conocerlo de antemano, y exige que todo `.src =` sea el logo.
+
+    LO QUE VIGILA: nombres de red escritos DIRECTO en el código del guion y el `.src`. LO QUE NO VE (frontera):
+    (a) HTML copiado con `innerHTML`/`insertAdjacentHTML`, también el de las plantillas `<template>` del servidor;
+    (b) nombres armados en variables sobre un global permitido (`document[k]`); (c) un `/` después de `}` que el
+    limpiador lee como regex; (d) un `//` dentro de un texto que esconde el resto de la línea. Que hoy solo se
+    pida el logo es lo que se comprobó leyendo el guion y las plantillas, no lo que garantiza esta prueba."""
     libres, propiedades = lo_que_el_guion_toca(_guion_de_las_cotizaciones())
     assert libres - GLOBALES_PERMITIDOS == set(), sorted(libres - GLOBALES_PERMITIDOS)
     assert propiedades - PROPIEDADES_PERMITIDAS - _datos_propios() == set(), sorted(propiedades - PROPIEDADES_PERMITIDAS - _datos_propios())
