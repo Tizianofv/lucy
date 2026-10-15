@@ -484,6 +484,22 @@ def test_guardar_borrador_y_enviar_dicen_lo_que_paso_y_lo_comprueban_al_pintar(m
     assert "COTIZACIÓN DE SERVICIOS" in html2 and [x["estado"] for x in _filas(m)] == ["enviada"]
 
 
+def test_el_recibo_de_guardar_una_cotizacion_no_sirve_para_pedir_otra_ni_marca_su_pdf(m):
+    """Por la ruta real: la 2 ya está enviada; se guarda la 1 como enviada (recibo y aviso de verdad). Pedir la página
+    de la 2 con ese recibo no dice «guardada» ni lleva la marca que baja el PDF; la de la 1 sí."""
+    _guardar("enviar")                                                    # la 1
+    _guardar("enviar")                                                    # la 2, ya enviada
+    c = _casa()
+    r = c.post("/proyectos/1/cotizaciones/1", data=_post_de_la_pagina(_formulario(_pagina(c, p=1, cotizacion=1, corregir=1)), "enviar"),
+               follow_redirects=False)
+    assert r.headers["location"] == "/proyectos?hecho=cotizacion_enviada&p=1&cotizacion=1#cotizaciones"
+    ajena = c.get("/proyectos?hecho=cotizacion_enviada&p=1&cotizacion=2").text
+    assert "COT-2026-002 guardada como enviada" not in ajena and "download data-bajar-ya>" not in ajena
+    suya = c.get("/proyectos?hecho=cotizacion_enviada&p=1&cotizacion=1").text         # el recibo seguía vivo
+    assert "COT-2026-001 guardada como enviada" in suya and suya.count("download data-bajar-ya>") == 1
+    assert "download data-bajar-ya>" not in c.get("/proyectos?hecho=cotizacion_enviada&p=1&cotizacion=1").text   # y se gastó
+
+
 def test_un_aviso_escrito_a_mano_no_pinta_nada_y_con_recibo_solo_si_el_estado_es_el_que_dice(m):
     borrador = _guardar("borrador")
     enviada = _guardar("enviar")
@@ -875,7 +891,11 @@ def test_el_guion_solo_usa_los_nombres_del_navegador_que_no_hacen_pedidos():
     (a) HTML copiado con `innerHTML`/`insertAdjacentHTML`, también el de las plantillas `<template>` del servidor;
     (b) nombres armados en variables sobre un global permitido (`document[k]`); (c) un `/` después de `}` que el
     limpiador lee como regex; (d) un `//` dentro de un texto que esconde el resto de la línea. Que hoy solo se
-    pida el logo es lo que se comprobó leyendo el guion y las plantillas, no lo que garantiza esta prueba."""
+    pida el logo es lo que se comprobó leyendo el guion y las plantillas, no lo que garantiza esta prueba.
+    (e) `click` y `removeAttribute` están permitidas sobre CUALQUIER elemento que devuelva `querySelector`: pulsar o
+    habilitar un botón cualquiera pasa en verde. Que el guion solo pulse `a[data-bajar-ya]` NO lo vigila ninguna prueba
+    por completo: la sección 11 corre el guion y mira qué se pulsa solo en sus escenarios, y un `.click()` en una función
+    que esos escenarios no llaman (o con otro selector) queda verde. Se comprobó leyendo el guion."""
     libres, propiedades = lo_que_el_guion_toca(_guion_de_las_cotizaciones())
     assert libres - GLOBALES_PERMITIDOS == set(), sorted(libres - GLOBALES_PERMITIDOS)
     assert propiedades - PROPIEDADES_PERMITIDAS - _datos_propios() == set(), sorted(propiedades - PROPIEDADES_PERMITIDAS - _datos_propios())
@@ -907,7 +927,8 @@ def test_el_guion_de_hoy_no_se_come_la_prueba_de_los_nombres():
 def test_el_guion_corrido_en_javascriptcore_no_pide_nada_al_cargar():
     """FRONTERA, dicha: esto NO prueba que el guion no haga pedidos. Lo corre con un navegador de mentira donde cada
     `fetch`, `XMLHttpRequest` y `navigator.sendBeacon` se cuenta, y mira que al cargar la página (sin ventana abierta) no
-    salga ninguno; lo que no corre al cargar (clics, escribir) lo vigila la prueba de los nombres de arriba."""
+    salga ninguno. Lo que no corre al cargar (clics, escribir) NO lo vigila esta prueba, y la de los nombres de arriba solo
+    mira nombres de red: ver su frontera."""
     if shutil.which("osascript") is None:
         pytest.skip("no hay osascript")
     guion = _guion_de_las_cotizaciones()

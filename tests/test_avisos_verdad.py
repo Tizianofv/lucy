@@ -59,7 +59,7 @@ import db.db as db
 import web.app as panel
 import web.avisos as avisos
 from acciones import crud
-from web.avisos import Aviso, AvisoQueElige, Navegacion, PuertaDeAvisos
+from web.avisos import Aviso, AvisoQueElige, Navegacion, NavegacionSellada, PuertaDeAvisos
 
 PLANTILLAS = _ROOT / "web" / "plantillas"
 GENERICOS = ("1", "0", "7", "zzz", "Hogar", "5,6")      # valores que ninguna plantilla nombra
@@ -573,6 +573,42 @@ def test_el_recibo_vale_para_ese_aviso_en_esa_ruta_y_nada_mas():
     assert _dice(c.get("/x/1?hecho=listo&cuenta=3")) == "hecho= cuenta=0"
     assert _dice(c.get("/x/1?hecho=listo")) == "hecho= cuenta=0"
     assert _dice(c.get("/x/1?hecho=listo&cuenta=2&p=99")) == "hecho=listo cuenta=2"   # la navegación no entra en la firma
+
+
+def test_un_parametro_que_sella_el_recibo_solo_vale_para_su_valor():
+    """`NavegacionSellada`: no cuenta nada de lo que pasó, pero el aviso habla de ESA cosa. El recibo del guardado de
+    la 1 no sirve para pedir la 2 (y sigue vivo para la 1); sin sello, `p` sigue sin entrar en la firma."""
+    app = FastAPI()
+    app.add_middleware(PuertaDeAvisos)
+
+    @app.get("/s", response_class=HTMLResponse)
+    async def s(hecho: Aviso[str] = "", cosa: NavegacionSellada[str] = "", p: Navegacion[int] = 0):
+        return f'<main><p class="aviso">hecho={hecho} cosa={cosa}</p></main>'
+
+    @app.post("/s/guardar")
+    async def guardar():
+        return RedirectResponse("/s?hecho=listo&cosa=1&p=3", status_code=303)
+    c = TestClient(app)
+    c.post("/s/guardar", follow_redirects=False)
+    assert _dice(c.get("/s?hecho=listo&cosa=2&p=3")) == "hecho= cosa=2"        # otra cosa: sin aviso
+    assert _dice(c.get("/s?hecho=listo&p=3")) == "hecho= cosa="               # sin la cosa: sin aviso
+    assert _dice(c.get("/s?hecho=listo&cosa=1&p=99")) == "hecho=listo cosa=1"  # la suya (y `p` no entra)
+
+
+def test_todo_parametro_sellado_de_las_rutas_reales_entra_en_la_firma_del_recibo():
+    """Los hermanos: la lista de parámetros sellados sale de las rutas registradas, y para cada uno el recibo cambia
+    con su valor (sin sellos la clave de A y la de B serían iguales)."""
+    hechos = 0
+    for r in _rutas_get(panel.app):
+        sellos, marcas = avisos.sellos_de(r), avisos.avisos_de(r)
+        for nombre in sellos:
+            assert marcas, (r.path, nombre)                  # sellar solo tiene sentido en una pantalla con avisos
+            aviso = next(iter(marcas))
+            a = avisos.clave_de(r.path, [(aviso, "x"), (nombre, "A")], marcas, sellos)
+            b = avisos.clave_de(r.path, [(aviso, "x"), (nombre, "B")], marcas, sellos)
+            assert a != b, (r.path, nombre)
+            hechos += 1
+    assert hechos >= 1
 
 
 def _con_reloj(monkeypatch, segundos):

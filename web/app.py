@@ -62,7 +62,7 @@ import registro_lectura
 import web.auth as auth
 import web.menu as _menu
 import web.avisos as avisos_mod
-from web.avisos import Aviso, AvisoQueElige, Navegacion, PuertaDeAvisos
+from web.avisos import Aviso, AvisoQueElige, Navegacion, NavegacionSellada, PuertaDeAvisos
 from acciones import crud
 from cerebro.bancos.categorias import (CATEGORIAS, NO_SUMAN,
                                        categoria_permitida)
@@ -1186,7 +1186,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
                     filtro: Navegacion[str] = "", quien: Navegacion[str] = "",
                     sq: Navegacion[str] = "", estado: Navegacion[int] = 0,
                     editar_nota: Navegacion[int] = 0, borrar_nota: Navegacion[int] = 0,
-                    cotizacion: Navegacion[str] = "", corregir: Navegacion[int] = 0):
+                    cotizacion: NavegacionSellada[str] = "", corregir: Navegacion[int] = 0):
     """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
     (`?g=`), las de «Sin grupo» (`?sin_grupo=1`) o el formulario de un proyecto
