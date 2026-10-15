@@ -802,8 +802,137 @@ def test_la_fecha_en_palabras_del_guion_es_la_del_servidor_en_cada_mes_y_no_inve
         assert _en_jxa(f"fechaEnPalabrasDeLaHoja({json.dumps(malo)}, {meses})") == "", malo
 
 
-def test_el_guion_solo_sale_en_la_casa_y_no_trae_ni_un_pedido_a_ningun_servidor(m):
+def test_el_guion_solo_sale_en_la_casa(m):
     casa = _pagina(_casa(), p=1)
-    guion = casa.split('<script id="guion-cotizaciones">', 1)[1].split("</script>", 1)[0]
-    assert "fetch(" not in guion and "XMLHttpRequest" not in guion and "location" not in guion
+    assert '<script id="guion-cotizaciones">' in casa
     assert 'id="guion-cotizaciones"' not in _pagina(_ver(), p=1)
+
+
+# ── 9. Lo que el guion puede tocar del navegador (decide por los NOMBRES que usa, no por una búsqueda de `fetch(`) ──
+
+def _guion_de_las_cotizaciones() -> str:
+    fuente = open("web/plantillas/proyectos.html", encoding="utf-8").read()
+    return fuente.split('<script id="guion-cotizaciones">', 1)[1].split("</script>", 1)[0]
+
+
+def _sin_textos_ni_comentarios(codigo: str) -> str:
+    codigo = re.sub(r"/\*.*?\*/", "", codigo, flags=re.S)
+    codigo = re.sub(r"//[^\n]*", "", codigo)
+    codigo = re.sub(r'"(?:\\.|[^"\\\n])*"', '""', codigo)
+    codigo = re.sub(r"'(?:\\.|[^'\\\n])*'", "''", codigo)
+    return re.sub(r"(?<=[(,=:!&|?{};])\s*/(?:\\.|\[[^\]]*\]|[^/\n\\\[])+/[gimsuy]*", "0", codigo)
+
+
+_PALABRAS_DE_JS = {"var", "function", "return", "if", "else", "while", "for", "true", "false", "null", "undefined",
+                   "new", "typeof", "this", "try", "catch", "throw", "in", "of"}
+
+# LO ÚNICO DEL NAVEGADOR QUE EL GUION PUEDE USAR (todo lo demás es rojo, y hay que mirarlo antes de agregarlo):
+# los globales que lee y las propiedades/métodos que llama sobre elementos, arreglos y textos. Ninguno hace un pedido.
+GLOBALES_PERMITIDOS = {"document", "Array", "JSON", "Math", "Number", "String"}
+PROPIEDADES_PERMITIDAS = {
+    "add", "addEventListener", "alt", "apply", "appendChild", "call", "checked", "className", "classList", "closest",
+    "concat", "contains", "createElement", "createTextNode", "documentElement", "elements", "exec", "firstChild", "forEach",
+    "getAttribute", "hidden", "innerHTML", "insertAdjacentHTML", "length", "map", "max", "min", "name", "parentNode", "parse",
+    "preventDefault", "prototype", "push", "querySelector", "querySelectorAll", "readyState", "remove", "removeChild",
+    "replace", "slice", "split", "src", "target", "test", "textContent", "toFixed", "trim", "value"}
+
+
+# Los datos que el guion lee de SU PROPIA información (no del navegador): las claves que le da el servidor
+# (`datos_de_la_vista_previa`, sacadas de lo real) y la forma de lo que `leer` arma de las casillas.
+def _datos_propios() -> set[str]:
+    return set(cz.datos_de_la_vista_previa()) | {"descripcion", "detalle", "nombre", "renglones", "total"}
+
+
+def lo_que_el_guion_toca(codigo: str) -> tuple[set[str], set[str]]:
+    """(globales libres, propiedades) que usa el código: las propiedades son los nombres que siguen a un punto; los
+    globales, los nombres que no se declaran con `var`/`function`/parámetro, no son claves de objeto ni palabras de JS."""
+    limpio = _sin_textos_ni_comentarios(codigo)
+    propiedades = set(re.findall(r"\.\s*([A-Za-z_$][\w$]*)", limpio))
+    declarados = set(re.findall(r"\bvar\s+([A-Za-z_$][\w$]*)", limpio))
+    declarados |= set(re.findall(r"\bfunction\s+([A-Za-z_$][\w$]*)", limpio))
+    for parametros in re.findall(r"\bfunction\s*[A-Za-z_$\w]*\s*\(([^)]*)\)", limpio):
+        declarados |= set(re.findall(r"[A-Za-z_$][\w$]*", parametros))
+    for var in re.findall(r"\bvar\s+([^;]*);", limpio):                    # `var a = 1, b = 2;`
+        declarados |= set(re.findall(r"(?:^|,)\s*([A-Za-z_$][\w$]*)\s*(?==|,|$)", var))
+    claves = set(re.findall(r"[{,]\s*([A-Za-z_$][\w$]*)\s*:", limpio))
+    libres = set()
+    for m in re.finditer(r"(?<![.\w$])([A-Za-z_$][\w$]*)", limpio):
+        n = m.group(1)
+        if n in _PALABRAS_DE_JS or n in declarados or n in claves:
+            continue
+        libres.add(n)
+    return libres, propiedades
+
+
+def test_el_guion_solo_usa_los_nombres_del_navegador_que_no_hacen_pedidos():
+    """Decide por los NOMBRES que el guion usa. Cualquier nombre que no esté en las dos listas cerradas
+    (`fetch`, `XMLHttpRequest`, `navigator.sendBeacon`, `location`, `window`, `open`, `submit`, `WebSocket`, `Image`,
+    `eval`…) lo pone rojo, sin tener que conocerlo de antemano. Los dos únicos pedidos que quedan son del
+    navegador y de esta misma página: el logo de la vista previa (`img.src`, siempre `/logo-cds.png`) y nada más."""
+    libres, propiedades = lo_que_el_guion_toca(_guion_de_las_cotizaciones())
+    assert libres - GLOBALES_PERMITIDOS == set(), sorted(libres - GLOBALES_PERMITIDOS)
+    assert propiedades - PROPIEDADES_PERMITIDAS - _datos_propios() == set(), sorted(propiedades - PROPIEDADES_PERMITIDAS - _datos_propios())
+    crudo = _guion_de_las_cotizaciones()
+    assert re.findall(r"\.src\s*=\s*([^;]*);", crudo) == ['"/logo-cds.png"']
+    assert not re.search(r"\[\s*[\"'][^\]]*[\"']\s*\]", crudo)                 # ningún `objeto["nombre"+"armado"]`
+
+
+@pytest.mark.parametrize("intruso", [
+    'navigator.sendBeacon("/x", d);', 'fetch("/x");', 'new Image().src = "/x";', 'window.open("/x");',
+    'form.submit();', 'var r = new XMLHttpRequest(); r.open("GET", "/x");', 'location.href = "/x";',
+    'document.defaultView.fetch("/x");', 'var f = window["fe" + "tch"]; f("/x");', 'eval("fetch(1)");',
+    'new WebSocket("ws://x");', 'document.forms[0].submit();', 'e.target.ownerDocument.location = "/x";'])
+def test_la_prueba_de_los_nombres_ve_a_un_intruso(intruso):
+    codigo = _guion_de_las_cotizaciones() + "\n" + intruso
+    libres, propiedades = lo_que_el_guion_toca(codigo)
+    malo = (libres - GLOBALES_PERMITIDOS) or (propiedades - PROPIEDADES_PERMITIDAS - _datos_propios()) or re.search(r"\[\s*[\"'][^\]]*[\"']\s*\]", codigo)
+    assert malo, intruso
+
+
+def test_el_guion_de_hoy_no_se_come_la_prueba_de_los_nombres():
+    """Control del limpiador: lo que ve es de verdad el código (no quedó vacío)."""
+    libres, propiedades = lo_que_el_guion_toca(_guion_de_las_cotizaciones())
+    assert {"document"} <= libres and {"querySelectorAll", "insertAdjacentHTML", "createElement", "src"} <= propiedades
+    assert len(propiedades) > 30
+    assert _datos_propios() & {"submit", "open", "sendBeacon", "fetch", "send", "href", "location"} == set()
+
+
+def test_el_guion_corrido_en_javascriptcore_no_pide_nada_al_cargar():
+    """FRONTERA, dicha: esto NO prueba que el guion no haga pedidos. Lo corre con un navegador de mentira donde cada
+    `fetch`, `XMLHttpRequest` y `navigator.sendBeacon` se cuenta, y mira que al cargar la página (sin ventana abierta) no
+    salga ninguno; lo que no corre al cargar (clics, escribir) lo vigila la prueba de los nombres de arriba."""
+    if shutil.which("osascript") is None:
+        pytest.skip("no hay osascript")
+    guion = _guion_de_las_cotizaciones()
+    codigo = ("var pedidos = [];\n"
+              "function fetch() { pedidos.push('fetch'); }\n"
+              "function XMLHttpRequest() { pedidos.push('xhr'); }\n"
+              "var navigator = {sendBeacon: function () { pedidos.push('beacon'); }};\n"
+              "var oyentes = {};\n"
+              "var document = {readyState: 'complete', documentElement: {classList: {add: function (c) { oyentes.clase = c; }}},\n"
+              "  addEventListener: function (t) { oyentes[t] = true; }, querySelectorAll: function () { return []; }};\n"
+              + guion + "\nJSON.stringify({pedidos: pedidos, oyentes: Object.keys(oyentes).sort()})")
+    r = subprocess.run(["osascript", "-l", "JavaScript", "-e", codigo], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    visto = json.loads(r.stdout.strip())
+    assert visto["pedidos"] == [] and visto["oyentes"] == ["change", "clase", "click", "input"], visto
+
+
+# ── 10. Un estado que no se conoce sale con la marca ────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("estado", ["borrador", "raro", "", None, "ENVIADA", "enviada "])
+def test_el_pdf_de_un_estado_que_no_es_enviada_sale_con_marca(m, monkeypatch, estado):
+    """La base no deja guardar otro estado (CHECK), así que se le da a la ruta una cotización leída con el estado
+    cambiado: solo `enviada`, tal cual, baja sin marca; cualquier otra cosa sale marcada (no sale como definitiva)."""
+    _guardar("enviar")
+    real = db.cotizaciones_de_proyectos
+
+    async def _con_otro_estado():
+        todo = await real()
+        for cs in todo.values():
+            for c in cs:
+                c["estado"] = estado
+        return todo
+    monkeypatch.setattr(db, "cotizaciones_de_proyectos", _con_otro_estado)
+    pdf = _casa().get("/proyectos/1/cotizaciones/1/pdf")
+    assert pdf.status_code == 200 and cz.MARCA_DE_BORRADOR in _texto_del_pdf(pdf.content)
