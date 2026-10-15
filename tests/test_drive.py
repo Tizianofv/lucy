@@ -152,15 +152,19 @@ _LOCAL = {"127.0.0.1", "localhost", "::1"}
 
 
 def _vigilar_toda_la_red(monkeypatch, violaciones):
-    """UNA SOLA PUERTA, decidida por lo que pasa y no por cómo está escrito el
+    """UNA SOLA PUERTA para lo que ve (httpx y `socket`), decidida por lo que pasa y no por cómo está escrito el
     código: durante la prueba, cualquier salida a la red que NO sea el cliente
     sancionado (el `AsyncClient` de `drive.httpx`, con transporte de mentira) se
     anota y revienta. Lo que mira: los transportes REALES de httpx (síncrono y
     asíncrono, así que `httpx.get`, `httpx.Client(...)` o un `AsyncClient` sacado
     de otro sitio) y `socket` (resolver un nombre o conectar a algo que no sea
     local, que es lo que haría `urllib`, `requests` o un `subprocess` en el mismo
-    proceso). FRONTERA: un hijo (`subprocess`) que salga a la red desde otro
-    proceso no pasa por aquí.
+    proceso). FRONTERA EXACTA: esta guarda ve `httpx` (sus dos transportes
+    reales) y el módulo `socket` de Python (`getaddrinfo` y `connect`). NO ve el
+    módulo C `_socket` (`_socket.getaddrinfo` es otro objeto), ni `ctypes`, ni un
+    proceso hijo. Medido por el testigo: resolver con `_socket.getaddrinfo`
+    dentro de una operación deja la suite verde. No se agregan más vías: la
+    serie de formas no se acaba, y la frase promete solo lo que se lista aquí.
     """
     import socket
 
@@ -464,6 +468,24 @@ async def test_en_un_camino_bueno_las_credenciales_solo_van_donde_deben(
     # Un token por pedido, y el pedido de Drive va detrás de él.
     assert [p.url.host for p in google.pedidos] == [
         "oauth2.googleapis.com", "www.googleapis.com"]
+
+
+@pytest.mark.parametrize("id_malo", ["ABC\n", "ABC\r\n", "\nABC", "a/b", "", 5, None])
+@pytest.mark.parametrize("op", [o for o in _OPERACIONES if o[0] != "buscar_en"],
+                         ids=[o[1] for o in _OPERACIONES if o[0] != "buscar_en"])
+async def test_un_id_malo_en_la_respuesta_de_google_no_se_acepta(google, op, id_malo):
+    """El hermano de la validación de entrada: el id que CONTESTA Google también
+    pasa por `fullmatch` (un `ABC\\n` se aceptaría con `match`)."""
+    google.api = _devuelve(200, json={"id": id_malo})
+    with pytest.raises(drive.DriveNoContesta):
+        await op[2]()
+    assert len(google.de_api()) == 1
+
+
+async def test_buscar_descarta_un_id_con_salto_de_linea_en_la_respuesta(google):
+    google.api = _devuelve(200, json={"files": [
+        {"id": "ABC\n", "name": "a"}, {"id": "BUENO", "name": "a"}]})
+    assert await drive.buscar_en("PADRE1", "a") == [{"id": "BUENO", "nombre": "a"}]
 
 
 def test_las_variables_leidas_son_las_declaradas():
