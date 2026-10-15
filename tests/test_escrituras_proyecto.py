@@ -288,7 +288,7 @@ def test_renombrar_a_uno_repetido_o_vacio_se_rechaza(mundo):
 def _script_de_la_pagina(mundo) -> str:
     mundo.proyecto(1, "P", area="CDS")
     html = ver(mundo, p=1)
-    guiones = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
+    guiones = re.findall(r"<script(?![^>]*guion-cotizaciones)[^>]*>(.*?)</script>", html, re.S)
     assert len(guiones) == 1
     return guiones[0]
 
@@ -969,7 +969,9 @@ def _rutas_post_de_proyectos(con_tareas: bool = False):
                                                 # parte 13 (9-oct-2026): agregar una del registro a la
                                                 # lista del proyecto, y sacar una agregada a mano
                                                 "agregar_sesion_a_proyecto",
-                                                "sacar_sesion_agregada_de_proyecto")):
+                                                "sacar_sesion_agregada_de_proyecto",
+                                                # pieza 5 de las cotizaciones (14-oct-2026)
+                                                "guardar_cotizacion")):
                         escribe.append((f"db.{n.func.attr}", ()))
                     if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                             and n.func.attr == "puede_entrar"):
@@ -1004,6 +1006,10 @@ def test_toda_ruta_post_de_proyectos_pide_sesion_y_escribe_por_una_puerta_con_ac
         # Agregar una del registro a la lista (parte 13), y devolver la quitada si ya estaba quitada.
         "/proyectos/{pid}/sesiones/agregar": {"db.agregar_sesion_a_proyecto",
                                               "db.devolver_sesion_de_proyecto"},
+        # 14-oct-2026, pieza 5 de las cotizaciones: las dos rutas que guardan una cotización escriben por
+        # UNA sola puerta de `db` (`guardar_cotizacion`: crear, editar un borrador, enviar, corregir).
+        "/proyectos/{pid}/cotizaciones": {"db.guardar_cotizacion"},
+        "/proyectos/{pid}/cotizaciones/{cid}": {"db.guardar_cotizacion"},
         "/proyectos/{pid}/area": {"crud.editar"},
         "/proyectos/{pid}/responsable": {"crud.editar"},
         "/proyectos/{pid}/estado": {"crud.editar"},

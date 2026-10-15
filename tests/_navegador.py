@@ -49,7 +49,8 @@ def dar_recibo(ruta: str, **consulta) -> None:
     de verdad de la acción hacen el POST. Sin llamarlo, una dirección escrita a mano
     no trae nada."""
     import web.app as panel
-    av = avisos.avisos_de(avisos._ruta_get(panel.app, ruta))
+    r = avisos._ruta_get(panel.app, ruta)
+    av = avisos.avisos_de(r)
     pares = [(k, str(v)) for k, v in consulta.items()]
-    nuevo = avisos._recibo(avisos.clave_de(ruta, pares, av), int(time.time()) + avisos.VIDA_RECIBO)
+    nuevo = avisos._recibo(avisos.clave_de(ruta, pares, av, avisos.sellos_de(r)), int(time.time()) + avisos.VIDA_RECIBO)
     Navegador.recibo = "~".join(r for r in (Navegador.recibo, nuevo) if r)

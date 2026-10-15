@@ -1,0 +1,136 @@
+{#- LAS COTIZACIONES DE UN PROYECTO (pieza 5 del diseño «Cotizaciones en Proyectos», 14-oct-2026): la lista de
+    la columna derecha y la ventana de «Nueva cotización» / «Corregir» / la hoja de una enviada.
+    Se incluye desde `proyectos.html`, dentro de la sección de arriba de «Cerrar el proyecto» (hereda su contexto: `m`, `solo_ver`,
+    `sufijo_filtro`, `error`, `hecho`, `cz`). `cz` lo arma `web/app.py::_pantalla_de_cotizaciones`; NINGÚN
+    texto de dinero ni de fecha sale de acá (`cotizaciones.resumen_de_cotizacion`, `valores_del_formulario`,
+    `hoja_de_cotizacion`). Los nombres de las casillas (`para-nombre`, `op-O-r-R-total`, `cond-clave`…) son los
+    que lee `cotizaciones.campos_del_formulario`: una prueba arma el POST con lo que esta plantilla pinta.
+    SOLO VER: la lista, abrir una (su hoja) y bajar el PDF; ni «+», ni «Corregir», ni formulario. La ventana
+    que escribe solo se arma para la sesión de la casa (`cz.ventana.tipo` ∈ nueva|borrador|corregir). -#}
+{% from "_hoja_de_cotizacion.html" import estilo_de_la_hoja, hoja_de_cotizacion %}
+{% set v = cz.ventana %}
+{#- Los avisos de las cotizaciones viven AQUÍ (en la ventana si hay una abierta, si no encima de la lista):
+    el velo de la ventana taparía un aviso de arriba de la página. -#}
+{% set aviso_de_cotizacion %}
+  {%- if error == 'cotizacion_cambio' %}<p class="aviso">La cotización cambió mientras la editabas: lo que escribiste NO se guardó. Abajo está como quedó.</p>
+  {%- elif error == 'cotizacion_no_esta' %}<p class="aviso">Esa cotización (o ese proyecto) ya no está: NO se guardó nada.</p>
+  {%- elif error == 'cotizacion_enviada_no_vuelve' %}<p class="aviso">Una cotización enviada no vuelve a borrador: NO se guardó nada. Para corregirla usa «Guardar y descargar PDF».</p>
+  {%- elif error == 'cotizacion_sin_tabla' %}<p class="aviso">Las cotizaciones todavía no se pueden guardar: falta actualizar la base de datos. NO se guardó nada.</p>
+  {%- elif error == 'cotizacion_base' %}<p class="aviso">La base de datos falló y no se pudo confirmar si se guardó: mira cómo quedó la lista antes de volver a intentarlo.</p>
+  {%- elif error in ('cotizacion_sin_opciones', 'cotizacion_sin_renglones') %}<p class="aviso">Cada cotización necesita al menos una opción, y cada opción al menos un renglón con su descripción y su total: NO se guardó nada.</p>
+  {%- elif error in ('cotizacion_total_vacio', 'cotizacion_total_cero') %}<p class="aviso">Cada renglón necesita un total mayor que cero: NO se guardó nada.</p>
+  {%- elif error == 'cotizacion_total_alto' %}<p class="aviso">Un total pasa de 99,999,999.99: NO se guardó nada.</p>
+  {%- elif error == 'cotizacion_total_decimales' %}<p class="aviso">Un total lleva más de dos decimales: NO se guardó nada.</p>
+  {%- elif error in ('cotizacion_total_formato', 'cotizacion_total_tipo') %}<p class="aviso">Un total no se entiende; escríbelo como 62,500 o 62500.50: NO se guardó nada.</p>
+  {%- elif error == 'cotizacion_fuera_de_latin1' %}<p class="aviso">Hay un carácter que el PDF no puede escribir (por ejemplo un emoji): quítalo. NO se guardó nada.</p>
+  {%- elif error in ('cotizacion_caracteres', 'cotizacion_tipo') %}<p class="aviso">Hay caracteres que no se pueden guardar (por ejemplo un salto de línea donde no cabe): NO se guardó nada.</p>
+  {%- elif error == 'cotizacion_validez' %}<p class="aviso">La validez tiene que ser de 7, 15 o 30 días: NO se guardó nada.</p>
+  {%- elif error == 'cotizacion_fecha' %}<p class="aviso">La fecha no se entiende: NO se guardó nada.</p>
+  {%- elif error == 'cotizacion_candado' %}<p class="aviso">Esa cotización no se pudo guardar porque falta saber qué versión editabas: NO se guardó nada. Ábrela otra vez.</p>
+  {%- elif error and error.startswith('cotizacion_') %}<p class="aviso">Esa cotización no se puede guardar así: NO se guardó nada. Revisa lo escrito.</p>
+  {%- elif hecho == 'cotizacion_borrador' and cz.abierta and not cz.abierta.enviada %}<p class="aviso ok">Borrador {{ cz.abierta.codigo }} guardado.</p>
+  {%- elif hecho == 'cotizacion_enviada' and cz.abierta and cz.abierta.enviada %}<p class="aviso ok">Cotización {{ cz.abierta.codigo }} guardada como enviada. <a class="cz-bajar" href="/proyectos/{{ m.id }}/cotizaciones/{{ cz.abierta.id }}/pdf" download data-bajar-ya>Descargar el PDF</a></p>
+  {%- endif %}
+{% endset %}
+<div class="cotiz" id="cotizaciones" data-ancla>
+  <div class="cotiz-enc"><h3>Cotizaciones</h3>
+    {% if not solo_ver %}<a class="cotiz-mas{{ ' activo' if v and v.tipo == 'nueva' }}" href="/proyectos?p={{ m.id }}&amp;cotizacion=nueva{{ sufijo_filtro }}#cotizaciones" title="Crear una cotización" aria-label="Crear una cotización">+</a>{% endif %}</div>
+  {% if not v %}{{ aviso_de_cotizacion }}{% endif %}
+  {% if cz.lista %}
+  <ul>
+    {% for c in cz.lista %}
+    <li><span class="pild{{ '' if c.enviada else ' borr' }}">{{ 'Enviada' if c.enviada else 'Borrador' }}</span>
+      <a class="cz-codigo" href="/proyectos?p={{ m.id }}&amp;cotizacion={{ c.id }}{{ sufijo_filtro }}#cotizaciones"><b>{{ c.codigo }}</b></a>
+      <span class="sub">{{ c.fecha }} · {{ c.opciones }} · {{ c.precio }}</span>
+      <a class="cz-pdf" href="/proyectos/{{ m.id }}/cotizaciones/{{ c.id }}/pdf" download>PDF</a></li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="vacio">Todavía no hay cotizaciones.</p>{% endif %}
+
+  {% if v %}
+  {{ estilo_de_la_hoja() }}
+  <div class="velo" role="dialog" aria-label="{{ v.titulo }}">
+   <div class="cz-ventana">
+    <div class="ventana-enc"><h2>{{ v.titulo }}</h2><span class="num">{{ v.numero }}</span>
+      <a class="cerrar" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}#cotizaciones" aria-label="Cerrar">✕</a></div>
+    {{ aviso_de_cotizacion }}
+    {% if v.tipo == 'hoja' %}
+    <div class="ventana-cuerpo una"><div class="previa">{{ hoja_de_cotizacion(v.hoja) }}</div></div>
+    <div class="ventana-pie">
+      {% if v.cot.enviada and not solo_ver %}<span class="izq">Enviada quiere decir que se bajó el PDF para mandarlo; Lucy no se lo manda al cliente.</span>
+      <a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;cotizacion={{ v.cot.id }}&amp;corregir=1{{ sufijo_filtro }}#cotizaciones">Corregir</a>{% endif %}
+      <a class="btn-linea" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}#cotizaciones">Cerrar</a>
+      <a class="btn-prim" href="/proyectos/{{ m.id }}/cotizaciones/{{ v.cot.id }}/pdf" download>Descargar PDF</a>
+    </div>
+    {% else %}
+    {% set f = v.valores %}
+    <form class="cz-form" method="post" action="/proyectos/{{ m.id }}/cotizaciones{{ '/' ~ v.id if v.id }}" autocomplete="off">
+     {% if f.candado %}<input type="hidden" name="cambiado_en" value="{{ f.candado }}">{% endif %}
+     <div class="ventana-cuerpo">
+      <div class="form-c">
+       <div><h4>Para</h4>
+        <div class="rej">
+         <label>Cliente<input type="text" name="para-nombre" value="{{ f.para_nombre }}" maxlength="200" required><span class="auto">Sale del cliente del proyecto; se puede corregir</span></label>
+         <label>Teléfono<input type="text" name="para-telefono" value="{{ f.para_telefono }}" maxlength="40" inputmode="tel"><span class="auto">Sale de su ficha; se puede corregir</span></label>
+         <label>Fecha<input type="date" name="fecha" value="{{ f.fecha }}" required></label>
+         <label>Validez<select name="validez" data-cz-validez>{% for d in (7, 15, 30) %}<option value="{{ d }}"{{ ' selected' if d == f.validez }}>{{ d }} días</option>{% endfor %}</select></label>
+        </div></div>
+       <div><h4>Opciones</h4><div class="cz-opciones" data-cz-opciones>
+        {% for op in f.opciones %}{% set o = loop.index0 %}
+        <div class="op cz-op{{ ' cz-sobra' if op.sobra }}">
+          <div class="op-enc"><span class="n" data-cz-n>OPCIÓN {{ loop.index }}</span><input type="text" name="op-{{ o }}-nombre" value="{{ op.nombre }}" maxlength="120" aria-label="Nombre de la opción" placeholder="Nombre de la opción"><button type="button" class="x" data-cz-quitar title="Quitar esta opción (sin guardar)">✕</button></div>
+          {% for r in op.renglones %}{% set k = loop.index0 %}
+          <div class="renglon-bloque{{ ' cz-sobra' if r.sobra }}">
+           <div class="renglon">
+            <label>Descripción<input type="text" name="op-{{ o }}-r-{{ k }}-descripcion" value="{{ r.descripcion }}" maxlength="200"></label>
+            <label>Total<span class="total">RD$ <input type="text" name="op-{{ o }}-r-{{ k }}-total" value="{{ r.total }}" maxlength="14" inputmode="decimal" placeholder="62,500"></span></label>
+           </div>
+           <label>Detalle<textarea name="op-{{ o }}-r-{{ k }}-detalle" maxlength="1000">{{ r.detalle }}</textarea></label>
+          </div>
+          {% endfor %}
+          <button type="button" class="mas-linea" data-cz-agregar="renglon">+ Agregar renglón</button>
+        </div>
+        {% endfor %}
+        <button type="button" class="mas-linea" data-cz-agregar="opcion">+ Agregar opción</button></div></div>
+       <div><h4>Condiciones</h4><div class="cond" data-cz-condiciones>
+        {% for c in f.condiciones %}
+        <label data-cz-condicion="{{ c.clave }}"{{ ' hidden' if c.oculta }}><input type="checkbox" name="cond-{{ c.clave }}"{{ ' checked' if c.marcada }}> <span data-cz-texto>{{ c.texto }}</span></label>
+        {% endfor %}
+        {% for c in f.propias %}{% set i = loop.index0 %}
+        <label class="cz-propia{{ ' cz-sobra' if c.sobra }}"><input type="checkbox" name="cond-extra-{{ i }}-marcada"{{ ' checked' if c.marcada }} aria-label="Marcar esta condición"> <input type="text" class="cz-texto-propio" name="cond-extra-{{ i }}-texto" value="{{ c.texto }}" maxlength="300" placeholder="Otra condición (opcional)"></label>
+        {% endfor %}
+        <button type="button" class="mas-linea" data-cz-agregar="condicion">+ Agregar condición</button></div></div>
+      </div>
+      <div class="previa" data-cz-previa data-cz-datos='{{ cz_datos_de_la_hoja|tojson }}'>
+       <p class="rot">Así va a salir</p>
+       {{ hoja_de_cotizacion(v.hoja) }}
+      </div>
+     </div>
+     <div class="ventana-pie"><span class="izq">Se guarda en este proyecto, en «Cotizaciones».</span>
+      <a class="btn-linea" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}#cotizaciones">Cancelar</a>
+      {% if v.tipo != 'corregir' %}<button class="btn-linea" name="accion" value="borrador">Guardar borrador</button>{% endif %}
+      <button class="btn-prim" name="accion" value="enviar">Guardar y descargar PDF</button>
+     </div>
+    </form>
+    {#- Lo que el botón «Agregar» pone (con JavaScript). Los números `__O__`, `__R__` y `__C__` los cambia el guion. -#}
+    <template data-cz-plantilla="renglon"><div class="renglon-bloque">
+     <div class="renglon">
+      <label>Descripción<input type="text" name="op-__O__-r-__R__-descripcion" maxlength="200"></label>
+      <label>Total<span class="total">RD$ <input type="text" name="op-__O__-r-__R__-total" maxlength="14" inputmode="decimal" placeholder="62,500"></span></label>
+     </div>
+     <label>Detalle<textarea name="op-__O__-r-__R__-detalle" maxlength="1000"></textarea></label></div></template>
+    <template data-cz-plantilla="opcion"><div class="op cz-op">
+     <div class="op-enc"><span class="n" data-cz-n>OPCIÓN</span><input type="text" name="op-__O__-nombre" maxlength="120" aria-label="Nombre de la opción" placeholder="Nombre de la opción"><button type="button" class="x" data-cz-quitar title="Quitar esta opción (sin guardar)">✕</button></div>
+     <div class="renglon-bloque">
+      <div class="renglon">
+       <label>Descripción<input type="text" name="op-__O__-r-0-descripcion" maxlength="200"></label>
+       <label>Total<span class="total">RD$ <input type="text" name="op-__O__-r-0-total" maxlength="14" inputmode="decimal" placeholder="62,500"></span></label>
+      </div>
+      <label>Detalle<textarea name="op-__O__-r-0-detalle" maxlength="1000"></textarea></label></div>
+     <button type="button" class="mas-linea" data-cz-agregar="renglon">+ Agregar renglón</button></div></template>
+    <template data-cz-plantilla="condicion"><label class="cz-propia"><input type="checkbox" name="cond-extra-__C__-marcada" checked aria-label="Marcar esta condición"> <input type="text" class="cz-texto-propio" name="cond-extra-__C__-texto" maxlength="300" placeholder="Otra condición"></label></template>
+    {% endif %}
+   </div>
+  </div>
+  {% endif %}
+</div>

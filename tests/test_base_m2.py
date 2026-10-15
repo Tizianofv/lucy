@@ -121,6 +121,12 @@ def _base(participantes_desde: str = "schema") -> sqlite3.Connection:
     # parcial (`WHERE borrado_en IS NULL`), que SQLite entiende.
     for s in _ddl(schema, "sesiones_de_proyecto"):
         con.execute(s)
+    # `cotizaciones` y `serie_cotizaciones` (pieza 5 de las cotizaciones): la página lee las cotizaciones
+    # de los proyectos y, con la ventana de «Nueva cotización» abierta, el contador de la serie; las dos
+    # rutas que guardan las escriben. Con sus CHECK y su UNIQUE, que SQLite entiende.
+    for tabla in ("cotizaciones", "serie_cotizaciones"):
+        for s in _ddl(schema, tabla):
+            con.execute(s)
     fuente = schema if participantes_desde == "schema" else \
         _migracion_m2().read_text(encoding="utf-8")
     for s in _ddl(fuente, "participantes"):

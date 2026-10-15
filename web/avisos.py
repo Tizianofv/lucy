@@ -101,6 +101,9 @@ log = logging.getLogger("lucy.avisos")
 Aviso = Annotated[T, Query(json_schema_extra={"aviso": True})]
 Navegacion = Annotated[T, Query(json_schema_extra={"aviso": False})]
 AvisoQueElige = Annotated[T, Query(json_schema_extra={"aviso": True, "elige": "p"})]
+# Navegación que además SELLA el recibo: no cuenta nada de lo que pasó, pero el aviso habla de ESA cosa (esa
+# cotización). Su valor entra en la firma del recibo: el recibo de un guardado de A no sirve para pedir B.
+NavegacionSellada = Annotated[T, Query(json_schema_extra={"aviso": False, "sella": True})]
 
 COOKIE = "lucy_aviso"
 # Lo que dura un recibo: el viaje del POST a su redirección. Más tiempo lo
@@ -118,13 +121,13 @@ def _firmar(texto: str) -> str:
                     hashlib.sha256).hexdigest()[:32]
 
 
-def clave_de(ruta: str, pares, avisos) -> str:
+def clave_de(ruta: str, pares, avisos, sellos=()) -> str:
     """Lo que dice el aviso, en su forma canónica: la ruta y SOLO los parámetros de
     aviso (decodificados y ordenados). El recibo vale aunque el navegador reescriba
     el orden o la forma de escapar, y solo para ese aviso en esa pantalla; los
     parámetros de navegación (qué proyecto se mira) no entran: no dicen nada de lo
-    que pasó."""
-    return ruta + "?" + urlencode(sorted((k, v) for k, v in pares if k in avisos))
+    que pasó. La excepción son los `sellos` (`NavegacionSellada`, p. ej. qué cotización): entran con su valor."""
+    return ruta + "?" + urlencode(sorted((k, v) for k, v in pares if k in avisos or k in sellos))
 
 
 def _recibo(clave: str, vence: int) -> str:
@@ -172,6 +175,11 @@ def parametros_sin_marca(app) -> list[tuple[str, str]]:
     return [(r.path, n) for r in app.router.routes
             if "GET" in (getattr(r, "methods", None) or ())
             for n, m in marcas_de(r).items() if not isinstance(m.get("aviso"), bool)]
+
+
+def sellos_de(ruta) -> set[str]:
+    """Los parámetros de navegación de la ruta que sellan el recibo (`NavegacionSellada`)."""
+    return {n for n, m in marcas_de(ruta).items() if m.get("sella") is True}
 
 
 def avisos_de(ruta) -> dict[str, str | None]:
@@ -291,7 +299,7 @@ class PuertaDeAvisos:
             return scope, send
         ahora = time.time()
         recibos = _recibos_de(_cookie_de(scope), ahora)
-        clave = clave_de(scope["path"], pares, avisos)
+        clave = clave_de(scope["path"], pares, avisos, sellos_de(ruta))
         for r in recibos:
             vence = int(r.partition(".")[0])
             if hmac.compare_digest(r.encode("ascii"), _recibo(clave, vence).encode("ascii")):
@@ -368,7 +376,7 @@ class PuertaDeAvisos:
         ahora = time.time()
         vence = int(ahora) + VIDA_RECIBO
         recibos = _recibos_de(_cookie_de(scope), ahora) + [
-            _recibo(clave_de(partes.path, pares, avisos), vence)]
+            _recibo(clave_de(partes.path, pares, avisos, sellos_de(_ruta_get(aplicacion, partes.path))), vence)]
         return dict(mensaje, headers=[
             *headers,
             (b"set-cookie", _poner_cookie(scope, recibos[-MAXIMO_DE_RECIBOS:]))])

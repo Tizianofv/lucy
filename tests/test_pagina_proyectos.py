@@ -73,9 +73,10 @@ def pintar_modelo(modelo: dict, areas=AREAS, **consulta) -> str:
     """La página con ESE modelo: la ruta real y la plantilla real, con la base
     reemplazada por el modelo ya armado.
 
-    También se doblan las TRES lecturas que la ruta hace aparte de `pagina_de_proyectos`:
-    `areas` (el menú de grupos) y, desde las partes 11 y 13, `sesiones_quitadas_de_proyectos` y
-    `sesiones_agregadas_de_proyectos` (las decisiones de la casa sobre las sesiones del proyecto).
+    También se doblan las CUATRO lecturas que la ruta hace aparte de `pagina_de_proyectos`:
+    `areas` (el menú de grupos), desde las partes 11 y 13 `sesiones_quitadas_de_proyectos` y
+    `sesiones_agregadas_de_proyectos` (las decisiones de la casa sobre las sesiones del proyecto) y, desde
+    la pieza 5 de las cotizaciones, `cotizaciones_de_proyectos` (sin la tabla: ese bloque no sale).
     Sin eso la ruta tocaría el `pool` del proceso —el que haya dejado el último archivo de pruebas
     que lo pisó— y esta página se pinta justamente para medir QUÉ PINTA, sin base.
     """
@@ -89,16 +90,17 @@ def pintar_modelo(modelo: dict, areas=AREAS, **consulta) -> str:
         return None                       # sin la tabla: el bloque sale sin controles
 
     guardado = (db.pagina_de_proyectos, db.areas, db.sesiones_quitadas_de_proyectos,
-                db.sesiones_agregadas_de_proyectos)
+                db.sesiones_agregadas_de_proyectos, db.cotizaciones_de_proyectos)
     db.pagina_de_proyectos, db.areas = _pagina, _areas
     db.sesiones_quitadas_de_proyectos = _sin_la_tabla
     db.sesiones_agregadas_de_proyectos = _sin_la_tabla
+    db.cotizaciones_de_proyectos = _sin_la_tabla         # (pieza 5 de las cotizaciones) sin la tabla: el bloque no sale
     dar_recibo("/proyectos", **consulta)         # mide CÓMO se pinta: como si un POST hubiera mandado aquí
     try:
         r = _cliente(config.CHAT_ID_DUENO).get("/proyectos", params=consulta)
     finally:
         (db.pagina_de_proyectos, db.areas, db.sesiones_quitadas_de_proyectos,
-         db.sesiones_agregadas_de_proyectos) = guardado
+         db.sesiones_agregadas_de_proyectos, db.cotizaciones_de_proyectos) = guardado
     assert r.status_code == 200, r.text[:300]
     return r.text
 
@@ -627,7 +629,7 @@ def test_la_pagina_no_promete_nada_que_no_hace(mundo):
         html = ver(mundo, **consulta)
         for prohibido in ('type="checkbox"', "borrar-x\" type", "data-hecha"):
             assert prohibido not in html, (consulta, prohibido)
-        guiones = re.findall(r"<script[^>]*>(.*?)</script>", html, re.S)
+        guiones = re.findall(r"<script(?![^>]*guion-cotizaciones)[^>]*>(.*?)</script>", html, re.S)
         assert len(guiones) == 1, (consulta, guiones)
         # (Con el único pedido que se le permite: el GET que busca personas de Noco.)
         from test_escrituras_proyecto import sin_el_unico_pedido_permitido

@@ -67,12 +67,25 @@ def _armar(pr, ta, co, personas, fechas=None, carpetas=None, notas=None):
 
 # Lo que el doble de `cotizaciones_de_proyectos` devuelve: `{proyecto_id: [cotización, ...]}`, con la forma de
 # `db.cotizaciones_de_proyectos` (contenido ya leído, como lo guarda la puerta).
-COTIZACIONES_DEL_MODELO: dict = {1: [dict(
-    id=1, proyecto_id=1, anio=2026, numero=1, codigo="COT-2026-001", estado="enviada",
-    para_nombre="Cliente de prueba", para_telefono="809-555-0101", fecha="2026-10-14", validez_dias=15,
-    contenido={"opciones": [{"nombre": "Una", "renglones": [
-                   {"descripcion": "Trabajo", "detalle": "", "total": "1000.00"}]}],
-               "condiciones": [{"clave": None, "texto": "Una condicion.", "marcada": True}]})]}
+def _una_cotizacion_del_modelo(id, numero, estado, opciones):
+    """Con la forma que devuelve `db.cotizaciones_de_proyectos`: `totales_por_opcion` es la suma de los
+    renglones de cada opción (como la calcula la lectura real) y `cambiado_en` el candado."""
+    from decimal import Decimal
+    contenido = {"opciones": [{"nombre": nombre, "renglones": [
+        {"descripcion": "Trabajo", "detalle": "", "total": total} for total in totales]}
+        for nombre, totales in opciones],
+        "condiciones": [{"clave": None, "texto": "Una condicion.", "marcada": True}]}
+    return dict(
+        id=id, proyecto_id=1, anio=2026, numero=numero, codigo=f"COT-2026-{numero:03d}", estado=estado,
+        para_nombre="Cliente de prueba", para_telefono="809-555-0101", fecha="2026-10-14", validez_dias=15,
+        cambiado_en=f"2026-10-14 12:00:0{id}.000000+00:00", contenido=contenido,
+        totales_por_opcion=[sum((Decimal(t) for t in totales), Decimal("0")) for _, totales in opciones])
+
+
+# La 1 es una ENVIADA con una opción; la 2, un BORRADOR con dos opciones de precio distinto (el rango de la lista).
+COTIZACIONES_DEL_MODELO: dict = {1: [
+    _una_cotizacion_del_modelo(2, 2, "borrador", [("Basica", ["1000.00"]), ("Completa", ["1500.50", "2000.00"])]),
+    _una_cotizacion_del_modelo(1, 1, "enviada", [("Una", ["1000.00"])])]}
 # Lo que el doble de `sesiones_quitadas_de_proyectos` devuelve: `{proyecto_id: {ref: codigo}}`. Por
 # omisión, nada; una prueba que quiera pintar la lista «Quitadas» lo llena con `monkeypatch`.
 QUITADAS_DEL_MODELO: dict = {}
@@ -147,6 +160,17 @@ class BaseQueNoSeToca:
             async def _cotizaciones():
                 return COTIZACIONES_DEL_MODELO
             return _cotizaciones
+        if nombre == "hoy_rd":
+            return db.hoy_rd              # función REAL y pura: el día de hoy en Santo Domingo; no toca la base
+        if nombre == "codigo_de_cotizacion":
+            return db.codigo_de_cotizacion        # REAL y pura: «COT-AAAA-NNN»
+        if nombre == "numero_que_sigue_de_cotizacion":
+            # FINGIDO, declarado: lo que `db.numero_que_sigue_de_cotizacion` leería de la serie (la ventana de
+            # «Nueva cotización» enseña `COT-AAAA-003`). El SQL real corre en SQLite en
+            # `tests/test_cotizaciones_en_la_pagina.py`.
+            async def _numero(anio=None):
+                return 3
+            return _numero
         if nombre == "sesiones_quitadas_de_proyectos":
             # FINGIDO, declarado: la tabla `sesiones_de_proyecto` está (la base de esta prueba es la de
             # después de la migración) y devuelve lo que diga `QUITADAS_DEL_MODELO` (por omisión,

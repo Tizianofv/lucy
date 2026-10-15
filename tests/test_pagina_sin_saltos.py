@@ -39,6 +39,7 @@ from _sin_saltar import (PERMITIDO_EN_LA_PIEZA, la_pieza_de, lo_prohibido_en_la_
 from test_escrituras_proyecto import hay_osascript
 import config
 import test_proyectos_solo_ver as sv
+import _proyectos_de_prueba as pp
 import web.menu as menu
 
 
@@ -154,6 +155,11 @@ def lo_que_sale_a_proposito() -> list[tuple[str, str, str]]:
         ("a", REGISTRO + "/#inicio", "«‹ Inicio»: vuelve a la App de registro"),
         ("a", "https://drive.example.test/carpetas/disco-uno", "«Abrir la carpeta» (Drive): abre otra pestaña"),
     ]
+    # El «PDF» de cada cotización de la lista (14-oct-2026, pieza 5): un enlace con `download`, que baja un
+    # archivo y la pieza deja pasar. La lista sale de las cotizaciones del modelo de prueba, no de números tecleados.
+    declarados += [("a", f"/proyectos/{pid}/cotizaciones/{c['id']}/pdf",
+                    "«PDF» de una cotización: baja un archivo (`download`), no cambia la página")
+                   for pid, cs in pp.COTIZACIONES_DEL_MODELO.items() for c in cs]
     return declarados
 
 
@@ -558,7 +564,7 @@ def test_n5_con_un_guardado_en_camino_y_otro_en_cola_ninguna_salida_de_la_pagina
     primera = True
     for f, d in zip(r, filas):
         nombre = (d["tag"], d["href"])
-        if d["target"] not in (None, "_self"):
+        if d["target"] not in (None, "_self") or d["download"]:      # otra pestaña, o un archivo que se baja: la página no se va
             assert not f["prevenido"] and f["avisos"] == 0 and f["tras"] == 0, (nombre, f)
             continue
         assert f["prevenido"] is True and f["navego"] == 0 and f["nuevos"] == 0, (nombre, f)          # no se fue ni salió B

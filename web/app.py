@@ -62,7 +62,7 @@ import registro_lectura
 import web.auth as auth
 import web.menu as _menu
 import web.avisos as avisos_mod
-from web.avisos import Aviso, AvisoQueElige, Navegacion, PuertaDeAvisos
+from web.avisos import Aviso, AvisoQueElige, Navegacion, NavegacionSellada, PuertaDeAvisos
 from acciones import crud
 from cerebro.bancos.categorias import (CATEGORIAS, NO_SUMAN,
                                        categoria_permitida)
@@ -1118,6 +1118,52 @@ def _vista_de_proyectos(modelo: dict, visibles: dict, *, p: int, g: str,
     return {"tipo": None}
 
 
+async def _pantalla_de_cotizaciones(m: dict, todas: dict | None, contacto: dict | None, solo_ver: bool,
+                                    cotizacion: str, corregir: int) -> dict | None:
+    """Lo que la plantilla necesita de las cotizaciones del proyecto `m`: `lista` (un resumen por
+    cotización, la más nueva primero), `ventana` (qué se abre, si algo: `nueva`, `borrador`, `corregir` o
+    `hoja`, cada una con sus valores y su hoja) y `abierta` (el resumen de la que pide `?cotizacion=`, si es
+    de este proyecto). `None` si falta la tabla. Solo LEE; no tiene sesión: quien llama ya decidió
+    `solo_ver` y en solo ver no se arma la ventana que escribe."""
+    if todas is None:
+        return None
+    del_proyecto = todas.get(m["id"], [])
+    lista = [cotizaciones.resumen_de_cotizacion(c) for c in del_proyecto]
+    pedida, corrige = cotizaciones.ventana_pedida(cotizacion, corregir, solo_ver)
+    pid = m["id"]
+    ventana = abierta = None
+    hoy = db.hoy_rd() if pedida else None
+    if pedida == "nueva":
+        numero = await db.numero_que_sigue_de_cotizacion(hoy.year)
+        codigo = db.codigo_de_cotizacion(hoy.year, numero) if numero else ""
+        telefono = (contacto or {}).get("telefono")
+        valores = cotizaciones.valores_del_formulario(
+            None, nombre_del_cliente=m.get("cliente"), telefono_del_cliente=telefono, hoy=hoy,
+            codigo_que_toca=codigo)
+        previa = cotizaciones.cotizacion_en_blanco(nombre=valores["para_nombre"], telefono=valores["para_telefono"],
+                                                   hoy=hoy, codigo=codigo)
+        ventana = {"tipo": "nueva", "titulo": "Nueva cotización", "numero": f"{codigo} · número automático",
+                   "valores": valores, "hoja": cotizaciones.hoja_de_cotizacion(previa),
+                   "id": None}
+    elif pedida:
+        cot = next((c for c in del_proyecto if c["id"] == int(pedida)), None)
+        if cot is not None:
+            abierta = cotizaciones.resumen_de_cotizacion(cot)
+            hoja = cotizaciones.hoja_de_cotizacion(cot)
+            se_edita = not solo_ver and (cot["estado"] == "borrador" or corrige)
+            if se_edita:
+                valores = cotizaciones.valores_del_formulario(
+                    cot, nombre_del_cliente=None, telefono_del_cliente=None, hoy=hoy, codigo_que_toca=None)
+                ventana = {"tipo": "borrador" if cot["estado"] == "borrador" else "corregir",
+                           "titulo": cot["codigo"], "numero": "borrador" if cot["estado"] == "borrador" else "enviada: se puede corregir",
+                           "valores": valores, "hoja": hoja,
+                           "id": cot["id"]}
+            else:
+                ventana = {"tipo": "hoja", "titulo": cot["codigo"], "numero": "borrador" if cot["estado"] == "borrador" else "enviada",
+                           "hoja": hoja, "cot": abierta}
+    return {"lista": lista, "ventana": ventana, "abierta": abierta}
+
+
 @app.get("/proyectos", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_VER)
 async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
@@ -1139,7 +1185,8 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
                     borrado: Aviso[int] = 0, borrada: Aviso[int] = 0,
                     filtro: Navegacion[str] = "", quien: Navegacion[str] = "",
                     sq: Navegacion[str] = "", estado: Navegacion[int] = 0,
-                    editar_nota: Navegacion[int] = 0, borrar_nota: Navegacion[int] = 0):
+                    editar_nota: Navegacion[int] = 0, borrar_nota: Navegacion[int] = 0,
+                    cotizacion: NavegacionSellada[str] = "", corregir: Navegacion[int] = 0):
     """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
     (`?g=`), las de «Sin grupo» (`?sin_grupo=1`) o el formulario de un proyecto
@@ -1183,6 +1230,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         borrar_proyecto = borrado = borrada = 0
         editar_nota = borrar_nota = 0
         sq = ""
+        corregir = 0
     if estado:
         # «Estado de los proyectos» solo lee la lista de proyectos: lo que abriría otra cosa o haría
         # otra lectura (la búsqueda de personas en Noco, las cuentas de borrar un grupo o un
@@ -1280,6 +1328,15 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         except Exception:
             log.warning("No se pudo leer el contacto del cliente en Noco.")
             contacto_del_cliente = None
+    # LAS COTIZACIONES DEL PROYECTO (pieza 5 del diseño «Cotizaciones en Proyectos», 14-oct-2026): una
+    # lectura aparte, solo en la vista de UN proyecto (`None` = falta la tabla: el bloque no sale y la página
+    # carga igual). La lista y la ventana salen de `cotizaciones.py` (funciones puras); la ventana que ESCRIBE
+    # (nueva, corregir) no se arma en solo ver. El guion de la ventana va en toda página de la sesión de la
+    # casa (no depende de datos: si se llega a un proyecto repintando desde otra vista, ya está cargado).
+    cz = None
+    if vista["tipo"] == "proyecto":
+        cz = await _pantalla_de_cotizaciones(vista["proyecto"], await db.cotizaciones_de_proyectos(),
+                                             contacto_del_cliente, solo_ver, cotizacion, corregir)
     # LA BÚSQUEDA DE UNA SESIÓN (parte 13, 9-oct-2026): solo la sesión de la casa y solo en un
     # proyecto; el texto se limpia antes de salir (`registro_lectura.buscar_sesiones`). Es un
     # pedido aparte, y solo cuando hay algo que buscar.
@@ -1288,7 +1345,10 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         busqueda_sesiones = await _buscar_sesiones_para_la_pagina(sq)
     return plantillas.TemplateResponse(
         request, "proyectos.html",
-        {"solo_ver": solo_ver,
+        {"solo_ver": solo_ver, "cz": cz,
+         "cz_activas": de_la_casa,
+         "cz_datos_de_la_hoja": (cotizaciones.datos_de_la_vista_previa()
+                                 if cz and cz["ventana"] and "valores" in cz["ventana"] else None),
          "registro": registro, "busqueda_sesiones": busqueda_sesiones,
          "contacto_del_cliente": contacto_del_cliente,
          "filtro": filtro, "quien": quien, "tareas_p": tareas_p, "personas_filtro": personas_filtro,
@@ -2236,7 +2296,7 @@ async def pdf_de_una_cotizacion(request: Request, pid: int, cid: int):
     el PDF se arma en el momento desde lo guardado (`cotizaciones.hoja_de_cotizacion` →
     `pdf_de_cotizacion`), nada se escribe. 404 si la cotización no existe, está borrada, no es de ESE
     proyecto (la búsqueda es por el proyecto de la ruta, no por el número solo) o falta la tabla.
-    `attachment` con el código como nombre: `COT-2026-001.pdf`."""
+    `attachment` con el código como nombre: `COT-2026-001.pdf`. Un borrador se baja con la marca «BORRADOR»."""
     if not (auth.puede_entrar(_sesion(request))
             or auth.validar_ver(request.cookies.get(COOKIE_VER))):
         return _fuera(request)
@@ -2245,7 +2305,10 @@ async def pdf_de_una_cotizacion(request: Request, pid: int, cid: int):
     if cot is None:
         return Response("No existe esa cotización.", status_code=404,
                         media_type="text/plain; charset=utf-8")
-    pdf = cotizaciones.pdf_de_cotizacion(cotizaciones.hoja_de_cotizacion(cot))
+    # El de un BORRADOR sale con la marca grande «BORRADOR» (Tiziano, 14-oct-2026: «B»); el de una enviada, sin
+    # marca. Todo lo que no es «enviada» lleva la marca: un estado que no se conoce no sale como definitivo.
+    pdf = cotizaciones.pdf_de_cotizacion(cotizaciones.hoja_de_cotizacion(cot),
+                                         borrador=cot["estado"] != "enviada")
     return Response(pdf, media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="{cot["codigo"]}.pdf"',
         "Cache-Control": "private, no-store"})
@@ -2547,6 +2610,95 @@ async def cambiar_carpeta_de_proyecto(request: Request, pid: int):
             f"/proyectos?error=carpeta_igual&p={pid}#carpeta-del-proyecto", status_code=303)
     hecho = "carpeta" if despues["carpeta"] else "carpeta_quitada"
     return RedirectResponse(f"/proyectos?hecho={hecho}&p={pid}#carpeta-del-proyecto", status_code=303)
+
+
+# LAS COTIZACIONES DEL PROYECTO (pieza 5 del diseño «Cotizaciones en Proyectos», 14-oct-2026). Dos rutas
+# POST, las dos con sesión de la casa (`auth.puede_entrar`; solo ver y sin sesión: 401) y las dos por
+# `db.guardar_cotizacion`, que es quien decide qué vale (la ruta lee el formulario con
+# `cotizaciones.campos_del_formulario` y traduce el rechazo a una CLAVE en la dirección). Lo escrito nunca
+# viaja en la dirección ni en el registro. Un rechazo REDIRIGE (no contesta 200 al POST: la pieza «sin
+# saltar» repintaría desde la dirección del POST) con la ventana abierta: la de una cotización que ya
+# existe se abre con LO GUARDADO.
+
+def _error_de_cotizacion(e: Exception) -> str:
+    """La CLAVE de `?error=` para lo que rechazó un guardado. Una excepción que no es de las de `db` es un
+    fallo de la base: no se sabe si llegó a confirmar."""
+    if isinstance(e, db.CotizacionNoVale):
+        return f"cotizacion_{e.clave}"
+    if isinstance(e, db.CotizacionNoEsta):
+        return "cotizacion_no_esta"
+    if isinstance(e, db.CotizacionCambio):
+        return "cotizacion_cambio"
+    if isinstance(e, db.CotizacionEnviadaSoloSeEnvia):
+        return "cotizacion_enviada_no_vuelve"
+    if isinstance(e, db.CotizacionesSinTabla):
+        return "cotizacion_sin_tabla"
+    return "cotizacion_base"
+
+
+async def _formulario_de_cotizacion(request: Request, cid: int | None) -> tuple[dict, str]:
+    """Lo que trae el POST de la ventana (ya en la forma que pide `db.guardar_cotizacion`) y dónde se queda
+    la persona si algo se rechaza: la nueva en blanco, o la que ya existe (corregir la abre como formulario
+    también si es un borrador)."""
+    campos = cotizaciones.campos_del_formulario(await request.form())
+    return campos, ("&cotizacion=nueva" if cid is None else f"&cotizacion={cid}&corregir=1")
+
+
+def _cotizacion_rechazada(e: Exception, pid: int, abre: str):
+    clave = _error_de_cotizacion(e)
+    if clave == "cotizacion_base":
+        log.exception("Panel de proyectos: falló la base al guardar una cotización de #%s", pid)
+    else:
+        log.warning("Panel de proyectos: cotización de #%s rechazada (%s)", pid, clave)
+    return RedirectResponse(f"/proyectos?error={clave}&p={pid}{abre}#cotizaciones", status_code=303)
+
+
+def _cotizacion_guardada(guardada: dict, pid: int):
+    """Vuelve a la página con la cotización abierta; el aviso dice «enviada» o «borrador» según lo que la
+    base devolvió (y la página lo comprueba otra vez al pintar)."""
+    hecho = "cotizacion_enviada" if guardada["estado"] == "enviada" else "cotizacion_borrador"
+    return RedirectResponse(
+        f"/proyectos?hecho={hecho}&p={pid}&cotizacion={guardada['id']}#cotizaciones", status_code=303)
+
+
+@app.post("/proyectos/{pid}/cotizaciones")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def guardar_cotizacion_nueva(request: Request, pid: int):
+    """Guardar una cotización NUEVA de un proyecto (borrador o directo a enviada, según el botón)."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    campos, abre = await _formulario_de_cotizacion(request, None)
+    try:
+        guardada = await db.guardar_cotizacion(
+            pid, chat, campos["accion"], campos["contenido"], campos["validez"],
+            para_nombre=campos["para_nombre"], para_telefono=campos["para_telefono"], fecha=campos["fecha"])
+    except db.CotizacionSinSesion:
+        return _fuera(request)
+    except Exception as e:
+        return _cotizacion_rechazada(e, pid, abre)
+    return _cotizacion_guardada(guardada, pid)
+
+
+@app.post("/proyectos/{pid}/cotizaciones/{cid}")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def guardar_cotizacion_existente(request: Request, pid: int, cid: int):
+    """Guardar una cotización que YA existe: un borrador (se queda borrador o pasa a enviada) o una enviada
+    (solo con «Guardar y descargar PDF»: se corrige y conserva su número). Con el candado `cambiado_en`."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    campos, abre = await _formulario_de_cotizacion(request, cid)
+    try:
+        guardada = await db.guardar_cotizacion(
+            pid, chat, campos["accion"], campos["contenido"], campos["validez"], cotizacion_id=cid,
+            cambiado_en=campos["cambiado_en"], para_nombre=campos["para_nombre"],
+            para_telefono=campos["para_telefono"], fecha=campos["fecha"])
+    except db.CotizacionSinSesion:
+        return _fuera(request)
+    except Exception as e:
+        return _cotizacion_rechazada(e, pid, abre)
+    return _cotizacion_guardada(guardada, pid)
 
 
 # LAS NOTAS Y DECISIONES DEL PROYECTO (parte 6, 8-oct-2026). Las tres rutas son sesión de la casa
