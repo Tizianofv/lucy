@@ -2752,7 +2752,8 @@ async def rehacer_carpeta_de_drive(request: Request, pid: int):
     except Exception as e:
         log.warning("Panel de proyectos: falló rehacer la carpeta de Drive de #%s (%s)", pid, type(e).__name__)
         r = "fallo"
-    destino = {"rehecha": "hecho=cotizacion_carpeta", "sigue": "error=cotizacion_carpeta_sigue",
+    destino = {"rehecha": "hecho=cotizacion_carpeta", "rehecha_enlace_viejo": "hecho=cotizacion_carpeta_enlace",
+               "rehecha_subcarpeta": "hecho=cotizacion_carpeta_subcarpeta", "sigue": "error=cotizacion_carpeta_sigue",
                "sin_causa": "error=cotizacion_carpeta_sin_causa", "fallo": "error=cotizacion_carpeta_fallo"}[r]
     return RedirectResponse(f"/proyectos?{destino}&p={pid}{abre}#cotizaciones", status_code=303)
 

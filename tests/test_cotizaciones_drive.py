@@ -343,7 +343,11 @@ def test_un_borrador_no_tiene_estado_de_drive():
 def _hechos_de_la_plantilla() -> set[str]:
     """Las claves de aviso (`hecho`) de las cotizaciones que la plantilla conoce, sacadas de su texto."""
     texto = (_ROOT / "web" / "plantillas" / "_cotizaciones_del_proyecto.html").read_text(encoding="utf-8")
-    return set(re.findall(r"hecho == '(cotizacion_\w+)'", texto))
+    claves = set()
+    for etiqueta in re.findall(r"\{%-?.*?%\}", texto, re.S):          # cada etiqueta de Jinja que mira `hecho`
+        if re.search(r"\bhecho\b", etiqueta):
+            claves |= set(re.findall(r"'(cotizacion_\w+)'", etiqueta))
+    return claves
 
 
 def test_las_claves_de_aviso_de_las_cotizaciones_que_conoce_la_plantilla_son_las_que_las_rutas_mandan():
@@ -774,12 +778,44 @@ def test_una_carpeta_borrada_a_mano_en_drive_no_se_rehace_sola_ni_se_borra_su_fi
     assert "No está en Drive" in renglon and _afirmaciones_de_estar_en_drive(renglon) == []
 
 
-def test_un_archivo_borrado_a_mano_en_drive_dice_su_causa_y_no_se_rehace_solo(m, nube):
+def test_un_archivo_borrado_a_mano_con_la_carpeta_viva_se_sube_como_nuevo_y_queda_en_drive(m, nube):
+    """El 404 del reemplazo suelta el id guardado y el MISMO intento sigue como una subida sin id (buscar por nombre y,
+    si no está, crear). Sin pasar por «Crear de nuevo la carpeta»."""
     _enviar()
-    archivo = _fila(m)["drive_archivo_id"]
-    del nube.cosas[archivo]
+    viejo = _fila(m)["drive_archivo_id"]
+    del nube.cosas[viejo]
+    nube.pasos.clear()
     _corregir()
-    assert _fila(m)["drive_error"] == cd.SIN_EL_ARCHIVO and nube.archivos() == []
+    fila = _fila(m)
+    assert [p for p, _ in nube.pasos if not p.endswith("!")] == ["buscar", "subir_nuevo"]
+    assert fila["drive_archivo_id"] not in (None, viejo) and fila["drive_version"] == fila["cambiado_en"]
+    assert fila["drive_error"] is None and nube.archivos() == [fila["drive_archivo_id"]]
+    assert "En Drive" in _seccion_de_cotizaciones(_casa().get("/proyectos", params={"p": 1}).text)
+
+
+def test_un_archivo_borrado_a_mano_que_reaparece_con_el_mismo_nombre_se_reemplaza_y_no_se_duplica(m, nube):
+    _enviar()
+    viejo = _fila(m)["drive_archivo_id"]
+    padre = nube.cosas.pop(viejo)["padre"]
+    otro = nube._nuevo("ARCHIVO")                               # alguien (Lucy, antes) dejó otro con ese nombre
+    nube.cosas[otro] = {"tipo": "pdf", "nombre": "COT-2026-001.pdf", "padre": padre, "datos": b"x"}
+    _corregir()
+    assert nube.archivos() == [otro] and _fila(m)["drive_archivo_id"] == otro
+
+
+def test_si_el_archivo_y_la_carpeta_ya_no_estan_la_causa_es_la_de_la_carpeta(m, nube):
+    _enviar()
+    _borrar_en_drive(nube, _carpetas(m)["carpeta_cotizaciones_id"])
+    _corregir()
+    assert _fila(m)["drive_error"] == cd.SIN_LA_CARPETA_DEL_PROYECTO
+
+
+def test_el_boton_de_crear_la_carpeta_no_sale_con_la_causa_del_archivo(m, nube):
+    _enviar()
+    m.con.execute("UPDATE cotizaciones SET drive_error = ?, drive_version = NULL WHERE id = 1", (cd.SIN_EL_ARCHIVO,))
+    m.con.commit()
+    hoja = _seccion_de_cotizaciones(_casa().get("/proyectos", params={"p": 1, "cotizacion": 1}).text)
+    assert "Crear de nuevo" not in hoja and "Volver a subir a Drive" in hoja
 
 
 def test_el_texto_que_google_contesta_no_llega_a_la_base_ni_a_la_pagina_ni_a_los_registros(m, nube, caplog):
@@ -1008,7 +1044,8 @@ def _con_la_carpeta_muerta(m, nube, que="proyecto"):
     viejas = _carpetas(m)
     _borrar_en_drive(nube, viejas["carpeta_proyecto_id" if que == "proyecto" else "carpeta_cotizaciones_id"])
     _corregir(cid=2)
-    assert _fila(m, 2)["drive_error"] in cd.CAUSAS_DE_CARPETA_MUERTA      # (con archivo guardado: «el archivo ya no está»)
+    # (con archivo guardado también: el 404 del archivo suelta el id y el intento sigue hasta ver que la carpeta no está)
+    assert _fila(m, 2)["drive_error"] == cd.SIN_LA_CARPETA_DEL_PROYECTO
     return viejas
 
 
@@ -1043,7 +1080,8 @@ def test_crear_de_nuevo_la_carpeta_rehace_las_dos_anota_las_nuevas_y_suelta_los_
     for cid in (1, 2):
         f = _fila(m, cid)
         assert (f["drive_archivo_id"], f["drive_version"], f["drive_error"]) == (None, None, None)
-    assert "La carpeta del proyecto se creó de nuevo" in html
+    assert "Se crearon de nuevo la carpeta del proyecto y su subcarpeta «cotizaciones»." in html
+    assert "sigue apuntando a la carpeta vieja" not in html           # la carpeta escrita a mano de este proyecto no es la vieja de Drive
     assert _afirmaciones_de_estar_en_drive(_seccion_de_cotizaciones(html).split('class="cz-ventana"')[1]) == []
     assert "Crear de nuevo" not in _seccion_de_cotizaciones(html)
     # y se suben de nuevo con «Volver a subir», sin otra lógica: caen en la carpeta nueva y quedan en Drive
@@ -1053,6 +1091,26 @@ def test_crear_de_nuevo_la_carpeta_rehace_las_dos_anota_las_nuevas_y_suelta_los_
         assert _fila(m, cid)["drive_version"] == _fila(m, cid)["cambiado_en"]
     assert {nube.cosas[i]["padre"] for i in nube.archivos()} == {nuevas["carpeta_cotizaciones_id"]}
     assert len(nube.archivos()) == 2
+
+
+def test_el_aviso_dice_si_el_enlace_abrir_la_carpeta_quedo_apuntando_a_la_vieja_y_no_lo_cambia(m, nube):
+    viejas = _con_la_carpeta_muerta(m, nube)
+    vieja = cd.enlace_de_carpeta_de_drive(viejas["carpeta_proyecto_id"])
+    m.con.execute("UPDATE proyectos SET carpeta = ? WHERE id = 1", (vieja,))
+    m.con.commit()
+    r, html = _rehacer()
+    assert r.headers["location"] == "/proyectos?hecho=cotizacion_carpeta_enlace&p=1&cotizacion=2#cotizaciones"
+    assert "Se crearon de nuevo la carpeta del proyecto y su subcarpeta «cotizaciones»." in html
+    assert "El enlace «Abrir la carpeta» del proyecto sigue apuntando a la carpeta vieja" in html
+    assert _filas(m, "SELECT carpeta FROM proyectos WHERE id = 1")[0]["carpeta"] == vieja      # NO se cambia
+
+
+def test_si_solo_falta_la_subcarpeta_el_aviso_lo_dice_y_no_habla_de_la_carpeta_del_proyecto(m, nube):
+    _con_la_carpeta_muerta(m, nube, que="cotizaciones")
+    r, html = _rehacer()
+    assert r.headers["location"] == "/proyectos?hecho=cotizacion_carpeta_subcarpeta&p=1&cotizacion=2#cotizaciones"
+    assert "Se creó de nuevo solo la subcarpeta «cotizaciones»: la carpeta del proyecto sigue siendo la misma." in html
+    assert "Se crearon de nuevo la carpeta del proyecto" not in html and "sigue apuntando" not in html
 
 
 def test_si_solo_falta_la_subcarpeta_cotizaciones_se_rehace_esa_y_el_proyecto_conserva_su_carpeta(m, nube):

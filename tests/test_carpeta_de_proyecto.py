@@ -558,6 +558,33 @@ def test_la_plantilla_sola_dibuja_el_enlace_solo_con_lo_que_pasa_el_filtro():
 
 # ── El censo de la plantilla y de todo el código que toca la carpeta ───────────────
 
+# Lo declarado de la plantilla de las cotizaciones que SÍ lleva la palabra dentro de una etiqueta de Jinja: las claves
+# de aviso `cotizacion_carpeta…`, la bandera `rehacer_carpeta` de `estado_de_drive`.
+_DECLARADO_EN_JINJA = re.compile(r"cotizacion_carpeta\w*|rehacer_carpeta")
+
+
+def _lecturas_del_dato_en_jinja(texto: str) -> list[str]:
+    """Las etiquetas de Jinja (`{{ … }}`, `{% … %}`) que nombran «carpeta» una vez quitado lo declarado. Cualquier
+    lectura del dato `carpeta` (con punto, con corchetes, en un `set`, por un alias) tiene que escribir la palabra
+    dentro de una etiqueta: se ve. FRONTERA: un nombre armado en ejecución (`m['car' ~ 'peta']`) no se ve."""
+    sin_comentarios = re.sub(r"\{#.*?#\}", "", texto, flags=re.S)
+    return [e for e in re.findall(r"\{\{.*?\}\}|\{%.*?%\}", sin_comentarios, flags=re.S)
+            if "carpeta" in _DECLARADO_EN_JINJA.sub("", e).lower()]
+
+
+def test_la_guarda_de_la_plantilla_de_cotizaciones_ve_cada_forma_de_leer_el_dato():
+    """Entradas inventadas: lo que tiene que salir rojo (incluido el alias del hueco que halló el testigo) y lo que no."""
+    malas = ["{{ m.carpeta }}", "{% set c = m['carpeta'] %}<a href=\"{{ c }}\">x</a>", '{% set c = m["carpeta"] %}',
+             "{% set y = m %}{{ y.carpeta }}", "{{ m|attr('carpeta') }}", "{% if m.carpeta %}x{% endif %}",
+             "{{ enlace_carpeta }}", "{%- set Carpeta = m.CARPETA -%}"]
+    for mala in malas:
+        assert _lecturas_del_dato_en_jinja(mala), mala
+    buenas = ["{% elif hecho == 'cotizacion_carpeta_enlace' %}", "{% if v.cot.drive.rehacer_carpeta and not solo_ver %}",
+              "Se creó de nuevo la carpeta {{ m.id }}", '<a class="carpeta-enlace" href="{{ cz.drive_url }}">', "{# m.carpeta #}"]
+    for buena in buenas:
+        assert _lecturas_del_dato_en_jinja(buena) == [], buena
+
+
 def test_en_ninguna_plantilla_la_carpeta_llega_a_un_href_sin_pasar_por_el_filtro():
     """Todo atributo de toda plantilla que lleve una expresión `{{ … }}` con «carpeta» adentro: el único
     que puede ir en un `href` es `{{ enlace_carpeta }}` (lo que devolvió el filtro). Las demás
@@ -574,17 +601,13 @@ def test_en_ninguna_plantilla_la_carpeta_llega_a_un_href_sin_pasar_por_el_filtro
                               'if (guion && !document.getElementById("guion-copiar-carpeta")) {',
                               's.id = "guion-copiar-carpeta";'], codigo
         elif ruta.name == "_cotizaciones_del_proyecto.html":
-            # Excepción DECLARADA (16-oct-2026, pieza 8): el enlace «Abrir en Drive» de la lista de cotizaciones lleva la
-            # clase `carpeta-enlace` porque es la ÚNICA que la prueba de solo ver deja salir hacia afuera. No pinta el
-            # dato `proyectos.carpeta`: su dirección sale de `cz.drive_url` (la carpeta `cotizaciones` en Drive). Se
-            # quita ESA clase, exacta, y lo demás sigue sin poder nombrar la carpeta.
+            # Excepción DECLARADA (16-oct-2026, pieza 8): esta plantilla habla de las carpetas de Drive de las cotizaciones
+            # (no del dato `proyectos.carpeta`): el enlace «Abrir en Drive» lleva la clase `carpeta-enlace` (la única que
+            # la prueba de solo ver deja salir hacia afuera), y el texto, las claves de aviso y la ruta del botón dicen
+            # «carpeta». Lo que NO puede es LEER el dato: ninguna etiqueta de Jinja (`{{ }}` o `{% %}`: expresiones, `set`,
+            # `m['carpeta']`, alias…) nombra «carpeta» fuera de lo declarado.
             assert texto.count('class="carpeta-enlace" href="{{ cz.drive_url }}"') == 1
-            # Y (pieza 8, «Crear de nuevo la carpeta en Drive») el texto que ve la persona puede decir «carpeta» (son las
-            # carpetas de Drive, no el dato `proyectos.carpeta`), con sus claves de aviso, su bandera y su ruta. Lo que NO
-            # puede es nombrar el dato en una expresión `{{ … }}` ni leer `m.carpeta`.
-            sin_lo_declarado = re.sub(r"cotizacion_carpeta\w*|rehacer_carpeta|/drive/carpeta", "", texto)
-            assert not re.findall(r"\{\{[^}]*carpeta[^}]*\}\}", sin_lo_declarado), ruta.name
-            assert "m.carpeta" not in texto and "enlace_carpeta" not in texto, ruta.name
+            assert _lecturas_del_dato_en_jinja(texto) == [], ruta.name
         elif ruta.name != "proyectos.html":
             assert "carpeta" not in texto.lower(), ruta.name        # ninguna otra plantilla pinta este dato
         for atributo in re.finditer(r"\b([\w:-]+)\s*=\s*(\"[^\"]*\"|'[^']*')", re.sub(r"\{#.*?#\}", "", texto, flags=re.S)):
