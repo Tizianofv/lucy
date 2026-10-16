@@ -468,6 +468,9 @@ CREATE TABLE cotizaciones (
   cambiado_en        TIMESTAMPTZ NOT NULL DEFAULT now(),
   enviada_en         TIMESTAMPTZ,
   borrado_en         TIMESTAMPTZ,
+  drive_archivo_id   TEXT,
+  drive_version      TIMESTAMPTZ,
+  drive_error        TEXT,
   CONSTRAINT cotizaciones_numero_unico
     UNIQUE (anio, numero),
   CONSTRAINT cotizaciones_numero_positivo
@@ -489,6 +492,20 @@ CREATE TABLE serie_cotizaciones (
   ultimo INT NOT NULL,
   CONSTRAINT serie_cotizaciones_ultimo_valido
     CHECK (ultimo >= 0)
+);
+
+-- EL DRIVE DE LAS COTIZACIONES (pieza 8 del diseño «Cotizaciones en Proyectos», 16-oct-2026; migración
+-- 2026-10-16_cotizaciones_drive.sql). `cotizaciones.drive_archivo_id` es el id del PDF en Drive;
+-- `drive_version` es el `cambiado_en` de la versión que Drive confirmó (una cotización está «en Drive» solo
+-- si `drive_version = cambiado_en`); `drive_error` es la causa, en frase fija, del último intento que falló.
+-- `drive_de_proyectos` guarda por id las dos carpetas de Drive de cada proyecto (la del proyecto y su
+-- `cotizaciones`) y el nombre con que se puso la primera, para saber si el proyecto se renombró.
+CREATE TABLE drive_de_proyectos (
+  proyecto_id            BIGINT PRIMARY KEY REFERENCES proyectos(id),
+  carpeta_proyecto_id    TEXT NOT NULL,
+  carpeta_cotizaciones_id TEXT NOT NULL,
+  nombre_puesto          TEXT NOT NULL,
+  creado_en              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- LOS MICRO-PASOS (encargo 7, 22-sep-2026): una lista de chequeo DENTRO de

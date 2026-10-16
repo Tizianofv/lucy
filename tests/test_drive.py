@@ -490,7 +490,8 @@ async def test_buscar_descarta_un_id_con_salto_de_linea_en_la_respuesta(google):
 
 def test_las_variables_leidas_son_las_declaradas():
     """`_credenciales` lee tres claves escritas a mano (la guarda del repo exige
-    claves constantes); este es el candado de que son las de `VARIABLES`."""
+    claves constantes); este es el candado de que son las de `VARIABLES`, y que
+    la cuarta (`carpeta_proyectos`, pieza 8) es la de `VARIABLE_CARPETA_PROYECTOS`."""
     arbol = ast.parse((RAIZ / "drive.py").read_text(encoding="utf-8"))
     leidas = [n.args[0].value for n in ast.walk(arbol)
               if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
@@ -498,7 +499,7 @@ def test_las_variables_leidas_son_las_declaradas():
               and isinstance(n.args[0], ast.Constant)
               and isinstance(n.args[0].value, str)
               and n.args[0].value.startswith("LUCY_DRIVE_")]
-    assert tuple(leidas) == drive.VARIABLES
+    assert len(leidas) == 4 and set(leidas) == set(drive.VARIABLES) | {drive.VARIABLE_CARPETA_PROYECTOS}
 
 
 def test_el_unico_permiso_que_se_pide_es_drive_file():

@@ -27,13 +27,25 @@
   {%- elif error == 'cotizacion_validez' %}<p class="aviso">La validez tiene que ser de 7, 15 o 30 días: NO se guardó nada.</p>
   {%- elif error == 'cotizacion_fecha' %}<p class="aviso">La fecha no se entiende: NO se guardó nada.</p>
   {%- elif error == 'cotizacion_candado' %}<p class="aviso">Esa cotización no se pudo guardar porque falta saber qué versión editabas: NO se guardó nada. Ábrela otra vez.</p>
+  {%- elif error == 'cotizacion_drive_borrador' %}<p class="aviso">Un borrador no se sube a Drive: primero guárdalo con «Guardar y descargar PDF».</p>
+  {%- elif error == 'cotizacion_carpeta_sigue' %}<p class="aviso">La carpeta todavía existe: no se creó otra.</p>
+  {%- elif error == 'cotizacion_carpeta_sin_causa' %}<p class="aviso">Ninguna cotización de este proyecto dice que su carpeta falte: no se creó nada.</p>
+  {%- elif error == 'cotizacion_carpeta_fallo' %}<p class="aviso">No se pudo crear la carpeta de nuevo y no se anotó nada. Puedes volver a intentarlo.</p>
+  {%- elif error == 'cotizacion_drive_base' %}<p class="aviso">La base de datos falló y no se pudo saber qué pasó al subir la cotización a Drive: mira cómo quedó antes de volver a intentarlo.</p>
   {%- elif error and error.startswith('cotizacion_') %}<p class="aviso">Esa cotización no se puede guardar así: NO se guardó nada. Revisa lo escrito.</p>
   {%- elif hecho == 'cotizacion_borrador' and cz.abierta and not cz.abierta.enviada %}<p class="aviso ok">Borrador {{ cz.abierta.codigo }} guardado.</p>
   {%- elif hecho == 'cotizacion_enviada' and cz.abierta and cz.abierta.enviada %}<p class="aviso ok">Cotización {{ cz.abierta.codigo }} guardada como enviada. <a class="cz-bajar" href="/proyectos/{{ m.id }}/cotizaciones/{{ cz.abierta.id }}/pdf" download data-bajar-ya>Descargar el PDF</a></p>
+    {%- if cz.abierta.drive %}<p class="aviso{{ ' ok' if cz.abierta.drive.estado == 'en_drive' }}">{{ cz.abierta.drive.aviso_al_guardar }}</p>{% endif %}
+  {%- elif hecho in ('cotizacion_carpeta', 'cotizacion_carpeta_enlace', 'cotizacion_carpeta_subcarpeta') and cz.abierta and cz.abierta.drive and cz.abierta.drive.estado != 'en_drive' and not cz.abierta.drive.rehacer_carpeta %}<p class="aviso ok">
+    {%- if hecho == 'cotizacion_carpeta_subcarpeta' %}Se creó de nuevo solo la subcarpeta «cotizaciones»: la carpeta del proyecto sigue siendo la misma.
+    {%- else %}Se crearon de nuevo la carpeta del proyecto y su subcarpeta «cotizaciones».{% endif %} Las cotizaciones que digan «No está en Drive» se suben una por una con «Volver a subir a Drive».
+    {%- if hecho == 'cotizacion_carpeta_enlace' %} El enlace «Abrir la carpeta» del proyecto sigue apuntando a la carpeta vieja: cámbialo a mano.{% endif %}</p>
+  {%- elif hecho == 'cotizacion_drive' and cz.abierta and cz.abierta.enviada and cz.abierta.drive %}<p class="aviso{{ ' ok' if cz.abierta.drive.estado == 'en_drive' }}">Cotización {{ cz.abierta.codigo }}: {{ cz.abierta.drive.aviso_al_reintentar }}</p>
   {%- endif %}
 {% endset %}
 <div class="cotiz" id="cotizaciones" data-ancla>
   <div class="cotiz-enc"><h3>Cotizaciones</h3>
+    {% if cz.drive_url %}<a class="carpeta-enlace" href="{{ cz.drive_url }}" target="_blank" rel="noopener noreferrer">Abrir en Drive</a>{% endif %}
     {% if not solo_ver %}<a class="cotiz-mas{{ ' activo' if v and v.tipo == 'nueva' }}" href="/proyectos?p={{ m.id }}&amp;cotizacion=nueva{{ sufijo_filtro }}#cotizaciones" title="Crear una cotización" aria-label="Crear una cotización">+</a>{% endif %}</div>
   {% if not v %}{{ aviso_de_cotizacion }}{% endif %}
   {% if cz.lista %}
@@ -42,6 +54,7 @@
     <li><span class="pild{{ '' if c.enviada else ' borr' }}">{{ 'Enviada' if c.enviada else 'Borrador' }}</span>
       <a class="cz-codigo" href="/proyectos?p={{ m.id }}&amp;cotizacion={{ c.id }}{{ sufijo_filtro }}#cotizaciones"><b>{{ c.codigo }}</b></a>
       <span class="sub">{{ c.fecha }} · {{ c.opciones }} · {{ c.precio }}</span>
+      {% if c.drive %}<span class="sub cz-drive cz-drive-{{ c.drive.estado }}">{{ c.drive.etiqueta }}</span>{% endif %}
       <a class="cz-pdf" href="/proyectos/{{ m.id }}/cotizaciones/{{ c.id }}/pdf" download>PDF</a></li>
     {% endfor %}
   </ul>
@@ -59,6 +72,9 @@
     <div class="ventana-pie">
       {% if v.cot.enviada and not solo_ver %}<span class="izq">Enviada quiere decir que se bajó el PDF para mandarlo; Lucy no se lo manda al cliente.</span>
       <a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;cotizacion={{ v.cot.id }}&amp;corregir=1{{ sufijo_filtro }}#cotizaciones">Corregir</a>{% endif %}
+      {% if v.cot.drive %}<span class="izq cz-drive cz-drive-{{ v.cot.drive.estado }}">{{ v.cot.drive.etiqueta }}</span>
+      {% if v.cot.drive.estado != 'en_drive' and not solo_ver %}<form method="post" action="/proyectos/{{ m.id }}/cotizaciones/{{ v.cot.id }}/drive" class="cz-drive-form"><button class="btn-linea" type="submit">Volver a subir a Drive</button></form>{% endif %}
+      {% if v.cot.drive.rehacer_carpeta and not solo_ver %}<form method="post" action="/proyectos/{{ m.id }}/drive/carpeta" class="cz-drive-form"><input type="hidden" name="cotizacion" value="{{ v.cot.id }}"><button class="btn-linea" type="submit">Crear de nuevo la carpeta en Drive</button></form>{% endif %}{% endif %}
       <a class="btn-linea" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}#cotizaciones">Cerrar</a>
       <a class="btn-prim" href="/proyectos/{{ m.id }}/cotizaciones/{{ v.cot.id }}/pdf" download>Descargar PDF</a>
     </div>

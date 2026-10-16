@@ -124,7 +124,7 @@ def _base(participantes_desde: str = "schema") -> sqlite3.Connection:
     # `cotizaciones` y `serie_cotizaciones` (pieza 5 de las cotizaciones): la página lee las cotizaciones
     # de los proyectos y, con la ventana de «Nueva cotización» abierta, el contador de la serie; las dos
     # rutas que guardan las escriben. Con sus CHECK y su UNIQUE, que SQLite entiende.
-    for tabla in ("cotizaciones", "serie_cotizaciones"):
+    for tabla in ("cotizaciones", "serie_cotizaciones", "drive_de_proyectos"):
         for s in _ddl(schema, tabla):
             con.execute(s)
     fuente = schema if participantes_desde == "schema" else \

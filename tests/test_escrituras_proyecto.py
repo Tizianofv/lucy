@@ -1010,6 +1010,14 @@ def test_toda_ruta_post_de_proyectos_pide_sesion_y_escribe_por_una_puerta_con_ac
         # UNA sola puerta de `db` (`guardar_cotizacion`: crear, editar un borrador, enviar, corregir).
         "/proyectos/{pid}/cotizaciones": {"db.guardar_cotizacion"},
         "/proyectos/{pid}/cotizaciones/{cid}": {"db.guardar_cotizacion"},
+        # 16-oct-2026, pieza 8: «Volver a subir a Drive» no escribe en `proyectos` ni guarda la cotización por
+        # esta ruta: sube el PDF por `cotizaciones_drive.subir` (que anota en `cotizaciones` por sus dos
+        # funciones de `db` y, solo si la carpeta del proyecto estaba vacía, por `crud.editar` con actor
+        # `panel`; lo vigila `tests/test_cotizaciones_drive.py`).
+        "/proyectos/{pid}/cotizaciones/{cid}/drive": set(),
+        # 16-oct-2026, pieza 8: «Crear de nuevo la carpeta en Drive»: tampoco escribe `proyectos` aquí; rehace las
+        # carpetas por `cotizaciones_drive.rehacer_la_carpeta` (que anota por `db.rehacer_carpetas_de_drive`).
+        "/proyectos/{pid}/drive/carpeta": set(),
         "/proyectos/{pid}/area": {"crud.editar"},
         "/proyectos/{pid}/responsable": {"crud.editar"},
         "/proyectos/{pid}/estado": {"crud.editar"},

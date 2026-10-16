@@ -505,6 +505,9 @@ LO_QUE_APUNTA_A_UN_PROYECTO = {
     # su `proyecto_id`, y el código COT-… no se reutiliza) y vuelven con él desde la papelera. La llave no
     # lleva `ON DELETE` porque ninguna ruta borra proyectos de verdad.
     "cotizaciones": "no se tocan: siguen nombrando al proyecto en la papelera, no se pierde nada",
+    # Drive de las cotizaciones (16-oct-2026, pieza 8): las carpetas de Drive del proyecto, por id. Borrar el
+    # proyecto no las toca (ni toca nada en Drive): siguen con su `proyecto_id` y vuelven con él.
+    "drive_de_proyectos": "no se tocan: siguen nombrando al proyecto en la papelera, no se pierde nada",
 }
 LO_QUE_APUNTA_A_UN_GRUPO = {
     "proyectos": "su `area` pasa a NULL (lo vivo, antes, se borra)",

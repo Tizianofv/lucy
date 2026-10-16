@@ -4190,10 +4190,13 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 14-oct-2026, rama `trabajo/cotizaciones-7`: +3 en disco, +1 EXENTO y +2 VIGILADOS por `tests/test_drive.py`
     # (nuevo, exento por rol), `drive.py` y `tools/autorizar_drive.py` (nuevos, vigilados: no leen la lista cruda
     # de `config`, leen su propio entorno por clave). Medida corriendo la prueba: 177, 126, 51.
-    assert medido == {"en disco": 177, "exentos": 126, "vigilados": 51}, (
+    # 16-oct-2026, rama `trabajo/cotizaciones-8` (pieza 8: Drive de las cotizaciones): +2 en disco, +1 EXENTO y +1
+    # VIGILADO por `tests/test_cotizaciones_drive.py` (nuevo, exento por rol) y `cotizaciones_drive.py` (nuevo,
+    # vigilado: no lee la lista cruda de `config`). Medida corriendo la prueba: 179, 127, 52.
+    assert medido == {"en disco": 179, "exentos": 127, "vigilados": 52}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "14-oct-2026 (cotizaciones-7) era {'en disco': 177, "
-        "'exentos': 126, 'vigilados': 51}. La aserción de fondo —cero "
+        "16-oct-2026 (cotizaciones-8) era {'en disco': 179, "
+        "'exentos': 127, 'vigilados': 52}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

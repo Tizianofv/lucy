@@ -56,6 +56,7 @@ from fastapi.templating import Jinja2Templates
 
 import config
 import cotizaciones
+import cotizaciones_drive
 import db.db as db
 import noco_lectura
 import registro_lectura
@@ -1118,6 +1119,24 @@ def _vista_de_proyectos(modelo: dict, visibles: dict, *, p: int, g: str,
     return {"tipo": None}
 
 
+async def _enlace_de_drive_de_las_cotizaciones(pid: int) -> str | None:
+    """«Abrir en Drive»: la carpeta `cotizaciones` del proyecto, o `None` si no tiene o no se pudo leer (la página
+    carga igual). Una lectura."""
+    try:
+        carpetas = await db.carpetas_de_drive(pid)
+    except Exception as e:
+        log.warning("Panel de proyectos: no se pudo leer la carpeta de Drive de #%s (%s)", pid, type(e).__name__)
+        return None
+    return None if carpetas is None else cotizaciones_drive.enlace_de_carpeta_de_drive(
+        carpetas["carpeta_cotizaciones_id"])
+
+
+def _resumen_con_su_drive(cot: dict) -> dict:
+    """El renglón de la lista con lo que dice de Drive. TODO lo que la pantalla dice de «En Drive» sale de
+    `cotizaciones_drive.estado_de_drive` (None en un borrador: no se sube)."""
+    return {**cotizaciones.resumen_de_cotizacion(cot), "drive": cotizaciones_drive.estado_de_drive(cot)}
+
+
 async def _pantalla_de_cotizaciones(m: dict, todas: dict | None, contacto: dict | None, solo_ver: bool,
                                     cotizacion: str, corregir: int) -> dict | None:
     """Lo que la plantilla necesita de las cotizaciones del proyecto `m`: `lista` (un resumen por
@@ -1128,7 +1147,7 @@ async def _pantalla_de_cotizaciones(m: dict, todas: dict | None, contacto: dict 
     if todas is None:
         return None
     del_proyecto = todas.get(m["id"], [])
-    lista = [cotizaciones.resumen_de_cotizacion(c) for c in del_proyecto]
+    lista = [_resumen_con_su_drive(c) for c in del_proyecto]
     pedida, corrige = cotizaciones.ventana_pedida(cotizacion, corregir, solo_ver)
     pid = m["id"]
     ventana = abierta = None
@@ -1148,7 +1167,7 @@ async def _pantalla_de_cotizaciones(m: dict, todas: dict | None, contacto: dict 
     elif pedida:
         cot = next((c for c in del_proyecto if c["id"] == int(pedida)), None)
         if cot is not None:
-            abierta = cotizaciones.resumen_de_cotizacion(cot)
+            abierta = _resumen_con_su_drive(cot)
             hoja = cotizaciones.hoja_de_cotizacion(cot)
             se_edita = not solo_ver and (cot["estado"] == "borrador" or corrige)
             if se_edita:
@@ -1161,7 +1180,8 @@ async def _pantalla_de_cotizaciones(m: dict, todas: dict | None, contacto: dict 
             else:
                 ventana = {"tipo": "hoja", "titulo": cot["codigo"], "numero": "borrador" if cot["estado"] == "borrador" else "enviada",
                            "hoja": hoja, "cot": abierta}
-    return {"lista": lista, "ventana": ventana, "abierta": abierta}
+    return {"lista": lista, "ventana": ventana, "abierta": abierta,
+            "drive_url": await _enlace_de_drive_de_las_cotizaciones(pid)}
 
 
 @app.get("/proyectos", response_class=HTMLResponse)
@@ -2653,6 +2673,18 @@ def _cotizacion_rechazada(e: Exception, pid: int, abre: str):
     return RedirectResponse(f"/proyectos?error={clave}&p={pid}{abre}#cotizaciones", status_code=303)
 
 
+async def _subir_a_drive(pid: int, cid: int) -> str:
+    """El intento de subir el PDF de una cotización ENVIADA a Drive, DESPUÉS de que quedó guardada (la
+    confirmación de la base ya pasó). Lo que sea que falle aquí no deshace nada: la cotización sigue guardada y la
+    pantalla, que lee la base, dice si llegó o no. Solo la base puede hacer subir una excepción, y aquí se
+    atrapa: el guardado ya está hecho y la redirección tiene que salir."""
+    try:
+        return await cotizaciones_drive.subir(pid, cid)
+    except Exception as e:
+        log.warning("Panel de proyectos: la subida a Drive de la cotización de #%s falló (%s)", pid, type(e).__name__)
+        return "fallo"
+
+
 def _cotizacion_guardada(guardada: dict, pid: int):
     """Vuelve a la página con la cotización abierta; el aviso dice «enviada» o «borrador» según lo que la
     base devolvió (y la página lo comprueba otra vez al pintar)."""
@@ -2677,6 +2709,8 @@ async def guardar_cotizacion_nueva(request: Request, pid: int):
         return _fuera(request)
     except Exception as e:
         return _cotizacion_rechazada(e, pid, abre)
+    if guardada["estado"] == "enviada":
+        await _subir_a_drive(pid, guardada["id"])
     return _cotizacion_guardada(guardada, pid)
 
 
@@ -2698,7 +2732,55 @@ async def guardar_cotizacion_existente(request: Request, pid: int, cid: int):
         return _fuera(request)
     except Exception as e:
         return _cotizacion_rechazada(e, pid, abre)
+    if guardada["estado"] == "enviada":
+        await _subir_a_drive(pid, guardada["id"])
     return _cotizacion_guardada(guardada, pid)
+
+
+@app.post("/proyectos/{pid}/drive/carpeta")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def rehacer_carpeta_de_drive(request: Request, pid: int):
+    """«Crear de nuevo la carpeta en Drive» (pieza 8, §3.7): solo la casa. `cotizaciones_drive.rehacer_la_carpeta`
+    decide si procede (alguna cotización dice que la carpeta ya no está y Drive confirma que no está). Lo que se
+    dice después sale de su resultado, por una clave en la dirección."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    campo = (await request.form()).get("cotizacion")
+    abre = f"&cotizacion={int(campo)}" if isinstance(campo, str) and campo.isdigit() and len(campo) < 12 else ""
+    try:
+        r = await cotizaciones_drive.rehacer_la_carpeta(pid)
+    except Exception as e:
+        log.warning("Panel de proyectos: falló rehacer la carpeta de Drive de #%s (%s)", pid, type(e).__name__)
+        r = "fallo"
+    destino = {"rehecha": "hecho=cotizacion_carpeta", "rehecha_enlace_viejo": "hecho=cotizacion_carpeta_enlace",
+               "rehecha_subcarpeta": "hecho=cotizacion_carpeta_subcarpeta", "sigue": "error=cotizacion_carpeta_sigue",
+               "sin_causa": "error=cotizacion_carpeta_sin_causa", "fallo": "error=cotizacion_carpeta_fallo"}[r]
+    return RedirectResponse(f"/proyectos?{destino}&p={pid}{abre}#cotizaciones", status_code=303)
+
+
+@app.post("/proyectos/{pid}/cotizaciones/{cid}/drive")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def volver_a_subir_cotizacion_a_drive(request: Request, pid: int, cid: int):
+    """«Volver a subir a Drive» (pieza 8): el MISMO intento de la subida, nada más. Solo la casa (solo ver y sin
+    sesión: 401). Solo una enviada que no está en Drive: a una que ya está no le vuelve a subir nada, y un borrador
+    no se sube. Lo que se dice después lo comprueba la página al pintar, leyendo la base."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    try:
+        todas = await db.cotizaciones_de_proyectos()
+    except Exception:
+        log.exception("Panel de proyectos: falló la base al leer las cotizaciones de #%s", pid)
+        return RedirectResponse(f"/proyectos?error=cotizacion_drive_base&p={pid}#cotizaciones", status_code=303)
+    cot = next((c for c in (todas or {}).get(pid, []) if c["id"] == cid), None)
+    if cot is None:
+        return RedirectResponse(f"/proyectos?error=cotizacion_no_esta&p={pid}#cotizaciones", status_code=303)
+    if cot["estado"] != "enviada":
+        return RedirectResponse(
+            f"/proyectos?error=cotizacion_drive_borrador&p={pid}&cotizacion={cid}#cotizaciones", status_code=303)
+    if cotizaciones_drive.estado_de_drive(cot)["estado"] != "en_drive":
+        await _subir_a_drive(pid, cid)
+    return RedirectResponse(
+        f"/proyectos?hecho=cotizacion_drive&p={pid}&cotizacion={cid}#cotizaciones", status_code=303)
 
 
 # LAS NOTAS Y DECISIONES DEL PROYECTO (parte 6, 8-oct-2026). Las tres rutas son sesión de la casa

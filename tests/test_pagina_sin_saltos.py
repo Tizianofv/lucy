@@ -160,6 +160,11 @@ def lo_que_sale_a_proposito() -> list[tuple[str, str, str]]:
     declarados += [("a", f"/proyectos/{pid}/cotizaciones/{c['id']}/pdf",
                     "«PDF» de una cotización: baja un archivo (`download`), no cambia la página")
                    for pid, cs in pp.COTIZACIONES_DEL_MODELO.items() for c in cs]
+    # «Abrir en Drive» de la lista de cotizaciones (16-oct-2026, pieza 8): abre la carpeta `cotizaciones` del proyecto en
+    # otra pestaña. La dirección sale de la carpeta que el modelo de prueba le da al proyecto 1
+    # (`pp.BaseQueNoSeToca`, `carpetas_de_drive`), no de un texto tecleado aquí.
+    declarados += [("a", "https://drive.google.com/drive/folders/" + pp.CARPETA_DE_COTIZACIONES_DEL_MODELO,
+                    "«Abrir en Drive» (la carpeta de las cotizaciones): abre otra pestaña")]
     return declarados
 
 
