@@ -569,3 +569,31 @@ def test_el_modulo_tiene_una_sola_llamada_al_modelo_y_es__pedir():
                 if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "create"):
                     llamadas.append(f.name)
     assert llamadas == ["_pedir"]
+
+
+# ── Los ejemplos de la maqueta ──────────────────────────────────────────────────────────────────────────
+
+def test_los_ejemplos_de_la_maqueta_estan_completos_y_sin_cifras_de_dinero():
+    assert len(ia.EJEMPLOS_DE_LA_MAQUETA) == 3
+    textos = []
+    for op in ia.EJEMPLOS_DE_LA_MAQUETA:
+        assert set(op) == {"nombre", "renglones"} and op["nombre"].strip()
+        for r in op["renglones"]:
+            assert set(r) == {"descripcion", "detalle"}
+            assert r["descripcion"].strip() and r["detalle"].strip()
+            textos += [r["descripcion"], r["detalle"]]
+        textos.append(op["nombre"])
+    assert ia.cifras_que_no_estaban(textos, []) == [], "un ejemplo trae una cifra"
+    for t in textos:
+        assert "RD$" not in t and "$" not in t
+        db._texto_de_cotizacion(t, "ejemplo", 1000)    # y valen para la puerta del texto
+
+
+def test_los_ejemplos_de_la_maqueta_viajan_al_modelo_y_no_cuentan_como_fuente(modelo):
+    _caso(modelo, {"detalle": "Dura 3 horas."})
+    with pytest.raises(ia.IAPropuestaNoSirve):   # la cifra no la dio la persona
+        asyncio.run(ia.mejorar_redaccion({"detalle": "bajo"}, "", ia.ejemplos_del_tono(None)))
+    assert "conservatorio" in modelo.texto_enviado()
+    fuente_de_los_ejemplos = [t for o in ia.EJEMPLOS_DE_LA_MAQUETA for r in o["renglones"]
+                              for t in (r["descripcion"], r["detalle"])]
+    assert ia.cifras_que_no_estaban(["3"], fuente_de_los_ejemplos) == ["3"]

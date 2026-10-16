@@ -82,15 +82,25 @@ class IAPropuestaNoSirve(Exception):
 
 # ── Los ejemplos del tono ───────────────────────────────────────────────────────────────────────────────
 
-# Las tres opciones de la cotización de muestra que Tiziano aprobó. PENDIENTE: el diseño manda copiar acá sus
-# descripciones y detalles de `disenos/lucy-cotizaciones/maqueta-aprobada.html` (líneas 1795-1818); el
-# agente que construyó esta pieza no tenía permiso de leer ese archivo, así que lleva solo los nombres que
-# el diseño cita. Los campos vacíos no se inventan: la sala los llena con el texto textual.
+# Las tres opciones de la cotización de muestra que Tiziano aprobó, copiadas textuales por la sala de
+# `disenos/lucy-cotizaciones/maqueta-aprobada.html:1795-1820`, SIN los totales: la IA nunca ve un precio.
+_DESCRIPCION_DE_LA_MAQUETA = "Grabación de bajo, bongó, conga, güira, guitarra y requinto"
 EJEMPLOS_DE_LA_MAQUETA = [
-    {"nombre": nombre, "renglones": [{"descripcion": "", "detalle": ""}]}
-    for nombre in ("Músicos formados en la práctica",
-                   "Músicos graduados de conservatorio",
-                   "Músicos graduados en el extranjero")
+    {"nombre": "Músicos formados en la práctica", "renglones": [{
+        "descripcion": _DESCRIPCION_DE_LA_MAQUETA,
+        "detalle": "Músicos formados en la práctica, con experiencia tocando el género en vivo y en la calle: "
+                   "conocen el estilo desde la tarima y el trabajo diario. Incluye horas de estudio para "
+                   "grabación, mezcla y máster. Canción terminada, lista para publicar en plataformas "
+                   "digitales."}]},
+    {"nombre": "Músicos graduados de conservatorio", "renglones": [{
+        "descripcion": _DESCRIPCION_DE_LA_MAQUETA,
+        "detalle": "Músicos graduados de conservatorio, con formación académica en su instrumento, dominio "
+                   "de lectura musical y teoría. Incluye horas de estudio para grabación, mezcla y máster. "
+                   "Canción terminada, lista para publicar."}]},
+    {"nombre": "Músicos graduados en el extranjero", "renglones": [{
+        "descripcion": _DESCRIPCION_DE_LA_MAQUETA,
+        "detalle": "Músicos graduados en el extranjero, con formación académica internacional. Incluye horas "
+                   "de estudio para grabación, mezcla y máster. Canción terminada, lista para publicar."}]},
 ]
 
 
