@@ -564,9 +564,15 @@ _DECLARADO_EN_JINJA = re.compile(r"cotizacion_carpeta\w*|rehacer_carpeta")
 
 
 def _lecturas_del_dato_en_jinja(texto: str) -> list[str]:
-    """Las etiquetas de Jinja (`{{ … }}`, `{% … %}`) que nombran «carpeta» una vez quitado lo declarado. Cualquier
-    lectura del dato `carpeta` (con punto, con corchetes, en un `set`, por un alias) tiene que escribir la palabra
-    dentro de una etiqueta: se ve. FRONTERA: un nombre armado en ejecución (`m['car' ~ 'peta']`) no se ve."""
+    """Las etiquetas de Jinja (`{{ … }}`, `{% … %}`) que nombran «carpeta» una vez quitado lo declarado.
+    LO QUE VE: SOLO sobre `_cotizaciones_del_proyecto.html` (es la única plantilla donde se llama), cualquier etiqueta,
+    `{{ }}` o `{% %}` (`set`, `if`, `for`…), que escriba la palabra: `m.carpeta`, `m['carpeta']`, `m["carpeta"]`,
+    un alias que la escriba, `|attr('carpeta')`. En `proyectos.html` NO se llama: allí la prueba de abajo solo mira
+    las expresiones `{{ }}` que están dentro de atributos.
+    LO QUE NO VE: un `{% set %}` o `{% if %}` con «carpeta» en `proyectos.html`; recorrer `m` sin nombrar el dato
+    (`{% for k, v in m.items() %}`); leerlo por posición (`(m.items()|list)[3][1]`); volcarlo entero (`m|tojson`);
+    un nombre armado en ejecución (`m['car' ~ 'peta']`); y cualquier cosa que el código Python (no la plantilla)
+    le ponga al modelo."""
     sin_comentarios = re.sub(r"\{#.*?#\}", "", texto, flags=re.S)
     return [e for e in re.findall(r"\{\{.*?\}\}|\{%.*?%\}", sin_comentarios, flags=re.S)
             if "carpeta" in _DECLARADO_EN_JINJA.sub("", e).lower()]

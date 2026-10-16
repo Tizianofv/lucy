@@ -38,7 +38,7 @@
     {%- if cz.abierta.drive %}<p class="aviso{{ ' ok' if cz.abierta.drive.estado == 'en_drive' }}">{{ cz.abierta.drive.aviso_al_guardar }}</p>{% endif %}
   {%- elif hecho in ('cotizacion_carpeta', 'cotizacion_carpeta_enlace', 'cotizacion_carpeta_subcarpeta') and cz.abierta and cz.abierta.drive and cz.abierta.drive.estado != 'en_drive' and not cz.abierta.drive.rehacer_carpeta %}<p class="aviso ok">
     {%- if hecho == 'cotizacion_carpeta_subcarpeta' %}Se creó de nuevo solo la subcarpeta «cotizaciones»: la carpeta del proyecto sigue siendo la misma.
-    {%- else %}Se crearon de nuevo la carpeta del proyecto y su subcarpeta «cotizaciones».{% endif %} Las cotizaciones quedaron como «No está en Drive»: súbelas una por una con «Volver a subir a Drive».
+    {%- else %}Se crearon de nuevo la carpeta del proyecto y su subcarpeta «cotizaciones».{% endif %} Las cotizaciones que digan «No está en Drive» se suben una por una con «Volver a subir a Drive».
     {%- if hecho == 'cotizacion_carpeta_enlace' %} El enlace «Abrir la carpeta» del proyecto sigue apuntando a la carpeta vieja: cámbialo a mano.{% endif %}</p>
   {%- elif hecho == 'cotizacion_drive' and cz.abierta and cz.abierta.enviada and cz.abierta.drive %}<p class="aviso{{ ' ok' if cz.abierta.drive.estado == 'en_drive' }}">Cotización {{ cz.abierta.codigo }}: {{ cz.abierta.drive.aviso_al_reintentar }}</p>
   {%- endif %}

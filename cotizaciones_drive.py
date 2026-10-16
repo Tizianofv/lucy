@@ -313,7 +313,9 @@ async def rehacer_la_carpeta(proyecto_id: int) -> str:
     if nuevas[0] == carpetas["carpeta_proyecto_id"]:
         return "rehecha_subcarpeta"
     # Se rehízo también la carpeta del proyecto. `proyectos.carpeta` NO se cambia (solo se llena si está vacía): si
-    # tiene el enlace de la carpeta vieja, «Abrir la carpeta» sigue apuntando a ella y el aviso lo dice.
+    # vale EXACTAMENTE el enlace de la carpeta vieja (`https://drive.google.com/drive/folders/<id>`, tal como lo
+    # escribe Lucy), «Abrir la carpeta» sigue apuntando a ella y el aviso lo dice. Si el enlace trae algo más
+    # (`?usp=sharing`) o es otro texto, la comparación no coincide y el aviso NO lo dice.
     try:
         actuales = await db.carpetas_de_proyectos()
         vieja = enlace_de_carpeta_de_drive(carpetas["carpeta_proyecto_id"])
