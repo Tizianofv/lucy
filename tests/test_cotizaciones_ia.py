@@ -139,12 +139,15 @@ def _caso(modelo, respuesta):
     return modelo
 
 
+PAL = ["cero", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve"]
+
+
 def _cotizacion(n, enviada_en, estado="enviada", **extra):
     c = {"id": n, "proyecto_id": 1, "estado": estado, "enviada_en": enviada_en, "codigo": f"COT-2026-{n:03d}",
          "para_nombre": NOMBRE_CLIENTE, "para_telefono": TELEFONO, "fecha": "2026-10-14",
          "contenido": {
-             "opciones": [{"nombre": f"Opcion de prueba {n}", "renglones": [
-                 {"descripcion": f"Descripcion de prueba {n}", "detalle": f"Detalle de prueba {n}",
+             "opciones": [{"nombre": f"Opcion de prueba {PAL[n]}", "renglones": [
+                 {"descripcion": f"Descripcion de prueba {PAL[n]}", "detalle": f"Detalle de prueba {PAL[n]}",
                   "total": TOTAL}]}],
              "condiciones": [{"clave": "deposito", "texto": TEXTO_DE_CONDICION, "marcada": True}]},
          "totales_por_opcion": [TOTAL]}
@@ -176,7 +179,7 @@ def test_ningun_precio_ni_dato_del_cliente_llega_al_modelo(modelo, boton):
         _caso(modelo, {"opciones": [{"nombre": "A", "renglones": [{"descripcion": "B", "detalle": "C"}]}]})
         asyncio.run(ia.armar_borrador("quiere grabar un merengue", ejemplos))
     enviado = modelo.texto_enviado()
-    assert "Detalle de prueba 7" in enviado, "los ejemplos recientes no llegaron: la prueba no mide nada"
+    assert f"Detalle de prueba {PAL[7]}" in enviado, "los ejemplos recientes no llegaron: la prueba no mide nada"
     for prohibida in FORMAS_PROHIBIDAS + ["99887.11", "99,887.11"]:
         assert prohibida not in enviado, f"llegó al modelo: {prohibida}"
 
@@ -195,19 +198,19 @@ def test_ejemplos_siempre_los_de_la_maqueta_y_las_5_enviadas_mas_recientes():
     nombres = [o["nombre"] for o in ia.ejemplos_del_tono(COTIZACIONES)]
     assert nombres[:3] == [o["nombre"] for o in ia.EJEMPLOS_DE_LA_MAQUETA]
     # 7 enviadas (1..7) y un borrador más nuevo (9): quedan 7, 6, 5, 4, 3; el borrador nunca.
-    assert nombres[3:] == [f"Opcion de prueba {n}" for n in (7, 6, 5, 4, 3)]
+    assert nombres[3:] == [f"Opcion de prueba {PAL[n]}" for n in (7, 6, 5, 4, 3)]
     for caso in (None, {}, {1: []}):
         assert ia.ejemplos_del_tono(caso) == ia.EJEMPLOS_DE_LA_MAQUETA
 
 
 def test_ejemplos_con_tope_de_caracteres_se_van_primero_las_mas_viejas(monkeypatch):
     grande = "x" * 700
-    cotizaciones = {1: [_cotizacion(n, _dia(n), contenido={"opciones": [{"nombre": f"O{n}", "renglones": [
+    cotizaciones = {1: [_cotizacion(n, _dia(n), contenido={"opciones": [{"nombre": f"O{PAL[n]}", "renglones": [
         {"descripcion": grande, "detalle": ""}]}], "condiciones": []}) for n in range(1, 6)]}
     base = sum(ia._tamano_de_ejemplo(o) for o in ia.EJEMPLOS_DE_LA_MAQUETA)
     monkeypatch.setattr(ia, "TOPE_DE_LOS_EJEMPLOS", base + 2 * 710)
     nombres = [o["nombre"] for o in ia.ejemplos_del_tono(cotizaciones)][3:]
-    assert nombres == ["O5", "O4"]
+    assert nombres == [f"O{PAL[5]}", f"O{PAL[4]}"]
 
 
 # ── 2. La respuesta no trae precio ──────────────────────────────────────────────────────────────────────
@@ -597,3 +600,92 @@ def test_los_ejemplos_de_la_maqueta_viajan_al_modelo_y_no_cuentan_como_fuente(mo
     fuente_de_los_ejemplos = [t for o in ia.EJEMPLOS_DE_LA_MAQUETA for r in o["renglones"]
                               for t in (r["descripcion"], r["detalle"])]
     assert ia.cifras_que_no_estaban(["3"], fuente_de_los_ejemplos) == ["3"]
+
+
+# ── Los ejemplos reales nunca traen precio ni cliente (H1 del testigo) ──────────────────────────────────
+
+def _cot_con(detalle="Detalle limpio", descripcion="Descripcion limpia", nombre_op="Opcion limpia", n=1, **extra):
+    return _cotizacion(n, _dia(n), contenido={"opciones": [{"nombre": nombre_op, "renglones": [
+        {"descripcion": descripcion, "detalle": detalle, "total": TOTAL}]}], "condiciones": []}, **extra)
+
+
+def _ejemplos_reales(*cots):
+    return ia.ejemplos_del_tono({1: list(cots)})[len(ia.EJEMPLOS_DE_LA_MAQUETA):]
+
+
+SUCIOS = {
+    "la sonda del testigo": "Para Zulmira Quintanilla, RD$73,914.37 por la sesion",
+    "el precio solo": "Cuesta RD$73,914.37",
+    "una cifra suelta": "Incluye 8 horas",
+    "el precio sin RD": "73914",
+    "el nombre solo": "Sesion de Zulmira",
+    "el apellido con otra mayuscula": "sesion de QUINTANILLA",
+    "el apellido con acento": "sesion de Quintanílla",
+    "el telefono con otro formato": "llamar al 829 555 7391",
+    "el telefono con puntos": "829.555.7391",
+    "un digito de otro alfabeto": "Incluye \u0663 horas",
+}
+
+
+@pytest.mark.parametrize("nombre", list(SUCIOS))
+@pytest.mark.parametrize("campo", ["detalle", "descripcion", "nombre_op"])
+def test_un_renglon_con_cifra_o_con_el_cliente_no_entra_como_ejemplo(nombre, campo):
+    sucio = SUCIOS[nombre]
+    cot = _cot_con(**{campo: sucio})
+    assert _ejemplos_reales(cot) == []
+    enviado = json.dumps(ia.ejemplos_del_tono({1: [cot]}), ensure_ascii=False)
+    for prohibido in ("73,914.37", "Zulmira", "Quintanilla", "7391"):
+        assert prohibido not in enviado
+
+
+def test_el_renglon_sucio_se_deja_fuera_y_los_limpios_de_la_misma_opcion_entran():
+    cot = _cotizacion(1, _dia(1), contenido={"opciones": [{"nombre": "Banda", "renglones": [
+        {"descripcion": "Limpio uno", "detalle": "Texto limpio", "total": TOTAL},
+        {"descripcion": "Sucio", "detalle": "RD$73,914.37", "total": TOTAL},
+        {"descripcion": "Limpio dos", "detalle": "", "total": TOTAL}]}], "condiciones": []})
+    assert _ejemplos_reales(cot) == [{"nombre": "Banda", "renglones": [
+        {"descripcion": "Limpio uno", "detalle": "Texto limpio"},
+        {"descripcion": "Limpio dos", "detalle": ""}]}]
+
+
+def test_las_palabras_cortas_del_nombre_del_cliente_no_dejan_fuera_a_nadie():
+    cot = _cot_con("Sesion de la banda", para_nombre="Juan de la Cruz")
+    assert len(_ejemplos_reales(cot)) == 1
+    assert _ejemplos_reales(_cot_con("Sesion con Cruz", para_nombre="Juan de la Cruz")) == []
+
+
+def test_entradas_inventadas_de_cliente_y_cifras():
+    rng = random.Random(7)
+    letras = "abcdefghijklmnopqrstuvwxyz"
+    for _ in range(200):
+        palabra = "".join(rng.choice(letras) for _ in range(rng.randint(3, 9)))
+        tel = "".join(rng.choice("0123456789") for _ in range(10))
+        cot = _cot_con("Texto", para_nombre=f"Fulano {palabra}", para_telefono=tel)
+        assert len(_ejemplos_reales(cot)) == 1
+        for sucio in (f"hola {palabra.upper()} adios", f"{palabra}", f"x {rng.randint(0, 99999)} y",
+                      f"tel {tel[:3]}-{tel[3:6]} {tel[6:]}"):
+            for campo in ("detalle", "descripcion", "nombre_op"):
+                cot = _cot_con(**{campo: sucio}, para_nombre=f"Fulano {palabra}", para_telefono=tel)
+                assert _ejemplos_reales(cot) == [], sucio
+
+
+def test_una_enviada_sin_opciones_no_corta_las_siguientes():
+    vacia = _cotizacion(8, _dia(20), contenido={"opciones": [], "condiciones": []})
+    sucia = _cot_con("RD$5", n=9)
+    sucia["enviada_en"] = _dia(25)
+    buena = _cotizacion(2, _dia(2))
+    assert [o["nombre"] for o in _ejemplos_reales(vacia, sucia, buena)] == [f"Opcion de prueba {PAL[2]}"]
+
+
+# ── La instruccion «no escribas montos» está en el mensaje de sistema (H2 del testigo) ──────────────────
+
+def test_los_dos_botones_le_dicen_a_la_ia_que_no_escriba_montos_y_que_escriba_sin_cantidad(modelo):
+    _caso(modelo, {"detalle": "x", "opciones": [{"nombre": "A", "renglones": [{"descripcion": "B", "detalle": ""}]}]})
+    asyncio.run(ia.mejorar_redaccion({"detalle": "bajo"}, "", []))
+    asyncio.run(ia.armar_borrador("grabar", []))
+    sistemas = [c["messages"][0]["content"] for c in modelo.cuerpos()]
+    assert len(sistemas) == 2
+    for sistema in sistemas:
+        assert "no escribas montos ni porcentajes" in sistema
+        assert "escribe sin cantidad" in sistema
+        assert "úsala tal cual" in sistema

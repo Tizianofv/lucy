@@ -14,7 +14,8 @@ esperaría hasta el triple.
 
 Cómo se evita que la IA ponga precios, en el orden de la regla 19 de la sala:
 1. nunca ve un precio: los ejemplos copian campo por campo, por nombre, `nombre`, `descripcion` y `detalle`
-   (`ejemplos_del_tono`), y lo que la persona escribió de un renglón se lee igual (`mejorar_redaccion`);
+   (`ejemplos_del_tono`), y un renglón entra como ejemplo solo si sus textos no traen ninguna cifra ni el nombre
+   o teléfono del cliente de esa cotización; lo que la persona escribió de un renglón se lee igual;
 2. el mensaje de sistema le dice qué SÍ hacer (`_REGLAS`);
 3. su respuesta no tiene casilla de precio: el código lee solo `nombre`, `descripcion` y `detalle`;
 4. al final, una guarda que contrasta un VALOR contra su FUENTE (`cifras_que_no_estaban`): toda cifra con
@@ -36,6 +37,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 
 import db.db as db
 from cerebro.deepseek import MODELO, cliente
@@ -108,14 +110,49 @@ def _texto(v) -> str:
     return v if isinstance(v, str) else ""
 
 
-def _opcion_de_ejemplo(op) -> dict | None:
+def _sin_acentos(t: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", t.casefold()) if not unicodedata.combining(c))
+
+
+def _palabras_del_cliente(cot: dict) -> list[str]:
+    """Las palabras de `para_nombre` (de 3 letras o más, sin acentos ni mayúsculas) y los dígitos de
+    `para_telefono`. De diseño: las palabras de 1 y 2 letras («de», «la») no identifican a nadie."""
+    palabras = [w for w in re.split(r"\W+", _sin_acentos(_texto(cot.get("para_nombre")))) if len(w) >= 3]
+    digitos = "".join(c for c in _texto(cot.get("para_telefono")) if c.isdigit())
+    return palabras + ([digitos] if digitos else [])
+
+
+def _limpio_para_ejemplo(texto: str, cliente: list[str]) -> bool:
+    """El texto NO trae ninguna cifra (ni dígito de ningún alfabeto) ni una palabra del nombre del cliente
+    ni su teléfono. Mira valores, no cómo está escrita la frase."""
+    if any(c.isdigit() for c in texto):
+        return False
+    normal = _sin_acentos(texto)
+    solo_digitos = "".join(c for c in normal if c.isdigit())
+    for dato in cliente:
+        if dato.isdigit():
+            if solo_digitos and dato in solo_digitos:
+                return False
+        elif re.search(r"(?<!\w)" + re.escape(dato) + r"(?!\w)", normal):
+            return False
+    return True
+
+
+def _opcion_de_ejemplo(op, cliente: list[str]) -> dict | None:
     """Una opción de una cotización → solo `nombre`, y de cada renglón solo `descripcion` y `detalle`,
-    copiados POR NOMBRE. Un campo que no está en esta lista no viaja, aunque mañana se agregue al contenido."""
+    copiados POR NOMBRE. Un campo que no está en esta lista no viaja, aunque mañana se agregue al contenido.
+    Un renglón entra SOLO si su nombre de opción, descripción y detalle están limpios (`_limpio_para_ejemplo`):
+    si no, se deja fuera (no se recorta ni se tapa). Sin renglones limpios, la opción no entra."""
     if not isinstance(op, dict):
+        return None
+    nombre = _texto(op.get("nombre"))
+    if not _limpio_para_ejemplo(nombre, cliente):
         return None
     renglones = [{"descripcion": _texto(r.get("descripcion")), "detalle": _texto(r.get("detalle"))}
                  for r in op.get("renglones") or [] if isinstance(r, dict)]
-    return {"nombre": _texto(op.get("nombre")), "renglones": renglones}
+    renglones = [r for r in renglones
+                 if _limpio_para_ejemplo(r["descripcion"], cliente) and _limpio_para_ejemplo(r["detalle"], cliente)]
+    return {"nombre": nombre, "renglones": renglones} if renglones else None
 
 
 def _tamano_de_ejemplo(op: dict) -> int:
@@ -137,9 +174,13 @@ def ejemplos_del_tono(cotizaciones: dict | None) -> list:
     enviadas.sort(key=lambda c: c["enviada_en"], reverse=True)
     for c in enviadas[:EJEMPLOS_RECIENTES]:
         contenido = c.get("contenido")
-        ops = [o for o in (_opcion_de_ejemplo(x) for x in (contenido or {}).get("opciones") or []) if o]
+        cliente = _palabras_del_cliente(c)
+        ops = [o for o in (_opcion_de_ejemplo(x, cliente) for x in (contenido or {}).get("opciones") or [])
+               if o]
+        if not ops:
+            continue
         costo = sum(_tamano_de_ejemplo(o) for o in ops)
-        if not ops or gastado + costo > TOPE_DE_LOS_EJEMPLOS:
+        if gastado + costo > TOPE_DE_LOS_EJEMPLOS:
             break
         ejemplos.extend(ops)
         gastado += costo
