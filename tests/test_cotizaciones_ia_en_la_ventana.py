@@ -779,6 +779,19 @@ def test_si_no_hay_como_hacer_sitio_no_se_llena_nada(nueva):
 
 
 @hay_osascript
+def test_sin_sitio_para_otra_opcion_aunque_cada_una_traiga_un_solo_renglon_no_se_llena_nada(nueva):
+    """Lo mismo, con una propuesta de dos opciones de un renglón: falta sitio solo para la OPCIÓN (los renglones cabrían)."""
+    dos = {"opciones": [{"nombre": "A", "renglones": [{"descripcion": "D1", "detalle": "T1"}]},
+                        {"nombre": "B", "renglones": [{"descripcion": "D2", "detalle": "T2"}]}]}
+    s = nueva(f"""
+    escribir(pedido(), 'quiere grabar'); boton(caja(), 'borrador').click(); responder(0, 200, {json.dumps(dos)});
+    return {{lleno: lleno(), error: raiz.querySelector('[data-cz-ia-error]').textContent, aviso: raiz.querySelector('[data-cz-ia-aviso]').children.length}};""",
+              sin_agregar=True)["salida"]
+    assert s["lleno"] == [{"nombre": "", "renglones": [{"descripcion": "", "detalle": "", "total": ""}]}]
+    assert s["error"] == ia.CAUSAS["no_contesto"] and s["aviso"] == 0
+
+
+@hay_osascript
 def test_una_opcion_en_blanco_de_mas_se_quita_y_las_que_la_persona_agrego_vacias_no_estorban(nueva):
     """La ventana trae 1 opción visible; la persona agrega otra en blanco y pide un borrador de 1 sola: la de más se quita."""
     s = nueva("""
