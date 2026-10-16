@@ -4199,10 +4199,13 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 16-oct-2026, rama `trabajo/cotizaciones-ia-1` (pieza 1 de la IA de las cotizaciones): +2 en disco, +1
     # EXENTO por `tests/test_cotizaciones_ia.py` (nuevo, exento por rol) y +1 VIGILADO por `cotizaciones_ia.py`
     # (nuevo, no lee la lista cruda de `config`). Medida corriendo la prueba: 182, 129, 53.
-    assert medido == {"en disco": 182, "exentos": 129, "vigilados": 53}, (
+    # 16-oct-2026, rama `trabajo/cotizaciones-ia-2` (pieza 2: las dos rutas): +1 en disco y +1 EXENTO por
+    # `tests/test_cotizaciones_ia_rutas.py` (nuevo, exento por rol); VIGILADOS sin cambio (se tocó `web/app.py`, ya
+    # vigilado). Medida corriendo la prueba: 183, 130, 53.
+    assert medido == {"en disco": 183, "exentos": 130, "vigilados": 53}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "16-oct-2026 (cotizaciones-ia-1) era {'en disco': 182, "
-        "'exentos': 129, 'vigilados': 53}. La aserción de fondo —cero "
+        "16-oct-2026 (cotizaciones-ia-2) era {'en disco': 183, "
+        "'exentos': 130, 'vigilados': 53}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

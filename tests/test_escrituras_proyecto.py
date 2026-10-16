@@ -1018,6 +1018,10 @@ def test_toda_ruta_post_de_proyectos_pide_sesion_y_escribe_por_una_puerta_con_ac
         # 16-oct-2026, pieza 8: «Crear de nuevo la carpeta en Drive»: tampoco escribe `proyectos` aquí; rehace las
         # carpetas por `cotizaciones_drive.rehacer_la_carpeta` (que anota por `db.rehacer_carpetas_de_drive`).
         "/proyectos/{pid}/drive/carpeta": set(),
+        # 16-oct-2026, pieza 2 de la IA de las cotizaciones: las dos rutas devuelven un TEXTO propuesto y no escriben
+        # nada (`tests/test_cotizaciones_ia_rutas.py` compara la base entera antes y después).
+        "/proyectos/{pid}/cotizaciones/ia/redaccion": set(),
+        "/proyectos/{pid}/cotizaciones/ia/borrador": set(),
         "/proyectos/{pid}/area": {"crud.editar"},
         "/proyectos/{pid}/responsable": {"crud.editar"},
         "/proyectos/{pid}/estado": {"crud.editar"},

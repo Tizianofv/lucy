@@ -934,7 +934,9 @@ def test_la_ruta_de_volver_a_subir_es_una_de_las_que_pide_sesion_de_la_casa(m, n
                     rutas[d.args[0].value] = any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                                                  and n.func.attr == "puede_entrar" for n in ast.walk(f))
     assert set(rutas) == {"/proyectos/{pid}/cotizaciones", "/proyectos/{pid}/cotizaciones/{cid}",
-                          "/proyectos/{pid}/cotizaciones/{cid}/drive"}
+                          "/proyectos/{pid}/cotizaciones/{cid}/drive",
+                          # 16-oct-2026, pieza 2 de la IA de las cotizaciones (no suben nada a Drive)
+                          "/proyectos/{pid}/cotizaciones/ia/redaccion", "/proyectos/{pid}/cotizaciones/ia/borrador"}
     assert all(rutas.values()), rutas
 
 
