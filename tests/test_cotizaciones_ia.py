@@ -352,7 +352,8 @@ CASOS_QUE_NO_VALEN = {
         [{"nombre": "A", "renglones": [_renglon(descripcion="a" * (db.LARGO_DESCRIPCION_DE_RENGLON + 1))]}])),
     "descripcion vacia": ("borrador", _borrador([{"nombre": "A", "renglones": [_renglon(descripcion="")]}])),
     "7 opciones": ("borrador", _borrador(
-        [{"nombre": f"O{i}", "renglones": [_renglon()]} for i in range(db.MAX_OPCIONES_DE_COTIZACION + 1)])),
+        [{"nombre": "Opcion " + "abcdefghij"[i], "renglones": [_renglon()]}
+         for i in range(db.MAX_OPCIONES_DE_COTIZACION + 1)])),
     "11 renglones": ("borrador", _borrador(
         [{"nombre": "A", "renglones": [_renglon() for _ in range(db.MAX_RENGLONES_DE_OPCION + 1)]}])),
     "sin opciones": ("borrador", _borrador([])),
