@@ -275,7 +275,12 @@ def _fichas(datos: dict) -> list[dict]:
 async def buscar_personas(texto: str) -> list[dict]:
     """Hasta `TOPE_BUSQUEDA` personas cuyo nombre o `nombre_whatsapp` se parezca a
     `texto` o, si el texto no tiene letras y trae al menos `MIN_DIGITOS_TELEFONO`
-    dígitos, cuyo teléfono los contenga (solo dígitos; sin suponer prefijos).
+    dígitos, cuyo teléfono GUARDADO SOLO CON DÍGITOS los contenga. Lo que se teclea
+    puede venir en cualquier formato (se le quitan `+`, espacios y guiones), pero
+    el teléfono de la ficha se compara tal como está guardado: así están hoy las
+    fichas (medido por la sala el 16-oct-2026: 569 de 569 con teléfono, todo
+    dígitos). Uno guardado con separadores NO se encuentra (frontera, probada).
+    No se suponen prefijos de país.
 
     Devuelve `[{"id": …, "nombre": …}]`. Es lo que llena el buscador del panel
     (no un desplegable: el Noco de CDS tiene 733 personas, medido por la sala el

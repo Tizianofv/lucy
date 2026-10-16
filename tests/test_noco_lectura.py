@@ -621,7 +621,9 @@ async def test_se_encuentra_por_nombre_whatsapp(monkeypatch):
     assert await noco_lectura.buscar_personas("ana wa") == [{"id": 948, "nombre": "Ana WA"}]
 
 
-async def test_se_encuentra_por_telefono_con_cualquier_formato_y_sin_suponer_prefijos(monkeypatch):
+async def test_lo_que_se_teclea_en_cualquier_formato_se_encuentra_contra_un_telefono_guardado_solo_con_digitos(monkeypatch):
+    """Lo tecleado, en cualquier formato, contra un teléfono guardado solo con
+    dígitos, como está hoy (medido por la sala el 16-oct-2026: 569 de 569)."""
     noco = _noco_con_fichas(monkeypatch)
     esperado = [{"id": 947, "nombre": "Sin nombre · 1234"}]
     for escrito in ("18095551234", "+1 809-555-1234", "809 555 1234", "555-1234", "5551234",
@@ -630,6 +632,16 @@ async def test_se_encuentra_por_telefono_con_cualquier_formato_y_sin_suponer_pre
         assert await noco_lectura.buscar_personas(escrito) == esperado, escrito
         assert noco.params()["where"].endswith(
             f"~or(telefono,like,%{''.join(c for c in escrito if c.isdigit())}%)"), escrito
+
+
+async def test_FRONTERA_un_telefono_guardado_con_separadores_no_se_encuentra(monkeypatch):
+    """Límite declarado, no virtud: la comparación es de subcadena de solo dígitos
+    contra el texto guardado. Hoy ninguna ficha lo guarda así (569 de 569 solo
+    dígitos, 16-oct-2026); si alguna lo hiciera, no saldría."""
+    _apuntar_a_noco(monkeypatch, Noco(filas=[{"Id": 60, "telefono": "+1 809-555-1234"}],
+                                      filtrar=True))
+    assert await noco_lectura.buscar_personas("18095551234") == []
+    assert await noco_lectura.buscar_personas("555-1234") == []
 
 
 @pytest.mark.parametrize("escrito", ["123", "+1 8", "12 3"])
