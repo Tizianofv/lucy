@@ -217,7 +217,7 @@ def pagina_sin_base():
     async def _sin_busqueda(pq, pdonde):
         # Como la real: sin texto o con un «dónde» que no vale, nada; con ellos, las
         # coincidencias (de mentira) para que se dibujen los botones de elegir.
-        if not pq.strip() or not re.fullmatch(r"cliente|proyecto|tarea-\d+", pdonde):
+        if not pq.strip() or not re.fullmatch(panel.DONDE_DE_LA_BUSQUEDA, pdonde):
             return None
         return {"donde": pdonde, "q": pq.strip(), "error": "",
                 "personas": [{"id": 900, "nombre": "Coincidencia Uno"}]}
