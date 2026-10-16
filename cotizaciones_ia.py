@@ -13,15 +13,18 @@ con su propio tope de tiempo y SIN reintentos: el cliente de siempre reintenta 2
 esperaría hasta el triple.
 
 Cómo se evita que la IA ponga precios, en el orden de la regla 19 de la sala:
-1. nunca ve un precio: los ejemplos copian campo por campo, por nombre, `nombre`, `descripcion` y `detalle`
-   (`ejemplos_del_tono`), y un renglón entra como ejemplo solo si sus textos no traen ningún dígito ni una palabra del
-   nombre del cliente de esa cotización; lo que la persona escribió de un renglón se lee igual;
+1. no recibe los campos de precio ni de cliente: los ejemplos copian campo por campo, por nombre, `nombre`,
+   `descripcion` y `detalle` (`ejemplos_del_tono`). Lo que SÍ se garantiza: la IA no recibe los campos de precio ni los datos del cliente (`total`, `para_nombre`,
+   `para_telefono`); de las cotizaciones viejas, un renglón con un dígito o con una palabra de 3 letras o más del
+   nombre de SU cliente no entra como ejemplo. Lo que NO se detecta: cifras escritas con letras, apodos, apellidos
+   de 1-2 letras ni nombres de OTROS clientes. Y lo que la persona escribe en el momento (el pedido, o el nombre
+   de la opción, la descripción y el detalle del renglón) va tal cual: es lo que la IA tiene que mejorar.;
 2. el mensaje de sistema le dice qué SÍ hacer (`_REGLAS`);
 3. su respuesta no tiene casilla de precio: el código lee solo `nombre`, `descripcion` y `detalle`;
 4. al final, una guarda que contrasta un VALOR contra su FUENTE (`cifras_que_no_estaban`): toda cifra con
    dígitos de la propuesta tiene que estar entre las cifras de lo que la persona escribió en esa llamada.
-   FRONTERA: no ve cifras escritas con letras («cincuenta mil pesos», «dos horas»); lo cubren los pasos 1
-   a 3. No juzga cómo está escrita la frase.
+   FRONTERA: no ve cifras escritas con letras («cincuenta mil pesos», «dos horas»); frente a eso solo
+   están el paso 2 (se le dice qué hacer) y el 3 (no hay casilla de precio), que no lo impiden. No juzga cómo está escrita la frase.
 
 Todo texto de la propuesta pasa por `db._texto_de_cotizacion` con el tope de su campo (la misma puerta de
 cuando se guarda), así que lo que la persona ve es lo que se podrá guardar y salir en el PDF.
@@ -85,7 +88,7 @@ class IAPropuestaNoSirve(Exception):
 # ── Los ejemplos del tono ───────────────────────────────────────────────────────────────────────────────
 
 # Las tres opciones de la cotización de muestra que Tiziano aprobó, copiadas textuales por la sala de
-# `disenos/lucy-cotizaciones/maqueta-aprobada.html:1795-1820`, SIN los totales: la IA nunca ve un precio.
+# `disenos/lucy-cotizaciones/maqueta-aprobada.html:1795-1820`, SIN los totales (la IA no recibe los campos de precio).
 _DESCRIPCION_DE_LA_MAQUETA = "Grabación de bajo, bongó, conga, güira, guitarra y requinto"
 EJEMPLOS_DE_LA_MAQUETA = [
     {"nombre": "Músicos formados en la práctica", "renglones": [{
@@ -122,8 +125,9 @@ def _palabras_del_cliente(cot: dict) -> list[str]:
 
 
 def _limpio_para_ejemplo(texto: str, cliente: list[str]) -> bool:
-    """El texto NO trae ningún dígito (de ningún alfabeto, así que tampoco un teléfono) ni una palabra del
-    nombre del cliente. Mira valores, no cómo está escrita la frase."""
+    """El texto NO trae ningún carácter para el que `str.isdigit()` sea verdadero (así queda fuera un teléfono
+    escrito con números; «½» y «Ⅻ» no son `isdigit` y pasan) ni una palabra del nombre del cliente. Mira
+    valores, no cómo está escrita la frase."""
     if any(c.isdigit() for c in texto):
         return False
     normal = _sin_acentos(texto)

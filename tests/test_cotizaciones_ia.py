@@ -161,14 +161,14 @@ def _dia(n):
 
 COTIZACIONES = {1: [_cotizacion(i, _dia(i)) for i in range(1, 8)] + [_cotizacion(9, _dia(30), estado="borrador")]}
 
-# ── 1. Ningún precio ni dato del cliente llega al modelo ────────────────────────────────────────────────
+# ── 1. Los campos de precio y de cliente no llegan al modelo ────────────────────────────────────────────────
 
 FORMAS_PROHIBIDAS = ["73914.37", "73,914.37", "73914", NOMBRE_CLIENTE, "Quintanilla", TELEFONO, "5557391",
                      TEXTO_DE_CONDICION, "COT-2026"]
 
 
 @pytest.mark.parametrize("boton", ["redaccion", "borrador"])
-def test_ningun_precio_ni_dato_del_cliente_llega_al_modelo(modelo, boton):
+def test_los_campos_de_precio_y_de_cliente_de_las_cotizaciones_viejas_no_llegan_al_modelo(modelo, boton):
     ejemplos = ia.ejemplos_del_tono(COTIZACIONES)
     if boton == "redaccion":
         _caso(modelo, {"detalle": "Texto nuevo"})
@@ -313,8 +313,8 @@ def test_la_cifra_del_nombre_de_la_opcion_o_de_la_descripcion_tambien_cuenta_com
 
 
 def test_frontera_declarada_la_guarda_no_ve_cifras_escritas_con_letras(modelo):
-    """A PROPÓSITO: la guarda mira dígitos. «cincuenta mil pesos» pasa; lo cubren los pasos 1 a 3 (no ve
-    precios, se le dice qué hacer, su respuesta no tiene casilla). Este caso existe para que nadie crea que
+    """A PROPÓSITO: la guarda mira dígitos. «cincuenta mil pesos» pasa; lo único que hay
+    detrás es decirle a la IA qué hacer y que su respuesta no tiene casilla de precio, y eso no lo impide. Este caso existe para que nadie crea que
     la guarda lo ve."""
     assert ia.cifras_que_no_estaban(["cincuenta mil pesos y dos horas"], ["nada"]) == []
     _caso(modelo, {"detalle": "Cuesta cincuenta mil pesos."})

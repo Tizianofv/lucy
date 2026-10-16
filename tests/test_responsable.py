@@ -2272,8 +2272,8 @@ LLAMADAS_AL_MODELO_SIN_JUNTA = {
     "captura/correo.py::clasificar":
         "clasifica un correo; lo que le pasa es el correo, no filas de tareas",
     "cotizaciones_ia.py::_pedir":
-        "redacta textos de una cotización; le pasa lo que la persona escribió y los textos de ejemplo, "
-        "sin precios ni datos del cliente",
+        "redacta textos de una cotización; le pasa lo que la persona escribió (tal cual) y textos de ejemplo "
+        "de cotizaciones viejas, sin sus campos de precio ni de cliente",
     "cerebro/consultar.py::_corregir":
         "le muestra al modelo su propio SQL y el error de Postgres, sin filas",
     "cerebro/consultar.py::responder":
