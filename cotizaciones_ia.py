@@ -14,8 +14,8 @@ esperaría hasta el triple.
 
 Cómo se evita que la IA ponga precios, en el orden de la regla 19 de la sala:
 1. nunca ve un precio: los ejemplos copian campo por campo, por nombre, `nombre`, `descripcion` y `detalle`
-   (`ejemplos_del_tono`), y un renglón entra como ejemplo solo si sus textos no traen ninguna cifra ni el nombre
-   o teléfono del cliente de esa cotización; lo que la persona escribió de un renglón se lee igual;
+   (`ejemplos_del_tono`), y un renglón entra como ejemplo solo si sus textos no traen ningún dígito ni una palabra del
+   nombre del cliente de esa cotización; lo que la persona escribió de un renglón se lee igual;
 2. el mensaje de sistema le dice qué SÍ hacer (`_REGLAS`);
 3. su respuesta no tiene casilla de precio: el código lee solo `nombre`, `descripcion` y `detalle`;
 4. al final, una guarda que contrasta un VALOR contra su FUENTE (`cifras_que_no_estaban`): toda cifra con
@@ -115,27 +115,19 @@ def _sin_acentos(t: str) -> str:
 
 
 def _palabras_del_cliente(cot: dict) -> list[str]:
-    """Las palabras de `para_nombre` (de 3 letras o más, sin acentos ni mayúsculas) y los dígitos de
-    `para_telefono`. De diseño: las palabras de 1 y 2 letras («de», «la») no identifican a nadie."""
-    palabras = [w for w in re.split(r"\W+", _sin_acentos(_texto(cot.get("para_nombre")))) if len(w) >= 3]
-    digitos = "".join(c for c in _texto(cot.get("para_telefono")) if c.isdigit())
-    return palabras + ([digitos] if digitos else [])
+    """Las palabras de `para_nombre` (de 3 letras o más, sin acentos ni mayúsculas). De diseño: las palabras
+    de 1 y 2 letras («de», «la») no identifican a nadie. El teléfono no necesita lista: tiene dígitos, y un
+    texto con cualquier dígito no entra (`_limpio_para_ejemplo`)."""
+    return [w for w in re.split(r"\W+", _sin_acentos(_texto(cot.get("para_nombre")))) if len(w) >= 3]
 
 
 def _limpio_para_ejemplo(texto: str, cliente: list[str]) -> bool:
-    """El texto NO trae ninguna cifra (ni dígito de ningún alfabeto) ni una palabra del nombre del cliente
-    ni su teléfono. Mira valores, no cómo está escrita la frase."""
+    """El texto NO trae ningún dígito (de ningún alfabeto, así que tampoco un teléfono) ni una palabra del
+    nombre del cliente. Mira valores, no cómo está escrita la frase."""
     if any(c.isdigit() for c in texto):
         return False
     normal = _sin_acentos(texto)
-    solo_digitos = "".join(c for c in normal if c.isdigit())
-    for dato in cliente:
-        if dato.isdigit():
-            if solo_digitos and dato in solo_digitos:
-                return False
-        elif re.search(r"(?<!\w)" + re.escape(dato) + r"(?!\w)", normal):
-            return False
-    return True
+    return not any(re.search(r"(?<!\w)" + re.escape(w) + r"(?!\w)", normal) for w in cliente)
 
 
 def _opcion_de_ejemplo(op, cliente: list[str]) -> dict | None:
