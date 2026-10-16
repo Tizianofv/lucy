@@ -974,8 +974,18 @@ def test_las_lecturas_traen_las_tres_de_drive_y_sin_las_columnas_o_la_tabla_la_p
 
 
 def test_humo_corre_las_lecturas_de_drive_contra_la_base_de_verdad():
-    texto = (_ROOT / "tools" / "humo.py").read_text(encoding="utf-8")
-    assert "drive_de_proyectos" in texto and "drive_archivo_id" in texto
+    """`tools/humo.py` tiene en su lista de pruebas (la que corre de verdad) la que lee las tres columnas de Drive y la
+    tabla nueva sin tolerancia, y esa función las nombra."""
+    arbol = ast.parse((_ROOT / "tools" / "humo.py").read_text(encoding="utf-8"))
+    en_la_lista = [e.elts[1].id for n in ast.walk(arbol) if isinstance(n, ast.Assign)
+                   and any(isinstance(t, ast.Name) and t.id == "pruebas" for t in n.targets)
+                   for e in n.value.elts if isinstance(e, ast.Tuple) and isinstance(e.elts[1], ast.Name)]
+    assert "_tablas_de_drive_de_las_cotizaciones" in en_la_lista, en_la_lista
+    funcion = next(n for n in ast.walk(arbol) if isinstance(n, ast.AsyncFunctionDef)
+                   and n.name == "_tablas_de_drive_de_las_cotizaciones")
+    cuerpo = ast.get_source_segment((_ROOT / "tools" / "humo.py").read_text(encoding="utf-8"), funcion)
+    assert "drive_archivo_id" in cuerpo and "drive_version" in cuerpo and "drive_error" in cuerpo \
+        and "drive_de_proyectos" in cuerpo
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
