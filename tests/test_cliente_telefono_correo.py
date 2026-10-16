@@ -260,6 +260,22 @@ def test_el_telefono_y_el_correo_salen_escapados_y_sin_enlace(mundo, noco, campo
     assert "<script>alert(1)" not in html and "<img src=x" not in html
 
 
+# ── una ficha sin `nombre` se puede ligar, y se guarda con su nombre para mostrar ───────
+
+def test_ligar_una_ficha_sin_nombre_guarda_el_nombre_para_mostrar(mundo, gente, noco):
+    """De punta a punta por la ruta de verdad (`POST /proyectos/2/cliente`), con el
+    lector real de `noco_lectura.persona` y un Noco de mentira que devuelve una
+    ficha con solo teléfono (invento): antes `persona` daba `None` y la ruta
+    rechazaba con «la ficha ya no está en Noco»."""
+    from test_escrituras_proyecto import mandar
+    _con_cliente(mundo)
+    noco.fichas = {58: {"Id": 58, "telefono": "18095551234"}}
+    r = mandar("/proyectos/2/cliente", {"noco_id": "58"})
+    assert r.headers["location"] == "/proyectos?hecho=cliente&p=2", r.headers["location"]
+    fila = mundo.con.execute("SELECT cliente_noco_id, cliente_nombre FROM proyectos WHERE id = 2").fetchone()
+    assert tuple(fila) == (58, "Sin nombre · 1234")
+
+
 # ── el lector, directo ──────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("unida", [0, -3, True, "8", None, 2.5])
