@@ -573,6 +573,13 @@ def test_en_ninguna_plantilla_la_carpeta_llega_a_un_href_sin_pasar_por_el_filtro
             assert codigo == ['var guion = nuevo.querySelector("#guion-copiar-carpeta");',
                               'if (guion && !document.getElementById("guion-copiar-carpeta")) {',
                               's.id = "guion-copiar-carpeta";'], codigo
+        elif ruta.name == "_cotizaciones_del_proyecto.html":
+            # Excepción DECLARADA (16-oct-2026, pieza 8): el enlace «Abrir en Drive» de la lista de cotizaciones lleva la
+            # clase `carpeta-enlace` porque es la ÚNICA que la prueba de solo ver deja salir hacia afuera. No pinta el
+            # dato `proyectos.carpeta`: su dirección sale de `cz.drive_url` (la carpeta `cotizaciones` en Drive). Se
+            # quita ESA clase, exacta, y lo demás sigue sin poder nombrar la carpeta.
+            assert texto.count('class="carpeta-enlace" href="{{ cz.drive_url }}"') == 1
+            assert "carpeta" not in texto.replace('class="carpeta-enlace" href="{{ cz.drive_url }}"', "").lower(), ruta.name
         elif ruta.name != "proyectos.html":
             assert "carpeta" not in texto.lower(), ruta.name        # ninguna otra plantilla pinta este dato
         for atributo in re.finditer(r"\b([\w:-]+)\s*=\s*(\"[^\"]*\"|'[^']*')", re.sub(r"\{#.*?#\}", "", texto, flags=re.S)):
@@ -607,7 +614,10 @@ def test_los_archivos_de_codigo_que_nombran_la_columna_son_estos():
     nombran = {str(a.relative_to(_ROOT)) for a in _py_del_repo() if patron.search(a.read_text(encoding="utf-8"))}
     # `db/db.py` (las dos puertas y la lectura), `acciones/crud.py` (la puerta en PUERTAS y el trato del
     # texto), `web/app.py` (la ruta y el filtro), `cerebro/consultar.py` (la nota para Lucy por Telegram).
-    assert nombran == {"db/db.py", "acciones/crud.py", "web/app.py", "cerebro/consultar.py"}, nombran
+    # `cotizaciones_drive.py` (16-oct-2026, pieza 8 de las cotizaciones): llena `carpeta` con la dirección de la
+    # carpeta de Drive que Lucy acaba de crear, solo si estaba vacía, por la misma puerta (`crud.editar`).
+    assert nombran == {"db/db.py", "acciones/crud.py", "web/app.py", "cerebro/consultar.py",
+                       "cotizaciones_drive.py"}, nombran
 
 
 def test_ningun_sql_escrito_a_mano_nombra_la_columna_y_los_genericos_son_los_medidos():

@@ -79,6 +79,7 @@ def _una_cotizacion_del_modelo(id, numero, estado, opciones):
         id=id, proyecto_id=1, anio=2026, numero=numero, codigo=f"COT-2026-{numero:03d}", estado=estado,
         para_nombre="Cliente de prueba", para_telefono="809-555-0101", fecha="2026-10-14", validez_dias=15,
         cambiado_en=f"2026-10-14 12:00:0{id}.000000+00:00", contenido=contenido,
+        drive_archivo_id=None, drive_version=None, drive_error=None,
         totales_por_opcion=[sum((Decimal(t) for t in totales), Decimal("0")) for _, totales in opciones])
 
 
@@ -91,6 +92,10 @@ COTIZACIONES_DEL_MODELO: dict = {1: [
 QUITADAS_DEL_MODELO: dict = {}
 # Lo mismo para las AGREGADAS a mano (parte 13): `{proyecto_id: {ref: codigo}}`. Por omisión, nada.
 AGREGADAS_DEL_MODELO: dict = {}
+
+
+# La carpeta de Drive donde el modelo de prueba dice que están las cotizaciones del proyecto 1 («Abrir en Drive»).
+CARPETA_DE_COTIZACIONES_DEL_MODELO = "CARPETA-C1"
 
 
 class BaseQueNoSeToca:
@@ -160,6 +165,13 @@ class BaseQueNoSeToca:
             async def _cotizaciones():
                 return COTIZACIONES_DEL_MODELO
             return _cotizaciones
+        if nombre == "carpetas_de_drive":
+            # FINGIDO, declarado: el proyecto 1 tiene sus carpetas de Drive (sale «Abrir en Drive»); los demás,
+            # no. El SQL real corre en SQLite en `tests/test_cotizaciones_drive.py`.
+            async def _carpetas(pid):
+                return ({"proyecto_id": 1, "carpeta_proyecto_id": "CARPETA-P1", "carpeta_cotizaciones_id": CARPETA_DE_COTIZACIONES_DEL_MODELO,
+                         "nombre_puesto": "Disco Uno"} if pid == 1 else None)
+            return _carpetas
         if nombre == "hoy_rd":
             return db.hoy_rd              # función REAL y pura: el día de hoy en Santo Domingo; no toca la base
         if nombre == "codigo_de_cotizacion":

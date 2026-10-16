@@ -72,6 +72,23 @@ async def _tablas_de_cotizaciones():
         return filas
 
 
+async def _tablas_de_drive_de_las_cotizaciones():
+    """Los SELECT de lo que la pieza 8 agregó (16-oct-2026), SIN tolerancia: las tres columnas de Drive de
+    `cotizaciones` y la tabla `drive_de_proyectos`. La lectura de las cotizaciones (`cotizaciones_de_proyectos`) TOLERA
+    que falten (devuelve `None` y la página sale sin el bloque), así que esta es la línea que dice si la migración
+    `db/migrations/2026-10-16_cotizaciones_drive.sql` no se aplicó. Son LECTURAS; la subida a Drive no se ejerce acá.
+    """
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=db.dict_row)
+        filas = {}
+        await cur.execute("SELECT count(drive_archivo_id) AS n, count(drive_version) AS v, count(drive_error) AS e "
+                          "FROM cotizaciones")
+        filas["cotizaciones con Drive"] = dict(await cur.fetchone())
+        await cur.execute("SELECT count(*) AS n FROM drive_de_proyectos")
+        filas["drive_de_proyectos"] = (await cur.fetchone())["n"]
+        return filas
+
+
 async def main() -> int:
     if not os.environ.get("DATABASE_URL", "").strip():
         print("Falta DATABASE_URL.", file=sys.stderr)
@@ -161,6 +178,8 @@ async def main() -> int:
         ("pagina_de_proyectos", lambda: db.pagina_de_proyectos()),
         # Las tablas de las cotizaciones (pieza 2): ver `_tablas_de_cotizaciones`. Una LECTURA.
         ("tablas de cotizaciones (sin tolerancia)", _tablas_de_cotizaciones),
+        # Lo que la pieza 8 agregó para Drive: ver `_tablas_de_drive_de_las_cotizaciones`. Una LECTURA.
+        ("columnas y tabla de Drive de las cotizaciones (sin tolerancia)", _tablas_de_drive_de_las_cotizaciones),
         # La lectura de las cotizaciones (pieza 3): TOLERA que la tabla no exista (devuelve `None`), así
         # que la línea de arriba es la que dice si falta; ésta corre el SELECT con sus columnas y el JOIN
         # contra la base de verdad. Es una LECTURA; `guardar_cotizacion` escribe y no se prueba acá.

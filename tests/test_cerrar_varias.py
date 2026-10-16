@@ -2343,7 +2343,11 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
     # le da a Lucy ninguna herramienta para tocarlas por Telegram (`cerebro/consultar.py` las declara
     # maquinaria). Lo que eso deja sin juzgar acá: una herramienta del agente que escribiera en ellas saldría
     # verde en ESTA guarda. Hoy ninguna lo hace: ni siquiera existe todavía código que las escriba.
-    assert len(declaradas) == 23 and len(vigiladas) == 10, (
+    # 16-oct-2026 (pieza 8 de las cotizaciones): 23 → 24 por `drive_de_proyectos` (los ids de las carpetas de Drive
+    # de cada proyecto). Queda FUERA de `crud.TABLAS`, igual que las otras tres de las cotizaciones: la escribe SOLO
+    # `db.guardar_carpetas_de_drive` (y `poner_nombre_de_carpeta_de_drive`), que llama la subida del panel, y Lucy no
+    # tiene herramienta para tocarla por Telegram (`cerebro/consultar.py` la declara maquinaria).
+    assert len(declaradas) == 24 and len(vigiladas) == 10, (
         f"el reparto de tablas cambió: el esquema declara {len(declaradas)} y "
         f"`crud.TABLAS` vigila {len(vigiladas)} (el 1-oct-2026, E7, eran 20 y 10). "
         f"Las que quedan sin juzgar serían {sorted(sin_juzgar)}. No se afloja "
@@ -2360,7 +2364,7 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
         "areas", "backups", "bandeja", "categorias_aprendidas",
         "comentarios_tarea", "consumos_estado", "correo_estado",
         "correo_reportado", "cuentas_propias", "log_acciones",
-        "sesiones_de_proyecto", "cotizaciones", "serie_cotizaciones",
+        "sesiones_de_proyecto", "cotizaciones", "serie_cotizaciones", "drive_de_proyectos",
     }, (f"cambió qué tablas quedan fuera del juicio de esta guarda: "
         f"{sorted(sin_juzgar)}. Una escritura a cualquiera de ellas se VE pero "
         f"no se exige que deje huella ni que salga en el parte.")

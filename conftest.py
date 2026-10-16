@@ -279,3 +279,13 @@ def _un_navegador_por_prueba():
     if modulo is not None:
         modulo.Navegador.reiniciar()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _sin_drive_de_verdad(monkeypatch):
+    """Ninguna prueba hereda las variables de Drive del entorno de quien la corre (la subida de una cotización
+    a Drive intenta hablar con Google si las encuentra). Las pruebas que quieren Drive las ponen ellas, junto con
+    su doble de la red (`tests/test_drive.py::google`)."""
+    for nombre in ("LUCY_DRIVE_CLIENT_ID", "LUCY_DRIVE_CLIENT_SECRET", "LUCY_DRIVE_REFRESH_TOKEN",
+                   "LUCY_DRIVE_CARPETA_PROYECTOS"):
+        monkeypatch.delenv(nombre, raising=False)

@@ -78,6 +78,10 @@ URL_TOKEN = "https://oauth2.googleapis.com/token"
 VARIABLES = ("LUCY_DRIVE_CLIENT_ID", "LUCY_DRIVE_CLIENT_SECRET",
              "LUCY_DRIVE_REFRESH_TOKEN")
 
+# El id de la carpeta «Proyectos» (donde la pieza 8 crea la carpeta de cada proyecto): una cuarta variable
+# del servicio `lucy`, aparte de la credencial. Se lee por `carpeta_proyectos`, también en cada llamada.
+VARIABLE_CARPETA_PROYECTOS = "LUCY_DRIVE_CARPETA_PROYECTOS"
+
 # Cuánto se espera a Google por pedido. Es un número elegido (el diseño, §3.7),
 # no medido.
 TIEMPO_LIMITE = 15.0
@@ -122,6 +126,11 @@ class DriveNoEsta(DriveError):
     causa = "la carpeta o el archivo ya no está en Drive"
 
 
+class DriveSinCarpetaProyectos(DriveError):
+    """Falta el id de «Proyectos» (o no es un id): nada se crea a ciegas."""
+    causa = "la carpeta Proyectos no está"
+
+
 def _id(valor) -> str:
     """Un id que puede ir en una URL o en una búsqueda. Si no lo es, no puede
     existir en Drive: se dice `DriveNoEsta` y no sale ningún pedido."""
@@ -154,6 +163,17 @@ def _credenciales() -> tuple[str, str, str]:
         log.warning("drive: falta configurar %s", ", ".join(faltan))
         raise DriveSinConfigurar()
     return valores
+
+
+def carpeta_proyectos() -> str:
+    """El id de la carpeta «Proyectos», de `LUCY_DRIVE_CARPETA_PROYECTOS`. Falta, está en blanco, no es un id
+    de Drive o es el alias `root` (que no es una carpeta «Proyectos»): `DriveSinCarpetaProyectos` y no sale
+    ningún pedido. No hace pedidos."""
+    valor = os.environ.get("LUCY_DRIVE_CARPETA_PROYECTOS", "").strip()
+    if not valor or valor == "root" or not _ID.fullmatch(valor):
+        log.warning("drive: falta configurar %s", VARIABLE_CARPETA_PROYECTOS)
+        raise DriveSinCarpetaProyectos()
+    return valor
 
 
 def _motivos(cuerpo) -> set:

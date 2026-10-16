@@ -131,9 +131,11 @@ def _base():
     con.execute("INSERT INTO proyectos (id, nombre, cliente_nombre) VALUES (2, 'Otro proyecto', 'Otro cliente')")
     con.execute("CREATE TABLE log_acciones (id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT, accion TEXT, "
                 "tabla TEXT, registro_id INTEGER, antes TEXT, despues TEXT, motivo TEXT, bandeja_id INTEGER)")
-    for s in g._sentencias(t._texto_migracion()):
-        if not re.match(r"(BEGIN|COMMIT|COMMENT\s+ON)\b", s, re.I):
-            con.execute(t._a_sqlite(s))
+    # la migración de las cotizaciones y la de Drive (pieza 8), una tras otra, como en producción
+    for texto in (t._texto_migracion(), t._texto_migracion_de_drive()):
+        for s in g._sentencias(texto):
+            if not re.match(r"(BEGIN|COMMIT|COMMENT\s+ON)\b", s, re.I):
+                con.execute(t._a_sqlite(s))
     con.commit()
     return con
 
@@ -469,7 +471,7 @@ def test_sin_la_tabla_la_lectura_da_none_y_otro_error_se_propaga(con, monkeypatc
     assert asyncio.run(db.cotizaciones_de_proyectos()) is None
 
     class _Raro(Exception):
-        sqlstate = "42703"
+        sqlstate = "08006"          # la conexión se cayó: no es «falta la tabla» ni «falta una columna» (42P01, 42703)
 
     async def revienta(self, sql, params=None):
         raise _Raro()
@@ -536,9 +538,12 @@ def test_las_sentencias_que_escriben_cotizaciones_son_las_de_la_puerta_y_cumplen
     hallados = _sentencias_sobre_cotizaciones(buzon._py_en_disco(_ROOT), _ROOT)
     inserts = [h for h in hallados if re.search(r"INSERT\s+INTO", h[2], re.I)]
     updates = [h for h in hallados if re.search(r"UPDATE\s+cotizaciones", h[2], re.I)]
-    assert len(inserts) == 1 and len(updates) == 2, hallados
-    # las dos UPDATE son las dos sentencias de la puerta
-    assert sorted(u[2] for u in updates) == sorted((db.SENTENCIA_DE_GUARDAR_BORRADOR, db.SENTENCIA_DE_ENVIAR))
+    assert len(inserts) == 1 and len(updates) == 4, hallados
+    # las UPDATE son las dos sentencias de la puerta (guardar) y las dos de Drive (pieza 8: marcar «en Drive» y
+    # anotar el error), que también exigen el candado `cambiado_en` y no tocan las columnas que no cambian
+    assert sorted(u[2] for u in updates) == sorted((
+        db.SENTENCIA_DE_GUARDAR_BORRADOR, db.SENTENCIA_DE_ENVIAR,
+        db.SENTENCIA_DE_MARCAR_EN_DRIVE, db.SENTENCIA_DE_ERROR_DE_DRIVE))
     assert _lo_que_viola(hallados) == []
 
 

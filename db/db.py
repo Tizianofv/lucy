@@ -2593,13 +2593,38 @@ async def _cambiar_cotizacion(conn, cur, proyecto_id, cotizacion_id, accion, gua
     return {**fila, "codigo": codigo_de_cotizacion(fila["anio"], fila["numero"]), "creada": False}
 
 
+# La lista, el PDF y la subida a Drive leen las mismas columnas de una cotización. Las tres últimas son las de
+# Drive (pieza 8, migración `2026-10-16_cotizaciones_drive.sql`): si esa migración falta, SQLSTATE 42703. Cada
+# sentencia lleva su lista escrita entera (sin armar el texto), para que los censos de «quién arma SQL al vuelo» no las confundan.
+def _cotizaciones_sin_migrar(e: Exception) -> bool:
+    """La base no tiene la tabla de las cotizaciones (42P01) o alguna columna que la lectura nombra (42703:
+    la migración de Drive sin aplicar). En los dos casos la lectura devuelve `None` y la página carga sin el
+    bloque; `tools/humo.py` es quien dice cuál de las dos falta."""
+    try:
+        return e.sqlstate in ("42P01", "42703")
+    except AttributeError:
+        return False
+
+
+def _cotizacion_leida(fila) -> dict:
+    """La fila tal como sale de la base, con `codigo`, `contenido` ya leído (dict) y `totales_por_opcion`."""
+    f = dict(fila)
+    contenido = json.loads(f["contenido"])
+    f["contenido"] = contenido
+    f["codigo"] = codigo_de_cotizacion(f["anio"], f["numero"])
+    f["totales_por_opcion"] = [sum((Decimal(r["total"]) for r in op["renglones"]), Decimal("0"))
+                               for op in contenido["opciones"]]
+    return f
+
+
 async def cotizaciones_de_proyectos() -> dict[int, list[dict]] | None:
     """`{proyecto_id: [cotización, ...]}` de las cotizaciones VIVAS de proyectos VIVOS, la más nueva
-    primero, o `None` si la tabla todavía no existe (SQLSTATE 42P01): entonces la página carga como hoy y
-    el bloque no sale. UNA LECTURA APARTE con su propia conexión. Nombre y teléfono salen de la COPIA que
-    se guardó, nunca de la ficha del cliente. Cada una trae `codigo`, `contenido` ya leído (dict),
-    `totales_por_opcion` (`Decimal`, la suma de los renglones de cada opción) y `cambiado_en` tal como
-    está en la base (el candado que la pantalla devuelve al guardar). Lo lee cualquier sesión que vea
+    primero, o `None` si la tabla todavía no existe (SQLSTATE 42P01) o le faltan las columnas de Drive
+    (42703): entonces la página carga como hoy y el bloque no sale. UNA LECTURA APARTE con su propia
+    conexión. Nombre y teléfono salen de la COPIA que se guardó, nunca de la ficha del cliente. Cada una
+    trae `codigo`, `contenido` ya leído (dict), `totales_por_opcion` (`Decimal`, la suma de los renglones de
+    cada opción), `cambiado_en` tal como está en la base (el candado que la pantalla devuelve al guardar) y
+    las tres de Drive (`drive_archivo_id`, `drive_version`, `drive_error`). Lo lee cualquier sesión que vea
     Proyectos, también la de solo ver: la función no pide sesión."""
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -2607,25 +2632,114 @@ async def cotizaciones_de_proyectos() -> dict[int, list[dict]] | None:
             await cur.execute(
                 "SELECT c.id, c.proyecto_id, c.anio, c.numero, c.estado, c.para_nombre, c.para_telefono, "
                 "c.fecha, c.validez_dias, c.contenido, c.creado_en, c.creado_por_chat_id, c.cambiado_en, "
-                "c.enviada_en "
+                "c.enviada_en, c.drive_archivo_id, c.drive_version, c.drive_error "
                 "FROM cotizaciones c JOIN proyectos p ON p.id = c.proyecto_id "
                 "WHERE c.borrado_en IS NULL AND p.borrado_en IS NULL "
                 "ORDER BY c.creado_en DESC, c.id DESC")
             filas = await cur.fetchall()
         except Exception as e:
-            if _tabla_ausente(e):
+            if _cotizaciones_sin_migrar(e):
                 return None
             raise
     salida: dict[int, list[dict]] = {}
     for f in filas:
-        f = dict(f)
-        contenido = json.loads(f["contenido"])
-        f["contenido"] = contenido
-        f["codigo"] = codigo_de_cotizacion(f["anio"], f["numero"])
-        f["totales_por_opcion"] = [sum((Decimal(r["total"]) for r in op["renglones"]), Decimal("0"))
-                                   for op in contenido["opciones"]]
+        f = _cotizacion_leida(f)
         salida.setdefault(f["proyecto_id"], []).append(f)
     return salida
+
+
+# ── EL DRIVE DE LAS COTIZACIONES (pieza 8 del diseño «Cotizaciones en Proyectos», 16-oct-2026) ─────────────
+#
+# Aquí solo hay SQL. Quién sube, en qué orden y con qué frases lo decide `cotizaciones_drive.py`; quién habla
+# con Drive es `drive.py`. «En Drive» quiere decir `drive_version = cambiado_en` y SOLO lo escribe
+# `marcar_cotizacion_en_drive`, con el candado de `cambiado_en` en la sentencia: si alguien corrigió la
+# cotización mientras se subía, la versión de Drive ya es vieja y la marca no se pone.
+SENTENCIA_DE_MARCAR_EN_DRIVE = (
+    "UPDATE cotizaciones SET drive_archivo_id = %s, drive_version = %s, drive_error = NULL "
+    "WHERE id = %s AND proyecto_id = %s AND cambiado_en = %s AND estado = 'enviada' AND borrado_en IS NULL "
+    "RETURNING id")
+SENTENCIA_DE_ERROR_DE_DRIVE = (
+    "UPDATE cotizaciones SET drive_error = %s "
+    "WHERE id = %s AND proyecto_id = %s AND cambiado_en = %s AND estado = 'enviada' AND borrado_en IS NULL "
+    "RETURNING id")
+
+
+async def cotizacion_para_drive(proyecto_id: int, cotizacion_id: int) -> dict | None:
+    """UNA cotización viva de un proyecto vivo, tal como la lee la lista (más `proyecto_nombre` y
+    `proyecto_carpeta`), o `None` si no existe, no es de ese proyecto o falta la tabla o alguna columna.
+    Una lectura: no pide sesión."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(
+                "SELECT c.id, c.proyecto_id, c.anio, c.numero, c.estado, c.para_nombre, c.para_telefono, "
+                "c.fecha, c.validez_dias, c.contenido, c.creado_en, c.creado_por_chat_id, c.cambiado_en, "
+                "c.enviada_en, c.drive_archivo_id, c.drive_version, c.drive_error, "
+                "p.nombre AS proyecto_nombre, p.carpeta AS proyecto_carpeta "
+                "FROM cotizaciones c JOIN proyectos p ON p.id = c.proyecto_id "
+                "WHERE c.id = %s AND c.proyecto_id = %s AND c.borrado_en IS NULL AND p.borrado_en IS NULL",
+                (cotizacion_id, proyecto_id))
+            fila = await cur.fetchone()
+        except Exception as e:
+            if _cotizaciones_sin_migrar(e):
+                return None
+            raise
+    return None if fila is None else _cotizacion_leida(fila)
+
+
+async def marcar_cotizacion_en_drive(proyecto_id: int, cotizacion_id: int, archivo_id: str, version) -> bool:
+    """Pone `drive_archivo_id`, `drive_version = version` y borra `drive_error`, SOLO si `cambiado_en` sigue
+    siendo `version` (la que se subió). `True` si escribió; `False` si la cotización cambió mientras se subía
+    (o ya no es una enviada viva): entonces no se marca nada."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_MARCAR_EN_DRIVE, (archivo_id, version, cotizacion_id, proyecto_id, version))
+        return await cur.fetchone() is not None
+
+
+async def marcar_error_de_drive(proyecto_id: int, cotizacion_id: int, causa: str, version) -> bool:
+    """Deja la `causa` (una frase fija) del intento que falló, SOLO si `cambiado_en` sigue siendo `version`: una
+    versión más nueva tiene su propio intento. No toca `drive_archivo_id` ni `drive_version`."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_ERROR_DE_DRIVE, (causa, cotizacion_id, proyecto_id, version))
+        return await cur.fetchone() is not None
+
+
+async def carpetas_de_drive(proyecto_id: int) -> dict | None:
+    """Las carpetas de Drive del proyecto (`carpeta_proyecto_id`, `carpeta_cotizaciones_id`, `nombre_puesto`)
+    o `None` si todavía no tiene. Si falta la tabla SUBE la excepción: quien sube no puede crear carpetas sin
+    poder anotarlas. Una lectura."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT proyecto_id, carpeta_proyecto_id, carpeta_cotizaciones_id, nombre_puesto "
+            "FROM drive_de_proyectos WHERE proyecto_id = %s", (proyecto_id,))
+        fila = await cur.fetchone()
+    return None if fila is None else dict(fila)
+
+
+async def guardar_carpetas_de_drive(proyecto_id: int, carpeta_proyecto_id: str, carpeta_cotizaciones_id: str,
+                                    nombre_puesto: str) -> dict:
+    """Anota las dos carpetas que se acaban de crear y devuelve las que QUEDARON: si otro intento se adelantó
+    (una fila por proyecto) gana el primero y se devuelven las suyas (`ON CONFLICT DO NOTHING`)."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "INSERT INTO drive_de_proyectos (proyecto_id, carpeta_proyecto_id, carpeta_cotizaciones_id, nombre_puesto) VALUES (%s, %s, %s, %s) ON CONFLICT (proyecto_id) DO NOTHING",
+            (proyecto_id, carpeta_proyecto_id, carpeta_cotizaciones_id, nombre_puesto))
+        await cur.execute(
+            "SELECT proyecto_id, carpeta_proyecto_id, carpeta_cotizaciones_id, nombre_puesto "
+            "FROM drive_de_proyectos WHERE proyecto_id = %s", (proyecto_id,))
+        return dict(await cur.fetchone())
+
+
+async def poner_nombre_de_carpeta_de_drive(proyecto_id: int, nombre_puesto: str) -> None:
+    """Anota el nombre con que quedó puesta la carpeta del proyecto en Drive, después de renombrarla allá."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute("UPDATE drive_de_proyectos SET nombre_puesto = %s WHERE proyecto_id = %s",
+                          (nombre_puesto, proyecto_id))
 
 
 SENTENCIA_DE_LA_QUE_TOCA_DE_COTIZACION = "SELECT ultimo FROM serie_cotizaciones WHERE anio = %s"

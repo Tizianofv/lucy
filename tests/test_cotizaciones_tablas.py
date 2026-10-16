@@ -61,6 +61,18 @@ def _texto_migracion() -> str:
     return _migracion().read_text(encoding="utf-8")
 
 
+def _migracion_de_drive():
+    """La migración de la pieza 8 (las tres columnas de Drive y `drive_de_proyectos`), buscada por lo que hace."""
+    suyas = [a for a in g._migraciones()
+             if "CREATE TABLE IF NOT EXISTS drive_de_proyectos" in a.read_text(encoding="utf-8")]
+    assert len(suyas) == 1, suyas
+    return suyas[0]
+
+
+def _texto_migracion_de_drive() -> str:
+    return _migracion_de_drive().read_text(encoding="utf-8")
+
+
 def _guion():
     spec = importlib.util.spec_from_file_location("ensayo_cotizaciones", _ROOT / "tools" / "ensayo_cotizaciones.py")
     modulo = importlib.util.module_from_spec(spec)
@@ -69,7 +81,8 @@ def _guion():
 
 
 def _a_sqlite(s: str) -> str:
-    return s.replace("BIGSERIAL PRIMARY KEY", "INTEGER PRIMARY KEY").replace("DEFAULT now()", "DEFAULT (now())")
+    return (s.replace("BIGSERIAL PRIMARY KEY", "INTEGER PRIMARY KEY").replace("DEFAULT now()", "DEFAULT (now())")
+            .replace("ADD COLUMN IF NOT EXISTS", "ADD COLUMN"))
 
 
 def _base_con_migracion(texto: str | None = None) -> sqlite3.Connection:
@@ -100,10 +113,33 @@ def _insertar(con, **otros):
 
 # ── 1. La migración y el esquema dicen lo mismo ─────────────────────────────────────────────────────
 
+def _columnas_que_agregan_otras_migraciones(tabla: str) -> set[str]:
+    """Las columnas que una migración POSTERIOR agrega con `ALTER TABLE <tabla> ADD COLUMN` (sacadas del texto de
+    todas las migraciones, no tecleadas): el esquema las declara dentro del `CREATE TABLE` y la migración que
+    crea la tabla, no."""
+    agregadas = set()
+    for archivo in g._migraciones():
+        if archivo == _migracion():
+            continue
+        agregadas |= {c.lower() for c in re.findall(
+            rf"ALTER\s+TABLE\s+{tabla}\s+ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)",
+            archivo.read_text(encoding="utf-8"), re.I)}
+    return agregadas
+
+
+def _sin_columnas(sentencia: str, columnas: set[str]) -> str:
+    """El `CREATE TABLE` sin las líneas de esas columnas (una columna por línea, como lo escribe el esquema)."""
+    return "\n".join(l for l in sentencia.splitlines()
+                     if not (l.split() and l.split()[0].lower() in columnas))
+
+
 @pytest.mark.parametrize("tabla", TABLAS)
 def test_la_migracion_y_el_esquema_dicen_lo_mismo(tabla):
     de_la_migracion = [b2._normal(s).replace("if not exists ", "") for s in b2._ddl(_texto_migracion(), tabla)]
-    del_esquema = [b2._normal(s) for s in b2._ddl(_ESQUEMA, tabla)]
+    # lo que otra migración agrega después (pieza 8: las tres columnas de Drive) se compara en
+    # `tests/test_cotizaciones_drive.py`; aquí el esquema se mira sin esas columnas
+    quitar = _columnas_que_agregan_otras_migraciones(tabla)
+    del_esquema = [b2._normal(_sin_columnas(s, quitar)) for s in b2._ddl(_ESQUEMA, tabla)]
     assert del_esquema, f"{tabla} no está en db/schema.sql"
     assert de_la_migracion == del_esquema
 

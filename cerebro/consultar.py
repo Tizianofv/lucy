@@ -98,6 +98,10 @@ TABLAS_DE_MAQUINARIA = {
                     "por Telegram en esta versión",
     "serie_cotizaciones": "el contador de números de cotización, una fila por "
                           "año: lo mueve solo el panel al guardar una nueva",
+    "drive_de_proyectos": "los ids de las carpetas de Drive de cada proyecto "
+                          "(donde Lucy guarda el PDF de sus cotizaciones): los "
+                          "escribe solo el panel al subir una cotización y Lucy "
+                          "no los consulta por Telegram",
 }
 
 # ── Un comentario llega al modelo COMO DATO, no como orden ───────────────
