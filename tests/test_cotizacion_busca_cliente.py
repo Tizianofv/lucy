@@ -169,6 +169,8 @@ def test_sin_el_campo_volver_la_ruta_sigue_como_siempre(m, noco):
 # ═══ 3. Solo quien puede ligar un cliente en el panel ═══
 
 def test_en_solo_ver_ni_se_arma_la_ventana_ni_el_buscador_y_el_post_da_401_sin_escribir(m, noco):
+    t._guardar("enviar", proyecto=2, para_nombre="Alguien")        # con una cotización, solo ver SÍ dibuja la sección
+    assert 'id="cotizaciones"' in _pagina(_ver(), p=2)
     html = _pagina(_ver(), p=2, cotizacion="nueva", pq="ficha", pdonde="cotizacion-cliente")
     assert 'name="volver"' not in html and 'class="cz-cliente-buscar"' not in html and 'class="sugerencia"' not in html
     r = _ver().post("/proyectos/2/cliente", data={"noco_id": "101", "volver": "cotizacion"}, follow_redirects=False)
