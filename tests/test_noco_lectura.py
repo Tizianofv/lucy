@@ -48,6 +48,7 @@ from __future__ import annotations
 import ast
 import inspect
 import pathlib
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -129,6 +130,44 @@ def _respuesta(filas, total=None) -> dict:
 
 FILA = {"Id": 7, "nombre": "Ana Pérez"}
 
+# Las columnas que la tabla de personas tiene y que este módulo conoce. Un `where`
+# que nombre otra se rechaza en el doble, como Noco rechaza una columna que no existe.
+_COLUMNAS_DE_LA_TABLA = {"Id", "nombre", "nombre_whatsapp", "telefono", "email",
+                         "unida_a", "bsuid"}
+
+
+def _donde_como_noco(donde: str, fila: dict) -> bool:
+    """Evalúa un `where` de Noco sobre una fila, como lo entiende Noco.
+
+    DE DÓNDE SALE LO QUE AFIRMA, y su frontera: de la sintaxis `where` del API v2
+    de NocoDB (documentación de NocoDB: condiciones `(columna,operador,valor)`,
+    unidas con `~or` / `~and` / `~not`; `like` con `%` como comodín; `eq` igual), tal
+    como la conoce quien escribió este doble. NO está comprobado contra el Noco de
+    CDS desde esta prueba (lo que no se comprobó: si `like` distingue mayúsculas
+    —aquí NO distingue— y cómo está escrito el teléfono en las fichas reales).
+    Solo entiende lo que este módulo escribe: condiciones unidas con `~or`. Todo
+    lo demás —otro conector, un paréntesis de más, una columna que la tabla no
+    tiene, un operador que no sea `like` o `eq`— hace fallar la prueba en vez de
+    adivinar. Una condición suelta fuera de un grupo `(…)` también.
+    """
+    partes = re.fullmatch(r"(\([^()]*\))((?:~or\([^()]*\))*)", donde)
+    assert partes, f"el doble de Noco no entiende este where: {donde!r}"
+    condiciones = re.findall(r"\(([^()]*)\)", donde)
+    for texto in condiciones:
+        assert texto.count(",") == 2, f"condición mal formada: {texto!r}"
+    ok = False
+    for columna, operador, valor in (c.split(",") for c in condiciones):
+        assert columna in _COLUMNAS_DE_LA_TABLA, f"Noco no tiene la columna {columna!r}"
+        assert operador in ("like", "eq"), f"operador {operador!r}"
+        actual = fila.get(columna)
+        actual = "" if actual is None else str(actual)
+        if operador == "eq":
+            ok = ok or actual == valor
+        else:
+            assert valor.startswith("%") and valor.endswith("%") and len(valor) > 2, valor
+            ok = ok or valor[1:-1].casefold() in actual.casefold()
+    return ok
+
 
 class Noco:
     """Un Noco de mentira: un cliente HTTP de VERDAD y un transporte de mentira.
@@ -151,8 +190,9 @@ class Noco:
     """
 
     def __init__(self, *, filas=(FILA,), total=None, status=200, cuerpo=None,
-                 json=None, falla=None):
+                 json=None, falla=None, filtrar=False):
         self.filas = filas
+        self.filtrar = filtrar        # contesta solo las filas que cumplen el `where`
         self.total = total
         self.status = status
         self.cuerpo = cuerpo          # texto crudo, para el caso «no es JSON»
@@ -181,7 +221,11 @@ class Noco:
             return HTTPX.Response(self.status, text=self.cuerpo)
         if self.status != 200:
             return HTTPX.Response(self.status, json={"msg": "no"})
-        return HTTPX.Response(200, json=_respuesta(self.filas, self.total))
+        filas = self.filas
+        if self.filtrar:
+            filas = [f for f in filas
+                     if _donde_como_noco(pedido.url.params["where"], f)]
+        return HTTPX.Response(200, json=_respuesta(filas, self.total))
 
     def donde(self, i: int = 0):
         assert len(self.pedidos) > i, f"no salió el pedido {i}: {self.pedidos}"
@@ -327,7 +371,9 @@ async def test_G13_todo_lo_que_sale_del_modulo_es_un_get_a_noco(noco):
 
 
 async def test_G16_lo_que_sale_pide_un_nombre_y_nada_mas(noco):
-    """Las columnas que piden `buscar_personas` y `persona` son `Id,nombre`.
+    """Las columnas que piden `buscar_personas` y `persona` son las del nombre:
+    `Id,nombre,nombre_whatsapp,telefono` (el teléfono, solo para los últimos 4
+    dígitos de «Sin nombre · ····»; no sale de `_ficha`, ver la prueba de abajo).
 
     Se mira lo que salió, no lo que dice el código: se llaman las funciones
     públicas y se leen los `fields` de los pedidos que llegaron al transporte.
@@ -340,9 +386,9 @@ async def test_G16_lo_que_sale_pide_un_nombre_y_nada_mas(noco):
 
     assert len(noco.pedidos) == 2, "no salieron los dos pedidos que se esperaban"
     for pedido in noco.pedidos:
-        assert pedido.url.params["fields"] == "Id,nombre", (
+        assert pedido.url.params["fields"] == "Id,nombre,nombre_whatsapp,telefono", (
             f"se pidieron las columnas {pedido.url.params['fields']!r}")
-        for prohibido in ("telefono", "email", "bsuid", "phone", "mail"):
+        for prohibido in ("email", "bsuid", "phone", "mail", "unida_a"):
             assert prohibido not in str(pedido.url).lower(), (
                 f"el pedido nombra {prohibido!r}: {pedido.url}")
 
@@ -374,8 +420,8 @@ async def test_G16_una_fila_con_columnas_de_mas_sale_con_dos_claves(noco):
     `fields` no bastara —porque Noco lo ignora, o porque mañana alguien lo
     cambie— lo que se guarda en Lucy sigue sin teléfonos.
     """
-    noco.filas = [{"Id": 7, "nombre": "Ana Pérez", "telefono": "8090000000",
-                   "email": "a@b.invalid", "bsuid": "xx-99"}]
+    noco.filas = [{"Id": 7, "nombre": "Ana Pérez", "nombre_whatsapp": "ana wa",
+                   "telefono": "8090000000", "email": "a@b.invalid", "bsuid": "xx-99"}]
 
     personas = await noco_lectura.buscar_personas("ana")
     assert personas == [{"id": 7, "nombre": "Ana Pérez"}]
@@ -405,12 +451,16 @@ async def test_el_buscador_no_trae_mas_de_lo_que_dice_el_diseno(noco):
 async def test_G14_el_texto_llega_limpio_al_where(noco, texto, esperado):
     await noco_lectura.buscar_personas(texto)
     where = noco.params()["where"]
-    assert where == f"(nombre,like,%{esperado}%)"
-    patron = where[len("(nombre,like,%"):-len("%)")]
-    for molde in ",()~":
-        assert molde not in patron, (
-            f"{molde!r} sobrevivió en el patrón {patron!r}: con eso se cierra "
-            f"el patrón y se agrega una condición propia")
+    assert where == (f"(nombre,like,%{esperado}%)"
+                     f"~or(nombre_whatsapp,like,%{esperado}%)")
+    # Cada patrón es una sola condición: solo los conectores `~or` que escribe el
+    # módulo, y ni una condición de más.
+    assert where.count("~") == 1 and where.count("(") == 2
+    for patron in re.findall(r"like,%(.*?)%\)", where):
+        for molde in ",()~":
+            assert molde not in patron, (
+                f"{molde!r} sobrevivió en el patrón {patron!r}: con eso se cierra "
+                f"el patrón y se agrega una condición propia")
 
 
 @pytest.mark.parametrize("texto", ["", "   ", "(),~", "~,()", None, 7, ["a"]])
@@ -436,7 +486,8 @@ async def test_G14_lo_mismo_por_la_ruta_de_verdad(noco):
     r = _cliente(config.CHAT_ID_DUENO).get("/personas/buscar",
                                            params={"q": "a),(Id,gt,0"})
     assert r.status_code == 200, r.text[:300]
-    assert noco.params()["where"] == "(nombre,like,%a Id gt 0%)"
+    assert noco.params()["where"] == ("(nombre,like,%a Id gt 0%)"
+                                      "~or(nombre_whatsapp,like,%a Id gt 0%)")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -531,6 +582,128 @@ async def test_persona_no_arma_un_where_con_cualquier_cosa(noco, malo):
     with pytest.raises(ValueError):
         await noco_lectura.persona(malo)
     assert noco.pedidos == []
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Fichas sin `nombre`: se buscan por `nombre_whatsapp` y por teléfono, y salen
+# con un nombre para mostrar (16-oct-2026)
+# ═══════════════════════════════════════════════════════════════════════
+# Los números de abajo son inventados: ninguno es de una persona.
+
+SIN_NOMBRE = {"Id": 947, "telefono": "18095551234"}
+CON_WHATSAPP = {"Id": 948, "nombre_whatsapp": "  Ana WA  ", "telefono": "18095550000"}
+CON_NOMBRE = {"Id": 949, "nombre": "Luis Pérez", "nombre_whatsapp": "otro nombre",
+              "telefono": "18095559999"}
+FICHAS_DE_PRUEBA = (SIN_NOMBRE, CON_WHATSAPP, CON_NOMBRE)
+
+
+def _noco_con_fichas(monkeypatch):
+    return _apuntar_a_noco(monkeypatch, Noco(filas=list(FICHAS_DE_PRUEBA), filtrar=True))
+
+
+async def test_el_doble_entiende_el_or_como_noco():
+    """El doble de arriba no es un adorno: si no entendiera `~or`, las pruebas de
+    búsqueda de abajo pasarían por razones equivocadas. Se prueba con filas a mano."""
+    fila = {"Id": 1, "nombre": None, "nombre_whatsapp": "Zeta Uno", "telefono": "8095550000"}
+    assert _donde_como_noco("(nombre,like,%zeta%)~or(nombre_whatsapp,like,%zeta%)", fila)
+    assert _donde_como_noco("(nombre,like,%zeta%)~or(telefono,like,%5550000%)", fila)
+    assert not _donde_como_noco("(nombre,like,%xx%)~or(nombre_whatsapp,like,%xx%)", fila)
+    assert _donde_como_noco("(Id,eq,1)", fila) and not _donde_como_noco("(Id,eq,2)", fila)
+    for malo in ("(nombre,like,%a%)~and(Id,eq,1)", "(nombre,like,%a%),(Id,eq,1)",
+                 "(nombre,like,%a%)~or(Id,gt,0)", "(inventada,like,%a%)",
+                 "nombre,like,%a%", "(nombre,like,%a%)~or"):
+        with pytest.raises(AssertionError):
+            _donde_como_noco(malo, fila)
+
+
+async def test_se_encuentra_por_nombre_whatsapp(monkeypatch):
+    _noco_con_fichas(monkeypatch)
+    assert await noco_lectura.buscar_personas("ana wa") == [{"id": 948, "nombre": "Ana WA"}]
+
+
+async def test_se_encuentra_por_telefono_con_cualquier_formato_y_sin_suponer_prefijos(monkeypatch):
+    noco = _noco_con_fichas(monkeypatch)
+    esperado = [{"id": 947, "nombre": "Sin nombre · 1234"}]
+    for escrito in ("18095551234", "+1 809-555-1234", "809 555 1234", "555-1234", "5551234",
+                    "  1234 "):
+        noco.pedidos.clear()
+        assert await noco_lectura.buscar_personas(escrito) == esperado, escrito
+        assert noco.params()["where"].endswith(
+            f"~or(telefono,like,%{''.join(c for c in escrito if c.isdigit())}%)"), escrito
+
+
+@pytest.mark.parametrize("escrito", ["123", "+1 8", "12 3"])
+async def test_con_menos_de_4_digitos_no_se_busca_por_telefono(monkeypatch, escrito):
+    noco = _noco_con_fichas(monkeypatch)
+    await noco_lectura.buscar_personas(escrito)
+    assert "telefono" not in noco.params()["where"]
+
+
+@pytest.mark.parametrize("escrito", ["ana 12345", "ana1234", "x-5551234"])
+async def test_un_texto_con_letras_no_se_busca_como_telefono(monkeypatch, escrito):
+    """«ana 12345» es un nombre con un número, no un teléfono: no se agrega la
+    condición de teléfono (mezclar las dos cosas traería fichas que no son)."""
+    noco = _noco_con_fichas(monkeypatch)
+    await noco_lectura.buscar_personas(escrito)
+    assert "telefono" not in noco.params()["where"]
+
+
+async def test_el_telefono_del_where_son_solo_digitos(monkeypatch):
+    noco = _noco_con_fichas(monkeypatch)
+    await noco_lectura.buscar_personas("+(1) 809,555~1234")
+    donde = noco.params()["where"]
+    assert donde.endswith("~or(telefono,like,%18095551234%)")
+    assert donde.count("~") == 2 and donde.count("(") == 3
+
+
+async def test_el_nombre_manda_sobre_el_nombre_whatsapp(monkeypatch):
+    _noco_con_fichas(monkeypatch)
+    assert await noco_lectura.persona(949) == {"id": 949, "nombre": "Luis Pérez"}
+    # y se encuentra por cualquiera de los dos, saliendo siempre con `nombre`
+    assert await noco_lectura.buscar_personas("otro nombre") == [{"id": 949, "nombre": "Luis Pérez"}]
+
+
+async def test_una_ficha_sin_nombre_sale_con_su_nombre_para_mostrar(monkeypatch):
+    _noco_con_fichas(monkeypatch)
+    assert await noco_lectura.persona(947) == {"id": 947, "nombre": "Sin nombre · 1234"}
+    assert await noco_lectura.persona(948) == {"id": 948, "nombre": "Ana WA"}
+
+
+async def test_el_nombre_en_blanco_cae_al_siguiente_y_no_sale_mas_que_id_y_nombre(noco):
+    noco.filas = [{"Id": 1, "nombre": "   ", "nombre_whatsapp": "Wa Uno", "telefono": "8091112222",
+                   "email": "a@b.invalid", "bsuid": "xx-99"},
+                  {"Id": 2, "nombre": None, "nombre_whatsapp": " ", "telefono": "809 111 2222"}]
+    fichas = await noco_lectura.buscar_personas("uno")
+    assert fichas == [{"id": 1, "nombre": "Wa Uno"}, {"id": 2, "nombre": "Sin nombre · 2222"}]
+    assert all(set(f) == {"id", "nombre"} for f in fichas)
+
+
+@pytest.mark.parametrize("telefono,esperado", [
+    ("+39 347 453 3331", "Sin nombre · 3331"),
+    ("123", "Sin nombre · 123"),
+    ("tel: 8095550001 ", "Sin nombre · 0001"),
+])
+async def test_los_ultimos_4_digitos_del_telefono(noco, telefono, esperado):
+    noco.filas = [{"Id": 5, "telefono": telefono}]
+    assert (await noco_lectura.persona(5))["nombre"] == esperado
+
+
+@pytest.mark.parametrize("fila", [
+    {"Id": 5},                                              # nada que mostrar
+    {"Id": 5, "nombre": None, "nombre_whatsapp": None, "telefono": None},
+    {"Id": 5, "nombre": " ", "nombre_whatsapp": " ", "telefono": "  "},
+    {"Id": 5, "telefono": "sin números"},
+    {"Id": 5, "telefono": 8095550000},                      # no es texto
+    {"Id": 5, "nombre_whatsapp": ["Ana"]},
+    {"nombre_whatsapp": "Ana"},                             # sin Id
+    {"Id": True, "nombre_whatsapp": "Ana"},
+])
+async def test_sin_nombre_ni_whatsapp_ni_telefono_no_sale(noco, fila):
+    """La frontera: sin nada que mostrar, la ficha no sale ni por la búsqueda ni
+    por `persona` (no se inventa un nombre)."""
+    noco.filas = [fila]
+    assert await noco_lectura.buscar_personas("ana") == []
+    assert await noco_lectura.persona(5) is None
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -780,9 +953,9 @@ _LLAMADAS_INOCUAS = {
     "isinstance", "len", "str", "zip", "type", "ValueError",
     "logging.getLogger", "log.warning",
     "os.environ.get", "os.environ.get().strip", "os.environ.get().strip().rstrip",
-    "<Constant>.join", "texto.replace", "texto.split", "nombre.strip",
+    "<Constant>.join", "texto.replace", "texto.split",
     "fila.get", "datos.get", "respuesta.json",
-    "range", "valor.strip",
+    "range", "valor.strip", "any", "c.isalpha",
 }
 
 # La red: lo único que sale del módulo. Cada una, una vez, y solo en `_get`.

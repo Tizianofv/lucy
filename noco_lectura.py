@@ -84,8 +84,14 @@ TIEMPO_LIMITE = 8.0
 # `limit` que se le pide a Noco: no se traen 733 fichas para enseñar 20.
 TOPE_BUSQUEDA = 20
 
-# Las columnas de `buscar_personas` y `persona`: un nombre, con el que se elige.
-COLUMNAS = "Id,nombre"
+# Las columnas de `buscar_personas` y `persona`. Salen `{id, nombre}`, pero para
+# armar el nombre de una ficha sin `nombre` hacen falta `nombre_whatsapp` y el
+# teléfono (de este solo se usan los últimos 4 dígitos, y no sale de `_ficha`).
+COLUMNAS = "Id,nombre,nombre_whatsapp,telefono"
+
+# Mínimo de dígitos para que el texto del buscador se busque también como teléfono
+# (el mismo mínimo que la App de registro).
+MIN_DIGITOS_TELEFONO = 4
 
 # Las columnas de `contacto`: teléfono y correo principales y la marca de ficha unida a otra.
 COLUMNAS_CONTACTO = "Id,telefono,email,unida_a"
@@ -155,6 +161,28 @@ def _limpio(texto) -> str:
     return " ".join(texto.split())
 
 
+def _digitos(texto) -> str:
+    """Solo los dígitos 0-9 de un texto (quita `+`, espacios, guiones). Sin suponer
+    prefijos de país: lo que no es dígito no cuenta y nada se agrega."""
+    if not isinstance(texto, str):
+        return ""
+    return "".join(c for c in texto if c in "0123456789")
+
+
+def _nombre_para_mostrar(fila: dict) -> str | None:
+    """El nombre con el que se muestra (y se guarda) una ficha: `nombre`; si no
+    tiene, `nombre_whatsapp`; si tampoco, «Sin nombre · <últimos 4 dígitos del
+    teléfono>». `None` si no tiene ninguno de los tres: no hay nada que mostrar."""
+    for clave in ("nombre", "nombre_whatsapp"):
+        valor = fila.get(clave)
+        if isinstance(valor, str) and valor.strip():
+            return valor.strip()
+    digitos = _digitos(fila.get("telefono"))
+    if digitos:
+        return f"Sin nombre · {digitos[-4:]}"
+    return None
+
+
 def _ficha(fila) -> dict | None:
     """Una fila de Noco como `{id, nombre}`, o `None` si no sirve.
 
@@ -168,19 +196,21 @@ def _ficha(fila) -> dict | None:
        alguien cambie el `fields`, lo que sale de este módulo sigue siendo un
        nombre. Es la última puerta, y por eso se arma acá y no con un `dict(fila)`.
 
-    Una fila sin `Id` entero o sin nombre con algo dentro no se inventa ni se
-    completa: se descarta (y se cuenta en el registro, sin el nombre: los
+    El `nombre` es el de mostrar (`_nombre_para_mostrar`): una ficha sin `nombre`
+    sale con `nombre_whatsapp` o «Sin nombre · <4 dígitos>». Una fila sin `Id`
+    entero, o sin nombre, nombre_whatsapp ni teléfono con algo dentro, no se
+    inventa ni se completa: se descarta (y se cuenta en el registro, sin el nombre: los
     nombres de las personas no van a un log).
     """
     if not isinstance(fila, dict):
         return None
     ident = fila.get("Id")
-    nombre = fila.get("nombre")
     if isinstance(ident, bool) or not isinstance(ident, int):
         return None
-    if not isinstance(nombre, str) or not nombre.strip():
+    nombre = _nombre_para_mostrar(fila)
+    if nombre is None:
         return None
-    return {"id": ident, "nombre": nombre.strip()}
+    return {"id": ident, "nombre": nombre}
 
 
 async def _get(ruta: str, parametros: dict[str, str],
@@ -243,7 +273,9 @@ def _fichas(datos: dict) -> list[dict]:
 
 
 async def buscar_personas(texto: str) -> list[dict]:
-    """Hasta `TOPE_BUSQUEDA` personas cuyo nombre se parezca a `texto`.
+    """Hasta `TOPE_BUSQUEDA` personas cuyo nombre o `nombre_whatsapp` se parezca a
+    `texto` o, si el texto no tiene letras y trae al menos `MIN_DIGITOS_TELEFONO`
+    dígitos, cuyo teléfono los contenga (solo dígitos; sin suponer prefijos).
 
     Devuelve `[{"id": …, "nombre": …}]`. Es lo que llena el buscador del panel
     (no un desplegable: el Noco de CDS tiene 733 personas, medido por la sala el
@@ -257,8 +289,12 @@ async def buscar_personas(texto: str) -> list[dict]:
     limpio = _limpio(texto)
     if not limpio:
         return []
+    donde = (f"(nombre,like,%{limpio}%)~or(nombre_whatsapp,like,%{limpio}%)")
+    digitos = _digitos(limpio)
+    if len(digitos) >= MIN_DIGITOS_TELEFONO and not any(c.isalpha() for c in limpio):
+        donde += f"~or(telefono,like,%{digitos}%)"
     datos = await _get("records", {
-        "where": f"(nombre,like,%{limpio}%)",
+        "where": donde,
         "limit": str(TOPE_BUSQUEDA),
     })
     return _fichas(datos)[:TOPE_BUSQUEDA]
