@@ -33,6 +33,11 @@
   {%- elif error == 'cotizacion_carpeta_fallo' %}<p class="aviso">No se pudo crear la carpeta de nuevo y no se anotó nada. Puedes volver a intentarlo.</p>
   {%- elif error == 'cotizacion_drive_base' %}<p class="aviso">La base de datos falló y no se pudo saber qué pasó al subir la cotización a Drive: mira cómo quedó antes de volver a intentarlo.</p>
   {%- elif error and error.startswith('cotizacion_') %}<p class="aviso">Esa cotización no se puede guardar así: NO se guardó nada. Revisa lo escrito.</p>
+  {%- elif v and v.tipo == 'nueva' and error == 'cliente' %}<p class="aviso">No se pudo poner ese cliente: la ficha ya no está en Noco o el proyecto ya no está. NO se ligó nada.</p>
+  {%- elif v and v.tipo == 'nueva' and error == 'cliente_noco' %}<p class="aviso">Noco no contestó: el cliente NO se ligó. Intenta otra vez en un momento.</p>
+  {%- elif v and v.tipo == 'nueva' and error == 'cliente_igual' %}<p class="aviso">No cambió nada: ese ya era el cliente.</p>
+  {%- elif v and v.tipo == 'nueva' and error == 'cliente_ya_tiene' %}<p class="aviso">Este proyecto ya tiene cliente: desde aquí NO se cambió nada.</p>
+  {%- elif v and v.tipo == 'nueva' and hecho == 'cliente' and m.cliente %}<p class="aviso ok">El cliente de este proyecto es {{ m.cliente }}; su nombre y su teléfono salen abajo.</p>
   {%- elif hecho == 'cotizacion_borrador' and cz.abierta and not cz.abierta.enviada %}<p class="aviso ok">Borrador {{ cz.abierta.codigo }} guardado.</p>
   {%- elif hecho == 'cotizacion_enviada' and cz.abierta and cz.abierta.enviada %}<p class="aviso ok">Cotización {{ cz.abierta.codigo }} guardada como enviada. <a class="cz-bajar" href="/proyectos/{{ m.id }}/cotizaciones/{{ cz.abierta.id }}/pdf" download data-bajar-ya>Descargar el PDF</a></p>
     {%- if cz.abierta.drive %}<p class="aviso{{ ' ok' if cz.abierta.drive.estado == 'en_drive' }}">{{ cz.abierta.drive.aviso_al_guardar }}</p>{% endif %}
@@ -67,6 +72,27 @@
     <div class="ventana-enc"><h2>{{ v.titulo }}</h2><span class="num">{{ v.numero }}</span>
       <a class="cerrar" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}#cotizaciones" aria-label="Cerrar">✕</a></div>
     {{ aviso_de_cotizacion }}
+    {#- BUSCAR EL CLIENTE AQUÍ (16-oct-2026): solo en «Nueva cotización» y solo si el proyecto no tiene cliente. Es el mismo
+        buscador y la misma escritura del encabezado (`POST /proyectos/N/cliente`, que decide `db.poner_cliente`); `volver`
+        solo hace que la página regrese a esta ventana. Va FUERA del formulario de la cotización (un formulario dentro de otro
+        no existe en HTML), así que lo que ya escribiste ahí no viaja: busca el cliente primero. -#}
+    {% if v.tipo == 'nueva' and v.sin_cliente %}
+    <div class="cz-cliente-buscar">
+     <p class="nota">Este proyecto no tiene cliente. Búscalo en Noco: al elegirlo se guarda como su cliente y el nombre y el teléfono salen abajo.</p>
+     <div class="persona-campo cliente-campo">
+      <form class="buscar-persona" method="get" action="/proyectos" role="search">
+       <label>Cliente <input class="campo-quien" type="text" name="pq" value="{% if busqueda and busqueda.donde == 'cotizacion-cliente' %}{{ busqueda.q }}{% endif %}" placeholder="Buscar en Noco…" aria-label="Buscar el cliente en Noco" data-buscar-persona="enviar" autocomplete="off"></label>
+       {{ vista_oculta('cotizacion-cliente') }}
+       <input type="hidden" name="cotizacion" value="nueva">
+       <button class="btn-linea">Buscar</button>
+      </form>
+      <form class="elegir-persona" method="post" action="/proyectos/{{ m.id }}/cliente">
+       <input type="hidden" name="volver" value="cotizacion">
+       {{ sugerencias('cotizacion-cliente') }}
+      </form>
+     </div>
+    </div>
+    {% endif %}
     {% if v.tipo == 'hoja' %}
     <div class="ventana-cuerpo una"><div class="previa">{{ hoja_de_cotizacion(v.hoja) }}</div></div>
     <div class="ventana-pie">

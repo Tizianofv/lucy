@@ -385,6 +385,12 @@ A_MANO = {
     "cotizacion guardada enviada": {"p": 1, "cotizacion": 1, "hecho": "cotizacion_enviada"},
     "cotizacion guardada borrador": {"p": 1, "cotizacion": 2, "hecho": "cotizacion_borrador"},
     "cotizacion rechazada": {"p": 1, "cotizacion": "nueva", "error": "cotizacion_sin_opciones"},
+    # 16-oct-2026: buscar el cliente desde «Nueva cotización» (el 2 no tiene cliente): la ventana con su buscador, con los
+    # resultados, y los avisos de lo que pasó al elegir.
+    "cotizacion sin cliente": {"p": 2, "cotizacion": "nueva"},
+    "cotizacion sin cliente busca": {"p": 2, "cotizacion": "nueva", "pq": "ab", "pdonde": "cotizacion-cliente"},
+    "cotizacion sin cliente noco": {"p": 2, "cotizacion": "nueva", "error": "cliente_noco"},
+    "cotizacion con cliente ya": {"p": 1, "cotizacion": "nueva", "error": "cliente_ya_tiene"},
     "busqueda de personas": {"p": 1, "t": 10, "pq": "ab", "pdonde": "cliente"},
     "todo junto": {"p": 1, "t": 10, "nuevo": "CDS", "confirmar": "cerrar", "editar": "nombre",
                    "editar_tarea": 10, "confirmar_borrar": 10, "editar_comentario": 100,

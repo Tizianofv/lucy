@@ -1161,9 +1161,10 @@ async def _pantalla_de_cotizaciones(m: dict, todas: dict | None, contacto: dict 
             codigo_que_toca=codigo)
         previa = cotizaciones.cotizacion_en_blanco(nombre=valores["para_nombre"], telefono=valores["para_telefono"],
                                                    hoy=hoy, codigo=codigo)
+        # Sin cliente en el proyecto, la ventana ofrece buscarlo (`sin_cliente`); con cliente, queda como siempre.
         ventana = {"tipo": "nueva", "titulo": "Nueva cotización", "numero": f"{codigo} · número automático",
                    "valores": valores, "hoja": cotizaciones.hoja_de_cotizacion(previa),
-                   "id": None}
+                   "id": None, "sin_cliente": not m.get("cliente")}
     elif pedida:
         cot = next((c for c in del_proyecto if c["id"] == int(pedida)), None)
         if cot is not None:
@@ -1426,13 +1427,18 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          "nombres_responsable": [n for v, n in config.opciones_de_responsable() if v]})
 
 
+# Los sitios de la página donde se puede buscar una persona de Noco sin JavaScript (`pdonde`). `cotizacion-cliente` es
+# el buscador de la ventana de «Nueva cotización». Las pruebas que doblan la búsqueda usan ESTE patrón, no una copia.
+DONDE_DE_LA_BUSQUEDA = r"cliente|cotizacion-cliente|proyecto|tarea-\d+"
+
+
 async def _buscar_personas_para_la_pagina(pq: str, pdonde: str) -> dict | None:
     """La búsqueda de personas de Noco que se dibuja SIN JavaScript: `None` si no
     hay nada que buscar. Es solo LECTURA de Noco (`noco_lectura.buscar_personas`);
     si Noco no contesta se dice, y nunca se inventa una lista vacía que parezca
     «esa persona no está»."""
     texto = pq.strip()
-    if not texto or not re.fullmatch(r"cliente|proyecto|tarea-\d+", pdonde):
+    if not texto or not re.fullmatch(DONDE_DE_LA_BUSQUEDA, pdonde):
         return None
     try:
         personas = await noco_lectura.buscar_personas(texto)
@@ -1604,6 +1610,9 @@ async def crear_proyecto_nuevo(request: Request):
         f"/proyectos?hecho=proyecto_nuevo&p={nuevo['id']}", status_code=303)
 
 
+VOLVER_A_LA_COTIZACION = "cotizacion"
+
+
 @app.post("/proyectos/{pid}/cliente")
 @auth.puerta(auth.PUERTA_SIEMPRE)
 async def poner_cliente_del_proyecto(request: Request, pid: int):
@@ -1613,21 +1622,33 @@ async def poner_cliente_del_proyecto(request: Request, pid: int):
     cliente (es opcional). Esta ruta solo traduce y pide sesión."""
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
-    vale, noco_id = _noco_id_de(await request.form())
-    if not vale:
-        return RedirectResponse(f"/proyectos?error=cliente&p={pid}", status_code=303)
+    formulario = await request.form()
+    # DESDE «NUEVA COTIZACIÓN» (16-oct-2026): el mismo formulario y la misma escritura; `volver=cotizacion` solo
+    # cambia a dónde vuelve (a la ventana abierta, ya con el cliente) y agrega dos negativas: desde ahí no se quita
+    # un cliente y no se cambia uno que el proyecto ya tiene. Cualquier otro valor de `volver` se ignora.
+    desde_cotizacion = str(formulario.get("volver", "")) == VOLVER_A_LA_COTIZACION
+    cola = "&cotizacion=nueva#cotizaciones" if desde_cotizacion else ""
+    vale, noco_id = _noco_id_de(formulario)
+    if not vale or (desde_cotizacion and noco_id is None):
+        return RedirectResponse(f"/proyectos?error=cliente&p={pid}{cola}", status_code=303)
+    if desde_cotizacion:
+        try:
+            if await db.ficha_de_cliente_de_proyecto(pid) is not None:
+                return RedirectResponse(f"/proyectos?error=cliente_ya_tiene&p={pid}{cola}", status_code=303)
+        except db.SesionNoEsta:
+            return RedirectResponse(f"/proyectos?error=cliente&p={pid}{cola}", status_code=303)
     try:
         cambio = await db.poner_cliente(pid, noco_id, leer_persona=noco_lectura.persona)
     except noco_lectura.NocoNoContesta as e:
         log.warning("Panel de proyectos: Noco no contestó al poner el cliente de #%s: %s", pid, e)
-        return RedirectResponse(f"/proyectos?error=cliente_noco&p={pid}", status_code=303)
+        return RedirectResponse(f"/proyectos?error=cliente_noco&p={pid}{cola}", status_code=303)
     except ValueError as e:
         log.warning("Panel de proyectos: cliente rechazado para #%s: %s", pid, e)
-        return RedirectResponse(f"/proyectos?error=cliente&p={pid}", status_code=303)
+        return RedirectResponse(f"/proyectos?error=cliente&p={pid}{cola}", status_code=303)
     if not cambio:
-        return RedirectResponse(f"/proyectos?error=cliente_igual&p={pid}", status_code=303)
+        return RedirectResponse(f"/proyectos?error=cliente_igual&p={pid}{cola}", status_code=303)
     hecho = "cliente_quitado" if noco_id is None else "cliente"
-    return RedirectResponse(f"/proyectos?hecho={hecho}&p={pid}", status_code=303)
+    return RedirectResponse(f"/proyectos?hecho={hecho}&p={pid}{cola}", status_code=303)
 
 
 def _error_de_persona(e: Exception) -> str:
