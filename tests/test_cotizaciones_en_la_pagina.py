@@ -389,6 +389,8 @@ def test_sin_javascript_se_crea_una_de_dos_opciones_y_dos_renglones_y_todo_lo_qu
     # cada casilla de texto de la página llegó a lo guardado
     todo = guardada[0]["contenido"] + "|" + (guardada[0]["para_nombre"] or "") + "|" + (guardada[0]["para_telefono"] or "")
     for _, nombre, tipo, valor, _ in f.casillas:
+        if nombre is None:
+            continue           # sin `name` no viaja en el POST: la casilla de la IA («Lo que pidió el cliente»), probada en `test_cotizaciones_ia_en_la_ventana.py`
         if tipo == "text" or nombre in ("para-nombre", "para-telefono") or tipo == "textarea":
             if nombre.endswith("-total"):
                 continue                                          # el dinero se guarda ya limpio: se mira abajo
