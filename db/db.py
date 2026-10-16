@@ -2706,6 +2706,34 @@ async def marcar_error_de_drive(proyecto_id: int, cotizacion_id: int, causa: str
         return await cur.fetchone() is not None
 
 
+# Al rehacer la carpeta del proyecto, los archivos de sus cotizaciones (que estaban en la carpeta muerta) dejan de valer:
+# se sueltan una por una, cada una con su candado `cambiado_en` (una que alguien corrigió en medio no se toca).
+SENTENCIA_DE_SOLTAR_DRIVE = (
+    "UPDATE cotizaciones SET drive_archivo_id = NULL, drive_version = NULL, drive_error = NULL "
+    "WHERE id = %s AND proyecto_id = %s AND cambiado_en = %s AND estado = 'enviada' AND borrado_en IS NULL "
+    "RETURNING id")
+
+
+async def rehacer_carpetas_de_drive(proyecto_id: int, carpeta_cotizaciones_vieja: str, carpeta_proyecto_id: str,
+                                    carpeta_cotizaciones_id: str, nombre_puesto: str,
+                                    cotizaciones: list[tuple]) -> bool:
+    """En UNA transacción: cambia las carpetas anotadas del proyecto por las nuevas, solo si la de cotizaciones anotada
+    sigue siendo `carpeta_cotizaciones_vieja` (nadie las rehízo en medio), y suelta (`drive_archivo_id`, `drive_version`
+    y `drive_error` en NULL) cada cotización de `cotizaciones` (pares `(id, cambiado_en)`), que queda «No está en
+    Drive». `False` si las anotadas ya no eran las viejas: no se escribe nada."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "UPDATE drive_de_proyectos SET carpeta_proyecto_id = %s, carpeta_cotizaciones_id = %s, nombre_puesto = %s "
+            "WHERE proyecto_id = %s AND carpeta_cotizaciones_id = %s RETURNING proyecto_id",
+            (carpeta_proyecto_id, carpeta_cotizaciones_id, nombre_puesto, proyecto_id, carpeta_cotizaciones_vieja))
+        if await cur.fetchone() is None:
+            return False
+        for cid, version in cotizaciones:
+            await cur.execute(SENTENCIA_DE_SOLTAR_DRIVE, (cid, proyecto_id, version))
+        return True
+
+
 async def carpetas_de_drive(proyecto_id: int) -> dict | None:
     """Las carpetas de Drive del proyecto (`carpeta_proyecto_id`, `carpeta_cotizaciones_id`, `nombre_puesto`)
     o `None` si todavía no tiene. Si falta la tabla SUBE la excepción: quien sube no puede crear carpetas sin

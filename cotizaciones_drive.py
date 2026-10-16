@@ -64,6 +64,11 @@ CAUSAS = (
     SIN_PDF,
 )
 
+# Las causas con las que «Crear de nuevo la carpeta en Drive» se ofrece. Al borrar una carpeta, Drive borra lo que tenía
+# dentro: una cotización que ya tenía archivo ve «el archivo ya no está», no «la carpeta ya no está». Ofrecerlo con
+# cualquiera de las dos no crea nada de más: `rehacer_la_carpeta` mira primero en Drive si la carpeta de verdad falta.
+CAUSAS_DE_CARPETA_MUERTA = (SIN_LA_CARPETA_DEL_PROYECTO, SIN_EL_ARCHIVO)
+
 ETIQUETA_EN_DRIVE = "En Drive"
 ETIQUETA_VIEJA = "La versión de Drive es vieja"
 ETIQUETA_NO_ESTA = "No está en Drive"
@@ -104,6 +109,7 @@ def estado_de_drive(cot: dict) -> dict | None:
         al_guardar = f"Guardada en Lucy, pero NO llegó a Drive{porque}. Puedes volver a intentarlo."
         al_reintentar = f"NO llegó a Drive{porque}. Puedes volver a intentarlo."
     return {"estado": estado, "etiqueta": etiqueta, "causa": causa,
+            "rehacer_carpeta": estado != "en_drive" and causa in CAUSAS_DE_CARPETA_MUERTA,
             "aviso_al_guardar": al_guardar, "aviso_al_reintentar": al_reintentar}
 
 
@@ -232,6 +238,71 @@ async def _llevar_a_drive(intento: _Intento, cot: dict) -> str:
     return await intento.drive(
         lambda: drive.subir_pdf(carpeta, nombre_del_pdf, pdf, archivo_id=archivo),
         no_esta=SIN_EL_ARCHIVO if archivo else SIN_LA_CARPETA_DEL_PROYECTO)
+
+
+async def _rehacer_las_carpetas(intento: _Intento, cot: dict, carpetas: dict):
+    """Crea de nuevo lo que falta y devuelve `(carpeta_proyecto_id, carpeta_cotizaciones_id, nombre_puesto)`, o `None`
+    si la carpeta de cotizaciones sigue en Drive (no hay nada que rehacer). Se mira ANTES de crear: si la del proyecto
+    ya no está (404) se rehacen las dos, con la misma regla de nombre y «· #N»; si está pero sin su `cotizaciones`,
+    solo esta."""
+    pid, proyecto, vieja = cot["proyecto_id"], carpetas["carpeta_proyecto_id"], carpetas["carpeta_cotizaciones_id"]
+    try:
+        hijos = await intento.drive(lambda: drive.buscar_en(proyecto, NOMBRE_DE_LA_CARPETA_DE_COTIZACIONES),
+                                    no_esta=SIN_LA_CARPETA_DEL_PROYECTO)
+        proyecto_vive = True
+    except _Falla as f:
+        if f.causa != SIN_LA_CARPETA_DEL_PROYECTO:
+            raise
+        hijos, proyecto_vive = [], False
+    if any(h["id"] == vieja for h in hijos):
+        return None
+    nombre = carpetas["nombre_puesto"]
+    if proyecto_vive:
+        # Buscar dentro de una carpeta que ya no está puede contestar «nadie» y no un 404: es al crear dentro cuando
+        # Drive dice que no existe. Entonces el proyecto también estaba muerto.
+        try:
+            nueva = await intento.drive(lambda: drive.crear_carpeta(NOMBRE_DE_LA_CARPETA_DE_COTIZACIONES, proyecto),
+                                        no_esta=SIN_LA_CARPETA_DEL_PROYECTO)
+            return proyecto, nueva, nombre
+        except _Falla as f:
+            if f.causa != SIN_LA_CARPETA_DEL_PROYECTO:
+                raise
+    raiz = _la_raiz()
+    nombre = await _nombre_para_la_carpeta(intento, raiz, cot["proyecto_nombre"], pid, propia=None)
+    proyecto = await intento.drive(lambda: drive.crear_carpeta(nombre, raiz),
+                                   no_esta=drive.DriveSinCarpetaProyectos.causa)
+    nueva = await intento.drive(lambda: drive.crear_carpeta(NOMBRE_DE_LA_CARPETA_DE_COTIZACIONES, proyecto),
+                                no_esta=SIN_LA_CARPETA_DEL_PROYECTO)
+    return proyecto, nueva, nombre
+
+
+async def rehacer_la_carpeta(proyecto_id: int) -> str:
+    """«Crear de nuevo la carpeta en Drive» (§3.7). Solo si alguna cotización enviada del proyecto dice, en
+    `drive_error`, que la carpeta o su archivo ya no están (`CAUSAS_DE_CARPETA_MUERTA`; `sin_causa` si no), y solo si de verdad no está (`sigue` si Drive la
+    ve: no se crea otra). Crea, anota las nuevas y suelta los archivos de las cotizaciones del proyecto, que quedan
+    «No está en Drive» y se suben con «Volver a subir» (`rehecha`). `fallo` si algo salió mal: no se anota nada."""
+    todas = await db.cotizaciones_de_proyectos()
+    enviadas = [c for c in (todas or {}).get(proyecto_id, []) if c["estado"] == "enviada"]
+    muertas = [c for c in enviadas if c.get("drive_error") in CAUSAS_DE_CARPETA_MUERTA]
+    carpetas = await db.carpetas_de_drive(proyecto_id) if muertas else None
+    cot = await db.cotizacion_para_drive(proyecto_id, muertas[0]["id"]) if carpetas else None
+    if cot is None:
+        return "sin_causa"
+    try:
+        nuevas = await _rehacer_las_carpetas(_Intento(), cot, carpetas)
+    except _Falla as f:
+        log.warning("cotizaciones: no se pudo rehacer la carpeta del proyecto #%s (%s)", proyecto_id, f.causa)
+        return "fallo"
+    except Exception as e:
+        log.warning("cotizaciones: no se pudo rehacer la carpeta del proyecto #%s (%s)", proyecto_id, type(e).__name__)
+        return "fallo"
+    if nuevas is None:
+        return "sigue"
+    if not await db.rehacer_carpetas_de_drive(proyecto_id, carpetas["carpeta_cotizaciones_id"], *nuevas,
+                                              [(c["id"], c["cambiado_en"]) for c in enviadas]):
+        log.warning("cotizaciones: las carpetas del proyecto #%s ya eran otras; no se anotó nada", proyecto_id)
+        return "fallo"
+    return "rehecha"
 
 
 async def _anotar_el_error(cot: dict, causa: str, version) -> None:

@@ -538,12 +538,12 @@ def test_las_sentencias_que_escriben_cotizaciones_son_las_de_la_puerta_y_cumplen
     hallados = _sentencias_sobre_cotizaciones(buzon._py_en_disco(_ROOT), _ROOT)
     inserts = [h for h in hallados if re.search(r"INSERT\s+INTO", h[2], re.I)]
     updates = [h for h in hallados if re.search(r"UPDATE\s+cotizaciones", h[2], re.I)]
-    assert len(inserts) == 1 and len(updates) == 4, hallados
+    assert len(inserts) == 1 and len(updates) == 5, hallados
     # las UPDATE son las dos sentencias de la puerta (guardar) y las dos de Drive (pieza 8: marcar «en Drive» y
-    # anotar el error), que también exigen el candado `cambiado_en` y no tocan las columnas que no cambian
+    # anotar el error; y la de soltar los archivos al rehacer la carpeta), que también exigen el candado `cambiado_en` y no tocan las columnas que no cambian
     assert sorted(u[2] for u in updates) == sorted((
         db.SENTENCIA_DE_GUARDAR_BORRADOR, db.SENTENCIA_DE_ENVIAR,
-        db.SENTENCIA_DE_MARCAR_EN_DRIVE, db.SENTENCIA_DE_ERROR_DE_DRIVE))
+        db.SENTENCIA_DE_MARCAR_EN_DRIVE, db.SENTENCIA_DE_ERROR_DE_DRIVE, db.SENTENCIA_DE_SOLTAR_DRIVE))
     assert _lo_que_viola(hallados) == []
 
 

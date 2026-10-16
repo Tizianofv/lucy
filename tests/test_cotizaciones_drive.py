@@ -265,7 +265,7 @@ def _afirmaciones_de_estar_en_drive(texto: str) -> list[str]:
     """Las frases de una página que AFIRMAN que algo está en Drive: «En Drive» (la etiqueta), «y en Drive» y «Subida a
     Drive». Se quitan antes las que dicen otra cosa con las mismas palabras (los enlaces y las negaciones), declaradas
     una por una."""
-    permitidas = ("Abrir en Drive", "No está en Drive", "ya no está en Drive")
+    permitidas = ("Abrir en Drive", "No está en Drive", "ya no está en Drive", "Crear de nuevo la carpeta en Drive")
     for frase in permitidas:
         texto = texto.replace(frase, "")
     return re.findall(r"(?i)\ben drive\b|subida a drive", texto)
@@ -989,6 +989,164 @@ def test_humo_corre_las_lecturas_de_drive_contra_la_base_de_verdad():
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# «Crear de nuevo la carpeta en Drive» (§3.7)
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+def _borrar_en_drive(nube, ident):
+    """Alguien borra a mano una carpeta (o archivo) y todo lo que tenía dentro."""
+    for hijo in [i for i, c in nube.cosas.items() if c["padre"] == ident]:
+        _borrar_en_drive(nube, hijo)
+    nube.cosas.pop(ident, None)
+
+
+def _con_la_carpeta_muerta(m, nube, que="proyecto"):
+    """Dos enviadas subidas; se borra la carpeta (`proyecto` entera, o solo `cotizaciones`); se corrige la 2 y queda con
+    la causa de la carpeta que ya no está."""
+    _enviar()
+    _guardar("enviar")
+    _volver_a_subir(cid=2)
+    viejas = _carpetas(m)
+    _borrar_en_drive(nube, viejas["carpeta_proyecto_id" if que == "proyecto" else "carpeta_cotizaciones_id"])
+    _corregir(cid=2)
+    assert _fila(m, 2)["drive_error"] in cd.CAUSAS_DE_CARPETA_MUERTA      # (con archivo guardado: «el archivo ya no está»)
+    return viejas
+
+
+def _rehacer(c=None, proyecto=1, cot=2):
+    c = c or _casa()
+    r = c.post(f"/proyectos/{proyecto}/drive/carpeta", data={"cotizacion": str(cot)}, follow_redirects=False)
+    return r, (c.get(r.headers["location"].split("#")[0]).text if r.status_code == 303 else None)
+
+
+def test_con_la_carpeta_muerta_la_hoja_ofrece_crearla_de_nuevo_solo_a_la_casa_y_solo_con_esa_causa(m, nube):
+    _con_la_carpeta_muerta(m, nube)
+    hoja = _seccion_de_cotizaciones(_casa().get("/proyectos", params={"p": 1, "cotizacion": 2}).text)
+    assert 'action="/proyectos/1/drive/carpeta"' in hoja and "Crear de nuevo la carpeta en Drive" in hoja
+    assert "Crear de nuevo" not in _seccion_de_cotizaciones(_ver().get("/proyectos", params={"p": 1, "cotizacion": 2}).text)
+    # con otra causa, o ya en Drive, no sale
+    m.con.execute("UPDATE cotizaciones SET drive_error = ? WHERE id = 2", (drive.DriveNoContesta.causa,))
+    m.con.commit()
+    assert "Crear de nuevo" not in _seccion_de_cotizaciones(_casa().get("/proyectos", params={"p": 1, "cotizacion": 2}).text)
+    # la lista no lo ofrece en ningún caso (solo la hoja abierta)
+    assert "Crear de nuevo" not in _seccion_de_cotizaciones(_casa().get("/proyectos", params={"p": 1}).text)
+
+
+def test_crear_de_nuevo_la_carpeta_rehace_las_dos_anota_las_nuevas_y_suelta_los_archivos_viejos(m, nube):
+    viejas = _con_la_carpeta_muerta(m, nube)
+    r, html = _rehacer()
+    assert r.headers["location"] == "/proyectos?hecho=cotizacion_carpeta&p=1&cotizacion=2#cotizaciones"
+    nuevas = _carpetas(m)
+    assert nuevas["carpeta_proyecto_id"] != viejas["carpeta_proyecto_id"] and nuevas["carpeta_cotizaciones_id"] != viejas["carpeta_cotizaciones_id"]
+    assert nube.cosas[nuevas["carpeta_proyecto_id"]]["nombre"] == "Disco de prueba" == nuevas["nombre_puesto"]
+    assert nube.cosas[nuevas["carpeta_cotizaciones_id"]]["padre"] == nuevas["carpeta_proyecto_id"]
+    # las dos cotizaciones quedan «No está en Drive», sin causa, y la hoja lo dice
+    for cid in (1, 2):
+        f = _fila(m, cid)
+        assert (f["drive_archivo_id"], f["drive_version"], f["drive_error"]) == (None, None, None)
+    assert "La carpeta del proyecto se creó de nuevo" in html
+    assert _afirmaciones_de_estar_en_drive(_seccion_de_cotizaciones(html).split('class="cz-ventana"')[1]) == []
+    assert "Crear de nuevo" not in _seccion_de_cotizaciones(html)
+    # y se suben de nuevo con «Volver a subir», sin otra lógica: caen en la carpeta nueva y quedan en Drive
+    assert nube.archivos() == []
+    for cid in (1, 2):
+        _volver_a_subir(cid=cid)
+        assert _fila(m, cid)["drive_version"] == _fila(m, cid)["cambiado_en"]
+    assert {nube.cosas[i]["padre"] for i in nube.archivos()} == {nuevas["carpeta_cotizaciones_id"]}
+    assert len(nube.archivos()) == 2
+
+
+def test_si_solo_falta_la_subcarpeta_cotizaciones_se_rehace_esa_y_el_proyecto_conserva_su_carpeta(m, nube):
+    viejas = _con_la_carpeta_muerta(m, nube, que="cotizaciones")
+    _rehacer()
+    nuevas = _carpetas(m)
+    assert nuevas["carpeta_proyecto_id"] == viejas["carpeta_proyecto_id"]
+    assert nuevas["carpeta_cotizaciones_id"] != viejas["carpeta_cotizaciones_id"]
+    assert nube.carpetas_de_proyectos() == [viejas["carpeta_proyecto_id"]]
+    assert _fila(m, 2)["drive_archivo_id"] is None
+
+
+def test_si_la_carpeta_todavia_esta_en_drive_no_se_crea_otra_ni_se_suelta_nada(m, nube):
+    _enviar()
+    carpetas = _carpetas(m)
+    m.con.execute("UPDATE cotizaciones SET drive_error = ? WHERE id = 1", (cd.SIN_LA_CARPETA_DEL_PROYECTO,))
+    m.con.commit()
+    antes = _fila(m)
+    nube.pasos.clear()
+    r, html = _rehacer(cot=1)
+    assert r.headers["location"] == "/proyectos?error=cotizacion_carpeta_sigue&p=1&cotizacion=1#cotizaciones"
+    assert "La carpeta todavía existe: no se creó otra." in html
+    assert not any(p.startswith("crear_carpeta") for p, _ in nube.pasos) and nube.carpetas_de_proyectos() == [carpetas["carpeta_proyecto_id"]]
+    assert _carpetas(m) == carpetas and _fila(m) == antes
+
+
+def test_sin_ninguna_cotizacion_que_diga_que_la_carpeta_falta_no_hace_nada(m, nube):
+    _enviar()
+    nube.google.pedidos.clear()
+    r, html = _rehacer(cot=1)
+    assert "error=cotizacion_carpeta_sin_causa" in r.headers["location"] and nube.google.pedidos == []
+    r, _ = _rehacer(proyecto=3, cot=1)                                   # un proyecto sin cotizaciones
+    assert "error=cotizacion_carpeta_sin_causa" in r.headers["location"] and nube.google.pedidos == []
+
+
+def test_solo_ver_y_sin_sesion_no_rehacen_la_carpeta(m, nube):
+    _con_la_carpeta_muerta(m, nube)
+    antes, pedidos = _carpetas(m), len(nube.google.pedidos)
+    for cliente in (_ver(), TestClient(__import__("web.app", fromlist=["app"]).app, base_url="https://testserver")):
+        assert cliente.post("/proyectos/1/drive/carpeta", data={"cotizacion": "2"}, follow_redirects=False).status_code == 401
+    assert _carpetas(m) == antes and len(nube.google.pedidos) == pedidos
+
+
+def test_la_carpeta_nueva_sigue_la_regla_del_nombre_repetido(m, nube):
+    _con_la_carpeta_muerta(m, nube)
+    otro = nube._nuevo("CARPETA")                      # otra carpeta de Lucy con ese nombre en «Proyectos»
+    nube.cosas[otro] = {"tipo": "carpeta", "nombre": "Disco de prueba", "padre": CARPETA_PROYECTOS}
+    _rehacer()
+    assert _carpetas(m)["nombre_puesto"] == "Disco de prueba · #1"
+    assert nube.cosas[_carpetas(m)["carpeta_proyecto_id"]]["nombre"] == "Disco de prueba · #1"
+
+
+def test_si_drive_falla_al_rehacer_no_se_anota_nada_ni_se_sueltan_los_archivos(m, nube):
+    _con_la_carpeta_muerta(m, nube)
+    antes = (_carpetas(m), _fila(m, 1), _fila(m, 2))
+    nube.falla = lambda paso, p: _R(500, json={}) if paso == "crear_carpeta" else None
+    r, html = _rehacer()
+    assert "error=cotizacion_carpeta_fallo" in r.headers["location"] and "No se pudo crear la carpeta de nuevo" in html
+    assert (_carpetas(m), _fila(m, 1), _fila(m, 2)) == antes
+
+
+def test_rehacer_las_carpetas_en_la_base_es_atomico_y_respeta_el_candado_de_cada_cotizacion(m, nube):
+    _enviar()
+    _guardar("enviar")
+    _volver_a_subir(cid=2)
+    c1, c2 = _fila(m, 1), _fila(m, 2)
+    viejas = _carpetas(m)
+    # otras carpetas anotadas que no son las que se creían: no se escribe nada
+    assert asyncio.run(db.rehacer_carpetas_de_drive(1, "OTRA", "N1", "N2", "x", [(1, c1["cambiado_en"])])) is False
+    assert _carpetas(m) == viejas and _fila(m, 1) == c1
+    # la 2 cambió en medio (otra versión): no se suelta; la 1 sí
+    ok = asyncio.run(db.rehacer_carpetas_de_drive(
+        1, viejas["carpeta_cotizaciones_id"], "N1", "N2", "x", [(1, c1["cambiado_en"]), (2, "una versión que ya no es")]))
+    assert ok is True and _carpetas(m)["carpeta_cotizaciones_id"] == "N2"
+    assert _fila(m, 1)["drive_archivo_id"] is None and _fila(m, 2) == c2
+
+
+def test_si_alguien_corrige_mientras_se_sube_y_drive_falla_la_version_nueva_no_recibe_el_error(m, nube):
+    """Drive falla y, justo antes, otra persona corrigió: el error es de la versión vieja y no se escribe sobre la nueva."""
+    _guardar("enviar")
+
+    def falla_y_otro_corrige(paso, p):
+        if paso == "subir_nuevo":
+            m.con.execute("UPDATE cotizaciones SET cambiado_en = '2026-10-15 00:00:00.000001+00:00' WHERE id = 1")
+            return _R(500, json={})
+        return None
+    nube.falla = falla_y_otro_corrige
+    assert asyncio.run(cd.subir(1, 1)) == "fallo"
+    fila = _fila(m)
+    assert fila["cambiado_en"] == "2026-10-15 00:00:00.000001+00:00"
+    assert fila["drive_error"] is None and fila["drive_archivo_id"] is None and fila["drive_version"] is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
 # Quién escribe lo de Drive, y cómo se lee
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -1012,8 +1170,11 @@ def test_drive_version_y_drive_archivo_id_se_escriben_en_un_solo_sitio_y_con_el_
         for n in ast.walk(arbol):
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "marcar_cotizacion_en_drive":
                 llamadores.append(rel)
-    assert [e[0] for e in escritores] == ["db/db.py"] and escritores[0][1] == db.SENTENCIA_DE_MARCAR_EN_DRIVE
-    assert re.search(r"\bcambiado_en\s*=\s*%s", db.SENTENCIA_DE_MARCAR_EN_DRIVE)
+    # dos sentencias lo ponen: marcar (Drive contestó) y soltar (se rehízo la carpeta y los archivos dejaron de valer)
+    assert [e[0] for e in escritores] == ["db/db.py", "db/db.py"]
+    assert sorted(e[1] for e in escritores) == sorted((db.SENTENCIA_DE_MARCAR_EN_DRIVE, db.SENTENCIA_DE_SOLTAR_DRIVE))
+    for sentencia in (db.SENTENCIA_DE_MARCAR_EN_DRIVE, db.SENTENCIA_DE_SOLTAR_DRIVE):
+        assert re.search(r"\bcambiado_en\s*=\s*%s", sentencia)
     assert llamadores == ["cotizaciones_drive.py"]
 
 
@@ -1029,7 +1190,8 @@ def test_la_unica_forma_de_decir_que_esta_en_drive_es_estado_de_drive():
     `cotizaciones_drive` (una sola puerta), y `app.py` solo las pasa."""
     for ruta in ("web/plantillas/_cotizaciones_del_proyecto.html", "web/app.py"):
         texto = (_ROOT / ruta).read_text(encoding="utf-8")
-        texto = texto.replace("Abrir en Drive", "").replace("No está en Drive", "")
+        texto = texto.replace("Abrir en Drive", "").replace("No está en Drive", "").replace(
+            "Crear de nuevo la carpeta en Drive", "")
         hallados = [l.strip() for l in texto.splitlines() if re.search(r"\ben Drive\b|Subida a Drive", l, re.I)
                     and not l.strip().startswith(("#", '"""'))]
         # en `app.py` solo comentarios y docstrings pueden nombrarlo; la plantilla, ninguna línea

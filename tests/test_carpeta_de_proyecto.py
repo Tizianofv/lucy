@@ -579,7 +579,12 @@ def test_en_ninguna_plantilla_la_carpeta_llega_a_un_href_sin_pasar_por_el_filtro
             # dato `proyectos.carpeta`: su dirección sale de `cz.drive_url` (la carpeta `cotizaciones` en Drive). Se
             # quita ESA clase, exacta, y lo demás sigue sin poder nombrar la carpeta.
             assert texto.count('class="carpeta-enlace" href="{{ cz.drive_url }}"') == 1
-            assert "carpeta" not in texto.replace('class="carpeta-enlace" href="{{ cz.drive_url }}"', "").lower(), ruta.name
+            # Y (pieza 8, «Crear de nuevo la carpeta en Drive») el texto que ve la persona puede decir «carpeta» (son las
+            # carpetas de Drive, no el dato `proyectos.carpeta`), con sus claves de aviso, su bandera y su ruta. Lo que NO
+            # puede es nombrar el dato en una expresión `{{ … }}` ni leer `m.carpeta`.
+            sin_lo_declarado = re.sub(r"cotizacion_carpeta\w*|rehacer_carpeta|/drive/carpeta", "", texto)
+            assert not re.findall(r"\{\{[^}]*carpeta[^}]*\}\}", sin_lo_declarado), ruta.name
+            assert "m.carpeta" not in texto and "enlace_carpeta" not in texto, ruta.name
         elif ruta.name != "proyectos.html":
             assert "carpeta" not in texto.lower(), ruta.name        # ninguna otra plantilla pinta este dato
         for atributo in re.finditer(r"\b([\w:-]+)\s*=\s*(\"[^\"]*\"|'[^']*')", re.sub(r"\{#.*?#\}", "", texto, flags=re.S)):

@@ -87,6 +87,10 @@ def _una_cotizacion_del_modelo(id, numero, estado, opciones):
 COTIZACIONES_DEL_MODELO: dict = {1: [
     _una_cotizacion_del_modelo(2, 2, "borrador", [("Basica", ["1000.00"]), ("Completa", ["1500.50", "2000.00"])]),
     _una_cotizacion_del_modelo(1, 1, "enviada", [("Una", ["1000.00"])])]}
+# La enviada del modelo dice que la carpeta de su proyecto ya no está en Drive: así la página pinta «Crear de nuevo la
+# carpeta en Drive» (y «Volver a subir a Drive») y los censos de controles las ven. La frase es la de `cotizaciones_drive`.
+import cotizaciones_drive as _cd
+COTIZACIONES_DEL_MODELO[1][1]["drive_error"] = _cd.SIN_LA_CARPETA_DEL_PROYECTO
 # Lo que el doble de `sesiones_quitadas_de_proyectos` devuelve: `{proyecto_id: {ref: codigo}}`. Por
 # omisión, nada; una prueba que quiera pintar la lista «Quitadas» lo llena con `monkeypatch`.
 QUITADAS_DEL_MODELO: dict = {}

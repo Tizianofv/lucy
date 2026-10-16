@@ -2737,6 +2737,26 @@ async def guardar_cotizacion_existente(request: Request, pid: int, cid: int):
     return _cotizacion_guardada(guardada, pid)
 
 
+@app.post("/proyectos/{pid}/drive/carpeta")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def rehacer_carpeta_de_drive(request: Request, pid: int):
+    """«Crear de nuevo la carpeta en Drive» (pieza 8, §3.7): solo la casa. `cotizaciones_drive.rehacer_la_carpeta`
+    decide si procede (alguna cotización dice que la carpeta ya no está y Drive confirma que no está). Lo que se
+    dice después sale de su resultado, por una clave en la dirección."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    campo = (await request.form()).get("cotizacion")
+    abre = f"&cotizacion={int(campo)}" if isinstance(campo, str) and campo.isdigit() and len(campo) < 12 else ""
+    try:
+        r = await cotizaciones_drive.rehacer_la_carpeta(pid)
+    except Exception as e:
+        log.warning("Panel de proyectos: falló rehacer la carpeta de Drive de #%s (%s)", pid, type(e).__name__)
+        r = "fallo"
+    destino = {"rehecha": "hecho=cotizacion_carpeta", "sigue": "error=cotizacion_carpeta_sigue",
+               "sin_causa": "error=cotizacion_carpeta_sin_causa", "fallo": "error=cotizacion_carpeta_fallo"}[r]
+    return RedirectResponse(f"/proyectos?{destino}&p={pid}{abre}#cotizaciones", status_code=303)
+
+
 @app.post("/proyectos/{pid}/cotizaciones/{cid}/drive")
 @auth.puerta(auth.PUERTA_SIEMPRE)
 async def volver_a_subir_cotizacion_a_drive(request: Request, pid: int, cid: int):
