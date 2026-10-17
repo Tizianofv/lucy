@@ -19,7 +19,7 @@
 {#- Los avisos de las cotizaciones viven AQUÍ (en la ventana si hay una abierta, si no encima de la lista):
     el velo de la ventana taparía un aviso de arriba de la página. -#}
 {% set aviso_de_cotizacion %}
-  {%- if error == 'cotizacion_cambio' %}<p class="aviso">La cotización cambió mientras la editabas: lo que escribiste NO se guardó. Abajo está como quedó.</p>
+  {%- if error == 'cotizacion_cambio' %}<p class="aviso">La cotización cambió mientras la editabas: lo que escribiste NO se guardó. Abajo está como quedó{% if v and v.escrito_aparte %}; lo que escribiste sale aparte, arriba, para que lo copies{% endif %}.</p>
   {%- elif error == 'cotizacion_no_esta' %}<p class="aviso">Esa cotización (o ese proyecto) ya no está: NO se guardó nada.</p>
   {%- elif error == 'cotizacion_enviada_no_vuelve' %}<p class="aviso">Una cotización enviada no vuelve a borrador: NO se guardó nada. Para corregirla usa «Guardar y descargar PDF».</p>
   {%- elif error == 'cotizacion_sin_tabla' %}<p class="aviso">Las cotizaciones todavía no se pueden guardar: falta actualizar la base de datos. NO se guardó nada.</p>
