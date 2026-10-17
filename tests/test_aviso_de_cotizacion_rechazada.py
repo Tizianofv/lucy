@@ -29,6 +29,7 @@ import re
 import shutil
 import subprocess
 from html.parser import HTMLParser
+from urllib.parse import unquote_plus
 
 import pytest
 from fastapi.testclient import TestClient  # noqa: F401  (primero: otros módulos de prueba cambian `httpx` al importarse)
@@ -160,8 +161,9 @@ def test_un_precio_vacio_rechazado_sale_en_el_pie_con_la_casilla_marcada_y_lo_es
     destino = r.headers["location"]
     assert "error=cotizacion_total_vacio" in destino and re.search(r"&rechazo=[\w-]{10,}#cotizaciones$", destino), destino
     # lo escrito NO viaja en la dirección ni queda en el registro
+    legible = unquote_plus(destino)                           # la dirección como se lee, no como viaja codificada
     for texto in ESCRITO.values():
-        assert texto not in destino and texto.encode("latin-1").hex() not in destino
+        assert texto not in destino and texto not in legible and texto.split()[0] not in legible
     assert not [x for x in caplog.records if any(v in x.getMessage() for v in ESCRITO.values())]
     html = c.get(destino.split("#")[0]).text
     v = _ventana(html)
