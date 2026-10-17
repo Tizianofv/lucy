@@ -180,6 +180,25 @@ h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balan
 .mas-linea{display:none}
 .con-js .mas-linea{display:inline-block}
 .con-js .cz-sobra{display:none}
+/* LA IA DE LOS TEXTOS DE LAS COTIZACIONES (pieza 3, 16-oct-2026): la clase de la maqueta `disenos/lucy-cotizaciones-ia/maqueta.html`. Sin JavaScript no sale. */
+.cz-ia{display:none}
+.con-js .ia-caja.cz-ia,.con-js .ia-fila.cz-ia{display:flex}
+.ia-caja{border:1px solid color-mix(in srgb,var(--color) 35%,var(--linea));background:color-mix(in srgb,var(--color) 6%,var(--papel));border-radius:12px;padding:.8rem;flex-direction:column;gap:.5rem;margin-bottom:.7rem}
+.ia-caja h5{margin:0;font:700 .8rem var(--texto);display:flex;align-items:center;gap:.4rem}
+.ia-pill{font:700 .62rem var(--texto);letter-spacing:.06em;padding:.08rem .4rem;border-radius:999px;background:var(--color);color:#fff}
+.ia-caja p{margin:0;font-size:.76rem;color:var(--suave)}
+.ia-caja label{display:flex;flex-direction:column;gap:.25rem;font-size:.78rem;color:var(--suave)}
+.ia-fila{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.btn-ia{font:600 .8rem var(--texto);padding:.4rem .75rem;border-radius:8px;border:1px solid var(--color);background:var(--papel);color:var(--color);cursor:pointer;align-items:center;gap:.35rem}
+.btn-ia:disabled{opacity:.55;cursor:not-allowed}
+.btn-ia.chico{font-size:.74rem;padding:.25rem .55rem;align-self:flex-start}
+.ia-espera{font-size:.76rem;color:var(--suave)}
+.ia-propuesta{border:1px dashed var(--color);border-radius:10px;padding:.6rem .7rem;background:var(--papel);font-size:.84rem;display:flex;flex-direction:column;gap:.45rem}
+.ia-propuesta .rot-ia{font:700 .68rem var(--texto);letter-spacing:.06em;text-transform:uppercase;color:var(--color)}
+.ia-propuesta .texto{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--tinta)}
+.ia-error{border-radius:10px;padding:.55rem .7rem;font-size:.8rem;background:#fdecec;color:#8a1c1c;border:1px solid #f3c2c2}
+.ia-aviso{border-radius:10px;padding:.6rem .8rem;font-size:.82rem;background:#fff7d6;color:#5c4a00;border:1px solid #f0dc8a;margin-bottom:.7rem}
+.form-c .cz-falta-precio input{background:#fff7d6;border-color:#e0c040}
 .cond{display:flex;flex-direction:column;gap:.35rem}
 .cond label{flex-direction:row;align-items:center;gap:.5rem;font-size:.84rem;color:var(--tinta);display:flex}
 .cond label[hidden]{display:none}
@@ -2032,6 +2051,195 @@ function fechaEnPalabrasDeLaHoja(iso, meses) {
   if (typeof MutationObserver !== "undefined" && document.body) {
     new MutationObserver(bajarYa).observe(document.body, {childList: true, subtree: true});
   }
+})();
+</script>
+{#- LA IA DE LOS TEXTOS DE LAS COTIZACIONES (pieza 3 del diseño `disenos/lucy-cotizaciones-ia/DISENO.md`, 16-oct-2026). Guion APARTE a
+    propósito: el de arriba conserva su garantía de «no pide nada a ningún servidor»; este es el único que pide, y solo a las dos
+    rutas de la IA, por UNA sola función (`pedir`). Qué hace: «Mejorar redacción» (una propuesta al lado del detalle; el detalle
+    solo cambia con «Usar este texto») y «Armar borrador con IA» (solo con las opciones vacías: llena nombre, descripción y detalle
+    y deja el precio vacío y marcado). NUNCA lee un precio de la respuesta ni escribe en una casilla de precio. Las frases que
+    ve la persona salen del formulario (`data-cz-ia-textos`), no de este guion. -#}
+<script id="guion-cotizaciones-ia">
+(function () {
+  function uno(sel, en) { return (en || document).querySelector(sel); }
+  function todos(sel, en) { return Array.prototype.slice.call((en || document).querySelectorAll(sel)); }
+  function vaciar(n) { while (n.firstChild) n.removeChild(n.firstChild); }
+  function texto(v) { return typeof v === "string" ? v : ""; }
+  function poner(n, v) { if (n.textContent !== v) n.textContent = v; }
+  function textosDe(form) {
+    try { return JSON.parse(form.getAttribute("data-cz-ia-textos")) || {}; } catch (x) { return {}; }
+  }
+  function el(etiqueta, clase, texto, hijos) {
+    var n = document.createElement(etiqueta);
+    if (clase) n.className = clase;
+    if (texto) n.textContent = texto;
+    (hijos || []).forEach(function (h) { n.appendChild(h); });
+    return n;
+  }
+  function visibles(en, sel) { return todos(sel, en).filter(function (n) { return !n.classList.contains("cz-sobra"); }); }
+  function avisar(campo) { campo.dispatchEvent(new Event("input", {bubbles: true})); }
+  /* LA ÚNICA FUNCIÓN QUE PIDE ALGO A UN SERVIDOR: un POST con JSON a la ruta de la IA de ESTE proyecto (la pone el servidor en
+     el formulario) y solo a `redaccion` o `borrador`. Siempre devuelve {ok, datos}; si la red falla o la respuesta no es JSON,
+     {ok: false, datos: null}. */
+  function pedir(form, que, cuerpo) {
+    return fetch(form.getAttribute("data-cz-ia-ruta") + "/" + que, {
+      method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"}, body: JSON.stringify(cuerpo)
+    }).then(function (r) {
+      return r.json().then(function (d) { return {ok: r.ok, datos: d}; });
+    }).then(null, function () { return {ok: false, datos: null}; });
+  }
+  function fallo(r, t) {
+    // Las frases del servidor son fijas (422 y 503 traen `error` y `causa`); cualquier otra cosa es «no contestó».
+    return r.datos && typeof r.datos.error === "string" && typeof r.datos.causa === "string" ? r.datos.error : t.sin_respuesta;
+  }
+  function opcionesVacias(form) {
+    var zona = uno("[data-cz-opciones]", form);
+    if (!zona) return false;
+    return todos("input", zona).concat(todos("textarea", zona)).every(function (c) { return !c.value.trim(); });
+  }
+  // Qué botones se pueden pulsar según lo que hay escrito.
+  function refrescar(form) {
+    var t = textosDe(form);
+    todos('[data-cz-ia="redaccion"]', form).forEach(function (b) {
+      var hay = !!uno("[name$='-detalle']", b.closest(".renglon-bloque")).value.trim();
+      b.disabled = !hay || !!b.getAttribute("data-cz-ia-espera");
+      b.title = hay ? "" : (t.detalle_vacio || "");
+    });
+    var caja = uno("[data-cz-ia-caja]", form);
+    var b = caja && uno('[data-cz-ia="borrador"]', caja);
+    if (!b || b.getAttribute("data-cz-ia-espera")) return;
+    var pedido = uno("[data-cz-ia-pedido]", caja).value.trim(), vacias = opcionesVacias(form);
+    b.disabled = !(vacias && pedido);
+    poner(uno("[data-cz-ia-estado]", caja), vacias ? (pedido ? "" : (t.pedido_vacio || "")) : (t.solo_vacias || ""));
+  }
+  function mejorar(form, b) {
+    var t = textosDe(form), bloque = b.closest(".renglon-bloque"), op = b.closest(".cz-op");
+    var detalle = uno("[name$='-detalle']", bloque), estado = uno("[data-cz-ia-estado]", bloque);
+    var lugar = uno("[data-cz-ia-propuesta]", bloque);
+    if (!detalle.value.trim() || b.getAttribute("data-cz-ia-espera")) return;
+    vaciar(lugar);
+    b.setAttribute("data-cz-ia-espera", "1");
+    b.disabled = true;
+    poner(estado, t.escribiendo || "");
+    pedir(form, "redaccion", {opcion: uno("[name$='-nombre']", op).value,
+                              descripcion: uno("[name$='-descripcion']", bloque).value, detalle: detalle.value}).then(function (r) {
+      b.removeAttribute("data-cz-ia-espera");
+      poner(estado, "");
+      refrescar(form);
+      if (r.ok && r.datos && typeof r.datos.detalle === "string" && r.datos.detalle) {
+        // La propuesta sale AL LADO. El detalle no cambia hasta que la persona pulsa «Usar este texto».
+        var botonUsar = el("button", "btn-prim", "Usar este texto"), botonDejar = el("button", "btn-linea", "Dejar el mío");
+        botonUsar.type = "button"; botonUsar.setAttribute("data-cz-ia", "usar");
+        botonDejar.type = "button"; botonDejar.setAttribute("data-cz-ia", "dejar");
+        lugar.appendChild(el("div", "ia-propuesta", "", [el("span", "rot-ia", "La IA propone"),
+                             el("div", "texto", r.datos.detalle), el("div", "ia-fila", "", [botonUsar, botonDejar])]));
+      } else {
+        lugar.appendChild(el("div", "ia-error", fallo(r, t)));
+      }
+    });
+  }
+  function usar(b) {
+    var bloque = b.closest(".renglon-bloque"), detalle = uno("[name$='-detalle']", bloque);
+    detalle.value = uno(".texto", b.closest(".ia-propuesta")).textContent;
+    vaciar(uno("[data-cz-ia-propuesta]", bloque));
+    avisar(detalle);
+  }
+  function dejar(b) { vaciar(b.closest("[data-cz-ia-propuesta]")); }
+  // Hace sitio con los «+ Agregar» de siempre (los del guion de la ventana) y devuelve si lo logró.
+  function haceSitio(form, opciones) {
+    function ops() { return visibles(form, ".cz-op"); }
+    function asegurar(cuantos, cuenta, mas) {
+      var intentos = 0;
+      while (cuenta().length < cuantos && intentos < 12) {
+        var antes = cuenta().length, boton = mas();
+        if (!boton) return false;
+        boton.click(); intentos += 1;
+        if (cuenta().length === antes) return false;
+      }
+      return cuenta().length >= cuantos;
+    }
+    if (!asegurar(opciones.length, ops, function () { return uno('[data-cz-agregar="opcion"]', form); })) return false;
+    return opciones.every(function (o, i) {
+      var op = ops()[i];
+      return asegurar(o.renglones.length, function () { return visibles(op, ".renglon-bloque"); },
+                      function () { return uno('[data-cz-agregar="renglon"]', op); });
+    });
+  }
+  function llenar(form, opciones, t) {
+    todos(".cz-op", form).filter(function (op) { return !op.classList.contains("cz-sobra"); }).slice(opciones.length).forEach(function (op) {
+      var quitar = uno("[data-cz-quitar]", op);
+      if (quitar) quitar.click();            // una opción en blanco de más
+    });
+    visibles(form, ".cz-op").forEach(function (op, i) {
+      var o = opciones[i], bloques = visibles(op, ".renglon-bloque");
+      if (!o) return;
+      uno("[name$='-nombre']", op).value = texto(o.nombre);
+      o.renglones.forEach(function (r, k) {
+        // SOLO nombre, descripción y detalle. De la respuesta no se lee ningún otro campo: la casilla de precio queda vacía y marcada.
+        uno("[name$='-descripcion']", bloques[k]).value = texto(r.descripcion);
+        uno("[name$='-detalle']", bloques[k]).value = texto(r.detalle);
+        var total = uno("[name$='-total']", bloques[k]), marca = total.closest(".total");
+        total.setAttribute("placeholder", t.pon_precio || "");
+        if (marca) marca.classList.add("cz-falta-precio");
+      });
+    });
+  }
+  function armar(form, b) {
+    var t = textosDe(form), caja = uno("[data-cz-ia-caja]", form);
+    var estado = uno("[data-cz-ia-estado]", caja), error = uno("[data-cz-ia-error]", caja);
+    var pedido = uno("[data-cz-ia-pedido]", caja).value.trim();
+    if (!pedido || !opcionesVacias(form) || b.getAttribute("data-cz-ia-espera")) return;
+    vaciar(error);
+    b.setAttribute("data-cz-ia-espera", "1");
+    b.disabled = true;
+    poner(estado, t.escribiendo || "");
+    pedir(form, "borrador", {pedido: pedido}).then(function (r) {
+      b.removeAttribute("data-cz-ia-espera");
+      poner(estado, "");
+      var opciones = r.ok && r.datos ? r.datos.opciones : null;
+      var bien = opciones instanceof Array && opciones.length > 0 && opciones.every(function (o) {
+        return o && o.renglones instanceof Array && o.renglones.length > 0 && o.renglones.every(function (x) { return x; });
+      });
+      var mensaje = "";
+      if (!bien) mensaje = fallo(r, t);
+      else if (!opcionesVacias(form)) mensaje = t.solo_vacias || "";     // la persona escribió mientras la IA pensaba: no se pisa nada
+      else if (!haceSitio(form, opciones)) mensaje = t.sin_respuesta || "";
+      if (mensaje) {
+        refrescar(form);
+        error.appendChild(el("div", "ia-error", mensaje));
+        return;
+      }
+      llenar(form, opciones, t);
+      var aviso = uno("[data-cz-ia-aviso]", form);
+      vaciar(aviso);
+      aviso.appendChild(el("div", "ia-aviso", t.aviso || ""));
+      avisar(uno("[name$='-nombre']", form));        // la vista previa se rehace
+      refrescar(form);
+    });
+  }
+  document.addEventListener("click", function (e) {
+    var objetivo = e.target && e.target.closest ? e.target : null;
+    var form = objetivo && objetivo.closest("form.cz-form");
+    if (!form) return;
+    var b = objetivo.closest("[data-cz-ia]");
+    if (!b) { refrescar(form); return; }       // un «+ Agregar» o un «✕» cambia lo que hay escrito
+    e.preventDefault();
+    var que = b.getAttribute("data-cz-ia");
+    if (que === "redaccion") mejorar(form, b);
+    else if (que === "borrador") armar(form, b);
+    else if (que === "usar") usar(b);
+    else if (que === "dejar") dejar(b);
+  });
+  document.addEventListener("input", function (e) {
+    var c = e.target && e.target.closest ? e.target : null;
+    var form = c && c.closest("form.cz-form");
+    if (!form) return;
+    var marca = c.closest(".cz-falta-precio");
+    if (marca && c.value.trim()) marca.classList.remove("cz-falta-precio");      // ya pusieron el precio
+    refrescar(form);
+  });
+  function alCargar() { todos("form.cz-form").forEach(refrescar); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", alCargar); else alCargar();
 })();
 </script>{% endif %}
 </body></html>

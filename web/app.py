@@ -57,6 +57,7 @@ from fastapi.templating import Jinja2Templates
 import config
 import cotizaciones
 import cotizaciones_drive
+import cotizaciones_ia
 import db.db as db
 import noco_lectura
 import registro_lectura
@@ -2802,6 +2803,76 @@ async def volver_a_subir_cotizacion_a_drive(request: Request, pid: int, cid: int
         await _subir_a_drive(pid, cid)
     return RedirectResponse(
         f"/proyectos?hecho=cotizacion_drive&p={pid}&cotizacion={cid}#cotizaciones", status_code=303)
+
+
+# LA IA DE LOS TEXTOS DE LAS COTIZACIONES (pieza 2 del diseño `disenos/lucy-cotizaciones-ia/DISENO.md`, 16-oct-2026).
+# Dos rutas POST que contestan JSON, las dos con sesión de la casa (`auth.puede_entrar`; solo ver y sin sesión: 401 y
+# el modelo no recibe nada). NO ESCRIBEN NADA: ni la base, ni Drive, ni Telegram; devuelven un texto que el navegador
+# enseña al lado y que solo cambia el formulario cuando la persona pulsa «Usar». Lo que hacen con el modelo (qué recibe,
+# la guarda de cifras, la puerta del texto, el tope de tiempo) vive en `cotizaciones_ia.py`. El `pid` está en la
+# dirección para que la ruta caiga bajo el censo de `/proyectos…`; no se lee.
+
+async def _pedido_de_la_ia(request: Request) -> dict | None:
+    """El cuerpo JSON del pedido, o `None` si no es un objeto JSON."""
+    try:
+        cuerpo = await request.json()
+    except ValueError:
+        return None
+    return cuerpo if isinstance(cuerpo, dict) else None
+
+
+async def _ejemplos_para_la_ia() -> list:
+    """Los ejemplos del tono (`cotizaciones_ia.ejemplos_del_tono`) con las cotizaciones de la base. Si la lectura falla,
+    los de siempre (la IA nunca se queda sin ejemplos)."""
+    try:
+        todas = await db.cotizaciones_de_proyectos()
+    except Exception:
+        log.warning("Cotizaciones con IA: no se pudieron leer las cotizaciones para los ejemplos")
+        todas = None
+    return cotizaciones_ia.ejemplos_del_tono(todas)
+
+
+def _respuesta_de_la_ia_que_fallo(e: Exception) -> JSONResponse:
+    """503 con la frase fija si la IA no contestó; 422 con la causa si lo que contestó (o lo que se pidió) no sirve. El
+    texto del servicio de la IA no llega aquí ni a la respuesta."""
+    if isinstance(e, cotizaciones_ia.IAPropuestaNoSirve):
+        return JSONResponse({"error": str(e), "causa": e.causa}, status_code=422)
+    return JSONResponse({"error": cotizaciones_ia.CAUSAS["no_contesto"], "causa": "no_contesto"}, status_code=503)
+
+
+@app.post("/proyectos/{pid}/cotizaciones/ia/redaccion")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def ia_mejorar_redaccion_de_cotizacion(request: Request, pid: int):
+    """«Mejorar redacción»: `{"opcion", "descripcion", "detalle"}` → `{"detalle": "..."}`. No escribe nada."""
+    if not auth.puede_entrar(_sesion(request)):
+        return JSONResponse({"error": "sin sesión"}, status_code=401)
+    cuerpo = await _pedido_de_la_ia(request)
+    if cuerpo is None:
+        return JSONResponse({"error": "El pedido no se entendió."}, status_code=400)
+    try:
+        detalle = await cotizaciones_ia.mejorar_redaccion(
+            {"descripcion": cuerpo.get("descripcion"), "detalle": cuerpo.get("detalle")},
+            cuerpo.get("opcion"), await _ejemplos_para_la_ia())
+    except (cotizaciones_ia.IANoContesta, cotizaciones_ia.IAPropuestaNoSirve) as e:
+        return _respuesta_de_la_ia_que_fallo(e)
+    return JSONResponse({"detalle": detalle})
+
+
+@app.post("/proyectos/{pid}/cotizaciones/ia/borrador")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def ia_armar_borrador_de_cotizacion(request: Request, pid: int):
+    """«Armar borrador con IA»: `{"pedido": "..."}` → `{"opciones": [{"nombre", "renglones": [{"descripcion",
+    "detalle"}]}]}`, SIN precios. No escribe nada."""
+    if not auth.puede_entrar(_sesion(request)):
+        return JSONResponse({"error": "sin sesión"}, status_code=401)
+    cuerpo = await _pedido_de_la_ia(request)
+    if cuerpo is None:
+        return JSONResponse({"error": "El pedido no se entendió."}, status_code=400)
+    try:
+        opciones = await cotizaciones_ia.armar_borrador(cuerpo.get("pedido"), await _ejemplos_para_la_ia())
+    except (cotizaciones_ia.IANoContesta, cotizaciones_ia.IAPropuestaNoSirve) as e:
+        return _respuesta_de_la_ia_que_fallo(e)
+    return JSONResponse({"opciones": opciones})
 
 
 # LAS NOTAS Y DECISIONES DEL PROYECTO (parte 6, 8-oct-2026). Las tres rutas son sesión de la casa

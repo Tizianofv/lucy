@@ -9,6 +9,13 @@
     que escribe solo se arma para la sesión de la casa (`cz.ventana.tipo` ∈ nueva|borrador|corregir). -#}
 {% from "_hoja_de_cotizacion.html" import estilo_de_la_hoja, hoja_de_cotizacion %}
 {% set v = cz.ventana %}
+{#- LA IA DE LOS TEXTOS (pieza 3 del diseño `disenos/lucy-cotizaciones-ia/DISENO.md`, 16-oct-2026). Solo se pinta dentro del
+    formulario, que solo se arma para la sesión de la casa; sin JavaScript no sale (`.cz-ia` se muestra con `.con-js`). Los botones
+    son `type="button"` y las casillas de la IA NO llevan `name`: nada de esto viaja en el POST de guardar. Los pedidos a las dos
+    rutas de la IA los hace `<script id="guion-cotizaciones-ia">` de `proyectos.html`; el texto de ninguna propuesta se escribe aquí. -#}
+{% macro ia_mejorar() -%}
+<div class="ia-fila cz-ia"><button type="button" class="btn-ia chico" data-cz-ia="redaccion" disabled>Mejorar redacción</button><span class="ia-espera" data-cz-ia-estado></span></div><div data-cz-ia-propuesta></div>
+{%- endmacro %}
 {#- Los avisos de las cotizaciones viven AQUÍ (en la ventana si hay una abierta, si no encima de la lista):
     el velo de la ventana taparía un aviso de arriba de la página. -#}
 {% set aviso_de_cotizacion %}
@@ -106,7 +113,7 @@
     </div>
     {% else %}
     {% set f = v.valores %}
-    <form class="cz-form" method="post" action="/proyectos/{{ m.id }}/cotizaciones{{ '/' ~ v.id if v.id }}" autocomplete="off">
+    <form class="cz-form" method="post" action="/proyectos/{{ m.id }}/cotizaciones{{ '/' ~ v.id if v.id }}" autocomplete="off" data-cz-ia-ruta="/proyectos/{{ m.id }}/cotizaciones/ia" data-cz-ia-textos='{{ {"sin_respuesta": "La IA no contestó. Lo que escribiste sigue igual.", "detalle_vacio": "Escribe algo en el detalle primero.", "pedido_vacio": "Escribe lo que pidió el cliente primero.", "escribiendo": "La IA está escribiendo…", "solo_vacias": "Solo con las opciones vacías: usa «Mejorar redacción» en cada renglón.", "aviso": "Esto lo propuso la IA. Revisa cada texto y pon los precios (en amarillo). Todavía no se guardó nada.", "pon_precio": "pon el precio"}|tojson }}'>
      {% if f.candado %}<input type="hidden" name="cambiado_en" value="{{ f.candado }}">{% endif %}
      <div class="ventana-cuerpo">
       <div class="form-c">
@@ -117,7 +124,16 @@
          <label>Fecha<input type="date" name="fecha" value="{{ f.fecha }}" required></label>
          <label>Validez<select name="validez" data-cz-validez>{% for d in (7, 15, 30) %}<option value="{{ d }}"{{ ' selected' if d == f.validez }}>{{ d }} días</option>{% endfor %}</select></label>
         </div></div>
-       <div><h4>Opciones</h4><div class="cz-opciones" data-cz-opciones>
+       <div><h4>Opciones</h4>
+        <div class="ia-caja cz-ia" data-cz-ia-caja>
+         <h5><span class="ia-pill">IA</span> Armar borrador con IA</h5>
+         <p>Escribe o pega lo que pidió el cliente. La IA propone las opciones y los renglones; <b>los precios los pones tú</b>. No se guarda nada hasta que tú guardes. Lo que escribas aquí sale hacia el servicio de IA (DeepSeek).</p>
+         <label>Lo que pidió el cliente<textarea data-cz-ia-pedido maxlength="2000" aria-label="Lo que pidió el cliente"></textarea></label>
+         <div class="ia-fila"><button type="button" class="btn-ia" data-cz-ia="borrador" disabled>Armar borrador con IA</button><span class="ia-espera" data-cz-ia-estado></span></div>
+         <div data-cz-ia-error></div>
+        </div>
+        <div data-cz-ia-aviso></div>
+        <div class="cz-opciones" data-cz-opciones>
         {% for op in f.opciones %}{% set o = loop.index0 %}
         <div class="op cz-op{{ ' cz-sobra' if op.sobra }}">
           <div class="op-enc"><span class="n" data-cz-n>OPCIÓN {{ loop.index }}</span><input type="text" name="op-{{ o }}-nombre" value="{{ op.nombre }}" maxlength="120" aria-label="Nombre de la opción" placeholder="Nombre de la opción"><button type="button" class="x" data-cz-quitar title="Quitar esta opción (sin guardar)">✕</button></div>
@@ -128,6 +144,7 @@
             <label>Total<span class="total">RD$ <input type="text" name="op-{{ o }}-r-{{ k }}-total" value="{{ r.total }}" maxlength="14" inputmode="decimal" placeholder="62,500"></span></label>
            </div>
            <label>Detalle<textarea name="op-{{ o }}-r-{{ k }}-detalle" maxlength="1000">{{ r.detalle }}</textarea></label>
+           {{ ia_mejorar() }}
           </div>
           {% endfor %}
           <button type="button" class="mas-linea" data-cz-agregar="renglon">+ Agregar renglón</button>
@@ -160,7 +177,8 @@
       <label>Descripción<input type="text" name="op-__O__-r-__R__-descripcion" maxlength="200"></label>
       <label>Total<span class="total">RD$ <input type="text" name="op-__O__-r-__R__-total" maxlength="14" inputmode="decimal" placeholder="62,500"></span></label>
      </div>
-     <label>Detalle<textarea name="op-__O__-r-__R__-detalle" maxlength="1000"></textarea></label></div></template>
+     <label>Detalle<textarea name="op-__O__-r-__R__-detalle" maxlength="1000"></textarea></label>
+     {{ ia_mejorar() }}</div></template>
     <template data-cz-plantilla="opcion"><div class="op cz-op">
      <div class="op-enc"><span class="n" data-cz-n>OPCIÓN</span><input type="text" name="op-__O__-nombre" maxlength="120" aria-label="Nombre de la opción" placeholder="Nombre de la opción"><button type="button" class="x" data-cz-quitar title="Quitar esta opción (sin guardar)">✕</button></div>
      <div class="renglon-bloque">
@@ -168,7 +186,8 @@
        <label>Descripción<input type="text" name="op-__O__-r-0-descripcion" maxlength="200"></label>
        <label>Total<span class="total">RD$ <input type="text" name="op-__O__-r-0-total" maxlength="14" inputmode="decimal" placeholder="62,500"></span></label>
       </div>
-      <label>Detalle<textarea name="op-__O__-r-0-detalle" maxlength="1000"></textarea></label></div>
+      <label>Detalle<textarea name="op-__O__-r-0-detalle" maxlength="1000"></textarea></label>
+      {{ ia_mejorar() }}</div>
      <button type="button" class="mas-linea" data-cz-agregar="renglon">+ Agregar renglón</button></div></template>
     <template data-cz-plantilla="condicion"><label class="cz-propia"><input type="checkbox" name="cond-extra-__C__-marcada" checked aria-label="Marcar esta condición"> <input type="text" class="cz-texto-propio" name="cond-extra-__C__-texto" maxlength="300" placeholder="Otra condición"></label></template>
     {% endif %}
