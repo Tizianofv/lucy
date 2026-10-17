@@ -851,11 +851,11 @@ _PALABRAS_DE_JS = {"var", "function", "return", "if", "else", "while", "for", "t
 GLOBALES_PERMITIDOS = {"document", "Array", "JSON", "Math", "MutationObserver", "Number", "String"}
 PROPIEDADES_PERMITIDAS = {
     "add", "addEventListener", "alt", "apply", "appendChild", "body", "call", "checked", "className", "classList", "click",
-    "closest", "concat", "contains", "createElement", "createTextNode", "documentElement", "elements", "exec", "firstChild", "focus", "forEach",
+    "closest", "concat", "contains", "createElement", "createTextNode", "documentElement", "elements", "exec", "execCommand", "firstChild", "focus", "forEach",
     "getAttribute", "hidden", "innerHTML", "insertAdjacentHTML", "length", "map", "max", "min", "name", "observe", "parentNode", "parse",
     "preventDefault", "prototype", "push", "querySelector", "querySelectorAll", "readyState", "remove", "removeAttribute",
     "removeChild",
-    "replace", "setAttribute", "slice", "split", "src", "target", "test", "textContent", "toFixed", "trim", "value"}
+    "replace", "select", "setAttribute", "slice", "split", "src", "target", "test", "textContent", "toFixed", "trim", "value"}
 
 
 # Los datos que el guion lee de SU PROPIA información (no del navegador): las claves que le da el servidor

@@ -94,7 +94,7 @@ class _Ventana(HTMLParser):
             self.casillas[a["name"]] = {"valor": a.get("value", ""), "invalida": a.get("aria-invalid"), "marcada": "checked" in a}
         if tag == "textarea" and a.get("name"):
             self._textarea = a["name"]
-            self.casillas[a["name"]] = {"valor": "", "invalida": None, "marcada": False}
+            self.casillas[a["name"]] = {"valor": "", "invalida": a.get("aria-invalid"), "marcada": False}
         if tag == "select" and a.get("name"):
             self._select = a["name"]
             self.casillas[a["name"]] = {"valor": "", "invalida": None, "marcada": False}
@@ -257,19 +257,44 @@ def test_un_rechazo_de_una_cotizacion_que_ya_existe_vuelve_con_lo_escrito_y_el_c
     assert _filas(m)[0]["cambiado_en"] is not None
 
 
-def test_si_la_cotizacion_cambio_la_ventana_abre_como_quedo_lo_guardado_y_sin_contrasena(m):
-    """Única excepción, dicha: con el candado viejo, lo escrito no se pone sobre lo guardado (pisaría el cambio ajeno)."""
+def test_si_la_cotizacion_cambio_la_ventana_abre_como_quedo_lo_guardado_y_lo_escrito_sale_aparte_para_copiar(m):
+    """Con el candado viejo, lo escrito NO se pone en las casillas (pisaría el cambio ajeno al guardar): las casillas traen lo
+    guardado y lo escrito sale APARTE, en solo lectura y con «Copiar», fuera del formulario. Nada se mezcla ni se guarda solo."""
     borrador = t._guardar("borrador", contenido=t._contenido(1))
     c = _casa()
     datos = _post_de_la_pagina(_formulario(_pagina(c, p=1, cotizacion=borrador["id"])), "borrador")
     otro = _casa().post(f"/proyectos/1/cotizaciones/{borrador['id']}", data=datos, follow_redirects=False)
     assert "hecho=cotizacion_borrador" in otro.headers["location"]                  # la otra pestaña guardó
+    guardado = _filas(m)[0]
     datos["para-nombre"] = "Lo de la segunda pestaña"
+    datos["op-0-nombre"] = ESCRITO["opcion"]
     r = c.post(f"/proyectos/1/cotizaciones/{borrador['id']}", data=datos, follow_redirects=False)
-    assert "error=cotizacion_cambio" in r.headers["location"] and "rechazo=" not in r.headers["location"]
-    v = _ventana(c.get(r.headers["location"].split("#")[0]).text)
+    destino = r.headers["location"]
+    assert "error=cotizacion_cambio" in destino and re.search(r"&rechazo=[\w-]{10,}#", destino)
+    assert "Lo de la segunda pestaña" not in unquote_plus(destino)
+    html = c.get(destino.split("#")[0]).text
+    v = _ventana(html)
     assert v.pie_dentro_del_pie and "La cotización cambió" in v.pie and v.avisos_arriba == 0
-    assert v.casillas["para-nombre"]["valor"] != "Lo de la segunda pestaña"
+    # las casillas: lo guardado, no lo escrito
+    assert v.casillas["para-nombre"]["valor"] == guardado["para_nombre"] != "Lo de la segunda pestaña"
+    assert v.casillas["op-0-nombre"]["valor"] != ESCRITO["opcion"]
+    # aparte: el bloque con lo escrito, en solo lectura, con «Copiar», FUERA del formulario y sin nombre (no viaja)
+    bloque = re.search(r'<div class="cz-aparte">(.*?)</div>', html, re.S)
+    assert bloque and "Lo que tú escribiste" in bloque.group(1) and "data-cz-copiar" in bloque.group(1)
+    area = re.search(r'<textarea readonly([^>]*)>(.*?)</textarea>', bloque.group(1), re.S)
+    assert area and "name=" not in area.group(1)
+    assert "Lo de la segunda pestaña" in area.group(2) and ESCRITO["opcion"] in area.group(2)
+    assert html.index('class="cz-aparte"') < html.index('<form class="cz-form"')
+    # solo se entrega «aparte» a quien lo pide aparte; las casillas nunca lo reciben por la contraseña
+    contrasena = re.search(r"rechazo=([\w-]+)", destino).group(1)
+    assert rechazada.leer(config.CHAT_ID_DUENO, 1, borrador["id"], contrasena) is None
+    assert rechazada.leer(config.CHAT_ID_DUENO, 1, borrador["id"], contrasena, aparte=True) is not None
+    assert _filas(m)[0]["para_nombre"] == guardado["para_nombre"]                    # y nada se guardó solo
+
+
+def test_un_rechazo_que_no_es_de_cambio_no_trae_el_bloque_de_lo_escrito_aparte(m):
+    c, r = _rechazo(m)
+    assert '<div class="cz-aparte">' not in c.get(r.headers["location"].split("#")[0]).text
 
 
 # ── La contraseña de lo escrito: de quién es, de qué proyecto y de qué cotización ──────────────────────────────
@@ -298,12 +323,15 @@ def test_la_contrasena_solo_sirve_a_su_sesion_su_proyecto_su_cotizacion_y_mientr
 
 
 def test_la_memoria_tiene_tope_y_no_guarda_lo_enorme():
+    """Falla rápido con CUALQUIER tope: se meten 200 entradas (un número fijo, que no depende de `MAXIMO`) y la memoria no puede
+    pasar de 100 ni de su propio `MAXIMO`; si el tope se quita o se sube a un millón, esto se pone rojo sin recorrer nada de más."""
     rechazada._guardado.clear()
     campos = {"contenido": {"opciones": [], "condiciones": []}, "validez": 15}
-    claves = [rechazada.guardar(1, 1, None, campos) for _ in range(rechazada.MAXIMO + 5)]
-    assert len(rechazada._guardado) == rechazada.MAXIMO
+    claves = [rechazada.guardar(1, 1, None, campos) for _ in range(200)]
+    assert rechazada.MAXIMO <= 100
+    assert len(rechazada._guardado) <= min(100, rechazada.MAXIMO) and len(rechazada._guardado) > 0
     assert rechazada.leer(1, 1, None, claves[0]) is None and rechazada.leer(1, 1, None, claves[-1]) is not None
-    assert rechazada.guardar(1, 1, None, {"x": "a" * (rechazada.LARGO_MAXIMO + 1)}) is None
+    assert rechazada.guardar(1, 1, None, {"x": "a" * 1_000_000}) is None
     rechazada._guardado.clear()
 
 
@@ -348,6 +376,15 @@ def _claves_de_no_vale_en_db() -> set[str]:
                     and ast.unparse(arg.values[0].value) == "campo" and isinstance(arg.values[1], ast.Constant), ast.unparse(arg)
                 claves |= {f"{c}{arg.values[1].value}" for c in campos}
     return claves
+
+
+def _motivos_con_campo_en_db() -> set[str]:
+    """Los motivos que nombran un campo (`{campo}_vacio` y `{campo}_largo`), por AST: los f-strings de `_texto_de_cotizacion`."""
+    campos = set()
+    for n in ast.walk(ast.parse(open("db/db.py", encoding="utf-8").read())):
+        if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "_texto_de_cotizacion":
+            campos.add(n.args[1].value if len(n.args) > 1 else next(k.value.value for k in n.keywords if k.arg == "campo"))
+    return {f"{c}{sufijo}" for c in campos for sufijo in ("_vacio", "_largo")}
 
 
 def _errores_de_rechazo_de_lo_real() -> list[str]:
@@ -400,7 +437,7 @@ def test_sin_rechazo_el_pie_no_trae_aviso_y_la_lista_y_la_hoja_lo_dicen_arriba(m
 def test_el_pie_de_la_ventana_se_queda_pegado_abajo_y_la_casilla_marcada_se_ve():
     css = open("web/plantillas/proyectos.html", encoding="utf-8").read()
     assert re.search(r"\.cz-ventana \.ventana-pie\{[^}]*position:sticky;bottom:0", css)
-    assert re.search(r"\.cz-ventana input\[aria-invalid=\"true\"\]\{[^}]*border:2px solid var\(--vencida\)", css)
+    assert re.search(r"\.cz-ventana input\[aria-invalid=\"true\"\],\.cz-ventana textarea\[aria-invalid=\"true\"\]\{[^}]*border:2px solid var\(--vencida\)", css)
     assert re.search(r"\.ventana-pie \.cz-aviso-vacio\{display:none\}", css)
 
 
@@ -496,3 +533,47 @@ def test_el_guion_solo_avisa_de_precios_vacios_y_nunca_decide_otra_cosa():
     """Un precio mal escrito («abc») NO lo detiene el guion: lo decide el servidor (formato, tope, decimales no se duplican aquí)."""
     v = _enviar_con([("Grabación", "", "abc"), ("Mezcla", "", "99999999999")])
     assert v["prevenidos"] == 0 and v["marcados"] == [None, None]
+
+
+# ══════════════════════════════════════════════════════════════════
+# 2 (ampliado). Un motivo que nombra un campo marca ESA casilla; la relación sale de la puerta real
+# ══════════════════════════════════════════════════════════════════
+
+def test_cada_motivo_que_nombra_un_campo_marca_su_casilla_y_su_aviso_dice_cual(m):
+    """No se teclea qué casilla va con qué motivo: para CADA casilla de texto de la ventana se le pone un valor malo (vacío, o
+    pasado de largo) a un POST bueno y se deja que la puerta real diga qué motivo da. Cada vez que ese motivo nombra un campo
+    (los `{campo}_vacio` y `{campo}_largo` que salen del AST de `db`), la página que vuelve marca EXACTAMENTE esa casilla con
+    `aria-invalid` y el aviso del pie no es el genérico."""
+    motivos = _motivos_con_campo_en_db()
+    assert {"descripcion_vacio", "nombre_largo", "para_nombre_vacio"} <= motivos
+    c = _casa()
+    f = _formulario(_pagina(c, p=1, cotizacion="nueva"))
+    bueno = _post_de_la_pagina(f, "enviar")
+    casillas = [n for _, n, tipo, _, _ in f.casillas if n and tipo in ("text", "textarea") and not n.endswith("-total")
+                and n not in ("fecha", "cambiado_en")]
+    assert len(casillas) >= 10
+    alcanzados, aceptados = {}, 0
+    for nombre in casillas:
+        for malo in ("", "z" * 5000):
+            r = c.post("/proyectos/1/cotizaciones", data=dict(bueno, **{nombre: malo}), follow_redirects=False)
+            aceptados += "hecho=cotizacion_enviada" in r.headers["location"]
+            error = re.search(r"error=cotizacion_(\w+?)&", r.headers["location"])
+            if not error or f"{error.group(1)}" not in motivos:
+                continue
+            v = _ventana(c.get(r.headers["location"].split("#")[0]).text)
+            marcadas = sorted(k for k, x in v.casillas.items() if x["invalida"] == "true")
+            assert marcadas == [nombre], (nombre, malo[:3], error.group(1), marcadas)
+            assert "no se puede guardar así" not in v.pie and "NO se guardó nada" in v.pie, (error.group(1), v.pie)
+            alcanzados.setdefault(error.group(1), set()).add(nombre)
+    assert len(_filas(m)) == aceptados          # solo se escribió lo que el servidor aceptó (un detalle o un teléfono vacíos valen)
+    # un piso, no una lista a medida: estos son los que la ventana de verdad puede provocar (los demás motivos con campo, como
+    # `detalle_vacio`, no se alcanzan: el detalle puede ir vacío y una condición propia vacía se descarta)
+    assert {"descripcion_vacio", "descripcion_largo", "detalle_largo", "nombre_vacio", "nombre_largo", "condicion_largo",
+            "para_nombre_vacio", "para_nombre_largo", "para_telefono_largo"} <= set(alcanzados), sorted(alcanzados)
+
+
+def test_el_aviso_de_cada_motivo_con_campo_no_es_el_generico(m):
+    c = _casa()
+    for motivo in sorted(_motivos_con_campo_en_db()):
+        v = _ventana(_pagina(c, con_recibo=True, p=1, cotizacion="nueva", error=f"cotizacion_{motivo}"))
+        assert v.pie_vacio is False and "no se puede guardar así" not in v.pie and "NO se guardó nada" in v.pie, (motivo, v.pie)

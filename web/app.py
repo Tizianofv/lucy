@@ -1179,13 +1179,15 @@ async def _pantalla_de_cotizaciones(m: dict, todas: dict | None, contacto: dict 
             se_edita = not solo_ver and (cot["estado"] == "borrador" or corrige)
             if se_edita:
                 escrito = cotizacion_rechazada.leer(chat, pid, cot["id"], rechazo) if chat is not None else None
+                aparte = cotizacion_rechazada.leer(chat, pid, cot["id"], rechazo, aparte=True) if chat is not None else None
                 valores = cotizaciones.valores_del_formulario(
                     cot, nombre_del_cliente=None, telefono_del_cliente=None, hoy=hoy, codigo_que_toca=None,
                     escrito=escrito)
                 ventana = {"tipo": "borrador" if cot["estado"] == "borrador" else "corregir",
                            "titulo": cot["codigo"], "numero": "borrador" if cot["estado"] == "borrador" else "enviada: se puede corregir",
                            "valores": valores, "hoja": hoja,
-                           "id": cot["id"]}
+                           "id": cot["id"],
+                           "escrito_aparte": cotizaciones.texto_de_lo_escrito(aparte) if aparte else None}
             else:
                 ventana = {"tipo": "hoja", "titulo": cot["codigo"], "numero": "borrador" if cot["estado"] == "borrador" else "enviada",
                            "hoja": hoja, "cot": abierta}
@@ -2700,16 +2702,17 @@ def _cotizacion_rechazada(e: Exception, pid: int, abre: str, chat: int | None = 
                           campos: dict | None = None):
     """El guardado se rechazó: nunca en silencio y sin perder lo escrito. Lo escrito se guarda en la memoria del
     proceso (`web/cotizacion_rechazada.py`) y la redirección lleva solo su contraseña (`rechazo`), jamás un dato de la
-    cotización. La única que NO lo lleva es `cotizacion_cambio`: ahí la ventana abre como quedó lo guardado (lo que
-    el aviso dice) y poner lo escrito con el candado nuevo pisaría el cambio ajeno al guardar."""
+    cotización. En `cotizacion_cambio` la ventana abre como quedó lo guardado (lo que el aviso dice) porque poner lo
+    escrito con el candado nuevo pisaría el cambio ajeno al guardar; lo escrito sale APARTE (`aparte=True`), solo para
+    leer y copiar: nada se mezcla con lo guardado ni se guarda solo."""
     clave = _error_de_cotizacion(e)
     if clave == "cotizacion_base":
         log.exception("Panel de proyectos: falló la base al guardar una cotización de #%s", pid)
     else:
         log.warning("Panel de proyectos: cotización de #%s rechazada (%s)", pid, clave)
     contrasena = None
-    if campos is not None and chat is not None and clave != "cotizacion_cambio":
-        contrasena = cotizacion_rechazada.guardar(chat, pid, cid, campos)
+    if campos is not None and chat is not None:
+        contrasena = cotizacion_rechazada.guardar(chat, pid, cid, campos, aparte=clave == "cotizacion_cambio")
     lleva = f"&rechazo={contrasena}" if contrasena else ""
     return RedirectResponse(f"/proyectos?error={clave}&p={pid}{abre}{lleva}#cotizaciones", status_code=303)
 

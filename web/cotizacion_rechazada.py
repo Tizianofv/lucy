@@ -27,7 +27,7 @@ VIDA = 900                  # segundos: lo que tarda una persona en volver a mir
 MAXIMO = 64                 # entradas a la vez
 LARGO_MAXIMO = 400_000      # caracteres de lo escrito; más que eso no se guarda (el formulario ya trae límites por casilla)
 
-_guardado: dict[str, tuple[float, int, int, int | None, dict]] = {}
+_guardado: dict[str, tuple[float, int, int, int | None, dict, bool]] = {}
 _cerrojo = threading.Lock()
 
 
@@ -41,9 +41,11 @@ def _largo(valor) -> int:
     return 1
 
 
-def guardar(chat: int, pid: int, cid: int | None, campos: dict) -> str | None:
+def guardar(chat: int, pid: int, cid: int | None, campos: dict, aparte: bool = False) -> str | None:
     """Guarda lo escrito (la forma de `cotizaciones.campos_del_formulario`) y devuelve la contraseña, o `None` si no se
-    guardó (demasiado grande). Nunca lanza."""
+    guardó (demasiado grande). Nunca lanza. `aparte=True` marca lo escrito que NO puede ponerse en las casillas (la
+    cotización cambió mientras se editaba): se muestra solo para leer y copiar, y `leer` lo entrega solo a quien lo pida
+    `aparte`."""
     try:
         if _largo(campos) > LARGO_MAXIMO:
             return None
@@ -54,13 +56,13 @@ def guardar(chat: int, pid: int, cid: int | None, campos: dict) -> str | None:
                 del _guardado[k]
             while len(_guardado) >= MAXIMO:
                 del _guardado[next(iter(_guardado))]
-            _guardado[clave] = (ahora + VIDA, chat, pid, cid, copy.deepcopy(campos))
+            _guardado[clave] = (ahora + VIDA, chat, pid, cid, copy.deepcopy(campos), bool(aparte))
         return clave
     except Exception:
         return None
 
 
-def leer(chat: int, pid: int, cid: int | None, clave) -> dict | None:
+def leer(chat: int, pid: int, cid: int | None, clave, aparte: bool = False) -> dict | None:
     """Lo escrito de esa contraseña, si es de esta sesión, de este proyecto y de esta cotización y no venció; si no,
     `None`. No gasta la contraseña: recargar la página sigue mostrando lo escrito hasta que venza."""
     if not isinstance(clave, str) or not clave:
@@ -69,7 +71,7 @@ def leer(chat: int, pid: int, cid: int | None, clave) -> dict | None:
         entrada = _guardado.get(clave)
     if entrada is None:
         return None
-    vence, de_chat, de_pid, de_cid, campos = entrada
-    if vence <= time.monotonic() or (de_chat, de_pid, de_cid) != (chat, pid, cid):
+    vence, de_chat, de_pid, de_cid, campos, es_aparte = entrada
+    if vence <= time.monotonic() or (de_chat, de_pid, de_cid) != (chat, pid, cid) or es_aparte != bool(aparte):
         return None
     return copy.deepcopy(campos)
