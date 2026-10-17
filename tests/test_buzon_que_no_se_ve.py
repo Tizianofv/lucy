@@ -4205,10 +4205,13 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 16-oct-2026, misma rama (pieza 3: los botones y el guion): +1 en disco y +1 EXENTO por
     # `tests/test_cotizaciones_ia_en_la_ventana.py` (nuevo, exento por rol); VIGILADOS sin cambio (solo plantillas).
     # Medida corriendo la prueba: 184, 131, 53.
-    assert medido == {"en disco": 184, "exentos": 131, "vigilados": 53}, (
+    # 17-oct-2026, rama `trabajo/aviso-cotizacion-sin-precio` (un guardado rechazado nunca es silencioso): +2 en disco,
+    # +1 EXENTO por `tests/test_aviso_de_cotizacion_rechazada.py` (nuevo, exento por rol) y +1 VIGILADO por
+    # `web/cotizacion_rechazada.py` (nuevo; no lee la lista cruda de `config`). Medida corriendo la prueba: 186, 132, 54.
+    assert medido == {"en disco": 186, "exentos": 132, "vigilados": 54}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "16-oct-2026 (cotizaciones-ia-2, pieza 3) era {'en disco': 184, "
-        "'exentos': 131, 'vigilados': 53}. La aserción de fondo —cero "
+        "17-oct-2026 (aviso-cotizacion-sin-precio) era {'en disco': 186, "
+        "'exentos': 132, 'vigilados': 54}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

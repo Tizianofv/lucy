@@ -64,6 +64,7 @@ import registro_lectura
 import web.auth as auth
 import web.menu as _menu
 import web.avisos as avisos_mod
+import web.cotizacion_rechazada as cotizacion_rechazada
 from web.avisos import Aviso, AvisoQueElige, Navegacion, NavegacionSellada, PuertaDeAvisos
 from acciones import crud
 from cerebro.bancos.categorias import (CATEGORIAS, NO_SUMAN,
@@ -1139,12 +1140,15 @@ def _resumen_con_su_drive(cot: dict) -> dict:
 
 
 async def _pantalla_de_cotizaciones(m: dict, todas: dict | None, contacto: dict | None, solo_ver: bool,
-                                    cotizacion: str, corregir: int) -> dict | None:
+                                    cotizacion: str, corregir: int, chat: int | None = None,
+                                    rechazo: str = "") -> dict | None:
     """Lo que la plantilla necesita de las cotizaciones del proyecto `m`: `lista` (un resumen por
     cotización, la más nueva primero), `ventana` (qué se abre, si algo: `nueva`, `borrador`, `corregir` o
     `hoja`, cada una con sus valores y su hoja) y `abierta` (el resumen de la que pide `?cotizacion=`, si es
     de este proyecto). `None` si falta la tabla. Solo LEE; no tiene sesión: quien llama ya decidió
-    `solo_ver` y en solo ver no se arma la ventana que escribe."""
+    `solo_ver` y en solo ver no se arma la ventana que escribe. `rechazo` es la contraseña de lo que la persona
+    escribió y un guardado rechazó (`web/cotizacion_rechazada.py`): si es de esta sesión, de este proyecto y de
+    esta cotización, la ventana de escribir sale con ESO en las casillas en vez de en blanco."""
     if todas is None:
         return None
     del_proyecto = todas.get(m["id"], [])
@@ -1157,9 +1161,10 @@ async def _pantalla_de_cotizaciones(m: dict, todas: dict | None, contacto: dict 
         numero = await db.numero_que_sigue_de_cotizacion(hoy.year)
         codigo = db.codigo_de_cotizacion(hoy.year, numero) if numero else ""
         telefono = (contacto or {}).get("telefono")
+        escrito = cotizacion_rechazada.leer(chat, pid, None, rechazo) if chat is not None else None
         valores = cotizaciones.valores_del_formulario(
             None, nombre_del_cliente=m.get("cliente"), telefono_del_cliente=telefono, hoy=hoy,
-            codigo_que_toca=codigo)
+            codigo_que_toca=codigo, escrito=escrito)
         previa = cotizaciones.cotizacion_en_blanco(nombre=valores["para_nombre"], telefono=valores["para_telefono"],
                                                    hoy=hoy, codigo=codigo)
         # Sin cliente en el proyecto, la ventana ofrece buscarlo (`sin_cliente`); con cliente, queda como siempre.
@@ -1173,12 +1178,16 @@ async def _pantalla_de_cotizaciones(m: dict, todas: dict | None, contacto: dict 
             hoja = cotizaciones.hoja_de_cotizacion(cot)
             se_edita = not solo_ver and (cot["estado"] == "borrador" or corrige)
             if se_edita:
+                escrito = cotizacion_rechazada.leer(chat, pid, cot["id"], rechazo) if chat is not None else None
+                aparte = cotizacion_rechazada.leer(chat, pid, cot["id"], rechazo, aparte=True) if chat is not None else None
                 valores = cotizaciones.valores_del_formulario(
-                    cot, nombre_del_cliente=None, telefono_del_cliente=None, hoy=hoy, codigo_que_toca=None)
+                    cot, nombre_del_cliente=None, telefono_del_cliente=None, hoy=hoy, codigo_que_toca=None,
+                    escrito=escrito)
                 ventana = {"tipo": "borrador" if cot["estado"] == "borrador" else "corregir",
                            "titulo": cot["codigo"], "numero": "borrador" if cot["estado"] == "borrador" else "enviada: se puede corregir",
                            "valores": valores, "hoja": hoja,
-                           "id": cot["id"]}
+                           "id": cot["id"],
+                           "escrito_aparte": cotizaciones.texto_de_lo_escrito(aparte) if aparte else None}
             else:
                 ventana = {"tipo": "hoja", "titulo": cot["codigo"], "numero": "borrador" if cot["estado"] == "borrador" else "enviada",
                            "hoja": hoja, "cot": abierta}
@@ -1208,7 +1217,8 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
                     filtro: Navegacion[str] = "", quien: Navegacion[str] = "",
                     sq: Navegacion[str] = "", estado: Navegacion[int] = 0,
                     editar_nota: Navegacion[int] = 0, borrar_nota: Navegacion[int] = 0,
-                    cotizacion: NavegacionSellada[str] = "", corregir: Navegacion[int] = 0):
+                    cotizacion: NavegacionSellada[str] = "", corregir: Navegacion[int] = 0,
+                    rechazo: Navegacion[str] = ""):
     """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
     (`?g=`), las de «Sin grupo» (`?sin_grupo=1`) o el formulario de un proyecto
@@ -1253,6 +1263,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         editar_nota = borrar_nota = 0
         sq = ""
         corregir = 0
+        rechazo = ""
     if estado:
         # «Estado de los proyectos» solo lee la lista de proyectos: lo que abriría otra cosa o haría
         # otra lectura (la búsqueda de personas en Noco, las cuentas de borrar un grupo o un
@@ -1358,7 +1369,8 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
     cz = None
     if vista["tipo"] == "proyecto":
         cz = await _pantalla_de_cotizaciones(vista["proyecto"], await db.cotizaciones_de_proyectos(),
-                                             contacto_del_cliente, solo_ver, cotizacion, corregir)
+                                             contacto_del_cliente, solo_ver, cotizacion, corregir,
+                                             _sesion(request) if de_la_casa else None, rechazo)
     # LA BÚSQUEDA DE UNA SESIÓN (parte 13, 9-oct-2026): solo la sesión de la casa y solo en un
     # proyecto; el texto se limpia antes de salir (`registro_lectura.buscar_sesiones`). Es un
     # pedido aparte, y solo cuando hay algo que buscar.
@@ -2686,13 +2698,23 @@ async def _formulario_de_cotizacion(request: Request, cid: int | None) -> tuple[
     return campos, ("&cotizacion=nueva" if cid is None else f"&cotizacion={cid}&corregir=1")
 
 
-def _cotizacion_rechazada(e: Exception, pid: int, abre: str):
+def _cotizacion_rechazada(e: Exception, pid: int, abre: str, chat: int | None = None, cid: int | None = None,
+                          campos: dict | None = None):
+    """El guardado se rechazó: nunca en silencio y sin perder lo escrito. Lo escrito se guarda en la memoria del
+    proceso (`web/cotizacion_rechazada.py`) y la redirección lleva solo su contraseña (`rechazo`), jamás un dato de la
+    cotización. En `cotizacion_cambio` la ventana abre como quedó lo guardado (lo que el aviso dice) porque poner lo
+    escrito con el candado nuevo pisaría el cambio ajeno al guardar; lo escrito sale APARTE (`aparte=True`), solo para
+    leer y copiar: nada se mezcla con lo guardado ni se guarda solo."""
     clave = _error_de_cotizacion(e)
     if clave == "cotizacion_base":
         log.exception("Panel de proyectos: falló la base al guardar una cotización de #%s", pid)
     else:
         log.warning("Panel de proyectos: cotización de #%s rechazada (%s)", pid, clave)
-    return RedirectResponse(f"/proyectos?error={clave}&p={pid}{abre}#cotizaciones", status_code=303)
+    contrasena = None
+    if campos is not None and chat is not None:
+        contrasena = cotizacion_rechazada.guardar(chat, pid, cid, campos, aparte=clave == "cotizacion_cambio")
+    lleva = f"&rechazo={contrasena}" if contrasena else ""
+    return RedirectResponse(f"/proyectos?error={clave}&p={pid}{abre}{lleva}#cotizaciones", status_code=303)
 
 
 async def _subir_a_drive(pid: int, cid: int) -> str:
@@ -2730,7 +2752,7 @@ async def guardar_cotizacion_nueva(request: Request, pid: int):
     except db.CotizacionSinSesion:
         return _fuera(request)
     except Exception as e:
-        return _cotizacion_rechazada(e, pid, abre)
+        return _cotizacion_rechazada(e, pid, abre, chat, None, campos)
     if guardada["estado"] == "enviada":
         await _subir_a_drive(pid, guardada["id"])
     return _cotizacion_guardada(guardada, pid)
@@ -2753,7 +2775,7 @@ async def guardar_cotizacion_existente(request: Request, pid: int, cid: int):
     except db.CotizacionSinSesion:
         return _fuera(request)
     except Exception as e:
-        return _cotizacion_rechazada(e, pid, abre)
+        return _cotizacion_rechazada(e, pid, abre, chat, cid, campos)
     if guardada["estado"] == "enviada":
         await _subir_a_drive(pid, guardada["id"])
     return _cotizacion_guardada(guardada, pid)

@@ -655,9 +655,22 @@ COBERTURA = (VISTAS + list(A_MANO.values()) + [
 ])
 
 
+def _pagina_con_lo_escrito_aparte() -> str:
+    """17-oct-2026: la ventana de un borrador que se rechazó porque la cotización cambió, con el bloque «Lo que tú escribiste»
+    (solo para leer y copiar). Lo escrito se pone en la memoria de `web/cotizacion_rechazada.py` por su puerta, en el momento
+    (la contraseña vence y es de un solo uso de sesión), y la página se pinta con esa contraseña."""
+    import cotizaciones
+    import web.cotizacion_rechazada as rechazada
+    campos = cotizaciones.campos_del_formulario({"para-nombre": "A", "op-0-nombre": "B", "op-0-r-0-descripcion": "C",
+                                                 "op-0-r-0-total": "1"})
+    contrasena = rechazada.guardar(config.CHAT_ID_DUENO, 1, 2, campos, aparte=True)
+    assert contrasena
+    return _pintar("casa", p=1, cotizacion=2, corregir=1, error="cotizacion_cambio", rechazo=contrasena)
+
+
 def _paginas_de_la_casa(consultas=COBERTURA) -> list[str]:
     with _con_el_bloque_de_sesiones():
-        return [_pintar("casa", **c) for c in consultas]
+        return [_pintar("casa", **c) for c in consultas] + [_pagina_con_lo_escrito_aparte()]
 
 
 @contextlib.contextmanager
