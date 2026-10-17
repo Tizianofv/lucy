@@ -25,6 +25,7 @@ from test_cotizaciones_en_la_pagina import (CASA, _casa, _guardar, _ver, m,  # n
 from test_pagina_proyectos import gente, mundo  # noqa: F401  (fixtures)
 from test_cotizaciones_ia import (SECRETO_DEL_SERVICIO, Modelo, bibliotecas_de_verdad,  # noqa: F401  (fixture autouse)
                                   modelo)
+import config
 import cotizaciones_drive
 import cotizaciones_ia as ia
 import db.db as db
@@ -47,6 +48,18 @@ CASOS = [(REDACCION, CUERPO_DE_REDACCION, RESPUESTA_DE_REDACCION),
 
 def _sin_sesion() -> Navegador:
     return Navegador(panel.app, base_url="https://testserver")
+
+
+AJENO = 700100999     # un chat que NO está en `config.CHAT_IDS_PERMITIDOS`
+
+
+def _ajeno() -> Navegador:
+    """Una sesión VÁLIDA (token bien firmado y vigente) de un chat que no puede entrar al panel."""
+    assert AJENO not in config.CHAT_IDS_PERMITIDOS and not auth.puede_entrar(AJENO)
+    c = Navegador(panel.app, base_url="https://testserver")
+    c.cookies.set(panel.COOKIE, auth.crear_token(AJENO, auth.VIDA_SESION))
+    assert auth.validar(c.cookies.get(panel.COOKIE)) == AJENO
+    return c
 
 
 def _toda_la_base(mundo) -> list[str]:
@@ -134,7 +147,7 @@ def test_si_no_se_pueden_leer_las_cotizaciones_la_ia_usa_los_ejemplos_de_siempre
 
 # ── Solo ver y sin sesión: 401 y el modelo no recibe nada ───────────────────────────────────────────────
 
-@pytest.mark.parametrize("quien", [_ver, _sin_sesion], ids=["solo_ver", "sin_sesion"])
+@pytest.mark.parametrize("quien", [_ver, _sin_sesion, _ajeno], ids=["solo_ver", "sin_sesion", "chat_ajeno_con_sesion_valida"])
 def test_cada_ruta_de_la_ia_registrada_da_401_sin_sesion_de_la_casa_y_no_llama_al_modelo(m, modelo, sin_escribir, quien):
     rutas = _rutas_de_la_ia(panel.app)
     assert rutas == ["/proyectos/{pid}/cotizaciones/ia/borrador", "/proyectos/{pid}/cotizaciones/ia/redaccion"], rutas

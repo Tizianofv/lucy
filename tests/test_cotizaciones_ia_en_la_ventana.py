@@ -327,7 +327,7 @@ function sinRed(i) { pedidos[i].p.rechazar(new Error("sin red")); }
 var escuchas = {};
 function Event(tipo, init) { this.type = tipo; this.bubbles = !!(init && init.bubbles); this.target = null; this.prevenido = false; }
 Event.prototype.preventDefault = function () { this.prevenido = true; };
-function Nodo(tag) { this.tag = tag; this.attrs = {}; this.children = []; this.parent = null; this._valor = ""; this.contenido = null; }
+function Nodo(tag) { this.tag = tag; this.attrs = {}; this.children = []; this.parent = null; this._valor = ""; this._sucio = false; this.contenido = null; }
 Nodo.prototype.appendChild = function (n) { if (n.parent) n.parent.removeChild(n); n.parent = this; this.children.push(n); return n; };
 Nodo.prototype.removeChild = function (n) { var i = this.children.indexOf(n); if (i >= 0) this.children.splice(i, 1); n.parent = null; return n; };
 Nodo.prototype.remove = function () { if (this.parent) this.parent.removeChild(this); };
@@ -345,8 +345,13 @@ Nodo.prototype.dispatchEvent = function (ev) {
 };
 Object.defineProperty(Nodo.prototype, "firstChild", {get: function () { return this.children.length ? this.children[0] : null; }});
 Object.defineProperty(Nodo.prototype, "value", {
-  get: function () { return (this.tag === "input" || this.tag === "textarea") ? this._valor : undefined; },
-  set: function (v) { this._valor = String(v); }});
+  // Como un navegador: un <input> que nadie ha tocado (ni por `.value =` ni escribiendo) muestra su atributo `value`
+  // (`setAttribute("value", x)` SÍ cambia lo que se ve); desde el primer `.value =` manda lo asignado.
+  get: function () {
+    if (this.tag === "input") return this._sucio ? this._valor : (this.attrs.value || "");
+    return this.tag === "textarea" ? this._valor : undefined;
+  },
+  set: function (v) { this._valor = String(v); this._sucio = true; }});
 Object.defineProperty(Nodo.prototype, "textContent", {
   get: function () { return this.children.map(function (c) { return c.tag === "#texto" ? c.texto : c.textContent; }).join(""); },
   set: function (v) { var self = this; this.children.slice().forEach(function (c) { self.removeChild(c); });
@@ -402,7 +407,6 @@ function construir(n) {
   Object.keys(n.a).forEach(function (k) { x.attrs[k] = n.a[k]; });
   if (n.t === "template") { x.contenido = n.c.map(construir); }
   else n.c.forEach(function (c) { x.appendChild(construir(c)); });
-  if (n.t === "input") x._valor = n.a.value || "";
   if (n.t === "textarea") { x._valor = x.textContent; }
   return x;
 }
@@ -410,7 +414,7 @@ function clonar(n, sustituir) {
   var x = new Nodo(n.tag);
   Object.keys(n.attrs).forEach(function (k) { x.attrs[k] = sustituir(n.attrs[k]); });
   if (n.tag === "#texto") x.texto = n.texto;
-  x._valor = n._valor;
+  x._valor = n._valor; x._sucio = n._sucio;
   n.children.forEach(function (c) { x.appendChild(clonar(c, sustituir)); });
   if (n.tag === "textarea") x._valor = "";
   return x;
@@ -466,7 +470,7 @@ function boton(b, que) { return b.querySelector('[data-cz-ia="' + que + '"]'); }
 function pedido() { return raiz.querySelector("[data-cz-ia-pedido]"); }
 function caja() { return raiz.querySelector("[data-cz-ia-caja]"); }
 function estadoDeArmar() { var b = boton(caja(), "borrador"); return {desactivado: b.disabled, frase: caja().querySelector("[data-cz-ia-estado]").textContent}; }
-function totales() { return forma().querySelectorAll("[name$='-total']").map(function (t) { return {nombre: t.attrs.name, valor: t.value, marcado: !!(t.closest(".total") && t.closest(".total").classList.contains("cz-falta-precio"))}; }); }
+function totales() { return forma().querySelectorAll("[name$='-total']").map(function (t) { return {nombre: t.attrs.name, valor: t.value, atributo: t.getAttribute("value") || "", marcado: !!(t.closest(".total") && t.closest(".total").classList.contains("cz-falta-precio"))}; }); }
 function lleno() {
   return ops().map(function (o) {
     return {nombre: campo(o, "-nombre").value, renglones: bloques(o).map(function (b) {
@@ -555,7 +559,7 @@ def test_mejorar_redaccion_pide_a_su_ruta_y_la_propuesta_sale_al_lado_sin_tocar_
     assert s["detalle"] == "bajo, conga y guira" and s["propuesta"] == "Grabación de bajo, conga y güira."
     assert s["rotulo"] == "La IA propone" and s["usar"] and s["dejar"] and s["estadoDespues"] == "" and s["reactivado"]
     # 2. la respuesta traía `total` y `precio`: ninguna casilla de precio cambió
-    assert all(t["valor"] == "" for t in s["totales"]), s["totales"]
+    assert all(t["valor"] == "" and t["atributo"] == "" for t in s["totales"]), s["totales"]
 
 
 @hay_osascript
@@ -574,7 +578,7 @@ def test_usar_este_texto_cambia_el_detalle_y_rehace_la_vista_previa_y_dejar_el_m
     assert s["trasDejar"] == {"detalle": "bajo y conga", "hijos": 0, "rehechas": 0}
     assert s["trasUsar"]["detalle"] == "Otro texto de la IA" and s["trasUsar"]["hijos"] == 0
     assert s["trasUsar"]["rehechas"] == ["op-0-r-0-detalle"], "«Usar» dispara `input` sobre el detalle: la vista previa se rehace"
-    assert all(t["valor"] == "" for t in s["trasUsar"]["totales"])
+    assert all(t["valor"] == "" and t["atributo"] == "" for t in s["trasUsar"]["totales"])
 
 
 @hay_osascript
@@ -674,7 +678,7 @@ def test_armar_borrador_llena_los_textos_deja_el_precio_vacio_y_marcado_y_rehace
         ["Incluye horas de estudio.", "Canción lista."], ["Con formación académica."], ["Formación internacional."]]
     # 2. NINGUNA casilla de precio recibe nada de la respuesta (traía `total`, `precio` y «RD$ 99,000»), y todas quedan marcadas
     assert [r["total"] for o in s["lleno"] for r in o["renglones"]] == [""] * 4
-    assert len(s["totales"]) >= 4 and all(t["valor"] == "" for t in s["totales"])
+    assert len(s["totales"]) >= 4 and all(t["valor"] == "" and t["atributo"] == "" for t in s["totales"])
     assert sum(1 for t in s["totales"] if t["marcado"]) == 4, "una marca por cada renglón que llenó la IA"
     assert s["marcas"].count("pon el precio") == 4
     assert s["aviso"] == "Esto lo propuso la IA. Revisa cada texto y pon los precios (en amarillo). Todavía no se guardó nada."
