@@ -179,7 +179,40 @@ def _sin_rd(total: str) -> str:
 
 
 def _renglon_en_blanco(sobra: bool) -> dict:
-    return {"descripcion": "", "detalle": "", "total": "", "sobra": sobra}
+    return {"descripcion": "", "detalle": "", "total": "", "sobra": sobra, "falta": False}
+
+
+def _texto(valor) -> str:
+    """Un campo que el POST trajo: solo un texto cuenta (un archivo subido o cualquier otra cosa es «nada»)."""
+    return valor if isinstance(valor, str) else ""
+
+
+def _total_no_vale(total: str) -> bool:
+    """¿La puerta de `db` rechaza este total? Es la MISMA función que decide al guardar: la casilla se señala
+    exactamente cuando el servidor la rechazaría, sin una regla escrita aparte."""
+    try:
+        db.total_de_cotizacion_que_vale(total)
+    except db.CotizacionNoVale:
+        return True
+    return False
+
+
+def _opciones_de_lo_escrito(opciones_escritas: list) -> list[dict]:
+    """Lo que la persona escribió y el servidor rechazó, en la forma de las casillas de la ventana: SOLO lo que
+    tiene algo (lo vacío de sobra que trajo el formulario se vuelve a dibujar como siempre) y, en cada renglón
+    con algo, `falta` si su total no pasaría la puerta. Los totales vuelven TAL CUAL se escribieron."""
+    hechas = []
+    for op in opciones_escritas:
+        renglones = []
+        for r in op["renglones"]:
+            d, det, t = _texto(r["descripcion"]), _texto(r["detalle"]), _texto(r["total"])
+            if not (d.strip() or det.strip() or t.strip()):
+                continue
+            renglones.append({"descripcion": d, "detalle": det, "total": t, "falta": _total_no_vale(t)})
+        nombre = _texto(op["nombre"])
+        if nombre.strip() or renglones:
+            hechas.append({"nombre": nombre, "renglones": renglones or [_renglon_en_blanco(False)]})
+    return hechas
 
 
 def condiciones_de_la_ventana(guardadas: list | None, validez_dias: int, n_opciones: int) -> tuple[list[dict], list[dict]]:
@@ -197,12 +230,29 @@ def condiciones_de_la_ventana(guardadas: list | None, validez_dias: int, n_opcio
 
 
 def valores_del_formulario(cot: dict | None, *, nombre_del_cliente: str | None,
-                           telefono_del_cliente: str | None, hoy: date, codigo_que_toca: str | None) -> dict:
+                           telefono_del_cliente: str | None, hoy: date, codigo_que_toca: str | None,
+                           escrito: dict | None = None) -> dict:
     """Lo que la ventana pone en cada casilla. `cot` es una de `db.cotizaciones_de_proyectos` (borrador o
     enviada a corregir) o `None` (nueva: el cliente del proyecto, su teléfono, hoy, 15 días y las cinco
     condiciones marcadas). Sin JavaScript sobran casillas en blanco: un renglón más por opción, una opción
-    entera y una condición propia, para poder agregar sin el botón; lo vacío no se guarda."""
-    if cot is None:
+    entera y una condición propia, para poder agregar sin el botón; lo vacío no se guarda.
+
+    `escrito` (lo que `campos_del_formulario` leyó de un POST que el servidor RECHAZÓ) pone en las casillas
+    lo que la persona escribió, tal cual, en vez de lo guardado o lo de una nueva: nada de lo escrito se
+    pierde. El número y el candado siguen siendo los de la cotización (el candado, el que ella leyó). Cada
+    renglón con un total que la puerta rechazaría sale con `falta` para que la ventana lo señale."""
+    if escrito is not None:
+        validez = escrito["validez"] if escrito["validez"] in db.VALIDEZ_DE_COTIZACION else VALIDEZ_POR_OMISION
+        guardadas = [{**c, "texto": _texto(c["texto"])} for c in escrito["contenido"]["condiciones"]
+                     if c["clave"] is not None or _texto(c["texto"]).strip()]
+        opciones = _opciones_de_lo_escrito(escrito["contenido"]["opciones"])
+        nombre, telefono = _texto(escrito["para_nombre"]), _texto(escrito["para_telefono"])
+        fecha = _texto(escrito["fecha"]) or hoy.isoformat()
+        if cot is None:
+            codigo, candado = codigo_que_toca or "", ""
+        else:
+            codigo, candado = cot["codigo"], _texto(escrito["cambiado_en"])
+    elif cot is None:
         validez = VALIDEZ_POR_OMISION
         guardadas = None
         opciones = []
@@ -212,7 +262,8 @@ def valores_del_formulario(cot: dict | None, *, nombre_del_cliente: str | None,
         validez = cot["validez_dias"]
         guardadas = cot["contenido"]["condiciones"]
         opciones = [{"nombre": op["nombre"],
-                     "renglones": [{"descripcion": r["descripcion"], "detalle": r["detalle"], "total": _sin_rd(r["total"])}
+                     "renglones": [{"descripcion": r["descripcion"], "detalle": r["detalle"], "total": _sin_rd(r["total"]),
+                                    "falta": False}
                                    for r in op["renglones"]]}
                     for op in cot["contenido"]["opciones"]]
         nombre, telefono = cot["para_nombre"], cot["para_telefono"] or ""

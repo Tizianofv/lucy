@@ -205,6 +205,13 @@ h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balan
 .cond input[type=checkbox]{width:auto;accent-color:var(--color)}
 .cond .cz-texto-propio{flex:1}
 .ventana-pie{display:flex;align-items:center;gap:.6rem;padding:.9rem 1.3rem;border-top:1px solid var(--linea);flex-wrap:wrap}
+/* El pie de la ventana de una cotización se queda a la vista (pegado abajo del velo) aunque la ventana sea más larga que la
+   pantalla: ahí están los botones de guardar y ahí sale el aviso de un guardado que el servidor rechazó. */
+.cz-ventana .ventana-pie{position:sticky;bottom:0;z-index:2;background:var(--papel);border-radius:0 0 16px 16px}
+.ventana-pie .cz-aviso-pie{flex:0 0 100%}
+.ventana-pie .cz-aviso-pie .aviso{margin:0}
+.ventana-pie .cz-aviso-vacio{display:none}
+.cz-ventana input[aria-invalid="true"]{border:2px solid var(--vencida);background:var(--vencida-fondo);outline:none}
 .ventana-pie .izq{margin-right:auto;font-size:.78rem;color:var(--suave)}
 .btn-prim{font:600 .88rem var(--texto);padding:.55rem 1.05rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
 .previa{padding:1.1rem 1.3rem;background:var(--bg);max-height:74vh;overflow:auto}
@@ -1899,6 +1906,13 @@ function fechaEnPalabrasDeLaHoja(iso, meses) {
   if (!m || Number(m[2]) < 1 || Number(m[2]) > 12) return "";
   return Number(m[3]) + " de " + meses[Number(m[2]) - 1] + " de " + m[1];
 }
+/* ¿Este renglón tiene algo escrito pero le falta el precio? Es lo que el servidor (`db.contenido_de_cotizacion_que_vale`)
+   rechaza como `total_vacio`: un renglón sin descripción, sin detalle y sin total no cuenta (el formulario trae de sobra) y
+   uno con algo y el total vacío no pasa. SOLO avisa antes de mandar: el que decide es el servidor. */
+function faltaElPrecio(descripcion, detalle, total) {
+  var d = String(descripcion).trim(), det = String(detalle).trim(), t = String(total).trim();
+  return !!(d || det || t) && !t;
+}
 /*FIN DE LAS PURAS*/
   function uno(sel, en) { return (en || document).querySelector(sel); }
   function todos(sel, en) { return Array.prototype.slice.call((en || document).querySelectorAll(sel)); }
@@ -2035,6 +2049,35 @@ function fechaEnPalabrasDeLaHoja(iso, meses) {
   }
   document.addEventListener("input", alCambiar);
   document.addEventListener("change", alCambiar);
+  /* ANTES DE MANDAR (17-oct-2026): si algún renglón tiene algo escrito y su precio vacío, no se manda: el aviso sale en el pie, junto
+     a los botones, y las casillas de precio que faltan quedan marcadas. No reemplaza nada del servidor: un POST que llegue sin
+     pasar por aquí lo rechaza igual. Va en la fase de captura para correr ANTES del guion de «sin saltar» (que respeta `preventDefault`). */
+  function alMandar(e) {
+    var form = e.target && e.target.closest ? e.target.closest("form.cz-form") : null;
+    if (!form) return;
+    var faltan = [];
+    todos(".renglon-bloque", form).forEach(function (b) {
+      var d = uno("[name$='-descripcion']", b), det = uno("[name$='-detalle']", b), t = uno("[name$='-total']", b);
+      if (d && det && t && faltaElPrecio(d.value, det.value, t.value)) faltan.push(t);
+    });
+    if (!faltan.length) return;
+    e.preventDefault();
+    faltan.forEach(function (t) { t.setAttribute("aria-invalid", "true"); });
+    var aviso = uno("[data-cz-aviso-pie]", form);
+    if (aviso) {
+      while (aviso.firstChild) aviso.removeChild(aviso.firstChild);
+      aviso.appendChild(el("p", "aviso", form.getAttribute("data-cz-sin-precio")));
+      aviso.classList.remove("cz-aviso-vacio");
+    }
+    faltan[0].focus();
+  }
+  document.addEventListener("submit", alMandar, true);
+  document.addEventListener("input", function (e) {
+    var t = e.target;
+    if (t && t.getAttribute && t.getAttribute("aria-invalid") === "true" && String(t.value).trim()) {
+      t.setAttribute("aria-invalid", "false");
+    }
+  });
   /* «Guardar y descargar PDF» baja solo: el aviso de una cotización enviada trae el enlace del PDF con la marca
      `data-bajar-ya`. Se pulsa UNA vez: primero se quita la marca, después se pulsa; sin marca no se pulsa nada.
      Corre al cargar la página y cada vez que cambia el documento, porque la pieza de «sin saltar» repinta las

@@ -55,6 +55,11 @@
   {%- elif hecho == 'cotizacion_drive' and cz.abierta and cz.abierta.enviada and cz.abierta.drive %}<p class="aviso{{ ' ok' if cz.abierta.drive.estado == 'en_drive' }}">Cotización {{ cz.abierta.codigo }}: {{ cz.abierta.drive.aviso_al_reintentar }}</p>
   {%- endif %}
 {% endset %}
+{#- DÓNDE SALE UN RECHAZO (17-oct-2026). Un «Guardar» rechazado no puede pasar sin que se vea: en una ventana que ESCRIBE el aviso de
+    todo `?error=cotizacion_…` sale en el pie, junto a los botones de guardar (el pie se queda a la vista aunque la ventana sea más
+    larga que la pantalla), y no arriba, donde la persona ya no está mirando. En la lista y en la hoja no hay botones de guardar:
+    sale arriba como siempre. Los avisos de `hecho` y los del cliente se quedan arriba. Una sola regla: el error es de una cotización. -#}
+{% set es_de_guardado = error and error.startswith('cotizacion_') %}
 <div class="cotiz" id="cotizaciones" data-ancla>
   <div class="cotiz-enc"><h3>Cotizaciones</h3>
     {% if cz.drive_url %}<a class="carpeta-enlace" href="{{ cz.drive_url }}" target="_blank" rel="noopener noreferrer">Abrir en Drive</a>{% endif %}
@@ -78,7 +83,7 @@
    <div class="cz-ventana">
     <div class="ventana-enc"><h2>{{ v.titulo }}</h2><span class="num">{{ v.numero }}</span>
       <a class="cerrar" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}#cotizaciones" aria-label="Cerrar">✕</a></div>
-    {{ aviso_de_cotizacion }}
+    {% if v.tipo == 'hoja' or not es_de_guardado %}{{ aviso_de_cotizacion }}{% endif %}
     {#- BUSCAR EL CLIENTE AQUÍ (16-oct-2026): solo en «Nueva cotización» y solo si el proyecto no tiene cliente. Es el mismo
         buscador y la misma escritura del encabezado (`POST /proyectos/N/cliente`, que decide `db.poner_cliente`); `volver`
         solo hace que la página regrese a esta ventana. Va FUERA del formulario de la cotización (un formulario dentro de otro
@@ -113,7 +118,7 @@
     </div>
     {% else %}
     {% set f = v.valores %}
-    <form class="cz-form" method="post" action="/proyectos/{{ m.id }}/cotizaciones{{ '/' ~ v.id if v.id }}" autocomplete="off" data-cz-ia-ruta="/proyectos/{{ m.id }}/cotizaciones/ia" data-cz-ia-textos='{{ {"sin_respuesta": "La IA no contestó. Lo que escribiste sigue igual.", "detalle_vacio": "Escribe algo en el detalle primero.", "pedido_vacio": "Escribe lo que pidió el cliente primero.", "escribiendo": "La IA está escribiendo…", "solo_vacias": "Solo con las opciones vacías: usa «Mejorar redacción» en cada renglón.", "aviso": "Esto lo propuso la IA. Revisa cada texto y pon los precios (en amarillo). Todavía no se guardó nada.", "pon_precio": "pon el precio"}|tojson }}'>
+    <form class="cz-form" method="post" action="/proyectos/{{ m.id }}/cotizaciones{{ '/' ~ v.id if v.id }}" autocomplete="off" data-cz-sin-precio="Falta el precio de algún renglón: escribe un total mayor que cero en las casillas marcadas en rojo. NO se guardó nada." data-cz-ia-ruta="/proyectos/{{ m.id }}/cotizaciones/ia" data-cz-ia-textos='{{ {"sin_respuesta": "La IA no contestó. Lo que escribiste sigue igual.", "detalle_vacio": "Escribe algo en el detalle primero.", "pedido_vacio": "Escribe lo que pidió el cliente primero.", "escribiendo": "La IA está escribiendo…", "solo_vacias": "Solo con las opciones vacías: usa «Mejorar redacción» en cada renglón.", "aviso": "Esto lo propuso la IA. Revisa cada texto y pon los precios (en amarillo). Todavía no se guardó nada.", "pon_precio": "pon el precio"}|tojson }}'>
      {% if f.candado %}<input type="hidden" name="cambiado_en" value="{{ f.candado }}">{% endif %}
      <div class="ventana-cuerpo">
       <div class="form-c">
@@ -141,7 +146,7 @@
           <div class="renglon-bloque{{ ' cz-sobra' if r.sobra }}">
            <div class="renglon">
             <label>Descripción<input type="text" name="op-{{ o }}-r-{{ k }}-descripcion" value="{{ r.descripcion }}" maxlength="200"></label>
-            <label>Total<span class="total">RD$ <input type="text" name="op-{{ o }}-r-{{ k }}-total" value="{{ r.total }}" maxlength="14" inputmode="decimal" placeholder="62,500"></span></label>
+            <label>Total<span class="total">RD$ <input type="text" name="op-{{ o }}-r-{{ k }}-total" value="{{ r.total }}" maxlength="14" inputmode="decimal" placeholder="62,500" aria-invalid="{{ 'true' if r.falta else 'false' }}"></span></label>
            </div>
            <label>Detalle<textarea name="op-{{ o }}-r-{{ k }}-detalle" maxlength="1000">{{ r.detalle }}</textarea></label>
            {{ ia_mejorar() }}
@@ -165,7 +170,9 @@
        {{ hoja_de_cotizacion(v.hoja) }}
       </div>
      </div>
-     <div class="ventana-pie"><span class="izq">Se guarda en este proyecto, en «Cotizaciones».</span>
+     <div class="ventana-pie">
+      <div class="cz-aviso-pie{{ '' if es_de_guardado else ' cz-aviso-vacio' }}" role="alert" data-cz-aviso-pie>{% if es_de_guardado %}{{ aviso_de_cotizacion }}{% endif %}</div>
+      <span class="izq">Se guarda en este proyecto, en «Cotizaciones».</span>
       <a class="btn-linea" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}#cotizaciones">Cancelar</a>
       {% if v.tipo != 'corregir' %}<button class="btn-linea" name="accion" value="borrador">Guardar borrador</button>{% endif %}
       <button class="btn-prim" name="accion" value="enviar">Guardar y descargar PDF</button>

@@ -525,7 +525,8 @@ def test_lo_que_se_rechaza_redirige_con_la_ventana_abierta_y_no_escribe_ni_gasta
         datos[k] = ""                                         # una cotización sin ninguna opción
     c = _casa()
     r = c.post("/proyectos/1/cotizaciones", data=datos, follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == \
+    # (la dirección lleva además `rechazo`: la contraseña de lo escrito, sin ningún dato; ver `test_aviso_de_cotizacion_rechazada.py`)
+    assert r.status_code == 303 and re.sub(r"&rechazo=[\w-]+", "", r.headers["location"]) == \
         "/proyectos?error=cotizacion_sin_opciones&p=1&cotizacion=nueva#cotizaciones"
     html = c.get(r.headers["location"].split("#")[0]).text
     assert "NO se guardó nada" in html and 'class="cz-form"' in html
@@ -850,11 +851,11 @@ _PALABRAS_DE_JS = {"var", "function", "return", "if", "else", "while", "for", "t
 GLOBALES_PERMITIDOS = {"document", "Array", "JSON", "Math", "MutationObserver", "Number", "String"}
 PROPIEDADES_PERMITIDAS = {
     "add", "addEventListener", "alt", "apply", "appendChild", "body", "call", "checked", "className", "classList", "click",
-    "closest", "concat", "contains", "createElement", "createTextNode", "documentElement", "elements", "exec", "firstChild", "forEach",
+    "closest", "concat", "contains", "createElement", "createTextNode", "documentElement", "elements", "exec", "firstChild", "focus", "forEach",
     "getAttribute", "hidden", "innerHTML", "insertAdjacentHTML", "length", "map", "max", "min", "name", "observe", "parentNode", "parse",
     "preventDefault", "prototype", "push", "querySelector", "querySelectorAll", "readyState", "remove", "removeAttribute",
     "removeChild",
-    "replace", "slice", "split", "src", "target", "test", "textContent", "toFixed", "trim", "value"}
+    "replace", "setAttribute", "slice", "split", "src", "target", "test", "textContent", "toFixed", "trim", "value"}
 
 
 # Los datos que el guion lee de SU PROPIA información (no del navegador): las claves que le da el servidor
@@ -947,7 +948,7 @@ def test_el_guion_corrido_en_javascriptcore_no_pide_nada_al_cargar():
     r = subprocess.run(["osascript", "-l", "JavaScript", "-e", codigo], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
     visto = json.loads(r.stdout.strip())
-    assert visto["pedidos"] == [] and visto["oyentes"] == ["change", "clase", "click", "input", "observador"], visto
+    assert visto["pedidos"] == [] and visto["oyentes"] == ["change", "clase", "click", "input", "observador", "submit"], visto
 
 
 # ── 10. Un estado que no se conoce sale con la marca ────────────────────────────────────────────────────
