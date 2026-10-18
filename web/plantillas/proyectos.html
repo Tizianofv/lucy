@@ -1464,14 +1464,13 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
       {% if not solo_ver and editar == 'carpeta_audio' %}
       <form class="carpeta-audio-editar" method="post" action="/proyectos/{{ m.id }}/carpeta-audio" data-auto>
         <label>Dónde están el audio y las sesiones <input type="text" name="carpeta_audio" maxlength="{{ largo_carpeta }}" value="{{ m.carpeta_audio or '' }}" placeholder="Ruta de la carpeta en el disco Sesiones" aria-label="Carpeta de audio del proyecto"></label>
-        <p class="nota">Escribe o pega la ruta de la carpeta en el disco Sesiones, tal como la ves en Finder. Lucy no ve ese disco: guarda lo que escribas y no comprueba que la carpeta exista. Hasta {{ largo_carpeta }} caracteres. Se guarda al salir del campo si cambió; para dejarla vacía, usa «Guardar» con el campo vacío.</p>
+        <p class="nota">Escribe o pega la ruta de la carpeta en el disco Sesiones, tal como la ves en Finder. Hasta {{ largo_carpeta }} caracteres. Se guarda al salir del campo si cambió; para dejarla vacía, usa «Guardar» con el campo vacío.</p>
         <div class="botones"><button class="guardar">Guardar</button><a class="btn-linea" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}#carpeta-del-proyecto">Cancelar</a></div>
       </form>
       {% elif m.carpeta_audio %}
       {% set copiar_carpeta = not solo_ver %}
       <div class="carpeta-contenido"><code class="carpeta-texto">{{ m.carpeta_audio }}</code>
-        {% if not solo_ver %}<div class="botones"><button type="button" class="btn-linea copiar" data-copiar-carpeta>Copiar</button><a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar=carpeta_audio{{ sufijo_filtro }}#carpeta-del-proyecto">Cambiar</a></div>{% endif %}
-        <p class="nota">Lucy no ve este disco: esta ruta es la que se escribió, y solo sirve en la computadora que tiene el disco Sesiones.</p></div>
+        {% if not solo_ver %}<div class="botones"><button type="button" class="btn-linea copiar" data-copiar-carpeta>Copiar</button><a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar=carpeta_audio{{ sufijo_filtro }}#carpeta-del-proyecto">Cambiar</a></div>{% endif %}</div>
       {% else %}
       <div class="carpeta-contenido"><p class="vacio">Todavía no hay carpeta de audio.</p>
         <a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar=carpeta_audio{{ sufijo_filtro }}#carpeta-del-proyecto">Poner</a></div>

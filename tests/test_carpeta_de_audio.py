@@ -63,7 +63,31 @@ DUENO = config.CHAT_ID_DUENO
 AUDIO = "Sesiones/Cliente Uno"
 PLANTILLA = _ROOT / "web" / "plantillas" / "proyectos.html"
 MIGRACION = _ROOT / "db" / "migrations" / "2026-10-18_proyectos_carpeta_audio.sql"
-FRASE = "Lucy no ve este disco: esta ruta es la que se escribió, y solo sirve en la computadora que tiene el disco Sesiones."
+TITULO = "Audio (disco Sesiones)"
+
+
+class _Textos(HTMLParser):
+    """Los trozos de texto de un HTML que NO están dentro de un `<code>` (la ruta), sin espacios de alrededor."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.trozos, self._code = [], 0
+
+    def handle_starttag(self, tag, attrs):
+        self._code += tag == "code"
+
+    def handle_endtag(self, tag):
+        self._code -= tag == "code"
+
+    def handle_data(self, data):
+        if not self._code and data.strip():
+            self.trozos.append(" ".join(data.split()))
+
+
+def _texto_fuera_de_la_ruta(bloque: str) -> list[str]:
+    p = _Textos()
+    p.feed(bloque)
+    return p.trozos
 
 
 def mandar(pid, campos, *, chat="dueno", files=None):
@@ -422,15 +446,16 @@ def test_la_casa_ve_la_linea_aunque_no_haya_ruta_y_puede_ponerla(uno):
     bloque = _el_bloque_de_audio(html)
     assert "<h3 class=\"carpeta-linea\">Audio (disco Sesiones)</h3>" in bloque and "Todavía no hay carpeta de audio." in bloque
     assert 'href="/proyectos?p=1&amp;editar=carpeta_audio#carpeta-del-proyecto"' in bloque and ">Poner</a>" in bloque
-    assert "Copiar" not in bloque and FRASE not in bloque
+    assert _texto_fuera_de_la_ruta(bloque) == [TITULO, "Todavía no hay carpeta de audio.", "Poner"]
     form = ver(uno, p=1, editar="carpeta_audio")
     assert 'action="/proyectos/1/carpeta-audio"' in form and 'name="carpeta_audio"' in form and f'maxlength="{LARGO}"' in form
-    assert "Lucy no ve ese disco" in form and "Cancelar" in _el_bloque_de_audio(form)
+    assert "Cancelar" in _el_bloque_de_audio(form)
 
 
 def test_la_casa_ve_la_ruta_como_texto_con_copiar_cambiar_y_la_frase(uno):
     bloque = _el_bloque_de_audio(_pintar(uno, AUDIO))
-    assert f'<code class="carpeta-texto">{AUDIO}</code>' in bloque and FRASE in bloque
+    assert f'<code class="carpeta-texto">{AUDIO}</code>' in bloque
+    assert _texto_fuera_de_la_ruta(bloque) == [TITULO, "Copiar", "Cambiar"]
     assert '<button type="button" class="btn-linea copiar" data-copiar-carpeta>Copiar</button>' in bloque
     assert ">Cambiar</a>" in bloque and "editar=carpeta_audio" in bloque
 
@@ -440,7 +465,8 @@ def test_solo_ver_ve_la_ruta_y_la_frase_sin_ningun_control_ni_guion(uno):
     assert "Audio (disco Sesiones)" not in html and _seccion(html) == ""          # sin ruta no hay nada que leer
     html = _pintar(uno, AUDIO, "ver")
     bloque = _el_bloque_de_audio(html)
-    assert f'<code class="carpeta-texto">{AUDIO}</code>' in bloque and FRASE in bloque
+    assert f'<code class="carpeta-texto">{AUDIO}</code>' in bloque
+    assert _texto_fuera_de_la_ruta(bloque) == [TITULO]
     for sobra in ("<form", "<button", "Copiar", "Cambiar", "Poner", "<a "):
         assert sobra not in bloque, sobra
     assert html.count("<script") == 1 and "data-copiar-carpeta" not in html and 'id="guion-copiar-carpeta"' not in html
@@ -791,16 +817,23 @@ def test_la_migracion_es_aditiva_y_dice_lo_que_hay_que_decir():
 # B5. LA PÁGINA Y LUCY NO PROMETEN LO QUE NO VEN
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_la_frase_de_que_lucy_no_ve_el_disco_esta_para_la_casa_y_para_solo_ver(uno):
-    for quien in ("casa", "ver"):
-        assert FRASE in _el_bloque_de_audio(_pintar(uno, AUDIO, quien)), quien
+def test_la_pagina_no_afirma_nada_del_disco_la_linea_solo_trae_titulo_ruta_y_botones(uno):
+    """B5: nada de texto en la línea de audio fuera del título, la ruta (su `<code>`) y los botones: ni que existe, ni dónde
+    sirve, ni que Lucy lo vea o no. Se mira TODO el texto de la línea, no una frase vieja."""
+    for valor in (AUDIO, DRIVE, "Sesiones/<b>x</b> existe"):
+        assert _texto_fuera_de_la_ruta(_el_bloque_de_audio(_pintar(uno, valor, "casa"))) == [TITULO, "Copiar", "Cambiar"]
+        assert _texto_fuera_de_la_ruta(_el_bloque_de_audio(_pintar(uno, valor, "ver"))) == [TITULO]
+    assert _texto_fuera_de_la_ruta(_el_bloque_de_audio(ver(_poner(uno, carpeta_audio=None) or uno, p=1))) == [
+        TITULO, "Todavía no hay carpeta de audio.", "Poner"]
+    # y el formulario tampoco dice nada del disco ni de que Lucy lo vea
+    form = _el_bloque_de_audio(ver(uno, p=1, editar="carpeta_audio"))
+    assert "Lucy no ve" not in form and "exist" not in form and "sirve" not in form
 
 
-def test_ninguna_frase_de_la_linea_de_audio_dice_que_la_carpeta_existe_o_se_creo(uno):
-    for quien in ("casa", "ver"):
-        texto = re.sub(r"<[^>]+>", " ", _el_bloque_de_audio(_pintar(uno, AUDIO, quien))).lower()
-        for promesa in ("existe", "creada", "se creó", "encontrad", "montado", "disponible", "abrir", "vacía", "pesa"):
-            assert promesa not in texto, (quien, promesa)
+def test_la_sonda_del_texto_de_la_linea_ve_una_frase_agregada():
+    bueno = '<div class="carpeta-audio"><h3>Audio (disco Sesiones)</h3><code>x</code><button>Copiar</button></div>'
+    assert _texto_fuera_de_la_ruta(bueno) == [TITULO, "Copiar"]
+    assert len(_texto_fuera_de_la_ruta(bueno.replace("</div>", "<p>La carpeta existe.</p></div>"))) == 3
 
 
 def test_lucy_por_telegram_ve_la_columna_y_sabe_que_no_ve_el_disco():
