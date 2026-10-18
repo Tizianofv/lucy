@@ -68,7 +68,8 @@ def noco(monkeypatch):
 
 
 def _con_cliente(mundo):
-    mundo.proyecto(1, "Disco Uno", area="CDS", cliente="Cliente X")
+    # Del grupo IA: es el único donde «Quitar el cliente» se ofrece (pieza 2 de «Un proyecto no se crea sin cliente»).
+    mundo.proyecto(1, "Disco Uno", area="IA", cliente="Cliente X")
     mundo.proyecto(2, "Sin cliente", area="CDS")
 
 

@@ -746,13 +746,12 @@ def test_para_cada_resultado_posible_el_panel_dice_lo_mismo_que_la_frase_real():
     assert cd.frase_de_la_carpeta({"resultado": "no_esta"}) != cd.frase_de_la_carpeta({"resultado": "fallo"})
 
 
-@pytest.mark.parametrize("prefijo", ["", "cliente_nuevo_"])
 @pytest.mark.parametrize("clave", sorted(cd.AVISOS_DE_LA_CARPETA))
-def test_la_pagina_pinta_la_frase_de_cada_clave_de_aviso(m, nube, clave, prefijo):
+def test_la_pagina_pinta_la_frase_de_cada_clave_de_aviso(m, nube, clave):
     from test_pagina_proyectos import ver_r
-    html = _html.unescape(ver_r(m, error=prefijo + clave, p=1))
+    html = _html.unescape(ver_r(m, error=clave, p=1))
     assert cd.frase_de_la_carpeta(cd.AVISOS_DE_LA_CARPETA[clave]) in html
-    assert ("SIN cliente: Noco" in html) == bool(prefijo)
+    assert "SIN cliente" not in html       # ya no hay «crear sin cliente y avisar» (pieza 2)
 
 
 def _fragmentos_de_las_frases() -> set[str]:

@@ -2174,7 +2174,9 @@ class ClienteConProyecto(ValueError):
 
 class ClienteDelProyectoNoVale(ValueError):
     """El cliente (o la falta de él) no puede quedar así en un proyecto que ya existe. `clave`: `obligatorio`
-    (un proyecto de CDS/ACD/sin grupo no se queda sin cliente), `nombre` (en CDS/ACD el nombre es el del cliente)."""
+    (un proyecto de CDS/ACD/sin grupo no se queda sin cliente), `nombre` (en CDS/ACD el nombre es el del cliente),
+    `ficha` (la ficha de Noco no existe o no vale: `poner_cliente`) y `proyecto` (el proyecto no existe o está en la
+    papelera: `poner_cliente`). Cada una es una CAUSA distinta, para que la pantalla diga la que fue."""
 
     def __init__(self, clave: str, mensaje: str):
         super().__init__(mensaje)
@@ -2879,6 +2881,20 @@ async def proyecto_para_la_carpeta(proyecto_id: int) -> dict | None:
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute("SELECT id, nombre FROM proyectos WHERE id = %s AND borrado_en IS NULL", (proyecto_id,))
+        fila = await cur.fetchone()
+    return None if fila is None else dict(fila)
+
+
+async def proyecto_para_el_aviso(proyecto_id: int) -> dict | None:
+    """El proyecto VIVO como `{id, nombre, estado, area}`, o `None` si no existe o está en la papelera. La lectura mínima
+    de los avisos que nombran a OTRO proyecto («el cliente tiene un proyecto activo»): la pantalla decide con ella si
+    el nombre y el enlace «Abrir» todavía dicen la verdad. Una lectura."""
+    if isinstance(proyecto_id, bool) or not isinstance(proyecto_id, int):
+        return None
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute("SELECT id, nombre, estado, area FROM proyectos WHERE id = %s AND borrado_en IS NULL",
+                          (proyecto_id,))
         fila = await cur.fetchone()
     return None if fila is None else dict(fila)
 
@@ -6863,11 +6879,15 @@ async def poner_cliente(proyecto_id: int, noco_id: int | None, *,
     `crud.editar` y `crud.deshacer` las rechazan por `crud.PUERTAS`, así que Telegram no las toca.
     """
     if isinstance(proyecto_id, bool) or not isinstance(proyecto_id, int):
-        raise ValueError("ese proyecto no existe o ya no está")
+        raise ClienteDelProyectoNoVale("proyecto", "ese proyecto no existe o ya no está")
     nuevo_id, nuevo_nombre = None, None
     if noco_id is not None:
-        nuevo_id, nuevo_nombre = await _ficha_de_noco_que_vale(
-            noco_id, leer_persona, "el cliente")
+        # La causa viaja en la CLAVE (`ficha`): la pantalla dice «esa ficha no está en Noco» y no adivina por el texto.
+        try:
+            nuevo_id, nuevo_nombre = await _ficha_de_noco_que_vale(
+                noco_id, leer_persona, "el cliente")
+        except ValueError as e:
+            raise ClienteDelProyectoNoVale("ficha", str(e)) from e
 
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -6876,7 +6896,7 @@ async def poner_cliente(proyecto_id: int, noco_id: int | None, *,
             (proyecto_id,))
         antes = await cur.fetchone()
         if antes is None:
-            raise ValueError("ese proyecto no existe o ya no está")
+            raise ClienteDelProyectoNoVale("proyecto", "ese proyecto no existe o ya no está")
         obligatorio = cliente_es_obligatorio(antes.get("area"))
         if obligatorio and noco_id is None:
             raise ClienteDelProyectoNoVale(

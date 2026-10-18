@@ -403,17 +403,26 @@ def test_cada_mas_de_proyecto_nuevo_tiene_su_ventanita_en_su_grupo_con_el_formul
             assert len(forms) == 1 and forms[0].attrs["action"] == "/proyectos/nuevo"
             assert forms[0].attrs["method"] == "post" and forms[0].clases == ["nuevo"]
             campos = {c.attrs.get("name"): c for c in forms[0].buscar() if c.attrs.get("name")}
-            assert sorted(campos) == ["area", "cliente", "nombre", "responsable"], consulta
-            # El cliente es OPCIONAL (Tiziano, 1-oct-2026): escondido y vacío hasta que se elige uno.
+            # Pieza 2 de «Un proyecto no se crea sin cliente»: fuera de IA el cliente es obligatorio y NO se pide el
+            # nombre (el proyecto se llama como su cliente); en IA el cliente es opcional y el nombre se escribe.
+            es_ia = area["clave"] == db.AREA_TECNICA
+            assert sorted(campos) == (["area", "cliente", "nombre", "responsable"] if es_ia
+                                      else ["area", "cliente", "responsable"]), consulta
+            # El cliente: escondido y vacío hasta que se elige uno.
             assert campos["cliente"].attrs["type"] == "hidden" and campos["cliente"].attrs["value"] == ""
+            assert (not db.cliente_es_obligatorio(area["clave"])) == es_ia
             buscador = [i for i in forms[0].buscar("input") if "data-buscar-persona" in i.attrs]
             assert len(buscador) == 1 and buscador[0].attrs["data-buscar-persona"] == "elegir"
             assert "name" not in buscador[0].attrs                           # la caja de buscar no se envía
             assert campos["area"].attrs["value"] == area["clave"]            # el grupo de SU enlace
-            assert campos["nombre"].attrs["maxlength"] == str(db.LARGO_NOMBRE_PROYECTO)
+            assert ("nombre" in campos) == es_ia
+            if es_ia:
+                assert campos["nombre"].attrs["maxlength"] == str(db.LARGO_NOMBRE_PROYECTO)
             opciones = [o.attrs.get("value") for o in campos["responsable"].buscar("option")]
             assert opciones == ["", "Persona Uno", "Persona Dos", "Code"], opciones
-            assert "Cliente (opcional)" in ventana.todo_el_texto()
+            assert ("Cliente (opcional)" in ventana.todo_el_texto()) == es_ia
+            # La caja que se VE es la que frena el envío sin cliente (un campo escondido no lo frena).
+            assert ("required" in buscador[0].attrs) == (not es_ia)
 
 
 def test_sin_grupo_no_ofrece_ventanita_ni_enlace(mundo):
@@ -450,12 +459,14 @@ def test_la_ventanita_y_la_pagina_aparte_envian_lo_mismo_a_la_misma_ruta(mundo, 
     formularios = [f for f in _formularios_de(html) if f["accion"] == "/proyectos/nuevo"]
     assert len(formularios) == len(AREAS) + 1
     enviados = []
-    # (Las ventanitas traen además el cliente, escondido y vacío: es opcional.)
+    # (Todos traen el cliente, escondido y vacío; el nombre solo el de IA: fuera de IA el proyecto se llama como su
+    # cliente, pieza 2 de «Un proyecto no se crea sin cliente».)
     for f in formularios:
         datos = _lo_que_manda_el_navegador(f, lambda c: "Un proyecto", _primera_habilitada)
         enviados.append(tuple(sorted(datos)))
-        assert datos["nombre"] == "Un proyecto" and datos["responsable"] == "Persona Uno"
-    assert set(enviados) == {("area", "cliente", "nombre", "responsable"), ("area", "nombre", "responsable")}
+        assert datos["responsable"] == "Persona Uno" and datos["cliente"] == ""
+        assert ("nombre" in datos) == (not db.cliente_es_obligatorio(datos["area"]))
+    assert set(enviados) == {("area", "cliente", "nombre", "responsable"), ("area", "cliente", "responsable")}
     assert sorted(_lo_que_manda_el_navegador(f, lambda c: "x", _primera_habilitada)["area"]
                   for f in formularios) == sorted([a["clave"] for a in AREAS] + ["ACD"])
 

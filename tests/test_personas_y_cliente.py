@@ -427,7 +427,7 @@ def test_cambiar_el_cliente_y_quitarlo_con_un_id_vacio(mundo, gente, noco):
     assert _cliente_de(mundo, 1) == (102, "Persona Dos de Noco")
     # En CDS y ACD el cliente es OBLIGATORIO: vaciar se rechaza y no cambia nada.
     n = len(_huellas(mundo))
-    assert mandar("/proyectos/1/cliente", {"noco_id": ""}).headers["location"] == "/proyectos?error=cliente&p=1"
+    assert mandar("/proyectos/1/cliente", {"noco_id": ""}).headers["location"] == "/proyectos?error=cliente_obligatorio&p=1"
     assert _cliente_de(mundo, 1) == (102, "Persona Dos de Noco") and len(_huellas(mundo)) == n
     # En IA es OPCIONAL: vaciar lo quita, sin llamar a Noco.
     mundo.con.execute("UPDATE proyectos SET area = 'IA' WHERE id = 1")
@@ -449,7 +449,9 @@ def test_un_cliente_que_no_vale_no_cambia_nada(mundo, gente, noco, noco_id):
     mandar("/proyectos/1/cliente", {"noco_id": "101"})
     antes = (_cliente_de(mundo, 1), len(_huellas(mundo)))
     r = mandar("/proyectos/1/cliente", {"noco_id": noco_id})
-    assert r.headers["location"] == "/proyectos?error=cliente&p=1"
+    # Dos causas distintas, dos avisos: lo que no es un número no es un cliente escogido (`cliente`); un número que
+    # Noco no conoce es una ficha que no vale (`cliente_ficha`).
+    assert r.headers["location"] == f"/proyectos?error={'cliente_ficha' if noco_id in ('999', '0') else 'cliente'}&p=1"
     assert (_cliente_de(mundo, 1), len(_huellas(mundo))) == antes
 
 
@@ -466,7 +468,7 @@ def test_el_cliente_de_un_proyecto_que_no_esta_o_esta_en_la_papelera_da_error(mu
     _sembrar(mundo)
     for pid in (3, 999):
         assert mandar(f"/proyectos/{pid}/cliente", {"noco_id": "101"}).headers["location"] == \
-            f"/proyectos?error=cliente&p={pid}"
+            f"/proyectos?error=proyecto&p={pid}"
 
 
 def test_telegram_no_escribe_el_cliente_y_crud_editar_lo_rechaza(mundo, gente, noco):
@@ -514,7 +516,7 @@ def test_en_cds_y_acd_sin_cliente_no_se_crea_nada_y_no_se_le_pide_nada_a_noco(mu
     assert _huellas(mundo) == [] and noco.pedidos == []
 
 
-@pytest.mark.parametrize("cae,cliente,clave", [(True, "101", "cliente_noco"), (False, "999", "cliente"),
+@pytest.mark.parametrize("cae,cliente,clave", [(True, "101", "cliente_noco"), (False, "999", "cliente_ficha"),
                                                (False, "abc", "cliente")])
 def test_si_el_cliente_no_se_puede_leer_el_proyecto_no_se_crea_y_el_aviso_lo_dice(
         mundo, gente, noco, cae, cliente, clave):

@@ -184,6 +184,11 @@ def test_la_cabecera_pone_el_aviso_de_sin_movimiento_debajo_del_titulo_con_el_te
 
 def test_cliente_y_responsable_van_en_la_cabecera_como_campos_con_su_etiqueta(mundo):
     _con_de_todo(mundo)
+    # «Quitar el cliente» solo se ofrece en IA (pieza 2 de «Un proyecto no se crea sin cliente»): en CDS el proyecto
+    # tiene cliente y el botón NO sale (quitarlo se rechazaría).
+    cds = arbol(ver(mundo, p=1)).buscar("div", "quienes")[0]
+    assert cds.buscar("form", "elegir-persona")[0].buscar("button") == []
+    mundo.con.execute("UPDATE proyectos SET area = 'IA' WHERE id = 1")
     html = ver(mundo, p=1)
     quienes = arbol(html).buscar("div", "quienes")[0]
     etiquetas = [l.todo_el_texto().strip() for l in quienes.buscar("label")]

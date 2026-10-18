@@ -151,7 +151,8 @@ def test_otra_ficha_da_otro_nombre_y_otro_telefono(m, noco):
 
 def test_una_ficha_que_noco_no_conoce_no_liga_nada(m, noco):
     r = _casa().post("/proyectos/2/cliente", data={"noco_id": "999", "volver": "cotizacion"}, follow_redirects=False)
-    assert r.headers["location"] == "/proyectos?error=cliente&p=2&cotizacion=nueva#cotizaciones"
+    # La ficha no existe en Noco: el aviso dice eso (`cliente_ficha`), no «falta escoger» ni «el proyecto no está».
+    assert r.headers["location"] == "/proyectos?error=cliente_ficha&p=2&cotizacion=nueva#cotizaciones"
     assert _cliente_de(m, 2) == (None, None)
 
 
@@ -231,7 +232,7 @@ def test_desde_la_ventana_no_se_quita_un_cliente(m, noco):
     # el encabezado SOLO lo quita en IA (pieza 1 de «Un proyecto no se crea sin cliente», 18-oct-2026): en CDS y ACD el
     # proyecto necesita cliente y se rechaza.
     r = _casa().post("/proyectos/1/cliente", data={"noco_id": ""}, follow_redirects=False)
-    assert r.headers["location"] == "/proyectos?error=cliente&p=1"
+    assert r.headers["location"] == "/proyectos?error=cliente_obligatorio&p=1"
     assert _cliente_de(m, 1) == (7, "Cliente de la ficha")
     m.con.execute("UPDATE proyectos SET area = 'IA' WHERE id = 1")
     m.con.commit()
@@ -251,7 +252,8 @@ def test_desde_la_ventana_no_se_cambia_un_cliente_que_el_proyecto_ya_tiene(m, no
 
 def test_un_proyecto_que_no_esta_no_se_liga_desde_la_ventana(m, noco):
     r = _casa().post("/proyectos/77/cliente", data={"noco_id": "101", "volver": "cotizacion"}, follow_redirects=False)
-    assert r.headers["location"] == "/proyectos?error=cliente&p=77&cotizacion=nueva#cotizaciones"
+    # El proyecto no existe: el aviso dice eso (`proyecto`), no que la ficha o el cliente fallaron.
+    assert r.headers["location"] == "/proyectos?error=proyecto&p=77&cotizacion=nueva#cotizaciones"
     assert noco["poner_cliente"] == []
 
 

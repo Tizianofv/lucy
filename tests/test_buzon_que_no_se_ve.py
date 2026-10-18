@@ -4223,10 +4223,13 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 18-oct-2026, rama `trabajo/cliente-p1` («Un proyecto no se crea sin cliente», pieza 1): +1 en disco y +1 EXENTO por
     # `tests/test_proyecto_con_cliente.py` (nuevo, exento por rol); VIGILADOS sin cambio. Medida corriendo la prueba:
     # 192, 137, 55.
-    assert medido == {"en disco": 192, "exentos": 137, "vigilados": 55}, (
+    # 18-oct-2026, rama `trabajo/cliente-p2` (piezas 2 y 3, la pantalla): +1 en disco y +1 EXENTO por
+    # `tests/test_panel_cliente_p2.py` (nuevo, exento por rol); VIGILADOS sin cambio. Medida corriendo la prueba:
+    # 193, 138, 55.
+    assert medido == {"en disco": 193, "exentos": 138, "vigilados": 55}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "18-oct-2026 (cliente-p1) era {'en disco': 192, "
-        "'exentos': 137, 'vigilados': 55}. La aserción de fondo —cero "
+        "18-oct-2026 (cliente-p2) era {'en disco': 193, "
+        "'exentos': 138, 'vigilados': 55}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

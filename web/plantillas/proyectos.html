@@ -493,10 +493,10 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     envía su formulario con el Id de Noco (`noco_id`): el nombre que se guarda
     lo vuelve a leer el servidor de Noco, nunca sale de la página. Lucy solo LEE
     de Noco. -#}
-{% macro sugerencias(donde) %}<div class="sugerencias">
+{% macro sugerencias(donde, campo='noco_id') %}<div class="sugerencias">
   {%- if busqueda and busqueda.donde == donde -%}
     {%- if busqueda.error %}<p class="vacio">{{ busqueda.error }}</p>
-    {%- elif busqueda.personas %}{% for x in busqueda.personas %}<button class="sugerencia" name="noco_id" value="{{ x.id }}" title="Elegir a {{ x.nombre }}">{{ x.nombre }}</button>{% endfor %}
+    {%- elif busqueda.personas %}{% for x in busqueda.personas %}<button class="sugerencia" name="{{ campo }}" value="{{ x.id }}" title="Elegir a {{ x.nombre }}">{{ x.nombre }}</button>{% endfor %}
     {%- else %}<p class="vacio">Nadie con «{{ busqueda.q }}» en Noco.</p>{% endif -%}
   {%- endif -%}
 </div>{% endmacro %}
@@ -786,15 +786,21 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
       página. Envía el mismo formulario a la misma ruta que la página aparte. -#}
   <dialog class="ventana" aria-label="Proyecto nuevo en {{ g.clave }}">
     <h2>Proyecto nuevo en {{ g.clave }}</h2>
+    {#- EL CLIENTE (pieza 2 de «Un proyecto no se crea sin cliente», 18-oct-2026): en todo grupo menos IA
+        (`cliente_es_obligatorio`, la misma puerta que usa la ruta) el cliente es obligatorio y el nombre NO se pide:
+        el proyecto se llama como su cliente. El `required` va en la caja que se ve (un campo escondido no frena el
+        envío); lo que de verdad decide es la ruta. En IA todo sigue como estaba. -#}
+    {% set pide_cliente = cliente_es_obligatorio(g.clave) %}
     <form class="nuevo" method="post" action="/proyectos/nuevo">
-      <label>Nombre del proyecto
-        <input name="nombre" type="text" required maxlength="{{ largo_nombre }}" placeholder="Ej. Grabación del sencillo"></label>
+      {% if not pide_cliente %}<label>Nombre del proyecto
+        <input name="nombre" type="text" required maxlength="{{ largo_nombre }}" placeholder="Ej. Grabación del sencillo"></label>{% endif %}
       <div class="persona-campo">
-        <label>Cliente (opcional)
-          <input type="text" placeholder="Buscar en Noco… (sin cliente)" aria-label="Cliente del proyecto" data-buscar-persona="elegir" autocomplete="off"></label>
-        <input type="hidden" name="cliente" value="" data-elegida>
+        <label>Cliente{% if not pide_cliente %} (opcional){% endif %}
+          <input type="text"{% if pide_cliente %} required placeholder="Escribe y escoge de la lista"{% else %} placeholder="Buscar en Noco… (sin cliente)"{% endif %} aria-label="Cliente del proyecto" data-buscar-persona="elegir" autocomplete="off"></label>
+        <input type="hidden" name="cliente" value="" data-elegida{% if pide_cliente %} required{% endif %}>
         <div class="sugerencias"></div>
       </div>
+      {% if pide_cliente %}<p class="suave">El proyecto se llama como su cliente.</p>{% endif %}
       <label>Responsable
         <select name="responsable" required>
           <option value="" selected disabled>Escoge…</option>
@@ -937,12 +943,16 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     {% elif error == 'tarea_siguiente_sin_proyecto' %}<p class="aviso">Esa tarea no está en un proyecto abierto: no se agregó la que sigue.</p>
     {% elif error == 'tarea_siguiente_no_hecha' %}<p class="aviso">Esa tarea ya no está hecha: no se agregó la que sigue.</p>
     {% elif error == 'tarea_derivada_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe la tarea nueva, así que la tarea NO se marcó hecha.</p>
-    {% elif error == 'cliente' %}<p class="aviso">No se pudo poner ese cliente: la ficha ya no está en Noco o el proyecto ya no está.</p>
-    {% elif error == 'cliente_ocupado' %}<p class="aviso">El cliente tiene un proyecto activo y no se pueden activar 2. El proyecto NO se creó.</p>
-    {% elif error == 'cliente_noco' %}<p class="aviso">Noco no contestó: el cliente NO se cambió. Intenta otra vez en un momento.</p>
+    {#- LOS AVISOS DEL CLIENTE (pieza 2): cada uno dice la causa que de verdad pasó; las rutas eligen la clave por la clase
+        con que la puerta rechazó, no por el texto del mensaje. -#}
+    {% elif error == 'cliente' %}<p class="aviso">Falta escoger al cliente: búscalo y toca su nombre en la lista. No se guardó nada.</p>
+    {% elif error == 'cliente_ficha' %}<p class="aviso">Esa ficha no está en Noco, o no se pudo leer bien: busca al cliente otra vez. No se guardó nada.</p>
+    {% elif error == 'cliente_ocupado' %}<p class="aviso">El cliente tiene un proyecto activo{% if ocupante %} («{{ ocupante.nombre }}»){% endif %} y no se pueden activar 2. No se guardó nada.{% if ocupante %} <a href="/proyectos?p={{ ocupante.id }}">Abrir</a>{% endif %}</p>
+    {% elif error == 'cliente_noco' %}<p class="aviso">Noco no contestó: no se guardó nada. Intenta otra vez en un momento.</p>
+    {% elif error == 'cliente_obligatorio' %}<p class="aviso">En CDS y ACD el proyecto no puede quedarse sin cliente: para cambiarlo, escoge a otro cliente.</p>
+    {% elif error == 'cliente_no_se_pudo' %}<p class="aviso">No se pudo cambiar el cliente. No se guardó nada.</p>
     {% elif error == 'cliente_igual' %}<p class="aviso">No cambió nada: ese ya era el cliente.</p>
-    {% elif error == 'cliente_nuevo' %}<p class="aviso">El proyecto se creó, pero SIN cliente: Noco no contestó o la ficha ya no está. Se puede poner desde la cabecera.</p>
-    {% elif frase_del_alta_en_drive %}<p class="aviso">{% if error.startswith('cliente_nuevo_') %}El proyecto se creó, pero SIN cliente: Noco no contestó o la ficha ya no está. Se puede poner desde la cabecera.{% else %}El proyecto se creó.{% endif %} {{ frase_del_alta_en_drive }}</p>
+    {% elif frase_del_alta_en_drive %}<p class="aviso">El proyecto se creó. {{ frase_del_alta_en_drive }}</p>
     {% elif error == 'persona_noco' %}<p class="aviso">Noco no contestó: la persona NO se agregó. Intenta otra vez en un momento.</p>
     {% elif error == 'persona_falta' %}<p class="aviso">Escoge a la persona antes de agregarla: búscala y toca su nombre.</p>
     {% elif error == 'persona_ficha' %}<p class="aviso">Esa persona ya no está en Noco, o no se pudo leer su ficha.</p>
@@ -1034,10 +1044,10 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
         {%- if c.email %}<span class="dato"><span>Correo:</span> <b>{{ c.email }}</b></span>{% endif -%}
       {%- endmacro %}
       <div class="quienes">{% if solo_ver %}{% if contacto_del_cliente %}<div class="cliente-datos chico"><span class="dato"><span>Cliente:</span> <b>{{ m.cliente }}</b></span>{{ datos_del_cliente(contacto_del_cliente) }}</div>{% else %}<span class="nota">Cliente: <b>{{ m.cliente or 'Sin cliente' }}</b></span>{% endif %} <span class="nota">Responsable: <b>{{ m.responsable or '—' }}</b></span>{% else %}
-        {#- EL CLIENTE se busca entre las personas de Noco (opcional: se puede
-            quitar). Con JavaScript, escribir ofrece coincidencias y elegir
-            guarda; vaciar la caja quita el cliente. Sin JavaScript: «Buscar»
-            y un botón por coincidencia. -#}
+        {#- EL CLIENTE se busca entre las personas de Noco (se puede quitar solo en IA:
+            en los demás grupos la puerta lo exige y el botón no sale). Con JavaScript,
+            escribir ofrece coincidencias y elegir guarda; vaciar la caja quita el
+            cliente. Sin JavaScript: «Buscar» y un botón por coincidencia. -#}
         {% if contacto_del_cliente %}<div class="cliente-bloque">{% endif %}<div class="persona-campo cliente-campo">
           <form class="buscar-persona" method="get" action="/proyectos" role="search">
             <label>Cliente <input class="campo-quien" type="text" name="pq" value="{% if busqueda and busqueda.donde == 'cliente' %}{{ busqueda.q }}{% else %}{{ m.cliente or '' }}{% endif %}" placeholder="Buscar en Noco… (sin cliente)" aria-label="Cliente del proyecto" data-buscar-persona="enviar" autocomplete="off"{% if m.cliente %} data-actual{% endif %}></label>
@@ -1046,7 +1056,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
           </form>
           <form class="elegir-persona" method="post" action="/proyectos/{{ m.id }}/cliente">
             {{ sugerencias('cliente') }}
-            {% if m.cliente %}<button class="btn-linea quitar-cliente" name="noco_id" value="">Quitar el cliente</button>{% endif %}
+            {% if m.cliente and not cliente_es_obligatorio(m.area) %}<button class="btn-linea quitar-cliente" name="noco_id" value="">Quitar el cliente</button>{% endif %}
           </form>
         </div>{% if contacto_del_cliente %}<div class="cliente-datos">{{ datos_del_cliente(contacto_del_cliente) }}</div></div>{% endif %}
         <form class="resp" method="post" action="/proyectos/{{ m.id }}/responsable" data-auto>
@@ -1510,9 +1520,25 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
       <h1>Proyecto nuevo en {{ g.clave }}</h1>
     </div>
     <section class="bloque">
-      {% if not solo_ver %}<form class="nuevo" method="post" action="/proyectos/nuevo">
-        <label>Nombre del proyecto
-          <input name="nombre" type="text" required maxlength="{{ largo_nombre }}" placeholder="Ej. Grabación del sencillo"></label>
+      {% set pide_cliente = cliente_es_obligatorio(g.clave) %}
+      {#- EL CLIENTE (pieza 2 de «Un proyecto no se crea sin cliente»): en todo grupo menos IA (`cliente_es_obligatorio`)
+          es obligatorio y el nombre NO se pide (el proyecto se llama como su cliente). Se escoge como en la cabecera:
+          con JavaScript se escribe y se toca un resultado (su Id queda en el campo escondido); SIN JavaScript «Buscar»
+          recarga la página con `?pq=` y el SERVIDOR pinta las fichas como botones DE ESTE formulario (`name="cliente"`):
+          tocar una envía el proyecto con esa ficha. Lo que decide es la ruta. -#}
+      {% if not solo_ver %}<div class="persona-campo">
+      <form class="buscar-persona" method="get" action="/proyectos" role="search">
+        <label>Cliente{% if not pide_cliente %} (opcional){% endif %}
+          <input type="text" name="pq"{% if busqueda and busqueda.donde == 'cliente-nuevo' %} value="{{ busqueda.q }}"{% endif %} placeholder="{{ 'Escribe y escoge de la lista' if pide_cliente else 'Buscar en Noco… (sin cliente)' }}" aria-label="Cliente del proyecto" data-buscar-persona="elegir" autocomplete="off"></label>
+        <input type="hidden" name="nuevo" value="{{ g.clave }}"><input type="hidden" name="pdonde" value="cliente-nuevo">
+        <button class="btn-linea">Buscar</button>
+      </form>
+      <form class="nuevo" method="post" action="/proyectos/nuevo">
+        {% if not pide_cliente %}<label>Nombre del proyecto
+          <input name="nombre" type="text" required maxlength="{{ largo_nombre }}" placeholder="Ej. Grabación del sencillo"></label>{% endif %}
+        <input type="hidden" name="cliente" value="" data-elegida{% if pide_cliente %} required{% endif %}>
+        {{ sugerencias('cliente-nuevo', 'cliente') }}
+        {% if pide_cliente %}<p class="suave">El proyecto se llama como su cliente.</p>{% endif %}
         <label>Responsable
           <select name="responsable" required>
             <option value="" selected disabled>Escoge…</option>
@@ -1520,7 +1546,8 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
           </select></label>
         <input type="hidden" name="area" value="{{ g.clave }}">
         <div class="botones"><button>Crear proyecto</button><a class="btn-linea" href="/proyectos">Cancelar</a></div>
-      </form>{% endif %}
+      </form>
+      </div>{% endif %}
     </section>
     </div>
 

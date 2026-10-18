@@ -16,7 +16,9 @@ def modelo(con_personas: bool = True) -> dict:
     pr = [dict(id=1, nombre="Disco Uno", area="CDS", estado="activo", cliente_nombre="Cliente X"),
           dict(id=2, nombre="Cerrado Dos", area="CDS", estado="cerrado"),
           dict(id=3, nombre="Sin area", area=None),
-          dict(id=4, nombre="Estado raro", area="CDS", estado="estado-que-nadie-conoce")]
+          # Del grupo IA y con cliente: es el único donde la plantilla dibuja «Quitar el cliente» (pieza 2 de «Un
+          # proyecto no se crea sin cliente»); sin un proyecto así el modelo no haría correr ese control.
+          dict(id=4, nombre="Estado raro", area="IA", estado="estado-que-nadie-conoce", cliente_nombre="Cliente Y")]
     ta = [dict(id=10, titulo="Pendiente A", proyecto_id=1, vence_en=tp._dia(1), responsable_chat_id=424242),
           dict(id=11, titulo="Hecha B", proyecto_id=1, estado="hecha", completado_en=tp._dia(-1)),
           dict(id=12, titulo="Suelta C", area="CDS"),
@@ -179,6 +181,11 @@ class BaseQueNoSeToca:
                 return ({"proyecto_id": 1, "carpeta_proyecto_id": "CARPETA-P1", "carpeta_cotizaciones_id": CARPETA_DE_COTIZACIONES_DEL_MODELO,
                          "nombre_puesto": "Disco Uno"} if pid == 1 else None)
             return _carpetas
+        if nombre in ("cliente_es_obligatorio", "cuenta_como_activo"):
+            # Las dos funciones REALES y puras de la puerta del cliente (pieza 1/2 de «Un proyecto no se crea sin
+            # cliente»): deciden mirando un valor, no tocan la base. La página las llama para pintar el campo del
+            # cliente y para saber si el proyecto que el aviso nombra sigue ocupando.
+            return getattr(db, nombre)
         if nombre == "hoy_rd":
             return db.hoy_rd              # función REAL y pura: el día de hoy en Santo Domingo; no toca la base
         if nombre == "codigo_de_cotizacion":

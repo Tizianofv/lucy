@@ -206,9 +206,9 @@ def test_sin_sesion_no_se_crea_nada(mundo):
 
 
 def test_el_formulario_de_proyecto_nuevo_pide_nombre_y_responsable_y_el_cliente_va_en_la_ventanita(mundo, gente):
-    """La PÁGINA aparte (la de sin JavaScript) pide nombre y responsable: el cliente
-    es opcional y sin JavaScript se pone después, desde la cabecera. La
-    VENTANITA (que solo existe con JavaScript) trae además el campo del cliente."""
+    """La PÁGINA aparte (la de sin JavaScript) de un grupo que exige cliente (ACD) pide el CLIENTE (su búsqueda y el campo
+    escondido) y el responsable, y NO el nombre: el proyecto se llama como su cliente (pieza 2 de «Un proyecto no se crea
+    sin cliente»). La de IA sigue pidiendo el nombre y el cliente es opcional."""
     html = ver(mundo, nuevo="ACD")
     assert titulo_de(html) == "Proyecto nuevo en ACD"
     aparte = html.split("<h1>Proyecto nuevo en ACD</h1>", 1)[1].split("</section>", 1)[0]
@@ -216,8 +216,12 @@ def test_el_formulario_de_proyecto_nuevo_pide_nombre_y_responsable_y_el_cliente_
     for opcion in ("Persona Uno", "Persona Dos", "Code"):
         assert f'<option value="{opcion}">' in aparte
     assert "sin responsable" not in html.lower()
-    assert 'name="cliente' not in aparte and "Cliente" not in aparte
-    assert html.count('<input type="hidden" name="cliente"') == len(_pagina.AREAS)   # una por ventanita
+    assert 'name="nombre"' not in aparte and "Nombre del proyecto" not in aparte
+    assert '<input type="hidden" name="cliente" value="" data-elegida required>' in aparte and "Cliente" in aparte
+    assert 'name="pq"' in aparte and '<input type="hidden" name="pdonde" value="cliente-nuevo">' in aparte
+    assert html.count('<input type="hidden" name="cliente"') == len(_pagina.AREAS) + 1   # una por ventanita y la de la página
+    ia = ver(mundo, nuevo="IA").split("<h1>Proyecto nuevo en IA</h1>", 1)[1].split("</section>", 1)[0]
+    assert 'name="nombre"' in ia and "Cliente (opcional)" in ia and "data-elegida required" not in ia
 
 
 def test_cada_grupo_ofrece_su_boton_de_proyecto_nuevo_y_sin_grupo_no(mundo):
