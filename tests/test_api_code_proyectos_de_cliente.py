@@ -295,6 +295,15 @@ def test_G1_un_proyecto_que_pasa_a_la_papelera_deja_de_salir(natalia):
     assert [p["id"] for p in _leer(A).json()["proyectos"]] == [1, 3]
 
 
+def test_G1_el_orden_es_activos_primero_luego_pausados_y_al_final_cerrados(natalia):
+    con = natalia()
+    con.execute("UPDATE proyectos SET estado = 'cerrado' WHERE id = 1")
+    con.execute("UPDATE proyectos SET estado = 'activo' WHERE id = 3")
+    con.commit()
+    assert [(p["id"], p["estado"]) for p in _leer(A).json()["proyectos"]] == [
+        (3, "En curso"), (2, "Pausado"), (1, "Cerrado")]
+
+
 def test_G1_los_hermanos_con_noco_id_en_la_ruta_son_estos_y_todos_estan_cubiertos():
     """HERMANOS, SACADOS DE LO REAL (lo que FastAPI registró): toda ruta de `/api/code` que
     lleva la ficha de un cliente en la ruta. Hoy es UNA; el día que haya otra (las consultas de la
