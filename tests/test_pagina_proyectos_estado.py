@@ -280,7 +280,7 @@ def test_E3_cada_caso_dice_lo_que_dice(mundo):
     assert f[3] == "Sin fecha Sin empezar Próxima: Pensar el título · sin fecha 1 pendiente"
     assert f[4] == "Con alerta Sin empezar Próxima: Revisar la alerta · sin fecha Grave 1 pendiente"
     assert f[5] == "En pausa Pausado Próxima: Esperar al cliente · vence el 11 oct 2026 1 pendiente"
-    assert f[6] == "Cerrado con pendiente Cerrado Cerrado: sin próxima tarea 1 pendiente"
+    assert f[6] == "Cerrado con pendiente Cerrado Archivado: sin próxima tarea 1 pendiente"
     assert f[7] == "Sin tareas Sin empezar Nada pendiente 0 pendientes"
     assert f[8] == "Todo hecho En curso Nada pendiente 0 pendientes"
     assert f[9] == "Sin grupo Sin empezar Próxima: De sin grupo · sin fecha 1 pendiente"

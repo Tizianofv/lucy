@@ -1406,6 +1406,31 @@ async def fechas_de_proyectos() -> dict[int, dict] | None:
                       "termina_cuando": f["termina_cuando"]} for f in filas}
 
 
+async def cierres_de_proyectos() -> dict[int, datetime]:
+    """`{proyecto_id: instante}` del ÚLTIMO CIERRE de cada proyecto (Archivar y borrar, pieza 2,
+    18-oct-2026). SOLO LEE. «Archivado» es «cerrado» (no hay estado nuevo) y no hay columna con la
+    fecha de cierre: la única pista es la huella `editar` de `log_acciones`. UN CIERRE es una huella
+    `editar` de `proyectos` cuyo `despues.estado` es `cerrado` y cuyo `antes.estado` NO lo era:
+    `crud.editar` guarda la fila entera en `despues`, así que cualquier otra edición de un cerrado
+    (la descripción, la carpeta) también trae `despues.estado = 'cerrado'` y NO es un cierre.
+    Con varios cierres (cerrar, reabrir, cerrar) vale el más nuevo. Un proyecto sin esa huella
+    (nació cerrado, o se cerró por un camino que no la dejó) no sale: la página no inventa fecha.
+    Lo que no ve: un cierre que vuelve por `deshacer` (otra acción) no cuenta como cierre nuevo."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT registro_id AS pid, MAX(ts) AS ts
+              FROM log_acciones
+             WHERE tabla = 'proyectos' AND accion = 'editar'
+               AND despues->>'estado' = %s
+               AND antes->>'estado' IS DISTINCT FROM %s
+             GROUP BY registro_id
+            """, (ESTADO_PROYECTO_CERRADO, ESTADO_PROYECTO_CERRADO))
+        filas = await cur.fetchall()
+    return {f["pid"]: f["ts"] for f in filas}
+
+
 async def _con_su_inicio(conn, cur, fila: dict) -> dict:
     """Un proyecto recién insertado (`fila`, con `RETURNING *`) con su `inicio` puesto a HOY en
     Santo Domingo (`hoy_rd`), y la fila releída para que la huella `crear` lo diga. LA ÚNICA que
@@ -5455,8 +5480,12 @@ def orden_en_la_lista(m: dict) -> tuple:
 
 def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
                  hoy: date, participantes=(), fechas=None, carpetas=None, notas=None,
-                 actividad=None, audios=None) -> dict:
+                 actividad=None, audios=None, cierres=None) -> dict:
     """El modelo de la página de proyectos, con todas las decisiones.
+
+    `cierres` es lo que devuelve `cierres_de_proyectos()` (`None` o sin el proyecto = no se sabe
+    cuándo se cerró: `cerrado_el` sale `None` y la página dice «Cerrado» sin fecha). Solo un proyecto
+    CERRADO ahora lleva `cerrado_el` (el día en Santo Domingo del último cierre): uno reabierto no.
 
     `fechas` es lo que devuelve `fechas_de_proyectos()` (`None` = las columnas no existen: el
     proyecto sale con `fechas_disponibles` falso y nada de fechas). Los días para la entrega
@@ -5531,6 +5560,10 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
             # compara al guardar (`si_sigue_igual`) para no pisar lo que llegó en el medio.
             "descripcion_huella": huella_de_descripcion(p["descripcion"]),
             "cerrado": p["estado"] == ESTADO_PROYECTO_CERRADO,
+            # Archivado = cerrado. El día del último cierre (de la huella `editar`); solo si ESTÁ
+            # cerrado, y `None` si la huella no existe: la página no inventa fecha.
+            "cerrado_el": (dia_rd((cierres or {}).get(pid))
+                           if p["estado"] == ESTADO_PROYECTO_CERRADO else None),
             # Telegram pudo guardar un estado libre antes de que existiera la
             # puerta (`crud.PUERTAS["proyectos"]["estado"]`): se ve, no se oculta.
             "estado_conocido": p["estado"] in ESTADOS_PROYECTO,
@@ -5711,9 +5744,11 @@ async def pagina_de_proyectos(hoy: date | None = None) -> dict:
     audios = await carpetas_de_audio()
     # LAS NOTAS (parte 6): otra lectura aparte, tolerante a su columna sin migrar.
     notas = await notas_de_proyectos()
+    # CUÁNDO SE CERRÓ cada archivado (pieza 2 de «Archivar y borrar»): lectura aparte y solo de lectura.
+    cierres = await cierres_de_proyectos()
     return armar_pagina(grupos, proyectos, tareas, huellas, comentarios,
                         nombres_con_code(), hoy, participantes, fechas, carpetas, notas,
-                        actividad, audios)
+                        actividad, audios, cierres)
 
 
 async def proyectos_de_cliente(noco_id: int, hoy: date | None = None) -> list[dict]:

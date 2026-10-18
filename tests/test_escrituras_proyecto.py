@@ -782,7 +782,7 @@ def test_cerrar_deja_las_tareas_abiertas_y_el_proyecto_cerrado(mundo):
     assert (h["actor"], h["accion"]) == ("panel", "editar")
     assert json.loads(h["despues"])["estado"] == "cerrado"
     html = ver(mundo, hecho="cerrado", p=1)
-    assert "Proyecto cerrado. Está en «cerrados»" in html and "Reabrir" in html
+    assert "Proyecto cerrado. Está en «archivados»" in html and "Reabrir" in html
     assert "/tareas/nueva?proyecto=1" not in html and "Cerrar proyecto</a>" not in html
     assert 'data-tarea="10"' in html                      # la tarea sigue en la lista
 

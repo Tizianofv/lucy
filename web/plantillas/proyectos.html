@@ -716,6 +716,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
 <a class="proy {{ 'cerrado' if cerrado }}" data-n="{{ m.nombre|sin_tildes }}" data-c="{{ (m.cliente or '')|sin_tildes }}" href="/proyectos?p={{ m.id }}{{ bq }}" aria-current="{{ 'true' if actual and actual.id == m.id else 'false' }}">
   <span>{{ m.nombre }}
     {%- if m.cliente %}<span class="sub">{{ m.cliente }}</span>{% elif not cerrado %}<span class="sub">Sin cliente</span>{% endif %}
+    {%- if cerrado %}<span class="sub cerrado-el">{{ ('Cerrado el ' ~ (m.cerrado_el|dia_largo)) if m.cerrado_el else 'Cerrado' }}</span>{% endif %}
     {%- if not cerrado %}<span class="sub {{ 'dormido' if m.dormido }}">{{ 'Sin movimiento ' if m.dormido else 'Último movimiento: ' }}{{ m.dias_sin_movimiento|hace_dias }}</span>{% endif %}</span>
   {%- if not cerrado %}<span class="cuenta">{% if m.n_vencidas %}<b>{{ m.n_vencidas }} vencida{{ 's' if m.n_vencidas > 1 }}</b> · {% endif %}{{ m.n_hechas }}/{{ m.n_total }}</span>{% endif %}
 </a>
@@ -774,7 +775,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
   {% else %}{% if not es_sin_grupo and not q %}<p class="vacio vacio-grupo" style="padding:.3rem .6rem">Sin proyectos abiertos.</p>{% endif %}{% endfor %}
   {% if g.cerrados %}
   <details class="cerrados" {% if actual and actual.cerrado and actual.area == g.clave %}open{% endif %}>
-    <summary>{{ g.cerrados|length }} cerrado{{ 's' if g.cerrados|length > 1 }}</summary>
+    <summary>{{ g.cerrados|length }} archivado{{ 's' if g.cerrados|length > 1 }}</summary>
     {% for m in g.cerrados %}{{ un_proyecto(m, actual, True) }}{% endfor %}
   </details>
   {% endif %}
@@ -999,7 +1000,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     {% elif hecho == 'sesion_agregada' %}<p class="aviso ok">Sesión agregada a este proyecto.</p>
     {% elif hecho == 'sesion_sacada' %}<p class="aviso ok">Se sacó de la lista.</p>
     {% elif hecho == 'responsable' %}<p class="aviso ok">Responsable guardado.</p>
-    {% elif hecho == 'cerrado' %}<p class="aviso ok">Proyecto cerrado. Está en «cerrados» en la lista de la izquierda.</p>
+    {% elif hecho == 'cerrado' %}<p class="aviso ok">Proyecto cerrado. Está en «archivados» en la lista de la izquierda.</p>
     {% elif hecho == 'cliente' %}<p class="aviso ok">Cliente guardado.</p>
     {% elif hecho == 'cliente_quitado' %}<p class="aviso ok">Cliente quitado: el proyecto queda sin cliente.</p>
     {% elif hecho == 'persona' %}<p class="aviso ok">Persona agregada.</p>
@@ -1501,7 +1502,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     {% if not solo_ver or m.cerrado %}
     <section class="bloque cerrar-p">
       <div class="encabezado"><h2>Cerrar el proyecto</h2></div>
-      {% if m.cerrado %}<div class="aviso-cerrado">Proyecto cerrado: no se le agregan tareas.
+      {% if m.cerrado %}<div class="aviso-cerrado">Proyecto cerrado{% if m.cerrado_el %} el {{ m.cerrado_el|dia_largo }}{% endif %}: no se le agregan tareas.
         {% if not solo_ver %}<form class="en-linea" method="post" action="/proyectos/{{ m.id }}/estado"><input type="hidden" name="estado" value="activo"><button class="btn-linea">Reabrir</button></form>{% endif %}</div>
       {% elif confirmar == 'cerrar' %}
       <div class="confirmar">¿Cerrar este proyecto?
@@ -1596,7 +1597,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
             {%- if m.proxima %}Próxima: {{ m.proxima.titulo }}
               {%- if m.proxima.vence %} <span class="cuando {{ 'vencida' if m.proxima.vencida }}">· {{ 'venció el' if m.proxima.vencida else 'vence el' }} {{ m.proxima.vence|dia_largo }}</span>{% else %} <span class="cuando">· sin fecha</span>{% endif %}
               {%- if m.proxima.grave %} <span class="pastilla roja">Grave</span>{% endif %}
-            {%- elif m.cerrado %}<span class="sin-proxima">Cerrado: sin próxima tarea</span>
+            {%- elif m.cerrado %}<span class="sin-proxima">Archivado: sin próxima tarea</span>
             {%- else %}<span class="sin-proxima">Nada pendiente</span>{% endif -%}
           </span>
           <span class="cuenta-p">{{ m.n_pendientes }} pendiente{{ 's' if m.n_pendientes != 1 }}</span>
