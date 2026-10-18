@@ -287,6 +287,15 @@ def test_G6b_deshacer_una_edicion_que_no_toco_el_estado_no_mueve_la_fecha(mundo)
     assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-9).astimezone(timezone.utc)}
 
 
+def test_G6b_deshacer_un_cambio_de_estado_que_no_salio_de_cerrado_no_cierra(mundo):
+    """Deshacer pausado → activo devuelve `pausado`, nunca `cerrado`: no es un cierre aunque el estado cambiara."""
+    mundo.proyecto(1, "Uno", area="CDS", estado="cerrado")
+    _huella(mundo, 10, 1, "editar", _dia(-9), {"estado": "activo"}, {"estado": "cerrado"})
+    _huella(mundo, 11, 1, "editar", _dia(-6), {"estado": "pausado"}, {"estado": "activo"})
+    _deshacer(mundo, 12, 1, _dia(-2), deshizo=11)
+    assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-9).astimezone(timezone.utc)}
+
+
 @pytest.mark.parametrize("motivo", [None, "", "Volvió con el proyecto #1 (acción #11)",
                                     "Tiziano deshizo la acción #999 (editar)"])
 def test_G6b_un_deshacer_que_no_apunta_a_una_reapertura_conocida_no_cierra(mundo, motivo):
