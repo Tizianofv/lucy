@@ -292,10 +292,10 @@ def test_A_cabecera_ficha_que_no_existe_proyecto_que_no_esta_y_nombre_repetido_s
     falta, a_falta = _cabecera(mundo, "101", pid=77)
     repetido, a_repe = _cabecera(mundo, "102", pid=2)
     assert (ficha, falta, repetido) == ("/proyectos?error=cliente_ficha&p=1", "/proyectos?error=proyecto&p=77",
-                                        "/proyectos?error=nombre_repetido&p=2")
+                                        "/proyectos?error=nombre_cliente_repetido&p=2")
     assert any("Esa ficha no está en Noco" in a for a in a_ficha)
     assert any("Ese proyecto ya no está" in a for a in a_falta)
-    assert any("Ya hay otro proyecto con ese nombre" in a for a in a_repe)
+    assert any("nombre de ese cliente" in a and "no se guardó nada" in a for a in a_repe)   # CDS: el nombre es el del cliente
     for avisos in (a_ficha, a_falta, a_repe):
         assert not any(FALSA in a for a in avisos), avisos
 
@@ -439,6 +439,9 @@ def leer_la_tarea(monkeypatch, mundo):
 
     async def candidatas(tid):
         return []
+    async def sin_gastos():
+        return []           # `db.papelera()` (los gastos) lee `movimientos`, tabla que esta base no tiene
+    monkeypatch.setattr(db, "papelera", sin_gastos)
     monkeypatch.setattr(db, "tarea_con_comentarios", tarea_con_comentarios)
     monkeypatch.setattr(db, "tareas_para_elegir_primero", candidatas)
 
@@ -570,3 +573,122 @@ def test_G14_el_segundo_paso_de_punta_a_punta_buscar_tocar_la_ficha_y_convertir(
     c, r = _post("/tareas/50/convertir-en-proyecto", {"cliente": valor})
     p = mundo.con.execute("SELECT * FROM proyectos").fetchall()
     assert len(p) == 1 and p[0]["cliente_noco_id"] == 104 and p[0]["area"] is None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Reabrir/reactivar y restaurar de la papelera: el aviso dice la causa y lleva «Abrir» (diseño §2.1-bis)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+@pytest.mark.parametrize("estado", ["cerrado", "pausado"])
+def test_R_reabrir_o_reactivar_con_el_cliente_ocupado_dice_la_causa_y_lleva_abrir(mundo, gente, noco, estado):
+    _p(mundo, 7, "Cliente 101", "CDS", cliente=101)
+    _p(mundo, 8, "Cliente 101", "ACD", estado=estado, cliente=101)
+    antes = _foto(mundo)
+    c, r = _post("/proyectos/8/estado", {"estado": "activo"})
+    assert r.headers["location"] == "/proyectos?error=reactivar_cliente_ocupado&p=8&ocupa=7"
+    assert _foto(mundo) == antes
+    pagina = _pagina_de(c, r)
+    aviso = next(a for a in _avisos(pagina) if "proyecto activo" in a)
+    assert "(«Cliente 101»)" in aviso and "sigue como estaba" in aviso and aviso.endswith("Abrir")
+    assert '<a href="/proyectos?p=7">Abrir</a>' in pagina
+    assert not any("No se pudo cambiar el estado" in a for a in _avisos(pagina))
+
+
+def test_R_pasar_a_pausado_o_cerrado_nunca_se_rechaza_y_reabrir_sin_otro_activo_funciona(mundo, gente, noco):
+    _p(mundo, 7, "Cliente 101", "CDS", cliente=101)
+    c, r = _post("/proyectos/7/estado", {"estado": "cerrado"})
+    assert r.headers["location"] == "/proyectos?hecho=cerrado&p=7"
+    c, r = _post("/proyectos/7/estado", {"estado": "activo"})
+    assert r.headers["location"] == "/proyectos?hecho=reabierto&p=7"
+
+
+def test_R_un_estado_que_no_existe_sigue_diciendo_el_aviso_general(mundo, gente, noco):
+    _p(mundo, 7, "Cliente 101", "CDS", cliente=101)
+    c, r = _post("/proyectos/7/estado", {"estado": "inventado"})
+    assert r.headers["location"] == "/proyectos?error=estado&p=7"
+
+
+def test_R_reactivar_uno_de_ia_con_el_nombre_de_otro_activo_dice_que_el_nombre_se_repite(mundo, gente, noco):
+    _p(mundo, 7, "Mejorar", "IA")
+    _p(mundo, 8, "Mejorar", "IA", estado="cerrado")
+    c, r = _post("/proyectos/8/estado", {"estado": "activo"})
+    assert r.headers["location"] == "/proyectos?error=nombre_repetido&p=8"
+    assert any("escribe otro nombre" in a for a in _avisos(_pagina_de(c, r)))
+
+
+def _borrado(mundo, pid, nombre, area, **k):
+    import asyncio
+    from acciones import crud
+    _p(mundo, pid, nombre, area, **k)
+    asyncio.run(crud.borrar("proyectos", pid, "x", actor="panel"))
+
+
+def test_R_restaurar_con_el_cliente_ocupado_dice_la_causa_y_lleva_abrir(mundo, gente, noco):
+    _borrado(mundo, 8, "Cliente 101", "ACD", cliente=101)
+    _p(mundo, 7, "Cliente 101", "CDS", cliente=101)
+    antes = _foto(mundo)
+    c, r = _post("/papelera/restaurar", {"tabla": "proyectos", "id": 8})
+    assert r.headers["location"] == "/papelera?error=restaurar_cliente_ocupado&ocupa=7"
+    assert _foto(mundo) == antes
+    pagina = _html.unescape(_cliente(DUENO).get(r.headers["location"]).text)
+    aviso = next(a for a in _avisos(pagina) if "proyecto activo" in a)
+    assert "(«Cliente 101»)" in aviso and aviso.startswith("No se restauró") and aviso.endswith("Abrir")
+    assert '<a href="/proyectos?p=7">Abrir</a>' in pagina
+
+
+@pytest.mark.parametrize("area", [a for a in GRUPOS_DE_TAREA if db.cliente_es_obligatorio(a)], ids=str)
+def test_R_restaurar_uno_sin_cliente_fuera_de_ia_dice_que_le_falta_el_cliente(mundo, gente, noco, area):
+    _borrado(mundo, 8, "Sin cliente", area)
+    antes = _foto(mundo)
+    c, r = _post("/papelera/restaurar", {"tabla": "proyectos", "id": 8})
+    assert r.headers["location"] == "/papelera?error=restaurar_sin_cliente"
+    assert _foto(mundo) == antes
+    pagina = _html.unescape(_cliente(DUENO).get(r.headers["location"]).text)
+    assert any("no tiene cliente" in a for a in _avisos(pagina))
+
+
+def test_R_restaurar_uno_de_ia_sin_cliente_o_uno_pausado_de_un_cliente_ocupado_si_vuelve(mundo, gente, noco):
+    _borrado(mundo, 8, "Interno", "IA")
+    _borrado(mundo, 9, "Cliente 101", "CDS", estado="pausado", cliente=101)
+    _p(mundo, 7, "Cliente 101", "CDS", cliente=101)
+    for pid in (8, 9):
+        c, r = _post("/papelera/restaurar", {"tabla": "proyectos", "id": pid})
+        assert r.headers["location"] == f"/papelera?hecho=proyecto_restaurado&id={pid}"
+
+
+def test_R_restaurar_con_el_nombre_de_otro_activo_dice_que_el_nombre_se_repite(mundo, gente, noco):
+    _borrado(mundo, 8, "Mejorar", "IA")
+    _p(mundo, 7, "Mejorar", "IA")
+    c, r = _post("/papelera/restaurar", {"tabla": "proyectos", "id": 8})
+    assert r.headers["location"] == "/papelera?error=restaurar_nombre_repetido"
+
+
+def test_R_el_aviso_de_la_papelera_no_nombra_a_un_proyecto_que_ya_no_ocupa(mundo, gente, noco):
+    from _navegador import dar_recibo
+    _p(mundo, 7, "Cliente 101", "CDS", estado="cerrado", cliente=101)
+    dar_recibo("/papelera", error="restaurar_cliente_ocupado", ocupa=7)
+    pagina = _html.unescape(_cliente(DUENO).get("/papelera", params={
+        "error": "restaurar_cliente_ocupado", "ocupa": 7}).text)
+    aviso = next(a for a in _avisos(pagina) if "proyecto activo" in a)
+    assert "(«" not in aviso and "Abrir" not in aviso
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# El nombre repetido dice la verdad según de quién es el nombre
+# ═══════════════════════════════════════════════════════════════════════
+
+def test_N_el_nombre_repetido_en_ia_habla_del_nombre_escrito_y_en_cds_del_nombre_del_cliente(mundo, gente, noco, drive):
+    _p(mundo, 7, "Mejorar", "IA")
+    c, r = _post("/proyectos/nuevo", _nuevo("IA", nombre="Mejorar"))
+    assert r.headers["location"] == "/proyectos?nuevo=IA&error=nombre_repetido"
+    en_ia = next(a for a in _avisos(_pagina_de(c, r)) if "nombre" in a)
+    assert "escribe otro nombre" in en_ia and "cliente" not in en_ia
+    # CDS: otra ficha con el mismo nombre de un proyecto activo; nadie escribió ningún nombre
+    noco.fichas[102] = {"id": 102, "nombre": "Cliente 101"}
+    _p(mundo, 8, "Cliente 101", "CDS", cliente=101)
+    c, r = _post("/proyectos/nuevo", _nuevo("ACD", cliente="102"))
+    assert r.headers["location"] == "/proyectos?nuevo=ACD&error=nombre_cliente_repetido"
+    en_cds = next(a for a in _avisos(_pagina_de(c, r)) if "nombre" in a)
+    assert "nombre de ese cliente" in en_cds and "escribe otro nombre" not in en_cds
+    assert drive == []

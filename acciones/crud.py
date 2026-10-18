@@ -2622,7 +2622,7 @@ async def deshacer(log_id: int) -> str:
                 ahora = await cur.fetchone()
                 if ahora is not None:
                     if db.cliente_es_obligatorio(ahora.get("area")) and ahora.get("cliente_noco_id") is None:
-                        raise ValueError("No la restauré: ese proyecto necesita cliente.")
+                        raise db.ClienteDelProyectoNoVale("obligatorio", "No la restauré: ese proyecto necesita cliente.")
                     try:
                         await db.proyecto_puede_quedar_activo(
                             cur, registro_id, ahora, {**ahora, "borrado_en": None})

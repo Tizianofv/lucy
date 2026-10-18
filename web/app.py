@@ -844,7 +844,7 @@ async def restaurar(request: Request):
 @app.get("/papelera", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_SIEMPRE)
 async def papelera(request: Request, restaurado: Aviso[int] = 0, hecho: Aviso[str] = "",
-                   id: Aviso[int] = 0, error: Aviso[str] = ""):
+                   id: Aviso[int] = 0, error: Aviso[str] = "", ocupa: Aviso[int] = 0):
     """Lo borrado, con los días que le quedan.
 
     Existe para que "borrar" no dé miedo: sale de las listas al instante y se
@@ -854,6 +854,8 @@ async def papelera(request: Request, restaurado: Aviso[int] = 0, hecho: Aviso[st
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     lo_borrado = await db.papelera_de_proyectos_y_tareas()
+    ocupante = (await _el_proyecto_que_ocupa_al_cliente(ocupa)
+                if error == "restaurar_cliente_ocupado" and ocupa else None)
     # Los avisos de restaurar dicen un ESTADO comprobado en la base al pintar, no la
     # acción (una dirección escrita a mano no puede forzarlos).
     de_vuelta = None
@@ -870,7 +872,8 @@ async def papelera(request: Request, restaurado: Aviso[int] = 0, hecho: Aviso[st
         request, "papelera.html",
         {"movs": await db.papelera(), "dias": db.DIAS_EN_PAPELERA,
          "restaurado": restaurado, "proyectos_borrados": lo_borrado["proyectos"],
-         "tareas_borradas": lo_borrado["tareas"], "notas_borradas": lo_borrado["notas"], "error": error, "de_vuelta": de_vuelta})
+         "tareas_borradas": lo_borrado["tareas"], "notas_borradas": lo_borrado["notas"], "error": error, "de_vuelta": de_vuelta,
+         "ocupante": ocupante})
 
 
 @app.post("/papelera/restaurar")
@@ -892,8 +895,18 @@ async def restaurar_proyecto_o_tarea(request: Request):
         await crud.deshacer_borrado(tabla, rid)
     except crud.NadaQueRestaurar:
         return RedirectResponse("/papelera?error=restaurar_no_esta", status_code=303)
+    except db.ClienteConProyecto as e:
+        log.warning("Papelera: no se restauró %s #%s: el cliente ya tiene el #%s activo", tabla, rid, e.proyecto_id)
+        return RedirectResponse(f"/papelera?error=restaurar_cliente_ocupado&ocupa={e.proyecto_id}", status_code=303)
+    except db.ClienteDelProyectoNoVale as e:
+        log.warning("Papelera: no se restauró %s #%s (%s)", tabla, rid, e.clave)
+        return RedirectResponse(
+            "/papelera?error=restaurar_sin_cliente" if e.clave == "obligatorio"
+            else "/papelera?error=restaurar_no_se_pudo", status_code=303)
     except ValueError as e:
         log.warning("Papelera: no se restauró %s #%s: %s", tabla, rid, e)
+        if isinstance(e.__cause__, db.NombreDeProyectoNoVale) and e.__cause__.clave == "repetido" and tabla == "proyectos":
+            return RedirectResponse("/papelera?error=restaurar_nombre_repetido", status_code=303)
         return RedirectResponse("/papelera?error=restaurar_no_se_pudo", status_code=303)
     hecho = {"proyectos": "proyecto_restaurado", "tareas": "tarea_restaurada", "notas": "nota_restaurada"}[tabla]
     return RedirectResponse(f"/papelera?hecho={hecho}&id={rid}", status_code=303)
@@ -1301,7 +1314,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
     # El nombre sale de la base AL PINTAR y solo si ese proyecto existe, sigue activo y es de un grupo que exige
     # cliente; si no, el aviso se pinta sin nombre y sin enlace (una dirección escrita a mano no inventa uno).
     ocupante = None
-    if error == "cliente_ocupado" and ocupa:
+    if error in ("cliente_ocupado", "reactivar_cliente_ocupado") and ocupa:
         ocupante = _ocupante_si_sigue_ocupando(modelo["proyectos"].get(ocupa))
     # GRUPOS (agregar y quitar): lo que se dibuja sale de la base. La cuenta de lo
     # que tiene un grupo se mide AL PINTAR (solo si se pidió la confirmación). Los
@@ -1472,6 +1485,13 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          "frase_de_la_carpeta_hecha": _frase_de_la_carpeta_del_aviso("", hecho),
          # Si el proyecto tiene su carpeta en Drive (la frase y el botón de «Crear la carpeta en Drive» salen de aquí).
          "carpeta_drive": carpeta_drive})
+
+
+def _clave_de_nombre_repetido(area) -> str:
+    """La CLAVE del aviso «otro proyecto activo ya tiene ese nombre», según de quién es el nombre: en IA lo escribió
+    una persona (`nombre_repetido`); en CDS, ACD y sin grupo es el del cliente (`nombre_cliente_repetido`) y nadie
+    lo escribió. Decide `db.cliente_es_obligatorio`, la misma puerta de siempre."""
+    return "nombre_cliente_repetido" if db.cliente_es_obligatorio(area) else "nombre_repetido"
 
 
 def _ocupante_si_sigue_ocupando(proyecto: dict | None) -> dict | None:
@@ -1701,7 +1721,8 @@ async def crear_proyecto_nuevo(request: Request):
             cliente_noco_id=cliente, leer_persona=noco_lectura.persona)
     except db.NombreDeProyectoNoVale as e:
         log.warning("Panel de proyectos: proyecto nuevo rechazado (%s)", e.clave)
-        return RedirectResponse(f"{vuelta}&error=nombre_{e.clave}", status_code=303)
+        clave = _clave_de_nombre_repetido(area) if e.clave == "repetido" else f"nombre_{e.clave}"
+        return RedirectResponse(f"{vuelta}&error={clave}", status_code=303)
     except db.ProyectoNoSeCrea as e:
         log.warning("Panel de proyectos: proyecto nuevo rechazado (%s)", e.clave)
         return RedirectResponse(f"{vuelta}&error={_clave_del_cliente_que_no_vale(e.clave, cliente)}", status_code=303)
@@ -1765,7 +1786,10 @@ async def poner_cliente_del_proyecto(request: Request, pid: int):
         return RedirectResponse(f"/proyectos?error={clave}&p={pid}{cola}", status_code=303)
     except db.NombreDeProyectoNoVale as e:
         log.warning("Panel de proyectos: cliente rechazado para #%s: el nombre (%s)", pid, e.clave)
-        return RedirectResponse(f"/proyectos?error=nombre_{e.clave}&p={pid}{cola}", status_code=303)
+        el_proyecto = await db.proyecto_para_el_aviso(pid)
+        clave = (_clave_de_nombre_repetido(el_proyecto["area"] if el_proyecto else None)
+                 if e.clave == "repetido" else f"nombre_{e.clave}")
+        return RedirectResponse(f"/proyectos?error={clave}&p={pid}{cola}", status_code=303)
     except ValueError as e:
         log.warning("Panel de proyectos: cliente rechazado para #%s: %s", pid, e)
         return RedirectResponse(f"/proyectos?error=cliente_no_se_pudo&p={pid}{cola}", status_code=303)
@@ -1901,8 +1925,17 @@ async def cambiar_estado_de_proyecto(request: Request, pid: int):
         despues, _log = await crud.editar(
             "proyectos", pid, {"estado": str(formulario.get("estado", ""))},
             motivo="Estado cambiado desde el panel", actor="panel")
+    except db.ClienteConProyecto as e:
+        log.warning("Panel de proyectos: estado rechazado para #%s: el cliente ya tiene el #%s activo", pid, e.proyecto_id)
+        return RedirectResponse(
+            f"/proyectos?error=reactivar_cliente_ocupado&p={pid}&ocupa={e.proyecto_id}", status_code=303)
     except ValueError as e:
         log.warning("Panel de proyectos: estado rechazado para #%s: %s", pid, e)
+        if isinstance(e.__cause__, db.NombreDeProyectoNoVale) and e.__cause__.clave == "repetido":
+            el_proyecto = await db.proyecto_para_el_aviso(pid)
+            return RedirectResponse(
+                f"/proyectos?error={_clave_de_nombre_repetido(el_proyecto['area'] if el_proyecto else None)}&p={pid}",
+                status_code=303)
         return RedirectResponse(f"/proyectos?error=estado&p={pid}", status_code=303)
     if despues is None:
         return RedirectResponse("/proyectos?error=proyecto", status_code=303)

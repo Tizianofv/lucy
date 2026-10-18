@@ -863,7 +863,9 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     {% elif error == 'proyecto' %}<p class="aviso">Ese proyecto ya no está.</p>
     {% elif error == 'nombre_vacio' %}<p class="aviso">El nombre no puede quedar vacío.</p>
     {% elif error == 'nombre_largo' %}<p class="aviso">El nombre no puede pasar de {{ largo_nombre }} caracteres.</p>
-    {% elif error == 'nombre_repetido' %}<p class="aviso">Ya hay otro proyecto con ese nombre. Cada proyecto se llama distinto.</p>
+    {% elif error == 'nombre_repetido' %}<p class="aviso">Ya hay otro proyecto activo con ese nombre. Cada proyecto activo se llama distinto: escribe otro nombre.</p>
+    {% elif error == 'nombre_cliente_repetido' %}<p class="aviso">Ya hay otro proyecto activo con el nombre de ese cliente (otra ficha que se llama igual). Aquí el nombre es el del cliente: no se guardó nada.</p>
+    {% elif error == 'reactivar_cliente_ocupado' %}<p class="aviso">El cliente tiene un proyecto activo{% if ocupante %} («{{ ocupante.nombre }}»){% endif %} y no se pueden activar 2. El proyecto sigue como estaba.{% if ocupante %} <a href="/proyectos?p={{ ocupante.id }}">Abrir</a>{% endif %}</p>
     {% elif error == 'nombre_igual' %}<p class="aviso">El nombre ya era ese: no cambió nada.</p>
     {% elif error == 'nombre_cliente' %}<p class="aviso">En CDS y ACD el nombre del proyecto es el del cliente: para cambiarlo, cambia el cliente.</p>
     {% elif error == 'nombre_invalido' %}<p class="aviso">Ese nombre no se puede guardar.</p>
