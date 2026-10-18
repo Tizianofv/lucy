@@ -187,6 +187,10 @@ async def main() -> int:
         # personas de cada proyecto y tarea, E7). Sin tolerancia a propósito: si
         # esa migración no está, esta línea es la que lo dice. Es una LECTURA.
         ("pagina_de_proyectos", lambda: db.pagina_de_proyectos()),
+        # Lo que Natalia lee de los proyectos de un cliente (pieza L1, 18-oct-2026): una LECTURA con una ficha
+        # cualquiera. OJO: si esa ficha no tiene proyectos, `proyectos_de_cliente` sale despues de la PRIMERA consulta y
+        # la de las tareas (el JOIN) no corre; solo prueba la segunda si la ficha 1 existe en la base.
+        ("proyectos_de_cliente", lambda: db.proyectos_de_cliente(1)),
         # Las tablas de las cotizaciones (pieza 2): ver `_tablas_de_cotizaciones`. Una LECTURA.
         ("tablas de cotizaciones (sin tolerancia)", _tablas_de_cotizaciones),
         # Lo que la pieza 8 agregó para Drive: ver `_tablas_de_drive_de_las_cotizaciones`. Una LECTURA.
