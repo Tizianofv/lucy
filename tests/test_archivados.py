@@ -288,6 +288,16 @@ def test_G6b_deshacer_una_edicion_que_no_toco_el_estado_no_mueve_la_fecha(mundo)
     assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-9).astimezone(timezone.utc)}
 
 
+def test_G6b_restaurar_un_proyecto_de_la_papelera_por_la_base_no_borra_la_fecha(mundo):
+    """El `borrar` de un proyecto también es una huella de `proyectos`: la consulta la trae para que el
+    `deshacer` que la restaura se sepa leer (y no lo trate como «no sé qué deshizo»)."""
+    mundo.proyecto(1, "Uno", area="CDS", estado="cerrado")
+    _huella(mundo, 10, 1, "editar", _dia(-9), {"estado": "activo"}, {"estado": "cerrado"})
+    _huella(mundo, 11, 1, "borrar", _dia(-6), {"estado": "cerrado"}, {"tareas_con_el": []})
+    _deshacer(mundo, 12, 1, _dia(-4), deshizo=11, accion="borrar")
+    assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-9).astimezone(timezone.utc)}
+
+
 @pytest.mark.parametrize("motivo", [None, "", "Volvió con el proyecto #1 (acción #11)",
                                     "Tiziano deshizo la acción #999 (editar)"])
 def test_G6b_un_deshacer_que_no_apunta_a_una_huella_conocida_borra_la_fecha_en_vez_de_inventarla(mundo, motivo):
@@ -395,6 +405,11 @@ _SECUENCIAS = {
         [("e", -9, None, "cerrado"), ("e", -6, None, "activo"), ("d", -2, 2)], None),
     "un `antes` sin estado que deja cerrado cuenta como cierre": (
         [("e", -9, None, "cerrado")], -9),
+    "deshacer una edición que no cambió el estado no lo toca, aunque hoy el estado sea otro": (
+        [("e", -9, "activo", "cerrado"), ("e", -7, "cerrado", "activo"), ("e", -5, "activo", "activo"),
+         ("e", -4, "activo", "cerrado"), ("d", -2, 3)], -4),
+    "no se sabe qué quedó y se deshace: el estado vuelve a saberse pero no hay día": (
+        [("e", -9, "activo", "cerrado"), ("e", -6, "cerrado", None), ("d", -2, 2)], None),
     "cerrado → pausado → deshacer lo deshecho dos veces": (
         [("e", -9, "activo", "cerrado"), ("e", -6, "cerrado", "pausado"), ("d", -4, 2), ("d", -2, 2)], -4),
 }
@@ -432,6 +447,15 @@ def test_regla_unica_cada_proyecto_lleva_su_propio_estado():
     a = _filas(_SECUENCIAS["cerrar, reabrir y deshacer la reapertura: vuelve a cerrado el día del deshacer"][0])
     b = [{**f, "id": 100, "pid": 2} for f in _filas([("e", -8, "activo", "cerrado")])]
     assert db.cierres_desde_las_huellas([*a, *b]) == {1: _dia(-2), 2: _dia(-8)}
+
+
+def test_regla_unica_un_deshacer_de_la_huella_de_otro_proyecto_no_le_cambia_el_estado():
+    uno = _filas([("e", -9, "activo", "cerrado"), ("e", -6, "cerrado", "activo")])
+    dos = [{"id": 50, "pid": 2, "accion": "editar", "ts": _dia(-12), "motivo": None,
+            "antes_estado": "activo", "despues_estado": "activo"},
+           {"id": 51, "pid": 2, "accion": "deshacer", "ts": _dia(-2), "antes_estado": None,
+            "despues_estado": None, "motivo": db.motivo_de_deshacer(2, "editar")}]
+    assert db.cierres_desde_las_huellas([*uno, *dos]) == {}
 
 
 def test_regla_unica_el_caso_del_testigo_por_la_base_y_por_la_pagina(mundo):
