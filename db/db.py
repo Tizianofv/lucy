@@ -1406,6 +1406,92 @@ async def fechas_de_proyectos() -> dict[int, dict] | None:
                       "termina_cuando": f["termina_cuando"]} for f in filas}
 
 
+def motivo_de_deshacer(log_id: int, accion: str) -> str:
+    """El `motivo` de la huella `deshacer` (la escribe `crud.deshacer`): dice QUÉ huella se deshizo.
+    `id_que_deshizo` lo lee de vuelta; una sola fuente para las dos."""
+    return f"Tiziano deshizo la acción #{log_id} ({accion})"
+
+
+def id_que_deshizo(motivo) -> int | None:
+    """El id de la huella que deshizo una huella `deshacer`, o `None` si el motivo no tiene esa forma."""
+    visto = re.match(r"Tiziano deshizo la acción #(\d+) \(", motivo or "")
+    return int(visto.group(1)) if visto else None
+
+
+def cierres_desde_las_huellas(filas) -> dict[int, datetime]:
+    """LA REGLA ÚNICA de `cierres_de_proyectos`, sobre filas ya leídas: para cada proyecto se recorren
+    sus huellas `editar` y `deshacer` en orden (`ts`, luego `id`) llevando el ESTADO en que quedó:
+    * `editar`: el estado pasa a `despues_estado`. Es cierre si antes NO era `cerrado` (el `antes_estado`
+      de la propia huella; si no trae estado cuenta como «no lo era») y ahora SÍ.
+    * `deshacer` de un `editar` de ESE proyecto: el estado vuelve a lo que ese `editar` tenía en
+      `antes_estado` (si el `editar` no cambió el estado, queda como estaba). Es cierre si antes no era
+      `cerrado` y ahora sí. Un `deshacer` de un `borrar` o un `crear` no toca el estado.
+    * Cualquier huella que no deja saber el estado (un `deshacer` cuyo motivo no apunta a un `editar` de
+      este proyecto, o cuyo `editar` no trae estado, o un `editar` sin `despues.estado`) deja el estado
+      DESCONOCIDO y borra la fecha: la página dice «Cerrado» sin día antes que inventar uno. Un cierre
+      posterior, que sí se sabe, la vuelve a dar.
+    Cada fila: `{id, pid, accion, ts, motivo, antes_estado, despues_estado}`. La fecha es la del ÚLTIMO
+    cierre. Un proyecto sin cierre conocido, o que hoy no está cerrado, no sale."""
+    cerrado = ESTADO_PROYECTO_CERRADO
+    desconocido = object()
+    por_id = {f["id"]: f for f in filas}
+    por_proyecto: dict[int, list] = {}
+    for f in filas:
+        por_proyecto.setdefault(f["pid"], []).append(f)
+    cierres: dict[int, datetime] = {}
+    for pid, huellas in por_proyecto.items():
+        estado, fecha = desconocido, None
+        for f in sorted(huellas, key=lambda h: (h["ts"], h["id"])):
+            if f["accion"] == "editar":
+                previo = f["antes_estado"]          # sin estado en el `antes`: no estaba cerrado
+                estado = f["despues_estado"] if f["despues_estado"] is not None else desconocido
+            elif f["accion"] == "deshacer":
+                previo = estado
+                u = por_id.get(id_que_deshizo(f["motivo"]))
+                if u is None or u["pid"] != pid:
+                    estado = desconocido
+                elif u["accion"] == "editar":
+                    if u["antes_estado"] is None:
+                        estado = desconocido
+                    elif u["antes_estado"] != u["despues_estado"]:
+                        estado = u["antes_estado"]
+                elif u["accion"] not in ("borrar", "crear"):
+                    estado = desconocido
+            else:
+                continue                             # `borrar` y `crear` solo sirven de blanco de un `deshacer`
+            if estado is desconocido:
+                fecha = None
+            elif estado == cerrado and previo is not desconocido and previo != cerrado:
+                fecha = f["ts"]
+            elif estado != cerrado:
+                fecha = None                         # reabierto: ya no hay fecha que enseñar
+        if fecha is not None:
+            cierres[pid] = fecha
+    return cierres
+
+
+async def cierres_de_proyectos() -> dict[int, datetime]:
+    """`{proyecto_id: instante}` del ÚLTIMO MOMENTO EN QUE CADA PROYECTO PASÓ A CERRADO (Archivar y
+    borrar, pieza 2, 18-oct-2026). SOLO LEE; lee las huellas `editar` y `deshacer` de `proyectos`
+    en `log_acciones` y decide con `cierres_desde_las_huellas` (la regla, dicha ahí). «Archivado» es
+    «cerrado» (no hay estado nuevo) y no hay columna con la fecha. Solo hay DOS escritores del
+    `estado` de un proyecto (los dos genéricos de `acciones/crud.py`; el panel, Telegram y los botones
+    pasan por `crud.editar`). `crud.editar` guarda la fila entera en `antes` y `despues`; `crud.deshacer`
+    deja `antes` y `despues` vacíos y en su `motivo` dice qué huella deshizo (`id_que_deshizo`).
+    Un proyecto sin huella (nació cerrado) o de estado no deducible no sale: la página no inventa fecha."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT id, registro_id AS pid, accion, ts, motivo,
+                   antes->>'estado' AS antes_estado, despues->>'estado' AS despues_estado
+              FROM log_acciones
+             WHERE tabla = 'proyectos' AND accion IN ('editar', 'deshacer', 'borrar', 'crear')
+            """)
+        filas = await cur.fetchall()
+    return cierres_desde_las_huellas(filas)
+
+
 async def _con_su_inicio(conn, cur, fila: dict) -> dict:
     """Un proyecto recién insertado (`fila`, con `RETURNING *`) con su `inicio` puesto a HOY en
     Santo Domingo (`hoy_rd`), y la fila releída para que la huella `crear` lo diga. LA ÚNICA que
@@ -5455,8 +5541,12 @@ def orden_en_la_lista(m: dict) -> tuple:
 
 def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
                  hoy: date, participantes=(), fechas=None, carpetas=None, notas=None,
-                 actividad=None, audios=None) -> dict:
+                 actividad=None, audios=None, cierres=None) -> dict:
     """El modelo de la página de proyectos, con todas las decisiones.
+
+    `cierres` es lo que devuelve `cierres_de_proyectos()` (`None` o sin el proyecto = no se sabe
+    cuándo se cerró: `cerrado_el` sale `None` y la página dice «Cerrado» sin fecha). Solo un proyecto
+    CERRADO ahora lleva `cerrado_el` (el día en Santo Domingo del último cierre): uno reabierto no.
 
     `fechas` es lo que devuelve `fechas_de_proyectos()` (`None` = las columnas no existen: el
     proyecto sale con `fechas_disponibles` falso y nada de fechas). Los días para la entrega
@@ -5533,6 +5623,10 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
             # compara al guardar (`si_sigue_igual`) para no pisar lo que llegó en el medio.
             "descripcion_huella": huella_de_descripcion(p["descripcion"]),
             "cerrado": p["estado"] == ESTADO_PROYECTO_CERRADO,
+            # Archivado = cerrado. El día del último cierre (de la huella `editar`); solo si ESTÁ
+            # cerrado, y `None` si la huella no existe: la página no inventa fecha.
+            "cerrado_el": (dia_rd((cierres or {}).get(pid))
+                           if p["estado"] == ESTADO_PROYECTO_CERRADO else None),
             # Telegram pudo guardar un estado libre antes de que existiera la
             # puerta (`crud.PUERTAS["proyectos"]["estado"]`): se ve, no se oculta.
             "estado_conocido": p["estado"] in ESTADOS_PROYECTO,
@@ -5713,9 +5807,11 @@ async def pagina_de_proyectos(hoy: date | None = None) -> dict:
     audios = await carpetas_de_audio()
     # LAS NOTAS (parte 6): otra lectura aparte, tolerante a su columna sin migrar.
     notas = await notas_de_proyectos()
+    # CUÁNDO SE CERRÓ cada archivado (pieza 2 de «Archivar y borrar»): lectura aparte y solo de lectura.
+    cierres = await cierres_de_proyectos()
     return armar_pagina(grupos, proyectos, tareas, huellas, comentarios,
                         nombres_con_code(), hoy, participantes, fechas, carpetas, notas,
-                        actividad, audios)
+                        actividad, audios, cierres)
 
 
 async def proyectos_de_cliente(noco_id: int, hoy: date | None = None) -> list[dict]:

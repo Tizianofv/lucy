@@ -215,7 +215,7 @@ function pintarSinSaltar(url, texto, ctx) {
       if (nuevas[j].getAttribute("data-region") === viejas[i].getAttribute("data-region")) hallada = nuevas[j];
     }
     if (!hallada) throw new Error("no es esta pantalla");
-    /* Lo que la persona abrió con su dedo (los `<details>` de «N hechas», «N cerrados»)
+    /* Lo que la persona abrió con su dedo (los `<details>` de «N hechas», «N archivados»)
        sigue abierto tras guardar, si la página trae los mismos: nunca se cierra lo que el
        servidor abrió. Al ir a otra pantalla no se hereda (son otros). Solo Proyectos. */
     abiertos = [];

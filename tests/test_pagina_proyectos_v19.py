@@ -149,7 +149,7 @@ def test_un_proyecto_abierto_sin_cliente_dice_sin_cliente_y_uno_cerrado_no(mundo
     subs = {a.attrs["href"]: [s.todo_el_texto() for s in a.buscar("span", "sub")] for a in abiertos}
     assert subs["/proyectos?p=1"][0] == "Colegio" and subs["/proyectos?p=2"][0] == "Sin cliente"
     cerrado = [a for a in arbol(html).buscar("a", "cerrado")][0]
-    assert [s.todo_el_texto() for s in cerrado.buscar("span", "sub")] == ["Otro"]
+    assert [s.todo_el_texto() for s in cerrado.buscar("span", "sub")] == ["Otro", "Cerrado"]   # sin huella: «Cerrado», sin fecha
     sin = ver(mundo, p=4)
     cerrados_sin = [a for a in arbol(sin).buscar("a", "cerrado")]
     assert all("Sin cliente" not in a.todo_el_texto() for a in cerrados_sin)

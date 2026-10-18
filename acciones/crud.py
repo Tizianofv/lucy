@@ -2839,7 +2839,7 @@ async def deshacer(log_id: int) -> str:
         # agrega. Si no, el log mentiría diciendo que aquello nunca pasó.
         await _registrar(
             conn, accion="deshacer", tabla=tabla, registro_id=registro_id,
-            motivo=f"Tiziano deshizo la acción #{log_id} ({huella['accion']})",
+            motivo=db.motivo_de_deshacer(log_id, huella['accion']),
         )
     return que
 
