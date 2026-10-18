@@ -513,6 +513,64 @@ CREATE TABLE drive_de_proyectos (
   creado_en              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- LAS CONSULTAS DE NATALIA (pieza L3 del diseño «Natalia y los Proyectos», 18-oct-2026; migración
+-- 2026-10-18_consultas_de_natalia.sql). Cuando un cliente necesita algo, Natalia no escribe una tarea: abre una
+-- consulta (`POST /api/code/clientes/{noco_id}/consultas`) y Lucy le pregunta al responsable por Telegram.
+-- `tipo` es `tarea_nueva` (el cliente pidió algo) o `nueva_fecha` (la tarea que sigue ya pasó su fecha); un CHECK
+-- ata cada tipo a sus estados y a sus campos. `clave` es única: la misma clave devuelve la misma consulta. El
+-- índice único parcial deja UNA `nueva_fecha` viva por tarea. El estado solo lo cambia
+-- `db.pasar_consulta_de_natalia`. Los comentarios de la migración explican cada columna.
+CREATE TABLE consultas_de_natalia (
+  id                     BIGSERIAL PRIMARY KEY,
+  clave                  TEXT NOT NULL,
+  tipo                   TEXT NOT NULL,
+  estado                 TEXT NOT NULL DEFAULT 'abierta',
+  cliente_noco_id        BIGINT NOT NULL,
+  proyecto_id            BIGINT NOT NULL REFERENCES proyectos(id),
+  titulo                 TEXT,
+  pedido                 TEXT,
+  vence_en               TIMESTAMPTZ,
+  tarea_id               BIGINT REFERENCES tareas(id),
+  vence_vencida_en       TIMESTAMPTZ,
+  responsable_chat_id    BIGINT NOT NULL,
+  creada_en              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  tarjeta_msg_id         BIGINT,
+  enviada_en             TIMESTAMPTZ,
+  recordada_en           TIMESTAMPTZ,
+  contestada_por_chat_id BIGINT,
+  contestada_en          TIMESTAMPTZ,
+  tarea_resultante_id    BIGINT REFERENCES tareas(id),
+  motivo                 TEXT,
+  CONSTRAINT consultas_de_natalia_clave_unica
+    UNIQUE (clave),
+  CONSTRAINT consultas_de_natalia_tipo_valido
+    CHECK (tipo IN ('tarea_nueva', 'nueva_fecha')),
+  CONSTRAINT consultas_de_natalia_estado_valido
+    CHECK (estado IN ('abierta', 'preguntada', 'anotada', 'rechazada', 'no_se_pudo', 'resuelta')),
+  CONSTRAINT consultas_de_natalia_estado_del_tipo
+    CHECK ((tipo = 'tarea_nueva' AND estado IN ('abierta', 'preguntada', 'anotada', 'rechazada', 'no_se_pudo')) OR
+           (tipo = 'nueva_fecha' AND estado IN ('abierta', 'preguntada', 'resuelta'))),
+  CONSTRAINT consultas_de_natalia_campos_del_tipo
+    CHECK ((tipo = 'tarea_nueva' AND titulo IS NOT NULL AND pedido IS NOT NULL AND
+            tarea_id IS NULL AND vence_vencida_en IS NULL) OR
+           (tipo = 'nueva_fecha' AND tarea_id IS NOT NULL AND titulo IS NULL AND pedido IS NULL AND
+            vence_en IS NULL)),
+  CONSTRAINT consultas_de_natalia_clave_valida
+    CHECK (length(clave) BETWEEN 1 AND 120)
+);
+
+-- UNA consulta de nueva fecha viva por tarea: la última puerta contra dos aperturas a la vez.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_consultas_de_natalia_nueva_fecha_viva
+  ON consultas_de_natalia (tarea_id)
+  WHERE tipo = 'nueva_fecha' AND estado IN ('abierta', 'preguntada');
+
+-- Lo que lee el despertador (L4) y la lectura de Natalia: por estado, y por ficha.
+CREATE INDEX IF NOT EXISTS idx_consultas_de_natalia_estado
+  ON consultas_de_natalia (estado)
+  WHERE estado IN ('abierta', 'preguntada');
+CREATE INDEX IF NOT EXISTS idx_consultas_de_natalia_cliente
+  ON consultas_de_natalia (cliente_noco_id);
+
 -- LOS MICRO-PASOS (encargo 7, 22-sep-2026): una lista de chequeo DENTRO de
 -- una tarea, para cuando sigue siendo grande. Decisión de Tiziano, textual:
 -- «No, es una lista de chequeo» — así que NO es una tarea: sin fecha, sin

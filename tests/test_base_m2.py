@@ -525,7 +525,11 @@ def test_G6_los_unicos_escritores_del_cliente_son_las_tres_puertas():
     """Desde la pieza 1 de «Un proyecto no se crea sin cliente» (18-oct-2026) el cliente nace con el proyecto: lo
     escriben `crear_proyecto` y `convertir_tarea_en_proyecto` en su INSERT, y `poner_cliente` en el UPDATE de un
     proyecto que existe. Un cuarto escritor se pone rojo acá."""
-    assert _escritores_de_cliente() == {"poner_cliente", "crear_proyecto", "convertir_tarea_en_proyecto"}
+    # `abrir_consulta_de_natalia` (18-oct-2026, pieza L3) escribe la columna `cliente_noco_id` de OTRA tabla,
+    # `consultas_de_natalia` (la ficha del cliente de la consulta), no la del proyecto: se declara aparte para que
+    # la guarda siga viendo cualquier cuarto escritor del cliente de un PROYECTO.
+    assert _escritores_de_cliente() - {"abrir_consulta_de_natalia"} == {
+        "poner_cliente", "crear_proyecto", "convertir_tarea_en_proyecto"}
 
 
 def test_G6_el_censo_ve_un_escritor_inventado():

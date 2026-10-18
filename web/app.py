@@ -180,17 +180,9 @@ def _destino_seguro(volver: str) -> str:
 # decimal, así que un número absurdamente largo se frena acá y no en la base.
 _MONTO = re.compile(r"^\d{1,10}(\.\d{1,2})?$")
 
-# El suelo de la fecha. NO es una regla de negocio sobre hasta cuándo se puede
-# cargar hacia atrás: es una malla contra un dígito del año que se resbaló.
-#
-# `date.fromisoformat` acepta tan contento "0026-09-04" y "1926-09-04", y una
-# fila guardada en el año 26 no vuelve a aparecer en ninguna pantalla que
-# alguien mire —el resumen va por mes, y ese mes nadie lo abre— así que el
-# gasto se pierde EN SILENCIO, que es la familia de fallo que este panel
-# combate. Los registros de Lucy empiezan en 2026; el suelo se deja seis años
-# por debajo, deliberadamente flojo, para que ningún registro tardío legítimo
-# lo toque y solo caiga el año mal tecleado.
-PISO_FECHA = date(2020, 1, 1)
+# El suelo de la fecha vive en `db.PISO_FECHA` (con su porqué): lo comparten el panel y la
+# puerta de Natalia (`web/api_code.py`), que no pueden importarse entre sí.
+PISO_FECHA = db.PISO_FECHA
 
 
 def _monto_valido(texto: str):
@@ -252,50 +244,10 @@ LARGO_TITULO = db.LARGO_TITULO_TAREA
 LOGO_CDS = Path(__file__).resolve().parent / "imagenes" / "logo-cds.png"
 
 
-def _vence_valido(texto: str, piso: date = PISO_FECHA):
-    """El campo «vence» del formulario → (aceptado, instante).
-
-    Devuelve `(True, None)` cuando viene VACÍO: la fecha es opcional y la tarea
-    nace sin fecha, que en este panel no es un hueco sino un grupo con nombre
-    propio —«Sin fecha»—. Ese grupo existe porque las 4 tareas sin `vence_en`
-    de producción llevaban meses invisibles; mandarlas a hoy por defecto sería
-    volver a inventarles una fecha que nadie eligió.
-
-    Devuelve `(False, None)` si el texto no es una fecha, o si cae por debajo
-    de PISO_FECHA. El piso es el mismo que usa /efectivo y por el mismo motivo:
-    no es una regla de negocio, es la malla contra un dígito del año que se
-    resbaló.
-
-    EL FUTURO SE ACEPTA, al revés que en /efectivo. Un gasto en efectivo es
-    plata que ya salió; una tarea que vence el mes que viene es el caso normal
-    de una tarea. Son la misma forma de campo y preguntas opuestas.
-
-    LA HORA ES 23:59 EN SANTO DOMINGO, y las dos mitades de esa frase importan:
-
-      · «23:59» porque el formulario pide un DÍA. «Vence el jueves» quiere decir
-        que el jueves entero todavía sirve, así que el instante que representa
-        ese día es su final y no su comienzo.
-      · «en Santo Domingo» porque `tareas.vence_en` es TIMESTAMPTZ, o sea un
-        instante, y el panel decide el grupo con `db.dia_rd`, que lo lee EN
-        SANTO DOMINGO. Armado en UTC, el 23:59 del jueves se guardaría como un
-        instante que en Santo Domingo todavía es del jueves a las 19:59 — pero
-        el 00:00 de cualquier día armado en UTC cae en el día ANTERIOR en
-        Santo Domingo. Una tarea escrita de noche nacería en el día equivocado.
-
-    La zona sale de `config.TZ`, la misma que usa `db.dia_rd`: dos copias de una
-    zona horaria se desincronizan igual que dos copias de cualquier otra cosa.
-    """
-    limpio = (texto or "").strip()
-    if not limpio:
-        return True, None
-    try:
-        dia = date.fromisoformat(limpio)
-    except ValueError:
-        return False, None
-    if dia < piso:
-        return False, None
-    return True, datetime(dia.year, dia.month, dia.day, 23, 59,
-                          tzinfo=config.TZ)
+# El campo «vence» de «Agregar tarea» se lee con `db.vence_de_dia_valido`: la MISMA pieza que
+# usa la puerta de Natalia (`web/api_code.py`) para validar la fecha de una consulta. Se movió de
+# aquí sin cambiar su texto (18-oct-2026, pieza L3).
+_vence_valido = db.vence_de_dia_valido
 
 
 # El campo de día y hora del navegador (`<input type="datetime-local">`) manda

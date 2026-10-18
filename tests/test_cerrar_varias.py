@@ -2351,7 +2351,12 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
     # de cada proyecto). Queda FUERA de `crud.TABLAS`, igual que las otras tres de las cotizaciones: la escribe SOLO
     # `db.guardar_carpetas_de_drive` (y `poner_nombre_de_carpeta_de_drive`), que llama la subida del panel, y Lucy no
     # tiene herramienta para tocarla por Telegram (`cerebro/consultar.py` la declara maquinaria).
-    assert len(declaradas) == 24 and len(vigiladas) == 10, (
+    # 18-oct-2026 (pieza L3 de «Natalia y los Proyectos»): 24 → 25 por `consultas_de_natalia` (las consultas que Natalia
+    # abre por un cliente). Queda FUERA de `crud.TABLAS`: la escriben SOLO `db.abrir_consulta_de_natalia` (la ruta
+    # `POST /api/code/clientes/{noco_id}/consultas`) y `db.pasar_consulta_de_natalia` (la única que cambia su estado),
+    # y Lucy no tiene herramienta para tocarla por Telegram (`cerebro/consultar.py` la declara maquinaria). Lo que eso
+    # deja sin juzgar acá: una herramienta del agente que escribiera en ella saldría verde en ESTA guarda. Hoy ninguna.
+    assert len(declaradas) == 25 and len(vigiladas) == 10, (
         f"el reparto de tablas cambió: el esquema declara {len(declaradas)} y "
         f"`crud.TABLAS` vigila {len(vigiladas)} (el 1-oct-2026, E7, eran 20 y 10). "
         f"Las que quedan sin juzgar serían {sorted(sin_juzgar)}. No se afloja "
@@ -2369,6 +2374,7 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
         "comentarios_tarea", "consumos_estado", "correo_estado",
         "correo_reportado", "cuentas_propias", "log_acciones",
         "sesiones_de_proyecto", "cotizaciones", "serie_cotizaciones", "drive_de_proyectos",
+        "consultas_de_natalia",
     }, (f"cambió qué tablas quedan fuera del juicio de esta guarda: "
         f"{sorted(sin_juzgar)}. Una escritura a cualquiera de ellas se VE pero "
         f"no se exige que deje huella ni que salga en el parte.")

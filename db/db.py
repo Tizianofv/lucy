@@ -1150,6 +1150,65 @@ def titulo_de_tarea_que_vale(valor) -> str:
     return limpio
 
 
+# El suelo de la fecha. NO es una regla de negocio sobre hasta cuándo se puede
+# cargar hacia atrás: es una malla contra un dígito del año que se resbaló.
+#
+# `date.fromisoformat` acepta tan contento "0026-09-04" y "1926-09-04", y una
+# fila guardada en el año 26 no vuelve a aparecer en ninguna pantalla que
+# alguien mire —el resumen va por mes, y ese mes nadie lo abre— así que el
+# gasto se pierde EN SILENCIO, que es la familia de fallo que este panel
+# combate. Los registros de Lucy empiezan en 2026; el suelo se deja seis años
+# por debajo, deliberadamente flojo, para que ningún registro tardío legítimo
+# lo toque y solo caiga el año mal tecleado.
+PISO_FECHA = date(2020, 1, 1)
+
+
+def vence_de_dia_valido(texto: str, piso: date = PISO_FECHA):
+    """El campo «vence» del formulario → (aceptado, instante).
+
+    Devuelve `(True, None)` cuando viene VACÍO: la fecha es opcional y la tarea
+    nace sin fecha, que en este panel no es un hueco sino un grupo con nombre
+    propio —«Sin fecha»—. Ese grupo existe porque las 4 tareas sin `vence_en`
+    de producción llevaban meses invisibles; mandarlas a hoy por defecto sería
+    volver a inventarles una fecha que nadie eligió.
+
+    Devuelve `(False, None)` si el texto no es una fecha, o si cae por debajo
+    de PISO_FECHA. El piso es el mismo que usa /efectivo y por el mismo motivo:
+    no es una regla de negocio, es la malla contra un dígito del año que se
+    resbaló.
+
+    EL FUTURO SE ACEPTA, al revés que en /efectivo. Un gasto en efectivo es
+    plata que ya salió; una tarea que vence el mes que viene es el caso normal
+    de una tarea. Son la misma forma de campo y preguntas opuestas.
+
+    LA HORA ES 23:59 EN SANTO DOMINGO, y las dos mitades de esa frase importan:
+
+      · «23:59» porque el formulario pide un DÍA. «Vence el jueves» quiere decir
+        que el jueves entero todavía sirve, así que el instante que representa
+        ese día es su final y no su comienzo.
+      · «en Santo Domingo» porque `tareas.vence_en` es TIMESTAMPTZ, o sea un
+        instante, y el panel decide el grupo con `db.dia_rd`, que lo lee EN
+        SANTO DOMINGO. Armado en UTC, el 23:59 del jueves se guardaría como un
+        instante que en Santo Domingo todavía es del jueves a las 19:59 — pero
+        el 00:00 de cualquier día armado en UTC cae en el día ANTERIOR en
+        Santo Domingo. Una tarea escrita de noche nacería en el día equivocado.
+
+    La zona sale de `config.TZ`, la misma que usa `db.dia_rd`: dos copias de una
+    zona horaria se desincronizan igual que dos copias de cualquier otra cosa.
+    """
+    limpio = (texto or "").strip()
+    if not limpio:
+        return True, None
+    try:
+        dia = date.fromisoformat(limpio)
+    except ValueError:
+        return False, None
+    if dia < piso:
+        return False, None
+    return True, datetime(dia.year, dia.month, dia.day, 23, 59,
+                          tzinfo=_config.TZ)
+
+
 def nombre_de_proyecto_que_vale(valor) -> str:
     """El nombre limpio que va a quedar, o `NombreDeProyectoNoVale`.
 
@@ -5878,6 +5937,324 @@ async def proyectos_de_cliente(noco_id: int, hoy: date | None = None) -> list[di
         0 if cuenta_como_activo(m["estado_guardado"]) else
         (1 if m["estado_guardado"] == ESTADO_PROYECTO_PAUSADO else 2), m["id"]))
     return salida
+
+
+# ── LAS CONSULTAS DE NATALIA (pieza L3 del diseño «Natalia y los Proyectos», 18-oct-2026) ─────────────
+#
+# Cuando un cliente necesita algo, Natalia NO escribe una tarea: abre una consulta y Lucy le pregunta al
+# responsable (DISENO.md §5). Esta pieza es la tabla (`consultas_de_natalia`, migración
+# `2026-10-18_consultas_de_natalia.sql`), abrirla (`abrir_consulta_de_natalia`), leerla
+# (`consultas_de_natalia_de_cliente`) y la UNA función que cambia su estado (`pasar_consulta_de_natalia`).
+# La tarjeta al responsable (L4) y los botones Sí/No (L5) llegan después y usan esa función.
+#
+# EL CERROJO DE «UN CLIENTE SOLO ABRE CONSULTAS DE SU PROYECTO» es UNO: `proyectos_de_cliente`, que filtra
+# por la ficha EN su consulta SQL. Abrir una consulta busca el proyecto (o la tarea) ENTRE los de esa
+# ficha; lo que no esté ahí no existe para esta función. Y la lectura filtra por `cliente_noco_id` en su
+# propia consulta. Ninguna de las dos mira el proyecto de otro y después lo descarta.
+TIPO_CONSULTA_TAREA_NUEVA = "tarea_nueva"
+TIPO_CONSULTA_NUEVA_FECHA = "nueva_fecha"
+ESTADO_CONSULTA_ABIERTA = "abierta"
+ESTADO_CONSULTA_PREGUNTADA = "preguntada"
+ESTADO_CONSULTA_ANOTADA = "anotada"
+ESTADO_CONSULTA_RECHAZADA = "rechazada"
+ESTADO_CONSULTA_NO_SE_PUDO = "no_se_pudo"
+ESTADO_CONSULTA_RESUELTA = "resuelta"
+# Lo que dijo el cliente viaja luego como comentario de la tarea («Pedido del cliente: «…». Confirmó X.»,
+# L5) y un comentario tiene tope `LARGO_COMENTARIO` (2000): se deja holgura para ese envoltorio. Un pedido
+# más largo se RECHAZA (no se corta: una consulta cortada le pregunta al responsable otra cosa).
+LARGO_PEDIDO_DE_CONSULTA = 1500
+# Cuántas consultas se leen de una vez (la lectura de Natalia pide las suyas por número).
+TOPE_DE_CONSULTAS_POR_LECTURA = 100
+
+# Los cambios de estado que existen. Una sola función (`pasar_consulta_de_natalia`) los escribe y solo
+# acepta estos pares; el CHECK de la tabla ata además cada tipo a SUS estados (el par `abierta → resuelta`
+# es de `nueva_fecha`: la tarea se arregló antes de que saliera la tarjeta).
+TRANSICIONES_DE_CONSULTA = frozenset({
+    (ESTADO_CONSULTA_ABIERTA, ESTADO_CONSULTA_PREGUNTADA),
+    (ESTADO_CONSULTA_ABIERTA, ESTADO_CONSULTA_RESUELTA),
+    (ESTADO_CONSULTA_PREGUNTADA, ESTADO_CONSULTA_ANOTADA),
+    (ESTADO_CONSULTA_PREGUNTADA, ESTADO_CONSULTA_RECHAZADA),
+    (ESTADO_CONSULTA_PREGUNTADA, ESTADO_CONSULTA_NO_SE_PUDO),
+    (ESTADO_CONSULTA_PREGUNTADA, ESTADO_CONSULTA_RESUELTA),
+})
+
+
+class ConsultasSinTabla(Exception):
+    """Falta la migración de las consultas (SQLSTATE 42P01). No se guardó ni se leyó nada."""
+
+
+class ConsultaNoVale(Exception):
+    """Una consulta que no se puede abrir. `clave` dice por qué, para que quien llama la traduzca sin
+    adivinar por el texto: `tipo`, `titulo`, `pedido`, `fecha`, `proyecto` (no existe, no es de ese
+    cliente o está en la papelera), `proyecto_cerrado`, `tarea` (no es la que sigue en un proyecto de ese
+    cliente), `tarea_no_vencida`, `responsable` (nadie a quien preguntarle), `clave_ajena` (esa clave ya es
+    de la consulta de otro cliente) y `clave_distinta` (esa clave ya se usó con otra consulta). El mensaje
+    NUNCA repite lo pedido ni lleva un número de chat."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+def _misma_peticion(fila: dict, quiere: dict) -> bool:
+    """¿La consulta guardada es la que se está pidiendo otra vez? Mismo tipo y mismo contenido. El
+    responsable solo se compara si quien pide dijo uno (vacío = «el que corresponda», que hoy pudo haber
+    cambiado de persona sin que sea otra consulta)."""
+    if fila["tipo"] != quiere["tipo"]:
+        return False
+    if quiere["tipo"] == TIPO_CONSULTA_TAREA_NUEVA:
+        if (fila["proyecto_id"], fila["titulo"], fila["pedido"], fila["vence_en"]) != (
+                quiere["proyecto_id"], quiere["titulo"], quiere["pedido"], quiere["vence_en"]):
+            return False
+    elif fila["tarea_id"] != quiere["tarea_id"]:
+        return False
+    return (quiere["responsable_chat_id"] is None
+            or fila["responsable_chat_id"] == quiere["responsable_chat_id"])
+
+
+async def _consulta_por_clave(cur, clave: str):
+    """La fila (con lo que hace falta para comparar) de la consulta que tiene esa clave, o `None`."""
+    await cur.execute(
+        "SELECT id, clave, tipo, estado, cliente_noco_id, proyecto_id, titulo, pedido, vence_en, "
+        "tarea_id, responsable_chat_id FROM consultas_de_natalia WHERE clave = %s", (clave,))
+    return await cur.fetchone()
+
+
+async def abrir_consulta_de_natalia(noco_id: int, clave: str, tipo: str, *, proyecto_id=None, titulo=None,
+                                    pedido=None, vence="", tarea_id=None, responsable_chat_id=None,
+                                    hoy: date | None = None) -> tuple[int, bool]:
+    """Abre la consulta de Natalia para la ficha `noco_id` y devuelve `(consulta_id, reusada)`; o lanza
+    `ConsultaNoVale` (nada guardado) o `ConsultasSinTabla`. Quien contesta al HTTP vuelve a LEER la
+    consulta por ese id (`consultas_de_natalia_de_cliente`): lo que se responde sale de la base, no de lo
+    que se mandó.
+
+    LA MISMA CLAVE ES LA MISMA CONSULTA. Si la clave ya existe se devuelve esa consulta con `reusada=True`,
+    ANTES de validar nada de la base: un reintento tras cambiar el mundo (el proyecto se cerró, el
+    responsable salió) tiene que devolver lo que ya se abrió, no un error nuevo. Si es de otro cliente, o
+    se pidió algo distinto con la misma clave, es `ConsultaNoVale`. Y UNA `nueva_fecha` viva por tarea: la
+    segunda apertura (con otra clave) devuelve la viva, `reusada=True`; la última puerta es el índice único
+    parcial de la tabla, no una comprobación previa (dos aperturas a la vez no pasan las dos).
+
+    `tarea_nueva` (proyecto, título, pedido, fecha propuesta y, opcional, responsable): se valida con las
+    MISMAS piezas que «Agregar tarea» del panel (`titulo_de_tarea_que_vale`, `vence_de_dia_valido`,
+    `proyecto_admite_tareas` dentro de `proyectos_de_cliente`), más que el proyecto sea de la ficha y que
+    el responsable (el dicho, o el del proyecto si no se dijo) cumpla `_responsable_de_consulta_que_vale`.
+    `nueva_fecha` (tarea): la tarea tiene que ser LA SIGUIENTE (`proxima`) de un proyecto de la ficha y
+    estar vencida; se le pregunta a su responsable, o al del proyecto si ese no puede."""
+    hoy = hoy or hoy_rd()
+
+    def _a_quien_se_puede_preguntar(chat) -> bool:
+        # LAS DOS puertas de siempre: quién puede ser responsable de una tarea y a quién Lucy le puede
+        # escribir por Telegram (Code cumple la primera y no la segunda).
+        return chat is not None and puede_ser_responsable(chat) and _config.puede_recibir_telegram(chat)
+
+    if tipo == TIPO_CONSULTA_TAREA_NUEVA:
+        if isinstance(proyecto_id, bool) or not isinstance(proyecto_id, int):
+            raise ConsultaNoVale("proyecto", "ese proyecto no es de este cliente o no existe")
+        try:
+            titulo = titulo_de_tarea_que_vale(titulo)
+        except ValueError as e:
+            raise ConsultaNoVale("titulo", str(e)) from None
+        pedido = pedido.strip() if isinstance(pedido, str) else ""
+        if not pedido:
+            raise ConsultaNoVale("pedido", "lo que pidió el cliente no puede quedar vacío")
+        if len(pedido) > LARGO_PEDIDO_DE_CONSULTA:
+            raise ConsultaNoVale(
+                "pedido", f"lo que pidió el cliente no puede pasar de {LARGO_PEDIDO_DE_CONSULTA} caracteres")
+        ok, vence_en = vence_de_dia_valido(vence if isinstance(vence, str) else "x")
+        if not ok:
+            raise ConsultaNoVale("fecha", "la fecha propuesta no vale: va como AAAA-MM-DD, o vacía")
+    elif tipo == TIPO_CONSULTA_NUEVA_FECHA:
+        if isinstance(tarea_id, bool) or not isinstance(tarea_id, int):
+            raise ConsultaNoVale("tarea", "esa tarea no es la que sigue en un proyecto de este cliente")
+        titulo = pedido = vence_en = None
+    else:
+        raise ConsultaNoVale("tipo", "el tipo de consulta no existe")
+    quiere = {"tipo": tipo, "proyecto_id": proyecto_id, "titulo": titulo, "pedido": pedido,
+              "vence_en": vence_en, "tarea_id": tarea_id, "responsable_chat_id": responsable_chat_id}
+
+    def _la_ya_abierta(fila):
+        if fila["cliente_noco_id"] != noco_id:
+            raise ConsultaNoVale("clave_ajena", "esa clave ya está en uso")
+        if not _misma_peticion(fila, quiere):
+            raise ConsultaNoVale("clave_distinta", "esa clave ya se usó con otra consulta distinta")
+        return fila["id"], True
+
+    # 1. ¿La clave ya existe? Si sí, esa es la consulta.
+    try:
+        async with pool.connection() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            existente = await _consulta_por_clave(cur, clave)
+    except Exception as e:
+        if _tabla_ausente(e):
+            raise ConsultasSinTabla("falta la migración de las consultas de Natalia") from None
+        raise
+    if existente is not None:
+        return _la_ya_abierta(existente)
+
+    # 2. El proyecto (o la tarea) ENTRE los de esa ficha, y a quién se le pregunta.
+    modelos = await proyectos_de_cliente(noco_id, hoy)
+    vence_vencida_en = None
+    if tipo == TIPO_CONSULTA_TAREA_NUEVA:
+        m = next((m for m in modelos if m["id"] == proyecto_id), None)
+        if m is None:
+            raise ConsultaNoVale("proyecto", "ese proyecto no es de este cliente o no existe")
+        if not m["admite_tareas"]:
+            raise ConsultaNoVale("proyecto_cerrado", "ese proyecto está cerrado: no se le agregan tareas")
+        a_quien = responsable_chat_id if responsable_chat_id is not None else m["responsable_chat_id"]
+        if not _a_quien_se_puede_preguntar(a_quien):
+            raise ConsultaNoVale("responsable", "no hay a quién preguntarle: ese responsable no puede ser")
+    else:
+        m = next((m for m in modelos if m["proxima"] is not None and m["proxima"]["id"] == tarea_id), None)
+        if m is None:
+            raise ConsultaNoVale("tarea", "esa tarea no es la que sigue en un proyecto de este cliente")
+        if not m["proxima"]["vencida"]:
+            raise ConsultaNoVale("tarea_no_vencida", "esa tarea no está vencida: no hay fecha nueva que pedir")
+        proyecto_id = m["id"]
+        a_quien = None          # se decide al leer la tarea, abajo
+
+    # 3. Escribir. `ON CONFLICT DO NOTHING` cubre las DOS llaves únicas (la clave y la nueva_fecha viva).
+    try:
+        async with pool.connection() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            if tipo == TIPO_CONSULTA_NUEVA_FECHA:
+                await cur.execute(
+                    "SELECT vence_en, responsable_chat_id FROM tareas WHERE id = %s AND borrado_en IS NULL",
+                    (tarea_id,))
+                t = await cur.fetchone()
+                if t is None:
+                    raise ConsultaNoVale("tarea", "esa tarea no es la que sigue en un proyecto de este cliente")
+                vence_vencida_en = t["vence_en"]
+                a_quien = (t["responsable_chat_id"] if _a_quien_se_puede_preguntar(t["responsable_chat_id"])
+                           else m["responsable_chat_id"])
+                if not _a_quien_se_puede_preguntar(a_quien):
+                    raise ConsultaNoVale(
+                        "responsable", "no hay a quién preguntarle: ni la tarea ni el proyecto tienen quién pueda ser")
+            await cur.execute(
+                """
+                INSERT INTO consultas_de_natalia
+                  (clave, tipo, cliente_noco_id, proyecto_id, titulo, pedido, vence_en, tarea_id,
+                   vence_vencida_en, responsable_chat_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                RETURNING id
+                """,
+                (clave, tipo, noco_id, proyecto_id, titulo, pedido, vence_en, tarea_id,
+                 vence_vencida_en, a_quien))
+            nueva = await cur.fetchone()
+            if nueva is not None:
+                return nueva["id"], False
+            # Chocó con una llave única: o la misma clave (otro pedido la abrió justo ahora) o ya hay una
+            # nueva_fecha viva para esa tarea.
+            existente = await _consulta_por_clave(cur, clave)
+            if existente is not None:
+                return _la_ya_abierta(existente)
+            await cur.execute(
+                "SELECT id FROM consultas_de_natalia WHERE tipo = %s AND tarea_id = %s "
+                "AND estado IN (%s, %s) ORDER BY id LIMIT 1",
+                (TIPO_CONSULTA_NUEVA_FECHA, tarea_id, ESTADO_CONSULTA_ABIERTA, ESTADO_CONSULTA_PREGUNTADA))
+            viva = await cur.fetchone()
+            if viva is None:
+                raise RuntimeError("la consulta chocó con una llave única y no se encontró con quién")
+            return viva["id"], True
+    except ConsultaNoVale:
+        raise
+    except Exception as e:
+        if _tabla_ausente(e):
+            raise ConsultasSinTabla("falta la migración de las consultas de Natalia") from None
+        raise
+
+
+async def consultas_de_natalia_de_cliente(noco_id: int, ids, hoy: date | None = None) -> list[dict]:
+    """Las consultas de la ficha `noco_id` que están entre `ids`, LEÍDAS de la base ahora, por id. Un id
+    que no existe y uno de otra ficha dan lo mismo: no salen. Solo lee.
+
+    Cada una: `{id, clave, tipo, estado, proyecto_id, titulo, tarea_id, tarea, siguiente}`. Nada de
+    chats, `pedido`, `motivo` ni fechas internas. `tarea` solo si está `anotada`: la tarea que nació, RELEÍDA
+    (`{id, titulo, vence, vencida, pendiente}`; `None` si ya no existe o no cuelga de un proyecto de esa ficha).
+    `siguiente` solo si está `resuelta`: la `proxima` de su proyecto en este momento (la de
+    `situacion_de_proyecto`; `None` si el proyecto ya no tiene o se cerró). Lanza `ConsultasSinTabla`."""
+    hoy = hoy or hoy_rd()
+    ids = list(dict.fromkeys(i for i in ids if isinstance(i, int) and not isinstance(i, bool)))
+    ids = ids[:TOPE_DE_CONSULTAS_POR_LECTURA]
+    if not ids:
+        return []
+    filas: list[dict] = []
+    tareas: dict[int, dict] = {}
+    try:
+        async with pool.connection() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            # Una consulta SQL por id (son pocas, tope `TOPE_DE_CONSULTAS_POR_LECTURA`): ningún SQL se arma
+            # al vuelo, y la ficha va EN cada consulta.
+            for consulta_id in sorted(ids):
+                await cur.execute(
+                    "SELECT id, clave, tipo, estado, proyecto_id, titulo, tarea_id, tarea_resultante_id "
+                    "FROM consultas_de_natalia WHERE cliente_noco_id = %s AND id = %s", (noco_id, consulta_id))
+                fila = await cur.fetchone()
+                if fila is not None:
+                    filas.append(fila)
+            for f in filas:
+                nacida = f["tarea_resultante_id"]
+                if f["estado"] != ESTADO_CONSULTA_ANOTADA or nacida is None:
+                    continue
+                await cur.execute(
+                    "SELECT t.id, t.titulo, t.estado, t.vence_en, t.completado_en "
+                    "FROM tareas t JOIN proyectos p ON p.id = t.proyecto_id "
+                    "WHERE p.cliente_noco_id = %s AND p.borrado_en IS NULL AND t.borrado_en IS NULL "
+                    "AND t.id = %s", (noco_id, nacida))
+                t = await cur.fetchone()
+                if t is not None:
+                    tareas[t["id"]] = t
+    except Exception as e:
+        if _tabla_ausente(e):
+            raise ConsultasSinTabla("falta la migración de las consultas de Natalia") from None
+        raise
+    siguientes: dict[int, dict | None] = {}
+    if any(f["estado"] == ESTADO_CONSULTA_RESUELTA for f in filas):
+        siguientes = {m["id"]: m["proxima"] for m in await proyectos_de_cliente(noco_id, hoy)}
+    salida = []
+    for f in filas:
+        tarea = siguiente = None
+        if f["estado"] == ESTADO_CONSULTA_ANOTADA and f["tarea_resultante_id"] in tareas:
+            t = tareas[f["tarea_resultante_id"]]
+            tarea = {"id": t["id"], "titulo": t["titulo"], "vence": dia_rd(t["vence_en"]),
+                     "vencida": grupo_de_tarea(t["estado"], t["vence_en"], hoy, t["completado_en"]) == "atrasadas",
+                     "pendiente": t["estado"] == ESTADO_PENDIENTE}
+        if f["estado"] == ESTADO_CONSULTA_RESUELTA:
+            siguiente = siguientes.get(f["proyecto_id"])
+        salida.append({"id": f["id"], "clave": f["clave"], "tipo": f["tipo"], "estado": f["estado"],
+                       "proyecto_id": f["proyecto_id"], "titulo": f["titulo"], "tarea_id": f["tarea_id"],
+                       "tarea": tarea, "siguiente": siguiente})
+    return salida
+
+
+async def pasar_consulta_de_natalia(cur, consulta_id: int, de: str, a: str, *, tarjeta_msg_id=None,
+                                    enviada_en=None, contestada_por_chat_id=None, contestada_en=None,
+                                    tarea_resultante_id=None, motivo=None) -> bool:
+    """LA ÚNICA FUNCIÓN QUE CAMBIA EL ESTADO de una consulta de Natalia. `cur` es un cursor con `dict_row`
+    de la conexión de quien llama (L5 la mete en la MISMA transacción que crea la tarea). Solo pasa los
+    pares de `TRANSICIONES_DE_CONSULTA` (otro es `ValueError`, nada escrito), y el `UPDATE` lleva
+    `WHERE estado = <el de antes>`: si otro ya la movió, no cambia nada y devuelve `False` (el primero
+    gana). Los campos que no se pasan (`None`) se quedan como estaban. El CHECK de la tabla impide un
+    estado que no es de su tipo. Devuelve si cambió."""
+    if (de, a) not in TRANSICIONES_DE_CONSULTA:
+        raise ValueError("ese cambio de estado de una consulta no existe")
+    await cur.execute(
+        """
+        UPDATE consultas_de_natalia
+           SET estado = %s,
+               tarjeta_msg_id = COALESCE(%s, tarjeta_msg_id),
+               enviada_en = COALESCE(%s, enviada_en),
+               contestada_por_chat_id = COALESCE(%s, contestada_por_chat_id),
+               contestada_en = COALESCE(%s, contestada_en),
+               tarea_resultante_id = COALESCE(%s, tarea_resultante_id),
+               motivo = COALESCE(%s, motivo)
+         WHERE id = %s AND estado = %s
+        RETURNING id
+        """,
+        (a, tarjeta_msg_id, enviada_en, contestada_por_chat_id, contestada_en, tarea_resultante_id,
+         motivo, consulta_id, de))
+    return (await cur.fetchone()) is not None
 
 
 async def derivaciones() -> dict[int, int]:

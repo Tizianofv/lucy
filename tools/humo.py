@@ -100,6 +100,22 @@ async def _columna_de_audio_sin_tolerancia():
         return {"proyectos con carpeta_audio": (await cur.fetchone())["n"]}
 
 
+async def _consultas_de_natalia_sin_tolerancia():
+    """Los SELECT de las consultas de Natalia (pieza L3, 18-oct-2026), SIN tolerancia: `count(*)` de la tabla y
+    las columnas que la lectura y el escritor de estado nombran. `db.consultas_de_natalia_de_cliente` y
+    `db.abrir_consulta_de_natalia` TOLERAN que la tabla falte (lanzan `ConsultasSinTabla` y las rutas contestan
+    503), así que esas líneas solas no dirían si la migración `db/migrations/2026-10-18_consultas_de_natalia.sql`
+    no se aplicó. Esta sí. Son LECTURAS: ni abrir una consulta ni cambiarle el estado se ejerce acá (humo.py no
+    escribe en producción)."""
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=db.dict_row)
+        await cur.execute(
+            "SELECT count(*) AS n, count(tarjeta_msg_id) AS tarjetas, count(tarea_resultante_id) AS nacidas, "
+            "count(vence_vencida_en) AS vencidas, count(contestada_por_chat_id) AS contestadas "
+            "FROM consultas_de_natalia")
+        return dict(await cur.fetchone())
+
+
 async def main() -> int:
     if not os.environ.get("DATABASE_URL", "").strip():
         print("Falta DATABASE_URL.", file=sys.stderr)
@@ -197,6 +213,11 @@ async def main() -> int:
         ("columnas y tabla de Drive de las cotizaciones (sin tolerancia)", _tablas_de_drive_de_las_cotizaciones),
         # La carpeta de audio (pieza 4 de «Carpetas del proyecto»): ver `_columna_de_audio_sin_tolerancia`. Una LECTURA.
         ("columna carpeta_audio de proyectos (sin tolerancia)", _columna_de_audio_sin_tolerancia),
+        # Las consultas de Natalia (pieza L3): ver `_consultas_de_natalia_sin_tolerancia`. Una LECTURA.
+        ("consultas_de_natalia (sin tolerancia)", _consultas_de_natalia_sin_tolerancia),
+        # La lectura de las consultas por ficha: corre el SQL de verdad (la ficha va en la consulta) con ids que no
+        # existen. TOLERA la tabla ausente (503 en la ruta), por eso la línea de arriba es la que lo dice. LECTURA.
+        ("consultas_de_natalia_de_cliente", lambda: db.consultas_de_natalia_de_cliente(1, [1, 2])),
         # La lectura de las cotizaciones (pieza 3): TOLERA que la tabla no exista (devuelve `None`), así
         # que la línea de arriba es la que dice si falta; ésta corre el SELECT con sus columnas y el JOIN
         # contra la base de verdad. Es una LECTURA; `guardar_cotizacion` escribe y no se prueba acá.

@@ -13,8 +13,9 @@ RUTAS DE ESTA PARTE, y solo éstas: `GET /tareas` (listar),
 `POST /tareas/{id}/cerrar`, `POST /tareas/{id}/tomar`, (1-oct-2026) los
 comentarios de una tarea de Code: `GET`/`POST /tareas/{id}/comentarios`, y
 (4-oct-2026) `POST /alertas` (permiso `alertas:crear`) y, desde el 18-oct-2026, la lectura
-`GET /clientes/{noco_id}/proyectos` (permiso `proyectos:leer_de_cliente`): las
-dos rutas de Natalia. Una ruta a medias —que exista pero siempre falle, o que
+`GET /clientes/{noco_id}/proyectos` (permiso `proyectos:leer_de_cliente`) y, de la
+pieza L3, las consultas al responsable: `POST`/`GET /clientes/{noco_id}/consultas` (permisos
+`consultas:abrir` y `consultas:leer`): las rutas de Natalia. Una ruta a medias —que exista pero siempre falle, o que
 acepte un permiso que nada usa— es peor que no tenerla: por eso `alertas:
 crear` no tuvo ruta hasta que esta estuvo completa.
 
@@ -39,11 +40,15 @@ import re
 import time
 from datetime import datetime
 
+from typing import Annotated, Literal, Union
+
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
 import config
 import db.db as db
+from acciones import crud
+from web.avisos import Navegacion
 
 log = logging.getLogger("lucy.api_code")
 
@@ -464,6 +469,160 @@ async def proyectos_del_cliente(
     } for m in modelos]
     return {"noco_id": noco_id, "proyectos": proyectos,
             "responsables": responsables_para_natalia()}
+
+
+# ── Las consultas al responsable, para Natalia (18-oct-2026, pieza L3) ────
+#
+# Diseño aprobado: disenos/natalia-tareas-en-proyectos/DISENO.md §5. Natalia NO escribe tareas en Lucy: abre
+# una CONSULTA y Lucy le pregunta al responsable (la tarjeta es de la pieza L4, los botones de la L5). Estas dos
+# rutas solo abren y leen consultas; ninguna manda nada a Telegram.
+#   · Abrir: `POST /clientes/{noco_id}/consultas` (`consultas:abrir`). Toda la validación y la escritura
+#     viven en `db.abrir_consulta_de_natalia`; aquí solo se traduce el pedido y el resultado.
+#   · Leer: `GET /clientes/{noco_id}/consultas?ids=…` (`consultas:leer`), SOLO las de esa ficha.
+# Lo que responden las dos sale de una RELECTURA de la base (`db.consultas_de_natalia_de_cliente`), nunca de lo
+# que se mandó. Ningún número de chat sale.
+
+class _ConsultaTareaNueva(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    clave: StrictStr
+    tipo: Literal["tarea_nueva"]
+    proyecto_id: StrictInt
+    titulo: StrictStr
+    pedido: StrictStr
+    vence: StrictStr = ""
+    responsable: StrictStr = ""
+
+
+class _ConsultaNuevaFecha(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    clave: StrictStr
+    tipo: Literal["nueva_fecha"]
+    tarea_id: StrictInt
+
+
+_ConsultaNueva = Annotated[Union[_ConsultaTareaNueva, _ConsultaNuevaFecha], Field(discriminator="tipo")]
+
+# Qué estado HTTP le toca a cada `ConsultaNoVale.clave`; lo que no esté aquí es 422 (el pedido está mal formado).
+# 404: no existe para ese cliente (también lo de otro cliente: no se distingue). 409: existe pero choca.
+_HTTP_DE_CONSULTA = {"proyecto": 404, "tarea": 404, "proyecto_cerrado": 409, "tarea_no_vencida": 409,
+                     "clave_ajena": 409, "clave_distinta": 409}
+
+
+def _sin_a_quien_preguntar(motivo: str) -> str:
+    """El 422 de «no hay a quién preguntarle»: el motivo y los NOMBRES que sí valen (nunca un chat)."""
+    return f"{motivo} Se puede preguntar a: {', '.join(responsables_para_natalia()) or 'nadie hoy'}."
+
+
+def _consulta_para_natalia(c: dict) -> dict:
+    """Una consulta releída → lo que sale: campo por campo, nada copiado del modelo de `db`."""
+    tarea, siguiente = c["tarea"], c["siguiente"]
+    return {
+        "consulta_id": c["id"], "clave": c["clave"], "tipo": c["tipo"], "estado": c["estado"],
+        "proyecto_id": c["proyecto_id"], "titulo": c["titulo"], "tarea_id": c["tarea_id"],
+        "tarea": None if tarea is None else {
+            "tarea_id": tarea["id"], "titulo": tarea["titulo"],
+            "fecha": tarea["vence"].isoformat() if tarea["vence"] else None,
+            "vencida": bool(tarea["vencida"]), "pendiente": bool(tarea["pendiente"])},
+        "siguiente": _siguiente_para_natalia(siguiente),
+    }
+
+
+@router.post("/clientes/{noco_id}/consultas")
+async def abrir_consulta(
+    cuerpo: _ConsultaNueva,
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere("consultas:abrir")),
+) -> dict:
+    """Abre la consulta de Natalia para la ficha `noco_id`, o devuelve la que ya tiene esa `clave`.
+
+    PEDIDO `tarea_nueva`: `{clave, tipo, proyecto_id, titulo, pedido, vence: "AAAA-MM-DD" | "", responsable:
+    "<nombre>" | ""}`. `nueva_fecha`: `{clave, tipo, tarea_id}`. Cualquier otro campo es 422.
+
+    RESPUESTAS, todas dicen la verdad:
+      · 200 `{"consulta_id", "clave", "tipo", "estado", "proyecto_id", "titulo", "tarea_id", "tarea",
+        "siguiente", "reusada"}`, releído de la base. `reusada: true` = ya existía (la misma clave, o ya había
+        una `nueva_fecha` viva para esa tarea): no se abrió otra.
+      · 404: el proyecto o la tarea no es de ese cliente (o no existe). 409: el proyecto está cerrado; la tarea
+        no está vencida; la clave es de otra consulta. 422: pedido mal formado, o no hay a quién preguntarle
+        (el detalle dice los nombres que sí valen).
+      · 503: falta la migración de la tabla. NO se guardó nada. 401/403/429: la puerta de siempre.
+    """
+    clave = cuerpo.clave.strip()
+    textos = [clave]
+    if isinstance(cuerpo, _ConsultaTareaNueva):
+        textos += [cuerpo.titulo, cuerpo.pedido, cuerpo.vence, cuerpo.responsable]
+    if any("\x00" in t for t in textos):
+        raise HTTPException(status_code=422, detail="el texto no puede llevar caracteres nulos")
+    if not _CLAVE_VALIDA.fullmatch(clave):
+        raise HTTPException(
+            status_code=422,
+            detail=f"la clave debe tener de 1 a {LARGO_CLAVE_ALERTA} caracteres "
+                   "entre letras, números y . _ : -")
+    responsable = None
+    if isinstance(cuerpo, _ConsultaTareaNueva) and cuerpo.responsable.strip():
+        # Por NOMBRE, con la MISMA pieza que los desplegables del panel (`crud.PUERTAS`), y después las
+        # puertas de la consulta (poder ser responsable y poder recibir Telegram) dentro de `db`.
+        try:
+            responsable = crud.PUERTAS["tareas"]["responsable_chat_id"](cuerpo.responsable)
+        except ValueError:
+            raise HTTPException(status_code=422, detail=_sin_a_quien_preguntar(
+                "ese nombre no es de nadie que pueda ser responsable.")) from None
+    try:
+        if isinstance(cuerpo, _ConsultaTareaNueva):
+            consulta_id, reusada = await db.abrir_consulta_de_natalia(
+                noco_id, clave, cuerpo.tipo, proyecto_id=cuerpo.proyecto_id, titulo=cuerpo.titulo,
+                pedido=cuerpo.pedido, vence=cuerpo.vence, responsable_chat_id=responsable)
+        else:
+            consulta_id, reusada = await db.abrir_consulta_de_natalia(
+                noco_id, clave, cuerpo.tipo, tarea_id=cuerpo.tarea_id)
+        relei = await db.consultas_de_natalia_de_cliente(noco_id, [consulta_id])
+    except db.ConsultasSinTabla:
+        log.error("puerta de Code: /consultas sin la tabla -- falta aplicar "
+                  "db/migrations/2026-10-18_consultas_de_natalia.sql")
+        raise HTTPException(
+            status_code=503,
+            detail="no se guardó: falta una migración de la base de Lucy. Avisale a la sala/Tiziano.") from None
+    except db.ConsultaNoVale as e:
+        if e.clave == "responsable":
+            raise HTTPException(status_code=422, detail=_sin_a_quien_preguntar(str(e))) from None
+        raise HTTPException(status_code=_HTTP_DE_CONSULTA.get(e.clave, 422), detail=str(e)) from None
+    if not relei:
+        # Se abrió y no se vuelve a ver: no se responde nada que no se pueda leer.
+        log.error("puerta de Code: la consulta %s se abrió y la relectura no la encontró", consulta_id)
+        raise HTTPException(status_code=500, detail="la consulta se abrió pero no se pudo releer")
+    return {**_consulta_para_natalia(relei[0]), "reusada": reusada}
+
+
+@router.get("/clientes/{noco_id}/consultas")
+async def leer_consultas(
+    ids: Navegacion[str],
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere("consultas:leer")),
+) -> dict:
+    """Las consultas de la ficha `noco_id` con esos `ids` (`?ids=3,4,9`, hasta
+    `db.TOPE_DE_CONSULTAS_POR_LECTURA`). 200 `{"noco_id", "consultas": [{"consulta_id", "clave", "tipo",
+    "estado", "proyecto_id", "titulo", "tarea_id", "tarea", "siguiente"}]}`. `tarea` solo viene si está
+    `anotada` (la tarea releída) y `siguiente` solo si está `resuelta` (la que sigue en su proyecto, releída).
+    Una de otra ficha y una que no existe dan lo mismo: no salen. `ids` mal formado o con demasiados es 422;
+    503 si falta la migración. Solo lee."""
+    try:
+        if len(ids) > 2000:
+            raise ValueError
+        pedidas = [int(x) for x in ids.split(",")]
+    except ValueError:
+        raise HTTPException(status_code=422, detail="ids va como números separados por coma") from None
+    if (not pedidas or len(pedidas) > db.TOPE_DE_CONSULTAS_POR_LECTURA
+            or any(i < 1 or i > _ID_MAXIMO_BIGINT for i in pedidas)):
+        raise HTTPException(
+            status_code=422,
+            detail=f"ids son de 1 a {db.TOPE_DE_CONSULTAS_POR_LECTURA} números enteros positivos")
+    try:
+        consultas = await db.consultas_de_natalia_de_cliente(noco_id, pedidas)
+    except db.ConsultasSinTabla:
+        raise HTTPException(
+            status_code=503,
+            detail="no se pudo leer: falta una migración de la base de Lucy. Avisale a la sala/Tiziano.") from None
+    return {"noco_id": noco_id, "consultas": [_consulta_para_natalia(c) for c in consultas]}
 
 
 def avisar_si_alertas_mal_nombradas() -> list[str]:
