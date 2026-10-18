@@ -650,8 +650,10 @@ def test_los_archivos_de_codigo_que_nombran_la_columna_son_estos():
     # texto), `web/app.py` (la ruta y el filtro), `cerebro/consultar.py` (la nota para Lucy por Telegram).
     # `cotizaciones_drive.py` (16-oct-2026, pieza 8 de las cotizaciones): llena `carpeta` con la dirección de la
     # carpeta de Drive que Lucy acaba de crear, solo si estaba vacía, por la misma puerta (`crud.editar`).
+    # `conftest.py` (18-oct-2026, pieza 1 de «Carpetas del proyecto»): su fixture `drive_aparte` arma el resultado de
+    # `preparar_la_carpeta` y lleva la clave `"carpeta"` de ESE diccionario (qué pasó con el enlace); no toca la columna.
     assert nombran == {"db/db.py", "acciones/crud.py", "web/app.py", "cerebro/consultar.py",
-                       "cotizaciones_drive.py"}, nombran
+                       "cotizaciones_drive.py", "conftest.py"}, nombran
 
 
 def test_ningun_sql_escrito_a_mano_nombra_la_columna_y_los_genericos_son_los_medidos():

@@ -289,3 +289,16 @@ def _sin_drive_de_verdad(monkeypatch):
     for nombre in ("LUCY_DRIVE_CLIENT_ID", "LUCY_DRIVE_CLIENT_SECRET", "LUCY_DRIVE_REFRESH_TOKEN",
                    "LUCY_DRIVE_CARPETA_PROYECTOS"):
         monkeypatch.delenv(nombre, raising=False)
+
+
+@pytest.fixture
+def drive_aparte(monkeypatch):
+    """Para las pruebas de un alta de proyecto que NO vigilan Drive (las del formulario, las fechas, el cliente…): la
+    carpeta de Drive del proyecto nuevo (`cotizaciones_drive.preparar_la_carpeta`) contesta «lista» sin tocar nada,
+    para que el aviso y la huella de esas pruebas sean los de un alta limpia. Lo de Drive de verdad (Drive de mentira
+    con memoria, fallas, huellas, avisos) lo vigila `tests/test_carpeta_nace_con_el_proyecto.py` con la función real."""
+    import cotizaciones_drive
+
+    async def _lista(proyecto_id, **kw):
+        return {"resultado": "lista", "causa": None, "carpeta": cotizaciones_drive.ENLACE_PUESTO}
+    monkeypatch.setattr(cotizaciones_drive, "preparar_la_carpeta", _lista)

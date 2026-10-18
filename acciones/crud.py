@@ -347,6 +347,14 @@ async def crear_proyecto(nombre: str, grupo: str,
             f"{await los_grupos_y_los_responsables()}.") from e
     except db.NombreDeProyectoNoVale as e:
         raise NoDeNegocio(f"No creé el proyecto: {e}.") from e
+    # LA CARPETA DE DRIVE nace con el proyecto, DESPUÉS de guardarlo y confirmarlo: lo que pase allá no cambia lo
+    # que esta función devuelve, solo se suma a la fila (`drive`) para que el agente lo cuente tal cual.
+    # (Import perezoso: `cotizaciones_drive` importa `crud`.)
+    import cotizaciones_drive
+    try:
+        nuevo["drive"] = await cotizaciones_drive.preparar_la_carpeta(nuevo["id"])
+    except Exception:
+        nuevo["drive"] = {"resultado": "fallo", "causa": None, "carpeta": None}
     return nuevo, nuevo.get("log_id")
 
 

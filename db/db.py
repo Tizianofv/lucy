@@ -2734,6 +2734,16 @@ async def rehacer_carpetas_de_drive(proyecto_id: int, carpeta_cotizaciones_vieja
         return True
 
 
+async def proyecto_para_la_carpeta(proyecto_id: int) -> dict | None:
+    """El proyecto VIVO (`id`, `nombre`), o `None` si no existe o está en la papelera. La lectura mínima de
+    `cotizaciones_drive.preparar_la_carpeta`: lo único que hace falta para crear su carpeta en Drive. Una lectura."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute("SELECT id, nombre FROM proyectos WHERE id = %s AND borrado_en IS NULL", (proyecto_id,))
+        fila = await cur.fetchone()
+    return None if fila is None else dict(fila)
+
+
 async def carpetas_de_drive(proyecto_id: int) -> dict | None:
     """Las carpetas de Drive del proyecto (`carpeta_proyecto_id`, `carpeta_cotizaciones_id`, `nombre_puesto`)
     o `None` si todavía no tiene. Si falta la tabla SUBE la excepción: quien sube no puede crear carpetas sin

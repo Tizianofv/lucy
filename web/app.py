@@ -1437,7 +1437,10 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          # 1-oct-2026). Salen de `config.opciones_de_responsable()`, la misma
          # lista de los demás desplegables, y viajan por NOMBRE: el número de
          # chat no se escribe en la página.
-         "nombres_responsable": [n for v, n in config.opciones_de_responsable() if v]})
+         "nombres_responsable": [n for v, n in config.opciones_de_responsable() if v],
+         # Lo que dice el aviso de la carpeta de Drive de un proyecto recién creado: sale de la MISMA frase
+         # (`cotizaciones_drive.frase_de_la_carpeta`), nunca se escribe en la plantilla.
+         "frase_del_alta_en_drive": _frase_de_la_carpeta_del_aviso(error)})
 
 
 # Los sitios de la página donde se puede buscar una persona de Noco sin JavaScript (`pdonde`). `cotizacion-cliente` es
@@ -1575,6 +1578,24 @@ async def _volver_a_la_tarea(tid: int, **parametros) -> str:
     return f"{base}{extra}#tarea-{tid}"
 
 
+def _frase_de_la_carpeta_del_aviso(error: str) -> str:
+    """La frase de la carpeta de Drive para un `?error=` del alta de un proyecto (`carpeta_drive_*`, o el mismo con
+    `cliente_nuevo_` delante). Vacía para cualquier otro aviso."""
+    resultado = cotizaciones_drive.AVISOS_DE_LA_CARPETA.get(error.removeprefix("cliente_nuevo_"))
+    return cotizaciones_drive.frase_de_la_carpeta(resultado) if resultado else ""
+
+
+async def _preparar_la_carpeta_de_drive(pid: int) -> dict:
+    """La carpeta de Drive de un proyecto que ACABA de quedar guardado (`cotizaciones_drive.preparar_la_carpeta`).
+    Lo que sea que falle aquí no deshace nada ni cambia lo que la ruta iba a contestar: el proyecto ya existe y la
+    pantalla dice la verdad. `preparar_la_carpeta` no sube excepciones; esto lo asegura por si algún día lo hiciera."""
+    try:
+        return await cotizaciones_drive.preparar_la_carpeta(pid)
+    except Exception as e:
+        log.warning("Panel de proyectos: la carpeta de Drive del proyecto #%s falló (%s)", pid, type(e).__name__)
+        return {"resultado": "fallo", "causa": None, "carpeta": None}
+
+
 @app.post("/proyectos/nuevo")
 @auth.puerta(auth.PUERTA_SIEMPRE)
 async def crear_proyecto_nuevo(request: Request):
@@ -1604,6 +1625,9 @@ async def crear_proyecto_nuevo(request: Request):
     except db.ProyectoNoSeCrea as e:
         log.warning("Panel de proyectos: proyecto nuevo rechazado (%s)", e.clave)
         return RedirectResponse(f"{vuelta}&error={e.clave}", status_code=303)
+    # LA CARPETA DE DRIVE nace con el proyecto, DESPUÉS de guardarlo y ANTES de cualquier salida anticipada (la del
+    # cliente): si Drive falla el proyecto sigue creado y el aviso lo dice.
+    aviso_carpeta = cotizaciones_drive.clave_de_aviso_de_la_carpeta(await _preparar_la_carpeta_de_drive(nuevo["id"]))
     # EL CLIENTE ES OPCIONAL (Tiziano, 1-oct-2026: «no todos los proyectos tienen
     # cliente»). Si la ventanita mandó uno, se pone DESPUÉS de crear el proyecto,
     # por la única puerta del cliente (`db.poner_cliente`, que vuelve a leer la
@@ -1617,10 +1641,13 @@ async def crear_proyecto_nuevo(request: Request):
             await db.poner_cliente(nuevo["id"], int(crudo), leer_persona=noco_lectura.persona)
         except (ValueError, noco_lectura.NocoNoContesta) as e:
             log.warning("Panel de proyectos: el proyecto #%s se creó sin cliente: %s", nuevo["id"], e)
+            error = {None: "cliente_nuevo", "carpeta_drive_fallo": "cliente_nuevo_carpeta_drive_fallo",
+                     "carpeta_drive_enlace": "cliente_nuevo_carpeta_drive_enlace"}[aviso_carpeta]
             return RedirectResponse(
-                f"/proyectos?hecho=proyecto_nuevo&error=cliente_nuevo&p={nuevo['id']}", status_code=303)
+                f"/proyectos?hecho=proyecto_nuevo&error={error}&p={nuevo['id']}", status_code=303)
+    cola = f"&error={aviso_carpeta}" if aviso_carpeta else ""
     return RedirectResponse(
-        f"/proyectos?hecho=proyecto_nuevo&p={nuevo['id']}", status_code=303)
+        f"/proyectos?hecho=proyecto_nuevo{cola}&p={nuevo['id']}", status_code=303)
 
 
 VOLVER_A_LA_COTIZACION = "cotizacion"
@@ -3272,6 +3299,9 @@ async def convertir_en_proyecto(request: Request, tid: int):
     except ValueError as e:
         log.warning("Panel de tareas: no se convirtió #%s en proyecto: %s", tid, e)
         return RedirectResponse(f"/tareas/{tid}?error=convertir", status_code=303)
+    # La carpeta de Drive del proyecto nuevo, DESPUÉS de guardarlo. Sin aviso en esta ruta: redirige a la página del
+    # proyecto, que dice la verdad.
+    await _preparar_la_carpeta_de_drive(resultado["proyecto_id"])
     return RedirectResponse(
         f"/proyectos?creado={resultado['proyecto_id']}"
         f"#proyecto-{resultado['proyecto_id']}",

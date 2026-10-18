@@ -20,7 +20,12 @@ LAS CARPETAS. `<Proyectos>/<nombre del proyecto>/cotizaciones`, siempre por id d
 nada se crea a ciegas. Si dentro de «Proyectos» ya hay una carpeta con ese nombre, la nueva se llama
 «<nombre> · #<número del proyecto>». Si el proyecto se renombra, se le cambia el nombre a SU carpeta (por id). Si la
 carpeta ya no está en Drive (404) NO se rehace sola: se dice la causa. La carpeta del proyecto se anota en
-`proyectos.carpeta` SOLO si estaba vacía.
+`proyectos.carpeta` SOLO si estaba vacía, y se vuelve a leer la base para decir si quedó (`ENLACE_*`).
+
+LA CARPETA NACE CON EL PROYECTO (diseño «Carpetas del proyecto», pieza 1). `preparar_la_carpeta` crea esas mismas
+carpetas SIN cotización, por la misma `_crear_las_carpetas`; la llaman, DESPUÉS de guardar el proyecto, las tres rutas que
+lo crean (el panel, Telegram y «convertir en proyecto»). Nunca sube una excepción: si Drive falla el proyecto ya existe y
+`frase_de_la_carpeta` (la única fuente de lo que se dice) cuenta que la carpeta NO se creó. Lucy no borra ni mueve nada en Drive.
 
 EL TIEMPO. `TIEMPO_DEL_INTENTO` (15 s, de diseño, no medido) es el tope de TODAS las llamadas a Drive de un intento
 juntas, no de cada una (cada una además tiene el suyo en `drive.py`). Las escrituras a la base no se cortan.
@@ -64,6 +69,15 @@ CAUSAS = (
     SIN_PDF,
 )
 
+# Por qué se escribió `proyectos.carpeta` (queda en la huella). Dos orígenes, dos frases verdaderas.
+MOTIVO_AL_SUBIR = "La carpeta del proyecto en Drive (la creó Lucy al subir una cotización)"
+MOTIVO_AL_CREAR_EL_PROYECTO = "La carpeta del proyecto en Drive (la creó Lucy al crear el proyecto)"
+
+# Qué pasó con el enlace en `proyectos.carpeta` cuando Lucy creó (o ya tenía) la carpeta de Drive del proyecto.
+ENLACE_PUESTO = "puesto"            # estaba vacía y ahora tiene el enlace (se volvió a leer de la base)
+ENLACE_YA_TENIA = "ya_tenia"        # tenía algo escrito: no se tocó
+ENLACE_NO_SE_PUDO = "no_se_pudo"    # no se pudo escribir (o no se pudo comprobar que quedó): se dice, no se calla
+
 ETIQUETA_EN_DRIVE = "En Drive"
 ETIQUETA_VIEJA = "La versión de Drive es vieja"
 ETIQUETA_NO_ESTA = "No está en Drive"
@@ -106,6 +120,46 @@ def estado_de_drive(cot: dict) -> dict | None:
     return {"estado": estado, "etiqueta": etiqueta, "causa": causa,
             "rehacer_carpeta": estado != "en_drive" and causa == SIN_LA_CARPETA_DEL_PROYECTO,
             "aviso_al_guardar": al_guardar, "aviso_al_reintentar": al_reintentar}
+
+
+SE_CREARA_CON_LA_COTIZACION = "Se creará con la primera cotización que se envíe."
+
+
+def frase_de_la_carpeta(resultado: dict) -> str:
+    """LA PUERTA de lo que se dice de la carpeta de Drive de un proyecto nuevo (la de Telegram, el aviso del
+    panel y, en su día, la página salen de aquí; ninguna se escribe aparte). `resultado` es lo que devuelve
+    `preparar_la_carpeta`. Solo `lista` y `ya_estaba` afirman que la carpeta existe; cualquier otra cosa, o
+    algo que no se entiende, dice que NO se creó. Si la carpeta está pero su enlace no quedó en el proyecto, lo dice."""
+    r = resultado.get("resultado") if isinstance(resultado, dict) else None
+    if r not in ("lista", "ya_estaba"):
+        if r == "no_esta":
+            return "No se pudo crear la carpeta en Drive: el proyecto ya no está."
+        causa = resultado.get("causa") if isinstance(resultado, dict) else None
+        porque = f" ({causa})" if causa in CAUSAS else ""
+        return f"No se pudo crear la carpeta en Drive{porque}. {SE_CREARA_CON_LA_COTIZACION}"
+    frase = "Carpeta de Drive creada." if r == "lista" else "El proyecto ya tiene su carpeta en Drive."
+    carpeta = resultado.get("carpeta")
+    if carpeta == ENLACE_NO_SE_PUDO:
+        frase += " Pero NO se pudo poner su enlace en el proyecto: «Abrir la carpeta» no lo muestra."
+    elif carpeta == ENLACE_YA_TENIA and r == "lista":
+        frase += " El proyecto ya tenía otra carpeta escrita y no se cambió."
+    return frase
+
+
+# Las claves de aviso del panel (`?error=`) y el resultado que cada una cuenta. La causa no viaja en la dirección.
+AVISOS_DE_LA_CARPETA = {
+    "carpeta_drive_fallo": {"resultado": "fallo", "causa": None},
+    "carpeta_drive_enlace": {"resultado": "lista", "causa": None, "carpeta": ENLACE_NO_SE_PUDO},
+}
+
+
+def clave_de_aviso_de_la_carpeta(resultado: dict) -> str | None:
+    """La clave de aviso del panel para lo que pasó con la carpeta, o `None` si no hay nada que avisar (la carpeta
+    quedó y su enlace también, o ya los tenía)."""
+    r = resultado.get("resultado") if isinstance(resultado, dict) else None
+    if r not in ("lista", "ya_estaba"):
+        return "carpeta_drive_fallo"
+    return "carpeta_drive_enlace" if resultado.get("carpeta") == ENLACE_NO_SE_PUDO else None
 
 
 def enlace_de_carpeta_de_drive(carpeta_id) -> str | None:
@@ -159,41 +213,81 @@ async def _nombre_para_la_carpeta(intento: _Intento, raiz: str, nombre: str, pro
     return nombre
 
 
-async def _llenar_la_carpeta_del_proyecto(proyecto_id: int, carpeta_id: str) -> None:
+async def _llenar_la_carpeta_del_proyecto(proyecto_id: int, carpeta_id: str, motivo: str) -> str:
     """Si el proyecto NO tiene carpeta escrita, le pone la dirección de la que Lucy acaba de crear, por la misma
-    puerta de siempre (`crud.editar`). Una ya escrita (aunque Lucy no la entienda) no se toca. Si algo falla no
-    importa para la subida: se registra y se sigue."""
+    puerta de siempre (`crud.editar`), y VUELVE A LEER la base para decir que quedó. Una ya escrita (aunque Lucy no
+    la entienda) no se toca. Devuelve `ENLACE_PUESTO`, `ENLACE_YA_TENIA` o `ENLACE_NO_SE_PUDO` (si algo falla, o si
+    no se puede comprobar que quedó, se registra y se dice: no importa para la subida, pero no se calla)."""
     try:
+        enlace = enlace_de_carpeta_de_drive(carpeta_id)
         actuales = await db.carpetas_de_proyectos()
-        if actuales is None:
-            return
+        if enlace is None or actuales is None or proyecto_id not in actuales:
+            return ENLACE_NO_SE_PUDO
         try:
-            vacia = db.carpeta_guardada(actuales.get(proyecto_id)) is None
+            vacia = db.carpeta_guardada(actuales[proyecto_id]) is None
         except db.CarpetaDeProyectoNoVale:
             vacia = False
-        if vacia:
-            await crud.editar("proyectos", proyecto_id, {"carpeta": enlace_de_carpeta_de_drive(carpeta_id)},
-                              motivo="La carpeta del proyecto en Drive (la creó Lucy al subir una cotización)",
-                              actor="panel")
+        if not vacia:
+            return ENLACE_YA_TENIA
+        await crud.editar("proyectos", proyecto_id, {"carpeta": enlace}, motivo=motivo, actor="panel")
+        despues = await db.carpetas_de_proyectos()
+        if despues is not None and db.carpeta_guardada(despues.get(proyecto_id)) == enlace:
+            return ENLACE_PUESTO
+        log.warning("cotizaciones: el enlace de la carpeta del proyecto #%s no quedó escrito", proyecto_id)
     except Exception as e:
         log.warning("cotizaciones: no se pudo llenar la carpeta del proyecto #%s (%s)", proyecto_id, type(e).__name__)
+    return ENLACE_NO_SE_PUDO
 
 
-async def _crear_las_carpetas(intento: _Intento, cot: dict) -> dict:
-    pid = cot["proyecto_id"]
+async def _crear_las_carpetas(intento: _Intento, proyecto_id: int, nombre_del_proyecto: str, motivo: str) -> dict:
+    """Crea `Proyectos/<nombre>` y su `cotizaciones`, las anota y llena `proyectos.carpeta` si estaba vacía. La
+    llaman la primera subida de una cotización y `preparar_la_carpeta`: es la ÚNICA manera de crear las carpetas de
+    un proyecto. Devuelve `{"carpetas": <las que quedaron anotadas>, "propia": <¿son las que se acaban de crear?>,
+    "enlace": <qué pasó con proyectos.carpeta, o None si otra creación se adelantó>}`."""
     raiz = _la_raiz()
-    nombre = await _nombre_para_la_carpeta(intento, raiz, cot["proyecto_nombre"], pid, propia=None)
+    nombre = await _nombre_para_la_carpeta(intento, raiz, nombre_del_proyecto, proyecto_id, propia=None)
     del_proyecto = await intento.drive(lambda: drive.crear_carpeta(nombre, raiz),
                                        no_esta=drive.DriveSinCarpetaProyectos.causa)
     de_cotizaciones = await intento.drive(
         lambda: drive.crear_carpeta(NOMBRE_DE_LA_CARPETA_DE_COTIZACIONES, del_proyecto),
         no_esta=SIN_LA_CARPETA_DEL_PROYECTO)
-    quedaron = await db.guardar_carpetas_de_drive(pid, del_proyecto, de_cotizaciones, nombre)
-    if quedaron["carpeta_proyecto_id"] == del_proyecto:
-        await _llenar_la_carpeta_del_proyecto(pid, del_proyecto)
+    quedaron = await db.guardar_carpetas_de_drive(proyecto_id, del_proyecto, de_cotizaciones, nombre)
+    propia = quedaron["carpeta_proyecto_id"] == del_proyecto
+    enlace = None
+    if propia:
+        enlace = await _llenar_la_carpeta_del_proyecto(proyecto_id, del_proyecto, motivo)
     else:
-        log.warning("cotizaciones: otra subida se adelantó con las carpetas del proyecto #%s", pid)
-    return quedaron
+        log.warning("cotizaciones: otra subida se adelantó con las carpetas del proyecto #%s", proyecto_id)
+    return {"carpetas": quedaron, "propia": propia, "enlace": enlace}
+
+
+async def preparar_la_carpeta(proyecto_id: int, *, motivo: str = MOTIVO_AL_CREAR_EL_PROYECTO) -> dict:
+    """La carpeta de Drive de un proyecto, sin que haya una cotización: la llaman las tres rutas que crean un proyecto
+    (DESPUÉS de guardarlo y confirmarlo). Devuelve `{"resultado", "causa", "carpeta"}`:
+      · `lista`: se crearon `Proyectos/<nombre>` y `cotizaciones`, se anotaron y se leyeron de vuelta;
+      · `ya_estaba`: el proyecto ya tenía fila en `drive_de_proyectos`: NO se llama a Drive para escribir nada;
+      · `no_esta`: el proyecto no existe o está en la papelera;
+      · `fallo`: no se pudo (`causa` es una de `CAUSAS`).
+    `carpeta` dice qué pasó con `proyectos.carpeta` (`ENLACE_*`): con `lista` y `ya_estaba` se intenta que quede el
+    enlace puesto si estaba vacía, y si no se pudo se dice. NUNCA sube una excepción (solo `CancelledError`)."""
+    try:
+        proyecto = await db.proyecto_para_la_carpeta(proyecto_id)
+        if proyecto is None:
+            return {"resultado": "no_esta", "causa": None, "carpeta": None}
+        carpetas = await db.carpetas_de_drive(proyecto_id)
+        if carpetas is not None:
+            enlace = await _llenar_la_carpeta_del_proyecto(proyecto_id, carpetas["carpeta_proyecto_id"], motivo)
+            return {"resultado": "ya_estaba", "causa": None, "carpeta": enlace}
+        hecho = await _crear_las_carpetas(_Intento(), proyecto_id, proyecto["nombre"], motivo)
+        if not hecho["propia"]:
+            return {"resultado": "ya_estaba", "causa": None, "carpeta": None}
+        return {"resultado": "lista", "causa": None, "carpeta": hecho["enlace"]}
+    except _Falla as f:
+        log.warning("cotizaciones: no se pudo crear la carpeta del proyecto #%s (%s)", proyecto_id, f.causa)
+        return {"resultado": "fallo", "causa": f.causa, "carpeta": None}
+    except Exception as e:
+        log.warning("cotizaciones: no se pudo crear la carpeta del proyecto #%s (%s)", proyecto_id, type(e).__name__)
+        return {"resultado": "fallo", "causa": drive.DriveError.causa, "carpeta": None}
 
 
 async def _poner_al_dia_el_nombre(intento: _Intento, cot: dict, carpetas: dict) -> None:
@@ -219,7 +313,7 @@ async def _llevar_a_drive(intento: _Intento, cot: dict) -> str:
         raise _Falla(SIN_PDF) from None
     carpetas = await db.carpetas_de_drive(cot["proyecto_id"])
     if carpetas is None:
-        carpetas = await _crear_las_carpetas(intento, cot)
+        carpetas = (await _crear_las_carpetas(intento, cot["proyecto_id"], cot["proyecto_nombre"], MOTIVO_AL_SUBIR))["carpetas"]
     else:
         await _poner_al_dia_el_nombre(intento, cot, carpetas)
     carpeta = carpetas["carpeta_cotizaciones_id"]

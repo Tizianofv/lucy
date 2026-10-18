@@ -46,6 +46,9 @@ import db.db as db
 import noco_lectura
 
 
+pytestmark = pytest.mark.usefixtures("drive_aparte")      # el alta no habla con Drive aquí (ver conftest.py)
+
+
 async def _ficha(noco_id):
     return {"id": noco_id, "nombre": FICHAS_DE_NOCO.get(noco_id, f"Ficha {noco_id}")}
 
