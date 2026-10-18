@@ -5581,7 +5581,9 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
     por_tarea: dict[int, list] = {}
     for c in comentarios:
         por_tarea.setdefault(c["tarea_id"], []).append({
-            "id": c["id"], "autor": nombres.get(c["autor_chat_id"]) or "Alguien",
+            "id": c["id"], "autor": (nombres.get(c["autor_chat_id"])
+                      or _config.autores_reservados().get(c["autor_chat_id"])
+                      or "Alguien"),
             "creado_en": c["creado_en"], "texto": c["texto"],
             "editado": c.get("editado_en") is not None})
 
@@ -7496,7 +7498,13 @@ async def comentarios_de_tarea(tarea_id: int) -> list[dict]:
             "FROM comentarios_tarea "
             "WHERE tarea_id = %s AND borrado_en IS NULL "
             "ORDER BY creado_en ASC, id ASC", (tarea_id,))
-        return list(await cur.fetchall())
+        filas = list(await cur.fetchall())
+    # El NOMBRE de quien escribió, para pintarlo (`tarea_detalle.html`): sale de
+    # `config.nombre_de_autor`, que también conoce a Natalia (autora reservada,
+    # 18-oct-2026). None = sin nombre conocido.
+    for f in filas:
+        f["autor"] = _config.nombre_de_autor(f["autor_chat_id"])
+    return filas
 
 
 async def tarea_con_comentarios(tarea_id: int) -> dict | None:
