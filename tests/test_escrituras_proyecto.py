@@ -42,6 +42,9 @@ import db.db as db
 import noco_lectura
 
 
+pytestmark = pytest.mark.usefixtures("drive_aparte")      # el alta no habla con Drive aquí (ver conftest.py)
+
+
 FICHAS_DE_NOCO = {101: "Cliente Uno", 102: "Persona Dos de Noco", 103: "Persona Tres de Noco"}
 
 
@@ -1018,6 +1021,11 @@ def test_toda_ruta_post_de_proyectos_pide_sesion_y_escribe_por_una_puerta_con_ac
         # 16-oct-2026, pieza 8: «Crear de nuevo la carpeta en Drive»: tampoco escribe `proyectos` aquí; rehace las
         # carpetas por `cotizaciones_drive.rehacer_la_carpeta` (que anota por `db.rehacer_carpetas_de_drive`).
         "/proyectos/{pid}/drive/carpeta": set(),
+        # 18-oct-2026, pieza 2 de «Carpetas del proyecto»: «Crear la carpeta en Drive» tampoco llama a ninguna puerta de
+        # `db` ni de `crud` desde la ruta: pide `cotizaciones_drive.preparar_la_carpeta` (la misma del alta de un proyecto),
+        # que anota en `drive_de_proyectos` y, solo con `proyectos.carpeta` vacía, escribe por `crud.editar` con actor `panel`
+        # (lo vigilan `tests/test_carpeta_nace_con_el_proyecto.py` y `tests/test_carpeta_boton_en_la_pagina.py`).
+        "/proyectos/{pid}/drive/crear": set(),
         # 16-oct-2026, pieza 2 de la IA de las cotizaciones: las dos rutas devuelven un TEXTO propuesto y no escriben
         # nada (`tests/test_cotizaciones_ia_rutas.py` compara la base entera antes y después).
         "/proyectos/{pid}/cotizaciones/ia/redaccion": set(),

@@ -621,7 +621,7 @@ def test_la_pagina_no_promete_nada_que_no_hace(mundo):
     # en `tests/test_escrituras_proyecto.py` y `tests/test_escrituras_tarea.py`).
     permitidas = re.compile(
         r"/proyectos/(nuevo|\d+/(nombre|area|responsable|estado|tareas|cliente|personas(/\d+/quitar)?|"
-        r"notas(/\d+/(editar|borrar))?|sesiones/(quitar|devolver|agregar))|"
+        r"notas(/\d+/(editar|borrar))?|sesiones/(quitar|devolver|agregar)|drive/crear)|"
         r"tarea/\d+/(hecha|reabrir|titulo|borrar|responsable|fecha|comentar|comentario/\d+/editar|"
         r"personas(/\d+/quitar)?))")
     for consulta in ({"p": 1}, {"p": 3}, {"g": "CDS"}, {"sin_grupo": 1}, {"nuevo": "CDS"}, {},

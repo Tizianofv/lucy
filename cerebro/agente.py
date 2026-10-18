@@ -42,6 +42,7 @@ import cerebro.deepseek as motor
 import cerebro.memoria as memoria
 import cerebro.viaje as viaje
 import config
+import cotizaciones_drive
 from cerebro.bancos.categorias import CATEGORIAS
 import db.db as db
 
@@ -984,7 +985,8 @@ async def _ejecutar_herramienta(
             return (f"OK: proyecto «{nuevo['nombre']}» #{nuevo['id']} creado en "
                     f"el grupo {nuevo['area']}, con "
                     f"{_con_nombres(str(nuevo.get('responsable_chat_id')))} de "
-                    f"responsable (acción #{log_id}, reversible).")
+                    f"responsable (acción #{log_id}, reversible). "
+                    f"{cotizaciones_drive.frase_de_la_carpeta(nuevo.get('drive'))}")
 
         if nombre == "editar":
             tabla = str(args.get("tabla") or "")

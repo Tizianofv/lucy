@@ -58,6 +58,9 @@ from _navegador import Navegador
 import web.app as panel
 import web.auth as auth
 
+pytestmark = pytest.mark.usefixtures("drive_aparte")      # el alta no habla con Drive aquí (ver conftest.py)
+
+
 DUENO = config.CHAT_ID_DUENO
 
 

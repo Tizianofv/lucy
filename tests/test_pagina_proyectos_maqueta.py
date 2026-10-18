@@ -43,6 +43,9 @@ import db.db as db
 # Un lector de árbol y de CSS, lo justo
 # ═══════════════════════════════════════════════════════════════════════
 
+pytestmark = pytest.mark.usefixtures("drive_aparte")      # el alta no habla con Drive aquí (ver conftest.py)
+
+
 _VACIOS = {"input", "br", "hr", "img", "meta", "link"}
 
 

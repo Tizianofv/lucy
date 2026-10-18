@@ -4208,10 +4208,16 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 17-oct-2026, rama `trabajo/aviso-cotizacion-sin-precio` (un guardado rechazado nunca es silencioso): +2 en disco,
     # +1 EXENTO por `tests/test_aviso_de_cotizacion_rechazada.py` (nuevo, exento por rol) y +1 VIGILADO por
     # `web/cotizacion_rechazada.py` (nuevo; no lee la lista cruda de `config`). Medida corriendo la prueba: 186, 132, 54.
-    assert medido == {"en disco": 186, "exentos": 132, "vigilados": 54}, (
+    # 18-oct-2026, rama `trabajo/carpetas-p1` (la carpeta de Drive nace con el proyecto): +1 en disco y +1 EXENTO por
+    # `tests/test_carpeta_nace_con_el_proyecto.py` (nuevo, exento por rol); VIGILADOS sin cambio (solo se tocaron
+    # archivos ya vigilados). Medida corriendo la prueba: 187, 133, 54.
+    # 18-oct-2026, rama `trabajo/carpetas-p2` (el botón de la carpeta en la página): +1 en disco y +1 EXENTO por
+    # `tests/test_carpeta_boton_en_la_pagina.py` (nuevo, exento por rol); VIGILADOS sin cambio. Medida corriendo la
+    # prueba: 188, 134, 54.
+    assert medido == {"en disco": 188, "exentos": 134, "vigilados": 54}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "17-oct-2026 (aviso-cotizacion-sin-precio) era {'en disco': 186, "
-        "'exentos': 132, 'vigilados': 54}. La aserción de fondo —cero "
+        "18-oct-2026 (carpetas-p2) era {'en disco': 188, "
+        "'exentos': 134, 'vigilados': 54}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

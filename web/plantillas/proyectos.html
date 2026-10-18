@@ -125,6 +125,7 @@ h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balan
 .carpeta-p form{display:flex;flex-direction:column;gap:.6rem;width:100%}
 .carpeta-p label{display:flex;flex-direction:column;gap:.2rem;font-size:.85rem;color:var(--suave)}
 .carpeta-p input{font:inherit;padding:.45rem .6rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
+.carpeta-p h3.carpeta-linea{font-size:.8rem;font-weight:600;color:var(--suave);margin:0}
 .carpeta-p .botones{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
 .carpeta-p button.guardar{font:600 .88rem var(--texto);padding:.5rem 1rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
 /* LAS COTIZACIONES (pieza 5, 14-oct-2026): la lista de cotizaciones y su ventana; las clases son las de la maqueta aprobada. */
@@ -932,6 +933,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     {% elif error == 'cliente_noco' %}<p class="aviso">Noco no contestó: el cliente NO se cambió. Intenta otra vez en un momento.</p>
     {% elif error == 'cliente_igual' %}<p class="aviso">No cambió nada: ese ya era el cliente.</p>
     {% elif error == 'cliente_nuevo' %}<p class="aviso">El proyecto se creó, pero SIN cliente: Noco no contestó o la ficha ya no está. Se puede poner desde la cabecera.</p>
+    {% elif frase_del_alta_en_drive %}<p class="aviso">{% if error.startswith('cliente_nuevo_') %}El proyecto se creó, pero SIN cliente: Noco no contestó o la ficha ya no está. Se puede poner desde la cabecera.{% else %}El proyecto se creó.{% endif %} {{ frase_del_alta_en_drive }}</p>
     {% elif error == 'persona_noco' %}<p class="aviso">Noco no contestó: la persona NO se agregó. Intenta otra vez en un momento.</p>
     {% elif error == 'persona_falta' %}<p class="aviso">Escoge a la persona antes de agregarla: búscala y toca su nombre.</p>
     {% elif error == 'persona_ficha' %}<p class="aviso">Esa persona ya no está en Noco, o no se pudo leer su ficha.</p>
@@ -961,6 +963,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     {% elif hecho == 'descripcion' %}<p class="aviso ok">Descripción guardada.</p>
     {% elif hecho == 'descripcion_quitada' %}<p class="aviso ok">Descripción quitada: el proyecto queda sin descripción.</p>
     {% elif hecho == 'fechas' %}<p class="aviso ok">Fechas guardadas.</p>
+    {% elif frase_de_la_carpeta_hecha %}<p class="aviso ok">{{ frase_de_la_carpeta_hecha }}</p>
     {% elif hecho == 'carpeta' %}<p class="aviso ok">Carpeta guardada.</p>
     {% elif hecho == 'carpeta_quitada' %}<p class="aviso ok">Carpeta quitada: el proyecto queda sin carpeta.</p>
     {% elif hecho == 'nota' %}<p class="aviso ok">Nota guardada.</p>
@@ -1413,8 +1416,14 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     {% set ver_cotizaciones = cz and (cz.lista or not solo_ver) %}
     {% if ver_carpeta or ver_cotizaciones %}
     <section class="bloque carpeta-p" id="carpeta-del-proyecto" data-ancla>
-      <div class="encabezado">{% if ver_carpeta %}<h2>Carpeta del proyecto</h2>{% else %}<h2>Cotizaciones</h2>{% endif %}
+      <div class="encabezado">{% if ver_carpeta %}<h2>Carpetas del proyecto</h2>{% else %}<h2>Cotizaciones</h2>{% endif %}
         {% if ver_carpeta and not solo_ver and editar != 'carpeta' %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar=carpeta{{ sufijo_filtro }}#carpeta-del-proyecto">{{ 'Cambiar' if m.carpeta else 'Poner' }}</a>{% endif %}</div>
+      {#- «DOCUMENTOS (DRIVE)» (pieza 2): la carpeta de siempre y, si el proyecto no tiene la suya en Drive, la frase y el
+          botón. Solo la casa los ve: en solo ver no hay botón ni se dice que falta. Si no se pudo leer
+          (`carpeta_drive.estado` = `no_se_sabe`) no se afirma nada. Las palabras vienen de `carpeta_drive`
+          (`cotizaciones_drive.estado_de_la_carpeta_de_drive`), no se escriben aquí. -#}
+      {% set drive_falta = ver_carpeta and not solo_ver and carpeta_drive and carpeta_drive.estado == 'falta' %}
+      {% if ver_carpeta %}<h3 class="carpeta-linea">Documentos (Drive)</h3>{% endif %}
       {% if not ver_carpeta %}{% elif not solo_ver and editar == 'carpeta' %}
       <form class="carpeta-editar" method="post" action="/proyectos/{{ m.id }}/carpeta" data-auto>
         <label>Dónde vive el proyecto <input type="text" name="carpeta" maxlength="{{ largo_carpeta }}" value="{{ m.carpeta or '' }}" placeholder="Dirección de la carpeta en Drive o ruta en la computadora" aria-label="Carpeta del proyecto"></label>
@@ -1429,6 +1438,12 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
         {% if not solo_ver %}<button type="button" class="btn-linea copiar" data-copiar-carpeta>Copiar</button>{% endif %}
         <p class="nota">Esta ruta solo sirve en la computadora donde existe la carpeta.</p></div>
       {% else %}<p class="vacio">Todavía no hay carpeta.</p>{% endif %}
+      {% if drive_falta and editar != 'carpeta' %}
+      <form class="carpeta-drive" method="post" action="/proyectos/{{ m.id }}/drive/crear">
+        <p class="vacio">{{ carpeta_drive.frase }}</p>
+        <div class="botones"><button class="guardar">{{ carpeta_drive.boton }}</button></div>
+      </form>
+      {% endif %}
       {% if ver_cotizaciones %}{% include "_cotizaciones_del_proyecto.html" %}{% endif %}
     </section>
     {% endif %}
