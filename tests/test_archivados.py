@@ -42,6 +42,7 @@ import config
 import db.db as db  # noqa: E402
 import web.app as panel  # noqa: E402
 import web.auth as auth  # noqa: E402
+from test_buzon_que_no_se_ve import _py_en_disco  # noqa: E402
 
 
 def _cierre(m, pid, cuando, antes="activo", despues="cerrado", accion="editar"):
