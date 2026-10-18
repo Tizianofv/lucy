@@ -45,6 +45,7 @@ import db.db as db  # noqa: E402
 
 _RAIZ = Path(__file__).resolve().parent.parent
 YA_NO_EXISTE = "No lo deshice: eso ya no existe (se borró de verdad)."
+YA_RECUPERADO = "No lo deshice: eso ya estaba recuperado."
 # La columna que cada tabla edita en estas pruebas (proyectos: la descripción, con puerta y con candado, que es la
 # que más reglas tiene; el resto, una sin puerta). La fila de ahora trae el valor de `despues` ('nuevo').
 _COLUMNA = {"tareas": "detalle", "proyectos": "descripcion"}
@@ -165,6 +166,47 @@ def test_G2_una_fila_que_existe_se_deshace_como_siempre(accion, tabla):
         assert m.valor(tabla) == "viejo", "no devolvió el valor de antes"
     nuevas = m.foto_del_log()[antes + 1:]
     assert [(f[1], f[2], f[3]) for f in nuevas] == [("deshacer", tabla, 1)], nuevas
+
+
+@pytest.mark.parametrize("tabla", TABLAS)
+def test_G2b_deshacer_un_borrar_de_una_fila_que_ya_estaba_viva_no_afirma_nada_y_no_escribe(tabla):
+    """El caso del testigo: repetir un deshacer viejo. La fila existe y no está en la papelera: el `UPDATE ... SET
+    borrado_en = NULL` la tocaría NULL a NULL y se diría «revertí». Ahora: la verdad, sin huella."""
+    m = Mundo()
+    m.fila(tabla, 1, borrada=False)
+    log_id = m.huella("borrar", tabla, 1)
+    antes = m.foto_del_log()
+    e = _rechazo(m, log_id)
+    assert isinstance(e, ValueError) and str(e) == YA_RECUPERADO, f"{tabla}: {e}"
+    assert m.foto_del_log() == antes, f"{tabla}: dejó una huella de un deshacer que no hizo nada"
+    assert m.borrado(tabla) is None
+
+
+def test_G4b_los_cuatro_caminos_dicen_lo_mismo_de_una_fila_que_ya_estaba_recuperada():
+    m = Mundo()
+    m.fila("tareas", 1)
+    log_id = m.huella("borrar", "tareas", 1)
+    antes = m.foto_del_log()
+    r = tnp._correr(m, lambda: agente._ejecutar_herramienta("deshacer", {"accion": log_id}, 1, []))
+    assert r == f"ERROR: {YA_RECUPERADO}", r
+    restaurar = tbr._con_gente({tbr.DUENO: "Tiziano"})
+    guardado = db.pool
+    db.pool = m.pool()
+    try:
+        q = tbr._Q(f"und:{log_id}", tbr.DUENO)
+        tnp._correr(m, lambda: botones.al_pulsar(tbr._update(q), None))
+    finally:
+        db.pool = guardado
+        restaurar()
+    assert [a[0] for a, k in q.respuestas if a] == [f"No pude deshacerlo: {YA_RECUPERADO}"]
+    assert q.editado == {}
+    assert tnp._correr(m, lambda: crud.deshacer_varias([log_id])) == (0, [f"#{log_id}: {YA_RECUPERADO}"])
+    # la Papelera de la página: su propia puerta (`NadaQueRestaurar`), con la MISMA frase
+    e = tnp._rechazo(m, lambda: crud.deshacer_borrado("tareas", 1))
+    assert isinstance(e, crud.NadaQueRestaurar) and e.clave == "no_esta_borrado" and str(e) == YA_RECUPERADO, e
+    e = tnp._rechazo(m, lambda: crud.deshacer_borrado("tareas", 999))
+    assert isinstance(e, crud.NadaQueRestaurar) and str(e) == YA_NO_EXISTE, e
+    assert m.foto_del_log() == antes
 
 
 def test_deshacer_de_un_crear_sobre_algo_que_ya_estaba_en_la_papelera_no_dice_que_revirtio():

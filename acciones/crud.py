@@ -2581,6 +2581,7 @@ async def _recibir_al_deshacer(cur, tarea_id, quedara, reaparece=False):
 
 
 DESHACER_YA_NO_EXISTE = "No lo deshice: eso ya no existe (se borró de verdad)."
+DESHACER_YA_ESTABA_RECUPERADO = "No lo deshice: eso ya estaba recuperado."
 
 
 async def _el_deshacer_toco(cur, escribio, tabla, registro_id, si_sigue_ahi):
@@ -2676,10 +2677,10 @@ async def deshacer(log_id: int) -> str:
                         raise ValueError(
                             "No lo deshice: ya hay otro proyecto vivo con ese nombre.") from e
             c = await conn.execute(
-                f"UPDATE {tabla} SET borrado_en = NULL WHERE id = %s", (registro_id,))
-            # (Si la fila sigue ahí pero ya estaba viva, el UPDATE la toca igual —NULL a NULL— y nada se afirma de
-            # más: repetir un deshacer viejo es un caso probado, `test_un_deshacer_viejo_no_trae_…`.)
-            await _el_deshacer_toco(cur, c, tabla, registro_id, "No lo deshice: no encontré qué restaurar.")
+                f"UPDATE {tabla} SET borrado_en = NULL WHERE id = %s AND borrado_en IS NOT NULL", (registro_id,))
+            # Una fila que ya estaba viva NO se toca (NULL a NULL contaría como tocada y se diría «revertí» sin
+            # haber cambiado nada): `_el_deshacer_toco` dice la verdad y no se escribe huella.
+            await _el_deshacer_toco(cur, c, tabla, registro_id, DESHACER_YA_ESTABA_RECUPERADO)
             que = "lo que había archivado"
             if tabla == "proyectos":
                 # UN PROYECTO VUELVE CON SUS TAREAS: las que se fueron con él EN ESE ACTO
@@ -2867,7 +2868,11 @@ async def deshacer_borrado(tabla: str, registro_id: int) -> tuple[str, int]:
         await cur.execute(f"SELECT borrado_en FROM {tabla} WHERE id = %s", (registro_id,))
         fila = await cur.fetchone()
         if fila is None or fila["borrado_en"] is None:
-            raise NadaQueRestaurar("no_esta_borrado", "eso no está en la papelera")
+            # Las MISMAS frases que `deshacer` (una sola fuente): la página, Telegram, el agente y «deshacer todo»
+            # dicen lo mismo de una fila que no existe o que ya estaba recuperada.
+            raise NadaQueRestaurar(
+                "no_esta_borrado",
+                DESHACER_YA_NO_EXISTE if fila is None else DESHACER_YA_ESTABA_RECUPERADO)
         # (La regla «una nota de un proyecto en la papelera no vuelve sola» vive en `deshacer`, que es por
         # donde pasa este camino: la página y Telegram no pueden decidir distinto.)
         await cur.execute(

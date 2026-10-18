@@ -157,14 +157,22 @@ async def test_deshacer_el_proyecto_devuelve_sus_tareas_y_solo_esas(base):
 
 async def test_un_deshacer_viejo_no_trae_lo_que_se_borro_aparte_despues(base):
     """La huella del proyecto devuelve las tareas que se fueron EN ESE ACTO. Si después la persona
-    borra una a mano (huella más nueva), repetir el deshacer viejo NO la trae de vuelta."""
+    borra una a mano (huella más nueva), repetir el deshacer viejo NO la trae de vuelta.
+
+    (Archivar y borrar, pieza 1: antes esta prueba exigía que el deshacer repetido CONTESTARA «lo que había
+    archivado» sobre un proyecto que ya estaba vivo, o sea, decía que revertía algo que no cambió. Ahora exige la
+    verdad: «No lo deshice: eso ya estaba recuperado», sin huella nueva y sin tocar nada.)"""
     _sembrar(base)
     log_id = await crud.borrar("proyectos", 1, "x", actor="panel")
     await crud.deshacer(log_id)
     await crud.borrar("tareas", 10, "a mano", actor="panel")
-    que = await crud.deshacer(log_id)
+    huellas = len(_huellas(base))
+    with pytest.raises(ValueError) as e:
+        await crud.deshacer(log_id)
+    assert str(e.value) == crud.DESHACER_YA_ESTABA_RECUPERADO == "No lo deshice: eso ya estaba recuperado."
+    assert len(_huellas(base)) == huellas, "dejó una huella `deshacer` de algo que no hizo"
     assert _borrada(base, "tareas", 10), "la que se borró aparte, después, no vuelve con un deshacer viejo"
-    assert not _borrada(base, "proyectos", 1) and que == "lo que había archivado"
+    assert not _borrada(base, "proyectos", 1)
 
 
 async def test_restaurar_una_tarea_cuyo_proyecto_sigue_borrado_se_rechaza_y_lo_dice(base):
