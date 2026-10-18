@@ -263,10 +263,9 @@ async def leer_comentarios(
         raise HTTPException(
             status_code=404,
             detail="no es una tarea del grupo IA asignada a Code, o no existe")
-    nombres = config.nombres_con_code()
     return {"comentarios": [
         {"id": f["id"],
-         "autor": nombres.get(f["autor_chat_id"], "sin nombre"),
+         "autor": config.nombre_de_autor(f["autor_chat_id"]) or "sin nombre",
          "creado_en": _fecha(f["creado_en"]),
          "texto": f["texto"],
          "editado": f["editado_en"] is not None}
