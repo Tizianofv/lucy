@@ -510,6 +510,8 @@ def test_deshacer_la_huella_solo_devuelve_lo_que_este_cambio_toco():
             if "FROM log_acciones" in s2 or s2.startswith("UPDATE tareas t SET"):
                 self._base.sql.append((s2, params))
                 self._filas = [huella] if "FROM log_acciones" in s2 else []
+                # Como el cursor de psycopg: el UPDATE sobre la fila que existe toca 1 (`deshacer` lo mira).
+                self.rowcount = 1
                 return self
             return await super().execute(sql, params)
 

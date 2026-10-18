@@ -312,8 +312,14 @@ async def test_recorrido_B_proyecto_borrado_restaurado_tarea_aparte_borrado_otra
     assert e["proyectos"][1][0] is False
     assert {t: e["tareas"][t][0] for t in (10, 11, 12, 13)} == {10: True, 11: False, 12: False, 13: True}
     # deshacer VARIAS huellas, las viejas incluidas, de atrás para adelante: lo borrado aparte NO vuelve
+    # (Archivar y borrar, pieza 1: antes esta prueba esperaba «2 de 2» sobre un proyecto que ya estaba vivo, o sea
+    # contaba como hechos dos deshacer que no cambiaron nada. Ahora cada uno se cuenta como NO hecho con la frase
+    # verdadera, y el estado no se mueve.)
+    huellas = len(_huellas(base))
     cuantas, fallos = await crud.deshacer_varias([l1, l2])
-    assert (cuantas, fallos) == (2, [])
+    assert (cuantas, fallos) == (0, [f"#{l2}: {crud.DESHACER_YA_ESTABA_RECUPERADO}",
+                                     f"#{l1}: {crud.DESHACER_YA_ESTABA_RECUPERADO}"])
+    assert len(_huellas(base)) == huellas
     e = _estado(base)
     assert {t: e["tareas"][t][0] for t in (10, 11, 12, 13)} == {10: True, 11: False, 12: False, 13: True}
     assert e["proyectos"][1][0] is False and e["proyectos"][4][0] is False and e["tareas"][20][0] is False

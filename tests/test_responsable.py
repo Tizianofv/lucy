@@ -919,6 +919,9 @@ def _id_de(fn) -> str:
 # lo que Postgres haría con él.
 
 class _CursorDeCrud:
+    # Como el cursor de psycopg tras un UPDATE sobre una fila que existe: tocó 1 (`crud.deshacer` lo mira).
+    rowcount = 1
+
     def __init__(self, base):
         self._base = base
         self._fila = None
@@ -928,6 +931,8 @@ class _CursorDeCrud:
         self._base.sql.append((s, params))
         if s.startswith("SELECT") and "FROM log_acciones" in s:
             self._fila = self._base.huella
+        elif s.startswith("SELECT 1 AS x FROM"):
+            self._fila = {"x": 1}          # «¿la fila sigue existiendo?» de `crud.deshacer`: sí
         elif s.startswith("SELECT"):
             self._fila = dict(self._base.fila) if self._base.fila else None
         elif "RETURNING" in s:

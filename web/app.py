@@ -868,9 +868,12 @@ async def papelera(request: Request, restaurado: Aviso[int] = 0, hecho: Aviso[st
     elif hecho == "nota_restaurada" and id:
         n = await db.aviso_de_nota(id, borrada=False)
         de_vuelta = {"tipo": "nota", **n} if n is not None else None
+    # La frase de «ya no existe» / «ya estaba recuperado»: la de `crud` (la misma que dicen Telegram y el agente).
+    frase_restaurar = crud.FRASE_DE_NADA_QUE_RESTAURAR.get(error.removeprefix("restaurar_")) \
+        if error.startswith("restaurar_") else None
     return plantillas.TemplateResponse(
         request, "papelera.html",
-        {"movs": await db.papelera(), "dias": db.DIAS_EN_PAPELERA,
+        {"frase_restaurar": frase_restaurar, "movs": await db.papelera(), "dias": db.DIAS_EN_PAPELERA,
          "restaurado": restaurado, "proyectos_borrados": lo_borrado["proyectos"],
          "tareas_borradas": lo_borrado["tareas"], "notas_borradas": lo_borrado["notas"], "error": error, "de_vuelta": de_vuelta,
          "ocupante": ocupante})
@@ -893,8 +896,11 @@ async def restaurar_proyecto_o_tarea(request: Request):
     rid = int(crudo)
     try:
         await crud.deshacer_borrado(tabla, rid)
-    except crud.NadaQueRestaurar:
-        return RedirectResponse("/papelera?error=restaurar_no_esta", status_code=303)
+    except crud.NadaQueRestaurar as e:
+        # La clave sale de la CAUSA (`crud.FRASE_DE_NADA_QUE_RESTAURAR` dice cuáles tienen frase propia); la
+        # que no (sin huella) sigue con el aviso general.
+        clave = f"restaurar_{e.clave}" if e.clave in crud.FRASE_DE_NADA_QUE_RESTAURAR else "restaurar_no_esta"
+        return RedirectResponse(f"/papelera?error={clave}", status_code=303)
     except db.ClienteConProyecto as e:
         log.warning("Papelera: no se restauró %s #%s: el cliente ya tiene el #%s activo", tabla, rid, e.proyecto_id)
         return RedirectResponse(f"/papelera?error=restaurar_cliente_ocupado&ocupa={e.proyecto_id}", status_code=303)

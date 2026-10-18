@@ -919,8 +919,11 @@ def test_por_la_pagina_lo_que_no_se_lista_ni_se_devuelve_viva_sin_huella_o_de_pr
     assert lista == {11: "sin_huella", 12: "proyecto_borrado"}               # la 10 y la 13 no salen
     html = _papelera().text
     assert "sin registro de cómo se borró" in html and "su proyecto está en la papelera: restaura primero el proyecto" in html
-    for nid in (10, 11, 12, 13, 999):
+    # (Archivar y borrar, pieza 1: la viva y la que no existe tienen su propia clave, con la frase de `crud`.)
+    for nid in (10, 11, 12):
         assert "error=restaurar_no_" in _donde(_restaurar(nid)), nid
+    assert _donde(_restaurar(13)).endswith("error=restaurar_ya_recuperado")
+    assert _donde(_restaurar(999)).endswith("error=restaurar_ya_no_existe")
     assert {f["id"] for f in _filas(uno) if f["borrado_en"] is None} == {13}
     # el proyecto vuelve: ahora la nota sí se puede devolver sola
     _correr(crud.deshacer_borrado("proyectos", 3))

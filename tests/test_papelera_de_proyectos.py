@@ -82,6 +82,24 @@ async def test_la_papelera_lista_proyectos_con_lo_que_se_fue_con_ellos_y_las_tar
     assert "Las que se fueron junto con su proyecto no salen aquí: van con él." in t
 
 
+def test_la_papelera_de_la_pagina_dice_la_misma_frase_que_los_otros_caminos_y_la_saca_de_la_causa(pap):
+    """Archivar y borrar, pieza 1 (H2 del testigo): `NadaQueRestaurar` ya no cae siempre en «Eso ya no está en la
+    papelera»: la clave sale de la causa y la frase es la de `crud` (la que dicen Telegram, el agente y «deshacer todo»).
+    Las causas con frase propia salen de `crud.FRASE_DE_NADA_QUE_RESTAURAR`, no de una lista de acá."""
+    _sembrar(pap)
+    c = _casa(pap)
+    por_causa = {"ya_recuperado": {"tabla": "tareas", "id": 15},        # existe y ya está viva
+                 "ya_no_existe": {"tabla": "tareas", "id": 9999}}       # no existe
+    assert set(por_causa) == set(crud.FRASE_DE_NADA_QUE_RESTAURAR), "hay una causa con frase y sin caso acá"
+    for clave, datos in por_causa.items():
+        error = _va_a(c.post("/papelera/restaurar", data=datos, follow_redirects=False))["error"]
+        assert error == f"restaurar_{clave}", (clave, error)
+        assert crud.FRASE_DE_NADA_QUE_RESTAURAR[clave] in _texto(_papelera(pap, error=error)), clave
+    # la que no tiene frase propia (sin huella) sigue con el aviso general
+    error = _va_a(c.post("/papelera/restaurar", data={"tabla": "tareas", "id": 17}, follow_redirects=False))["error"]
+    assert error == "restaurar_no_esta" and "no hay registro de cómo se borró" in _texto(_papelera(pap, error=error))
+
+
 def test_la_papelera_dice_que_esto_no_se_vacia_solo_y_es_verdad():
     """La frase «esto no se vacía solo» es cierta: lo único que borra de verdad por antigüedad es
     `db.vaciar_papelera`, y toca solo `movimientos` (y `tools/vaciar_papelera.py` solo llama a esa)."""
@@ -177,8 +195,10 @@ def test_lo_que_no_se_puede_restaurar_no_se_restaura_y_se_dice(pap):
     assert _va_a(c.post("/papelera/restaurar", data={"tabla": "tareas", "id": 13}, follow_redirects=False))["error"] == "restaurar_no_se_pudo"
     # sin huella, no está borrada, no existe, o datos que no valen
     assert _va_a(c.post("/papelera/restaurar", data={"tabla": "tareas", "id": 17}, follow_redirects=False))["error"] == "restaurar_no_esta"
-    assert _va_a(c.post("/papelera/restaurar", data={"tabla": "tareas", "id": 15}, follow_redirects=False))["error"] == "restaurar_no_esta"
-    for datos in ({"tabla": "tareas", "id": 9999}, {"tabla": "areas", "id": 1}, {"tabla": "tareas", "id": "x"}, {}):
+    # (Archivar y borrar, pieza 1: ya viva y ya inexistente tienen cada una su clave y su frase; antes eran `restaurar_no_esta`.)
+    assert _va_a(c.post("/papelera/restaurar", data={"tabla": "tareas", "id": 15}, follow_redirects=False))["error"] == "restaurar_ya_recuperado"
+    assert _va_a(c.post("/papelera/restaurar", data={"tabla": "tareas", "id": 9999}, follow_redirects=False))["error"] == "restaurar_ya_no_existe"
+    for datos in ({"tabla": "areas", "id": 1}, {"tabla": "tareas", "id": "x"}, {}):
         assert _va_a(c.post("/papelera/restaurar", data=datos, follow_redirects=False))["error"] == "restaurar_no_esta", datos
     assert _foto(pap) == antes                                               # y nada se escribió
     html = _papelera(pap)

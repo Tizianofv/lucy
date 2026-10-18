@@ -86,6 +86,10 @@ class _Transaccion:
 
 
 class _Cur:
+    # Como el cursor de psycopg tras un UPDATE sobre una fila que existe: tocó 1 (`crud.deshacer` lo mira antes de
+    # afirmar que revirtió algo). Un UPDATE que no encuentra la fila vale 0; eso se prueba en tests/test_deshacer_no_miente.py.
+    rowcount = 1
+
     def __init__(self, row=None, filas=None):
         self._row = row
         self._filas = filas if filas is not None else ([row] if row is not None else [])
@@ -226,10 +230,13 @@ class _BaseDePasos:
                 self.pasos[pid]["borrado_en"] = datetime(2026, 9, 22, tzinfo=UTC)
             return _Cur(None)
 
-        if s == "UPDATE micro_pasos SET borrado_en = NULL WHERE id = %s":
+        if s == "UPDATE micro_pasos SET borrado_en = NULL WHERE id = %s AND borrado_en IS NOT NULL":
             (pid,) = p
+            estaba = self.pasos[pid]["borrado_en"] is not None
             self.pasos[pid]["borrado_en"] = None
-            return _Cur(None)
+            cur = _Cur(None)
+            cur.rowcount = 1 if estaba else 0       # como psycopg: solo toca la que estaba en la papelera
+            return cur
 
         if s.startswith("UPDATE micro_pasos SET"):
             # El resto -- `editar()`, que arma `col = %s, ...` con un
