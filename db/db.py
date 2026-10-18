@@ -1406,29 +1406,56 @@ async def fechas_de_proyectos() -> dict[int, dict] | None:
                       "termina_cuando": f["termina_cuando"]} for f in filas}
 
 
+def motivo_de_deshacer(log_id: int, accion: str) -> str:
+    """El `motivo` de la huella `deshacer` (la escribe `crud.deshacer`): dice QUÉ huella se deshizo.
+    `id_que_deshizo` lo lee de vuelta; una sola fuente para las dos."""
+    return f"Tiziano deshizo la acción #{log_id} ({accion})"
+
+
+def id_que_deshizo(motivo) -> int | None:
+    """El id de la huella que deshizo una huella `deshacer`, o `None` si el motivo no tiene esa forma."""
+    visto = re.match(r"Tiziano deshizo la acción #(\d+) \(", motivo or "")
+    return int(visto.group(1)) if visto else None
+
+
 async def cierres_de_proyectos() -> dict[int, datetime]:
-    """`{proyecto_id: instante}` del ÚLTIMO CIERRE de cada proyecto (Archivar y borrar, pieza 2,
-    18-oct-2026). SOLO LEE. «Archivado» es «cerrado» (no hay estado nuevo) y no hay columna con la
-    fecha de cierre: la única pista es la huella `editar` de `log_acciones`. UN CIERRE es una huella
-    `editar` de `proyectos` cuyo `despues.estado` es `cerrado` y cuyo `antes.estado` NO lo era:
-    `crud.editar` guarda la fila entera en `despues`, así que cualquier otra edición de un cerrado
-    (la descripción, la carpeta) también trae `despues.estado = 'cerrado'` y NO es un cierre.
-    Con varios cierres (cerrar, reabrir, cerrar) vale el más nuevo. Un proyecto sin esa huella
-    (nació cerrado, o se cerró por un camino que no la dejó) no sale: la página no inventa fecha.
-    Lo que no ve: un cierre que vuelve por `deshacer` (otra acción) no cuenta como cierre nuevo."""
+    """`{proyecto_id: instante}` del ÚLTIMO MOMENTO EN QUE CADA PROYECTO PASÓ A CERRADO (Archivar y
+    borrar, pieza 2, 18-oct-2026). SOLO LEE. «Archivado» es «cerrado» (no hay estado nuevo) y no hay
+    columna con la fecha de cierre: la única pista es `log_acciones`. Solo hay DOS escritores del
+    `estado` de un proyecto (los dos genéricos de `acciones/crud.py`; el panel, Telegram y los botones
+    pasan por `crud.editar`), y cada uno deja su huella:
+    * `editar`: cierra si `despues.estado` es `cerrado` y `antes.estado` NO lo era (un `antes` sin
+      estado cuenta como «no lo era»). `crud.editar` guarda la fila entera, así que cualquier otra
+      edición de un cerrado también trae `despues.estado = 'cerrado'` y NO es un cierre.
+    * `deshacer` (con `antes` y `despues` vacíos; su `motivo` dice qué huella deshizo, ver
+      `id_que_deshizo`): cierra si lo que deshizo era un `editar` que SACÓ al proyecto de cerrado
+      (deshacer una reapertura lo devuelve a cerrado).
+    Con varios pasos vale el más nuevo. Un proyecto sin huella (nació cerrado, o la huella no se
+    puede leer) no sale: la página no inventa fecha."""
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(
             """
-            SELECT registro_id AS pid, MAX(ts) AS ts
+            SELECT id, registro_id AS pid, accion, ts, motivo,
+                   antes->>'estado' AS antes_estado, despues->>'estado' AS despues_estado
               FROM log_acciones
-             WHERE tabla = 'proyectos' AND accion = 'editar'
-               AND despues->>'estado' = %s
-               AND antes->>'estado' IS DISTINCT FROM %s
-             GROUP BY registro_id
-            """, (ESTADO_PROYECTO_CERRADO, ESTADO_PROYECTO_CERRADO))
+             WHERE tabla = 'proyectos' AND accion IN ('editar', 'deshacer')
+            """)
         filas = await cur.fetchall()
-    return {f["pid"]: f["ts"] for f in filas}
+    por_id = {f["id"]: f for f in filas}
+    cierres: dict[int, datetime] = {}
+    for f in filas:
+        if f["accion"] == "editar":
+            cierra = (f["despues_estado"] == ESTADO_PROYECTO_CERRADO
+                      and f["antes_estado"] != ESTADO_PROYECTO_CERRADO)
+        else:
+            u = por_id.get(id_que_deshizo(f["motivo"]))
+            cierra = bool(u and u["accion"] == "editar" and u["pid"] == f["pid"]
+                          and u["antes_estado"] == ESTADO_PROYECTO_CERRADO
+                          and u["despues_estado"] != ESTADO_PROYECTO_CERRADO)
+        if cierra and (f["pid"] not in cierres or f["ts"] > cierres[f["pid"]]):
+            cierres[f["pid"]] = f["ts"]
+    return cierres
 
 
 async def _con_su_inicio(conn, cur, fila: dict) -> dict:

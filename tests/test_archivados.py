@@ -10,6 +10,8 @@ ejecuta de verdad (SQLite con el `CREATE TABLE` de `db/schema.sql` y huellas con
   G6  La fecha sale del ÚLTIMO CIERRE (la huella `editar` donde `antes.estado` no era cerrado y `despues.estado`
       sí): una edición posterior de un cerrado (trae `despues.estado = 'cerrado'` pero `antes` también) no la
       mueve; cerrar, reabrir y cerrar da el segundo; un reabierto no muestra fecha. El día es el de Santo Domingo.
+  G6b Los DOS escritores del `estado` (`crud.editar` y `crud.deshacer`) cuentan: deshacer una reapertura vuelve
+      a cerrar el proyecto y la fecha es la del deshacer; deshacer lo que no lo cerró, o de otro proyecto, no.
   G7  Sin huella de cierre: «Cerrado», sin fecha (no se inventa una).
   G8  Solo ver ve la fecha, en la lista y en la ficha, y ningún formulario del cierre.
 
@@ -23,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import pathlib
 import re
 from datetime import datetime, timezone
 
@@ -231,3 +234,117 @@ def test_G8_solo_ver_ve_la_fecha_y_ningun_control_del_cierre(mundo):
     assert _lineas_cerrado_el(html) == [f"Cerrado el {esperado}"]
     assert f"Proyecto cerrado el {esperado}: no se le agregan tareas." in html
     assert "Reabrir" not in html and "/estado" not in html
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# G6b: `deshacer` también cierra (hallazgo H1 del testigo)
+# ═══════════════════════════════════════════════════════════════════════
+
+_RAIZ = pathlib.Path(__file__).resolve().parent.parent
+
+
+def _huella(m, hid, pid, accion, cuando, antes=None, despues=None, motivo=None, tabla="proyectos"):
+    """Una huella con id fijo. `deshacer` va con `antes` y `despues` VACÍOS, como la escribe `crud.deshacer`."""
+    m.con.execute(
+        "INSERT INTO log_acciones (id, actor, accion, tabla, registro_id, ts, antes, despues, motivo) "
+        "VALUES (?, 'lucy', ?, ?, ?, ?, ?, ?, ?)",
+        (hid, accion, tabla, pid, cuando.isoformat(),
+         json.dumps(antes) if antes is not None else None,
+         json.dumps(despues) if despues is not None else None, motivo))
+
+
+def _deshacer(m, hid, pid, cuando, deshizo, accion="editar"):
+    _huella(m, hid, pid, "deshacer", cuando, motivo=db.motivo_de_deshacer(deshizo, accion))
+
+
+def _cierra_reabre(m, pid=1):
+    """Huellas 10 (cierra, hace 9 días) y 11 (reabre, hace 6)."""
+    _huella(m, 10, pid, "editar", _dia(-9), {"estado": "activo"}, {"estado": "cerrado"})
+    _huella(m, 11, pid, "editar", _dia(-6), {"estado": "cerrado"}, {"estado": "activo"})
+
+
+def test_G6b_el_caso_del_testigo_cerrar_reabrir_y_deshacer_la_reapertura_da_la_fecha_del_deshacer(mundo):
+    mundo.proyecto(1, "Uno", area="CDS", estado="cerrado")
+    _cierra_reabre(mundo)
+    _deshacer(mundo, 12, 1, _dia(-2), deshizo=11)
+    html = ver(mundo, p=1)
+    assert _lineas_cerrado_el(html) == [f"Cerrado el {tp._dia(-2).day} oct 2026"]
+    assert f"Proyecto cerrado el {tp._dia(-2).day} oct 2026: no se le agregan tareas." in html
+
+
+def test_G6b_deshacer_el_cierre_lo_reabre_y_no_es_un_cierre(mundo):
+    mundo.proyecto(1, "Uno", area="CDS", estado="cerrado")
+    _huella(mundo, 10, 1, "editar", _dia(-9), {"estado": "activo"}, {"estado": "cerrado"})
+    _deshacer(mundo, 11, 1, _dia(-4), deshizo=10)
+    assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-9).astimezone(timezone.utc)}
+
+
+def test_G6b_deshacer_una_edicion_que_no_toco_el_estado_no_mueve_la_fecha(mundo):
+    mundo.proyecto(1, "Uno", area="CDS", estado="cerrado")
+    _huella(mundo, 10, 1, "editar", _dia(-9), {"estado": "activo"}, {"estado": "cerrado"})
+    _huella(mundo, 11, 1, "editar", _dia(-6), {"estado": "cerrado", "x": 1}, {"estado": "cerrado", "x": 2})
+    _deshacer(mundo, 12, 1, _dia(-2), deshizo=11)
+    assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-9).astimezone(timezone.utc)}
+
+
+@pytest.mark.parametrize("motivo", [None, "", "Volvió con el proyecto #1 (acción #11)",
+                                    "Tiziano deshizo la acción #999 (editar)"])
+def test_G6b_un_deshacer_que_no_apunta_a_una_reapertura_conocida_no_cierra(mundo, motivo):
+    mundo.proyecto(1, "Uno", area="CDS", estado="cerrado")
+    _cierra_reabre(mundo)
+    _huella(mundo, 12, 1, "deshacer", _dia(-2), motivo=motivo)
+    assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-9).astimezone(timezone.utc)}
+
+
+def test_G6b_el_deshacer_de_otro_proyecto_no_cierra_este(mundo):
+    mundo.proyecto(1, "Uno", area="CDS", estado="cerrado")
+    mundo.proyecto(2, "Dos", area="CDS", estado="activo")
+    _cierra_reabre(mundo, 1)
+    _deshacer(mundo, 12, 2, _dia(-2), deshizo=11)       # apunta a la huella del proyecto 1, pero es del 2
+    assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-9).astimezone(timezone.utc)}
+
+
+def test_G6b_un_deshacer_de_una_tarea_con_el_mismo_numero_no_cierra(mundo):
+    mundo.proyecto(1, "Uno", area="CDS", estado="cerrado")
+    _cierra_reabre(mundo)
+    _huella(mundo, 12, 1, "deshacer", _dia(-2), tabla="tareas", motivo=db.motivo_de_deshacer(11, "editar"))
+    assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-9).astimezone(timezone.utc)}
+
+
+def test_G6b_el_motivo_se_escribe_y_se_lee_con_las_mismas_dos_funciones():
+    assert db.id_que_deshizo(db.motivo_de_deshacer(4242, "editar")) == 4242
+    assert db.id_que_deshizo("otra cosa") is None and db.id_que_deshizo(None) is None
+    codigo = (_RAIZ / "acciones" / "crud.py").read_text(encoding="utf-8")
+    # `crud.deshacer` lo escribe por la función compartida, no con su propia copia del texto.
+    assert "deshizo la acción" not in codigo and "db.motivo_de_deshacer(log_id" in codigo
+
+
+def test_G6b_los_escritores_del_estado_de_un_proyecto_siguen_siendo_los_dos_genericos_de_crud():
+    """La lista de «quién cierra» sale de lo real: cada `UPDATE {tabla} SET {asignaciones}` de `crud.py` (editar y
+    deshacer) y ningún `UPDATE proyectos` fuera de `tests/` que toque `estado`. Un tercero pone roja esta prueba:
+    hay que decidir cómo deja su huella antes de que la fecha pueda leerla."""
+    genericos = re.findall(r'f"UPDATE \{tabla\}(?: t)? SET \{asignaciones\}',
+                           (_RAIZ / "acciones" / "crud.py").read_text(encoding="utf-8"))
+    assert len(genericos) == 2
+    for ruta in _RAIZ.rglob("*.py"):
+        rel = ruta.relative_to(_RAIZ).parts
+        if rel[0] in ("tests", "venv", ".venv") or ".venv" in rel:
+            continue
+        for sql in re.findall(r"UPDATE\s+proyectos\s+SET\b[^\"]*", ruta.read_text(encoding="utf-8")):
+            assert not re.search(r"\bestado\s*=", sql), (str(ruta), sql)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# H2: un `antes` sin estado
+# ═══════════════════════════════════════════════════════════════════════
+
+@pytest.mark.parametrize("antes", [None, {}, {"id": 1}])
+def test_G6_un_cierre_cuyo_antes_no_trae_estado_cuenta_como_cierre(mundo, antes):
+    """El proyecto no estaba cerrado antes si el `antes` no lo dice (NULL ≠ 'cerrado')."""
+    mundo.proyecto(1, "Uno", area="CDS", estado="cerrado")
+    mundo.con.execute(
+        "INSERT INTO log_acciones (id, actor, accion, tabla, registro_id, ts, antes, despues) "
+        "VALUES (20, 'lucy', 'editar', 'proyectos', 1, ?, ?, ?)",
+        (_dia(-3).isoformat(), json.dumps(antes) if antes is not None else None,
+         json.dumps({"estado": "cerrado"})))
+    assert list(asyncio.run(db.cierres_de_proyectos())) == [1]
