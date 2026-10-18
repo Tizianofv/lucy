@@ -353,12 +353,12 @@ def test_lo_que_ya_estaba_igual_no_escribe_ni_deja_huella(uno):
 
 
 def test_pedir_la_carpeta_y_otra_columna_escribe_las_dos_y_una_mala_no_escribe_ninguna(uno):
-    _correr(crud.editar("proyectos", 1, {"carpeta": RUTA, "nombre": "Otro nombre"}, motivo="x"))
+    _correr(crud.editar("proyectos", 1, {"carpeta": RUTA, "descripcion": "Otra descripcion"}, motivo="x"))
     f = _fila(uno)
-    assert (f["carpeta"], f["nombre"]) == (RUTA, "Otro nombre")
+    assert (f["carpeta"], f["descripcion"]) == (RUTA, "Otra descripcion")
     antes = _fila(uno)
     with pytest.raises(ValueError):
-        _correr(crud.editar("proyectos", 1, {"carpeta": "a" * (LARGO + 1), "nombre": "Tercero"}, motivo="x"))
+        _correr(crud.editar("proyectos", 1, {"carpeta": "a" * (LARGO + 1), "descripcion": "Tercera"}, motivo="x"))
     assert _fila(uno) == antes
 
 
@@ -691,7 +691,9 @@ def test_ningun_sql_escrito_a_mano_nombra_la_columna_y_los_genericos_son_los_med
     # Los que arman `UPDATE {tabla}` al vuelo son los mismos de la parte 4: o validan por las puertas
     # (`editar`, `deshacer`: ejercidas arriba con una carpeta mala) o escriben una columna fija que no es esta.
     assert genericos == GENERICOS_MEDIDOS, genericos
-    assert {"db/db.py::crear_proyecto", "db/db.py::convertir_tarea_en_proyecto", "db/db.py::_buscar_o_crear"} <= insertan
+    # (`_buscar_o_crear` salió: desde la pieza 1 de «Un proyecto no se crea sin cliente» ya no crea proyectos.)
+    assert {"db/db.py::crear_proyecto", "db/db.py::convertir_tarea_en_proyecto"} <= insertan
+    assert "db/db.py::_buscar_o_crear" not in insertan
 
 
 def test_un_proyecto_nuevo_nace_sin_carpeta(uno):

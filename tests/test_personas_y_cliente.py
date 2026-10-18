@@ -414,7 +414,9 @@ def test_poner_el_cliente_guarda_el_nombre_que_devuelve_noco_y_no_el_del_formula
     assert _cliente_de(mundo, 1) == (101, "Cliente Uno") and noco.pedidos == [("persona", 101)]
     h, = _huellas(mundo)
     assert (h["actor"], h["accion"], h["tabla"], h["registro_id"]) == ("panel", "editar", "proyectos", 1)
-    assert json.loads(h["despues"]) == {"cliente_noco_id": 101, "cliente_nombre": "Cliente Uno"}
+    # (El proyecto es de CDS: su nombre pasa a ser el del cliente, en la misma escritura y en la misma huella.)
+    assert json.loads(h["despues"]) == {"cliente_noco_id": 101, "cliente_nombre": "Cliente Uno", "nombre": "Cliente Uno"}
+    assert mundo.con.execute("SELECT nombre FROM proyectos WHERE id = 1").fetchone()[0] == "Cliente Uno"
     assert "Cliente guardado." in ver(mundo, hecho="cliente", p=1)
 
 
@@ -423,7 +425,13 @@ def test_cambiar_el_cliente_y_quitarlo_con_un_id_vacio(mundo, gente, noco):
     mandar("/proyectos/1/cliente", {"noco_id": "101"})
     assert mandar("/proyectos/1/cliente", {"noco_id": "102"}).headers["location"] == "/proyectos?hecho=cliente&p=1"
     assert _cliente_de(mundo, 1) == (102, "Persona Dos de Noco")
-    # El cliente es OPCIONAL: vaciar lo quita, sin llamar a Noco.
+    # En CDS y ACD el cliente es OBLIGATORIO: vaciar se rechaza y no cambia nada.
+    n = len(_huellas(mundo))
+    assert mandar("/proyectos/1/cliente", {"noco_id": ""}).headers["location"] == "/proyectos?error=cliente_obligatorio&p=1"
+    assert _cliente_de(mundo, 1) == (102, "Persona Dos de Noco") and len(_huellas(mundo)) == n
+    # En IA es OPCIONAL: vaciar lo quita, sin llamar a Noco.
+    mundo.con.execute("UPDATE proyectos SET area = 'IA' WHERE id = 1")
+    mundo.con.commit()
     pedidos = len(noco.pedidos)
     r = mandar("/proyectos/1/cliente", {"noco_id": ""})
     assert r.headers["location"] == "/proyectos?hecho=cliente_quitado&p=1" and _cliente_de(mundo, 1) == (None, None)
@@ -441,7 +449,9 @@ def test_un_cliente_que_no_vale_no_cambia_nada(mundo, gente, noco, noco_id):
     mandar("/proyectos/1/cliente", {"noco_id": "101"})
     antes = (_cliente_de(mundo, 1), len(_huellas(mundo)))
     r = mandar("/proyectos/1/cliente", {"noco_id": noco_id})
-    assert r.headers["location"] == "/proyectos?error=cliente&p=1"
+    # Dos causas distintas, dos avisos: lo que no es un número no es un cliente escogido (`cliente`); un número que
+    # Noco no conoce es una ficha que no vale (`cliente_ficha`).
+    assert r.headers["location"] == f"/proyectos?error={'cliente_ficha' if noco_id in ('999', '0') else 'cliente'}&p=1"
     assert (_cliente_de(mundo, 1), len(_huellas(mundo))) == antes
 
 
@@ -458,7 +468,7 @@ def test_el_cliente_de_un_proyecto_que_no_esta_o_esta_en_la_papelera_da_error(mu
     _sembrar(mundo)
     for pid in (3, 999):
         assert mandar(f"/proyectos/{pid}/cliente", {"noco_id": "101"}).headers["location"] == \
-            f"/proyectos?error=cliente&p={pid}"
+            f"/proyectos?error=proyecto&p={pid}"
 
 
 def test_telegram_no_escribe_el_cliente_y_crud_editar_lo_rechaza(mundo, gente, noco):
@@ -478,35 +488,47 @@ def test_telegram_no_escribe_el_cliente_y_crud_editar_lo_rechaza(mundo, gente, n
 # ── El cliente al crear un proyecto (la ventanita) ──────────────────────
 
 def test_la_ventanita_puede_mandar_un_cliente_y_el_proyecto_nace_con_el_de_noco(mundo, gente, noco):
-    r = mandar("/proyectos/nuevo", {"nombre": "Con cliente", "area": "CDS", "responsable": "Persona Dos",
+    r = mandar("/proyectos/nuevo", {"nombre": "Lo escrito no cuenta", "area": "CDS", "responsable": "Persona Dos",
                                     "cliente": "101"})
     pid = mundo.con.execute("SELECT id FROM proyectos").fetchone()[0]
     assert r.headers["location"] == f"/proyectos?hecho=proyecto_nuevo&p={pid}"
     assert _cliente_de(mundo, pid) == (101, "Cliente Uno")
-    assert [h["accion"] for h in _huellas(mundo)] == ["crear", "editar"]       # dos puertas, dos huellas
+    # El proyecto nace CON el cliente y con su nombre, en UNA puerta y UNA huella (antes: crear y luego poner).
+    assert mundo.con.execute("SELECT nombre FROM proyectos").fetchone()[0] == "Cliente Uno"
+    h, = _huellas(mundo)
+    assert h["accion"] == "crear" and json.loads(h["despues"])["cliente_noco_id"] == 101
 
 
-def test_sin_cliente_el_proyecto_nace_igual_y_no_se_le_pide_nada_a_noco(mundo, gente, noco):
+def test_en_ia_sin_cliente_el_proyecto_nace_igual_y_no_se_le_pide_nada_a_noco(mundo, gente, noco):
     for campos in ({}, {"cliente": ""}, {"cliente": "   "}):
-        mandar("/proyectos/nuevo", {"nombre": f"P{len(campos)}{campos.get('cliente', '')!r}", "area": "CDS",
+        mandar("/proyectos/nuevo", {"nombre": f"P{len(campos)}{campos.get('cliente', '')!r}", "area": "IA",
                                     "responsable": "Persona Dos", **campos})
     assert mundo.con.execute("SELECT count(*) FROM proyectos WHERE cliente_noco_id IS NOT NULL").fetchone()[0] == 0
     assert mundo.con.execute("SELECT count(*) FROM proyectos").fetchone()[0] == 3 and noco.pedidos == []
 
 
-@pytest.mark.parametrize("cae,cliente", [(True, "101"), (False, "999"), (False, "abc")])
-def test_si_el_cliente_no_se_puede_poner_el_proyecto_se_crea_sin_cliente_y_el_aviso_lo_dice(mundo, gente, noco, cae, cliente):
+@pytest.mark.parametrize("area", ["CDS", "ACD"])
+@pytest.mark.parametrize("campos", [{}, {"cliente": ""}, {"cliente": "   "}])
+def test_en_cds_y_acd_sin_cliente_no_se_crea_nada_y_no_se_le_pide_nada_a_noco(mundo, gente, noco, area, campos):
+    r = mandar("/proyectos/nuevo", {"nombre": "Sin cliente", "area": area, "responsable": "Persona Dos", **campos})
+    assert r.headers["location"] == f"/proyectos?nuevo={area}&error=cliente"
+    assert mundo.con.execute("SELECT count(*) FROM proyectos").fetchone()[0] == 0
+    assert _huellas(mundo) == [] and noco.pedidos == []
+
+
+@pytest.mark.parametrize("cae,cliente,clave", [(True, "101", "cliente_noco"), (False, "999", "cliente_ficha"),
+                                               (False, "abc", "cliente")])
+def test_si_el_cliente_no_se_puede_leer_el_proyecto_no_se_crea_y_el_aviso_lo_dice(
+        mundo, gente, noco, cae, cliente, clave):
     noco.cae = cae
     r = mandar("/proyectos/nuevo", {"nombre": "Sin cliente por Noco", "area": "CDS", "responsable": "Persona Dos",
                                     "cliente": cliente})
-    pid = mundo.con.execute("SELECT id FROM proyectos").fetchone()[0]
-    assert r.headers["location"] == f"/proyectos?hecho=proyecto_nuevo&error=cliente_nuevo&p={pid}"
-    assert _cliente_de(mundo, pid) == (None, None)
-    assert "SIN cliente" in ver(mundo, hecho="proyecto_nuevo", error="cliente_nuevo", p=pid)
+    assert r.headers["location"] == f"/proyectos?nuevo=CDS&error={clave}"
+    assert mundo.con.execute("SELECT count(*) FROM proyectos").fetchone()[0] == 0 and _huellas(mundo) == []
 
 
-def test_un_proyecto_que_no_vale_no_pide_nada_a_noco_aunque_traiga_cliente(mundo, gente, noco):
-    r = mandar("/proyectos/nuevo", {"nombre": "", "area": "CDS", "responsable": "Persona Dos", "cliente": "101"})
+def test_un_proyecto_de_ia_que_no_vale_no_pide_nada_a_noco_aunque_traiga_cliente(mundo, gente, noco):
+    r = mandar("/proyectos/nuevo", {"nombre": "", "area": "IA", "responsable": "Persona Dos", "cliente": "101"})
     assert "error=nombre_vacio" in r.headers["location"] and noco.pedidos == []
 
 
@@ -617,7 +639,9 @@ def test_solo_las_dos_puertas_escriben_participantes():
 
 def test_solo_poner_cliente_escribe_las_columnas_del_cliente_en_proyectos():
     assert _escritores_de(r"UPDATE\s+proyectos\s+SET[^;]*\bcliente_(noco_id|nombre)\s*=") == {"poner_cliente"}
-    assert _escritores_de(r"INSERT\s+INTO\s+proyectos\s*\([^)]*cliente_") == set()
+    # El cliente NACE con el proyecto (pieza 1 de «Un proyecto no se crea sin cliente»): lo escriben sus dos creadores.
+    assert _escritores_de(r"INSERT\s+INTO\s+proyectos\s*\([^)]*cliente_") == {
+        "crear_proyecto", "convertir_tarea_en_proyecto"}
 
 
 def test_el_censo_ve_un_escritor_inventado():

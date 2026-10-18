@@ -53,6 +53,7 @@ from test_pagina_proyectos import (Mundo, gente, mundo, ver, ver_r, HOY, CREADO)
 import acciones.crud as crud
 import config
 import db.db as db
+import noco_lectura
 from _doble_postgres import ConexionPostgresFiel, ErrorSQL
 from _navegador import Navegador
 import web.app as panel
@@ -522,22 +523,25 @@ def _el_proyecto_nuevo(m):
     return f
 
 
+async def _ficha_de_mentira(noco_id):
+    return {"id": noco_id, "nombre": "Cliente de la ficha"}
+
+
 @pytest.mark.parametrize("camino", ["db.crear_proyecto", "crud.crear_proyecto (Telegram)",
-                                    "db.convertir_tarea_en_proyecto", "db.buscar_o_crear_proyecto"])
+                                    "db.convertir_tarea_en_proyecto"])
 @pytest.mark.parametrize("instante,dia", [(_ANTES_DE_MEDIANOCHE, "2026-10-07"),
                                           (_DESPUES_DE_MEDIANOCHE, "2026-10-08")])
 def test_todo_sitio_que_crea_un_proyecto_lo_deja_con_inicio_igual_a_hoy_de_santo_domingo(
         mundo_real, gente, monkeypatch, camino, instante, dia):
     _reloj(monkeypatch, instante)
     if camino == "db.crear_proyecto":
-        _correr(db.crear_proyecto("Por la puerta", "CDS", gente.dueno))
+        _correr(db.crear_proyecto(None, "CDS", gente.dueno, cliente_noco_id=101, leer_persona=_ficha_de_mentira))
     elif camino.startswith("crud.crear_proyecto"):
-        _correr(crud.crear_proyecto("Por Telegram", "CDS", gente.dueno))
-    elif camino == "db.convertir_tarea_en_proyecto":
-        mundo_real.tarea(5, "Una tarea que se vuelve proyecto", area="CDS")
-        _correr(db.convertir_tarea_en_proyecto(5))
+        monkeypatch.setattr(noco_lectura, "persona", _ficha_de_mentira)
+        _correr(crud.crear_proyecto(None, "CDS", gente.dueno, 101))
     else:
-        assert _correr(db.buscar_o_crear_proyecto("Nombrado al vuelo", bandeja_id=1))
+        mundo_real.tarea(5, "Una tarea que se vuelve proyecto", area="CDS")
+        _correr(db.convertir_tarea_en_proyecto(5, cliente_noco_id=101, leer_persona=_ficha_de_mentira))
     f = _el_proyecto_nuevo(mundo_real)
     assert f["inicio"] == dia and f["entrega"] is None and f["termina_cuando"] is None
     # La huella `crear` dice lo mismo que quedó guardado.
@@ -550,17 +554,18 @@ def test_por_las_rutas_del_panel_el_proyecto_nace_con_inicio_igual_a_hoy(mundo_r
     c = Navegador(panel.app, base_url="https://testserver")
     c.cookies.set(panel.COOKIE, auth.crear_token(DUENO, auth.VIDA_SESION))
     nombres = {n: ch for ch, n in config.nombres_con_code().items()}
-    r = c.post("/proyectos/nuevo", data={"nombre": "Desde el botón", "area": "CDS",
+    monkeypatch.setattr(noco_lectura, "persona", _ficha_de_mentira)
+    r = c.post("/proyectos/nuevo", data={"nombre": "Desde el botón", "area": "IA", "cliente": "",
                                          "responsable": "Persona Uno"}, follow_redirects=False)
     assert r.status_code == 303 and "error=" not in r.headers["location"], r.headers["location"]
     mundo_real.tarea(5, "Convertida con el botón", area="CDS")
-    r = c.post("/tareas/5/convertir-en-proyecto", follow_redirects=False)
+    r = c.post("/tareas/5/convertir-en-proyecto", data={"cliente": "101"}, follow_redirects=False)
     assert r.status_code == 303 and "error" not in r.headers["location"], r.headers["location"]
     filas = [dict(f) for f in mundo_real.con.execute("SELECT nombre, inicio FROM proyectos ORDER BY id")]
     assert [f["inicio"] for f in filas] == ["2026-10-07", "2026-10-07"] and len(filas) == 2
 
 
-def test_los_sitios_que_insertan_un_proyecto_son_estos_tres_y_cada_uno_llama_a_con_su_inicio():
+def test_los_sitios_que_insertan_un_proyecto_son_estos_dos_y_cada_uno_llama_a_con_su_inicio():
     """Sonda sobre el código (no un `grep`): toda función fuera de `tests/` cuyo SQL, con los f-strings
     rearmados, dice `INSERT INTO proyectos` o `INSERT INTO {…}`. El trinquete: uno nuevo se pone rojo
     hasta que alguien lo declare aquí y le pida su `inicio`."""
@@ -576,8 +581,8 @@ def test_los_sitios_que_insertan_un_proyecto_son_estos_tres_y_cada_uno_llama_a_c
                     llamadas = {c.func.id for c in ast.walk(fn)
                                 if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
                     insertores.setdefault(f"{'/'.join(partes)}::{fn.name}", set()).update(llamadas)
-    assert set(insertores) == {"db/db.py::crear_proyecto", "db/db.py::convertir_tarea_en_proyecto",
-                               "db/db.py::_buscar_o_crear"}, set(insertores)
+    # (`_buscar_o_crear` salió: desde la pieza 1 de «Un proyecto no se crea sin cliente» ya no crea proyectos.)
+    assert set(insertores) == {"db/db.py::crear_proyecto", "db/db.py::convertir_tarea_en_proyecto"}, set(insertores)
     for sitio, llamadas in insertores.items():
         assert "_con_su_inicio" in llamadas, f"{sitio} inserta un proyecto sin ponerle su inicio"
 

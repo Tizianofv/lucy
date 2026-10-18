@@ -260,12 +260,12 @@ def test_lo_que_ya_estaba_igual_no_escribe_ni_deja_huella(uno):
 
 
 def test_pedir_la_ruta_y_otra_columna_escribe_las_dos_y_una_mala_no_escribe_ninguna(uno):
-    _correr(crud.editar("proyectos", 1, {"carpeta_audio": AUDIO, "nombre": "Otro nombre"}, motivo="x"))
+    _correr(crud.editar("proyectos", 1, {"carpeta_audio": AUDIO, "descripcion": "Otra descripcion"}, motivo="x"))
     f = _fila(uno)
-    assert (f["carpeta_audio"], f["nombre"]) == (AUDIO, "Otro nombre")
+    assert (f["carpeta_audio"], f["descripcion"]) == (AUDIO, "Otra descripcion")
     antes = _fila(uno)
     with pytest.raises(ValueError):
-        _correr(crud.editar("proyectos", 1, {"carpeta_audio": "a" * (LARGO + 1), "nombre": "Tercero"}, motivo="x"))
+        _correr(crud.editar("proyectos", 1, {"carpeta_audio": "a" * (LARGO + 1), "descripcion": "Tercera"}, motivo="x"))
     assert _fila(uno) == antes
 
 

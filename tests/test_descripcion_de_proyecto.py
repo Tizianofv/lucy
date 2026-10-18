@@ -607,9 +607,9 @@ def test_convertir_una_tarea_en_proyecto_copia_el_detalle_sin_la_puerta_FRONTERA
     propio INSERT y NO pasa por `crud.PUERTAS`, así que un detalle de más de `LARGO` caracteres (el que
     deja Telegram, que no lo limita: `acciones/crud.py` lo lee con `str(...).strip()`) queda como
     descripción. Si algún día se le pone la puerta, esta prueba cambia a propósito."""
-    mundo.tarea(50, "Una tarea larga")
+    mundo.tarea(50, "Una tarea larga", area="IA")        # IA: ahí el detalle va solo a la descripción
     mundo.con.execute("UPDATE tareas SET detalle = ? WHERE id = 50", ("d" * (LARGO + 100),))
-    _correr(db.convertir_tarea_en_proyecto(50))
+    _correr(db.convertir_tarea_en_proyecto(50, cliente_noco_id=None, leer_persona=None))
     nuevo = mundo.con.execute("SELECT descripcion FROM proyectos").fetchone()[0]
     assert nuevo == "d" * (LARGO + 100)
     # y el panel con ese texto: se enseña entero, y guardar (con o sin cambios) dice que NO se guardó
@@ -648,13 +648,13 @@ def _escritores_de_sql():
 
 def test_sonda_los_escritores_con_la_tabla_al_vuelo_son_estos_y_solo_dos_pueden_escribir_la_descripcion():
     """Los escritores cuyo SQL interpola la tabla (los que un `grep` de `UPDATE proyectos` no ve) son
-    estos seis. Cuatro escriben UNA columna fija que no es `descripcion`; `editar` y `deshacer` escriben
+    estos cinco. Tres escriben UNA columna fija que no es `descripcion`; `editar` y `deshacer` escriben
     las que les pidan, y por eso se prueban arriba contra la puerta. Un séptimo escritor genérico pone
     roja esta prueba hasta que alguien lo clasifique."""
     genericos = {k: v for k, v in _escritores_de_sql().items() if any("…" in t for _, t, _ in v)}
     assert set(genericos) == {
         ("acciones/crud.py", "borrar"), ("acciones/crud.py", "deshacer"), ("acciones/crud.py", "editar"),
-        ("cerebro/despertador.py", "revisar"), ("db/db.py", "_buscar_o_crear"),
+        ("cerebro/despertador.py", "revisar"),
         ("tools/rellenar_duenos.py", "main")}, sorted(genericos)
     fijos = {("acciones/crud.py", "borrar"): "borrado_en",
              ("cerebro/despertador.py", "revisar"): "avisos_enviados",
@@ -663,8 +663,8 @@ def test_sonda_los_escritores_con_la_tabla_al_vuelo_son_estos_y_solo_dos_pueden_
         resto = " ".join(r for _, t, r in genericos[clave] if "…" in t)
         assert re.search(rf"\bSET\s+{columna}\b", resto), (clave, resto[:80])
         assert "descripcion" not in resto
-    insert = " ".join(r for _, t, r in genericos[("db/db.py", "_buscar_o_crear")] if "…" in t)
-    assert re.match(r"\s*\(nombre\)", insert) and "descripcion" not in insert
+    # (`db._buscar_o_crear` salió de esta lista: desde la pieza 1 de «Un proyecto no se crea sin cliente» solo crea
+    # personas y con un INSERT escrito entero.)
     # `borrar` también tiene un UPDATE de `borrado_en` por tabla; ninguno de los fijos nombra la columna.
     # Los dos libres: ¿llaman a la puerta? (el árbol de llamadas, no un nombre)
     fuente = ast.parse((_ROOT / "acciones" / "crud.py").read_text(encoding="utf-8"))
@@ -851,6 +851,8 @@ def test_el_candado_solo_esta_en_la_descripcion_y_el_resto_de_las_ediciones_escr
     condición sobre el valor). La lista de columnas con candado es esta y solo esta."""
     assert crud._COLUMNAS_CON_CANDADO == {("proyectos", "descripcion")}
     uno.tarea(7, "una tarea", proyecto=1)
+    # En IA y con cliente: ahí se renombra a mano y se puede pasar a otro grupo (en CDS/ACD el nombre es el del cliente).
+    uno.con.execute("UPDATE proyectos SET area = 'IA', cliente_noco_id = 7, cliente_nombre = 'Cliente' WHERE id = 1")
     visto = []
     uno.con.set_trace_callback(visto.append)
     try:

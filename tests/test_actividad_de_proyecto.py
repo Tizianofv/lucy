@@ -683,7 +683,7 @@ def test_la_huella_de_un_comentario_no_trae_el_titulo_de_su_tarea(mundo):
 
 
 def test_las_acciones_de_verdad_dejan_las_frases_que_se_esperan(mundo):
-    mundo.proyecto(1, "Uno", area="CDS", responsable=DUENO)
+    mundo.proyecto(1, "Uno", area="IA", responsable=DUENO)     # IA: ahí el nombre se renombra a mano
     assert post("/proyectos/1/tareas", {"titulo": TITULO}).status_code == 303
     tid = mundo.con.execute("SELECT id FROM tareas WHERE titulo = ?", (TITULO,)).fetchone()[0]
     assert post(f"/proyectos/tarea/{tid}/hecha", {}).status_code == 303

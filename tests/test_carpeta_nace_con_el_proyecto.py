@@ -55,6 +55,9 @@ import drive
 from acciones import crud
 
 NOMBRE = "Proyecto de la prueba"
+# Estas pruebas miden la CARPETA DE DRIVE, no el cliente: se crean en el grupo IA, el único que no exige cliente y
+# donde el nombre del proyecto se escribe (pieza 1 de «Un proyecto no se crea sin cliente», 18-oct-2026).
+AREA = db.AREA_TECNICA
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -70,7 +73,7 @@ def _id_de(m_, nombre) -> int:
 def _por_el_panel(m_, nombre=NOMBRE, cliente=None, c=None):
     """«+ Proyecto» del panel: (respuesta del POST, el navegador, página que sigue, id del proyecto)."""
     c = c or _casa()
-    datos = {"nombre": nombre, "area": "CDS", "responsable": "Persona Dos"}
+    datos = {"nombre": nombre, "area": AREA, "responsable": "Persona Dos"}
     if cliente is not None:
         datos["cliente"] = cliente
     r = c.post("/proyectos/nuevo", data=datos, follow_redirects=False)
@@ -83,13 +86,13 @@ def _por_telegram(m_, nombre=NOMBRE):
     """La herramienta `crear_proyecto` del agente, REAL: (lo que le contesta al modelo, id del proyecto)."""
     acciones: list = []
     r = asyncio.run(agente._ejecutar_herramienta(
-        "crear_proyecto", {"nombre": nombre, "grupo": "CDS", "responsable": "Persona Dos"}, 1, acciones))
+        "crear_proyecto", {"nombre": nombre, "grupo": AREA, "responsable": "Persona Dos"}, 1, acciones))
     return r, _id_de(m_, nombre)
 
 
 def _convirtiendo(m_, nombre=NOMBRE, c=None):
     """«Convertir en proyecto» una tarea suelta: (respuesta del POST, id del proyecto)."""
-    m_.tarea(50, nombre, area="CDS")
+    m_.tarea(50, nombre, area=AREA)
     m_.con.commit()
     c = c or _casa()
     r = c.post("/tareas/50/convertir-en-proyecto", follow_redirects=False)
@@ -299,30 +302,32 @@ def test_el_censo_ve_un_creador_que_no_pide_la_carpeta_o_la_pide_antes(tmp_path)
                                          ("mal.py", "por_otro_nombre"), ("mal.py", "sin_pedirla")]
 
 
-def test_en_el_panel_la_carpeta_se_pide_aunque_el_cliente_falle(m, nube, monkeypatch):
-    """Antes del `return` anticipado del cliente: si Noco no contesta el proyecto se crea sin cliente PERO con carpeta."""
+def test_en_el_panel_si_noco_no_contesta_no_hay_proyecto_ni_carpeta(m, nube, monkeypatch):
+    """Pieza 1 de «Un proyecto no se crea sin cliente» (18-oct-2026): ya no hay «crear sin cliente y avisar». Si Noco no
+    contesta la puerta no escribe NADA, y como la carpeta se pide DESPUÉS de guardar, tampoco hay carpeta en Drive."""
     import noco_lectura
 
     async def sin_noco(noco_id, **k):
         raise noco_lectura.NocoNoContesta("Noco de mentira: no contesta")
     monkeypatch.setattr(noco_lectura, "persona", sin_noco)
+    antes = [_filas(m, f"SELECT * FROM {t}") for t in ("proyectos", "log_acciones", "drive_de_proyectos")]
+    c = _casa()
+    r = c.post("/proyectos/nuevo", data={"nombre": NOMBRE, "area": AREA, "responsable": "Persona Dos", "cliente": "101"},
+               follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == f"/proyectos?nuevo={AREA}&error=cliente_noco"
+    despues = [_filas(m, f"SELECT * FROM {t}") for t in ("proyectos", "log_acciones", "drive_de_proyectos")]
+    assert despues == antes, "escribió algo (proyecto, huella o carpeta) aunque Noco no contestó"
+
+
+def test_en_el_panel_con_cliente_el_proyecto_nace_con_el_y_la_carpeta_se_pide_despues(m, nube, monkeypatch):
+    import noco_lectura
+
+    async def ficha(noco_id, **k):
+        return {"id": noco_id, "nombre": "Ficha de Noco"}
+    monkeypatch.setattr(noco_lectura, "persona", ficha)
     r, _, pagina, pid = _por_el_panel(m, cliente="101")
-    assert r.headers["location"] == f"/proyectos?hecho=proyecto_nuevo&error=cliente_nuevo&p={pid}"
+    assert (_proyecto(m, pid)["cliente_noco_id"], _proyecto(m, pid)["cliente_nombre"]) == (101, "Ficha de Noco")
     assert _carpetas(m, pid) is not None and _proyecto(m, pid)["carpeta"] == _enlace(_carpetas(m, pid)["carpeta_proyecto_id"])
-    assert "SIN cliente" in pagina and "No se pudo crear la carpeta" not in pagina
-
-
-def test_si_el_cliente_falla_y_drive_tambien_el_aviso_dice_las_dos_cosas(m, nube, monkeypatch):
-    import noco_lectura
-
-    async def sin_noco(noco_id, **k):
-        raise noco_lectura.NocoNoContesta("Noco de mentira: no contesta")
-    monkeypatch.setattr(noco_lectura, "persona", sin_noco)
-    monkeypatch.delenv("LUCY_DRIVE_REFRESH_TOKEN")
-    r, _, pagina, pid = _por_el_panel(m, cliente="101")
-    assert r.headers["location"] == f"/proyectos?hecho=proyecto_nuevo&error=cliente_nuevo_carpeta_drive_fallo&p={pid}"
-    assert "SIN cliente" in pagina and cd.frase_de_la_carpeta(cd.AVISOS_DE_LA_CARPETA["carpeta_drive_fallo"]) in pagina
-    assert _carpetas(m, pid) is None and _proyecto(m, pid)["borrado_en"] is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -502,6 +507,24 @@ def test_dos_proyectos_de_igual_nombre_uno_en_la_papelera_la_segunda_carpeta_lle
     assert a["carpeta_proyecto_id"] != b["carpeta_proyecto_id"]
     assert nube.cosas[a["carpeta_proyecto_id"]]["nombre"] == "Disco repetido"
     assert nube.cosas[b["carpeta_proyecto_id"]]["nombre"] == "Disco repetido · #3" == b["nombre_puesto"]
+
+
+@pytest.mark.parametrize("viejo", ["cerrado", "pausado"])
+def test_un_cliente_que_vuelve_con_un_proyecto_nuevo_la_carpeta_del_nuevo_lleva_su_numero_y_la_vieja_conserva_su_nombre(
+        m, nube, viejo):
+    """G7r de «Un proyecto no se crea sin cliente» (18-oct-2026): en CDS y ACD el nombre del proyecto es el del cliente, así
+    que el proyecto nuevo del mismo cliente se llama IGUAL que el viejo (pausado o cerrado). Las carpetas no chocan: la del
+    nuevo queda «<nombre> · #<número>» y la del viejo no se toca ni se reusa."""
+    m.con.execute("UPDATE proyectos SET nombre = 'Cliente repetido' WHERE id IN (2, 3)")
+    m.con.commit()
+    _preparar(2)
+    m.con.execute("UPDATE proyectos SET estado = ? WHERE id = 2", (viejo,))
+    m.con.commit()
+    _preparar(3)
+    a, b = _carpetas(m, 2), _carpetas(m, 3)
+    assert a["carpeta_proyecto_id"] != b["carpeta_proyecto_id"]
+    assert nube.cosas[a["carpeta_proyecto_id"]]["nombre"] == "Cliente repetido" == a["nombre_puesto"]
+    assert nube.cosas[b["carpeta_proyecto_id"]]["nombre"] == "Cliente repetido · #3" == b["nombre_puesto"]
 
 
 def test_preparar_no_habla_con_drive_por_su_cuenta_y_crea_por_la_unica_funcion_de_las_carpetas():
@@ -723,13 +746,12 @@ def test_para_cada_resultado_posible_el_panel_dice_lo_mismo_que_la_frase_real():
     assert cd.frase_de_la_carpeta({"resultado": "no_esta"}) != cd.frase_de_la_carpeta({"resultado": "fallo"})
 
 
-@pytest.mark.parametrize("prefijo", ["", "cliente_nuevo_"])
 @pytest.mark.parametrize("clave", sorted(cd.AVISOS_DE_LA_CARPETA))
-def test_la_pagina_pinta_la_frase_de_cada_clave_de_aviso(m, nube, clave, prefijo):
+def test_la_pagina_pinta_la_frase_de_cada_clave_de_aviso(m, nube, clave):
     from test_pagina_proyectos import ver_r
-    html = _html.unescape(ver_r(m, error=prefijo + clave, p=1))
+    html = _html.unescape(ver_r(m, error=clave, p=1))
     assert cd.frase_de_la_carpeta(cd.AVISOS_DE_LA_CARPETA[clave]) in html
-    assert ("SIN cliente: Noco" in html) == bool(prefijo)
+    assert "SIN cliente" not in html       # ya no hay «crear sin cliente y avisar» (pieza 2)
 
 
 def _fragmentos_de_las_frases() -> set[str]:

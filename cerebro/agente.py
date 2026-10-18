@@ -99,7 +99,8 @@ HERRAMIENTAS DISPONIBLES:
   dos historias que deberían ser una—. Si de verdad NO existe, la tarea NO se
   crea: `crear` la rechaza entera y te dice que le preguntes a Tiziano en qué
   grupo va el proyecto y quién es el responsable. Cuando te lo diga, creá el
-  proyecto con `crear_proyecto` y creá la tarea otra vez. Un proyecto NUNCA
+  proyecto con `crear_proyecto` (si el grupo no es {GRUPO_SIN_CLIENTE}, también hace falta
+  el cliente: buscalo con `buscar_cliente`) y creá la tarea otra vez. Un proyecto NUNCA
   nace por nombrarlo: nace con grupo y con responsable, o no nace.
   RESPONSABLE (solo tareas, opcional): "crea X para Rosi" = mandalo YA en
   esta misma llamada, con el NOMBRE tal como está en esta lista, y nunca un
@@ -163,21 +164,49 @@ HERRAMIENTAS DISPONIBLES:
   círculo (X espera a Y y Y ya esperaba, directa o indirectamente, a X),
   `crear` lo rechaza entero y el motivo te dice por qué.
 
-· crear_proyecto  {"nombre": "...", "grupo": "...", "responsable": "..."}
+· buscar_cliente  {"texto": "..."}
+  Busca en Personas (la lista de personas y clientes) por nombre, nombre de
+  WhatsApp o teléfono, y devuelve hasta {TOPE_CLIENTES} fichas {"id", "nombre"}. Solo lee:
+  no crea ni cambia nada. Es la ÚNICA fuente del "cliente_id" de
+  `crear_proyecto`.
+   · 1 ficha que es claramente la persona o la empresa que dijo Tiziano:
+     úsala.
+   · 0 fichas: no es que no exista (puede estar escrita distinta). Busca otra
+     vez con otra parte del nombre o con el teléfono; si tampoco, pregúntale a
+     Tiziano. Si la respuesta dice que Noco no contestó, dile eso tal cual y
+     que lo intente en un momento: no es lo mismo que "no hay nadie".
+   · 2 o más fichas: enséñale la lista numerada a Tiziano y pregunta cuál. Si
+     dos fichas se llaman igual, díselo y pídele otro dato (el teléfono) para
+     buscar de nuevo y distinguirlas; no escojas tú.
+
+· crear_proyecto  {"nombre": "...", "grupo": "...", "responsable": "...",
+                   "cliente_id": 0}
   Da de alta un proyecto NUEVO. Es la ÚNICA forma de que un proyecto nazca:
   pedir una tarea "dentro del proyecto X" cuando X no existe NO lo crea, te
   lo rechaza y te toca preguntar antes.
-  LOS TRES CAMPOS SON OBLIGATORIOS, y por eso son tres y no uno:
-   · "nombre": como lo dijo Tiziano, y que no sea el de otro proyecto vivo.
+  "grupo" y "responsable" son obligatorios siempre:
    · "grupo": UNA de estas, tal cual: {AREAS}. Sin grupo, el proyecto cae en
      «Sin grupo» en la página y sus tareas no se agrupan con nada.
    · "responsable": UNO de estos nombres, nunca un número: {PERSONAS_Y_CODE}.
      No hay «sin responsable» al crear — un proyecto lo lleva alguien.
-  El CLIENTE no se pide por acá ni se adivina: no todo proyecto tiene uno, y
-  el que tenga se pone en el panel. No mandes "cliente".
   Si Tiziano no dijo el grupo o el responsable, PREGUNTÁNTASELO antes de
   llamar —los dos se eligen, no se inventan— y no crees el proyecto a medias:
   el rechazo te dice cuáles hay.
+  EL CLIENTE depende del grupo:
+   · En cualquier grupo menos {GRUPO_SIN_CLIENTE} el proyecto es de un cliente: manda
+     "cliente_id" con el "id" de la ficha que te devolvió `buscar_cliente` en
+     esta conversación, nunca uno que no hayas visto ahí. NO mandes "nombre":
+     el proyecto se llama como el cliente, y la respuesta te dice qué nombre
+     quedó. Busca al cliente primero con lo que dijo Tiziano; si no dijo para
+     quién es, pregúntaselo.
+   · En el grupo {GRUPO_SIN_CLIENTE} no hay cliente: manda "nombre", como lo dijo Tiziano, que
+     no sea el de otro proyecto vivo, y no mandes "cliente_id".
+   · Un cliente tiene un solo proyecto activo. Si el rechazo dice que ya tiene
+     uno, no crees otro: ofrécele a Tiziano agregar la tarea a ese proyecto
+     (con `crear`, "proyecto" = su nombre). Un proyecto pausado o cerrado no
+     cuenta; reabrirlo no es tu decisión.
+   · El cliente de un proyecto que ya existe no se cambia por acá: `editar`
+     lo rechaza. Se hace en el panel.
 
 · editar  {"tabla": "tareas|eventos|notas|movimientos|personas|proyectos|"
                     "micro_pasos",
@@ -654,7 +683,9 @@ def herramientas_del_prompt(areas: list[dict] | None = None,
     ).replace("{PANTALLAS_DEL_PANEL}", pantallas
     ).replace("{PERSONAS_DEL_PANEL}", personas
     ).replace("{PERSONAS_Y_CODE}", personas_y_code
+    ).replace("{TOPE_CLIENTES}", str(crud.TOPE_CANDIDATOS_CLIENTE)
     ).replace("{AREAS}", areas_txt
+    ).replace("{GRUPO_SIN_CLIENTE}", f'"{db.AREA_TECNICA}"'
     ).replace("{PROYECTOS}", proyectos_txt)
 
 
@@ -912,7 +943,7 @@ def _parte_de_lo_hecho(acciones: list[dict]) -> str:
 # despachador y este mensaje sigue diciendo lo de antes — que es exactamente
 # lo que había pasado: `pasos` existía y no estaba en la lista.
 HERRAMIENTAS_QUE_HAY = (
-    "consultar", "crear", "crear_proyecto", "editar", "archivar", "pasos",
+    "consultar", "crear", "buscar_cliente", "crear_proyecto", "editar", "archivar", "pasos",
     "deshacer", "perfil", "preferencia", "correo", "lugar", "buscar_lugar",
     "viaje", "panel", "recordar", "preguntar", "responder")
 
@@ -968,6 +999,15 @@ async def _ejecutar_herramienta(
                 resultado += await _avisar_choques(rid)
             return resultado
 
+        if nombre == "buscar_cliente":
+            # SOLO LEE: `crud.buscar_cliente` llama a `noco_lectura.buscar_personas` (un GET) y a nada más.
+            # Noco sin contestar NO es «0 fichas»: sube `NoDeNegocio` y el modelo lo lee como ERROR.
+            fichas = await crud.buscar_cliente(str(args.get("texto") or ""))
+            if not fichas:
+                return ("0 fichas con ese texto. Eso no prueba que el cliente no exista: prueba con otra parte del "
+                        "nombre o con el teléfono, y si tampoco sale, pregúntale a Tiziano.")
+            return json.dumps(fichas, ensure_ascii=False)
+
         if nombre == "crear_proyecto":
             # EL ÚNICO CAMINO POR EL QUE NACE UN PROYECTO DESDE TELEGRAM (E8,
             # 1-oct-2026). Va por `crud`, como TODA escritura que dispara una
@@ -976,9 +1016,10 @@ async def _ejecutar_herramienta(
             # —nombre, grupo y responsable— son las de `db.crear_proyecto`, la
             # misma puerta que usa el panel; esta rama no decide nada.
             nuevo, log_id = await crud.crear_proyecto(
-                str(args.get("nombre") or ""),
+                (str(args.get("nombre")).strip() or None) if args.get("nombre") else None,
                 str(args.get("grupo") or ""),
-                args.get("responsable"))
+                args.get("responsable"),
+                args.get("cliente_id"))
             _anotar(acciones, log_id,
                     f"creé el proyecto «{str(nuevo.get('nombre') or '')[:40]}» "
                     f"en {nuevo.get('area')}")

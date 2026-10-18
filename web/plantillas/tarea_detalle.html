@@ -37,6 +37,14 @@ nombre (el título de la tarea). Cambia el título y vuelve a intentar.</p>
 largo para ser el nombre de un proyecto.</p>
 {% elif error == 'convertir_vacio' %}
 <p class="aviso">No se convirtió en proyecto: la tarea no tiene título.</p>
+{% elif error == 'convertir_cliente' %}
+<p class="aviso">No se convirtió en proyecto: falta escoger al cliente. Búscalo y toca su nombre en la lista.</p>
+{% elif error == 'convertir_ficha' %}
+<p class="aviso">No se convirtió en proyecto: esa ficha no está en Noco, o no se pudo leer bien. Busca al cliente otra vez.</p>
+{% elif error == 'convertir_noco' %}
+<p class="aviso">No se convirtió en proyecto: Noco no contestó. Inténtalo en un momento.</p>
+{% elif error == 'convertir_ocupado' %}
+<p class="aviso">No se convirtió en proyecto: el cliente tiene un proyecto activo{% if ocupante %} («{{ ocupante.nombre }}»){% endif %} y no se pueden activar 2.{% if ocupante %} <a href="/proyectos?p={{ ocupante.id }}">Abrir</a>{% endif %}</p>
 {% endif %}
 
 {# «PRIMERO:» (encargo 6). Si la tarea ESPERA a otra que sigue pendiente, se
@@ -106,6 +114,7 @@ largo para ser el nombre de un proyecto.</p>
    `db.convertir_tarea_en_proyecto` para qué pasa con el responsable, el área
    y los comentarios. Sin formulario intermedio: un botón, un click. #}
 {% if tarea.estado == pendiente and not tarea.proyecto_id %}
+{% if not cliente_es_obligatorio(tarea.area) %}
 <form method="post" action="/tareas/{{ tarea.id }}/convertir-en-proyecto">
   <div class="barra">
     <button>Convertir en proyecto</button>
@@ -113,6 +122,34 @@ largo para ser el nombre de un proyecto.</p>
       título, este detalle como descripción y esta área.</span>
   </div>
 </form>
+{% elif not convertir %}
+{#- FUERA DE IA son DOS PASOS (pieza 3 de «Un proyecto no se crea sin cliente»): este enlace abre el segundo, que pide el
+    cliente. Sin cliente la puerta no convierte nada. Qué grupos lo piden lo decide `cliente_es_obligatorio`. -#}
+<div class="barra">
+  <a style="background:var(--acento);color:#fff;padding:.45rem .6rem;border-radius:7px;text-decoration:none" href="/tareas/{{ tarea.id }}?convertir=1">Convertir en proyecto</a>
+  <span class="suave">Paso 1 de 2: después escoges al cliente.</span>
+</div>
+{% else %}
+{#- EL SEGUNDO PASO: el servidor busca en Noco (solo lee) y pinta las fichas como botones; cada uno envía la
+    conversión con el Id de esa ficha. El nombre que queda lo vuelve a leer la puerta de Noco. -#}
+<div class="tarjeta">
+  <div class="suave">Convertir en proyecto · paso 2 de 2: escoge al cliente</div>
+  <form method="get" action="/tareas/{{ tarea.id }}" role="search" class="barra">
+    <input type="hidden" name="convertir" value="1">
+    <input type="text" name="pq" value="{{ busqueda.q if busqueda else '' }}" placeholder="Busca al cliente en Noco…" aria-label="Cliente del proyecto" autocomplete="off">
+    <button>Buscar</button>
+  </form>
+  <form method="post" action="/tareas/{{ tarea.id }}/convertir-en-proyecto">
+    {%- if busqueda %}
+      {%- if busqueda.error %}<p class="aviso">{{ busqueda.error }}</p>
+      {%- elif busqueda.personas %}{% for x in busqueda.personas %}<button name="cliente" value="{{ x.id }}" title="Convertir con {{ x.nombre }}">{{ x.nombre }}</button> {% endfor %}
+      {%- else %}<p class="suave">Nadie con «{{ busqueda.q }}» en Noco.</p>{% endif %}
+    {%- endif %}
+  </form>
+  <p class="suave">Al tocar un nombre, la tarea se archiva y el proyecto nace con ese cliente: se llama como él, y el título de esta tarea pasa a la primera línea de su descripción.</p>
+  <a href="/tareas/{{ tarea.id }}">Cancelar</a>
+</div>
+{% endif %}
 {% endif %}
 
 {# `detalle` es el texto que Lucy le puso a la tarea al anotarla. Se enseña

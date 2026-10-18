@@ -1111,9 +1111,9 @@ async def cambiar_estado(bandeja_id: int, estado: str, desde: str | None = None)
 # UNA SOLA PUERTA para «qué nombre vale», y UNA SOLA función para «¿ya hay uno
 # con ese nombre?», llamadas por TODO lo que escribe `proyectos.nombre`:
 # `crud.editar` (Telegram y panel, por `crud.PUERTAS`), `crud.deshacer`,
-# `crud.perfil`, `_buscar_o_crear` y `convertir_tarea_en_proyecto`. La lista de
-# escritores no está tecleada acá: la saca de lo real
-# `tests/test_nombre_de_proyecto.py`.
+# `crud.perfil` (que busca), `crear_proyecto`, `poner_cliente` (en CDS/ACD el nombre es el del cliente) y
+# `convertir_tarea_en_proyecto`. La lista de escritores no está tecleada acá: la saca de lo real
+# `tests/test_nombre_de_proyecto.py`. (`_buscar_o_crear` ya no crea proyectos: pieza 1 de «Un proyecto no se crea sin cliente».)
 #
 # Sin candado en la base (decisión de la sala: sin migración): un índice único
 # sería DDL en producción. La regla es de aplicación, y por eso el duplicado se
@@ -1123,7 +1123,7 @@ LARGO_NOMBRE_PROYECTO = 200
 
 class NombreDeProyectoNoVale(ValueError):
     """Un nombre de proyecto que no puede quedar. `clave` dice por qué
-    (`vacio`, `largo`, `repetido`) para que una pantalla lo traduzca sin
+    (`vacio`, `largo`, `repetido`, y `cliente`: en CDS y ACD el nombre es el del cliente) para que una pantalla lo traduzca sin
     adivinar por el texto del mensaje. El mensaje NUNCA repite el nombre pedido."""
 
     def __init__(self, clave: str, mensaje: str):
@@ -1409,8 +1409,8 @@ async def fechas_de_proyectos() -> dict[int, dict] | None:
 async def _con_su_inicio(conn, cur, fila: dict) -> dict:
     """Un proyecto recién insertado (`fila`, con `RETURNING *`) con su `inicio` puesto a HOY en
     Santo Domingo (`hoy_rd`), y la fila releída para que la huella `crear` lo diga. LA ÚNICA que
-    escribe `inicio` al crear: la llaman los TRES sitios que insertan un proyecto
-    (`crear_proyecto`, `convertir_tarea_en_proyecto`, `_buscar_o_crear`), dentro de la misma
+    escribe `inicio` al crear: la llaman los DOS sitios que insertan un proyecto
+    (`crear_proyecto` y `convertir_tarea_en_proyecto`), dentro de la misma
     transacción que el `INSERT`. Con la columna sin migrar (SQLSTATE 42703) no escribe nada y
     devuelve la fila como vino (la migración le pone el día de creación): crear no se rompe.
     Va en un SAVEPOINT para que ese error no deje abortada la transacción del `INSERT`."""
@@ -2110,16 +2110,23 @@ async def agregar_sesion_a_proyecto(proyecto_id: int, sesion_ref, codigo, chat_i
 
 
 async def proyecto_vivo_con_nombre(cur, nombre: str, excluir_id: int | None = None):
-    """El id de un proyecto VIVO que se llama así, o None. LA comparación de
-    nombres de proyecto: la usan la búsqueda de Lucy (`_buscar_o_crear`,
-    `crud.perfil`) y todo chequeo de duplicados, para que no puedan separarse.
+    """El id del proyecto ACTIVO que se llama así, o None. LA comparación de
+    nombres de proyecto: todo chequeo de duplicados la usa, para que no puedan
+    separarse.
+
+    «ACTIVO» es `cuenta_como_activo`: ni la papelera, ni un pausado, ni un
+    cerrado cuentan (Tiziano, 18-oct-2026: un cliente vuelve con algo distinto,
+    se abre un proyecto nuevo y el viejo sigue pausado o cerrado CON EL MISMO
+    NOMBRE). El nombre de la función se queda por no mover sus referencias.
+    El SQL pasa los dos estados que no cuentan como parámetros, sacados de las
+    mismas constantes que `cuenta_como_activo`: no hay una segunda lista.
 
     `lower(nombre) = lower(...)` y nada más (ignora mayúsculas, NO tildes: es lo
     que hacía la búsqueda antes, y un chequeo con otro criterio dejaría pasar
     nombres que la búsqueda ve iguales). `excluir_id` es la propia fila, para
-    poder cambiar solo las mayúsculas de sí mismo. Un proyecto borrado no
-    cuenta. `ORDER BY id`: si algún día hay dos, siempre gana el mismo (antes,
-    `LIMIT 1` sin orden dejaba la elección a Postgres).
+    poder cambiar solo las mayúsculas de sí mismo. `ORDER BY id`: si algún día
+    hay dos, siempre gana el mismo (antes, `LIMIT 1` sin orden dejaba la
+    elección a Postgres).
 
     `cur` es un cursor con `row_factory=dict_row`.
     """
@@ -2129,12 +2136,123 @@ async def proyecto_vivo_con_nombre(cur, nombre: str, excluir_id: int | None = No
          WHERE borrado_en IS NULL
            AND lower(nombre) = lower(%s)
            AND id <> %s
+           AND estado NOT IN (%s, %s)
          ORDER BY id
          LIMIT 1
         """,
-        (nombre, excluir_id or 0))
+        (nombre, excluir_id or 0, ESTADO_PROYECTO_PAUSADO, ESTADO_PROYECTO_CERRADO))
     fila = await cur.fetchone()
     return fila["id"] if fila else None
+
+
+# ── UN PROYECTO NO SE CREA SIN CLIENTE (Tiziano, 18-oct-2026; pieza 1, «la puerta») ───────────────────────────────
+#
+# LA REGLA: en CDS, ACD y sin grupo el proyecto lleva cliente y su nombre es el nombre del cliente; en IA
+# (`AREA_TECNICA`) no hace falta. Y UN SOLO PROYECTO ACTIVO POR CLIENTE (pausados, cerrados y la papelera no cuentan).
+# Dos preguntas, dos funciones, y todos los caminos preguntan a ESTAS:
+#   · `cliente_es_obligatorio(area)`: ¿este grupo exige cliente?
+#   · `proyecto_vivo_del_cliente(cur, cliente)`: ¿ese cliente ya tiene un proyecto activo?
+# El cierre en la base (CHECK e índice) es de la pieza 6, y es el último recurso, no la defensa principal.
+def cliente_es_obligatorio(area) -> bool:
+    """¿Un proyecto de este grupo exige cliente? Todo menos IA. `None` (sin grupo) y cualquier grupo desconocido
+    o que no sea un texto dan True: lo que la función no sabe clasificar cae del lado estricto. Es LA ÚNICA que
+    lo decide; nadie compara con `'IA'` por su cuenta."""
+    return area != AREA_TECNICA
+
+
+class ClienteConProyecto(ValueError):
+    """El cliente ya tiene un proyecto activo y no se pueden activar 2. `proyecto_id`, `nombre` y `estado` son del
+    que ya está (para que la pantalla lo nombre y lo enlace). El MENSAJE no lleva el nombre: el nombre de un
+    proyecto de CDS/ACD es el de un cliente y los avisos van a los registros."""
+
+    def __init__(self, proyecto_id: int, nombre: str, estado: str):
+        super().__init__(f"el cliente tiene un proyecto activo (#{proyecto_id}) y no se pueden activar 2")
+        self.proyecto_id = proyecto_id
+        self.nombre = nombre
+        self.estado = estado
+
+
+class ClienteDelProyectoNoVale(ValueError):
+    """El cliente (o la falta de él) no puede quedar así en un proyecto que ya existe. `clave`: `obligatorio`
+    (un proyecto de CDS/ACD/sin grupo no se queda sin cliente), `nombre` (en CDS/ACD el nombre es el del cliente),
+    `ficha` (la ficha de Noco no existe o no vale: `poner_cliente`) y `proyecto` (el proyecto no existe o está en la
+    papelera: `poner_cliente`). Cada una es una CAUSA distinta, para que la pantalla diga la que fue."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+async def proyecto_vivo_del_cliente(cur, cliente_noco_id, excluir_id: int | None = None):
+    """El proyecto ACTIVO de ese cliente, como `{id, nombre, estado}`, o None. LA ÚNICA que decide «un solo
+    proyecto activo por cliente». Cuenta por `cliente_noco_id` (no por nombre) y entre CDS, ACD y sin grupo
+    juntos: IA no cuenta ni es contada (`cliente_es_obligatorio`, escrito en SQL como `COALESCE(area,'') <> IA`).
+    Un pausado, un cerrado y la papelera tampoco cuentan (`cuenta_como_activo`, en SQL `estado NOT IN (pausado,
+    cerrado)` con las mismas constantes). `excluir_id` es la propia fila. `ORDER BY id LIMIT 1`.
+
+    `cur` es un cursor con `row_factory=dict_row`."""
+    await cur.execute(
+        """
+        SELECT id, nombre, estado FROM proyectos
+         WHERE borrado_en IS NULL
+           AND cliente_noco_id = %s
+           AND COALESCE(area, '') <> %s
+           AND estado NOT IN (%s, %s)
+           AND id <> %s
+         ORDER BY id
+         LIMIT 1
+        """,
+        (cliente_noco_id, AREA_TECNICA, ESTADO_PROYECTO_PAUSADO, ESTADO_PROYECTO_CERRADO, excluir_id or 0))
+    fila = await cur.fetchone()
+    return dict(fila) if fila else None
+
+
+def _cliente_que_cuenta(fila) -> int | None:
+    """El cliente por el que ESTA fila ocupa un proyecto activo, o None si no ocupa ninguno: tiene que estar
+    fuera de la papelera, con cliente, activa (`cuenta_como_activo`) y ser de un grupo que lo exige."""
+    if fila is None or fila.get("borrado_en") is not None or fila.get("cliente_noco_id") is None:
+        return None
+    if not cuenta_como_activo(fila.get("estado")) or not cliente_es_obligatorio(fila.get("area")):
+        return None
+    return fila["cliente_noco_id"]
+
+
+async def proyecto_puede_quedar_activo(cur, proyecto_id, antes, despues) -> None:
+    """Comprueba, ANTES de escribir, que un proyecto que va a quedar como `despues` no rompe «un solo proyecto
+    activo por cliente» ni el nombre de otro activo. `antes` y `despues` son dicts con `estado`, `area`,
+    `cliente_noco_id`, `nombre` y `borrado_en` (`antes=None` es un proyecto que todavía no existe: la creación).
+    LA LLAMAN todos los caminos por los que un proyecto PASA a ocupar a su cliente: crear, convertir una tarea,
+    `poner_cliente`, `crud.editar` (estado o grupo: reabrir un cerrado, reactivar un pausado, pasar de IA a
+    CDS/ACD) y `crud.deshacer` (deshacer un cierre o una pausa, restaurar de la papelera).
+
+    Se consulta SOLO cuando pasa a ocupar a un cliente que antes no ocupaba (`_cliente_que_cuenta`): activo→pausado,
+    activo→cerrado, cerrado→pausado y activo→activo no consultan; volver a escoger al mismo cliente tampoco.
+    Si el cliente ya tiene OTRO activo: `ClienteConProyecto`. Aparte, un proyecto que vuelve a ser activo
+    (cuenta_como_activo, fuera de la papelera) no puede tomar el nombre de otro activo: `NombreDeProyectoNoVale`
+    (`repetido`). Los cambios de nombre de uno que ya era activo los revisan quienes lo renombran."""
+    clave = _cliente_que_cuenta(despues)
+    if clave is not None and clave != _cliente_que_cuenta(antes):
+        otro = await proyecto_vivo_del_cliente(cur, clave, excluir_id=proyecto_id)
+        if otro is not None:
+            raise ClienteConProyecto(otro["id"], otro["nombre"], otro["estado"])
+    if antes is not None and despues.get("borrado_en") is None and cuenta_como_activo(despues.get("estado")):
+        era_activo = antes.get("borrado_en") is None and cuenta_como_activo(antes.get("estado"))
+        if not era_activo and await proyecto_vivo_con_nombre(
+                cur, despues["nombre"], excluir_id=proyecto_id) is not None:
+            raise NombreDeProyectoNoVale("repetido", "ya hay otro proyecto con ese nombre")
+
+
+def nombre_que_toca(area, cliente_nombre, nombre_dado) -> str:
+    """El nombre que va a quedar en un proyecto NUEVO (o al poner su cliente). En CDS, ACD y sin grupo
+    (`cliente_es_obligatorio`) es el nombre del cliente, ya limpio por `nombre_de_proyecto_que_vale`; un
+    `nombre_dado` distinto del cliente es `ProyectoNoSeCrea('nombre')` (no se ignora en silencio) y `None` o
+    el mismo nombre valen. En IA es el `nombre_dado`, limpio como siempre."""
+    if not cliente_es_obligatorio(area):
+        return nombre_de_proyecto_que_vale(nombre_dado)
+    del_cliente = nombre_de_proyecto_que_vale(cliente_nombre)
+    if nombre_dado is not None and (not isinstance(nombre_dado, str) or nombre_dado.strip() != del_cliente):
+        raise ProyectoNoSeCrea("nombre", "en CDS y ACD el nombre del proyecto es el del cliente")
+    return del_cliente
 
 
 # ── LAS COTIZACIONES DE UN PROYECTO: LA PUERTA DEL CONTENIDO (pieza 1 del diseño «Cotizaciones en
@@ -2767,6 +2885,20 @@ async def proyecto_para_la_carpeta(proyecto_id: int) -> dict | None:
     return None if fila is None else dict(fila)
 
 
+async def proyecto_para_el_aviso(proyecto_id: int) -> dict | None:
+    """El proyecto VIVO como `{id, nombre, estado, area}`, o `None` si no existe o está en la papelera. La lectura mínima
+    de los avisos que nombran a OTRO proyecto («el cliente tiene un proyecto activo»): la pantalla decide con ella si
+    el nombre y el enlace «Abrir» todavía dicen la verdad. Una lectura."""
+    if isinstance(proyecto_id, bool) or not isinstance(proyecto_id, int):
+        return None
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute("SELECT id, nombre, estado, area FROM proyectos WHERE id = %s AND borrado_en IS NULL",
+                          (proyecto_id,))
+        fila = await cur.fetchone()
+    return None if fila is None else dict(fila)
+
+
 async def carpetas_de_drive(proyecto_id: int) -> dict | None:
     """Las carpetas de Drive del proyecto (`carpeta_proyecto_id`, `carpeta_cotizaciones_id`, `nombre_puesto`)
     o `None` si todavía no tiene. Si falta la tabla SUBE la excepción: quien sube no puede crear carpetas sin
@@ -2837,6 +2969,7 @@ async def numero_que_sigue_de_cotizacion(anio: int | None = None) -> int | None:
 # Decisión de la sala (delegada por Tiziano, 29-sep): un proyecto CERRADO no
 # recibe tareas; uno PAUSADO sí.
 ESTADO_PROYECTO_CERRADO = "cerrado"
+ESTADO_PROYECTO_PAUSADO = "pausado"
 
 # EL VOCABULARIO CERRADO DE `proyectos.estado` (Lucy 1.0, E2, G9). Hasta aquí
 # `estado` era texto libre: `crud.editar` guardaba lo que dijera el modelo
@@ -2844,9 +2977,21 @@ ESTADO_PROYECTO_CERRADO = "cerrado"
 # no estaba ni cerrado ni abierto. La puerta es `estado_de_proyecto_que_vale`
 # y entra en `crud.PUERTAS["proyectos"]["estado"]`: la pasan `crud.editar`
 # (Telegram y panel) y `crud.deshacer`. Los demás escritores del estado no lo
-# nombran: los INSERT de `proyectos` (`_buscar_o_crear`, `crud.perfil`,
+# nombran: los INSERT de `proyectos` (`crear_proyecto` y
 # `convertir_tarea_en_proyecto`) lo dejan al DEFAULT 'activo' de la base.
-ESTADOS_PROYECTO = ("activo", "pausado", ESTADO_PROYECTO_CERRADO)
+ESTADOS_PROYECTO = ("activo", ESTADO_PROYECTO_PAUSADO, ESTADO_PROYECTO_CERRADO)
+
+
+def cuenta_como_activo(estado) -> bool:
+    """¿Este estado de proyecto cuenta como ACTIVO? (Diseño «Un proyecto no se
+    crea sin cliente», §2.1-bis.) UNA sola pregunta, y la hacen todos: «un solo
+    proyecto activo por cliente», la comparación de nombres y la búsqueda de
+    Telegram. Un pausado y un cerrado NO cuentan (Tiziano, 18-oct-2026: «un
+    proyecto en pausa deja abrir otro»). Un estado FUERA del vocabulario (la
+    columna es texto libre y una escritura vieja pudo dejar otro) SÍ cuenta:
+    lo no clasificado cae del lado estricto. Por eso se pregunta por lo que NO
+    cuenta, y no por `estado == 'activo'`."""
+    return estado not in (ESTADO_PROYECTO_PAUSADO, ESTADO_PROYECTO_CERRADO)
 
 
 def estado_de_proyecto_que_vale(valor) -> str:
@@ -2974,7 +3119,7 @@ async def persona_viva(persona_id) -> bool:
 
 async def _buscar_o_crear(tabla: str, nombre: str, *,
                           bandeja_id: int | None = None) -> int | None:
-    """Devuelve el id de la persona/proyecto con ese nombre; la crea si no está.
+    """Devuelve el id de la persona con ese nombre; la crea si no está.
 
     Sin esto, "Ana", "ana" y "Ana García" serían tres personas distintas y la
     consulta "¿cuándo vi a Ana por última vez?" del req 10 devolvería un tercio
@@ -2982,114 +3127,78 @@ async def _buscar_o_crear(tabla: str, nombre: str, *,
     (unaccent no está garantizado, así que comparamos en minúsculas) y mira
     también los alias.
 
-    LA HUELLA, SOLO PARA `proyectos` (encargo 5, hallazgo del propio diseño:
-    "cuando Lucy crea una tarea nombrando un proyecto que no existe, lo crea
-    SIN DEJAR RASTRO en el registro -- 3 de los 4 proyectos de producción no
-    tienen rastro"). Cuando la fila YA existía, no hay nada que registrar: no
-    se creó nada. Cuando se crea de verdad, se deja la misma huella que
-    cualquier otra creación -- `accion='crear'`, con lo que quedó guardado en
-    `despues` -- así que `deshacer()` la revierte gratis, sin código nuevo:
-    "proyectos" ya está en `acciones.crud.TABLAS` y la rama 'crear' de
-    `deshacer()` es genérica para cualquier tabla ahí.
+    SOLO PARA `personas`. Hasta la pieza 1 de «Un proyecto no se crea sin
+    cliente» (18-oct-2026) también creaba proyectos con un INSERT genérico, de
+    tabla armada al vuelo, que no podía traer cliente ni nombre del cliente; esa rama se
+    borró junto con `buscar_o_crear_proyecto`, y cualquier otra `tabla` es un
+    error de programación. UN PROYECTO NACE SOLO por `crear_proyecto` y
+    `convertir_tarea_en_proyecto`.
 
     `personas` NO lleva huella -- no se pidió, y agregarla sería un segundo
     problema resuelto en el mismo cambio (Regla 15 de la sala: uno a la vez).
-
-    No se puede usar `acciones.crud._registrar` acá: ese vive en `crud.py`, que
-    IMPORTA este módulo (`import db.db as db`), así que importarlo de vuelta
-    sería un ciclo. Se escribe la fila de `log_acciones` a mano, con la MISMA
-    forma que ya usan las demás escrituras del panel en este archivo (ver
-    `crear_tarea_desde_el_panel`, `gasto_en_efectivo`), actor `'lucy'` porque
-    esto lo dispara SIEMPRE una interpretación de Telegram, nunca el panel.
     """
+    if tabla != "personas":
+        raise ValueError(f"_buscar_o_crear solo crea personas, no {tabla!r}")
     nombre = (nombre or "").strip()
     if not nombre:
         return None
 
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        if tabla == "proyectos":
-            # La MISMA consulta que usa el chequeo de duplicados del nombre.
-            existente = await proyecto_vivo_con_nombre(cur, nombre)
-            if existente is not None:
-                return existente
-            # Va a CREARSE un proyecto: por la misma puerta que un renombre.
-            nombre = nombre_de_proyecto_que_vale(nombre)
-        else:
-            await cur.execute(
-                """
-                SELECT id FROM personas
-                 WHERE borrado_en IS NULL
-                   AND (lower(nombre) = lower(%s)
-                        OR lower(%s) = ANY(SELECT lower(a) FROM unnest(alias) a))
-                 LIMIT 1
-                """,
-                (nombre, nombre),
-            )
-            fila = await cur.fetchone()
-            if fila:
-                return fila["id"]
+        await cur.execute(
+            """
+            SELECT id FROM personas
+             WHERE borrado_en IS NULL
+               AND (lower(nombre) = lower(%s)
+                    OR lower(%s) = ANY(SELECT lower(a) FROM unnest(alias) a))
+             LIMIT 1
+            """,
+            (nombre, nombre),
+        )
+        fila = await cur.fetchone()
+        if fila:
+            return fila["id"]
 
-        if tabla == "personas":
-            # `bandeja_id` (§E, 27-sep-2026): la puerta de dueño de la parte
-            # A decide "esto es de Tiziano" por la bandeja que originó la
-            # fila -- INSERT literal, no el `{tabla}` genérico de arriba,
-            # para que el censo de `tests/test_duenos.py` la encuentre por
-            # el AST sin tener que reconstruir un f-string.
-            #
-            # CON UN SAVEPOINT (`async with conn.transaction():`), igual que
-            # `tareas_de_code_pendientes`/`tomar_tarea_de_la_sala`: SIN esto,
-            # el primer INSERT que revienta con SQLSTATE 42703 deja la
-            # transacción ABORTADA en Postgres real (autocommit=False, sin
-            # savepoint de por medio) -- el segundo INSERT del "except"
-            # correría en la MISMA transacción envenenada y reventaría con
-            # 25P02 ("current transaction is aborted"), no con la persona
-            # creada. Hallazgo del testigo sobre `cbc2726`, NO PASA: la
-            # primera versión de este arreglo pasaba las pruebas SQLite
-            # (que no modelan el aborto de la conexión) pero reventaba
-            # contra el comportamiento real de Postgres.
-            try:
-                async with conn.transaction():
-                    await cur.execute(
-                        "INSERT INTO personas (nombre, bandeja_id) VALUES (%s, %s) "
-                        "RETURNING *",
-                        (nombre, bandeja_id),
-                    )
-            except Exception as e:
-                try:
-                    sqlstate = e.sqlstate
-                except AttributeError:
-                    raise e from None
-                if sqlstate != "42703":
-                    raise
-                # SIN LA MIGRACIÓN (§E sin aplicar): cae al INSERT de antes,
-                # sin bandeja_id -- no revienta, la persona se crea igual.
-                # El SAVEPOINT de arriba ya revirtió: esta conexión sigue
-                # sana.
-                cur = conn.cursor(row_factory=dict_row)
+        # `bandeja_id` (§E, 27-sep-2026): la puerta de dueño de la parte
+        # A decide "esto es de Tiziano" por la bandeja que originó la
+        # fila -- INSERT literal, para que el censo de `tests/test_duenos.py`
+        # la encuentre por el AST sin tener que reconstruir un f-string.
+        #
+        # CON UN SAVEPOINT (`async with conn.transaction():`), igual que
+        # `tareas_de_code_pendientes`/`tomar_tarea_de_la_sala`: SIN esto,
+        # el primer INSERT que revienta con SQLSTATE 42703 deja la
+        # transacción ABORTADA en Postgres real (autocommit=False, sin
+        # savepoint de por medio) -- el segundo INSERT del "except"
+        # correría en la MISMA transacción envenenada y reventaría con
+        # 25P02 ("current transaction is aborted"), no con la persona
+        # creada. Hallazgo del testigo sobre `cbc2726`, NO PASA: la
+        # primera versión de este arreglo pasaba las pruebas SQLite
+        # (que no modelan el aborto de la conexión) pero reventaba
+        # contra el comportamiento real de Postgres.
+        try:
+            async with conn.transaction():
                 await cur.execute(
-                    "INSERT INTO personas (nombre) VALUES (%s) RETURNING *",
-                    (nombre,),
+                    "INSERT INTO personas (nombre, bandeja_id) VALUES (%s, %s) "
+                    "RETURNING *",
+                    (nombre, bandeja_id),
                 )
-        else:
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate != "42703":
+                raise
+            # SIN LA MIGRACIÓN (§E sin aplicar): cae al INSERT de antes,
+            # sin bandeja_id -- no revienta, la persona se crea igual.
+            # El SAVEPOINT de arriba ya revirtió: esta conexión sigue
+            # sana.
+            cur = conn.cursor(row_factory=dict_row)
             await cur.execute(
-                f"INSERT INTO {tabla} (nombre) VALUES (%s) RETURNING *", (nombre,)
+                "INSERT INTO personas (nombre) VALUES (%s) RETURNING *",
+                (nombre,),
             )
         nueva = await cur.fetchone()
-        if tabla == "proyectos":
-            # Nace con `inicio` = hoy (parte 4), por la misma función que los otros dos sitios.
-            nueva = await _con_su_inicio(conn, cur, nueva)
-            await conn.execute(
-                """
-                INSERT INTO log_acciones
-                  (actor, accion, tabla, registro_id, antes, despues, motivo,
-                   bandeja_id)
-                VALUES ('lucy', 'crear', 'proyectos', %s, NULL, %s,
-                        'Proyecto nuevo, nombrado al crear una tarea', %s)
-                """,
-                (nueva["id"],
-                 json.dumps(nueva, default=str, ensure_ascii=False),
-                 bandeja_id))
         return nueva["id"]
 
 
@@ -3098,48 +3207,60 @@ async def buscar_o_crear_persona(nombre: str, *,
     return await _buscar_o_crear("personas", nombre, bandeja_id=bandeja_id)
 
 
-async def buscar_o_crear_proyecto(nombre: str, *,
-                                  bandeja_id: int | None = None) -> int | None:
-    """Busca el proyecto y, si no está, LO CREA (sin grupo ni responsable).
+class NombreEnVarios(ValueError):
+    """Dos o más proyectos PAUSADOS se llaman igual y ninguno está activo: recibirían tareas los dos, así que
+    no se elige uno por su cuenta. `ids` son los candidatos (ordenados). Quien pregunta (Telegram) le pide a
+    Tiziano que diga cuál. El mensaje no lleva nombres."""
 
-    Desde E8 (1-oct-2026) NINGÚN camino de Telegram llama acá: `crud.crear_
-    desde_interpretacion` pregunta por `proyecto_vivo_por_nombre` y, si el
-    proyecto no existe, no lo crea — le pregunta a Tiziano el grupo y el
-    responsable. Se queda porque es la forma genérica de «búscalo o créalo»
-    de la que sale `buscar_o_crear_persona` (que sí se usa), y porque sus
-    pruebas la miden.
-
-    LA PUERTA DE UN PROYECTO NUEVO ES `crear_proyecto`, y solo esa: nace con
-    grupo y con responsable.
-    """
-    return await _buscar_o_crear("proyectos", nombre, bandeja_id=bandeja_id)
+    def __init__(self, ids):
+        super().__init__("hay varios proyectos pausados con ese nombre y ninguno activo")
+        self.ids = tuple(ids)
 
 
 async def proyecto_vivo_por_nombre(nombre: str) -> int | None:
-    """El id del proyecto VIVO que se llama así, o `None`. **NO CREA NADA.**
+    """El id del proyecto que se llama así (fuera de la papelera), o `None`. **NO CREA NADA.**
 
-    Es la búsqueda que usa Telegram desde E8 (1-oct-2026). Un proyecto nace
-    SOLO por `crear_proyecto`, que exige grupo y responsable: un proyecto que
-    aparece porque alguien lo nombró al vuelo nace sin las dos cosas y en la
-    página cae en «Sin grupo», que es de donde salió este encargo.
+    Es la búsqueda que usa Telegram desde E8 (1-oct-2026) y `crud.perfil`. Un proyecto nace SOLO por
+    `crear_proyecto` y `convertir_tarea_en_proyecto`: un proyecto que aparece porque alguien lo nombró al vuelo
+    nace sin grupo, sin responsable y sin cliente.
 
-    La comparación es la MISMA de siempre — `proyecto_vivo_con_nombre`, la que
-    comparten `_buscar_o_crear`, `crud.perfil`, `crear_proyecto` y
-    `convertir_tarea_en_proyecto` —, así que «¿existe?» contesta lo mismo por
-    donde se pregunte. Lo único que cambia es que acá no hay INSERT detrás.
+    DESDE «UN PROYECTO NO SE CREA SIN CLIENTE» (pieza 1): en CDS y ACD el nombre es el del cliente y puede
+    REPETIRSE entre un activo y varios pausados o cerrados, así que ELIGE POR PRIORIDAD (la comparación de
+    nombres es la misma, `lower(nombre) = lower(...)`):
+      1. el ACTIVO con ese nombre (`cuenta_como_activo`; como mucho uno, el de menor `id` si hubiera más);
+      2. si no hay, el PAUSADO (recibe tareas);
+      3. si no, el CERRADO de menor `id`, para que el rechazo «ese proyecto está cerrado» siga siendo verdadero y
+         no «no existe».
+    Si no hay activo y hay DOS O MÁS pausados: `NombreEnVarios(ids)`; nunca elige uno por su cuenta.
 
-    Abre su propia conexión (a diferencia de `proyecto_vivo_con_nombre`, que
-    recibe el cursor): quien pregunta desde `acciones/crud.py` no está dentro
-    de una transacción en ese momento, y meterlo adentro alargaría la
-    transacción de la entidad sin ganar nada — el mismo criterio con el que
-    `crear_desde_interpretacion` resuelve personas y proyectos fuera.
+    Abre su propia conexión: quien pregunta desde `acciones/crud.py` no está dentro de una transacción en ese
+    momento, y meterlo adentro alargaría la transacción de la entidad sin ganar nada.
     """
     nombre = (nombre or "").strip()
     if not nombre:
         return None
     async with pool.connection() as conn:
-        return await proyecto_vivo_con_nombre(
-            conn.cursor(row_factory=dict_row), nombre)
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT id, estado FROM proyectos
+             WHERE borrado_en IS NULL
+               AND lower(nombre) = lower(%s)
+             ORDER BY id
+            """,
+            (nombre,))
+        filas = [dict(f) for f in await cur.fetchall()]
+    if not filas:
+        return None
+    activos = [f["id"] for f in filas if cuenta_como_activo(f["estado"])]
+    if activos:
+        return activos[0]
+    pausados = [f["id"] for f in filas if f["estado"] == ESTADO_PROYECTO_PAUSADO]
+    if len(pausados) > 1:
+        raise NombreEnVarios(pausados)
+    if pausados:
+        return pausados[0]
+    return filas[0]["id"]
 
 
 class ProyectoNoSeCrea(ValueError):
@@ -3152,72 +3273,81 @@ class ProyectoNoSeCrea(ValueError):
         self.clave = clave
 
 
-async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int,
-                         desde: str = "panel") -> dict:
-    """El diálogo «+ Proyecto en X» de la página de proyectos (Lucy 1.0, E5).
-    Crea un proyecto y devuelve su fila. Si no vale, `NombreDeProyectoNoVale`
-    (por el nombre) o `ProyectoNoSeCrea` (por el grupo o el responsable), las
-    dos con `clave`; las dos son ValueError.
+async def crear_proyecto(nombre: str | None, area: str, responsable_chat_id: int, *,
+                         cliente_noco_id: int | None, leer_persona, desde: str = "panel") -> dict:
+    """El diálogo «+ Proyecto en X» de la página de proyectos (Lucy 1.0, E5) y el alta por Telegram.
+    Crea un proyecto y devuelve su fila. Si no vale, `NombreDeProyectoNoVale` (por el nombre),
+    `ProyectoNoSeCrea` (por el grupo, el responsable, el cliente o el nombre) o `ClienteConProyecto`
+    (el cliente ya tiene un proyecto activo), todas con ValueError; si Noco no contesta sube la excepción de
+    `leer_persona` (`noco_lectura.NocoNoContesta`) y NO se escribe nada.
 
     TODO LO QUE DECIDE ESTÁ AQUÍ, UNA VEZ, Y NO EN LA RUTA:
-      · el nombre, por `nombre_de_proyecto_que_vale` (no vacío, largo, sin
-        espacios de alrededor) y que no haya otro proyecto VIVO con ese nombre,
-        con `proyecto_vivo_con_nombre`: las mismas dos piezas que un renombre y
-        que los demás sitios que crean proyectos;
-      · el grupo, que tiene que ser uno de `areas()` (el proyecto nuevo nace
-        con grupo: sale del botón que se tocó);
-      · el responsable, por `puede_ser_responsable` (Rosi, Tiziano o Code): no
-        hay «sin responsable» al crear (Tiziano, 1-oct-2026: «somos siempre
-        Rosi, Yo o Code»). Lo que llega tiene que SER un chat (un número que
-        pase esa puerta): `None`, un texto o un chat que no entra al panel se
-        rechazan acá. La ruta solo TRADUCE el nombre elegido a chat (con la
-        puerta de `crud.PUERTAS`, que es sync y vive en `crud`); la decisión
-        de si vale es de esta función, así que quien la llame sin la ruta (el
-        Telegram de E8) tiene la misma puerta.
+      · el cliente (pieza 1 de «Un proyecto no se crea sin cliente», 18-oct-2026): `cliente_noco_id` y
+        `leer_persona` van SIN valor por omisión, para que ningún camino pueda olvidarlos. Si el grupo lo exige
+        (`cliente_es_obligatorio`: todo menos IA) y no vino, `ProyectoNoSeCrea('cliente')`. Si vino, la ficha se
+        VUELVE A LEER de Noco con `leer_persona` ANTES de abrir la conexión (`_ficha_de_noco_que_vale`, la misma
+        de `poner_cliente`): Noco sin contestar, una ficha que no existe o un Id que no es un número positivo
+        no dejan ninguna fila ni huella. El nombre del cliente que se guarda es el que Noco devuelve.
+      · el nombre, por `nombre_que_toca`: en CDS/ACD es el nombre del cliente (y `nombre` puede venir `None`; uno
+        distinto es `ProyectoNoSeCrea('nombre')`); en IA es el pedido, por `nombre_de_proyecto_que_vale`.
+        Que no haya otro proyecto ACTIVO con ese nombre, con `proyecto_vivo_con_nombre`.
+      · un solo proyecto ACTIVO por cliente: `proyecto_puede_quedar_activo` (todo proyecto nuevo nace activo).
+      · el grupo, que tiene que ser uno de `areas()`.
+      · el responsable, por `puede_ser_responsable` (Rosi, Tiziano o Code): no hay «sin responsable» al crear
+        (Tiziano, 1-oct-2026: «somos siempre Rosi, Yo o Code»). Lo que llega tiene que SER un chat.
+    La ruta solo TRADUCE; quien la llame sin ella (el Telegram de E8) tiene la misma puerta.
 
-    `desde` dice QUIÉN lo pide y queda en la huella: `"panel"` (el botón de la
-    página, por omisión) o `"lucy"` (Telegram, vía `crud.crear_proyecto`). Es un
-    ValueError si es otra cosa. Cada origen tiene su `INSERT` con el actor como
-    LITERAL, no como variable, para no romper el guarda de
-    `tests/test_proyectos_panel.py` (el actor variable solo viaja por
-    `crud._registrar`).
+    `desde` dice QUIÉN lo pide y queda en la huella: `"panel"` (el botón de la página, por omisión) o `"lucy"`
+    (Telegram, vía `crud.crear_proyecto`). Es un ValueError si es otra cosa. Cada origen tiene su `INSERT` con el
+    actor como LITERAL, no como variable, para no romper el guarda de `tests/test_proyectos_panel.py` (el actor
+    variable solo viaja por `crud._registrar`).
 
-    NO lleva cliente: lo pone `poner_cliente` (E3), con la ficha releída de
-    Noco; nace sin cliente, que es un estado válido (es opcional).
+    UNA SOLA TRANSACCIÓN: el INSERT (con `cliente_noco_id` y `cliente_nombre` en el MISMO insert) y su huella
+    `crear` (con lo que quedó guardado en `despues`, así que `crud.deshacer` la revierte con la rama genérica de
+    'crear'). No se puede usar `crud._registrar` (`crud` importa este módulo): la fila de `log_acciones` se
+    escribe a mano con la misma forma que las otras escrituras de este archivo.
 
-    UNA SOLA TRANSACCIÓN: el INSERT y su huella `crear` (con lo que quedó
-    guardado en `despues`, así que `crud.deshacer` la revierte con la rama
-    genérica de 'crear'). El actor es un literal (`'panel'` o `'lucy'`, según `desde`): lo dispara un botón
-    del panel o Telegram, y el guarda de `tests/test_proyectos_panel.py` no deja que el
-    actor viaje como variable fuera de `crud._registrar`. No se puede usar `crud._registrar` (`crud` importa este módulo): la fila de
-    `log_acciones` se escribe a mano con la misma forma que las otras
-    escrituras de este archivo.
-
-    DEVUELVE LA FILA CON SU `log_id` — el asa para deshacer, que es lo que
-    `cerebro/agente.py::_anotar` necesita. La ruta del panel la ignora; quien
-    la llame desde Telegram (por `crud.crear_proyecto`) la usa. NADA MÁS
-    cambia con eso: mismo INSERT, misma huella, misma transacción.
+    DEVUELVE LA FILA CON SU `log_id` — el asa para deshacer, que es lo que `cerebro/agente.py::_anotar` necesita.
     """
     if desde not in ("panel", "lucy"):
         raise ValueError(f"origen de proyecto desconocido: {desde!r}")
-    nombre = nombre_de_proyecto_que_vale(nombre)
+    obligatorio = cliente_es_obligatorio(area)
+    pedido = nombre
+    if not obligatorio:
+        nombre = nombre_de_proyecto_que_vale(nombre)
     if area not in {a["clave"] for a in await areas()}:
         raise ProyectoNoSeCrea("grupo", "ese grupo no existe")
     if (isinstance(responsable_chat_id, bool) or not isinstance(responsable_chat_id, int)
             or not puede_ser_responsable(responsable_chat_id)):
         raise ProyectoNoSeCrea("responsable", "ese chat no puede ser responsable")
+    cliente_id, cliente_nombre = None, None
+    if cliente_noco_id is None:
+        if obligatorio:
+            raise ProyectoNoSeCrea("cliente", "un proyecto de este grupo necesita cliente")
+    else:
+        # ANTES de abrir la conexión: si Noco no contesta, no hay nada que deshacer.
+        try:
+            cliente_id, cliente_nombre = await _ficha_de_noco_que_vale(
+                cliente_noco_id, leer_persona, "el cliente")
+        except ValueError as e:
+            raise ProyectoNoSeCrea("cliente", str(e)) from e
+    nombre = nombre_que_toca(area, cliente_nombre, pedido if obligatorio else nombre)
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
+        await proyecto_puede_quedar_activo(
+            cur, None, None,
+            {"estado": "activo", "area": area, "cliente_noco_id": cliente_id, "nombre": nombre,
+             "borrado_en": None})
         if await proyecto_vivo_con_nombre(cur, nombre) is not None:
             raise NombreDeProyectoNoVale(
                 "repetido", "ya hay otro proyecto con ese nombre")
         await cur.execute(
             """
-            INSERT INTO proyectos (nombre, area, responsable_chat_id)
-            VALUES (%s, %s, %s)
+            INSERT INTO proyectos (nombre, area, responsable_chat_id, cliente_noco_id, cliente_nombre)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING *
             """,
-            (nombre, area, responsable_chat_id))
+            (nombre, area, responsable_chat_id, cliente_id, cliente_nombre))
         # Nace con `inicio` = hoy (parte 4): `_con_su_inicio` es la única que lo escribe al crear.
         nuevo = await _con_su_inicio(conn, cur, await cur.fetchone())
         # EL ASA, EN LA MISMA FILA QUE SE DEVUELVE. La huella ya se escribía;
@@ -3258,7 +3388,7 @@ async def crear_proyecto(nombre: str, area: str, responsable_chat_id: int,
         return nuevo
 
 
-async def convertir_tarea_en_proyecto(tarea_id: int) -> dict:
+async def convertir_tarea_en_proyecto(tarea_id: int, *, cliente_noco_id: int | None, leer_persona) -> dict:
     """El botón «convertir en proyecto» (encargo 5). Una tarea SUELTA se
     convierte en un proyecto propio. Devuelve
     `{proyecto_id, proyecto_nombre, log_id_proyecto, log_id_tarea}`.
@@ -3281,9 +3411,18 @@ async def convertir_tarea_en_proyecto(tarea_id: int) -> dict:
     QUÉ PASA CON CADA COSA DE LA TAREA ORIGINAL (decisión de este encargo,
     ninguna le pertenecía a Tiziano -- son todas preguntas con una respuesta
     técnica, no de negocio):
-      · TÍTULO Y DETALLE → `proyectos.nombre` y `proyectos.descripcion`. Es
-        la traducción obvia: son los mismos dos campos que ya tiene una
-        tarea, con otro nombre.
+      · TÍTULO Y DETALLE → en IA, `proyectos.nombre` y `proyectos.descripcion`
+        (son los mismos dos campos que ya tiene una tarea, con otro nombre).
+        EN CDS, ACD Y SIN ÁREA (pieza 1 de «Un proyecto no se crea sin
+        cliente», 18-oct-2026) EL NOMBRE ES EL DEL CLIENTE, así que el título ya
+        no puede ser el nombre: pasa a la PRIMERA LÍNEA de la descripción y el
+        detalle sigue debajo (la tarea archivada sigue recuperable).
+      · CLIENTE: `cliente_noco_id` y `leer_persona` van sin valor por omisión,
+        como en `crear_proyecto`. Si el área de la tarea lo exige
+        (`cliente_es_obligatorio`; sin área también) y no vino, `ProyectoNoSeCrea
+        ('cliente')`. La ficha se vuelve a leer de Noco ANTES de la transacción
+        que escribe: Noco sin contestar no deja proyecto, ni huella, ni tarea
+        archivada. Un solo proyecto ACTIVO por cliente: `ClienteConProyecto`.
       · ÁREA → `proyectos.area`, tal cual la tenía la tarea (una tarea sin
         proyecto puede tener la suya propia, encargo 4). Con esto el
         proyecto nace con la misma área que ya se le había puesto a la
@@ -3326,8 +3465,7 @@ async def convertir_tarea_en_proyecto(tarea_id: int) -> dict:
     tarea: no hace falta una fila de `bandeja` nueva, la trazabilidad sigue
     siendo la de la tarea original.
     """
-    async with pool.connection() as conn:
-        cur = conn.cursor(row_factory=dict_row)
+    async def _la_tarea(cur) -> dict:
         await cur.execute(
             "SELECT * FROM tareas WHERE id = %s AND borrado_en IS NULL",
             (tarea_id,))
@@ -3339,23 +3477,55 @@ async def convertir_tarea_en_proyecto(tarea_id: int) -> dict:
                 "Solo se puede convertir una tarea pendiente en proyecto.")
         if tarea.get("proyecto_id") is not None:
             raise ValueError("Esa tarea ya tiene proyecto: no se convierte.")
+        return tarea
 
-        # El título de la tarea va a ser el NOMBRE de un proyecto: por la misma
-        # puerta que un renombre (no vacío, largo, y que no haya ya otro vivo
-        # con ese nombre: convertir dos tareas con el mismo título dejaba dos
-        # proyectos iguales).
-        nombre_proyecto = nombre_de_proyecto_que_vale(tarea["titulo"])
+    # PRIMERA PASADA, solo lee: qué área tiene la tarea decide si hace falta cliente, y la ficha se pide a Noco
+    # ANTES de la transacción que escribe.
+    async with pool.connection() as conn:
+        tarea = await _la_tarea(conn.cursor(row_factory=dict_row))
+    area = tarea.get("area")
+    obligatorio = cliente_es_obligatorio(area)
+    cliente_id, cliente_nombre = None, None
+    if cliente_noco_id is None:
+        if obligatorio:
+            raise ProyectoNoSeCrea("cliente", "un proyecto de este grupo necesita cliente")
+    else:
+        try:
+            cliente_id, cliente_nombre = await _ficha_de_noco_que_vale(
+                cliente_noco_id, leer_persona, "el cliente")
+        except ValueError as e:
+            raise ProyectoNoSeCrea("cliente", str(e)) from e
+
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        tarea = await _la_tarea(cur)           # otra vez, ya dentro de la transacción: pudo cambiar en el medio
+        if cliente_es_obligatorio(tarea.get("area")) != obligatorio:
+            raise ValueError("Esa tarea cambió de grupo mientras se convertía: inténtalo otra vez.")
+
+        # En IA el título de la tarea es el NOMBRE del proyecto: por la misma puerta que un renombre (no vacío,
+        # largo, y que no haya ya otro ACTIVO con ese nombre: convertir dos tareas con el mismo título dejaba dos
+        # proyectos iguales). En los demás grupos el nombre es el del cliente (`nombre_que_toca`) y el título
+        # pasa a la descripción.
+        nombre_proyecto = nombre_que_toca(area, cliente_nombre, tarea["titulo"] if not obligatorio else None)
+        descripcion = tarea.get("detalle")
+        if obligatorio:
+            titulo = (tarea.get("titulo") or "").strip()
+            descripcion = "\n".join(x for x in (titulo, descripcion) if x and str(x).strip()) or None
+        await proyecto_puede_quedar_activo(
+            cur, None, None,
+            {"estado": "activo", "area": area, "cliente_noco_id": cliente_id, "nombre": nombre_proyecto,
+             "borrado_en": None})
         if await proyecto_vivo_con_nombre(cur, nombre_proyecto) is not None:
             raise NombreDeProyectoNoVale(
                 "repetido", "Ya hay un proyecto con ese nombre: no se convierte.")
 
         await cur.execute(
             """
-            INSERT INTO proyectos (nombre, descripcion, area)
-            VALUES (%s, %s, %s)
+            INSERT INTO proyectos (nombre, descripcion, area, cliente_noco_id, cliente_nombre)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING *
             """,
-            (nombre_proyecto, tarea.get("detalle"), tarea.get("area")))
+            (nombre_proyecto, descripcion, area, cliente_id, cliente_nombre))
         # Nace con `inicio` = hoy (parte 4), por la misma función que los otros dos sitios.
         proyecto = await _con_su_inicio(conn, cur, await cur.fetchone())
 
@@ -4707,7 +4877,7 @@ async def papelera_de_proyectos_y_tareas() -> dict:
     · Cada proyecto: `id, nombre, area, borrado_en, huella_id` (su último `borrar`;
       sin él no hay con qué restaurar), `tareas` (las que se fueron con él en ese
       acto, según la huella) y `choca` (hay otro proyecto VIVO con ese nombre: no se
-      puede restaurar mientras).
+      puede restaurar mientras; un pausado o un cerrado no chocan por nombre).
     · Cada tarea: `id, titulo, estado, proyecto_id, proyecto_nombre, borrado_en,
       huella_id` y `por_que_no` (`None` si se puede restaurar; `sin_huella`,
       `proyecto_borrado` o `proyecto_cerrado`). Las que se fueron CON su proyecto
@@ -4726,7 +4896,10 @@ async def papelera_de_proyectos_y_tareas() -> dict:
         for p in proyectos:
             ids = await _ids_que_se_fueron_con(cur, p["huella_id"])
             p["tareas"] = len(ids)
-            p["choca"] = (await proyecto_vivo_con_nombre(cur, p["nombre"], excluir_id=p["id"])) is not None
+            # Solo choca por nombre si al volver CUENTA como activo: un pausado o un cerrado pueden repetir el
+            # nombre de uno activo (misma decisión que `proyecto_puede_quedar_activo`, que toma `crud.deshacer`).
+            p["choca"] = cuenta_como_activo(p["estado"]) and (
+                await proyecto_vivo_con_nombre(cur, p["nombre"], excluir_id=p["id"])) is not None
             for tid in ids:
                 fueron[tid] = p["id"]
         await cur.execute(
@@ -6678,8 +6851,8 @@ async def _ficha_de_noco_que_vale(noco_id, leer_persona, quien: str) -> tuple:
 
 async def poner_cliente(proyecto_id: int, noco_id: int | None, *,
                         leer_persona) -> bool:
-    """Pone (o quita) el cliente de UN proyecto. Devuelve si cambió algo.
-    (Lucy 1.0, E2, G6.)
+    """Pone, cambia o quita el cliente de UN proyecto que ya existe. Devuelve si cambió algo.
+    (Lucy 1.0, E2, G6; reglas de «Un proyecto no se crea sin cliente», pieza 1.)
 
     EL NOMBRE QUE SE GUARDA ES EL QUE NOCO DEVUELVE PARA ESE Id, nunca uno que
     haya mandado quien llama: `leer_persona(noco_id)` es la función que vuelve a
@@ -6690,20 +6863,31 @@ async def poner_cliente(proyecto_id: int, noco_id: int | None, *,
     Noco no contesta, la excepción de `leer_persona` sube tal cual, antes de
     abrir ninguna conexión.
 
-    `noco_id=None` quita el cliente (el cliente es OPCIONAL: las dos columnas
-    NULL, que es como nacen todos). Lo que ya decía lo mismo no se reescribe ni
-    deja huella. Las dos columnas se escriben JUNTAS en un solo UPDATE (el CHECK
-    `proyectos_cliente_entero` lo exige) y con su huella `editar` de actor
-    'panel' en la misma transacción. Es el ÚNICO escritor de `cliente_noco_id`
-    y `cliente_nombre`: `crud.editar` y `crud.deshacer` las rechazan por
-    `crud.PUERTAS`, así que Telegram no las toca.
+    EN CDS, ACD Y SIN GRUPO (`cliente_es_obligatorio`):
+      · `noco_id=None` (quitar el cliente) se RECHAZA: `ClienteDelProyectoNoVale('obligatorio')`. Solo en IA se quita.
+      · el NOMBRE DEL PROYECTO es el del cliente: `nombre` se escribe en la MISMA sentencia que las dos columnas del
+        cliente (volver a escoger al mismo cliente cuando la ficha cambió de nombre en Noco actualiza los dos, y
+        arregla un nombre viejo). La huella `editar` muestra las tres.
+      · un solo proyecto ACTIVO por cliente: si el proyecto cuenta como activo y el cliente nuevo ya tiene OTRO,
+        `ClienteConProyecto` y no cambia nada (volver a escoger al mismo cliente no es choque; un pausado o un
+        cerrado pueden tomar cualquier cliente).
+    En IA el cliente es OPCIONAL (las dos columnas NULL, que es como nacen) y el nombre no se toca.
+
+    Lo que ya decía lo mismo no se reescribe ni deja huella. Las dos columnas se escriben JUNTAS en un solo UPDATE
+    (el CHECK `proyectos_cliente_entero` lo exige) y con su huella `editar` de actor 'panel' en la misma
+    transacción. Es el ÚNICO escritor de `cliente_noco_id` y `cliente_nombre` de un proyecto que existe:
+    `crud.editar` y `crud.deshacer` las rechazan por `crud.PUERTAS`, así que Telegram no las toca.
     """
     if isinstance(proyecto_id, bool) or not isinstance(proyecto_id, int):
-        raise ValueError("ese proyecto no existe o ya no está")
+        raise ClienteDelProyectoNoVale("proyecto", "ese proyecto no existe o ya no está")
     nuevo_id, nuevo_nombre = None, None
     if noco_id is not None:
-        nuevo_id, nuevo_nombre = await _ficha_de_noco_que_vale(
-            noco_id, leer_persona, "el cliente")
+        # La causa viaja en la CLAVE (`ficha`): la pantalla dice «esa ficha no está en Noco» y no adivina por el texto.
+        try:
+            nuevo_id, nuevo_nombre = await _ficha_de_noco_que_vale(
+                noco_id, leer_persona, "el cliente")
+        except ValueError as e:
+            raise ClienteDelProyectoNoVale("ficha", str(e)) from e
 
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
@@ -6712,13 +6896,35 @@ async def poner_cliente(proyecto_id: int, noco_id: int | None, *,
             (proyecto_id,))
         antes = await cur.fetchone()
         if antes is None:
-            raise ValueError("ese proyecto no existe o ya no está")
+            raise ClienteDelProyectoNoVale("proyecto", "ese proyecto no existe o ya no está")
+        obligatorio = cliente_es_obligatorio(antes.get("area"))
+        if obligatorio and noco_id is None:
+            raise ClienteDelProyectoNoVale(
+                "obligatorio", "un proyecto de CDS o ACD necesita cliente: no se quita")
+        nombre_nuevo = nombre_que_toca(antes.get("area"), nuevo_nombre, None) if obligatorio else None
         if (antes.get("cliente_noco_id") == nuevo_id
-                and antes.get("cliente_nombre") == nuevo_nombre):
+                and antes.get("cliente_nombre") == nuevo_nombre
+                and (not obligatorio or antes.get("nombre") == nombre_nuevo)):
             return False
-        await conn.execute(
-            "UPDATE proyectos SET cliente_noco_id = %s, cliente_nombre = %s "
-            "WHERE id = %s", (nuevo_id, nuevo_nombre, proyecto_id))
+        despues_fila = {**antes, "cliente_noco_id": nuevo_id, "cliente_nombre": nuevo_nombre}
+        if obligatorio:
+            despues_fila["nombre"] = nombre_nuevo
+        # Primero «un solo activo por cliente» (es la causa que se le dice a la persona)…
+        await proyecto_puede_quedar_activo(cur, proyecto_id, antes, despues_fila)
+        # …y después el nombre: el del cliente puede ser el de otro proyecto ACTIVO (dos fichas con el mismo nombre).
+        if (obligatorio and nombre_nuevo != antes.get("nombre") and cuenta_como_activo(antes.get("estado"))
+                and await proyecto_vivo_con_nombre(cur, nombre_nuevo, excluir_id=proyecto_id) is not None):
+            raise NombreDeProyectoNoVale("repetido", "ya hay otro proyecto con ese nombre")
+        if obligatorio:
+            await conn.execute(
+                "UPDATE proyectos SET cliente_noco_id = %s, cliente_nombre = %s, nombre = %s "
+                "WHERE id = %s", (nuevo_id, nuevo_nombre, nombre_nuevo, proyecto_id))
+            cambio = {"cliente_noco_id": nuevo_id, "cliente_nombre": nuevo_nombre, "nombre": nombre_nuevo}
+        else:
+            await conn.execute(
+                "UPDATE proyectos SET cliente_noco_id = %s, cliente_nombre = %s "
+                "WHERE id = %s", (nuevo_id, nuevo_nombre, proyecto_id))
+            cambio = {"cliente_noco_id": nuevo_id, "cliente_nombre": nuevo_nombre}
         await conn.execute(
             """
             INSERT INTO log_acciones
@@ -6727,8 +6933,7 @@ async def poner_cliente(proyecto_id: int, noco_id: int | None, *,
                     'cliente cambiado desde el panel de proyectos')
             """,
             (proyecto_id, json.dumps(antes, default=str, ensure_ascii=False),
-             json.dumps({"cliente_noco_id": nuevo_id,
-                         "cliente_nombre": nuevo_nombre}, ensure_ascii=False)))
+             json.dumps(cambio, ensure_ascii=False)))
         return True
 
 

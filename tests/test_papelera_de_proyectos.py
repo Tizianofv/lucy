@@ -172,7 +172,7 @@ def test_lo_que_no_se_puede_restaurar_no_se_restaura_y_se_dice(pap):
     pap.con.commit()
     antes = _foto(pap)
     c = _casa(pap)
-    assert _va_a(c.post("/papelera/restaurar", data={"tabla": "proyectos", "id": 1}, follow_redirects=False))["error"] == "restaurar_no_se_pudo"
+    assert _va_a(c.post("/papelera/restaurar", data={"tabla": "proyectos", "id": 1}, follow_redirects=False))["error"] == "restaurar_nombre_repetido"
     # una tarea cuyo proyecto sigue en la papelera
     assert _va_a(c.post("/papelera/restaurar", data={"tabla": "tareas", "id": 13}, follow_redirects=False))["error"] == "restaurar_no_se_pudo"
     # sin huella, no está borrada, no existe, o datos que no valen

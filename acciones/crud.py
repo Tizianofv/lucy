@@ -22,6 +22,7 @@ from psycopg.rows import dict_row
 
 import config
 import db.db as db
+import noco_lectura
 from config import TZ
 
 # Lista blanca. Los nombres de tabla se interpolan en el SQL (no se pueden
@@ -293,8 +294,29 @@ async def los_grupos_y_los_responsables() -> str:
             f"({de_responsables})")
 
 
-async def crear_proyecto(nombre: str, grupo: str,
-                         responsable) -> tuple[dict, int | None]:
+TOPE_CANDIDATOS_CLIENTE = 5      # cuántas fichas ve el modelo por búsqueda (DISENO.md §2.2); el prompt toma esta cifra
+
+
+async def buscar_cliente(texto: str) -> list[dict]:
+    """Los candidatos de Personas (Noco) para el cliente de un proyecto, pedidos por Telegram:
+    `[{"id", "nombre"}]`, como mucho `TOPE_CANDIDATOS_CLIENTE` (el lector pide hasta `noco_lectura.TOPE_BUSQUEDA` y
+    aquí se corta), de `noco_lectura.buscar_personas`.
+
+    SOLO LEE (esa función solo hace GET: lo exige `tests/test_noco_lectura.py`). Es la única fuente del `cliente_id`
+    que el modelo le manda a `crear_proyecto`; `db.crear_proyecto` vuelve a leer la ficha, así que un Id que
+    Noco no tiene no crea nada; uno que sí existe se acepta aunque no haya salido de esta búsqueda. Noco sin contestar NO es «0 fichas»: se dice con su causa (`NoDeNegocio`) y
+    nunca se devuelve una lista vacía en su lugar.
+    """
+    try:
+        return (await noco_lectura.buscar_personas(str(texto or "")))[:TOPE_CANDIDATOS_CLIENTE]
+    except noco_lectura.NocoNoContesta as e:
+        raise NoDeNegocio(
+            "No pude buscar al cliente: Noco no contesta. Dile a Tiziano que lo intente en un momento; "
+            "no es lo mismo que \"no hay nadie con ese nombre\".") from e
+
+
+async def crear_proyecto(nombre: str | None, grupo: str,
+                         responsable, cliente_id=None) -> tuple[dict, int | None]:
     """El alta de un proyecto pedida por Telegram (E8, 1-oct-2026).
 
     Devuelve `(fila, log_id)`: la fila con su `id`, su `area` y su
@@ -306,7 +328,12 @@ async def crear_proyecto(nombre: str, grupo: str,
     usa el panel: el nombre (`nombre_de_proyecto_que_vale`, y que no haya otro
     vivo con ese nombre), el grupo (uno de `db.areas()`) y el responsable
     (`config.puede_ser_responsable`). Acá NO hay una segunda copia de ninguno
-    de los tres criterios.
+    de los tres criterios. Desde la pieza 1 de «Un proyecto no se crea sin
+    cliente» (18-oct-2026) también decide ahí el CLIENTE: en CDS, ACD y sin grupo
+    es obligatorio y su nombre es el del proyecto; en IA no hace falta. `cliente_id`
+    es el Id de una ficha de Personas (Noco); la puerta vuelve a leer la ficha, así
+    que un Id que Noco no tiene no crea nada (uno que existe se acepta, venga de donde venga), y si Noco no contesta no se crea (solo se
+    LEE de Noco).
 
     Lo que sí hace esta capa, y es lo único que hace:
       · Traduce el RESPONSABLE, que llega por nombre («Rosi», «Tiziano»,
@@ -332,21 +359,45 @@ async def crear_proyecto(nombre: str, grupo: str,
         raise NoDeNegocio(
             f"No creé el proyecto: {e}. Pregúntale a Tiziano "
             f"{await los_grupos_y_los_responsables()}.") from e
+    if isinstance(cliente_id, str):
+        # El modelo manda el Id como texto a veces; un texto en blanco es «no mandó cliente».
+        cliente_id = int(cliente_id.strip()) if cliente_id.strip().isdigit() else (cliente_id.strip() or None)
+    vino_cliente = cliente_id is not None
     try:
         nuevo = await db.crear_proyecto(
-            str(nombre or ""), str(grupo or "").strip(), chat, desde="lucy")
+            None if nombre is None else str(nombre), str(grupo or "").strip(), chat,
+            cliente_noco_id=cliente_id, leer_persona=noco_lectura.persona, desde="lucy")
     except db.ProyectoNoSeCrea as e:
         if e.clave == "responsable":
             raise NoDeNegocio(
                 "No creé el proyecto: le falta el responsable, y un proyecto "
                 "nace con uno. Pregúntale a Tiziano "
                 f"{await los_grupos_y_los_responsables()}.") from e
+        if e.clave == "cliente" and not vino_cliente:
+            raise NoDeNegocio(
+                "No creé el proyecto: falta el cliente. Un proyecto de este grupo es de un cliente: búscalo con "
+                "`buscar_cliente` (si Tiziano no dijo cuál, pregúntaselo) y manda su `cliente_id`.") from e
+        if e.clave == "cliente":
+            raise NoDeNegocio(
+                f"No creé el proyecto: ese `cliente_id` no es una ficha de Personas que sirva ({e}). Usa solo el "
+                "`id` de lo que te devolvió `buscar_cliente`; si no lo has buscado, búscalo ahora.") from e
+        if e.clave == "nombre":
+            raise NoDeNegocio(
+                f"No creé el proyecto: {e}. No mandes `nombre`: el proyecto toma el del cliente.") from e
         raise NoDeNegocio(
             f"No creé el proyecto: el grupo «{str(grupo or '').strip()[:40]}» "
             f"no existe. Pregúntale a Tiziano "
             f"{await los_grupos_y_los_responsables()}.") from e
     except db.NombreDeProyectoNoVale as e:
         raise NoDeNegocio(f"No creé el proyecto: {e}.") from e
+    except db.ClienteConProyecto as e:
+        raise NoDeNegocio(
+            f"No creé el proyecto: el cliente tiene el proyecto #{e.proyecto_id} «{e.nombre[:60]}» activo y no se "
+            "pueden activar 2. Si es una tarea, créala dentro de ese proyecto.",
+            para_la_persona=f"El cliente tiene un proyecto activo («{e.nombre[:60]}», #{e.proyecto_id}) y no se "
+                            "pueden activar 2.") from e
+    except noco_lectura.NocoNoContesta as e:
+        raise NoDeNegocio("No creé el proyecto: Noco no contesta, inténtalo luego.") from e
     # LA CARPETA DE DRIVE nace con el proyecto, DESPUÉS de guardarlo y confirmarlo: lo que pase allá no cambia lo
     # que esta función devuelve, solo se suma a la fila (`drive`) para que el agente lo cuente tal cual.
     # (Import perezoso: `cotizaciones_drive` importa `crud`.)
@@ -472,7 +523,17 @@ async def crear_desde_interpretacion(
     # —una cita, un gasto— porque un nombre no existe sería perder lo que sí
     # importaba. Ahí simplemente no se enlaza y no se crea nada.
     dicho = str(r.get("proyecto") or "").strip()
-    proyecto_id = await db.proyecto_vivo_por_nombre(dicho)
+    try:
+        proyecto_id = await db.proyecto_vivo_por_nombre(dicho)
+    except db.NombreEnVarios as e:
+        if clas != "tarea":
+            proyecto_id = None          # en una cita, nota o movimiento el proyecto es un enlace secundario
+        else:
+            ids = " y ".join(f"#{i}" for i in e.ids)
+            raise NoDeNegocio(
+                f"No creé la tarea: hay varios proyectos pausados con el nombre «{dicho[:60]}» ({ids}) y ninguno "
+                "activo. Averigua con Tiziano cuál es, y créala dentro de ese.",
+                para_la_persona=f"Hay varios proyectos pausados con ese nombre ({ids}). ¿En cuál va?") from e
     if clas == "tarea" and dicho and proyecto_id is None:
         raise await _la_pregunta_del_proyecto(dicho)
 
@@ -1711,12 +1772,8 @@ async def editar(
                 del campos["nombre"]
                 if not campos:
                     return antes, None
-            elif await db.proyecto_vivo_con_nombre(
-                    cur, campos["nombre"], excluir_id=registro_id) is not None:
-                raise ValueError(
-                    "No cambié nada: ya hay otro proyecto con ese nombre."
-                ) from db.NombreDeProyectoNoVale(
-                    "repetido", "ya hay otro proyecto con ese nombre")
+            # (El duplicado y la regla «en CDS y ACD el nombre es el del cliente» se miran más abajo, cuando ya se
+            # sabe con qué grupo y estado va a quedar el proyecto.)
 
         # LA DESCRIPCIÓN DE UN PROYECTO (parte 3, 8-oct-2026): (1) si el panel dijo con qué
         # huella abrió el formulario y lo que hay ahora ya no la tiene, NO se escribe encima
@@ -1852,6 +1909,46 @@ async def editar(
                     campos["area"], tabla="proyectos")
             except ValueError as e:
                 raise ValueError(f"No cambié nada: {e}.") from e
+
+        # UN PROYECTO NO SE CREA SIN CLIENTE, NI SE DEJA SIN ÉL (pieza 1, 18-oct-2026). Con grupo, estado y nombre
+        # ya conocidos, las reglas de «el cliente» para un proyecto que existe, TODAS por las funciones de `db`
+        # (`cliente_es_obligatorio`, `proyecto_puede_quedar_activo`, `proyecto_vivo_con_nombre`):
+        #   · el NOMBRE de CDS, ACD y sin grupo es el del cliente: no se renombra a mano (se cambia el cliente);
+        #   · un proyecto SIN cliente no pasa de IA a un grupo que lo exige (primero se escoge el cliente), y uno
+        #     de IA CON cliente que pasa a CDS/ACD toma el nombre del cliente en el MISMO UPDATE;
+        #   · un solo proyecto ACTIVO por cliente: reabrir un cerrado, reactivar un pausado o pasar de IA a CDS/ACD
+        #     se rechaza si el cliente ya tiene otro activo (pasar a pausado o a cerrado nunca se rechaza);
+        #   · reactivar uno no puede tomar el nombre de otro activo, ni renombrar a un activo con el de otro.
+        if tabla == "proyectos" and any(c in campos for c in ("nombre", "estado", "area")):
+            area_antes, area_final = antes.get("area"), campos.get("area", antes.get("area"))
+            estado_final = campos.get("estado", antes.get("estado"))
+            if "nombre" in campos and db.cliente_es_obligatorio(area_final):
+                raise ValueError(
+                    "No cambié nada: en CDS y ACD el nombre del proyecto es el del cliente: cambia el cliente."
+                ) from db.NombreDeProyectoNoVale(
+                    "cliente", "en CDS y ACD el nombre del proyecto es el del cliente")
+            if ("area" in campos and not db.cliente_es_obligatorio(area_antes)
+                    and db.cliente_es_obligatorio(area_final)):
+                if antes.get("cliente_noco_id") is None:
+                    raise ValueError(
+                        "No cambié nada: ese grupo necesita cliente y el proyecto no tiene. Primero se escoge "
+                        "el cliente en la página de proyectos.")
+                if antes.get("nombre") != antes.get("cliente_nombre"):
+                    campos["nombre"] = antes.get("cliente_nombre")  # pasa a CDS/ACD: el nombre es el del cliente
+            despues_fila = {**antes, **{c: campos[c] for c in ("nombre", "estado", "area") if c in campos}}
+            # Primero «un solo activo por cliente» (la causa que se le dice a la persona), después el nombre.
+            try:
+                await db.proyecto_puede_quedar_activo(cur, registro_id, antes, despues_fila)
+            except db.NombreDeProyectoNoVale as e:
+                raise ValueError("No cambié nada: ya hay otro proyecto con ese nombre.") from e
+            if ("nombre" in campos and campos["nombre"] != antes.get("nombre")
+                    and db.cuenta_como_activo(estado_final)
+                    and await db.proyecto_vivo_con_nombre(
+                        cur, campos["nombre"], excluir_id=registro_id) is not None):
+                raise ValueError(
+                    "No cambié nada: ya hay otro proyecto con ese nombre."
+                ) from db.NombreDeProyectoNoVale(
+                    "repetido", "ya hay otro proyecto con ese nombre")
 
         # «PRIMERO:» (encargo 6), en TAREAS, por la MISMA puerta que usa
         # `crear_desde_interpretacion` -- `_primero_que_vale`, ni una
@@ -2007,6 +2104,17 @@ async def perfil(
     hoy = datetime.now(TZ).strftime("%d/%m/%Y")
     linea = f"· [{hoy}] {nota.strip()}" if nota and nota.strip() else None
 
+    # El proyecto se busca como lo busca Telegram al crear una tarea (`db.proyecto_vivo_por_nombre`: el activo, si
+    # no el pausado, si no el cerrado), FUERA de la conexión de abajo: esa función abre la suya.
+    existente = None
+    if tabla == "proyectos":
+        try:
+            existente = await db.proyecto_vivo_por_nombre(nombre)
+        except db.NombreEnVarios as e:
+            raise NoDeNegocio(
+                f"No anoté nada: hay varios proyectos pausados llamados «{nombre[:60]}» "
+                f"({' y '.join(f'#{i}' for i in e.ids)}). Averigua con Tiziano cuál es.") from e
+
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         if tabla == "personas":
@@ -2021,8 +2129,6 @@ async def perfil(
                 (nombre, nombre),
             )
         else:
-            # La MISMA consulta con la que se chequea un nombre repetido.
-            existente = await db.proyecto_vivo_con_nombre(cur, nombre)
             if existente is not None:
                 await cur.execute(
                     "SELECT * FROM proyectos WHERE id = %s", (existente,))
@@ -2501,25 +2607,10 @@ async def deshacer(log_id: int) -> str:
         if tabla not in TABLAS:
             raise ValueError(f"No sé deshacer cambios en {tabla}.")
 
-        # EL NOMBRE DE UN PROYECTO NO SE RESTAURA SALTÁNDOSE LA REGLA
-        # (pieza 1 del diseño «proyectos»). Deshacer una edición de nombre, o
-        # deshacer el borrado de un proyecto, devuelve un nombre por SQL
-        # genérico; si mientras tanto otro proyecto vivo tomó ese nombre, eso
-        # reintroduciría el duplicado. Se mira con la MISMA consulta que
-        # `editar`, antes de escribir. (Lo demás de `deshacer` sigue igual.)
-        if tabla == "proyectos" and huella["accion"] in ("editar", "borrar"):
-            antes_p = huella["antes"] or {}
-            despues_p = huella.get("despues") or {}
-            vuelve = antes_p.get("nombre") if antes_p.get("nombre") is not None \
-                else None
-            if huella["accion"] == "editar" and (
-                    "nombre" not in despues_p
-                    or despues_p["nombre"] == antes_p.get("nombre")):
-                vuelve = None   # esta edición no cambió el nombre: no se toca
-            if vuelve is not None and await db.proyecto_vivo_con_nombre(
-                    cur, vuelve, excluir_id=registro_id) is not None:
-                raise ValueError(
-                    "No lo deshice: ya hay otro proyecto vivo con ese nombre.")
+        # EL NOMBRE Y EL CLIENTE DE UN PROYECTO NO SE RESTAURAN SALTÁNDOSE LA REGLA (pieza 1 del diseño «proyectos» y
+        # pieza 1 de «Un proyecto no se crea sin cliente»). Deshacer una edición, o deshacer el borrado de un proyecto,
+        # devuelve valores por SQL genérico; se miran, con las MISMAS funciones que `editar`, en las ramas de abajo
+        # (`borrar` y `editar`), ANTES de escribir.
 
         if huella["accion"] == "crear":
             await conn.execute(
@@ -2549,6 +2640,22 @@ async def deshacer(log_id: int) -> str:
                 if suyo is not None and suyo["borrado_en"] is not None:
                     raise ValueError(
                         "No la restauré: su proyecto está en la papelera. Restaura primero el proyecto.")
+            if tabla == "proyectos":
+                # RESTAURAR UN PROYECTO LO DEJA ACTIVO OTRA VEZ SI ASÍ ESTABA (pieza 1, 18-oct-2026): (1) uno de CDS,
+                # ACD o sin grupo que no tiene cliente no vuelve (la papelera lo permite sin cliente, el
+                # resto del sistema no); (2) por las mismas reglas que reabrir uno: si vuelve activo no puede tomar
+                # el nombre de otro activo ni el cliente de otro proyecto activo. Uno pausado o cerrado vuelve así y no choca.
+                await cur.execute("SELECT * FROM proyectos WHERE id = %s", (registro_id,))
+                ahora = await cur.fetchone()
+                if ahora is not None:
+                    if db.cliente_es_obligatorio(ahora.get("area")) and ahora.get("cliente_noco_id") is None:
+                        raise db.ClienteDelProyectoNoVale("obligatorio", "No la restauré: ese proyecto necesita cliente.")
+                    try:
+                        await db.proyecto_puede_quedar_activo(
+                            cur, registro_id, ahora, {**ahora, "borrado_en": None})
+                    except db.NombreDeProyectoNoVale as e:
+                        raise ValueError(
+                            "No lo deshice: ya hay otro proyecto vivo con ese nombre.") from e
             await conn.execute(
                 f"UPDATE {tabla} SET borrado_en = NULL WHERE id = %s", (registro_id,))
             que = "lo que había archivado"
@@ -2622,6 +2729,34 @@ async def deshacer(log_id: int) -> str:
                         _fecha_guardada("entrega", antes["entrega"] if "entrega" in columnas else ahora.get("entrega"))):
                     raise ValueError(
                         "No lo deshice: la entrega quedaría antes del inicio. Corrige las fechas a mano.")
+            # EL CLIENTE Y EL NOMBRE DE UN PROYECTO (pieza 1, 18-oct-2026): lo que va a quedar es la fila de ahora con
+            # las columnas que esta edición devuelve. Por las MISMAS funciones que `editar`: (1) en CDS, ACD o sin
+            # grupo el nombre es el del cliente, así que un nombre viejo no vuelve; (2) un proyecto sin cliente no
+            # vuelve a un grupo que lo exige desde IA; (3) reabrir un cerrado, reactivar un pausado o volver de IA a
+            # CDS/ACD no puede ocupar a un cliente que ya tiene otro proyecto activo, ni tomar el nombre de otro activo.
+            if tabla == "proyectos":
+                await cur.execute("SELECT * FROM proyectos WHERE id = %s", (registro_id,))
+                ahora = await cur.fetchone()
+                if ahora is not None:
+                    quedaria = {**ahora, **{c: antes[c] for c in columnas}}
+                    if "nombre" in columnas and db.cliente_es_obligatorio(quedaria.get("area")):
+                        raise ValueError(
+                            "No lo deshice: en CDS y ACD el nombre del proyecto es el del cliente.")
+                    if ("area" in columnas and not db.cliente_es_obligatorio(ahora.get("area"))
+                            and db.cliente_es_obligatorio(quedaria.get("area"))
+                            and ahora.get("cliente_noco_id") is None):
+                        raise ValueError(
+                            "No lo deshice: ese grupo necesita cliente y el proyecto no tiene.")
+                    try:
+                        if ("nombre" in columnas and quedaria["nombre"] != ahora.get("nombre")
+                                and db.cuenta_como_activo(quedaria.get("estado"))
+                                and await db.proyecto_vivo_con_nombre(
+                                    cur, quedaria["nombre"], excluir_id=registro_id) is not None):
+                            raise db.NombreDeProyectoNoVale("repetido", "ya hay otro proyecto con ese nombre")
+                        await db.proyecto_puede_quedar_activo(cur, registro_id, ahora, quedaria)
+                    except db.NombreDeProyectoNoVale as e:
+                        raise ValueError(
+                            "No lo deshice: ya hay otro proyecto vivo con ese nombre.") from e
             # DESHACER TAMBIÉN «RECIBE»: si el resultado deja la tarea en un
             # proyecto DISTINTO del que tiene AHORA, ese proyecto tiene que
             # admitirla hoy (puede haberse cerrado desde entonces). Se compara con

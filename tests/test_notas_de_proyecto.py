@@ -109,8 +109,10 @@ def uno(mundo, monkeypatch):
     async def _sin_gastos():
         return []
     monkeypatch.setattr(db, "papelera", _sin_gastos)
-    mundo.proyecto(1, "Disco de prueba", area="CDS", responsable=DUENO)
-    mundo.proyecto(2, "Otro proyecto", area="CDS", responsable=DUENO)
+    # IA: estas pruebas son de las NOTAS, y un proyecto de CDS/ACD sin cliente no vuelve de la papelera (pieza 1 de «Un
+    # proyecto no se crea sin cliente», 18-oct-2026).
+    mundo.proyecto(1, "Disco de prueba", area="IA", responsable=DUENO)
+    mundo.proyecto(2, "Otro proyecto", area="IA", responsable=DUENO)
     return mundo
 
 
@@ -333,7 +335,7 @@ def test_el_tope_es_el_de_los_otros_textos_libres_de_la_casa():
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_solo_salen_las_notas_vivas_de_este_proyecto(uno):
-    uno.proyecto(3, "En la papelera", area="CDS", borrado=True)
+    uno.proyecto(3, "En la papelera", area="IA", borrado=True)
     _nota(uno, 10, 1, "viva de uno", autor=DUENO, cuando=CREADO)
     _nota(uno, 11, 1, "borrada de uno", autor=DUENO, borrada=True)
     _nota(uno, 12, 2, "viva de dos", autor=DUENO)
@@ -349,7 +351,7 @@ def test_solo_salen_las_notas_vivas_de_este_proyecto(uno):
 
 
 def test_la_lectura_trae_solo_lo_vivo_de_proyectos_vivos_la_mas_nueva_primero(uno):
-    uno.proyecto(3, "En la papelera", area="CDS", borrado=True)
+    uno.proyecto(3, "En la papelera", area="IA", borrado=True)
     ayer, hoy = CREADO - timedelta(days=1), CREADO
     _nota(uno, 1, 1, "vieja", autor=DUENO, cuando=ayer)
     _nota(uno, 2, 1, "nueva", autor=DUENO, cuando=hoy)
@@ -621,7 +623,7 @@ def test_igual_al_que_habia_no_escribe_ni_dice_guardado(uno):
 
 
 def test_un_proyecto_que_no_existe_o_esta_en_la_papelera_no_recibe_notas(uno):
-    uno.proyecto(3, "En la papelera", area="CDS", borrado=True)
+    uno.proyecto(3, "En la papelera", area="IA", borrado=True)
     _nota(uno, 10, 3, "de un proyecto borrado", autor=DUENO)
     antes = _filas(uno)
     for pid in (3, 999):
@@ -696,7 +698,7 @@ def test_las_tres_funciones_de_db_rechazan_por_si_solas_a_quien_no_entra_al_pane
 
 
 def test_las_tres_funciones_de_db_dicen_la_verdad_de_lo_que_no_esta(uno):
-    uno.proyecto(3, "En la papelera", area="CDS", borrado=True)
+    uno.proyecto(3, "En la papelera", area="IA", borrado=True)
     _nota(uno, 10, 3, "de un proyecto borrado", autor=DUENO)
     _nota(uno, 11, 2, "de otro proyecto", autor=DUENO)
     with pytest.raises(db.NotaNoEsta):
@@ -906,7 +908,7 @@ def test_el_aviso_de_nota_restaurada_dice_un_estado_y_no_la_direccion(uno):
 
 
 def test_por_la_pagina_lo_que_no_se_lista_ni_se_devuelve_viva_sin_huella_o_de_proyecto_borrado(uno):
-    uno.proyecto(3, "En la papelera", area="CDS", borrado=True)
+    uno.proyecto(3, "En la papelera", area="IA", borrado=True)
     _nota(uno, 10, None, "sin proyecto", autor=DUENO, borrada=True)
     _nota(uno, 11, 1, "borrada sin huella", autor=DUENO, borrada=True)
     _nota(uno, 12, 3, "de un proyecto borrado", autor=DUENO, borrada=True)
@@ -931,7 +933,7 @@ def _huella_de_borrar(uno, nid):
 
 def test_por_telegram_deshacer_tampoco_devuelve_una_nota_a_un_proyecto_en_la_papelera(uno):
     """`crud.deshacer(log_id)` DIRECTO (la ruta de Telegram): la regla vive ahí y la comparte la Papelera."""
-    uno.proyecto(3, "En la papelera", area="CDS", borrado=True)
+    uno.proyecto(3, "En la papelera", area="IA", borrado=True)
     _nota(uno, 12, 3, "de un proyecto borrado", autor=DUENO, borrada=True)
     uno.huella("borrar", "notas", 12, CREADO)
     antes, h_antes = _filas(uno), _huellas(uno)
@@ -1156,7 +1158,7 @@ def test_sonda_quien_escribe_notas_con_el_sql_a_mano_y_quien_arma_la_tabla_al_vu
                       ("db/db.py", "borrar_nota_de_proyecto")}, sorted(a_mano)
     assert al_vuelo == {("acciones/crud.py", "borrar"), ("acciones/crud.py", "deshacer"),
                         ("acciones/crud.py", "editar"), ("cerebro/despertador.py", "revisar"),
-                        ("db/db.py", "_buscar_o_crear"), ("tools/rellenar_duenos.py", "main")}, sorted(al_vuelo)
+                        ("tools/rellenar_duenos.py", "main")}, sorted(al_vuelo)
 
 
 def test_sonda_quien_lee_notas_con_el_nombre_a_mano_y_quien_la_pide_por_argumento():

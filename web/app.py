@@ -411,6 +411,10 @@ plantillas.env.filters["dia_largo"] = _dia_largo
 plantillas.env.filters["enlace_de_carpeta"] = db.enlace_de_carpeta
 plantillas.env.filters["hace_dias"] = _hace_dias
 plantillas.env.filters["iniciales"] = _iniciales
+# LA PUERTA DEL CLIENTE, para las plantillas: «¿este grupo exige cliente?» lo decide `db.cliente_es_obligatorio` (la
+# misma que usan las rutas y la base) y no una comparación escrita en el HTML. Se entrega como global de las plantillas
+# (no por el contexto de cada página) para que ninguna vista tenga que pedírsela al módulo `db` al pintarse.
+plantillas.env.globals["cliente_es_obligatorio"] = db.cliente_es_obligatorio
 # El buscador de la página de proyectos filtra EN VIVO en el navegador (1-oct-2026,
 # como la maqueta): cada proyecto de la lista lleva su nombre y su cliente ya
 # sin tildes ni mayúsculas (`data-n`, `data-c`), con la MISMA función con la que
@@ -840,7 +844,7 @@ async def restaurar(request: Request):
 @app.get("/papelera", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_SIEMPRE)
 async def papelera(request: Request, restaurado: Aviso[int] = 0, hecho: Aviso[str] = "",
-                   id: Aviso[int] = 0, error: Aviso[str] = ""):
+                   id: Aviso[int] = 0, error: Aviso[str] = "", ocupa: Aviso[int] = 0):
     """Lo borrado, con los días que le quedan.
 
     Existe para que "borrar" no dé miedo: sale de las listas al instante y se
@@ -850,6 +854,8 @@ async def papelera(request: Request, restaurado: Aviso[int] = 0, hecho: Aviso[st
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     lo_borrado = await db.papelera_de_proyectos_y_tareas()
+    ocupante = (await _el_proyecto_que_ocupa_al_cliente(ocupa)
+                if error == "restaurar_cliente_ocupado" and ocupa else None)
     # Los avisos de restaurar dicen un ESTADO comprobado en la base al pintar, no la
     # acción (una dirección escrita a mano no puede forzarlos).
     de_vuelta = None
@@ -866,7 +872,8 @@ async def papelera(request: Request, restaurado: Aviso[int] = 0, hecho: Aviso[st
         request, "papelera.html",
         {"movs": await db.papelera(), "dias": db.DIAS_EN_PAPELERA,
          "restaurado": restaurado, "proyectos_borrados": lo_borrado["proyectos"],
-         "tareas_borradas": lo_borrado["tareas"], "notas_borradas": lo_borrado["notas"], "error": error, "de_vuelta": de_vuelta})
+         "tareas_borradas": lo_borrado["tareas"], "notas_borradas": lo_borrado["notas"], "error": error, "de_vuelta": de_vuelta,
+         "ocupante": ocupante})
 
 
 @app.post("/papelera/restaurar")
@@ -888,8 +895,18 @@ async def restaurar_proyecto_o_tarea(request: Request):
         await crud.deshacer_borrado(tabla, rid)
     except crud.NadaQueRestaurar:
         return RedirectResponse("/papelera?error=restaurar_no_esta", status_code=303)
+    except db.ClienteConProyecto as e:
+        log.warning("Papelera: no se restauró %s #%s: el cliente ya tiene el #%s activo", tabla, rid, e.proyecto_id)
+        return RedirectResponse(f"/papelera?error=restaurar_cliente_ocupado&ocupa={e.proyecto_id}", status_code=303)
+    except db.ClienteDelProyectoNoVale as e:
+        log.warning("Papelera: no se restauró %s #%s (%s)", tabla, rid, e.clave)
+        return RedirectResponse(
+            "/papelera?error=restaurar_sin_cliente" if e.clave == "obligatorio"
+            else "/papelera?error=restaurar_no_se_pudo", status_code=303)
     except ValueError as e:
         log.warning("Papelera: no se restauró %s #%s: %s", tabla, rid, e)
+        if isinstance(e.__cause__, db.NombreDeProyectoNoVale) and e.__cause__.clave == "repetido" and tabla == "proyectos":
+            return RedirectResponse("/papelera?error=restaurar_nombre_repetido", status_code=303)
         return RedirectResponse("/papelera?error=restaurar_no_se_pudo", status_code=303)
     hecho = {"proyectos": "proyecto_restaurado", "tareas": "tarea_restaurada", "notas": "nota_restaurada"}[tabla]
     return RedirectResponse(f"/papelera?hecho={hecho}&id={rid}", status_code=303)
@@ -1229,7 +1246,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
                     sq: Navegacion[str] = "", estado: Navegacion[int] = 0,
                     editar_nota: Navegacion[int] = 0, borrar_nota: Navegacion[int] = 0,
                     cotizacion: NavegacionSellada[str] = "", corregir: Navegacion[int] = 0,
-                    rechazo: Navegacion[str] = ""):
+                    rechazo: Navegacion[str] = "", ocupa: Aviso[int] = 0):
     """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
     (`?g=`), las de «Sin grupo» (`?sin_grupo=1`) o el formulario de un proyecto
@@ -1275,6 +1292,7 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         sq = ""
         corregir = 0
         rechazo = ""
+        ocupa = 0
     if estado:
         # «Estado de los proyectos» solo lee la lista de proyectos: lo que abriría otra cosa o haría
         # otra lectura (la búsqueda de personas en Noco, las cuentas de borrar un grupo o un
@@ -1292,6 +1310,12 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
     # prompt, y `base.html`, que es ese menú, también tumba las demás pantallas.
     pantallas = _menu.pantallas()
     busqueda = await _buscar_personas_para_la_pagina(pq, pdonde)
+    # «EL CLIENTE TIENE UN PROYECTO ACTIVO»: el aviso nombra al proyecto que lo ocupa (`ocupa`) y lo enlaza con «Abrir».
+    # El nombre sale de la base AL PINTAR y solo si ese proyecto existe, sigue activo y es de un grupo que exige
+    # cliente; si no, el aviso se pinta sin nombre y sin enlace (una dirección escrita a mano no inventa uno).
+    ocupante = None
+    if error in ("cliente_ocupado", "reactivar_cliente_ocupado") and ocupa:
+        ocupante = _ocupante_si_sigue_ocupando(modelo["proyectos"].get(ocupa))
     # GRUPOS (agregar y quitar): lo que se dibuja sale de la base. La cuenta de lo
     # que tiene un grupo se mide AL PINTAR (solo si se pidió la confirmación). Los
     # avisos de `hecho=grupo_creado|grupo_quitado` NO afirman la acción (una
@@ -1421,7 +1445,8 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          # INFO/registro/la-pagina-de-inicio-y-como-se-llega.md
          "volver_a_la_app": (config.REGISTRO_URL + "/#inicio") if config.REGISTRO_URL.startswith(
              ("http://", "https://")) else "",
-         "busqueda": busqueda, "largo_rol": db.LARGO_ROL_PARTICIPANTE, "modelo": modelo, "visibles": visibles, "vista": vista, "q": q,
+         "busqueda": busqueda, "ocupante": ocupante,
+         "largo_rol": db.LARGO_ROL_PARTICIPANTE, "modelo": modelo, "visibles": visibles, "vista": vista, "q": q,
          "pantallas": pantallas, "areas": await db.areas(), "error": error,
          "area_guardada": area_guardada, "creado": creado,
          "nombre_guardado": nombre_guardado, "tarea_creada": tarea_creada,
@@ -1462,9 +1487,34 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          "carpeta_drive": carpeta_drive})
 
 
+def _clave_de_nombre_repetido(area) -> str:
+    """La CLAVE del aviso «otro proyecto activo ya tiene ese nombre», según de quién es el nombre: en IA lo escribió
+    una persona (`nombre_repetido`); en CDS, ACD y sin grupo es el del cliente (`nombre_cliente_repetido`) y nadie
+    lo escribió. Decide `db.cliente_es_obligatorio`, la misma puerta de siempre."""
+    return "nombre_cliente_repetido" if db.cliente_es_obligatorio(area) else "nombre_repetido"
+
+
+def _ocupante_si_sigue_ocupando(proyecto: dict | None) -> dict | None:
+    """`{id, nombre}` del proyecto que el aviso «el cliente tiene un proyecto activo» nombra y enlaza, o `None` si ya
+    no cuenta: no existe, no está activo (`db.cuenta_como_activo`) o es de un grupo que no exige cliente. Es lo que
+    impide que una dirección escrita a mano ponga el nombre de cualquier proyecto en el aviso. `proyecto` es la fila
+    del modelo de la página (`db.pagina_de_proyectos`) o la de `db.proyecto_para_el_aviso`."""
+    if proyecto is None or not db.cuenta_como_activo(proyecto["estado"]):
+        return None
+    if not db.cliente_es_obligatorio(proyecto.get("area")):
+        return None
+    return {"id": proyecto["id"], "nombre": proyecto["nombre"]}
+
+
+async def _el_proyecto_que_ocupa_al_cliente(pid: int) -> dict | None:
+    """Lo mismo que `_ocupante_si_sigue_ocupando`, para las páginas que no cargan el modelo entero (la de la tarea):
+    lee ese proyecto de la base."""
+    return _ocupante_si_sigue_ocupando(await db.proyecto_para_el_aviso(pid))
+
+
 # Los sitios de la página donde se puede buscar una persona de Noco sin JavaScript (`pdonde`). `cotizacion-cliente` es
 # el buscador de la ventana de «Nueva cotización». Las pruebas que doblan la búsqueda usan ESTE patrón, no una copia.
-DONDE_DE_LA_BUSQUEDA = r"cliente|cotizacion-cliente|proyecto|tarea-\d+"
+DONDE_DE_LA_BUSQUEDA = r"cliente|cliente-nuevo|cliente-convertir|cotizacion-cliente|proyecto|tarea-\d+"
 
 
 async def _buscar_personas_para_la_pagina(pq: str, pdonde: str) -> dict | None:
@@ -1598,9 +1648,9 @@ async def _volver_a_la_tarea(tid: int, **parametros) -> str:
 
 
 def _frase_de_la_carpeta_del_aviso(error: str, hecho: str = "") -> str:
-    """La frase de la carpeta de Drive para un `?error=` (`carpeta_drive_*`, o el mismo con `cliente_nuevo_` delante, del
-    alta de un proyecto) o un `?hecho=` (`carpeta_drive*`, del botón de la página). Vacía para cualquier otro aviso."""
-    for tabla, clave in ((cotizaciones_drive.AVISOS_DE_LA_CARPETA, error.removeprefix("cliente_nuevo_")),
+    """La frase de la carpeta de Drive para un `?error=` (`carpeta_drive_*`, del alta de un proyecto) o un `?hecho=`
+    (`carpeta_drive*`, del botón de la página). Vacía para cualquier otro aviso."""
+    for tabla, clave in ((cotizaciones_drive.AVISOS_DE_LA_CARPETA, error),
                          (cotizaciones_drive.HECHOS_DE_LA_CARPETA, hecho)):
         resultado = tabla.get(clave)
         if resultado:
@@ -1617,6 +1667,26 @@ async def _preparar_la_carpeta_de_drive(pid: int) -> dict:
     except Exception as e:
         log.warning("Panel de proyectos: la carpeta de Drive del proyecto #%s falló (%s)", pid, type(e).__name__)
         return {"resultado": "fallo", "causa": None, "carpeta": None}
+
+
+def _cliente_del_formulario(formulario) -> int | None:
+    """El Id de Noco del campo `cliente` del formulario (solo dígitos), o `None` si no llegó o no es un número.
+    Si el campo llega más de una vez (el escondido de la ventanita, vacío, y el botón de un resultado de la búsqueda
+    sin JavaScript, con el Id), vale el último que trae algo: no depende de cuál gane el servidor."""
+    for crudo in reversed([str(v).strip() for v in formulario.getlist("cliente")]):
+        if crudo:
+            return int(crudo) if re.fullmatch(r"[0-9]{1,18}", crudo) else None
+    return None
+
+
+def _clave_del_cliente_que_no_vale(clave: str, cliente: int | None) -> str:
+    """La CLAVE del aviso cuando la puerta dice que el cliente no vale (`ProyectoNoSeCrea('cliente')`): son dos
+    causas y la pantalla dice la que fue. Si no se escogió a nadie (`cliente` es `None`) falta escogerlo (`cliente`);
+    si se escogió a alguien, la que no vale es su ficha (`cliente_ficha`). Cualquier otra clave (`grupo`,
+    `responsable`) viaja tal cual."""
+    if clave != "cliente":
+        return clave
+    return "cliente" if cliente is None else "cliente_ficha"
 
 
 @app.post("/proyectos/nuevo")
@@ -1640,33 +1710,31 @@ async def crear_proyecto_nuevo(request: Request):
             str(formulario.get("responsable", "")))
     except ValueError:
         responsable = None
+    # EL CLIENTE NACE CON EL PROYECTO (pieza 1 de «Un proyecto no se crea sin cliente», 18-oct-2026): se manda a la
+    # puerta, que vuelve a leer la ficha de Noco ANTES de escribir y decide si el grupo lo exige. Aquí solo se
+    # traduce: un Id que no es un número llega como `None` y la puerta lo rechaza si hace falta. En CDS y ACD el
+    # nombre es el del cliente: lo que se haya escrito en «Nombre» no viaja.
+    cliente = _cliente_del_formulario(formulario)
     try:
-        nuevo = await db.crear_proyecto(nombre, area, responsable)
+        nuevo = await db.crear_proyecto(
+            None if db.cliente_es_obligatorio(area) else nombre, area, responsable,
+            cliente_noco_id=cliente, leer_persona=noco_lectura.persona)
     except db.NombreDeProyectoNoVale as e:
         log.warning("Panel de proyectos: proyecto nuevo rechazado (%s)", e.clave)
-        return RedirectResponse(f"{vuelta}&error=nombre_{e.clave}", status_code=303)
+        clave = _clave_de_nombre_repetido(area) if e.clave == "repetido" else f"nombre_{e.clave}"
+        return RedirectResponse(f"{vuelta}&error={clave}", status_code=303)
     except db.ProyectoNoSeCrea as e:
         log.warning("Panel de proyectos: proyecto nuevo rechazado (%s)", e.clave)
-        return RedirectResponse(f"{vuelta}&error={e.clave}", status_code=303)
-    # LA CARPETA DE DRIVE nace con el proyecto, DESPUÉS de guardarlo y ANTES de cualquier salida anticipada (la del
-    # cliente): si Drive falla el proyecto sigue creado y el aviso lo dice.
+        return RedirectResponse(f"{vuelta}&error={_clave_del_cliente_que_no_vale(e.clave, cliente)}", status_code=303)
+    except noco_lectura.NocoNoContesta as e:
+        log.warning("Panel de proyectos: Noco no contestó al crear un proyecto: %s", e)
+        return RedirectResponse(f"{vuelta}&error=cliente_noco", status_code=303)
+    except db.ClienteConProyecto as e:
+        log.warning("Panel de proyectos: proyecto nuevo rechazado: el cliente ya tiene el #%s activo", e.proyecto_id)
+        return RedirectResponse(f"{vuelta}&error=cliente_ocupado&ocupa={e.proyecto_id}", status_code=303)
+    # LA CARPETA DE DRIVE nace con el proyecto, DESPUÉS de guardarlo (y con su cliente ya puesto): si Drive falla el
+    # proyecto sigue creado y el aviso lo dice.
     aviso_carpeta = cotizaciones_drive.clave_de_aviso_de_la_carpeta(await _preparar_la_carpeta_de_drive(nuevo["id"]))
-    # EL CLIENTE ES OPCIONAL (Tiziano, 1-oct-2026: «no todos los proyectos tienen
-    # cliente»). Si la ventanita mandó uno, se pone DESPUÉS de crear el proyecto,
-    # por la única puerta del cliente (`db.poner_cliente`, que vuelve a leer la
-    # ficha de Noco): así el proyecto no depende de que Noco conteste, y si no
-    # contesta el proyecto queda creado SIN cliente y el aviso lo dice.
-    crudo = str(formulario.get("cliente", "")).strip()
-    if crudo:
-        try:
-            if not crudo.isdigit():
-                raise ValueError("cliente que no es un Id")
-            await db.poner_cliente(nuevo["id"], int(crudo), leer_persona=noco_lectura.persona)
-        except (ValueError, noco_lectura.NocoNoContesta) as e:
-            log.warning("Panel de proyectos: el proyecto #%s se creó sin cliente: %s", nuevo["id"], e)
-            error = "cliente_nuevo" if aviso_carpeta is None else f"cliente_nuevo_{aviso_carpeta}"
-            return RedirectResponse(
-                f"/proyectos?hecho=proyecto_nuevo&error={error}&p={nuevo['id']}", status_code=303)
     cola = f"&error={aviso_carpeta}" if aviso_carpeta else ""
     return RedirectResponse(
         f"/proyectos?hecho=proyecto_nuevo{cola}&p={nuevo['id']}", status_code=303)
@@ -1681,7 +1749,8 @@ async def poner_cliente_del_proyecto(request: Request, pid: int):
     """Poner, cambiar o quitar el cliente de un proyecto. TODO LO DECIDE
     `db.poner_cliente`: vuelve a pedirle la ficha a Noco (solo LEE) y guarda el
     nombre que Noco devuelve, nunca uno del formulario. `noco_id` vacío quita el
-    cliente (es opcional). Esta ruta solo traduce y pide sesión."""
+    cliente SOLO en IA (en CDS, ACD y sin grupo la puerta lo rechaza: `cliente_obligatorio`). Esta ruta solo traduce
+    (cada rechazo, con su causa) y pide sesión."""
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     formulario = await request.form()
@@ -1698,15 +1767,32 @@ async def poner_cliente_del_proyecto(request: Request, pid: int):
             if await db.ficha_de_cliente_de_proyecto(pid) is not None:
                 return RedirectResponse(f"/proyectos?error=cliente_ya_tiene&p={pid}{cola}", status_code=303)
         except db.SesionNoEsta:
-            return RedirectResponse(f"/proyectos?error=cliente&p={pid}{cola}", status_code=303)
+            return RedirectResponse(f"/proyectos?error=proyecto&p={pid}{cola}", status_code=303)
+    # CADA RECHAZO DICE LO QUE PASÓ: la causa sale de la clase (y de su clave) con que la puerta la rechazó, no del
+    # texto del mensaje. Lo que no se sabe nombrar sale como `cliente_no_se_pudo`, que no afirma ninguna causa.
     try:
         cambio = await db.poner_cliente(pid, noco_id, leer_persona=noco_lectura.persona)
     except noco_lectura.NocoNoContesta as e:
         log.warning("Panel de proyectos: Noco no contestó al poner el cliente de #%s: %s", pid, e)
         return RedirectResponse(f"/proyectos?error=cliente_noco&p={pid}{cola}", status_code=303)
+    except db.ClienteConProyecto as e:
+        log.warning("Panel de proyectos: cliente rechazado para #%s: el cliente ya tiene el #%s activo", pid, e.proyecto_id)
+        return RedirectResponse(
+            f"/proyectos?error=cliente_ocupado&p={pid}&ocupa={e.proyecto_id}{cola}", status_code=303)
+    except db.ClienteDelProyectoNoVale as e:
+        log.warning("Panel de proyectos: cliente rechazado para #%s (%s)", pid, e.clave)
+        clave = {"obligatorio": "cliente_obligatorio", "ficha": "cliente_ficha", "proyecto": "proyecto"}.get(
+            e.clave, "cliente_no_se_pudo")
+        return RedirectResponse(f"/proyectos?error={clave}&p={pid}{cola}", status_code=303)
+    except db.NombreDeProyectoNoVale as e:
+        log.warning("Panel de proyectos: cliente rechazado para #%s: el nombre (%s)", pid, e.clave)
+        el_proyecto = await db.proyecto_para_el_aviso(pid)
+        clave = (_clave_de_nombre_repetido(el_proyecto["area"] if el_proyecto else None)
+                 if e.clave == "repetido" else f"nombre_{e.clave}")
+        return RedirectResponse(f"/proyectos?error={clave}&p={pid}{cola}", status_code=303)
     except ValueError as e:
         log.warning("Panel de proyectos: cliente rechazado para #%s: %s", pid, e)
-        return RedirectResponse(f"/proyectos?error=cliente&p={pid}{cola}", status_code=303)
+        return RedirectResponse(f"/proyectos?error=cliente_no_se_pudo&p={pid}{cola}", status_code=303)
     if not cambio:
         return RedirectResponse(f"/proyectos?error=cliente_igual&p={pid}{cola}", status_code=303)
     hecho = "cliente_quitado" if noco_id is None else "cliente"
@@ -1839,8 +1925,17 @@ async def cambiar_estado_de_proyecto(request: Request, pid: int):
         despues, _log = await crud.editar(
             "proyectos", pid, {"estado": str(formulario.get("estado", ""))},
             motivo="Estado cambiado desde el panel", actor="panel")
+    except db.ClienteConProyecto as e:
+        log.warning("Panel de proyectos: estado rechazado para #%s: el cliente ya tiene el #%s activo", pid, e.proyecto_id)
+        return RedirectResponse(
+            f"/proyectos?error=reactivar_cliente_ocupado&p={pid}&ocupa={e.proyecto_id}", status_code=303)
     except ValueError as e:
         log.warning("Panel de proyectos: estado rechazado para #%s: %s", pid, e)
+        if isinstance(e.__cause__, db.NombreDeProyectoNoVale) and e.__cause__.clave == "repetido":
+            el_proyecto = await db.proyecto_para_el_aviso(pid)
+            return RedirectResponse(
+                f"/proyectos?error={_clave_de_nombre_repetido(el_proyecto['area'] if el_proyecto else None)}&p={pid}",
+                status_code=303)
         return RedirectResponse(f"/proyectos?error=estado&p={pid}", status_code=303)
     if despues is None:
         return RedirectResponse("/proyectos?error=proyecto", status_code=303)
@@ -3368,15 +3463,38 @@ async def cambiar_primero_de_tarea(request: Request, tid: int):
 async def convertir_en_proyecto(request: Request, tid: int):
     """El botón «convertir en proyecto» (encargo 5, requisito 2).
 
-    Sin formulario intermedio: un botón, un click. `db.convertir_tarea_en_proyecto`
-    hace todo el trabajo —valida, crea el proyecto, archiva la tarea, dos
+    En IA, un botón, un click. En cualquier otro grupo (y en una tarea sin área) son DOS PASOS (pieza 3 de «Un
+    proyecto no se crea sin cliente», 18-oct-2026): la página de la tarea (`?convertir=1`) pide escoger al cliente
+    y este POST lleva su Id (`cliente`); sin él, la puerta no convierte nada.
+    `db.convertir_tarea_en_proyecto` hace todo el trabajo —valida, crea el proyecto, archiva la tarea, dos
     huellas— dentro de una sola transacción; ver su docstring para qué pasa
     con el responsable, el área y los comentarios de la tarea original.
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
+    # EL CLIENTE: si la tarea es de IA no hace falta; en cualquier otro caso la puerta lo exige y, sin él, no convierte
+    # nada. Esta ruta solo traduce el Id y el rechazo (cada uno con su causa en la dirección).
+    formulario = await request.form()
+    cliente = _cliente_del_formulario(formulario)
     try:
-        resultado = await db.convertir_tarea_en_proyecto(tid)
+        resultado = await db.convertir_tarea_en_proyecto(
+            tid, cliente_noco_id=cliente, leer_persona=noco_lectura.persona)
+    except noco_lectura.NocoNoContesta as e:
+        log.warning("Panel de tareas: Noco no contestó al convertir #%s: %s", tid, e)
+        return RedirectResponse(f"/tareas/{tid}?error=convertir_noco", status_code=303)
+    except db.ClienteConProyecto as e:
+        log.warning("Panel de tareas: no se convirtió #%s: el cliente ya tiene el #%s activo", tid, e.proyecto_id)
+        return RedirectResponse(f"/tareas/{tid}?error=convertir_ocupado&ocupa={e.proyecto_id}", status_code=303)
+    except db.ProyectoNoSeCrea as e:
+        log.warning("Panel de tareas: no se convirtió #%s en proyecto (%s)", tid, e.clave)
+        # Falta escoger al cliente (`convertir_cliente`) o la ficha escogida no vale (`convertir_ficha`); cualquier
+        # otra clave (el grupo, el responsable, el nombre) no es de cliente y cae en el aviso general.
+        if e.clave != "cliente":
+            return RedirectResponse(f"/tareas/{tid}?error=convertir", status_code=303)
+        causa = _clave_del_cliente_que_no_vale(e.clave, cliente)
+        return RedirectResponse(
+            f"/tareas/{tid}?error={'convertir_cliente' if causa == 'cliente' else 'convertir_ficha'}",
+            status_code=303)
     except db.NombreDeProyectoNoVale as e:
         # El título de la tarea no puede ser el nombre de un proyecto: el motivo
         # REAL (repetido, vacío, largo) viaja como clave, no el «no califica»
@@ -4119,7 +4237,8 @@ def _texto_de_comentario(crudo: str) -> str | None:
 async def tarea_detalle(request: Request, tid: int, error: Aviso[str] = "",
                         comentado: Aviso[int] = 0, borrado: Aviso[int] = 0,
                         area_guardada: Aviso[int] = 0, primero_guardado: Aviso[int] = 0,
-                        paso_agregado: Aviso[int] = 0, paso_movido: Aviso[str] = ""):
+                        paso_agregado: Aviso[int] = 0, paso_movido: Aviso[str] = "",
+                        ocupa: Aviso[int] = 0, convertir: Navegacion[int] = 0, pq: Navegacion[str] = ""):
     """Una tarea con sus comentarios, y el cuadro para escribir uno.
 
     VA EN SU PROPIA PANTALLA, a la que se entra tocando el título en /tareas.
@@ -4146,6 +4265,11 @@ async def tarea_detalle(request: Request, tid: int, error: Aviso[str] = "",
 
     `pasos` (encargo 7) es la lista de chequeo -- `db.tarea_con_comentarios`
     ya la trae, tolerando la tabla ausente (ver `db.pasos_de_tarea`).
+
+    `convertir=1` y `pq` son el SEGUNDO PASO de «convertir en proyecto» cuando la tarea no es de IA (pieza 3 de «Un
+    proyecto no se crea sin cliente»): el servidor busca en Noco (solo LEE) las fichas que coinciden con `pq` y las
+    pinta como botones; cada uno envía la conversión con el Id de esa ficha. `ocupa` es el proyecto activo del cliente
+    cuando `error=convertir_ocupado` (se enlaza con «Abrir» si de verdad existe y sigue activo).
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
@@ -4166,12 +4290,24 @@ async def tarea_detalle(request: Request, tid: int, error: Aviso[str] = "",
                 "largo_comentario": LARGO_COMENTARIO,
                 "areas": areas, "pendiente": db.ESTADO_PENDIENTE,
                 "colores_area": {a["clave"]: a["color"] for a in areas},
-                "candidatos_primero": []}
+                "candidatos_primero": [], "ocupante": None, "busqueda": None,
+                "convertir": 0}
     if datos is None:
         return plantillas.TemplateResponse(
             request, "tarea_detalle.html", contexto, status_code=404)
-    contexto.update(tarea=datos["tarea"], comentarios=datos["comentarios"],
-                    pasos=datos["pasos"],
+    tarea = datos["tarea"]
+    # EL SEGUNDO PASO solo existe para una tarea que de verdad se puede convertir (pendiente y sin proyecto) y
+    # cuyo grupo exige cliente (`cliente_es_obligatorio`, la misma puerta de siempre): una dirección escrita a mano
+    # para una tarea de IA, hecha o ya dentro de un proyecto no dibuja nada.
+    segundo_paso = bool(convertir and tarea["estado"] == db.ESTADO_PENDIENTE and not tarea["proyecto_id"]
+                        and db.cliente_es_obligatorio(tarea["area"]))
+    ocupante = None
+    if error == "convertir_ocupado" and ocupa:
+        ocupante = await _el_proyecto_que_ocupa_al_cliente(ocupa)
+    contexto.update(tarea=tarea, comentarios=datos["comentarios"],
+                    pasos=datos["pasos"], convertir=int(segundo_paso), ocupante=ocupante,
+                    busqueda=(await _buscar_personas_para_la_pagina(pq, "cliente-convertir")
+                              if segundo_paso else None),
                     candidatos_primero=await db.tareas_para_elegir_primero(tid))
     return plantillas.TemplateResponse(request, "tarea_detalle.html", contexto)
 
