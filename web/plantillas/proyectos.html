@@ -126,6 +126,7 @@ h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balan
 .carpeta-p label{display:flex;flex-direction:column;gap:.2rem;font-size:.85rem;color:var(--suave)}
 .carpeta-p input{font:inherit;padding:.45rem .6rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta)}
 .carpeta-p h3.carpeta-linea{font-size:.8rem;font-weight:600;color:var(--suave);margin:0}
+.carpeta-p .carpeta-audio{display:flex;flex-direction:column;gap:.6rem;align-items:flex-start;margin-top:.9rem}
 .carpeta-p .botones{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
 .carpeta-p button.guardar{font:600 .88rem var(--texto);padding:.5rem 1rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer}
 /* LAS COTIZACIONES (pieza 5, 14-oct-2026): la lista de cotizaciones y su ventana; las clases son las de la maqueta aprobada. */
@@ -883,6 +884,12 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     {% elif error == 'carpeta_base' %}<p class="aviso">La base de datos falló al guardar y no se pudo confirmar: lo que escribiste no está a salvo. Abajo está la carpeta como está ahora; mírala antes de escribirla otra vez.</p>
     {% elif error == 'carpeta_sin_columna' %}<p class="aviso">La carpeta todavía no se puede guardar: falta actualizar la base de datos. NO se guardó nada.</p>
     {% elif error == 'carpeta_invalida' %}<p class="aviso">Esa carpeta no se puede guardar: NO se guardó nada.</p>
+    {% elif error == 'carpeta_audio_largo' %}<p class="aviso">La carpeta de audio no puede pasar de {{ largo_carpeta }} caracteres: NO se guardó.</p>
+    {% elif error in ('carpeta_audio_caracteres', 'carpeta_audio_tipo') %}<p class="aviso">Esa carpeta de audio lleva caracteres que no se pueden guardar (por ejemplo un salto de línea): NO se guardó.</p>
+    {% elif error == 'carpeta_audio_igual' %}<p class="aviso">La carpeta de audio ya estaba así: no cambió nada.</p>
+    {% elif error == 'carpeta_audio_base' %}<p class="aviso">La base de datos falló al guardar y no se pudo confirmar: lo que escribiste no está a salvo. Abajo está la carpeta de audio como está ahora; mírala antes de escribirla otra vez.</p>
+    {% elif error == 'carpeta_audio_sin_columna' %}<p class="aviso">La carpeta de audio todavía no se puede guardar: falta actualizar la base de datos. NO se guardó nada.</p>
+    {% elif error == 'carpeta_audio_invalida' %}<p class="aviso">Esa carpeta de audio no se puede guardar: NO se guardó nada.</p>
     {% elif error == 'nota_vacio' %}<p class="aviso">La nota no puede quedar vacía: NO se guardó nada.</p>
     {% elif error == 'nota_largo' %}<p class="aviso">La nota no puede pasar de {{ largo_nota }} caracteres: NO se guardó nada.</p>
     {% elif error in ('nota_caracteres', 'nota_tipo') %}<p class="aviso">Esa nota lleva caracteres que no se pueden guardar: NO se guardó nada.</p>
@@ -966,6 +973,8 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     {% elif frase_de_la_carpeta_hecha %}<p class="aviso ok">{{ frase_de_la_carpeta_hecha }}</p>
     {% elif hecho == 'carpeta' %}<p class="aviso ok">Carpeta guardada.</p>
     {% elif hecho == 'carpeta_quitada' %}<p class="aviso ok">Carpeta quitada: el proyecto queda sin carpeta.</p>
+    {% elif hecho == 'carpeta_audio' %}<p class="aviso ok">Carpeta de audio guardada.</p>
+    {% elif hecho == 'carpeta_audio_quitada' %}<p class="aviso ok">Carpeta de audio quitada: el proyecto queda sin ella.</p>
     {% elif hecho == 'nota' %}<p class="aviso ok">Nota guardada.</p>
     {% elif hecho == 'nota_editada' %}<p class="aviso ok">Nota cambiada.</p>
     {% elif hecho == 'nota_borrada' and nota_borrada_en_papelera %}<p class="aviso ok">Nota borrada. Está en la <a href="/papelera">Papelera</a>; se restaura desde ahí.</p>
@@ -1413,10 +1422,15 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
         con su «+»; solo ver, solo si hay alguna). Sin la tabla de cotizaciones (`cz` es `None`) no sale nada
         de ellas y la página queda como antes. -#}
     {% set ver_carpeta = m.carpeta_disponible and (m.carpeta or not solo_ver) %}
+    {#- LA CARPETA DE AUDIO (pieza 4 de «Carpetas del proyecto»): su propia línea y su propia columna. Lucy NO ve el disco
+        Sesiones: lo que sale es la ruta que alguien escribió, SIEMPRE como texto escapado dentro de un `<code>` (jamás
+        un enlace, aunque empiece por `https://`: no pasa por `enlace_de_carpeta` ni por ningún atributo), y la frase
+        que lo dice. Sin la columna en la base (`m.carpeta_audio_disponible` falso) la línea no sale. -#}
+    {% set ver_audio = m.carpeta_audio_disponible and (m.carpeta_audio or not solo_ver) %}
     {% set ver_cotizaciones = cz and (cz.lista or not solo_ver) %}
-    {% if ver_carpeta or ver_cotizaciones %}
+    {% if ver_carpeta or ver_audio or ver_cotizaciones %}
     <section class="bloque carpeta-p" id="carpeta-del-proyecto" data-ancla>
-      <div class="encabezado">{% if ver_carpeta %}<h2>Carpetas del proyecto</h2>{% else %}<h2>Cotizaciones</h2>{% endif %}
+      <div class="encabezado">{% if ver_carpeta or ver_audio %}<h2>Carpetas del proyecto</h2>{% else %}<h2>Cotizaciones</h2>{% endif %}
         {% if ver_carpeta and not solo_ver and editar != 'carpeta' %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar=carpeta{{ sufijo_filtro }}#carpeta-del-proyecto">{{ 'Cambiar' if m.carpeta else 'Poner' }}</a>{% endif %}</div>
       {#- «DOCUMENTOS (DRIVE)» (pieza 2): la carpeta de siempre y, si el proyecto no tiene la suya en Drive, la frase y el
           botón. Solo la casa los ve: en solo ver no hay botón ni se dice que falta. Si no se pudo leer
@@ -1443,6 +1457,25 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
         <p class="vacio">{{ carpeta_drive.frase }}</p>
         <div class="botones"><button class="guardar">{{ carpeta_drive.boton }}</button></div>
       </form>
+      {% endif %}
+      {% if ver_audio %}
+      <div class="carpeta-audio">
+      <h3 class="carpeta-linea">Audio (disco Sesiones)</h3>
+      {% if not solo_ver and editar == 'carpeta_audio' %}
+      <form class="carpeta-audio-editar" method="post" action="/proyectos/{{ m.id }}/carpeta-audio" data-auto>
+        <label>Dónde están el audio y las sesiones <input type="text" name="carpeta_audio" maxlength="{{ largo_carpeta }}" value="{{ m.carpeta_audio or '' }}" placeholder="Ruta de la carpeta en el disco Sesiones" aria-label="Carpeta de audio del proyecto"></label>
+        <p class="nota">Escribe o pega la ruta de la carpeta en el disco Sesiones, tal como la ves en Finder. Hasta {{ largo_carpeta }} caracteres. Se guarda al salir del campo si cambió; para dejarla vacía, usa «Guardar» con el campo vacío.</p>
+        <div class="botones"><button class="guardar">Guardar</button><a class="btn-linea" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}#carpeta-del-proyecto">Cancelar</a></div>
+      </form>
+      {% elif m.carpeta_audio %}
+      {% set copiar_carpeta = not solo_ver %}
+      <div class="carpeta-contenido"><code class="carpeta-texto">{{ m.carpeta_audio }}</code>
+        {% if not solo_ver %}<div class="botones"><button type="button" class="btn-linea copiar" data-copiar-carpeta>Copiar</button><a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar=carpeta_audio{{ sufijo_filtro }}#carpeta-del-proyecto">Cambiar</a></div>{% endif %}</div>
+      {% else %}
+      <div class="carpeta-contenido"><p class="vacio">Todavía no hay carpeta de audio.</p>
+        <a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar=carpeta_audio{{ sufijo_filtro }}#carpeta-del-proyecto">Poner</a></div>
+      {% endif %}
+      </div>
       {% endif %}
       {% if ver_cotizaciones %}{% include "_cotizaciones_del_proyecto.html" %}{% endif %}
     </section>
@@ -1874,14 +1907,15 @@ iniciarSinSaltos("/proyectos");
     ruta de computadora, sesión de la casa). Va FUERA de `<main>`: los guiones de una región que
     se repinta no vuelven a correr, y el oyente está en el documento. -#}
 {% if copiar_carpeta %}<script id="guion-copiar-carpeta">
-/* Lo que hace este guion, y nada más: el botón «Copiar» de la carpeta del proyecto copia al
-   portapapeles el texto que se ve al lado, y dice «Copiado» solo si el navegador lo copió. Si no
+/* Lo que hace este guion, y nada más: el botón «Copiar» de una carpeta del proyecto (la de Drive escrita como ruta o la
+   de audio) copia al portapapeles el texto de SU propia caja, y dice «Copiado» solo si el navegador lo copió. Si no
    puede, deja el texto seleccionado y dice que se copie a mano. No manda nada a ningún servidor. */
 document.documentElement.classList.add("con-js");
 document.addEventListener("click", function (e) {
   var boton = e.target && e.target.closest ? e.target.closest("[data-copiar-carpeta]") : null;
   if (!boton) return;
-  var texto = boton.parentNode.querySelector("code.carpeta-texto");
+  var caja = boton.closest(".carpeta-contenido");
+  var texto = caja ? caja.querySelector("code.carpeta-texto") : null;
   if (!texto) return;
   function decir(frase) {
     boton.textContent = frase;

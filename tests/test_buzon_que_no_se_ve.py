@@ -4217,10 +4217,13 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 18-oct-2026, rama `trabajo/carpetas-p3` (el arreglo de una vez de las carpetas): +2 en disco, +1 EXENTO y +1
     # VIGILADO por `tests/test_crear_carpetas_de_drive.py` (nuevo, exento por rol) y `tools/crear_carpetas_de_drive.py`
     # (nuevo, vigilado: no lee la lista cruda de `config`). Medida corriendo la prueba: 190, 135, 55.
-    assert medido == {"en disco": 190, "exentos": 135, "vigilados": 55}, (
+    # 18-oct-2026, rama `trabajo/carpetas-p4` (la carpeta de audio), junta con `main` = `7c29fda` (que ya traía la p3): +1
+    # en disco y +1 EXENTO por `tests/test_carpeta_de_audio.py` (nuevo, exento por rol); VIGILADOS sin cambio. Medida
+    # corriendo la prueba con las dos piezas juntas: 191, 136, 55.
+    assert medido == {"en disco": 191, "exentos": 136, "vigilados": 55}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "18-oct-2026 (carpetas-p3) era {'en disco': 190, "
-        "'exentos': 135, 'vigilados': 55}. La aserción de fondo —cero "
+        "18-oct-2026 (carpetas-p3 y carpetas-p4 juntas) era {'en disco': 191, "
+        "'exentos': 136, 'vigilados': 55}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

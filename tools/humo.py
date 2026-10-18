@@ -89,6 +89,17 @@ async def _tablas_de_drive_de_las_cotizaciones():
         return filas
 
 
+async def _columna_de_audio_sin_tolerancia():
+    """El SELECT de la carpeta de audio (pieza 4 de «Carpetas del proyecto», 18-oct-2026), SIN tolerancia.
+    `db.carpetas_de_audio()` TOLERA que la columna falte (devuelve `None` y la página sale sin la línea de audio),
+    así que `pagina_de_proyectos` sigue en verde sin la migración `db/migrations/2026-10-18_proyectos_carpeta_audio.sql`.
+    Esta línea es la que lo dice. Es una LECTURA."""
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=db.dict_row)
+        await cur.execute("SELECT count(carpeta_audio) AS n FROM proyectos")
+        return {"proyectos con carpeta_audio": (await cur.fetchone())["n"]}
+
+
 async def main() -> int:
     if not os.environ.get("DATABASE_URL", "").strip():
         print("Falta DATABASE_URL.", file=sys.stderr)
@@ -180,6 +191,8 @@ async def main() -> int:
         ("tablas de cotizaciones (sin tolerancia)", _tablas_de_cotizaciones),
         # Lo que la pieza 8 agregó para Drive: ver `_tablas_de_drive_de_las_cotizaciones`. Una LECTURA.
         ("columnas y tabla de Drive de las cotizaciones (sin tolerancia)", _tablas_de_drive_de_las_cotizaciones),
+        # La carpeta de audio (pieza 4 de «Carpetas del proyecto»): ver `_columna_de_audio_sin_tolerancia`. Una LECTURA.
+        ("columna carpeta_audio de proyectos (sin tolerancia)", _columna_de_audio_sin_tolerancia),
         # La lectura de las cotizaciones (pieza 3): TOLERA que la tabla no exista (devuelve `None`), así
         # que la línea de arriba es la que dice si falta; ésta corre el SELECT con sus columnas y el JOIN
         # contra la base de verdad. Es una LECTURA; `guardar_cotizacion` escribe y no se prueba acá.

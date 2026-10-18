@@ -57,6 +57,8 @@ HECHOS_DE_ANTES = {"proyecto_nuevo", "grupo_creado", "grupo_quitado", "responsab
                    "fechas",
                    # La carpeta (parte 5, 8-oct-2026): igual, las ampara el recibo.
                    "carpeta", "carpeta_quitada",
+                   # La carpeta de audio (pieza 4 de «Carpetas del proyecto», 18-oct-2026): igual, las ampara el recibo.
+                   "carpeta_audio", "carpeta_audio_quitada",
                    # Las notas (parte 6, 8-oct-2026): igual, las ampara el recibo.
                    "nota", "nota_editada",
                    # Las sesiones que se quitan de un proyecto (parte 11, 9-oct-2026): igual, las

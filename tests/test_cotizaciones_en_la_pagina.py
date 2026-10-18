@@ -288,15 +288,18 @@ def test_en_solo_ver_la_seccion_no_sale_si_no_hay_carpeta_ni_cotizaciones_y_en_l
 
 def test_sin_la_columna_de_la_carpeta_las_cotizaciones_salen_igual_y_la_carpeta_no(m):
     _guardar(proyecto=1)
-    guardada = panel.db.carpetas_de_proyectos
+    guardada, guardada_audio = panel.db.carpetas_de_proyectos, panel.db.carpetas_de_audio
 
     async def _sin_columna():
         return None                       # como SQLSTATE 42703 (la columna no existe): `carpeta_disponible` falso
+    # Una base de antes de las dos migraciones (la de la carpeta y la de la carpeta de audio, pieza 4): ninguna de las
+    # dos líneas sale. (La de audio sola sin migrar la vigila `tests/test_carpeta_de_audio.py`.)
     panel.db.carpetas_de_proyectos = _sin_columna
+    panel.db.carpetas_de_audio = _sin_columna
     try:
         html = _pagina(_casa(), p=1)
     finally:
-        panel.db.carpetas_de_proyectos = guardada
+        panel.db.carpetas_de_proyectos, panel.db.carpetas_de_audio = guardada, guardada_audio
     assert "Carpetas del proyecto" not in html and "COT-2026-001" in _seccion_de_cotizaciones(html)
     assert "<h2>Cotizaciones</h2>" in html
 

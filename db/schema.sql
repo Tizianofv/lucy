@@ -109,6 +109,11 @@ CREATE TABLE proyectos (
   -- empieza por `http://` o `https://` se pinta como enlace (`db.enlace_de_carpeta`).
   -- La escribe `crud.editar` por su puerta (`db.carpeta_de_proyecto_que_vale`).
   carpeta         TEXT,
+  -- La carpeta de audio (pieza 4 de «Carpetas del proyecto», migración 2026-10-18_proyectos_carpeta_audio.sql):
+  -- la ruta, escrita a mano, de la carpeta del proyecto en el disco Sesiones del estudio. Lucy NO ve ese disco:
+  -- no sabe si existe. NULL = sin escribir. Nunca se pinta como enlace. La escribe `crud.editar` por la misma
+  -- puerta que `carpeta` (`db.carpeta_de_proyecto_que_vale`).
+  carpeta_audio   TEXT,
   CONSTRAINT proyectos_cliente_entero
     CHECK ((cliente_noco_id IS NULL) = (cliente_nombre IS NULL)),
   CONSTRAINT proyectos_entrega_despues_del_inicio

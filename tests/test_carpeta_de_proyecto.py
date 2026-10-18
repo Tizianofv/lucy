@@ -622,8 +622,11 @@ def test_en_ninguna_plantilla_la_carpeta_llega_a_un_href_sin_pasar_por_el_filtro
                     con_expresion.append((atributo.group(1), expresion))
     navegan = [(k, e) for k, e in con_expresion if k in _ATRIBUTOS_QUE_NAVEGAN]
     assert navegan == [("href", "enlace_carpeta")], navegan
+    # (`m.carpeta_audio or ''` es el `value` del campo de la carpeta de audio, pieza 4: nunca un atributo que navega;
+    # su propia prueba, `tests/test_carpeta_de_audio.py`, mira que sea el único sitio y que no pase por el filtro.)
     assert sorted(set(con_expresion)) == sorted([("href", "enlace_carpeta"), ("value", "m.carpeta or ''"),
-                                                 ("maxlength", "largo_carpeta")]), con_expresion
+                                                 ("maxlength", "largo_carpeta"),
+                                                 ("value", "m.carpeta_audio or ''")]), con_expresion
     fuente = (_ROOT / "web" / "plantillas" / "proyectos.html").read_text(encoding="utf-8")
     assigns = re.findall(r"\{%-?\s*set\s+enlace_carpeta\s*=\s*([^%]*?)\s*-?%\}", fuente)
     assert assigns == ["m.carpeta|enlace_de_carpeta"]
@@ -631,7 +634,9 @@ def test_en_ninguna_plantilla_la_carpeta_llega_a_un_href_sin_pasar_por_el_filtro
     expresiones = re.findall(r"\{\{\s*([^}]*?carpeta[^}]*?)\s*\}\}", re.sub(r"\{#.*?#\}", "", fuente, flags=re.S))
     # Lo de «Documentos (Drive)» (pieza 2) son palabras que llegan hechas desde `cotizaciones_drive`, no el dato `carpeta`.
     permitidas = {"largo_carpeta", "m.carpeta or ''", "m.carpeta", "enlace_carpeta", "'Cambiar' if m.carpeta else 'Poner'",
-                  "carpeta_drive.frase", "carpeta_drive.boton", "frase_de_la_carpeta_hecha"}
+                  "carpeta_drive.frase", "carpeta_drive.boton", "frase_de_la_carpeta_hecha",
+                  # La carpeta de audio (pieza 4): texto escapado en su `<code>` y el `value` de su campo.
+                  "m.carpeta_audio", "m.carpeta_audio or ''"}
     assert {e for e in expresiones if "m.id" not in e} <= permitidas, expresiones
     # `m.carpeta` suelto (el texto) solo aparece dentro de `<code class="carpeta-texto">`, y `m.carpeta or ''`
     # solo en el `value` del campo del formulario.
@@ -714,7 +719,8 @@ def test_la_casa_ve_el_bloque_aunque_no_haya_carpeta_y_puede_ponerla(uno):
     form = ver(uno, p=1, editar="carpeta")
     assert 'action="/proyectos/1/carpeta"' in form and 'name="carpeta"' in form and f'maxlength="{LARGO}"' in form
     assert "Pega la dirección de la carpeta en Drive" in form
-    assert "Cancelar" in form and "&amp;editar=carpeta" not in form.split('class="carpeta-editar"', 1)[1]
+    # (con el `#` del final: la línea de audio, pieza 4, trae su propio «Poner» con `editar=carpeta_audio`)
+    assert "Cancelar" in form and "&amp;editar=carpeta#" not in form.split('class="carpeta-editar"', 1)[1]
 
 
 def test_la_casa_ve_un_enlace_con_cambiar_y_sin_copiar(uno):
@@ -907,6 +913,8 @@ def test_los_avisos_de_la_carpeta_no_salen_con_una_direccion_escrita_a_mano(uno)
 def _ddl_sin_la_carpeta() -> str:
     ddl = b2._ddl(b2._SCHEMA.read_text(encoding="utf-8"), "proyectos")[0]
     ddl = re.sub(r"\n\s*carpeta\s+TEXT,", "", ddl)
+    # La base de antes de esta migración es también la de antes de la de la carpeta de audio (pieza 4, que vino después).
+    ddl = re.sub(r"\n\s*carpeta_audio\s+TEXT,", "", ddl)
     assert "carpeta" not in ddl, ddl
     return ddl
 
@@ -1033,7 +1041,8 @@ hay_osascript = pytest.mark.skipif(
 #  · `document.addEventListener(tipo, f)` guarda UN oyente por tipo: así lo usa el guion.
 #  · el evento trae `target.closest(selector)`: devuelve el botón si el selector es el del botón, y
 #    nada si no (así lo hace `Element.closest`).
-#  · `boton.parentNode.querySelector("code.carpeta-texto")` devuelve el `<code>`; su `textContent` es
+#  · `boton.closest(".carpeta-contenido")` devuelve la caja del botón (el ancestro más cercano que cumple el selector,
+#    que es lo que hace `Element.closest`) y `caja.querySelector("code.carpeta-texto")` devuelve el `<code>`; su `textContent` es
 #    el texto del HTML ya SIN escapes (lo que un navegador entrega), que la prueba saca del HTML servido.
 #  · `navigator.clipboard.writeText(t)` devuelve algo con `then(ok, fallo)`; el doble llama a `ok` o a
 #    `fallo` enseguida. Un `Promise` real lo hace después, sin importar para este guion.
@@ -1044,7 +1053,8 @@ function correrTemporizadores() { var cola = __t; __t = []; for (var i = 0; i < 
 var __oyentes = {};
 var __texto = {textContent: %(TEXTO)s};
 var __cuerpo = {querySelector: function (s) { return s === "code.carpeta-texto" ? __texto : null; }};
-var __boton = {textContent: "Copiar", parentNode: __cuerpo};
+var __boton = {textContent: "Copiar", parentNode: __cuerpo,
+               closest: function (s) { return s === ".carpeta-contenido" ? __cuerpo : null; }};
 function __evento(sobreElBoton) {
   return {target: {closest: function (s) { return (sobreElBoton && s === "[data-copiar-carpeta]") ? __boton : null; }}};
 }
@@ -1194,6 +1204,8 @@ def test_la_migracion_corrida_dos_veces_deja_lo_mismo():
 def test_la_tabla_migrada_es_la_del_esquema():
     con = _tabla_vieja()
     _aplicar_migracion(con, _MIGRACION.read_text(encoding="utf-8"))
+    # y la de la carpeta de audio (pieza 4), que el esquema también declara
+    _aplicar_migracion(con, (_ROOT / "db" / "migrations" / "2026-10-18_proyectos_carpeta_audio.sql").read_text(encoding="utf-8"))
     tipos = lambda c: {f[1]: f[2].upper() for f in c.execute("PRAGMA table_info(proyectos)")}   # noqa: E731
     assert tipos(con) == tipos(b2._base())
 
@@ -1214,5 +1226,5 @@ def test_la_migracion_es_aditiva_y_dice_lo_que_hay_que_decir():
 def test_el_esquema_declara_la_columna_y_nada_mas_de_la_tabla_cambio_de_forma():
     esquema = b2._SCHEMA.read_text(encoding="utf-8")
     ddl = " ".join(b2._ddl(esquema, "proyectos")[0].split())
-    assert re.search(r"carpeta TEXT,", ddl) and ddl.count("carpeta") == 1
+    assert len(re.findall(r"\bcarpeta TEXT,", ddl)) == 1 and ddl.count("carpeta") == 2      # ella y `carpeta_audio` (pieza 4)
     assert "carpeta" in db.columnas_declaradas()["proyectos"]

@@ -1555,6 +1555,29 @@ async def carpetas_de_proyectos() -> dict[int, str | None] | None:
     return {f["id"]: f["carpeta"] for f in filas}
 
 
+async def carpetas_de_audio() -> dict[int, str | None] | None:
+    """`{proyecto_id: carpeta_audio}` de los proyectos VIVOS, o `None` si la columna todavía no existe (la
+    migración `2026-10-18_proyectos_carpeta_audio.sql` sin aplicar, SQLSTATE 42703): entonces la página no
+    dibuja la línea «Audio (disco Sesiones)». UNA LECTURA APARTE con su propia conexión y NO dentro de
+    `carpetas_de_proyectos`: una base con la columna `carpeta` y sin `carpeta_audio` tiene que seguir
+    enseñando la carpeta de Drive (y un 42703 deja abortada la transacción de la conexión donde ocurre).
+    Lo que devuelve es lo que alguien escribió: Lucy no ve el disco Sesiones y aquí no se comprueba nada de él."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute("SELECT id, carpeta_audio FROM proyectos WHERE borrado_en IS NULL")
+            filas = await cur.fetchall()
+        except Exception as e:
+            try:
+                sqlstate = e.sqlstate
+            except AttributeError:
+                raise e from None
+            if sqlstate == "42703":
+                return None
+            raise
+    return {f["id"]: f["carpeta_audio"] for f in filas}
+
+
 # ── LAS NOTAS Y DECISIONES DEL PROYECTO (`notas.proyecto_id`, parte 6 del diseño de la página completa
 # del proyecto, 8-oct-2026) ─────────────────────────────────────────────────────────────────
 #
@@ -5259,7 +5282,7 @@ def orden_en_la_lista(m: dict) -> tuple:
 
 def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
                  hoy: date, participantes=(), fechas=None, carpetas=None, notas=None,
-                 actividad=None) -> dict:
+                 actividad=None, audios=None) -> dict:
     """El modelo de la página de proyectos, con todas las decisiones.
 
     `fechas` es lo que devuelve `fechas_de_proyectos()` (`None` = las columnas no existen: el
@@ -5267,6 +5290,8 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
     se cuentan contra `hoy` (Santo Domingo) y no se enseñan en un proyecto cerrado.
     `carpetas` es lo que devuelve `carpetas_de_proyectos()` (`None` = la columna no existe: el
     proyecto sale con `carpeta_disponible` falso y el bloque de la carpeta no se dibuja).
+    `audios` es lo que devuelve `carpetas_de_audio()` (`None` = la columna no existe: el proyecto sale con
+    `carpeta_audio_disponible` falso y la línea de audio no se dibuja; la carpeta de Drive no depende de esto).
     `notas` es lo que devuelve `notas_de_proyectos()` (`None` = la columna `autor_chat_id` no existe:
     el proyecto sale con `notas_disponibles` falso y el bloque de notas no se dibuja). Cada nota lleva
     el NOMBRE de su autor (`_nota_del_modelo`), nunca el número de chat.
@@ -5362,6 +5387,10 @@ def armar_pagina(areas, proyectos, tareas, huellas, comentarios, nombres,
             # plantilla con `enlace_de_carpeta` (una sola puerta), no este modelo.
             "carpeta_disponible": carpetas is not None and pid in carpetas,
             "carpeta": carpetas.get(pid) if carpetas else None,
+            # La carpeta de audio (pieza 4 de «Carpetas del proyecto»): la ruta que alguien escribió, tal cual. Lucy no
+            # ve el disco Sesiones; la plantilla la pinta siempre como texto, nunca como enlace.
+            "carpeta_audio_disponible": audios is not None and pid in audios,
+            "carpeta_audio": audios.get(pid) if audios else None,
             # Las notas (parte 6): las vivas de este proyecto, la más nueva primero. Sin la columna
             # `autor_chat_id` en la base (`notas` es `None`) no se dibuja nada de esto.
             "notas_disponibles": notas is not None,
@@ -5505,11 +5534,13 @@ async def pagina_de_proyectos(hoy: date | None = None) -> dict:
     fechas = await fechas_de_proyectos()
     # LA CARPETA (parte 5): otra lectura aparte, tolerante a su columna sin migrar.
     carpetas = await carpetas_de_proyectos()
+    # LA CARPETA DE AUDIO (pieza 4 de «Carpetas del proyecto»): su propia lectura, tolerante a su columna sin migrar.
+    audios = await carpetas_de_audio()
     # LAS NOTAS (parte 6): otra lectura aparte, tolerante a su columna sin migrar.
     notas = await notas_de_proyectos()
     return armar_pagina(grupos, proyectos, tareas, huellas, comentarios,
                         nombres_con_code(), hoy, participantes, fechas, carpetas, notas,
-                        actividad)
+                        actividad, audios)
 
 
 async def derivaciones() -> dict[int, int]:

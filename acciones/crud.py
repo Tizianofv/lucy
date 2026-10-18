@@ -1465,6 +1465,10 @@ PUERTAS = {"tareas": {"responsable_chat_id": _responsable_que_vale,
                         # vacío = sin carpeta. Si es un enlace lo decide
                         # otra puerta, la de PINTAR (`db.enlace_de_carpeta`): esta guarda cualquier ruta.
                         "carpeta": db.carpeta_de_proyecto_que_vale,
+                        # La carpeta de audio (pieza 4 de «Carpetas del proyecto», 18-oct-2026): LA MISMA función
+                        # que la carpeta, no una copia (un solo criterio). Es una ruta del disco Sesiones que Lucy
+                        # no ve; nunca se pinta como enlace.
+                        "carpeta_audio": db.carpeta_de_proyecto_que_vale,
                         "cliente_noco_id": _el_cliente_se_elige_en_el_panel,
                         "cliente_nombre": _el_cliente_se_elige_en_el_panel}}
 
@@ -1506,6 +1510,7 @@ _VUELVE_A = {
     ("proyectos", "entrega"): "el proyecto volvería a tener la fecha de entrega que tenía",
     ("proyectos", "termina_cuando"): "el proyecto volvería a decir lo que decía en «Termina cuando»",
     ("proyectos", "carpeta"): "el proyecto volvería a tener la carpeta que tenía",
+    ("proyectos", "carpeta_audio"): "el proyecto volvería a tener la carpeta de audio que tenía",
     ("proyectos", "cliente_noco_id"): "el proyecto volvería al cliente que tenía",
     ("proyectos", "cliente_nombre"): "el proyecto volvería al cliente que tenía",
 }
@@ -1520,7 +1525,7 @@ _COLUMNAS_DE_DIA = frozenset({("proyectos", "inicio"), ("proyectos", "entrega")}
 # como una fecha ISO; una carpeta que se llame «2026-10-08» (o «2026-10 ventas») no es una hora y la
 # puerta de la carpeta (que pide un texto) la rechazaría como `tipo`. Estas se le pasan a su puerta
 # TAL CUAL llegaron.
-_COLUMNAS_DE_TEXTO = frozenset({("proyectos", "carpeta")})
+_COLUMNAS_DE_TEXTO = frozenset({("proyectos", "carpeta"), ("proyectos", "carpeta_audio")})
 
 # Las fechas del proyecto (parte 4): `editar` no escribe las que ya valen lo que se pide, y mira que
 # la entrega no quede antes del inicio. Misma regla en `deshacer`.
@@ -1741,6 +1746,17 @@ async def editar(
                 igual = False
             if igual:
                 del campos["carpeta"]
+                if not campos:
+                    return antes, None
+
+        # LA CARPETA DE AUDIO (pieza 4 de «Carpetas del proyecto»): lo mismo que la carpeta, para su columna.
+        if tabla == "proyectos" and "carpeta_audio" in campos:
+            try:
+                igual = campos["carpeta_audio"] == db.carpeta_guardada(antes["carpeta_audio"])
+            except db.CarpetaDeProyectoNoVale:
+                igual = False
+            if igual:
+                del campos["carpeta_audio"]
                 if not campos:
                     return antes, None
 
