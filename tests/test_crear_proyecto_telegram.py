@@ -137,9 +137,9 @@ class Mundo:
     Las columnas son las de `db/schema.sql` para las cinco tablas que toca este
     camino. `personas` no hace falta: las interpretaciones de estas pruebas no
     nombran a nadie, así que `buscar_o_crear_persona("")` sale antes de tocar
-    la base. `proyectos` NO tiene columnas de cliente: el diseño dice que el
-    cliente no se pide por Telegram, y una columna acá dejaría pasar un
-    `cliente_*` escrito sin que nadie lo note.
+    la base. `proyectos` SÍ tiene las columnas del cliente (`cliente_noco_id`,
+    `cliente_nombre`): desde la pieza 1 de «Un proyecto no se crea sin cliente»
+    (18-oct-2026) el proyecto nace con ellas, y su INSERT las escribe.
     """
 
     def __init__(self, areas=("CDS", "ACD", "IA")):
@@ -149,7 +149,8 @@ class Mundo:
             CREATE TABLE areas (clave TEXT PRIMARY KEY, color TEXT, orden INTEGER);
             CREATE TABLE proyectos (id INTEGER PRIMARY KEY, nombre TEXT NOT NULL,
               descripcion, estado TEXT DEFAULT 'activo', area,
-              responsable_chat_id INTEGER, borrado_en, inicio, entrega, termina_cuando);
+              responsable_chat_id INTEGER, borrado_en, inicio, entrega, termina_cuando,
+              cliente_noco_id, cliente_nombre);
             CREATE TABLE tareas (id INTEGER PRIMARY KEY, bandeja_id, titulo,
               detalle, vence_en, recurrencia, estado TEXT DEFAULT 'pendiente',
               proyecto_id, persona_id, anticipos_min, responsable_chat_id,
@@ -164,11 +165,11 @@ class Mundo:
                 "INSERT INTO areas (clave, color, orden) VALUES (?, ?, ?)",
                 (clave, "#2b6cb0", i))
 
-    def proyecto(self, nombre, area=None, responsable=None, borrado=False):
+    def proyecto(self, nombre, area=None, responsable=None, borrado=False, estado="activo"):
         c = self.con.execute(
-            "INSERT INTO proyectos (nombre, area, responsable_chat_id, borrado_en)"
-            " VALUES (?, ?, ?, ?)",
-            (nombre, area, responsable, "2026-09-01" if borrado else None))
+            "INSERT INTO proyectos (nombre, area, responsable_chat_id, borrado_en, estado)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (nombre, area, responsable, "2026-09-01" if borrado else None, estado))
         return c.lastrowid
 
     def proyectos(self):
@@ -350,13 +351,13 @@ def test_crear_proyecto_con_datos_buenos_crea_por_la_puerta_con_su_huella():
     _casa()
     m = Mundo()
     r, acciones = _herramienta(m, "crear_proyecto", {
-        "nombre": "  Documental  ", "grupo": "ACD", "responsable": "Rosi"})
+        "nombre": "  Documental  ", "grupo": "IA", "responsable": "Rosi"})
 
     filas = m.proyectos()
     assert len(filas) == 1, filas
     f = filas[0]
     assert (f["nombre"], f["area"], f["responsable_chat_id"]) == (
-        "Documental", "ACD", ROSI), f
+        "Documental", "IA", ROSI), f
     h, = m.huellas()
     assert (h["accion"], h["tabla"], h["registro_id"]) == (
         "crear", "proyectos", f["id"]), h
@@ -420,13 +421,13 @@ def test_la_huella_de_un_proyecto_de_telegram_dice_que_vino_de_telegram():
     _casa()
     m = Mundo()
     _herramienta(m, "crear_proyecto", {
-        "nombre": "Por Telegram", "grupo": "CDS", "responsable": "Rosi"})
+        "nombre": "Por Telegram", "grupo": "IA", "responsable": "Rosi"})
     h, = m.huellas()
     assert h["actor"] == "lucy", h
     assert "Telegram" in h["motivo"] and "panel" not in h["motivo"], h
 
     m2 = Mundo()
-    _correr(m2, lambda: db.crear_proyecto("Por el panel", "CDS", ROSI))
+    _correr(m2, lambda: db.crear_proyecto("Por el panel", "IA", ROSI, cliente_noco_id=None, leer_persona=None))
     h2, = m2.huellas()
     assert (h2["actor"], "panel" in h2["motivo"]) == ("panel", True), h2
 
@@ -435,7 +436,7 @@ def test_la_puerta_rechaza_un_origen_desconocido():
     _casa()
     m = Mundo()
     try:
-        _correr(m, lambda: db.crear_proyecto("X", "CDS", ROSI, desde="otro"))
+        _correr(m, lambda: db.crear_proyecto("X", "IA", ROSI, desde="otro", cliente_noco_id=None, leer_persona=None))
     except ValueError:
         pass
     else:
@@ -472,9 +473,9 @@ def test_un_proyecto_en_la_papelera_no_estorba_para_crear_otro_con_su_nombre():
     nombre (`proyecto_vivo_con_nombre`)."""
     _casa()
     m = Mundo()
-    m.proyecto("En la papelera", area="CDS", borrado=True)
+    m.proyecto("En la papelera", area="IA", borrado=True)
     r, _ = _herramienta(m, "crear_proyecto", {
-        "nombre": "En la papelera", "grupo": "CDS", "responsable": "Rosi"})
+        "nombre": "En la papelera", "grupo": "IA", "responsable": "Rosi"})
     assert r.startswith("OK"), r
     assert len(m.proyectos()) == 2, m.proyectos()
 
@@ -791,9 +792,8 @@ ENTRADAS_DE_TELEGRAM = (
 
 def test_ningun_otro_camino_de_telegram_crea_un_proyecto():
     creadores, genericos = _creadores_de_proyectos(_ROA)
-    assert genericos, (
-        "el censo no vio al escritor genérico (`INSERT INTO {tabla}`): sin él "
-        "estaría verde sin mirar el camino que se pierde en un grep")
+    # (Ya no hay escritor genérico de proyectos: `_buscar_o_crear` se quedó solo con las personas, pieza 1 de «Un
+    # proyecto no se crea sin cliente». Que el censo SABE ver uno lo prueba `test_el_censo_ve_un_escritor_generico_inventado`.)
 
     alcanzables = _alcanzables(_ROA, ENTRADAS_DE_TELEGRAM)
     assert ("cerebro/agente.py", "_ejecutar_herramienta") in alcanzables, (
@@ -805,10 +805,8 @@ def test_ningun_otro_camino_de_telegram_crea_un_proyecto():
     for antes_creaba in (("acciones/crud.py", "crear_desde_interpretacion"),
                          ("acciones/crud.py", "perfil")):
         assert antes_creaba in alcanzables, (antes_creaba, sorted(alcanzables))
-    # Y el escritor GENÉRICO sigue siendo alcanzable —lo usa `buscar_o_crear_
-    # persona`, que Telegram sí llama—: lo que lo salva no es que no se llegue,
-    # es que nadie le pasa «proyectos» (`buscar_o_crear_proyecto` no está en
-    # `alcanzables`, y eso lo dice el `assert not culpables` de abajo).
+    # `_buscar_o_crear` (personas) sigue siendo alcanzable —lo usa `buscar_o_crear_persona`, que Telegram sí llama—,
+    # pero ya no escribe proyectos, y eso lo dice el `assert not culpables` de abajo.
     assert ("db/db.py", "_buscar_o_crear") in alcanzables, sorted(alcanzables)
 
     # La ÚNICA excepción, y no es un perdón: es la herramienta que E8 agrega.
@@ -824,13 +822,12 @@ def test_ningun_otro_camino_de_telegram_crea_un_proyecto():
 
 def test_el_censo_de_creadores_ve_a_los_de_hoy():
     """EL TRINQUETE, para que el de arriba no se quede verde por no ver nada:
-    hoy pueden crear un proyecto estos tres. Uno nuevo se pone rojo acá hasta
+    hoy pueden crear un proyecto estos dos. Uno nuevo se pone rojo acá hasta
     que alguien lo mire."""
     creadores, genericos = _creadores_de_proyectos(_ROA)
     assert sorted(n for _, n in creadores) == [
-        "buscar_o_crear_proyecto", "convertir_tarea_en_proyecto",
-        "crear_proyecto"], sorted(creadores)
-    assert sorted(n for _, n in genericos) == ["_buscar_o_crear"], sorted(genericos)
+        "convertir_tarea_en_proyecto", "crear_proyecto"], sorted(creadores)
+    assert sorted(n for _, n in genericos) == [], sorted(genericos)
 
 
 def test_el_censo_ve_un_creador_inventado(tmp_path):

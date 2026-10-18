@@ -1640,33 +1640,31 @@ async def crear_proyecto_nuevo(request: Request):
             str(formulario.get("responsable", "")))
     except ValueError:
         responsable = None
+    # EL CLIENTE NACE CON EL PROYECTO (pieza 1 de «Un proyecto no se crea sin cliente», 18-oct-2026): se manda a la
+    # puerta, que vuelve a leer la ficha de Noco ANTES de escribir y decide si el grupo lo exige. Aquí solo se
+    # traduce: un Id que no es un número llega como `None` y la puerta lo rechaza si hace falta. En CDS y ACD el
+    # nombre es el del cliente: lo que se haya escrito en «Nombre» no viaja.
+    crudo = str(formulario.get("cliente", "")).strip()
+    cliente = int(crudo) if re.fullmatch(r"[0-9]{1,18}", crudo) else None
     try:
-        nuevo = await db.crear_proyecto(nombre, area, responsable)
+        nuevo = await db.crear_proyecto(
+            None if db.cliente_es_obligatorio(area) else nombre, area, responsable,
+            cliente_noco_id=cliente, leer_persona=noco_lectura.persona)
     except db.NombreDeProyectoNoVale as e:
         log.warning("Panel de proyectos: proyecto nuevo rechazado (%s)", e.clave)
         return RedirectResponse(f"{vuelta}&error=nombre_{e.clave}", status_code=303)
     except db.ProyectoNoSeCrea as e:
         log.warning("Panel de proyectos: proyecto nuevo rechazado (%s)", e.clave)
         return RedirectResponse(f"{vuelta}&error={e.clave}", status_code=303)
-    # LA CARPETA DE DRIVE nace con el proyecto, DESPUÉS de guardarlo y ANTES de cualquier salida anticipada (la del
-    # cliente): si Drive falla el proyecto sigue creado y el aviso lo dice.
+    except noco_lectura.NocoNoContesta as e:
+        log.warning("Panel de proyectos: Noco no contestó al crear un proyecto: %s", e)
+        return RedirectResponse(f"{vuelta}&error=cliente_noco", status_code=303)
+    except db.ClienteConProyecto as e:
+        log.warning("Panel de proyectos: proyecto nuevo rechazado: el cliente ya tiene el #%s activo", e.proyecto_id)
+        return RedirectResponse(f"{vuelta}&error=cliente_ocupado&p={e.proyecto_id}", status_code=303)
+    # LA CARPETA DE DRIVE nace con el proyecto, DESPUÉS de guardarlo (y con su cliente ya puesto): si Drive falla el
+    # proyecto sigue creado y el aviso lo dice.
     aviso_carpeta = cotizaciones_drive.clave_de_aviso_de_la_carpeta(await _preparar_la_carpeta_de_drive(nuevo["id"]))
-    # EL CLIENTE ES OPCIONAL (Tiziano, 1-oct-2026: «no todos los proyectos tienen
-    # cliente»). Si la ventanita mandó uno, se pone DESPUÉS de crear el proyecto,
-    # por la única puerta del cliente (`db.poner_cliente`, que vuelve a leer la
-    # ficha de Noco): así el proyecto no depende de que Noco conteste, y si no
-    # contesta el proyecto queda creado SIN cliente y el aviso lo dice.
-    crudo = str(formulario.get("cliente", "")).strip()
-    if crudo:
-        try:
-            if not crudo.isdigit():
-                raise ValueError("cliente que no es un Id")
-            await db.poner_cliente(nuevo["id"], int(crudo), leer_persona=noco_lectura.persona)
-        except (ValueError, noco_lectura.NocoNoContesta) as e:
-            log.warning("Panel de proyectos: el proyecto #%s se creó sin cliente: %s", nuevo["id"], e)
-            error = "cliente_nuevo" if aviso_carpeta is None else f"cliente_nuevo_{aviso_carpeta}"
-            return RedirectResponse(
-                f"/proyectos?hecho=proyecto_nuevo&error={error}&p={nuevo['id']}", status_code=303)
     cola = f"&error={aviso_carpeta}" if aviso_carpeta else ""
     return RedirectResponse(
         f"/proyectos?hecho=proyecto_nuevo{cola}&p={nuevo['id']}", status_code=303)
@@ -3375,8 +3373,23 @@ async def convertir_en_proyecto(request: Request, tid: int):
     """
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
+    # EL CLIENTE (pieza 1 de «Un proyecto no se crea sin cliente»): si la tarea es de IA no hace falta; en cualquier
+    # otro caso la puerta lo exige y, sin él, no convierte nada. La pantalla de dos pasos que lo pide es otra pieza.
+    formulario = await request.form()
+    crudo = str(formulario.get("cliente", "")).strip()
+    cliente = int(crudo) if re.fullmatch(r"[0-9]{1,18}", crudo) else None
     try:
-        resultado = await db.convertir_tarea_en_proyecto(tid)
+        resultado = await db.convertir_tarea_en_proyecto(
+            tid, cliente_noco_id=cliente, leer_persona=noco_lectura.persona)
+    except noco_lectura.NocoNoContesta as e:
+        log.warning("Panel de tareas: Noco no contestó al convertir #%s: %s", tid, e)
+        return RedirectResponse(f"/tareas/{tid}?error=convertir_noco", status_code=303)
+    except db.ClienteConProyecto as e:
+        log.warning("Panel de tareas: no se convirtió #%s: el cliente ya tiene el #%s activo", tid, e.proyecto_id)
+        return RedirectResponse(f"/tareas/{tid}?error=convertir_ocupado", status_code=303)
+    except db.ProyectoNoSeCrea as e:
+        log.warning("Panel de tareas: no se convirtió #%s en proyecto (%s)", tid, e.clave)
+        return RedirectResponse(f"/tareas/{tid}?error=convertir_cliente", status_code=303)
     except db.NombreDeProyectoNoVale as e:
         # El título de la tarea no puede ser el nombre de un proyecto: el motivo
         # REAL (repetido, vacío, largo) viaja como clave, no el «no califica»

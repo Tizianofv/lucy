@@ -155,6 +155,8 @@ def gente():
 
 def _proyecto(con, id=1, nombre="Proyecto de prueba", estado="activo", **otros):
     campos = {"id": id, "nombre": nombre, "estado": estado, **otros}
+    if otros.get("area"):        # el grupo tiene que existir (llave foránea)
+        con.execute("INSERT OR IGNORE INTO areas (clave, color, orden) VALUES (?, '#9', 9)", (otros["area"],))
     con.execute(f"INSERT INTO proyectos ({', '.join(campos)}) VALUES "
                 f"({', '.join('?' for _ in campos)})", tuple(campos.values()))
     con.commit()
@@ -393,7 +395,8 @@ def _noco_de_mentira(fichas: dict, pedidos: list | None = None):
 
 
 async def test_G6_se_guarda_el_nombre_que_devuelve_noco_para_ese_id(base):
-    _proyecto(base, 1)
+    _proyecto(base, 1, area="IA")
+    # (en IA: el cliente es opcional y el nombre del proyecto no se toca; en CDS/ACD ver `tests/test_proyecto_con_cliente.py`)
     leer = _noco_de_mentira({7: {"id": 7, "nombre": "  Nombre Desde Noco "}})
     assert await db.poner_cliente(1, 7, leer_persona=leer) is True
     fila = _una(base, "SELECT cliente_noco_id i, cliente_nombre n FROM proyectos WHERE id = 1")
@@ -406,7 +409,7 @@ async def test_G6_se_guarda_el_nombre_que_devuelve_noco_para_ese_id(base):
 
 
 async def test_G6_lo_mismo_dos_veces_no_escribe_ni_deja_huella(base):
-    _proyecto(base, 1)
+    _proyecto(base, 1, area="IA")
     leer = _noco_de_mentira({7: {"id": 7, "nombre": "Ficha"}})
     await db.poner_cliente(1, 7, leer_persona=leer)
     assert await db.poner_cliente(1, 7, leer_persona=leer) is False
@@ -414,7 +417,7 @@ async def test_G6_lo_mismo_dos_veces_no_escribe_ni_deja_huella(base):
 
 
 async def test_G6_cambiar_de_cliente_y_quitarlo(base):
-    _proyecto(base, 1)
+    _proyecto(base, 1, area="IA")
     leer = _noco_de_mentira({7: {"id": 7, "nombre": "Uno"}, 8: {"id": 8, "nombre": "Dos"}})
     await db.poner_cliente(1, 7, leer_persona=leer)
     await db.poner_cliente(1, 8, leer_persona=leer)
@@ -428,7 +431,7 @@ async def test_G6_cambiar_de_cliente_y_quitarlo(base):
     None, {}, {"id": 99, "nombre": "De otro Id"}, {"id": 7, "nombre": ""},
     {"id": 7, "nombre": "   "}, {"id": 7, "nombre": None}, {"id": 7}])
 async def test_G6_una_ficha_que_no_vale_no_guarda_nada(base, ficha):
-    _proyecto(base, 1)
+    _proyecto(base, 1, area="IA")
     with pytest.raises(ValueError):
         await db.poner_cliente(1, 7, leer_persona=_noco_de_mentira({7: ficha}))
     assert _una(base, "SELECT cliente_noco_id i FROM proyectos WHERE id = 1")["i"] is None
@@ -518,8 +521,11 @@ def _escritores_de_cliente() -> set[str]:
     return hallados
 
 
-def test_G6_el_unico_escritor_del_cliente_es_poner_cliente():
-    assert _escritores_de_cliente() == {"poner_cliente"}
+def test_G6_los_unicos_escritores_del_cliente_son_las_tres_puertas():
+    """Desde la pieza 1 de «Un proyecto no se crea sin cliente» (18-oct-2026) el cliente nace con el proyecto: lo
+    escriben `crear_proyecto` y `convertir_tarea_en_proyecto` en su INSERT, y `poner_cliente` en el UPDATE de un
+    proyecto que existe. Un cuarto escritor se pone rojo acá."""
+    assert _escritores_de_cliente() == {"poner_cliente", "crear_proyecto", "convertir_tarea_en_proyecto"}
 
 
 def test_G6_el_censo_ve_un_escritor_inventado():

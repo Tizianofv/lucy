@@ -108,7 +108,9 @@ def _huellas(mundo) -> list[dict]:
 
 
 def _nuevo(mundo, **campos):
-    datos = {"nombre": "Grabación del sencillo", "area": "CDS", "responsable": "Persona Dos"}
+    # IA: el único grupo que no exige cliente y donde el nombre del proyecto se escribe (pieza 1 de «Un proyecto no se
+    # crea sin cliente», 18-oct-2026). El alta de CDS/ACD con cliente se ejerce en `tests/test_proyecto_con_cliente.py`.
+    datos = {"nombre": "Grabación del sencillo", "area": db.AREA_TECNICA, "responsable": "Persona Dos"}
     datos.update(campos)
     return mandar("/proyectos/nuevo", datos)
 
@@ -117,13 +119,13 @@ def _nuevo(mundo, **campos):
 # Crear un proyecto
 # ═══════════════════════════════════════════════════════════════════════
 
-def test_crear_deja_el_proyecto_con_su_grupo_responsable_y_sin_cliente(mundo, gente):
+def test_crear_en_ia_deja_el_proyecto_con_su_grupo_responsable_y_sin_cliente(mundo, gente):
     r = _nuevo(mundo, nombre="  Grabación del sencillo  ")
     assert r.status_code == 303
     pid = mundo.con.execute("SELECT id FROM proyectos").fetchone()[0]
     assert r.headers["location"] == f"/proyectos?hecho=proyecto_nuevo&p={pid}"
     fila = _fila(mundo, pid)
-    assert (fila["nombre"], fila["area"], fila["estado"]) == ("Grabación del sencillo", "CDS", "activo")
+    assert (fila["nombre"], fila["area"], fila["estado"]) == ("Grabación del sencillo", "IA", "activo")
     assert fila["responsable_chat_id"] == gente.rosi
     assert fila["cliente_noco_id"] is None and fila["cliente_nombre"] is None
     assert fila["borrado_en"] is None
@@ -137,7 +139,7 @@ def test_crear_deja_su_huella_de_panel_y_se_puede_deshacer(mundo, gente):
     h = huellas[0]
     assert (h["actor"], h["accion"], h["tabla"]) == ("panel", "crear", "proyectos")
     despues = json.loads(h["despues"])
-    assert despues["nombre"] == "Grabación del sencillo" and despues["area"] == "CDS"
+    assert despues["nombre"] == "Grabación del sencillo" and despues["area"] == "IA"
     assert h["antes"] is None
     # Deshacer (la rama genérica de «crear») lo manda a la papelera.
     asyncio.new_event_loop().run_until_complete(crud.deshacer(h["id"]))
@@ -158,16 +160,16 @@ def test_el_proyecto_recien_creado_se_ve_con_su_aviso_y_su_responsable(mundo, ge
                                            ("x" * (db.LARGO_NOMBRE_PROYECTO + 1), "nombre_largo")])
 def test_un_nombre_que_no_vale_no_crea_nada_y_vuelve_al_formulario(mundo, nombre, clave):
     r = _nuevo(mundo, nombre=nombre)
-    assert r.headers["location"] == f"/proyectos?nuevo=CDS&error={clave}"
+    assert r.headers["location"] == f"/proyectos?nuevo=IA&error={clave}"
     assert mundo.con.execute("SELECT count(*) FROM proyectos").fetchone()[0] == 0
     assert _huellas(mundo) == []
 
 
 def test_un_nombre_repetido_no_crea_otro_pero_uno_de_la_papelera_no_cuenta(mundo):
-    mundo.proyecto(1, "Ya existe", area="CDS")
-    mundo.proyecto(2, "De la papelera", area="CDS", borrado=True)
+    mundo.proyecto(1, "Ya existe", area="IA")
+    mundo.proyecto(2, "De la papelera", area="IA", borrado=True)
     r = _nuevo(mundo, nombre="YA EXISTE")
-    assert r.headers["location"] == "/proyectos?nuevo=CDS&error=nombre_repetido"
+    assert r.headers["location"] == "/proyectos?nuevo=IA&error=nombre_repetido"
     assert mundo.con.execute("SELECT count(*) FROM proyectos").fetchone()[0] == 2
     assert _nuevo(mundo, nombre="de la papelera").headers["location"].startswith(
         "/proyectos?hecho=proyecto_nuevo")
@@ -181,7 +183,7 @@ def test_el_rechazo_no_lleva_el_nombre_pedido_en_la_url(mundo):
 @pytest.mark.parametrize("quien", ["", "Nadie", "Ajeno", "700100999", "-5", "Persona Dos; DROP", "x" * 300])
 def test_el_responsable_tiene_que_ser_de_los_que_valen(mundo, gente, quien):
     r = _nuevo(mundo, responsable=quien)
-    assert r.headers["location"] == "/proyectos?nuevo=CDS&error=responsable"
+    assert r.headers["location"] == "/proyectos?nuevo=IA&error=responsable"
     assert mundo.con.execute("SELECT count(*) FROM proyectos").fetchone()[0] == 0
 
 
@@ -256,7 +258,7 @@ def test_el_titulo_se_edita_con_doble_clic_y_sin_javascript_hay_un_enlace(mundo)
 
 
 def test_renombrar_guarda_y_la_pagina_lo_enseña(mundo):
-    mundo.proyecto(1, "Viejo", area="CDS")
+    mundo.proyecto(1, "Viejo", area="IA")
     r = mandar("/proyectos/1/nombre", {"nombre": "  Nuevo nombre "})
     assert r.headers["location"] == "/proyectos?nombre_guardado=1&p=1#proyecto-1"
     assert _fila(mundo, 1)["nombre"] == "Nuevo nombre"
@@ -266,8 +268,8 @@ def test_renombrar_guarda_y_la_pagina_lo_enseña(mundo):
 
 
 def test_renombrar_a_uno_repetido_o_vacio_se_rechaza(mundo):
-    mundo.proyecto(1, "Uno", area="CDS")
-    mundo.proyecto(2, "Dos", area="CDS")
+    mundo.proyecto(1, "Uno", area="IA")
+    mundo.proyecto(2, "Dos", area="IA")
     assert mandar("/proyectos/1/nombre", {"nombre": "dos"}).headers["location"].startswith(
         "/proyectos?error=nombre_repetido&p=1")
     assert mandar("/proyectos/1/nombre", {"nombre": ""}).headers["location"].startswith(
@@ -901,9 +903,10 @@ def test_un_grupo_que_no_existe_no_se_guarda(mundo):
 def test_el_cliente_se_lee_de_la_base_y_se_escribe_solo_por_poner_cliente_con_la_ficha_de_noco(mundo):
     """El cliente de la cabecera sale de `proyectos.cliente_nombre`; se cambia con
     el formulario de `/proyectos/{pid}/cliente`; y la ÚNICA puerta que lo escribe
-    es `db.poner_cliente`, llamada desde dos rutas (la del cliente y la de
-    «proyecto nuevo») SIEMPRE con `leer_persona=noco_lectura.persona`, para que el
-    nombre que se guarda sea el que Noco devuelve. SALE DEL ÁRBOL de `web/`."""
+    es `db.poner_cliente` (un proyecto que existe) y, desde la pieza 1 de «Un proyecto no se
+    crea sin cliente», los dos creadores (`db.crear_proyecto` y `db.convertir_tarea_en_proyecto`):
+    toda llamada desde `web/` pasa SIEMPRE `leer_persona=noco_lectura.persona`, para que el nombre
+    que se guarda sea el que Noco devuelve. SALE DEL ÁRBOL de `web/`."""
     mundo.proyecto(1, "P", area="CDS", cliente="Colegio")
     html = ver(mundo, p=1)
     assert '<label>Cliente <input class="campo-quien" type="text" name="pq" value="Colegio"' in html
@@ -915,11 +918,12 @@ def test_el_cliente_se_lee_de_la_base_y_se_escribe_solo_por_poner_cliente_con_la
                 if isinstance(f, (ast.AsyncFunctionDef, ast.FunctionDef)):
                     for n in ast.walk(f):
                         if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                                and n.func.attr == "poner_cliente"):
+                                and n.func.attr in ("poner_cliente", "crear_proyecto", "convertir_tarea_en_proyecto")):
                             llamadas[f.name] = {k.arg: ast.unparse(k.value) for k in n.keywords}
-    assert sorted(llamadas) == ["crear_proyecto_nuevo", "poner_cliente_del_proyecto"], llamadas
+    assert sorted(llamadas) == ["convertir_en_proyecto", "crear_proyecto_nuevo", "poner_cliente_del_proyecto"], llamadas
     for nombre, kw in llamadas.items():
-        assert kw == {"leer_persona": "noco_lectura.persona"}, (nombre, kw)
+        assert kw["leer_persona"] == "noco_lectura.persona", (nombre, kw)
+        assert "cliente_noco_id" in kw or nombre == "poner_cliente_del_proyecto", (nombre, kw)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -989,7 +993,7 @@ def test_toda_ruta_post_de_proyectos_pide_sesion_y_escribe_por_una_puerta_con_ac
     # personas). «Proyecto nuevo» tiene dos: crea, y después pone el cliente si la
     # ventanita mandó uno.
     esperadas = {
-        "/proyectos/nuevo": {"db.crear_proyecto", "db.poner_cliente"},
+        "/proyectos/nuevo": {"db.crear_proyecto"},          # el cliente nace con el proyecto (pieza 1, 18-oct-2026)
         "/proyectos/{pid}/nombre": {"crud.editar"},
         "/proyectos/{pid}/descripcion": {"crud.editar"},      # 8-oct-2026: «De qué se trata»
         "/proyectos/{pid}/fechas": {"crud.editar"},           # 8-oct-2026: inicio, entrega, «Termina cuando»
@@ -1127,7 +1131,7 @@ def test_quien_escribe_cada_columna_del_proyecto_y_si_pasa_por_su_puerta():
     # perfil — nace con grupo y responsable, por `crear_proyecto`. El trinquete
     # hizo lo suyo: al desaparecer ese escritor, esta línea se puso roja hasta
     # que alguien vino y lo declaró.
-    assert escritores["nombre"] == {"convertir_tarea_en_proyecto", "crear_proyecto"}
+    assert escritores["nombre"] == {"convertir_tarea_en_proyecto", "crear_proyecto", "poner_cliente"}
     # `crear_proyecto` llama a las puertas de lo que escribe.
     fuente = ast.parse((_ROOT / "db" / "db.py").read_text(encoding="utf-8"))
     crear = next(f for f in ast.walk(fuente) if isinstance(f, ast.AsyncFunctionDef) and f.name == "crear_proyecto")
@@ -1164,11 +1168,19 @@ def _filas(mundo) -> int:
     return mundo.con.execute("SELECT count(*) FROM proyectos").fetchone()[0]
 
 
+# Sin cliente: lo único que vale en IA. Con `leer_persona=None` si la puerta pidiera la ficha, esta prueba se rompe.
+_SIN_CLIENTE = dict(cliente_noco_id=None, leer_persona=None)
+
+
+def mundo_rosi() -> int:
+    return config.CHAT_ID_DUENO
+
+
 @pytest.mark.parametrize("responsable", [None, True, False, "Persona Dos", "700100001", 12345,
                                           700100999, 3.5, [700100001]])
 async def test_la_puerta_rechaza_un_responsable_que_no_es_un_chat_que_valga(mundo, gente, responsable):
     with pytest.raises(db.ProyectoNoSeCrea) as e:
-        await db.crear_proyecto("Un proyecto", "CDS", responsable)
+        await db.crear_proyecto("Un proyecto", "CDS", responsable, **_SIN_CLIENTE)
     assert e.value.clave == "responsable"
     assert _filas(mundo) == 0 and _huellas(mundo) == []
 
@@ -1176,7 +1188,7 @@ async def test_la_puerta_rechaza_un_responsable_que_no_es_un_chat_que_valga(mund
 @pytest.mark.parametrize("area", ["Inventada", "", None, "cds", 5, "CDS' OR 1=1 --"])
 async def test_la_puerta_rechaza_un_grupo_que_no_existe(mundo, gente, area):
     with pytest.raises(db.ProyectoNoSeCrea) as e:
-        await db.crear_proyecto("Un proyecto", area, gente.rosi)
+        await db.crear_proyecto("Un proyecto", area, gente.rosi, **_SIN_CLIENTE)
     assert e.value.clave == "grupo"
     assert _filas(mundo) == 0 and _huellas(mundo) == []
 
@@ -1185,34 +1197,42 @@ async def test_la_puerta_rechaza_un_grupo_que_no_existe(mundo, gente, area):
                                            ("x" * (db.LARGO_NOMBRE_PROYECTO + 1), "largo")])
 async def test_la_puerta_rechaza_un_nombre_malo(mundo, gente, nombre, clave):
     with pytest.raises(db.NombreDeProyectoNoVale) as e:
-        await db.crear_proyecto(nombre, "CDS", gente.rosi)
+        await db.crear_proyecto(nombre, "IA", gente.rosi, **_SIN_CLIENTE)
     assert e.value.clave == clave
     assert _filas(mundo) == 0 and _huellas(mundo) == []
 
 
 async def test_la_puerta_rechaza_un_nombre_repetido_pero_no_el_de_uno_en_la_papelera(mundo, gente):
-    mundo.proyecto(1, "Ya existe", area="CDS")
-    mundo.proyecto(2, "En la papelera", area="CDS", borrado=True)
+    mundo.proyecto(1, "Ya existe", area="IA")
+    mundo.proyecto(2, "En la papelera", area="IA", borrado=True)
     with pytest.raises(db.NombreDeProyectoNoVale) as e:
-        await db.crear_proyecto(" YA EXISTE ", "CDS", gente.rosi)
+        await db.crear_proyecto(" YA EXISTE ", "IA", gente.rosi, **_SIN_CLIENTE)
     assert e.value.clave == "repetido" and _filas(mundo) == 2
-    nuevo = await db.crear_proyecto("en la papelera", "CDS", gente.rosi)
+    nuevo = await db.crear_proyecto("en la papelera", "IA", gente.rosi, **_SIN_CLIENTE)
     assert nuevo["nombre"] == "en la papelera" and _filas(mundo) == 3
 
 
-async def test_la_puerta_decide_en_orden_nombre_grupo_responsable(mundo):
+async def test_la_puerta_decide_en_orden_nombre_grupo_responsable_cliente(mundo):
+    # En IA el nombre se pide y es lo primero; en CDS/ACD el nombre lo da el cliente, así que el orden es grupo,
+    # responsable y cliente.
     with pytest.raises(db.NombreDeProyectoNoVale):
-        await db.crear_proyecto("", "Inventada", None)
+        await db.crear_proyecto("", "IA", None, **_SIN_CLIENTE)
     with pytest.raises(db.ProyectoNoSeCrea) as e:
-        await db.crear_proyecto("Bien", "Inventada", None)
+        await db.crear_proyecto("Bien", "Inventada", None, **_SIN_CLIENTE)
     assert e.value.clave == "grupo"
+    with pytest.raises(db.ProyectoNoSeCrea) as e:
+        await db.crear_proyecto(None, "CDS", None, **_SIN_CLIENTE)
+    assert e.value.clave == "responsable"
+    with pytest.raises(db.ProyectoNoSeCrea) as e:
+        await db.crear_proyecto(None, "CDS", mundo_rosi(), **_SIN_CLIENTE)
+    assert e.value.clave == "cliente"
 
 
 @pytest.mark.parametrize("quien", ["dueno", "rosi", "code"])
 async def test_la_puerta_deja_pasar_a_rosi_a_tiziano_y_a_code(mundo, gente, quien):
     chat = {"dueno": gente.dueno, "rosi": gente.rosi, "code": config.CHAT_ID_CODE}[quien]
-    nuevo = await db.crear_proyecto("  Con espacios  ", "ACD", chat)
-    assert (nuevo["nombre"], nuevo["area"], nuevo["responsable_chat_id"]) == ("Con espacios", "ACD", chat)
+    nuevo = await db.crear_proyecto("  Con espacios  ", "IA", chat, **_SIN_CLIENTE)
+    assert (nuevo["nombre"], nuevo["area"], nuevo["responsable_chat_id"]) == ("Con espacios", "IA", chat)
     h, = _huellas(mundo)
     assert (h["actor"], h["accion"], h["registro_id"]) == ("panel", "crear", nuevo["id"])
 
@@ -1663,11 +1683,21 @@ def test_cada_formulario_enviado_como_el_navegador_escribe_en_el_proyecto_de_la_
             datos["noco_id"] = "101"
         elif clase == "agregar":
             datos["noco_id"] = "102"
+        elif clase == "nuevo":
+            datos["cliente"] = "101"           # el cliente que la persona escoge en la ventanita (campo `cliente`)
         antes = _todos(m)
         pid = consulta.get("p")
         r = _cliente(config.CHAT_ID_DUENO).post(form["accion"], data=datos, follow_redirects=False)
         despues = _todos(m)
         assert r.status_code == 303, (vista, form["accion"], datos)
+        # EN CDS Y ACD el nombre del proyecto es el del cliente (pieza 1, 18-oct-2026): renombrar a mano se rechaza
+        # (la pantalla de esos grupos deja de ofrecer el renombrado en la pieza 2) y el proyecto queda igual.
+        if clase == "renombrar" and db.cliente_es_obligatorio(antes[pid]["area"]):
+            assert r.headers["location"].startswith(f"/proyectos?error=nombre_cliente&p={pid}"), (
+                vista, r.headers["location"])
+            assert despues == antes, (vista, "un renombre rechazado cambió algo")
+            casos += 1
+            continue
         assert r.headers["location"].startswith("/proyectos?") and "error=" not in r.headers["location"], (
             vista, form["accion"], datos, r.headers["location"])
         textos = " ".join(b["texto"] for b in form["botones"])
@@ -1679,7 +1709,10 @@ def test_cada_formulario_enviado_como_el_navegador_escribe_en_el_proyecto_de_la_
             # El grupo es el que ESE formulario trae escondido: cada ventanita lleva
             # el de su grupo, y la página aparte el de `?nuevo=`.
             suyo = next(c["value"] for c in form["campos"] if c["name"] == "area")
-            assert (fila["nombre"], fila["area"]) == ("Escrito en nombre", suyo), (vista, fila)
+            # En IA el nombre que se escribió; en CDS y ACD el de la ficha del cliente que se escogió.
+            esperado = "Escrito en nombre" if not db.cliente_es_obligatorio(suyo) else "Cliente Uno"
+            assert (fila["nombre"], fila["area"]) == (esperado, suyo), (vista, fila)
+            assert (fila["cliente_noco_id"], fila["cliente_nombre"]) == (101, "Cliente Uno"), (vista, fila)
             assert fila["responsable_chat_id"] == nombres["Persona Uno"], (vista, fila)
             casos += 1
             continue

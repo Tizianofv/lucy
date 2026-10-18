@@ -460,18 +460,29 @@ def test_la_ventanita_y_la_pagina_aparte_envian_lo_mismo_a_la_misma_ruta(mundo, 
                   for f in formularios) == sorted([a["clave"] for a in AREAS] + ["ACD"])
 
 
-def test_enviar_cada_ventanita_crea_el_proyecto_en_su_grupo(mundo, gente):
-    for area in AREAS:
+def test_enviar_cada_ventanita_crea_el_proyecto_en_su_grupo(mundo, gente, monkeypatch):
+    # Desde la pieza 1 de «Un proyecto no se crea sin cliente» (18-oct-2026): en CDS y ACD la ventanita manda el cliente
+    # que la persona escogió (un cliente distinto por grupo: un solo proyecto activo por cliente) y el proyecto toma su
+    # nombre; en IA el cliente no hace falta y el nombre es el escrito.
+    import noco_lectura
+
+    async def ficha(noco_id):
+        return {"id": noco_id, "nombre": f"Ficha {noco_id}"}
+    monkeypatch.setattr(noco_lectura, "persona", ficha)
+    for i, area in enumerate(AREAS):
         raiz = arbol(ver(mundo))
         enlace = next(e for e in _enlaces_de_nuevo(raiz) if e.attrs["href"].endswith("=" + area["clave"]))
         form = _ventana_de(enlace).buscar("form")[0]
         datos = {c.attrs["name"]: c.attrs.get("value", "") for c in form.buscar("input") if "name" in c.attrs}
         datos["nombre"] = "Desde la ventanita " + area["clave"]
         datos["responsable"] = "Persona Dos"
+        if area["clave"] != "IA":
+            datos["cliente"] = str(100 + i)
         r = _cliente(config.CHAT_ID_DUENO).post(form.attrs["action"], data=datos, follow_redirects=False)
         assert r.status_code == 303 and "error=" not in r.headers["location"], r.headers["location"]
+        esperado = datos["nombre"] if area["clave"] == "IA" else f"Ficha {100 + i}"
         fila = mundo.con.execute("SELECT area, responsable_chat_id FROM proyectos WHERE nombre = ?",
-                                 ("Desde la ventanita " + area["clave"],)).fetchone()
+                                 (esperado,)).fetchone()
         assert tuple(fila) == (area["clave"], gente.rosi)
 
 

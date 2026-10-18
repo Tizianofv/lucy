@@ -90,17 +90,29 @@ class _CursorProyectos:
             # `db.proyecto_vivo_con_nombre` (chequeo de nombre repetido): lo que
             # dice su SQL, a mano. (Su texto real se ejecuta de verdad, en
             # sqlite, en `tests/test_nombre_de_proyecto.py`.)
-            nombre, excluir = p
+            # (Los dos últimos parámetros son los estados que NO cuentan como activo: pausado y cerrado.)
+            nombre, excluir, *no_cuentan = p
             self._fila = next(
                 ({"id": q["id"]} for q in self._conn.proyectos
                  if q.get("borrado_en") is None and q["id"] != excluir
+                 and q.get("estado", "activo") not in no_cuentan
                  and q["nombre"].lower() == nombre.lower()), None)
+
+        elif s.startswith("SELECT id, nombre, estado FROM proyectos"):
+            # `db.proyecto_vivo_del_cliente`: el proyecto ACTIVO de ese cliente (fuera de IA).
+            cliente, area_fija, *no_cuentan, excluir = p
+            self._fila = next(
+                ({k: q[k] for k in ("id", "nombre", "estado")} for q in self._conn.proyectos
+                 if q.get("borrado_en") is None and q.get("cliente_noco_id") == cliente
+                 and (q.get("area") or "") != area_fija and q["id"] != excluir
+                 and q.get("estado", "activo") not in no_cuentan), None)
 
         elif s.startswith("INSERT INTO proyectos"):
             self._conn.sig_proyecto += 1
-            nombre, descripcion, area = p
+            nombre, descripcion, area, cliente_id, cliente_nombre = p
             fila = {"id": self._conn.sig_proyecto, "nombre": nombre,
                     "descripcion": descripcion, "area": area,
+                    "cliente_noco_id": cliente_id, "cliente_nombre": cliente_nombre,
                     "estado": "activo", "borrado_en": None,
                     "creado_en": datetime(2026, 9, 22, tzinfo=UTC)}
             self._conn.proyectos.append(fila)
@@ -209,11 +221,16 @@ def _con_base(conn, fn):
         db.pool = guardado
 
 
+# Sin cliente: lo único que vale en IA. En CDS, ACD y sin área la tarea no se convierte sin cliente (y el proyecto toma el
+# nombre del cliente): `tests/test_proyecto_con_cliente.py`.
+_SIN_CLIENTE = dict(cliente_noco_id=None, leer_persona=None)
+
+
 def _fila_tarea(**extra):
     fila = {"id": 40, "bandeja_id": 900, "titulo": "Álbum nuevo",
             "detalle": "grabar el disco completo", "estado": "pendiente",
             "vence_en": None, "creado_en": datetime(2026, 8, 1, tzinfo=UTC),
-            "responsable_chat_id": None, "proyecto_id": None, "area": "CDS",
+            "responsable_chat_id": None, "proyecto_id": None, "area": "IA",
             "borrado_en": None}
     fila.update(extra)
     return fila
@@ -223,21 +240,21 @@ def _fila_tarea(**extra):
 
 def test_convertir_crea_el_proyecto_con_nombre_detalle_y_area_de_la_tarea():
     conn = _ConnProyectos([_fila_tarea()])
-    resultado = _con_base(conn, lambda: db.convertir_tarea_en_proyecto(40))
+    resultado = _con_base(conn, lambda: db.convertir_tarea_en_proyecto(40, **_SIN_CLIENTE))
 
     assert len(conn.proyectos) == 1
     p = conn.proyectos[0]
     assert p["nombre"] == "Álbum nuevo", "el nombre del proyecto no es el título"
     assert p["descripcion"] == "grabar el disco completo", (
         "la descripción del proyecto no es el detalle de la tarea")
-    assert p["area"] == "CDS", "el proyecto no heredó el área de la tarea"
+    assert p["area"] == "IA", "el proyecto no heredó el área de la tarea"
     assert resultado["proyecto_id"] == p["id"]
     assert resultado["proyecto_nombre"] == "Álbum nuevo"
 
 
 def test_convertir_archiva_la_tarea_original_y_no_la_muda_al_proyecto():
     conn = _ConnProyectos([_fila_tarea()])
-    _con_base(conn, lambda: db.convertir_tarea_en_proyecto(40))
+    _con_base(conn, lambda: db.convertir_tarea_en_proyecto(40, **_SIN_CLIENTE))
 
     tarea = next(t for t in conn.tareas if t["id"] == 40)
     assert tarea["borrado_en"] is not None, "la tarea original no se archivó"
@@ -251,7 +268,7 @@ def test_convertir_archiva_la_tarea_original_y_no_la_muda_al_proyecto():
 def test_convertir_rechaza_una_tarea_que_ya_tiene_proyecto():
     conn = _ConnProyectos([_fila_tarea(proyecto_id=7)])
     try:
-        _con_base(conn, lambda: db.convertir_tarea_en_proyecto(40))
+        _con_base(conn, lambda: db.convertir_tarea_en_proyecto(40, **_SIN_CLIENTE))
         assert False, "debió rechazar: esa tarea ya tiene proyecto"
     except ValueError as e:
         assert "proyecto" in str(e).lower()
@@ -263,7 +280,7 @@ def test_convertir_rechaza_una_tarea_que_ya_tiene_proyecto():
 def test_convertir_rechaza_una_tarea_que_no_esta_pendiente():
     conn = _ConnProyectos([_fila_tarea(estado="hecha")])
     try:
-        _con_base(conn, lambda: db.convertir_tarea_en_proyecto(40))
+        _con_base(conn, lambda: db.convertir_tarea_en_proyecto(40, **_SIN_CLIENTE))
         assert False, "debió rechazar: esa tarea no está pendiente"
     except ValueError as e:
         assert "pendiente" in str(e).lower()
@@ -273,7 +290,7 @@ def test_convertir_rechaza_una_tarea_que_no_esta_pendiente():
 def test_convertir_rechaza_una_tarea_que_no_existe():
     conn = _ConnProyectos([])
     try:
-        _con_base(conn, lambda: db.convertir_tarea_en_proyecto(999))
+        _con_base(conn, lambda: db.convertir_tarea_en_proyecto(999, **_SIN_CLIENTE))
         assert False, "debió rechazar: esa tarea no existe"
     except ValueError:
         pass
@@ -285,7 +302,7 @@ def test_convertir_deja_dos_huellas_independientes_y_deshaceables():
     con la forma que `deshacer()` ya sabe revertir -- nada de un tercer tipo
     de acción inventado."""
     conn = _ConnProyectos([_fila_tarea()])
-    resultado = _con_base(conn, lambda: db.convertir_tarea_en_proyecto(40))
+    resultado = _con_base(conn, lambda: db.convertir_tarea_en_proyecto(40, **_SIN_CLIENTE))
 
     huella_proyecto = next(
         l for l in conn.logs if l["id"] == resultado["log_id_proyecto"])
@@ -308,117 +325,16 @@ def test_convertir_conserva_responsable_y_comentarios_en_la_tarea_archivada():
     """El responsable no tiene a dónde ir en `proyectos` -- no existe esa
     columna ahí -- así que se queda en la fila archivada, no se pierde."""
     conn = _ConnProyectos([_fila_tarea(responsable_chat_id=DUENO)])
-    _con_base(conn, lambda: db.convertir_tarea_en_proyecto(40))
+    _con_base(conn, lambda: db.convertir_tarea_en_proyecto(40, **_SIN_CLIENTE))
     tarea = next(t for t in conn.tareas if t["id"] == 40)
     assert tarea["responsable_chat_id"] == DUENO, (
         "el responsable se perdió al convertir -- no había dónde guardarlo "
         "en el registro si esto fallara en silencio")
 
 
-# ── La huella de `buscar_o_crear_proyecto` (encargo 5, requisito 4) ──────
-
-class _CursorBuscarOCrear:
-    def __init__(self, conn):
-        self._conn = conn
-        self._fila = None
-
-    async def execute(self, sql, params=None):
-        s = " ".join(sql.split())
-        p = params or ()
-        self._conn.sql.append((s, p))
-
-        if s.startswith("SELECT id FROM proyectos"):
-            nombre = p[0]
-            self._fila = next(
-                ({"id": pr["id"]} for pr in self._conn.proyectos
-                 if pr["nombre"].lower() == nombre.lower()), None)
-
-        elif s.startswith("INSERT INTO proyectos (nombre)"):
-            self._conn.sig += 1
-            fila = {"id": self._conn.sig, "nombre": p[0]}
-            self._conn.proyectos.append(fila)
-            self._fila = fila
-
-        elif s.startswith("UPDATE proyectos SET inicio"):
-            inicio, pid = p
-            for q in self._conn.proyectos:
-                if q["id"] == pid:
-                    q["inicio"] = inicio
-            self._fila = None
-
-        elif s.startswith("SELECT * FROM proyectos WHERE id"):
-            self._fila = next((dict(q) for q in self._conn.proyectos if q["id"] == p[0]), None)
-
-        elif s.startswith("INSERT INTO log_acciones"):
-            m = re.search(
-                r"log_acciones\s*\(([^)]*)\)\s*VALUES\s*\(([^)]*)\)", s,
-                re.IGNORECASE)
-            columnas = _split_top_level(m.group(1))
-            crudos = _split_top_level(m.group(2))
-            it = iter(p)
-            fila = {}
-            for col, val in zip(columnas, crudos):
-                fila[col] = (next(it) if val == "%s"
-                             else None if val.upper() == "NULL"
-                             else val.strip("'\""))
-            self._conn.logs.append(fila)
-            self._fila = None
-
-        else:
-            raise AssertionError(
-                f"SQL no modelado por _CursorBuscarOCrear: {s[:90]}")
-        return self
-
-    async def fetchone(self):
-        return self._fila
-
-
-class _ConnBuscarOCrear:
-    def __init__(self, proyectos=None):
-        self.proyectos = [dict(p) for p in (proyectos or [])]
-        self.logs: list = []
-        self.sql: list = []
-        self.sig = 200
-
-    def cursor(self, row_factory=None):
-        return _CursorBuscarOCrear(self)
-
-    @contextlib.asynccontextmanager
-    async def transaction(self):
-        yield self
-
-    async def execute(self, sql, params=None):
-        return await _CursorBuscarOCrear(self).execute(sql, params)
-
-
-def test_buscar_o_crear_proyecto_deja_huella_al_crear_uno_nuevo():
-    conn = _ConnBuscarOCrear([])
-    pid = _con_base(conn, lambda: db.buscar_o_crear_proyecto(
-        "Renovar el estudio", bandeja_id=77))
-
-    assert len(conn.proyectos) == 1 and conn.proyectos[0]["id"] == pid
-    assert len(conn.logs) == 1, (
-        "crear un proyecto nuevo nombrándolo al vuelo tiene que dejar huella "
-        "en el registro -- hallazgo del encargo 5: 3 de 4 proyectos de "
-        "producción no tenían rastro")
-    huella = conn.logs[0]
-    assert huella["accion"] == "crear"
-    assert huella["tabla"] == "proyectos"
-    assert huella["registro_id"] == pid
-    assert huella["bandeja_id"] == 77
-    assert huella["actor"] == "lucy", (
-        "esto lo dispara siempre una interpretación de Telegram, nunca el panel")
-
-
-def test_buscar_o_crear_proyecto_no_deja_huella_si_ya_existia():
-    conn = _ConnBuscarOCrear([{"id": 55, "nombre": "Renovar el estudio"}])
-    pid = _con_base(conn, lambda: db.buscar_o_crear_proyecto(
-        "renovar el estudio"))  # minúscula: mismo match insensible
-
-    assert pid == 55, "debió encontrar el proyecto existente, no crear otro"
-    assert len(conn.proyectos) == 1
-    assert conn.logs == [], "no se creó nada, no hay nada que registrar"
-
+# ── (La huella de `buscar_o_crear_proyecto` se retiró con la función: pieza 1 de «Un proyecto no se crea sin
+#    cliente», 18-oct-2026. Un proyecto nace SOLO por `crear_proyecto` y `convertir_tarea_en_proyecto`, y las dos dejan
+#    su huella `crear`: se ejercen arriba y en `tests/test_escrituras_proyecto.py`.) ──
 
 # ── `db.proyectos_vivos` / `db.proyectos_con_tareas` ──────────────────────
 
@@ -573,8 +489,8 @@ def test_cambiar_area_de_proyecto_llama_a_la_misma_puerta_que_telegram():
 def test_convertir_en_proyecto_llama_a_db_convertir_y_redirige_al_nuevo():
     llamadas = []
 
-    async def _convertir_espia(tid):
-        llamadas.append(tid)
+    async def _convertir_espia(tid, **kw):
+        llamadas.append((tid, kw["cliente_noco_id"], kw["leer_persona"] is panel.noco_lectura.persona))
         return {"proyecto_id": 42, "proyecto_nombre": "Álbum nuevo",
                 "log_id_proyecto": 1, "log_id_tarea": 2}
 
@@ -586,13 +502,13 @@ def test_convertir_en_proyecto_llama_a_db_convertir_y_redirige_al_nuevo():
     finally:
         db.convertir_tarea_en_proyecto = guardado
 
-    assert llamadas == [40]
+    assert llamadas == [(40, None, True)]       # sin `cliente` en el formulario llega None, y la ficha se lee con Noco
     assert r.status_code == 303
     assert r.headers["location"] == "/proyectos?creado=42#proyecto-42"
 
 
 def test_convertir_en_proyecto_redirige_con_error_si_la_tarea_no_califica():
-    async def _convertir_rechaza(tid):
+    async def _convertir_rechaza(tid, **kw):
         raise ValueError("Esa tarea ya tiene proyecto: no se convierte.")
 
     guardado = db.convertir_tarea_en_proyecto

@@ -976,9 +976,10 @@ async def _ejecutar_herramienta(
             # —nombre, grupo y responsable— son las de `db.crear_proyecto`, la
             # misma puerta que usa el panel; esta rama no decide nada.
             nuevo, log_id = await crud.crear_proyecto(
-                str(args.get("nombre") or ""),
+                (str(args.get("nombre")).strip() or None) if args.get("nombre") else None,
                 str(args.get("grupo") or ""),
-                args.get("responsable"))
+                args.get("responsable"),
+                args.get("cliente_id"))
             _anotar(acciones, log_id,
                     f"creé el proyecto «{str(nuevo.get('nombre') or '')[:40]}» "
                     f"en {nuevo.get('area')}")

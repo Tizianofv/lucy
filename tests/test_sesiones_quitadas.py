@@ -302,6 +302,10 @@ def test_la_quitada_sale_de_la_lista_y_de_los_totales(dos):
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_se_queda_quitada_al_cambiar_el_cliente_y_volverlo_a_poner(dos):
+    # En IA el cliente se puede quitar (en CDS y ACD el proyecto necesita cliente: pieza 1 de «Un proyecto no se crea
+    # sin cliente», 18-oct-2026); lo que se vigila es que la decisión sobre la sesión sobreviva a quitarlo y ponerlo.
+    dos.con.execute("UPDATE proyectos SET area = 'IA' WHERE id = 1")
+    dos.con.commit()
     ficha = _ficha(dos, 1)
     quitar(1, 11)
     assert "s011" not in _pintadas(_bloque(_ver(p=1)))

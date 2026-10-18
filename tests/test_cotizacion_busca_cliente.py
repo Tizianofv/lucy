@@ -228,7 +228,13 @@ def test_desde_la_ventana_no_se_quita_un_cliente(m, noco):
     r = _casa().post("/proyectos/1/cliente", data={"noco_id": "", "volver": "cotizacion"}, follow_redirects=False)
     assert r.headers["location"] == "/proyectos?error=cliente&p=1&cotizacion=nueva#cotizaciones"
     assert _cliente_de(m, 1) == (7, "Cliente de la ficha") and noco["poner_cliente"] == []
-    # el encabezado sí lo quita (no se tocó)
+    # el encabezado SOLO lo quita en IA (pieza 1 de «Un proyecto no se crea sin cliente», 18-oct-2026): en CDS y ACD el
+    # proyecto necesita cliente y se rechaza.
+    r = _casa().post("/proyectos/1/cliente", data={"noco_id": ""}, follow_redirects=False)
+    assert r.headers["location"] == "/proyectos?error=cliente&p=1"
+    assert _cliente_de(m, 1) == (7, "Cliente de la ficha")
+    m.con.execute("UPDATE proyectos SET area = 'IA' WHERE id = 1")
+    m.con.commit()
     r = _casa().post("/proyectos/1/cliente", data={"noco_id": ""}, follow_redirects=False)
     assert r.headers["location"] == "/proyectos?hecho=cliente_quitado&p=1"
     assert _cliente_de(m, 1) == (None, None)

@@ -87,7 +87,11 @@ class Mundo(N.Base):
             "INSERT INTO personas (nombre, borrado_en) VALUES (?, ?)",
             (nombre, "2026-09-01" if borrada else None)).lastrowid
 
-    def tarea(self, titulo, borrada=False, proyecto=None, estado="pendiente"):
+    def tarea(self, titulo, borrada=False, proyecto=None, estado="pendiente", area=None):
+        if area is not None:           # (hay pruebas con la tabla SIN la columna `area`: sólo se nombra si se pide)
+            return self.con.execute(
+                "INSERT INTO tareas (titulo, borrado_en, proyecto_id, estado, area) VALUES (?,?,?,?,?)",
+                (titulo, "2026-09-01" if borrada else None, proyecto, estado, area)).lastrowid
         return self.con.execute(
             "INSERT INTO tareas (titulo, borrado_en, proyecto_id, estado) VALUES (?,?,?,?)",
             (titulo, "2026-09-01" if borrada else None, proyecto, estado)).lastrowid
@@ -617,9 +621,9 @@ def test_convertir_una_tarea_no_agrega_tareas_a_ningun_proyecto():
     lo encuentra: solo mira los `INSERT INTO tareas`)."""
     A._casa()
     m = Mundo()
-    t = m.tarea("Nuevo proyecto")
+    t = m.tarea("Nuevo proyecto", area=TEC)       # IA: la única que se convierte sin cliente
     antes = m.n_tareas()
-    N._correr(m, lambda: db.convertir_tarea_en_proyecto(t))
+    N._correr(m, lambda: db.convertir_tarea_en_proyecto(t, cliente_noco_id=None, leer_persona=None))
     assert m.n_tareas() == antes
 
 
@@ -1192,6 +1196,11 @@ def _casos_de_no():
         m.proyecto("Cerrado", estado="cerrado")
         return m
 
+    def pausados_en_varios(m):
+        m.proyecto("Doble", estado="pausado")
+        m.proyecto("Doble", estado="pausado")
+        return m
+
     def duplicado_de_otro(m):
         m.con.execute("INSERT INTO tareas (titulo, responsable_chat_id, estado) "
                       "VALUES ('Llamar al banco', ?, 'pendiente')", (OTRA,))
@@ -1222,6 +1231,11 @@ def _casos_de_no():
         ("proyecto_cerrado", cerrado,
          {"clasificacion": "tarea", "titulo": "x", "proyecto": "cerrado"},
          "ese proyecto está cerrado"),
+        # Pieza 1 de «Un proyecto no se crea sin cliente» (18-oct-2026): dos proyectos PAUSADOS con el mismo nombre y
+        # ninguno activo no se resuelven solos: se pregunta cuál.
+        ("proyecto_pausado_en_varios", pausados_en_varios,
+         {"clasificacion": "tarea", "titulo": "x", "proyecto": "doble"},
+         "varios proyectos pausados"),
         # E8 (1-oct-2026): nombrar un proyecto que no existe ya NO lo crea al
         # vuelo — se corta y se pregunta. Este caso ANTES esperaba «200
         # caracteres»: el nombre lo rechazaba `nombre_de_proyecto_que_vale`
@@ -1278,8 +1292,8 @@ def test_los_casos_de_no_cubren_cada_raise_de_no_de_negocio_de_crear():
               and _es_no_de_negocio(n.exc)]
     # Los 4 «No creé la tarea: {e}» de responsable, área, «Primero:» y proyecto
     # cerrado, la PREGUNTA del proyecto que no existe (E8), el «ya existía», la
-    # clasificación, el dueño de cita y la migración de citas.
-    assert len(raises) == 9, (
+    # clasificación, el dueño de cita y la migración de citas, y los pausados con el mismo nombre (18-oct-2026).
+    assert len(raises) == 10, (
         f"cambió el número de `raise NoDeNegocio` ({len(raises)}): agrega su "
         f"caso a `_casos_de_no`")
     assert len(_casos_de_no()) >= len(raises)

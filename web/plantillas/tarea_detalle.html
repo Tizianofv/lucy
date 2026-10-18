@@ -37,6 +37,12 @@ nombre (el título de la tarea). Cambia el título y vuelve a intentar.</p>
 largo para ser el nombre de un proyecto.</p>
 {% elif error == 'convertir_vacio' %}
 <p class="aviso">No se convirtió en proyecto: la tarea no tiene título.</p>
+{% elif error == 'convertir_cliente' %}
+<p class="aviso">No se convirtió en proyecto: en CDS y ACD el proyecto necesita un cliente.</p>
+{% elif error == 'convertir_noco' %}
+<p class="aviso">No se convirtió en proyecto: Noco no contestó. Inténtalo en un momento.</p>
+{% elif error == 'convertir_ocupado' %}
+<p class="aviso">No se convirtió en proyecto: el cliente tiene un proyecto activo y no se pueden activar 2.</p>
 {% endif %}
 
 {# «PRIMERO:» (encargo 6). Si la tarea ESPERA a otra que sigue pendiente, se

@@ -59,9 +59,11 @@ def _huella_de_antes(m, tabla: str, rid: int, accion="borrar", despues=None):
 
 def _sembrar(m):
     """Un grupo «Hogar» con de todo, y otro grupo con lo suyo (que no se debe tocar)."""
-    m.proyecto(1, "Casa nueva", area="Hogar")
-    m.proyecto(2, "Viejo", area="Hogar", estado="cerrado")
-    m.proyecto(3, "Ya borrado", area="Hogar", borrado=True)
+    # Con cliente (el mismo): desde «Un proyecto no se crea sin cliente» (pieza 1, 18-oct-2026) un proyecto de un grupo
+    # que no es IA no vuelve de la papelera sin él. Uno activo y uno cerrado del mismo cliente conviven.
+    m.proyecto(1, "Casa nueva", area="Hogar", cliente="Cliente Hogar")
+    m.proyecto(2, "Viejo", area="Hogar", estado="cerrado", cliente="Cliente Hogar")
+    m.proyecto(3, "Ya borrado", area="Hogar", borrado=True, cliente="Cliente Hogar")
     m.proyecto(4, "De otro grupo", area="CDS")
     m.tarea(10, "pendiente en 1", proyecto=1)
     m.tarea(11, "hecha en 1", proyecto=1, estado="hecha", completado=_dia(-1))

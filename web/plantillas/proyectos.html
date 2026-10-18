@@ -859,6 +859,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     {% elif error == 'nombre_largo' %}<p class="aviso">El nombre no puede pasar de {{ largo_nombre }} caracteres.</p>
     {% elif error == 'nombre_repetido' %}<p class="aviso">Ya hay otro proyecto con ese nombre. Cada proyecto se llama distinto.</p>
     {% elif error == 'nombre_igual' %}<p class="aviso">El nombre ya era ese: no cambió nada.</p>
+    {% elif error == 'nombre_cliente' %}<p class="aviso">En CDS y ACD el nombre del proyecto es el del cliente: para cambiarlo, cambia el cliente.</p>
     {% elif error == 'nombre_invalido' %}<p class="aviso">Ese nombre no se puede guardar.</p>
     {% elif error == 'descripcion_cambio' %}<p class="aviso">La descripción cambió mientras la escribías (o el formulario no venía de esta página): lo que escribiste NO se guardó. Abajo está como está ahora.</p>
     {% elif error == 'descripcion_igual' %}<p class="aviso">La descripción ya decía eso: no cambió nada.</p>
@@ -937,6 +938,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     {% elif error == 'tarea_siguiente_no_hecha' %}<p class="aviso">Esa tarea ya no está hecha: no se agregó la que sigue.</p>
     {% elif error == 'tarea_derivada_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe la tarea nueva, así que la tarea NO se marcó hecha.</p>
     {% elif error == 'cliente' %}<p class="aviso">No se pudo poner ese cliente: la ficha ya no está en Noco o el proyecto ya no está.</p>
+    {% elif error == 'cliente_ocupado' %}<p class="aviso">El cliente tiene un proyecto activo y no se pueden activar 2. El proyecto NO se creó.</p>
     {% elif error == 'cliente_noco' %}<p class="aviso">Noco no contestó: el cliente NO se cambió. Intenta otra vez en un momento.</p>
     {% elif error == 'cliente_igual' %}<p class="aviso">No cambió nada: ese ya era el cliente.</p>
     {% elif error == 'cliente_nuevo' %}<p class="aviso">El proyecto se creó, pero SIN cliente: Noco no contestó o la ficha ya no está. Se puede poner desde la cabecera.</p>

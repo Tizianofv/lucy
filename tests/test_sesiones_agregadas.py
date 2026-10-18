@@ -386,6 +386,10 @@ def test_el_aviso_de_una_agregada_no_sale_si_la_app_no_contesto(dos, registro, m
 # ═══════════════════════════════════════════════════════════════════════
 
 def test_las_agregadas_se_quedan_al_cambiar_el_cliente(dos):
+    # En IA el cliente se puede quitar (en CDS y ACD el proyecto necesita cliente: pieza 1 de «Un proyecto no se crea
+    # sin cliente», 18-oct-2026); lo que se vigila es que la decisión sobre la sesión sobreviva a quitarlo y ponerlo.
+    dos.con.execute("UPDATE proyectos SET area = 'IA' WHERE id = 1")
+    dos.con.commit()
     assert "hecho=sesion_agregada" in _donde(agregar(1, 21))
     ficha = _ficha(dos, 1)
 

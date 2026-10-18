@@ -51,6 +51,9 @@ import web.app as panel  # noqa: E402
 # cambiara la constante del código, una prueba que la leyera se movería con
 # ella y seguiría en verde (hallazgo del testigo sobre 2cb3e6d).
 LARGO = 200
+# Sin cliente: lo único que vale en IA (las pruebas de este archivo son del NOMBRE, que en IA se escribe; en CDS, ACD y
+# sin grupo el nombre es el del cliente, pieza 1 de «Un proyecto no se crea sin cliente», 18-oct-2026).
+_SIN_CLIENTE = dict(cliente_noco_id=None, leer_persona=None)
 
 
 def test_el_largo_maximo_es_el_200_del_diseno():
@@ -145,8 +148,8 @@ class Base:
         self.sql: list = []
         self.con.executescript("""
             CREATE TABLE proyectos (id INTEGER PRIMARY KEY, creado_en, nombre TEXT
-              NOT NULL, descripcion, estado TEXT DEFAULT 'activo', area,
-              borrado_en, bandeja_id);
+              NOT NULL, descripcion, estado TEXT NOT NULL DEFAULT 'activo', area,
+              borrado_en, bandeja_id, cliente_noco_id, cliente_nombre);
             CREATE TABLE log_acciones (id INTEGER PRIMARY KEY, actor, accion,
               tabla, registro_id, antes, despues, motivo, bandeja_id);
             CREATE TABLE tareas (id INTEGER PRIMARY KEY, bandeja_id, titulo,
@@ -154,10 +157,12 @@ class Base:
               borrado_en);
         """)
 
-    def proyecto(self, nombre, borrado=False):
+    def proyecto(self, nombre, borrado=False, area="IA", estado="activo"):
+        # IA por omisión: estas pruebas son del NOMBRE, y ahí el nombre se escribe. En CDS, ACD y sin grupo el
+        # nombre es el del cliente (pieza 1 de «Un proyecto no se crea sin cliente», 18-oct-2026).
         c = self.con.execute(
-            "INSERT INTO proyectos (nombre, borrado_en) VALUES (?, ?)",
-            (nombre, "2026-09-01" if borrado else None))
+            "INSERT INTO proyectos (nombre, borrado_en, area, estado) VALUES (?, ?, ?, ?)",
+            (nombre, "2026-09-01" if borrado else None, area, estado))
         return c.lastrowid
 
     def nombre_de(self, pid):
@@ -369,7 +374,7 @@ def test_proyecto_vivo_con_nombre_ejecuta_su_sql_de_verdad():
 def test_lucy_encuentra_el_proyecto_por_la_misma_comparacion_y_no_duplica():
     b = Base()
     pid = b.proyecto("Mi Proyecto")
-    assert _correr(b, lambda: db.buscar_o_crear_proyecto("mi proyecto")) == pid
+    assert _correr(b, lambda: db.proyecto_vivo_por_nombre("mi proyecto")) == pid
     assert b.nombres_vivos() == ["Mi Proyecto"], "creó un duplicado"
     r = _correr(b, lambda: crud.perfil("proyecto", "MI PROYECTO", nota="hola"))
     assert "actualizado" in r[0] and b.nombres_vivos() == ["Mi Proyecto"]
@@ -378,8 +383,6 @@ def test_lucy_encuentra_el_proyecto_por_la_misma_comparacion_y_no_duplica():
 def test_crear_un_proyecto_por_los_otros_caminos_tambien_pasa_por_la_puerta():
     largo = "n" * (LARGO + 1)
     b = Base()
-    assert isinstance(_rechazo(b, lambda: db.buscar_o_crear_proyecto(largo)),
-                      ValueError)
     assert isinstance(_rechazo(b, lambda: crud.perfil("proyecto", largo,
                                                        nota="x")), ValueError)
     assert b.nombres_vivos() == [], "creó un proyecto con nombre inválido"
@@ -387,16 +390,16 @@ def test_crear_un_proyecto_por_los_otros_caminos_tambien_pasa_por_la_puerta():
     for titulo in ("PROYECTO YA HECHO", largo):
         b = Base()
         b.proyecto("Proyecto Ya Hecho")
-        b.con.execute("INSERT INTO tareas (id, titulo, bandeja_id) VALUES (7, ?, 1)",
+        b.con.execute("INSERT INTO tareas (id, titulo, bandeja_id, area) VALUES (7, ?, 1, 'IA')",
                       (titulo,))
-        e = _rechazo(b, lambda: db.convertir_tarea_en_proyecto(7))
+        e = _rechazo(b, lambda: db.convertir_tarea_en_proyecto(7, **_SIN_CLIENTE))
         assert isinstance(e, ValueError), f"convirtió {titulo[:10]!r}"
         assert b.nombres_vivos() == ["Proyecto Ya Hecho"]
         assert b.con.execute("SELECT borrado_en FROM tareas WHERE id=7").fetchone()[0] \
             is None, "archivó la tarea aunque no creó el proyecto"
     b = Base()
-    b.con.execute("INSERT INTO tareas (id, titulo, bandeja_id) VALUES (7, 'Nuevo', 1)")
-    res = _correr(b, lambda: db.convertir_tarea_en_proyecto(7))
+    b.con.execute("INSERT INTO tareas (id, titulo, bandeja_id, area) VALUES (7, 'Nuevo', 1, 'IA')")
+    res = _correr(b, lambda: db.convertir_tarea_en_proyecto(7, **_SIN_CLIENTE))
     assert res["proyecto_nombre"] == "Nuevo"
 
 
@@ -580,6 +583,12 @@ def _llamadas(nodo) -> set:
     return salida
 
 
+def _funcion_de_db(nombre):
+    arbol = ast.parse(Path(base.RAIZ, "db", "db.py").read_text(encoding="utf-8"))
+    return next(f for f in ast.walk(arbol)
+                if isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)) and f.name == nombre)
+
+
 def test_todo_lo_que_escribe_el_nombre_pasa_por_la_puerta_y_la_funcion_unica():
     censo = _censo_del_nombre()
     assert censo["sitios"], "el censo no vio ni un execute: estaría verde sin mirar"
@@ -588,12 +597,16 @@ def test_todo_lo_que_escribe_el_nombre_pasa_por_la_puerta_y_la_funcion_unica():
     # estaría ciego, no arreglado). `crud.perfil` SALIÓ de esta lista con E8
     # (1-oct-2026): dejó de escribir el nombre de un proyecto — su INSERT se
     # borró, porque un proyecto nuevo ya no nace por el perfil.
-    for fn in (db._buscar_o_crear, db.convertir_tarea_en_proyecto,
-               db.crear_proyecto):
+    # `_buscar_o_crear` SALIÓ con la pieza 1 de «Un proyecto no se crea sin cliente» (18-oct-2026): ya no crea
+    # proyectos (solo personas). Entró `poner_cliente`: en CDS, ACD y sin grupo escribe el nombre (el del cliente).
+    for fn in (db.convertir_tarea_en_proyecto, db.crear_proyecto, db.poner_cliente):
         assert tr._id_de(fn) in legibles, (
             f"el censo no ve a {tr._id_de(fn)}: dejó de ver")
+    # `nombre_que_toca` es el envoltorio que decide QUÉ nombre queda (el del cliente en CDS/ACD, el pedido en IA): los
+    # escritores llaman a la puerta directo o por él, y él SÍ llama a la puerta.
+    assert _PUERTA in _llamadas(_funcion_de_db("nombre_que_toca"))
     sin_puerta = sorted(q for q, f in legibles.items()
-                        if _PUERTA not in _llamadas(f))
+                        if _PUERTA not in _llamadas(f) and "nombre_que_toca" not in _llamadas(f))
     assert not sin_puerta, (
         f"escriben el nombre sin LLAMAR a la puerta (nombrarla no basta): "
         f"{sin_puerta}")
@@ -659,8 +672,10 @@ def test_cambiar_el_nombre_a_un_duplicado_junto_con_otro_campo_si_se_rechaza():
     b = Base()
     a = b.proyecto("Uno")
     b.proyecto("Otro")
+    # (Con `estado: pausado` ya NO se rechazaría: un pausado puede repetir el nombre de un activo, 18-oct-2026;
+    # lo cubre `tests/test_proyecto_con_cliente.py`. Aquí el proyecto sigue activo.)
     e = _rechazo(b, lambda: crud.editar(
-        "proyectos", a, {"nombre": "otro", "estado": "pausado"}, motivo="x"))
+        "proyectos", a, {"nombre": "otro", "estado": "activo"}, motivo="x"))
     assert isinstance(e, ValueError)
     assert b.updates() == [] and b.nombre_de(a) == "Uno"
     assert b.con.execute("SELECT estado FROM proyectos WHERE id=?",
@@ -880,7 +895,7 @@ def test_convertir_rechazado_por_el_nombre_dice_el_motivo_real_no_el_de_siempre(
     for titulo, clave in casos:
         b = Base()
         b.proyecto("Proyecto Ya Hecho")
-        b.con.execute("INSERT INTO tareas (id, titulo, bandeja_id) VALUES (7, ?, 1)",
+        b.con.execute("INSERT INTO tareas (id, titulo, bandeja_id, area) VALUES (7, ?, 1, 'IA')",
                       (titulo,))
         r = _convertir(b, 7)
         assert r.headers["location"] == f"/tareas/7?error={clave}", (
@@ -930,7 +945,6 @@ def test_todo_rechazo_del_nombre_dice_que_es_el_nombre_del_proyecto():
         str(_rechazo(b, _editar(p, largo))),
         str(_rechazo(b, _editar(p, ""))),
         str(_rechazo(b, _editar(p, "casa"))),
-        str(_rechazo(b, lambda: db.buscar_o_crear_proyecto(largo))),
         str(_rechazo(b, lambda: crud.perfil("proyecto", largo, nota="x"))),
     ]
     for m in mensajes:
@@ -947,15 +961,15 @@ def test_titulos_con_espacios_en_los_bordes_se_limpian_y_su_duplicado_se_detecta
     # Convertir una tarea cuyo título trae espacios: choca con «Casa» existente.
     b = Base()
     b.proyecto("Casa")
-    b.con.execute("INSERT INTO tareas (id, titulo, bandeja_id) VALUES (7, '  Casa ', 1)")
-    e = _rechazo(b, lambda: db.convertir_tarea_en_proyecto(7))
+    b.con.execute("INSERT INTO tareas (id, titulo, bandeja_id, area) VALUES (7, '  Casa ', 1, 'IA')")
+    e = _rechazo(b, lambda: db.convertir_tarea_en_proyecto(7, **_SIN_CLIENTE))
     assert isinstance(e, db.NombreDeProyectoNoVale) and e.clave == "repetido", (
         "convertir dejó pasar un duplicado con espacios")
     assert b.nombres_vivos() == ["Casa"]
     # Sin choque: el proyecto nace con el nombre LIMPIO.
     b = Base()
-    b.con.execute("INSERT INTO tareas (id, titulo, bandeja_id) VALUES (7, '  Nuevo  ', 1)")
-    res = _correr(b, lambda: db.convertir_tarea_en_proyecto(7))
+    b.con.execute("INSERT INTO tareas (id, titulo, bandeja_id, area) VALUES (7, '  Nuevo  ', 1, 'IA')")
+    res = _correr(b, lambda: db.convertir_tarea_en_proyecto(7, **_SIN_CLIENTE))
     assert res["proyecto_nombre"] == "Nuevo"
     assert b.nombres_vivos() == ["Nuevo"]
     assert json.loads(b.con.execute(
@@ -971,7 +985,7 @@ def test_lucy_y_el_perfil_encuentran_con_el_nombre_limpio_y_no_crean_proyectos()
     creaba «Tercero» sin grupo, sin cliente y sin responsable."""
     b = Base()
     pid = b.proyecto("Casa")
-    assert _correr(b, lambda: db.buscar_o_crear_proyecto("  Casa ")) == pid
+    assert _correr(b, lambda: db.proyecto_vivo_por_nombre("  Casa ")) == pid
     r = _correr(b, lambda: crud.perfil("proyecto", "  CASA ", nota="x"))
     assert "actualizado" in r[0]
     assert b.nombres_vivos() == ["Casa"], "creó un duplicado con espacios"
