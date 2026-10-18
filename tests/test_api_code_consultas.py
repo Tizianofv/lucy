@@ -550,6 +550,19 @@ def test_G2_la_misma_clave_de_otro_cliente_es_409_sin_decir_de_quien_y_no_cambia
     assert leer([antes[0]["id"]], noco_id=B).json()["consultas"] == []
 
 
+def test_G2_otro_cliente_que_manda_el_mismo_pedido_con_la_misma_clave_no_recibe_la_consulta_ajena(natalia):
+    """El ataque de verdad: B manda EXACTAMENTE el cuerpo de A (misma clave, mismo proyecto, mismo texto). La
+    búsqueda por clave ocurre antes de validar el proyecto, así que sin el cerrojo de la ficha le devolvería la
+    consulta de A, con su título y su estado."""
+    con = natalia()
+    cuerpo = nueva("identica", proyecto_id=1, titulo="Titulo-solo-de-A", pedido="Pedido-solo-de-A")
+    assert abrir(cuerpo, noco_id=A).status_code == 200
+    r = abrir(cuerpo, noco_id=B)
+    assert r.status_code == 409, r.text
+    assert "solo-de-A" not in r.text and "consulta_id" not in r.text
+    assert len(filas(con)) == 1 and filas(con)[0]["cliente_noco_id"] == A
+
+
 def test_G2_la_tarea_resultante_de_una_anotada_solo_sale_si_cuelga_de_un_proyecto_de_esa_ficha(natalia):
     """Una fila forjada: la consulta es de A pero su `tarea_resultante_id` es la tarea 50 del proyecto de B."""
     con = natalia()
