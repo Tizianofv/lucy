@@ -585,7 +585,8 @@ def test_si_el_enlace_no_se_pudo_poner_la_carpeta_de_drive_se_crea_pero_la_funci
     r = _preparar(2)
     assert r == {"resultado": "lista", "causa": None, "carpeta": cd.ENLACE_NO_SE_PUDO}, r
     assert _carpetas(m, 2) is not None
-    assert _proyecto(m, 2)["carpeta"] in (None, "https://otro.example.test/otra")
+    otro = "https://otro.example.test/otra"
+    assert _proyecto(m, 2)["carpeta"] == (otro if como is _editar_que_escribe_otro_valor else None)
     frase = cd.frase_de_la_carpeta(r)
     assert frase.startswith("Carpeta de Drive creada.") and "NO se pudo poner su enlace en el proyecto" in frase
     assert cd.clave_de_aviso_de_la_carpeta(r) == "carpeta_drive_enlace"
@@ -742,22 +743,42 @@ def _fragmentos_de_las_frases() -> set[str]:
     return {t for t in trozos if len(t.split()) >= 3}
 
 
+def _frases_a_mano(raiz, fragmentos) -> list:
+    """Dónde se escribe, fuera de `cotizaciones_drive.py`, alguna de las frases de la carpeta: en toda cadena de todo
+    `.py` del repo que no es de `tests/` (la lista sale de `_modulos`) y en el texto de todo `.html` bajo `web/` (menos
+    lo que va dentro de `{{ }}` y `{% %}`). FRONTERA: no ve una frase armada por pedazos ni una plantilla fuera de `web/`."""
+    hallados = []
+    for rel, arbol in _modulos(raiz):
+        if rel == "cotizaciones_drive.py":
+            continue
+        for n in ast.walk(arbol):
+            if isinstance(n, ast.Constant) and isinstance(n.value, str):
+                hallados += [(rel, f) for f in fragmentos if f in " ".join(n.value.split())]
+    for html in sorted((raiz / "web").rglob("*.html")):
+        texto = re.sub(r"\{\{.*?\}\}|\{%.*?%\}", "", html.read_text(encoding="utf-8"), flags=re.S)
+        hallados += [(html.relative_to(raiz).as_posix(), f) for f in fragmentos if f in " ".join(texto.split())]
+    return sorted(set(hallados))
+
+
 def test_ninguna_otra_pieza_escribe_las_frases_de_la_carpeta_a_mano():
     fragmentos = _fragmentos_de_las_frases()
     assert len(fragmentos) >= 5, fragmentos
-    donde = {"web/app.py": "py", "acciones/crud.py": "py", "cerebro/agente.py": "py", "web/plantillas/proyectos.html": "html",
-             "web/plantillas/_cotizaciones_del_proyecto.html": "html"}
-    hallados = []
-    for ruta, tipo in donde.items():
-        texto = (_ROOT / ruta).read_text(encoding="utf-8")
-        trozos = ([n.value for n in ast.walk(ast.parse(texto)) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
-                  if tipo == "py" else [re.sub(r"\{\{.*?\}\}|\{%.*?%\}", "", texto, flags=re.S)])
-        for t in trozos:
-            hallados += [(ruta, f) for f in fragmentos if f in " ".join(t.split())]
-    assert hallados == [], hallados
-    # y la guarda ve lo inventado
-    assert "No se pudo crear" in " ".join(["<p>No se pudo crear la carpeta en Drive.</p>"]) and any(
-        f in "No se pudo crear la carpeta en Drive." for f in fragmentos)
+    assert _frases_a_mano(_ROOT, fragmentos) == []
+
+
+def test_la_guarda_de_las_frases_a_mano_ve_un_archivo_inventado(tmp_path):
+    """Pasa por la MISMA función que escanea el repo, con archivos que no están en él."""
+    fragmentos = _fragmentos_de_las_frases()
+    frase = cd.frase_de_la_carpeta({"resultado": "fallo"})
+    (tmp_path / "cerebro").mkdir()
+    (tmp_path / "cerebro" / "zz_frase_a_mano.py").write_text(f"MENSAJE = {frase!r}\n", encoding="utf-8")
+    (tmp_path / "otro.py").write_text("X = 'nada que ver'\n", encoding="utf-8")
+    (tmp_path / "web" / "plantillas").mkdir(parents=True)
+    (tmp_path / "web" / "plantillas" / "nueva.html").write_text(f"<p>{frase}</p>", encoding="utf-8")
+    (tmp_path / "web" / "plantillas" / "limpia.html").write_text("<p>{{ frase }}</p>", encoding="utf-8")
+    (tmp_path / "cotizaciones_drive.py").write_text(f"OK = {frase!r}\n", encoding="utf-8")
+    hallados = {r for r, _ in _frases_a_mano(tmp_path, fragmentos)}
+    assert hallados == {"cerebro/zz_frase_a_mano.py", "web/plantillas/nueva.html"}, hallados
 
 
 @pytest.mark.parametrize("falla", ["500", "sin_configurar", "mas_de_15_s", "falta_la_tabla"])
