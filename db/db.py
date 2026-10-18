@@ -5716,6 +5716,72 @@ async def pagina_de_proyectos(hoy: date | None = None) -> dict:
                         actividad, audios)
 
 
+async def proyectos_de_cliente(noco_id: int, hoy: date | None = None) -> list[dict]:
+    """Los proyectos de UN cliente (la ficha de NocoDB `noco_id`), para que Natalia le cuente
+    cómo va lo suyo (diseño `natalia-tareas-en-proyectos`, pieza L1, 18-oct-2026).
+
+    QUÉ PROYECTOS: los que NO están en la papelera y cuya `cliente_noco_id` ES esa ficha, sea cual
+    sea su estado (activo, pausado o cerrado: «vivo» es lo mismo que en `armar_pagina`, que no esté
+    borrado). El filtro por cliente va EN la consulta (`WHERE cliente_noco_id = %s`), no después:
+    lo de otro cliente ni sale de la base. Las personas agregadas a un proyecto (`participantes`)
+    NO cuentan: solo la ficha del cliente del proyecto. Un id sin proyectos da `[]`.
+
+    QUÉ DICE CADA UNO: `estado` y `proxima` salen de `situacion_de_proyecto` (la misma puerta
+    única que usa la página, con las mismas filas de `_fila_de_tarea` y las graves de `graves_de`),
+    y `admite_tareas` de `proyecto_admite_tareas` (la misma que usa agregar una tarea). Aquí NO se
+    recorta nada: devuelve `{id, nombre, estado, estado_guardado, proxima, admite_tareas,
+    responsable_chat_id}` y quien lo manda afuera (`web/api_code.py`) decide qué campos salen.
+
+    ORDEN: los que cuentan como activos (`cuenta_como_activo`), luego los pausados, luego los
+    cerrados; dentro de cada grupo, por id."""
+    hoy = hoy or hoy_rd()
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            """
+            SELECT id, nombre, estado, responsable_chat_id
+              FROM proyectos
+             WHERE cliente_noco_id = %s AND borrado_en IS NULL
+             ORDER BY id
+            """, (noco_id,))
+        proyectos = list(await cur.fetchall())
+        if not proyectos:
+            return []
+        await cur.execute(
+            """
+            SELECT t.id, t.proyecto_id, t.area, t.titulo, t.estado, t.vence_en,
+                   t.completado_en, t.responsable_chat_id
+              FROM tareas t JOIN proyectos p ON p.id = t.proyecto_id
+             WHERE p.cliente_noco_id = %s AND p.borrado_en IS NULL
+               AND t.borrado_en IS NULL
+            """, (noco_id,))
+        tareas = list(await cur.fetchall())
+        admiten: dict[int, bool] = {}
+        for p in proyectos:
+            try:
+                await proyecto_admite_tareas(cur, p["id"])
+                admiten[p["id"]] = True
+            except ProyectoNoAdmiteTareas:
+                admiten[p["id"]] = False
+    graves = await graves_de([t["id"] for t in tareas])
+    por_proyecto: dict[int, list] = {p["id"]: [] for p in proyectos}
+    for t in tareas:
+        t["grave"] = t["id"] in graves
+        por_proyecto[t["proyecto_id"]].append(_fila_de_tarea(t, hoy, {}, {}))
+    salida = []
+    for p in proyectos:
+        situacion = situacion_de_proyecto(p["estado"], por_proyecto[p["id"]])
+        salida.append({
+            "id": p["id"], "nombre": p["nombre"], "estado": situacion["estado"],
+            "estado_guardado": p["estado"], "proxima": situacion["proxima"],
+            "admite_tareas": admiten[p["id"]],
+            "responsable_chat_id": p["responsable_chat_id"]})
+    salida.sort(key=lambda m: (
+        0 if cuenta_como_activo(m["estado_guardado"]) else
+        (1 if m["estado_guardado"] == ESTADO_PROYECTO_PAUSADO else 2), m["id"]))
+    return salida
+
+
 async def derivaciones() -> dict[int, int]:
     """`{hija_id: madre_id}` de las tareas VIVAS que salen de otra.
 

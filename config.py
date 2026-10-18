@@ -260,7 +260,10 @@ def opciones_de_responsable() -> tuple[tuple[str, str], ...]:
 # puede llamar: `POST /api/code/alertas`, desde el 4-oct-2026) también tiene
 # su ruta. La clave de Natalia se agrega a `CLAVES_API_CODE` como
 # `natalia:<clave larga>` y su permiso a `PERMISOS_API_CODE` como
-# `natalia=alertas:crear`.
+# `natalia=alertas:crear`. Desde el 18-oct-2026 también existe
+# `proyectos:leer_de_cliente` (`GET /api/code/clientes/{noco_id}/proyectos`):
+# para que Natalia lo use, la sala lo suma así:
+# `natalia=alertas:crear+proyectos:leer_de_cliente`.
 #
 # CERRADO POR DEFECTO, en dos niveles independientes:
 #   · Si `CLAVES_API_CODE` no está puesta (o no tiene ninguna pieza legible),
