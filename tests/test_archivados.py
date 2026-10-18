@@ -335,9 +335,8 @@ def test_G6b_los_escritores_del_estado_de_un_proyecto_siguen_siendo_los_dos_gene
     genericos = re.findall(r'f"UPDATE \{tabla\}(?: t)? SET \{asignaciones\}',
                            (_RAIZ / "acciones" / "crud.py").read_text(encoding="utf-8"))
     assert len(genericos) == 2
-    for ruta in _RAIZ.rglob("*.py"):
-        rel = ruta.relative_to(_RAIZ).parts
-        if rel[0] in ("tests", "venv", ".venv") or ".venv" in rel:
+    for ruta in _py_en_disco(_RAIZ):       # la única puerta del repo: no entra en entornos virtuales
+        if ruta.relative_to(_RAIZ).parts[0] == "tests":
             continue
         for sql in re.findall(r"UPDATE\s+proyectos\s+SET\b[^\"]*", ruta.read_text(encoding="utf-8")):
             assert not re.search(r"\bestado\s*=", sql), (str(ruta), sql)
