@@ -277,7 +277,7 @@ def test_G6b_deshacer_el_cierre_lo_reabre_y_no_es_un_cierre(mundo):
     mundo.proyecto(1, "Uno", area="CDS", estado="cerrado")
     _huella(mundo, 10, 1, "editar", _dia(-9), {"estado": "activo"}, {"estado": "cerrado"})
     _deshacer(mundo, 11, 1, _dia(-4), deshizo=10)
-    assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-9).astimezone(timezone.utc)}
+    assert asyncio.run(db.cierres_de_proyectos()) == {}        # lo reabrió: ya no hay fecha que enseñar
 
 
 def test_G6b_deshacer_una_edicion_que_no_toco_el_estado_no_mueve_la_fecha(mundo):
@@ -288,22 +288,14 @@ def test_G6b_deshacer_una_edicion_que_no_toco_el_estado_no_mueve_la_fecha(mundo)
     assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-9).astimezone(timezone.utc)}
 
 
-def test_G6b_deshacer_un_cambio_de_estado_que_no_salio_de_cerrado_no_cierra(mundo):
-    """Deshacer pausado → activo devuelve `pausado`, nunca `cerrado`: no es un cierre aunque el estado cambiara."""
-    mundo.proyecto(1, "Uno", area="CDS", estado="cerrado")
-    _huella(mundo, 10, 1, "editar", _dia(-9), {"estado": "activo"}, {"estado": "cerrado"})
-    _huella(mundo, 11, 1, "editar", _dia(-6), {"estado": "pausado"}, {"estado": "activo"})
-    _deshacer(mundo, 12, 1, _dia(-2), deshizo=11)
-    assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-9).astimezone(timezone.utc)}
-
-
 @pytest.mark.parametrize("motivo", [None, "", "Volvió con el proyecto #1 (acción #11)",
                                     "Tiziano deshizo la acción #999 (editar)"])
-def test_G6b_un_deshacer_que_no_apunta_a_una_reapertura_conocida_no_cierra(mundo, motivo):
+def test_G6b_un_deshacer_que_no_apunta_a_una_huella_conocida_borra_la_fecha_en_vez_de_inventarla(mundo, motivo):
     mundo.proyecto(1, "Uno", area="CDS", estado="cerrado")
     _cierra_reabre(mundo)
     _huella(mundo, 12, 1, "deshacer", _dia(-2), motivo=motivo)
-    assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-9).astimezone(timezone.utc)}
+    assert asyncio.run(db.cierres_de_proyectos()) == {}
+    assert _lineas_cerrado_el(ver(mundo, p=1)) == ["Cerrado"]      # sin día, no uno inventado
 
 
 def test_G6b_el_deshacer_de_otro_proyecto_no_cierra_este(mundo):
@@ -311,13 +303,13 @@ def test_G6b_el_deshacer_de_otro_proyecto_no_cierra_este(mundo):
     mundo.proyecto(2, "Dos", area="CDS", estado="activo")
     _cierra_reabre(mundo, 1)
     _deshacer(mundo, 12, 2, _dia(-2), deshizo=11)       # apunta a la huella del proyecto 1, pero es del 2
-    assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-9).astimezone(timezone.utc)}
+    assert asyncio.run(db.cierres_de_proyectos()) == {}   # el 1 quedó reabierto; el 2 no se puede deducir
 
 
-def test_G6b_un_deshacer_de_una_tarea_con_el_mismo_numero_no_cierra(mundo):
+def test_G6b_un_deshacer_de_una_tarea_con_el_mismo_numero_no_toca_el_proyecto(mundo):
     mundo.proyecto(1, "Uno", area="CDS", estado="cerrado")
-    _cierra_reabre(mundo)
-    _huella(mundo, 12, 1, "deshacer", _dia(-2), tabla="tareas", motivo=db.motivo_de_deshacer(11, "editar"))
+    _huella(mundo, 10, 1, "editar", _dia(-9), {"estado": "activo"}, {"estado": "cerrado"})
+    _huella(mundo, 12, 1, "deshacer", _dia(-2), tabla="tareas", motivo=db.motivo_de_deshacer(10, "editar"))
     assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-9).astimezone(timezone.utc)}
 
 
@@ -357,3 +349,119 @@ def test_G6_un_cierre_cuyo_antes_no_trae_estado_cuenta_como_cierre(mundo, antes)
         (_dia(-3).isoformat(), json.dumps(antes) if antes is not None else None,
          json.dumps({"estado": "cerrado"})))
     assert list(asyncio.run(db.cierres_de_proyectos())) == [1]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# LA REGLA ÚNICA (vuelta 3): el estado se lleva huella por huella
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Cada secuencia es una lista de huellas de UN proyecto, en orden; los ids son 1, 2, 3… en el orden en que están.
+#   ("e", día, antes, despues)  una `editar` (None = el `estado` no viene en esa mitad de la fila)
+#   ("d", día, id)              un `deshacer` (con `antes`/`despues` vacíos) de la huella `id`
+#   ("b", día)                  un `borrar` (solo sirve de blanco de un `deshacer`)
+# `esperado`: el día (offset de `_dia`) del último cierre, o None = «Cerrado» sin día.
+
+_SECUENCIAS = {
+    "del testigo (vuelta 2): cerrar, reabrir, editar otro campo, cerrar, deshacer la reapertura": (
+        [("e", -9, "activo", "cerrado"), ("e", -7, "cerrado", "activo"), ("e", -5, "activo", "activo"),
+         ("e", -4, "activo", "cerrado"), ("d", -2, 2)], -4),
+    "cerrar, reabrir y deshacer la reapertura: vuelve a cerrado el día del deshacer": (
+        [("e", -9, "activo", "cerrado"), ("e", -6, "cerrado", "activo"), ("d", -2, 2)], -2),
+    "cerrar, reabrir, cerrar, deshacer la reapertura vieja": (
+        [("e", -9, "activo", "cerrado"), ("e", -6, "cerrado", "activo"), ("e", -3, "activo", "cerrado"),
+         ("d", -2, 2)], -3),
+    "cerrar y deshacer el cierre: reabierto, sin fecha": (
+        [("e", -9, "activo", "cerrado"), ("d", -4, 1)], None),
+    "cerrar, deshacer el cierre y volver a cerrar": (
+        [("e", -9, "activo", "cerrado"), ("d", -6, 1), ("e", -3, "activo", "cerrado")], -3),
+    "editar otro campo de un cerrado no mueve la fecha": (
+        [("e", -9, "activo", "cerrado"), ("e", -5, "cerrado", "cerrado")], -9),
+    "deshacer esa edición de otro campo tampoco": (
+        [("e", -9, "activo", "cerrado"), ("e", -5, "cerrado", "cerrado"), ("d", -2, 2)], -9),
+    "restaurar de la papelera (deshacer un borrar) no toca el estado": (
+        [("e", -9, "activo", "cerrado"), ("b", -6), ("d", -4, 2)], -9),
+    "pasar a pausado y luego deshacerlo hasta cerrado": (
+        [("e", -9, "activo", "pausado"), ("e", -7, "pausado", "cerrado"), ("e", -5, "cerrado", "pausado"),
+         ("d", -2, 3)], -2),
+    "reabierto al final: sin fecha": (
+        [("e", -9, "activo", "cerrado"), ("e", -6, "cerrado", "activo")], None),
+    "un deshacer que no apunta a nada conocido: no se sabe, sin día": (
+        [("e", -9, "activo", "cerrado"), ("d", -2, 999)], None),
+    "…y un cierre que sí se sabe después vuelve a dar fecha": (
+        [("e", -9, "activo", "cerrado"), ("d", -4, 999), ("e", -1, "activo", "cerrado")], -1),
+    "una `editar` sin estado en `despues`: no se sabe, sin día": (
+        [("e", -9, "activo", "cerrado"), ("e", -2, "cerrado", None)], None),
+    "deshacer una `editar` cuyo `antes` no traía estado: no se sabe, sin día": (
+        [("e", -9, None, "cerrado"), ("e", -6, None, "activo"), ("d", -2, 2)], None),
+    "un `antes` sin estado que deja cerrado cuenta como cierre": (
+        [("e", -9, None, "cerrado")], -9),
+    "cerrado → pausado → deshacer lo deshecho dos veces": (
+        [("e", -9, "activo", "cerrado"), ("e", -6, "cerrado", "pausado"), ("d", -4, 2), ("d", -2, 2)], -4),
+}
+
+
+def _filas(seq, pid=1):
+    filas = []
+    for n, h in enumerate(seq, 1):
+        base = dict(id=n, pid=pid, motivo=None, antes_estado=None, despues_estado=None)
+        if h[0] == "e":
+            filas.append({**base, "accion": "editar", "ts": _dia(h[1]), "antes_estado": h[2], "despues_estado": h[3]})
+        elif h[0] == "d":
+            filas.append({**base, "accion": "deshacer", "ts": _dia(h[1]),
+                          "motivo": db.motivo_de_deshacer(h[2], "editar")})
+        else:
+            filas.append({**base, "accion": "borrar", "ts": _dia(h[1])})
+    return filas
+
+
+@pytest.mark.parametrize("nombre", list(_SECUENCIAS))
+def test_regla_unica_secuencias(nombre):
+    seq, esperado = _SECUENCIAS[nombre]
+    r = db.cierres_desde_las_huellas(_filas(seq))
+    assert r == ({} if esperado is None else {1: _dia(esperado)}), (nombre, r)
+
+
+@pytest.mark.parametrize("nombre", list(_SECUENCIAS))
+def test_regla_unica_el_orden_en_que_llegan_las_filas_no_importa(nombre):
+    seq, esperado = _SECUENCIAS[nombre]
+    filas = _filas(seq)
+    assert db.cierres_desde_las_huellas(list(reversed(filas))) == db.cierres_desde_las_huellas(filas)
+
+
+def test_regla_unica_cada_proyecto_lleva_su_propio_estado():
+    a = _filas(_SECUENCIAS["cerrar, reabrir y deshacer la reapertura: vuelve a cerrado el día del deshacer"][0])
+    b = [{**f, "id": 100, "pid": 2} for f in _filas([("e", -8, "activo", "cerrado")])]
+    assert db.cierres_desde_las_huellas([*a, *b]) == {1: _dia(-2), 2: _dia(-8)}
+
+
+def test_regla_unica_el_caso_del_testigo_por_la_base_y_por_la_pagina(mundo):
+    mundo.proyecto(1, "Uno", area="CDS", estado="cerrado", cliente="Cliente A")
+    for n, h in enumerate(_SECUENCIAS["del testigo (vuelta 2): cerrar, reabrir, editar otro campo, cerrar, deshacer la reapertura"][0], 1):
+        if h[0] == "e":
+            _huella(mundo, n, 1, "editar", _dia(h[1]), {"estado": h[2]}, {"estado": h[3]})
+        else:
+            _deshacer(mundo, n, 1, _dia(h[1]), deshizo=h[2])
+    assert asyncio.run(db.cierres_de_proyectos()) == {1: _dia(-4).astimezone(timezone.utc)}
+    assert _lineas_cerrado_el(ver(mundo, p=1)) == [f"Cerrado el {tp._dia(-4).day} oct 2026"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# B: `crud.deshacer` de verdad escribe el motivo que la fecha sabe leer
+# ═══════════════════════════════════════════════════════════════════════
+
+@pytest.mark.parametrize("accion", ["crear", "borrar", "editar"])
+def test_B_crud_deshacer_deja_un_motivo_que_id_que_deshizo_lee(accion):
+    """Corre `crud.deshacer` de verdad (la base de prueba de `test_deshacer_no_miente`) y lee la huella que dejó:
+    su `motivo` es `db.motivo_de_deshacer` y `db.id_que_deshizo` devuelve la huella deshecha."""
+    from test_deshacer_no_miente import Mundo, _deshacer as _correr_deshacer
+    m = Mundo()
+    m.fila("proyectos", 1, borrada=(accion == "borrar"))
+    log_id = m.huella(accion, "proyectos", 1)
+    _correr_deshacer(m, log_id)
+    fila = m.con.execute(
+        "SELECT accion, tabla, registro_id, motivo, antes, despues FROM log_acciones "
+        "WHERE accion = 'deshacer'").fetchall()
+    assert len(fila) == 1
+    accion_h, tabla, rid, motivo, antes, despues = tuple(fila[0])
+    assert (tabla, rid) == ("proyectos", 1) and motivo == db.motivo_de_deshacer(log_id, accion)
+    assert db.id_que_deshizo(motivo) == log_id and antes is None and despues is None
