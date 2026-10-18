@@ -654,8 +654,11 @@ def test_los_archivos_de_codigo_que_nombran_la_columna_son_estos():
     # carpeta de Drive que Lucy acaba de crear, solo si estaba vacía, por la misma puerta (`crud.editar`).
     # `conftest.py` (18-oct-2026, pieza 1 de «Carpetas del proyecto»): su fixture `drive_aparte` arma el resultado de
     # `preparar_la_carpeta` y lleva la clave `"carpeta"` de ESE diccionario (qué pasó con el enlace); no toca la columna.
+    # `tools/crear_carpetas_de_drive.py` (18-oct-2026, pieza 3 de «Carpetas del proyecto»): el guion de una vez LEE la
+    # columna, por `db.carpetas_de_proyectos` y `db.carpeta_guardada`, para repartir los proyectos; no escribe en ella
+    # (el enlace lo escribe `preparar_la_carpeta`, por `crud.editar`). Una prueba suya lo vigila (`_infracciones`).
     assert nombran == {"db/db.py", "acciones/crud.py", "web/app.py", "cerebro/consultar.py",
-                       "cotizaciones_drive.py", "conftest.py"}, nombran
+                       "cotizaciones_drive.py", "conftest.py", "tools/crear_carpetas_de_drive.py"}, nombran
 
 
 def test_ningun_sql_escrito_a_mano_nombra_la_columna_y_los_genericos_son_los_medidos():
