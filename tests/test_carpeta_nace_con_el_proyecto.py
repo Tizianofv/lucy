@@ -745,8 +745,8 @@ def _fragmentos_de_las_frases() -> set[str]:
 
 def _frases_a_mano(raiz, fragmentos) -> list:
     """Dónde se escribe, fuera de `cotizaciones_drive.py`, alguna de las frases de la carpeta: en toda cadena de todo
-    `.py` del repo que no es de `tests/` (la lista sale de `_modulos`) y en el texto de todo `.html` bajo `web/` (menos
-    lo que va dentro de `{{ }}` y `{% %}`). FRONTERA: no ve una frase armada por pedazos ni una plantilla fuera de `web/`."""
+    `.py` del repo que no es de `tests/` (la lista sale de `_modulos`) y en el texto de todo `.html` de `web/plantillas/` (menos
+    lo que va dentro de `{{ }}` y `{% %}`). FRONTERA: no ve una frase armada por pedazos ni una plantilla fuera de `web/plantillas/`."""
     hallados = []
     for rel, arbol in _modulos(raiz):
         if rel == "cotizaciones_drive.py":
@@ -754,7 +754,7 @@ def _frases_a_mano(raiz, fragmentos) -> list:
         for n in ast.walk(arbol):
             if isinstance(n, ast.Constant) and isinstance(n.value, str):
                 hallados += [(rel, f) for f in fragmentos if f in " ".join(n.value.split())]
-    for html in sorted((raiz / "web").rglob("*.html")):
+    for html in sorted((raiz / "web" / "plantillas").glob("*.html")):
         texto = re.sub(r"\{\{.*?\}\}|\{%.*?%\}", "", html.read_text(encoding="utf-8"), flags=re.S)
         hallados += [(html.relative_to(raiz).as_posix(), f) for f in fragmentos if f in " ".join(texto.split())]
     return sorted(set(hallados))
