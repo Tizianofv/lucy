@@ -228,7 +228,7 @@ def nombres_con_code() -> dict[int, str]:
 # `puede_recibir_telegram` / `web.auth.puede_entrar`: todas esas puertas
 # siguen significando lo que significaban. El único sitio que la nombra es
 # `autores_reservados()`, y quien pinta el autor de un comentario le pregunta
-# a `nombre_de_autor`, no a una copia suya.
+# a `nombre_de_autor` (o suma `autores_reservados()`), no a una copia suya.
 CHAT_ID_NATALIA = -2
 
 # El único lugar donde el texto «Natalia» se teclea como autora.
@@ -247,8 +247,11 @@ def nombre_de_autor(chat_id) -> str | None:
     se sabe (el que pinta decide qué decir: «Alguien» o «sin nombre»).
 
     Primero los nombres de siempre (`nombres_con_code`: personas y Code), luego
-    los autores reservados. Se lee en cada llamada. Es la ÚNICA puerta para
-    pintar autores: nadie más debe mirar `autores_reservados()`."""
+    los autores reservados. Se lee en cada llamada. La usan dos de los tres
+    sitios que pintan un autor (`comentarios_de_tarea`, `leer_comentarios`); el
+    tercero, `db.armar_pagina`, recibe sus `nombres` de fuera y suma
+    `autores_reservados()` directo. Nadie más debe mirarlos (lo vigila
+    `tests/test_natalia_autora_reservada.py`)."""
     return nombres_con_code().get(chat_id) or autores_reservados().get(chat_id)
 
 
