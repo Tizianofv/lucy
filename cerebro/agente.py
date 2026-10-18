@@ -166,7 +166,7 @@ HERRAMIENTAS DISPONIBLES:
 
 · buscar_cliente  {"texto": "..."}
   Busca en Personas (la lista de personas y clientes) por nombre, nombre de
-  WhatsApp o teléfono, y devuelve hasta 5 fichas {"id", "nombre"}. Solo lee:
+  WhatsApp o teléfono, y devuelve hasta {TOPE_CLIENTES} fichas {"id", "nombre"}. Solo lee:
   no crea ni cambia nada. Es la ÚNICA fuente del "cliente_id" de
   `crear_proyecto`.
    · 1 ficha que es claramente la persona o la empresa que dijo Tiziano:
@@ -683,6 +683,7 @@ def herramientas_del_prompt(areas: list[dict] | None = None,
     ).replace("{PANTALLAS_DEL_PANEL}", pantallas
     ).replace("{PERSONAS_DEL_PANEL}", personas
     ).replace("{PERSONAS_Y_CODE}", personas_y_code
+    ).replace("{TOPE_CLIENTES}", str(crud.TOPE_CANDIDATOS_CLIENTE)
     ).replace("{AREAS}", areas_txt
     ).replace("{GRUPO_SIN_CLIENTE}", f'"{db.AREA_TECNICA}"'
     ).replace("{PROYECTOS}", proyectos_txt)

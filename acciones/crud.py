@@ -294,17 +294,21 @@ async def los_grupos_y_los_responsables() -> str:
             f"({de_responsables})")
 
 
+TOPE_CANDIDATOS_CLIENTE = 5      # cuántas fichas ve el modelo por búsqueda (DISENO.md §2.2); el prompt toma esta cifra
+
+
 async def buscar_cliente(texto: str) -> list[dict]:
     """Los candidatos de Personas (Noco) para el cliente de un proyecto, pedidos por Telegram:
-    `[{"id", "nombre"}]`, hasta cinco, de `noco_lectura.buscar_personas`.
+    `[{"id", "nombre"}]`, como mucho `TOPE_CANDIDATOS_CLIENTE` (el lector pide hasta `noco_lectura.TOPE_BUSQUEDA` y
+    aquí se corta), de `noco_lectura.buscar_personas`.
 
     SOLO LEE (esa función solo hace GET: lo exige `tests/test_noco_lectura.py`). Es la única fuente del `cliente_id`
-    que el modelo le manda a `crear_proyecto`; aun así `db.crear_proyecto` vuelve a leer la ficha, así que un Id que
-    no salió de acá no crea nada. Noco sin contestar NO es «0 fichas»: se dice con su causa (`NoDeNegocio`) y
+    que el modelo le manda a `crear_proyecto`; `db.crear_proyecto` vuelve a leer la ficha, así que un Id que
+    Noco no tiene no crea nada; uno que sí existe se acepta aunque no haya salido de esta búsqueda. Noco sin contestar NO es «0 fichas»: se dice con su causa (`NoDeNegocio`) y
     nunca se devuelve una lista vacía en su lugar.
     """
     try:
-        return await noco_lectura.buscar_personas(str(texto or ""))
+        return (await noco_lectura.buscar_personas(str(texto or "")))[:TOPE_CANDIDATOS_CLIENTE]
     except noco_lectura.NocoNoContesta as e:
         raise NoDeNegocio(
             "No pude buscar al cliente: Noco no contesta. Dile a Tiziano que lo intente en un momento; "
@@ -328,7 +332,7 @@ async def crear_proyecto(nombre: str | None, grupo: str,
     cliente» (18-oct-2026) también decide ahí el CLIENTE: en CDS, ACD y sin grupo
     es obligatorio y su nombre es el del proyecto; en IA no hace falta. `cliente_id`
     es el Id de una ficha de Personas (Noco); la puerta vuelve a leer la ficha, así
-    que un Id inventado no crea nada, y si Noco no contesta no se crea (solo se
+    que un Id que Noco no tiene no crea nada (uno que existe se acepta, venga de donde venga), y si Noco no contesta no se crea (solo se
     LEE de Noco).
 
     Lo que sí hace esta capa, y es lo único que hace:

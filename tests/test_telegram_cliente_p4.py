@@ -83,6 +83,20 @@ def test_G17_buscar_cliente_devuelve_los_candidatos_y_nada_mas(mundo, gente, noc
     _todo_get(noco)
 
 
+def test_H2_buscar_cliente_corta_en_el_tope_y_el_prompt_dice_la_misma_cifra(mundo, gente, monkeypatch):
+    import noco_lectura
+    muchas = [{"Id": 100 + i, "nombre": f"Mismo {i}"} for i in range(noco_lectura.TOPE_BUSQUEDA)]
+    _apuntar_a_noco(monkeypatch, Noco(filas=muchas, filtrar=True))
+    assert crud.TOPE_CANDIDATOS_CLIENTE < noco_lectura.TOPE_BUSQUEDA      # la prueba ejerce el corte de verdad
+    r, _ = _herr("buscar_cliente", {"texto": "mismo"})
+    assert [f["id"] for f in json.loads(r)] == [100 + i for i in range(crud.TOPE_CANDIDATOS_CLIENTE)], r
+    assert f"hasta {crud.TOPE_CANDIDATOS_CLIENTE} fichas" in agente.herramientas_del_prompt([])
+    assert "{TOPE_CLIENTES}" not in agente.herramientas_del_prompt([])
+    monkeypatch.setattr(crud, "TOPE_CANDIDATOS_CLIENTE", 3)
+    assert "hasta 3 fichas" in agente.herramientas_del_prompt([])
+    assert len(json.loads(_herr("buscar_cliente", {"texto": "mismo"})[0])) == 3
+
+
 def test_G17_buscar_cliente_sin_coincidencias_no_dice_que_no_existe(mundo, gente, noco):
     r, _ = _herr("buscar_cliente", {"texto": "zzzz"})
     assert r.startswith("0 fichas") and "no prueba que el cliente no exista" in r, r
