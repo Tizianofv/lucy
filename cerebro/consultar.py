@@ -217,9 +217,13 @@ NOTAS_DE_COLUMNA = {
     ("proyectos", "termina_cuando"): "texto escrito a mano: qué tiene que ser verdad para dar el "
                                      "proyecto por terminado; NULL = sin escribir",
     # La carpeta (parte 5, 8-oct-2026): texto escrito a mano; la página solo la pinta como enlace
-    # si empieza por http:// o https://.
-    ("proyectos", "carpeta"): "texto escrito a mano: dónde vive el proyecto (una dirección de Drive o "
-                              "la ruta de una carpeta de una computadora); NULL = sin carpeta",
+    # si empieza por http:// o https://. Una ruta de computadora ya no va aquí: es `carpeta_audio`.
+    ("proyectos", "carpeta"): "texto escrito a mano: dónde vive el proyecto (la dirección de su carpeta "
+                              "en Drive); NULL = sin carpeta",
+    # La carpeta de audio (pieza 4 de «Carpetas del proyecto», 18-oct-2026): ruta escrita a mano; Lucy no ve el disco.
+    ("proyectos", "carpeta_audio"): "ruta escrita a mano de la carpeta de audio del proyecto en el disco Sesiones "
+                                    "del estudio; Lucy NO ve ese disco, así que no sabe si la carpeta existe; "
+                                    "NULL = sin escribir",
     ("personas", "alias"): "text[]",
     ("log_acciones", "antes"): "jsonb",
     ("log_acciones", "despues"): "jsonb",

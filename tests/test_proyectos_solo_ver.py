@@ -368,6 +368,7 @@ A_MANO = {
     "editar=descripcion": {"p": 1, "editar": "descripcion"},     # parte 3 (8-oct-2026): el formulario de «De qué se trata»
     "editar=fechas": {"p": 1, "editar": "fechas"},               # parte 4 (8-oct-2026): el formulario de las fechas
     "editar=carpeta": {"p": 1, "editar": "carpeta"},             # parte 5 (8-oct-2026): el formulario de la carpeta
+    "editar=carpeta_audio": {"p": 1, "editar": "carpeta_audio"}, # pieza 4 de «Carpetas del proyecto» (18-oct-2026): el de la ruta de audio
     "editar_nota": {"p": 1, "editar_nota": 700},                 # parte 6 (8-oct-2026): el formulario de una nota
     "borrar_nota": {"p": 1, "borrar_nota": 700},                 # parte 6: la pregunta de borrar una nota
     "editar_tarea": {"p": 1, "t": 10, "editar_tarea": 10},

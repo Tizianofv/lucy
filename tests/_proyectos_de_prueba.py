@@ -49,10 +49,13 @@ def modelo(con_personas: bool = True) -> dict:
                       autor_chat_id=None, bandeja_chat_id=None, bandeja_origen=None)],
              2: [dict(id=703, proyecto_id=2, creado_en=tp.CREADO, contenido="Nota del cerrado",
                       autor_chat_id=config.CHAT_ID_DUENO, bandeja_chat_id=None, bandeja_origen=None)]}
-    return _armar(pr, ta, co, personas if con_personas else [], fechas, carpetas, notas)
+    # La carpeta de audio (pieza 4 de «Carpetas del proyecto»): el 1 trae una ruta (texto con «Copiar» y «Cambiar»), el 2
+    # (cerrado) ninguna (la casa ve «Poner»), el resto no salió en la lectura (`carpeta_audio_disponible` falso).
+    audios = {1: "Sesiones/Cliente Uno", 2: None}
+    return _armar(pr, ta, co, personas if con_personas else [], fechas, carpetas, notas, audios)
 
 
-def _armar(pr, ta, co, personas, fechas=None, carpetas=None, notas=None):
+def _armar(pr, ta, co, personas, fechas=None, carpetas=None, notas=None, audios=None):
     """`tp.modelo_de_filas` con participantes (esa función no los recibe): los mismos
     rellenos, y `db.armar_pagina` de verdad."""
     pr = [{"creado_en": tp.CREADO, "descripcion": None, "estado": "activo", "area": None,
@@ -62,7 +65,7 @@ def _armar(pr, ta, co, personas, fechas=None, carpetas=None, notas=None):
           for t in ta]
     return db.armar_pagina(list(tp.AREAS), pr, ta, [], list(co),
                            {424242: "Dueño", config.CHAT_ID_DUENO: "Dueño"}, tp.HOY,
-                           participantes=personas, fechas=fechas, carpetas=carpetas, notas=notas)
+                           participantes=personas, fechas=fechas, carpetas=carpetas, notas=notas, audios=audios)
 
 
 # Lo que el doble de `cotizaciones_de_proyectos` devuelve: `{proyecto_id: [cotización, ...]}`, con la forma de

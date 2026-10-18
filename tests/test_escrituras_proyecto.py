@@ -994,6 +994,7 @@ def test_toda_ruta_post_de_proyectos_pide_sesion_y_escribe_por_una_puerta_con_ac
         "/proyectos/{pid}/descripcion": {"crud.editar"},      # 8-oct-2026: «De qué se trata»
         "/proyectos/{pid}/fechas": {"crud.editar"},           # 8-oct-2026: inicio, entrega, «Termina cuando»
         "/proyectos/{pid}/carpeta": {"crud.editar"},          # 8-oct-2026: la carpeta del proyecto
+        "/proyectos/{pid}/carpeta-audio": {"crud.editar"},    # 18-oct-2026, pieza 4 de «Carpetas del proyecto»: la ruta de audio
         # 8-oct-2026: las notas y decisiones; escriben por SUS tres funciones de `db` (no por `crud.editar`:
         # el UPDATE lleva el proyecto y el texto leído; las toca cualquiera de la casa, como los comentarios)
         "/proyectos/{pid}/notas": {"db.crear_nota_de_proyecto"},
@@ -1072,7 +1073,7 @@ def _escritores_sql_de_proyectos() -> dict:
     genéricos `crud.editar`, `deshacer`) no se ve; esos los cubren las pruebas
     de las puertas (`tests/test_base_m2.py`)."""
     columnas = ("nombre", "area", "estado", "responsable_chat_id", "descripcion",
-                "inicio", "entrega", "termina_cuando", "carpeta")
+                "inicio", "entrega", "termina_cuando", "carpeta", "carpeta_audio")
     salida = {c: set() for c in columnas}
     for archivo in _archivos_de_texto():
         if archivo.suffix != ".py":
@@ -1114,6 +1115,8 @@ def test_quien_escribe_cada_columna_del_proyecto_y_si_pasa_por_su_puerta():
     # se escribe SOLO por `crud.editar` (SQL al vuelo, que este censo no ve: lo declara y lo ejerce
     # `tests/test_carpeta_de_proyecto.py`).
     assert escritores["carpeta"] == set()
+    # La carpeta de audio (pieza 4 de «Carpetas del proyecto»): lo mismo, solo `crud.editar` (`tests/test_carpeta_de_audio.py`).
+    assert escritores["carpeta_audio"] == set()
     # `borrar_grupo` (7-oct-2026) solo PONE el área en NULL en los proyectos del grupo
     # que se borra; no escribe un grupo que venga de afuera.
     assert escritores["area"] == {"borrar_grupo", "convertir_tarea_en_proyecto", "crear_proyecto"}
@@ -1577,7 +1580,7 @@ def _primera_habilitada(c):
 # vista -> (consulta, acciones POST exactas que tiene que tener, página = proyecto)
 # Las escrituras de la tarea (`/proyectos/tarea/...`, `/proyectos/{pid}/tareas`)
 # son de `tests/test_escrituras_tarea.py`; acá, solo las del proyecto.
-_SOLO_PROYECTO = re.compile(r"/proyectos/(nuevo|\d+/(nombre|descripcion|fechas|carpeta|area|responsable|estado|cliente|personas))")
+_SOLO_PROYECTO = re.compile(r"/proyectos/(nuevo|\d+/(nombre|descripcion|fechas|carpeta|carpeta-audio|area|responsable|estado|cliente|personas))")
 
 
 def _del_proyecto(formularios):
@@ -1618,6 +1621,10 @@ _VISTAS = {
     "editar_carpeta": ({"p": 2, "editar": "carpeta"},
                        ["/proyectos/2/nombre", "/proyectos/2/carpeta", "/proyectos/2/responsable",
                         "/proyectos/2/cliente", "/proyectos/2/personas"] + _V),
+    # La carpeta de audio (pieza 4, 18-oct-2026): su formulario solo se dibuja con `?editar=carpeta_audio`.
+    "editar_carpeta_audio": ({"p": 2, "editar": "carpeta_audio"},
+                             ["/proyectos/2/nombre", "/proyectos/2/carpeta-audio", "/proyectos/2/responsable",
+                              "/proyectos/2/cliente", "/proyectos/2/personas"] + _V),
     # La página aparte (`?nuevo=`) es un formulario MÁS, el de siempre.
     "nuevo": ({"nuevo": "CDS"}, ["/proyectos/nuevo"] + _V),
 }
@@ -1699,6 +1706,10 @@ def test_cada_formulario_enviado_como_el_navegador_escribe_en_el_proyecto_de_la_
             assert fila["carpeta"] == "Escrito en carpeta", (vista, fila)
             assert {k: v for k, v in fila.items() if k != "carpeta"} == {
                 k: v for k, v in antes[pid].items() if k != "carpeta"}, (vista, "tocó otra columna")
+        elif clase == "carpeta-audio-editar":
+            assert fila["carpeta_audio"] == "Escrito en carpeta_audio", (vista, fila)
+            assert {k: v for k, v in fila.items() if k != "carpeta_audio"} == {
+                k: v for k, v in antes[pid].items() if k != "carpeta_audio"}, (vista, "tocó otra columna")
         elif clase == "resp":
             elegido = _otra_opcion(next(c for c in form["campos"] if c["tipo"] == "select"))
             assert fila["responsable_chat_id"] == nombres[_valor(elegido)], (vista, fila)
