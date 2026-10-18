@@ -1909,6 +1909,11 @@ async def editar(
                 if antes.get("nombre") != antes.get("cliente_nombre"):
                     campos["nombre"] = antes.get("cliente_nombre")  # pasa a CDS/ACD: el nombre es el del cliente
             despues_fila = {**antes, **{c: campos[c] for c in ("nombre", "estado", "area") if c in campos}}
+            # Primero «un solo activo por cliente» (la causa que se le dice a la persona), después el nombre.
+            try:
+                await db.proyecto_puede_quedar_activo(cur, registro_id, antes, despues_fila)
+            except db.NombreDeProyectoNoVale as e:
+                raise ValueError("No cambié nada: ya hay otro proyecto con ese nombre.") from e
             if ("nombre" in campos and campos["nombre"] != antes.get("nombre")
                     and db.cuenta_como_activo(estado_final)
                     and await db.proyecto_vivo_con_nombre(
@@ -1917,10 +1922,6 @@ async def editar(
                     "No cambié nada: ya hay otro proyecto con ese nombre."
                 ) from db.NombreDeProyectoNoVale(
                     "repetido", "ya hay otro proyecto con ese nombre")
-            try:
-                await db.proyecto_puede_quedar_activo(cur, registro_id, antes, despues_fila)
-            except db.NombreDeProyectoNoVale as e:
-                raise ValueError("No cambié nada: ya hay otro proyecto con ese nombre.") from e
 
         # «PRIMERO:» (encargo 6), en TAREAS, por la MISMA puerta que usa
         # `crear_desde_interpretacion` -- `_primero_que_vale`, ni una

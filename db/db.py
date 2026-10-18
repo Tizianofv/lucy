@@ -6889,11 +6889,12 @@ async def poner_cliente(proyecto_id: int, noco_id: int | None, *,
         despues_fila = {**antes, "cliente_noco_id": nuevo_id, "cliente_nombre": nuevo_nombre}
         if obligatorio:
             despues_fila["nombre"] = nombre_nuevo
-            # El nombre del cliente puede ser el de otro proyecto ACTIVO (dos fichas con el mismo nombre).
-            if (nombre_nuevo != antes.get("nombre") and cuenta_como_activo(antes.get("estado"))
-                    and await proyecto_vivo_con_nombre(cur, nombre_nuevo, excluir_id=proyecto_id) is not None):
-                raise NombreDeProyectoNoVale("repetido", "ya hay otro proyecto con ese nombre")
+        # Primero «un solo activo por cliente» (es la causa que se le dice a la persona)…
         await proyecto_puede_quedar_activo(cur, proyecto_id, antes, despues_fila)
+        # …y después el nombre: el del cliente puede ser el de otro proyecto ACTIVO (dos fichas con el mismo nombre).
+        if (obligatorio and nombre_nuevo != antes.get("nombre") and cuenta_como_activo(antes.get("estado"))
+                and await proyecto_vivo_con_nombre(cur, nombre_nuevo, excluir_id=proyecto_id) is not None):
+            raise NombreDeProyectoNoVale("repetido", "ya hay otro proyecto con ese nombre")
         if obligatorio:
             await conn.execute(
                 "UPDATE proyectos SET cliente_noco_id = %s, cliente_nombre = %s, nombre = %s "

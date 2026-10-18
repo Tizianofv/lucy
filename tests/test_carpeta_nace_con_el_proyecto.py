@@ -509,6 +509,24 @@ def test_dos_proyectos_de_igual_nombre_uno_en_la_papelera_la_segunda_carpeta_lle
     assert nube.cosas[b["carpeta_proyecto_id"]]["nombre"] == "Disco repetido · #3" == b["nombre_puesto"]
 
 
+@pytest.mark.parametrize("viejo", ["cerrado", "pausado"])
+def test_un_cliente_que_vuelve_con_un_proyecto_nuevo_la_carpeta_del_nuevo_lleva_su_numero_y_la_vieja_conserva_su_nombre(
+        m, nube, viejo):
+    """G7r de «Un proyecto no se crea sin cliente» (18-oct-2026): en CDS y ACD el nombre del proyecto es el del cliente, así
+    que el proyecto nuevo del mismo cliente se llama IGUAL que el viejo (pausado o cerrado). Las carpetas no chocan: la del
+    nuevo queda «<nombre> · #<número>» y la del viejo no se toca ni se reusa."""
+    m.con.execute("UPDATE proyectos SET nombre = 'Cliente repetido' WHERE id IN (2, 3)")
+    m.con.commit()
+    _preparar(2)
+    m.con.execute("UPDATE proyectos SET estado = ? WHERE id = 2", (viejo,))
+    m.con.commit()
+    _preparar(3)
+    a, b = _carpetas(m, 2), _carpetas(m, 3)
+    assert a["carpeta_proyecto_id"] != b["carpeta_proyecto_id"]
+    assert nube.cosas[a["carpeta_proyecto_id"]]["nombre"] == "Cliente repetido" == a["nombre_puesto"]
+    assert nube.cosas[b["carpeta_proyecto_id"]]["nombre"] == "Cliente repetido · #3" == b["nombre_puesto"]
+
+
 def test_preparar_no_habla_con_drive_por_su_cuenta_y_crea_por_la_unica_funcion_de_las_carpetas():
     arbol = ast.parse((_ROOT / "cotizaciones_drive.py").read_text(encoding="utf-8"))
     preparar = next(f for f in _funciones(arbol) if f.name == "preparar_la_carpeta")
