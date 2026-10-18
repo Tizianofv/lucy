@@ -122,7 +122,11 @@ def estado_de_drive(cot: dict) -> dict | None:
             "aviso_al_guardar": al_guardar, "aviso_al_reintentar": al_reintentar}
 
 
-SE_CREARA_CON_LA_COTIZACION = "Se creará con la primera cotización que se envíe."
+# Lo que la PÁGINA dice y el botón que lo acompaña (pieza 2). Viven aquí, no en la plantilla ni en `web/app.py`: la
+# plantilla pinta lo que recibe.
+ETIQUETA_DEL_BOTON_DE_LA_CARPETA = "Crear la carpeta en Drive"
+FRASE_SIN_CARPETA_EN_DRIVE = "Todavía no hay carpeta en Drive."
+PUEDE_VOLVER_A_INTENTAR = f"Puedes volver a intentarlo con «{ETIQUETA_DEL_BOTON_DE_LA_CARPETA}», en la página del proyecto."
 
 
 def frase_de_la_carpeta(resultado: dict) -> str:
@@ -136,7 +140,7 @@ def frase_de_la_carpeta(resultado: dict) -> str:
             return "No se pudo crear la carpeta en Drive: el proyecto ya no está."
         causa = resultado.get("causa") if isinstance(resultado, dict) else None
         porque = f" ({causa})" if causa in CAUSAS else ""
-        return f"No se pudo crear la carpeta en Drive{porque}. {SE_CREARA_CON_LA_COTIZACION}"
+        return f"No se pudo crear la carpeta en Drive{porque}. {PUEDE_VOLVER_A_INTENTAR}"
     frase = "Carpeta de Drive creada." if r == "lista" else "El proyecto ya tiene su carpeta en Drive."
     carpeta = resultado.get("carpeta")
     if carpeta == ENLACE_NO_SE_PUDO:
@@ -166,6 +170,39 @@ def clave_de_aviso_de_la_carpeta(resultado: dict) -> str | None:
     if resultado.get("carpeta") != ENLACE_NO_SE_PUDO:
         return None
     return "carpeta_drive_enlace" if r == "lista" else "carpeta_drive_ya_enlace"
+
+
+# Las claves de aviso de lo que SALIÓ BIEN (`?hecho=`) y el resultado que cada una cuenta. Las de lo que no salió bien o
+# salió a medias son `AVISOS_DE_LA_CARPETA` (`?error=`). La causa no viaja en la dirección.
+HECHOS_DE_LA_CARPETA = {
+    "carpeta_drive": {"resultado": "lista", "causa": None},
+    "carpeta_drive_otra": {"resultado": "lista", "causa": None, "carpeta": ENLACE_YA_TENIA},
+    "carpeta_drive_ya": {"resultado": "ya_estaba", "causa": None},
+}
+
+
+def aviso_de_la_carpeta(resultado: dict) -> tuple[str, str]:
+    """LA PUERTA del aviso que sigue a pedir la carpeta de un proyecto (el botón de la página): `("hecho" | "error",
+    clave)`. Siempre hay uno: el que dice lo que `frase_de_la_carpeta` diría de ese resultado. Las claves de `error`
+    son las de `AVISOS_DE_LA_CARPETA` (las mismas del alta de un proyecto) y las de `hecho` las de `HECHOS_DE_LA_CARPETA`."""
+    clave = clave_de_aviso_de_la_carpeta(resultado)
+    if clave is not None:
+        return "error", clave
+    if resultado["resultado"] == "ya_estaba":
+        return "hecho", "carpeta_drive_ya"
+    return "hecho", "carpeta_drive_otra" if resultado.get("carpeta") == ENLACE_YA_TENIA else "carpeta_drive"
+
+
+def estado_de_la_carpeta_de_drive(carpetas: dict | None, *, se_pudo_leer: bool) -> dict:
+    """LA PUERTA de «¿tiene el proyecto su carpeta en Drive?», para la página. `carpetas` es lo que devolvió
+    `db.carpetas_de_drive` (`None` = no hay fila) y `se_pudo_leer` dice si esa lectura contestó: si no contestó (la tabla
+    no está, la base no responde) NO se sabe, y no se afirma que falta. `estado` es `hay`, `falta` o `no_se_sabe`; solo con
+    `falta` hay `frase` y `boton` (lo que la página dice y el botón que ofrece)."""
+    if not se_pudo_leer:
+        return {"estado": "no_se_sabe", "frase": None, "boton": None}
+    if carpetas is not None:
+        return {"estado": "hay", "frase": None, "boton": None}
+    return {"estado": "falta", "frase": FRASE_SIN_CARPETA_EN_DRIVE, "boton": ETIQUETA_DEL_BOTON_DE_LA_CARPETA}
 
 
 def enlace_de_carpeta_de_drive(carpeta_id) -> str | None:

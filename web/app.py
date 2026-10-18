@@ -1139,6 +1139,17 @@ def _resumen_con_su_drive(cot: dict) -> dict:
     return {**cotizaciones.resumen_de_cotizacion(cot), "drive": cotizaciones_drive.estado_de_drive(cot)}
 
 
+async def _estado_de_la_carpeta_de_drive_del_proyecto(pid: int) -> dict:
+    """Lo que la página dice de la carpeta de Drive del proyecto (`cotizaciones_drive.estado_de_la_carpeta_de_drive`):
+    una lectura (`db.carpetas_de_drive`) que no tumba la página; si falla, no se sabe y no se afirma nada."""
+    try:
+        carpetas, se_pudo_leer = await db.carpetas_de_drive(pid), True
+    except Exception as e:
+        log.warning("Panel de proyectos: no se pudo leer si #%s tiene su carpeta de Drive (%s)", pid, type(e).__name__)
+        carpetas, se_pudo_leer = None, False
+    return cotizaciones_drive.estado_de_la_carpeta_de_drive(carpetas, se_pudo_leer=se_pudo_leer)
+
+
 async def _pantalla_de_cotizaciones(m: dict, todas: dict | None, contacto: dict | None, solo_ver: bool,
                                     cotizacion: str, corregir: int, chat: int | None = None,
                                     rechazo: str = "") -> dict | None:
@@ -1371,6 +1382,11 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         cz = await _pantalla_de_cotizaciones(vista["proyecto"], await db.cotizaciones_de_proyectos(),
                                              contacto_del_cliente, solo_ver, cotizacion, corregir,
                                              _sesion(request) if de_la_casa else None, rechazo)
+    # LA CARPETA DE DRIVE DEL PROYECTO (pieza 2 de «Carpetas del proyecto»): una lectura aparte, solo en la vista de UN
+    # proyecto, que no sube excepciones (`_estado_de_la_carpeta_de_drive_del_proyecto`): si no se pudo leer, no se afirma que falta.
+    carpeta_drive = None
+    if vista["tipo"] == "proyecto":
+        carpeta_drive = await _estado_de_la_carpeta_de_drive_del_proyecto(vista["proyecto"]["id"])
     # LA BÚSQUEDA DE UNA SESIÓN (parte 13, 9-oct-2026): solo la sesión de la casa y solo en un
     # proyecto; el texto se limpia antes de salir (`registro_lectura.buscar_sesiones`). Es un
     # pedido aparte, y solo cuando hay algo que buscar.
@@ -1440,7 +1456,10 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          "nombres_responsable": [n for v, n in config.opciones_de_responsable() if v],
          # Lo que dice el aviso de la carpeta de Drive de un proyecto recién creado: sale de la MISMA frase
          # (`cotizaciones_drive.frase_de_la_carpeta`), nunca se escribe en la plantilla.
-         "frase_del_alta_en_drive": _frase_de_la_carpeta_del_aviso(error)})
+         "frase_del_alta_en_drive": _frase_de_la_carpeta_del_aviso(error),
+         "frase_de_la_carpeta_hecha": _frase_de_la_carpeta_del_aviso("", hecho),
+         # Si el proyecto tiene su carpeta en Drive (la frase y el botón de «Crear la carpeta en Drive» salen de aquí).
+         "carpeta_drive": carpeta_drive})
 
 
 # Los sitios de la página donde se puede buscar una persona de Noco sin JavaScript (`pdonde`). `cotizacion-cliente` es
@@ -1578,11 +1597,15 @@ async def _volver_a_la_tarea(tid: int, **parametros) -> str:
     return f"{base}{extra}#tarea-{tid}"
 
 
-def _frase_de_la_carpeta_del_aviso(error: str) -> str:
-    """La frase de la carpeta de Drive para un `?error=` del alta de un proyecto (`carpeta_drive_*`, o el mismo con
-    `cliente_nuevo_` delante). Vacía para cualquier otro aviso."""
-    resultado = cotizaciones_drive.AVISOS_DE_LA_CARPETA.get(error.removeprefix("cliente_nuevo_"))
-    return cotizaciones_drive.frase_de_la_carpeta(resultado) if resultado else ""
+def _frase_de_la_carpeta_del_aviso(error: str, hecho: str = "") -> str:
+    """La frase de la carpeta de Drive para un `?error=` (`carpeta_drive_*`, o el mismo con `cliente_nuevo_` delante, del
+    alta de un proyecto) o un `?hecho=` (`carpeta_drive*`, del botón de la página). Vacía para cualquier otro aviso."""
+    for tabla, clave in ((cotizaciones_drive.AVISOS_DE_LA_CARPETA, error.removeprefix("cliente_nuevo_")),
+                         (cotizaciones_drive.HECHOS_DE_LA_CARPETA, hecho)):
+        resultado = tabla.get(clave)
+        if resultado:
+            return cotizaciones_drive.frase_de_la_carpeta(resultado)
+    return ""
 
 
 async def _preparar_la_carpeta_de_drive(pid: int) -> dict:
@@ -2805,6 +2828,19 @@ async def guardar_cotizacion_existente(request: Request, pid: int, cid: int):
     if guardada["estado"] == "enviada":
         await _subir_a_drive(pid, guardada["id"])
     return _cotizacion_guardada(guardada, pid)
+
+
+@app.post("/proyectos/{pid}/drive/crear")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def crear_carpeta_de_drive_del_proyecto(request: Request, pid: int):
+    """El botón de la carpeta de Drive del proyecto (pieza 2 de «Carpetas del proyecto»): solo la casa (solo ver, sin sesión y un chat
+    que no es de la casa: 401, y a Drive no le llega nada). Llama a la MISMA puerta que el alta de un proyecto
+    (`cotizaciones_drive.preparar_la_carpeta`, por `_preparar_la_carpeta_de_drive`, que no sube excepciones) y lo que se
+    dice después sale de su resultado (`aviso_de_la_carpeta`); la causa no viaja en la dirección."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    tipo, clave = cotizaciones_drive.aviso_de_la_carpeta(await _preparar_la_carpeta_de_drive(pid))
+    return RedirectResponse(f"/proyectos?{tipo}={clave}&p={pid}#carpeta-del-proyecto", status_code=303)
 
 
 @app.post("/proyectos/{pid}/drive/carpeta")

@@ -567,7 +567,9 @@ _A = ["/proyectos/2/nombre", "/proyectos/2/responsable",
       # E7 (1-oct-2026): el cliente y las personas del proyecto son formularios.
       "/proyectos/2/cliente", "/proyectos/2/personas",
       # Parte 6 (8-oct-2026): el formulario de «Nueva nota» está siempre que la base tenga la columna.
-      "/proyectos/2/notas"]
+      "/proyectos/2/notas",
+      # Pieza 2 de «Carpetas del proyecto» (18-oct-2026): «Crear la carpeta en Drive», mientras el proyecto no tenga la suya.
+      "/proyectos/2/drive/crear"]
 _TAREAS_DE_2 = ["/proyectos/tarea/10/hecha", "/proyectos/tarea/10/titulo",
                 "/proyectos/tarea/11/reabrir", "/proyectos/tarea/11/titulo",
                 "/proyectos/tarea/12/hecha", "/proyectos/tarea/12/titulo", "/proyectos/2/tareas"]
@@ -592,7 +594,8 @@ _VISTAS_DE_TAREAS = {
     "editar_nombre": ({"p": 2, "editar": "nombre"}, _A + _TAREAS_DE_2 + _V),
     "cerrado": ({"p": 3}, ["/proyectos/3/estado", "/proyectos/3/nombre",
                            "/proyectos/3/responsable", "/proyectos/3/cliente",
-                           "/proyectos/3/personas", "/proyectos/3/notas", "/proyectos/tarea/40/reabrir",
+                           "/proyectos/3/personas", "/proyectos/3/notas", "/proyectos/3/drive/crear",
+                           "/proyectos/tarea/40/reabrir",
                            "/proyectos/tarea/40/titulo"] + _V),
     "sueltas": ({"g": "CDS"}, ["/proyectos/tarea/30/hecha", "/proyectos/tarea/30/titulo"] + _V),
     # El detalle de una tarea suelta: además de lo de siempre, «Meter en un proyecto».

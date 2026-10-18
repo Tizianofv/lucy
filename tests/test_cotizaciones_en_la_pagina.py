@@ -297,7 +297,7 @@ def test_sin_la_columna_de_la_carpeta_las_cotizaciones_salen_igual_y_la_carpeta_
         html = _pagina(_casa(), p=1)
     finally:
         panel.db.carpetas_de_proyectos = guardada
-    assert "Carpeta del proyecto" not in html and "COT-2026-001" in _seccion_de_cotizaciones(html)
+    assert "Carpetas del proyecto" not in html and "COT-2026-001" in _seccion_de_cotizaciones(html)
     assert "<h2>Cotizaciones</h2>" in html
 
 

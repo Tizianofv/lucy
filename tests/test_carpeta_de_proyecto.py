@@ -629,7 +629,9 @@ def test_en_ninguna_plantilla_la_carpeta_llega_a_un_href_sin_pasar_por_el_filtro
     assert assigns == ["m.carpeta|enlace_de_carpeta"]
     # y dónde más se escribe algo con «carpeta» dentro de `{{ }}`: cada expresión es una conocida.
     expresiones = re.findall(r"\{\{\s*([^}]*?carpeta[^}]*?)\s*\}\}", re.sub(r"\{#.*?#\}", "", fuente, flags=re.S))
-    permitidas = {"largo_carpeta", "m.carpeta or ''", "m.carpeta", "enlace_carpeta", "'Cambiar' if m.carpeta else 'Poner'"}
+    # Lo de «Documentos (Drive)» (pieza 2) son palabras que llegan hechas desde `cotizaciones_drive`, no el dato `carpeta`.
+    permitidas = {"largo_carpeta", "m.carpeta or ''", "m.carpeta", "enlace_carpeta", "'Cambiar' if m.carpeta else 'Poner'",
+                  "carpeta_drive.frase", "carpeta_drive.boton", "frase_de_la_carpeta_hecha"}
     assert {e for e in expresiones if "m.id" not in e} <= permitidas, expresiones
     # `m.carpeta` suelto (el texto) solo aparece dentro de `<code class="carpeta-texto">`, y `m.carpeta or ''`
     # solo en el `value` del campo del formulario.
@@ -704,7 +706,7 @@ def test_lucy_por_telegram_ve_la_columna_y_sabe_que_es_texto_a_mano():
 
 def test_la_casa_ve_el_bloque_aunque_no_haya_carpeta_y_puede_ponerla(uno):
     html = ver(uno, p=1)
-    assert '<h2>Carpeta del proyecto</h2>' in html and "Todavía no hay carpeta." in html
+    assert '<h2>Carpetas del proyecto</h2>' in html and "Todavía no hay carpeta." in html
     assert 'href="/proyectos?p=1&amp;editar=carpeta#carpeta-del-proyecto"' in html and ">Poner</a>" in html
     form = ver(uno, p=1, editar="carpeta")
     assert 'action="/proyectos/1/carpeta"' in form and 'name="carpeta"' in form and f'maxlength="{LARGO}"' in form
@@ -1138,7 +1140,10 @@ def test_el_guion_de_marcar_tareas_sigue_siendo_el_primero_y_el_unico_de_siempre
 
 def test_el_boton_de_copiar_esta_fuera_de_los_formularios_y_sin_js_no_se_ve(uno):
     html = _pintar(uno, RUTA)
-    assert "<form" not in html.split('id="carpeta-del-proyecto"', 1)[1].split("</section>", 1)[0]
+    seccion = html.split('id="carpeta-del-proyecto"', 1)[1].split("</section>", 1)[0]
+    # el único formulario de la sección es el de «Crear la carpeta en Drive» (pieza 2); «Copiar» no está dentro de él
+    sin_el_de_drive = re.sub(r'<form class="carpeta-drive".*?</form>', "", seccion, flags=re.S)
+    assert "<form" not in sin_el_de_drive and "data-copiar-carpeta" in sin_el_de_drive
     assert re.search(r"\.carpeta-p \.copiar\{display:none\}", html) and re.search(r"\.con-js \.carpeta-p \.copiar\{display:inline-block\}", html)
 
 

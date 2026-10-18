@@ -267,7 +267,7 @@ def test_el_proyecto_va_en_tres_columnas_las_tareas_al_centro_y_las_personas_a_l
     # A la derecha: cómo va, las personas del proyecto, la carpeta del proyecto (parte 5, 8-oct-2026;
     # la sesión de la casa la ve siempre que la columna exista) y cerrar el proyecto, en ese orden.
     assert [h2.todo_el_texto() for h2 in lado.buscar("h2")] == [
-        "Cómo va", "Personas del proyecto", "Carpeta del proyecto", "Cerrar el proyecto"]
+        "Cómo va", "Personas del proyecto", "Carpetas del proyecto", "Cerrar el proyecto"]
     assert "Cerrar proyecto" in lado.todo_el_texto()
     personas = [s for s in lado.buscar("section", "bloque") if "personas-p" in s.clases][0]
     assert personas.buscar("span", "nota")[0].todo_el_texto() == "Quién está metido y qué hace aquí"

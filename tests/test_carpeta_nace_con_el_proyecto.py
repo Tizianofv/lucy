@@ -740,6 +740,9 @@ def _fragmentos_de_las_frases() -> set[str]:
         for t in re.split(r"(?<=\.)\s+", cd.frase_de_la_carpeta(r)):
             t = re.sub(r"\(.*?\)", "", t)
             trozos.add(" ".join(t.split()[:7]))
+    # las palabras de la página y del botón (pieza 2), sacadas de la función que las dice
+    estado = cd.estado_de_la_carpeta_de_drive(None, se_pudo_leer=True)
+    trozos |= {" ".join(estado[k].split()[:7]) for k in ("frase", "boton")}
     return {t for t in trozos if len(t.split()) >= 3}
 
 

@@ -4211,10 +4211,13 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 18-oct-2026, rama `trabajo/carpetas-p1` (la carpeta de Drive nace con el proyecto): +1 en disco y +1 EXENTO por
     # `tests/test_carpeta_nace_con_el_proyecto.py` (nuevo, exento por rol); VIGILADOS sin cambio (solo se tocaron
     # archivos ya vigilados). Medida corriendo la prueba: 187, 133, 54.
-    assert medido == {"en disco": 187, "exentos": 133, "vigilados": 54}, (
+    # 18-oct-2026, rama `trabajo/carpetas-p2` (el botón de la carpeta en la página): +1 en disco y +1 EXENTO por
+    # `tests/test_carpeta_boton_en_la_pagina.py` (nuevo, exento por rol); VIGILADOS sin cambio. Medida corriendo la
+    # prueba: 188, 134, 54.
+    assert medido == {"en disco": 188, "exentos": 134, "vigilados": 54}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "18-oct-2026 (carpetas-p1) era {'en disco': 187, "
-        "'exentos': 133, 'vigilados': 54}. La aserción de fondo —cero "
+        "18-oct-2026 (carpetas-p2) era {'en disco': 188, "
+        "'exentos': 134, 'vigilados': 54}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "
