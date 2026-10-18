@@ -1010,10 +1010,24 @@ def test_G7q_pausar_o_cerrar_a_uno_de_ia_si_puede_repetir_el_nombre_de_un_activo
     assert (_fila(mundo, 2)["nombre"], _fila(mundo, 2)["estado"]) == ("Mismo nombre", "pausado")
 
 
-def test_G7q_la_papelera_no_dice_que_choca_un_pausado_o_un_cerrado():
-    # La bandera `choca` de la papelera es la misma decisión que `deshacer`: ver las pruebas de hermanos de la papelera.
-    fuente = inspect.getsource(db.papelera_de_proyectos_y_tareas)
-    assert "cuenta_como_activo(p[\"estado\"])" in fuente
+def test_G7q_la_papelera_dice_que_choca_solo_al_que_volveria_activo_con_el_nombre_de_un_activo(mundo, gente):
+    """La bandera `choca` de la papelera es la MISMA decisión que `deshacer` (restaurar): un pausado o un cerrado que vuelve
+    así no choca por nombre con un activo; uno que vuelve activo, sí."""
+    _p(mundo, 1, "Mismo nombre", area="IA", estado="activo")
+    _p(mundo, 2, "Mismo nombre", area="IA", estado="pausado", borrado=True)
+    _p(mundo, 3, "Mismo nombre", area="IA", estado="cerrado", borrado=True)
+    _p(mundo, 4, "Mismo nombre", area="IA", estado="activo", borrado=True)
+    for pid in (2, 3, 4):
+        mundo.con.execute("INSERT INTO log_acciones (actor, accion, tabla, registro_id, antes) VALUES "
+                          "('lucy', 'borrar', 'proyectos', ?, ?)", (pid, json.dumps(_fila(mundo, pid), default=str)))
+    mundo.con.commit()
+    papelera = {p["id"]: p["choca"] for p in _correr(db.papelera_de_proyectos_y_tareas())["proyectos"]}
+    assert papelera == {2: False, 3: False, 4: True}
+    # y restaurar hace LO MISMO que la bandera
+    _correr(crud.deshacer_borrado("proyectos", 2))
+    _correr(crud.deshacer_borrado("proyectos", 3))
+    with pytest.raises(ValueError, match="ya hay otro proyecto vivo con ese nombre"):
+        _correr(crud.deshacer_borrado("proyectos", 4))
 
 
 # ═══════════════════════════════════════════════════════════════════════

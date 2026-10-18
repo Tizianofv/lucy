@@ -1111,9 +1111,9 @@ async def cambiar_estado(bandeja_id: int, estado: str, desde: str | None = None)
 # UNA SOLA PUERTA para «qué nombre vale», y UNA SOLA función para «¿ya hay uno
 # con ese nombre?», llamadas por TODO lo que escribe `proyectos.nombre`:
 # `crud.editar` (Telegram y panel, por `crud.PUERTAS`), `crud.deshacer`,
-# `crud.perfil`, `_buscar_o_crear` y `convertir_tarea_en_proyecto`. La lista de
-# escritores no está tecleada acá: la saca de lo real
-# `tests/test_nombre_de_proyecto.py`.
+# `crud.perfil` (que busca), `crear_proyecto`, `poner_cliente` (en CDS/ACD el nombre es el del cliente) y
+# `convertir_tarea_en_proyecto`. La lista de escritores no está tecleada acá: la saca de lo real
+# `tests/test_nombre_de_proyecto.py`. (`_buscar_o_crear` ya no crea proyectos: pieza 1 de «Un proyecto no se crea sin cliente».)
 #
 # Sin candado en la base (decisión de la sala: sin migración): un índice único
 # sería DDL en producción. La regla es de aplicación, y por eso el duplicado se
@@ -1409,8 +1409,8 @@ async def fechas_de_proyectos() -> dict[int, dict] | None:
 async def _con_su_inicio(conn, cur, fila: dict) -> dict:
     """Un proyecto recién insertado (`fila`, con `RETURNING *`) con su `inicio` puesto a HOY en
     Santo Domingo (`hoy_rd`), y la fila releída para que la huella `crear` lo diga. LA ÚNICA que
-    escribe `inicio` al crear: la llaman los TRES sitios que insertan un proyecto
-    (`crear_proyecto`, `convertir_tarea_en_proyecto`, `_buscar_o_crear`), dentro de la misma
+    escribe `inicio` al crear: la llaman los DOS sitios que insertan un proyecto
+    (`crear_proyecto` y `convertir_tarea_en_proyecto`), dentro de la misma
     transacción que el `INSERT`. Con la columna sin migrar (SQLSTATE 42703) no escribe nada y
     devuelve la fila como vino (la migración le pone el día de creación): crear no se rompe.
     Va en un SAVEPOINT para que ese error no deje abortada la transacción del `INSERT`."""
@@ -2961,7 +2961,7 @@ ESTADO_PROYECTO_PAUSADO = "pausado"
 # no estaba ni cerrado ni abierto. La puerta es `estado_de_proyecto_que_vale`
 # y entra en `crud.PUERTAS["proyectos"]["estado"]`: la pasan `crud.editar`
 # (Telegram y panel) y `crud.deshacer`. Los demás escritores del estado no lo
-# nombran: los INSERT de `proyectos` (`_buscar_o_crear`, `crud.perfil`,
+# nombran: los INSERT de `proyectos` (`crear_proyecto` y
 # `convertir_tarea_en_proyecto`) lo dejan al DEFAULT 'activo' de la base.
 ESTADOS_PROYECTO = ("activo", ESTADO_PROYECTO_PAUSADO, ESTADO_PROYECTO_CERRADO)
 

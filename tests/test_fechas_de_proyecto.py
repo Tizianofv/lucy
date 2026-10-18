@@ -565,7 +565,7 @@ def test_por_las_rutas_del_panel_el_proyecto_nace_con_inicio_igual_a_hoy(mundo_r
     assert [f["inicio"] for f in filas] == ["2026-10-07", "2026-10-07"] and len(filas) == 2
 
 
-def test_los_sitios_que_insertan_un_proyecto_son_estos_tres_y_cada_uno_llama_a_con_su_inicio():
+def test_los_sitios_que_insertan_un_proyecto_son_estos_dos_y_cada_uno_llama_a_con_su_inicio():
     """Sonda sobre el código (no un `grep`): toda función fuera de `tests/` cuyo SQL, con los f-strings
     rearmados, dice `INSERT INTO proyectos` o `INSERT INTO {…}`. El trinquete: uno nuevo se pone rojo
     hasta que alguien lo declare aquí y le pida su `inicio`."""
