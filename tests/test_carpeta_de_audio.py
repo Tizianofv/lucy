@@ -839,11 +839,11 @@ def _funciones_que_nombran_la_columna_y_tocan_el_disco(fuente: str) -> list[str]
                 nombra = True
             if isinstance(n, ast.Call):
                 f = n.func
-                while isinstance(f, ast.Attribute):
-                    f = f.value
+                while isinstance(f, (ast.Attribute, ast.Call, ast.Subscript)):         # os.path.x(..), Path(..).x(), __import__("os").x(..)
+                    f = f.value if isinstance(f, (ast.Attribute, ast.Subscript)) else f.func
                 con_algo_variable = any(not isinstance(a, ast.Constant) for a in n.args) or any(
                     not isinstance(k.value, ast.Constant) for k in n.keywords)
-                if (isinstance(f, ast.Name) and (f.id in _TOCAN_EL_DISCO or f.id in ("open", "Path", "listdir", "scandir"))
+                if (isinstance(f, ast.Name) and (f.id in _TOCAN_EL_DISCO or f.id in ("open", "Path", "listdir", "scandir", "__import__"))
                         and con_algo_variable):
                     tocan = True
         if nombra and tocan:
@@ -868,7 +868,8 @@ def test_la_sonda_del_disco_ve_las_formas_de_tocarlo():
                  "def f(m):\n    return open(m['carpeta_audio'])\n",
                  "async def f(carpeta_audio):\n    subprocess.run(['ls', carpeta_audio])\n",
                  "def f(m):\n    return shutil.disk_usage(m['carpeta_audio'])\n",
-                 "def f(m):\n    ruta = m['carpeta_audio']\n    return os.path.isdir(ruta)\n"):
+                 "def f(m):\n    ruta = m['carpeta_audio']\n    return os.path.isdir(ruta)\n",
+                 "def f(m):\n    return __import__('os').path.exists(m['carpeta_audio'])\n"):
         assert _funciones_que_nombran_la_columna_y_tocan_el_disco(malo) == ["f"], malo
     assert _funciones_que_nombran_la_columna_y_tocan_el_disco("def f(m):\n    return os.getcwd()\n") == []
     assert _funciones_que_nombran_la_columna_y_tocan_el_disco(
