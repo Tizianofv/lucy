@@ -240,7 +240,7 @@ caracteres.</p>
 <div class="tarjeta">
   {# QUIÉN, con su NOMBRE. Si no tiene nombre en NOMBRES_POR_CHAT se dice
      «sin nombre»: el número de chat de una persona no se enseña. #}
-  <div class="suave"><b>{{ nombres.get(c.autor_chat_id, 'sin nombre') }}</b>
+  <div class="suave"><b>{{ c.autor or nombres.get(c.autor_chat_id, 'sin nombre') }}</b>
     · {{ c.creado_en|hora_rd }}</div>
   <div style="white-space:pre-wrap">{{ c.texto }}</div>
   {# Un formulario por comentario, y está bien acá: esta pantalla no es la

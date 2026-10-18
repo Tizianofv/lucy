@@ -213,6 +213,48 @@ def nombres_con_code() -> dict[int, str]:
     return {**NOMBRES_POR_CHAT, CHAT_ID_CODE: NOMBRE_CODE}
 
 
+# ── «NATALIA», AUTORA RESERVADA ──────────────────────────────────────────────
+#
+# Diseño del 18-oct-2026 (disenos/natalia-tareas-en-proyectos/DISENO.md, §7,
+# pieza L2). Regla de Tiziano, textual: «Lucy ahora es la parte del GAL System
+# que se comunica con nosotros el equipo, Natalia es quien habla con el
+# cliente». Natalia (el bot de WhatsApp) va a dejar comentarios en tareas de
+# Lucy; su nombre tiene que pintarse «Natalia» y no «Alguien».
+#
+# `CHAT_ID_NATALIA` es un valor RESERVADO, como `CHAT_ID_CODE`, y vale MENOS
+# que ella: Code puede ser responsable; Natalia NO. Es solo un AUTOR para
+# pintar. Por eso NO está en `NOMBRES_POR_CHAT`, ni en `nombres_con_code()`,
+# ni en `personas_del_panel()`, ni pasa `puede_ser_responsable` /
+# `puede_recibir_telegram` / `web.auth.puede_entrar`: todas esas puertas
+# siguen significando lo que significaban. El único sitio que la nombra es
+# `autores_reservados()`, y quien pinta el autor de un comentario le pregunta
+# a `nombre_de_autor` (o suma `autores_reservados()`), no a una copia suya.
+CHAT_ID_NATALIA = -2
+
+# El único lugar donde el texto «Natalia» se teclea como autora.
+NOMBRE_NATALIA = "Natalia"
+
+
+def autores_reservados() -> dict[int, str]:
+    """Los autores que existen SOLO para pintar un comentario: `{chat: nombre}`.
+
+    No son personas de la casa ni responsables posibles. Hoy: Natalia."""
+    return {CHAT_ID_NATALIA: NOMBRE_NATALIA}
+
+
+def nombre_de_autor(chat_id) -> str | None:
+    """El nombre con el que se pinta quien escribió un comentario, o None si no
+    se sabe (el que pinta decide qué decir: «Alguien» o «sin nombre»).
+
+    Primero los nombres de siempre (`nombres_con_code`: personas y Code), luego
+    los autores reservados. Se lee en cada llamada. La usan dos de los tres
+    sitios que pintan un autor (`comentarios_de_tarea`, `leer_comentarios`); el
+    tercero, `db.armar_pagina`, recibe sus `nombres` de fuera y suma
+    `autores_reservados()` directo. Nadie más debe mirarlos (lo vigila
+    `tests/test_natalia_autora_reservada.py`)."""
+    return nombres_con_code().get(chat_id) or autores_reservados().get(chat_id)
+
+
 def opciones_de_responsable() -> tuple[tuple[str, str], ...]:
     """Las opciones de CUALQUIER desplegable de responsable del panel:
     `((valor, etiqueta), …)`, con «sin responsable» primero (valor `""`), luego
