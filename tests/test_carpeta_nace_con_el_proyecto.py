@@ -555,6 +555,15 @@ def _editar_que_no_escribe(mp, m_):
     mp.setattr(crud, "editar", calla)
 
 
+def _editar_que_escribe_otro_valor(mp, m_):
+    """Otro escritor se adelanta: `editar` deja en `carpeta` un valor que no es el enlace de Lucy."""
+    real = crud.editar
+
+    async def otro(tabla, pid, cambios, **k):
+        return await real(tabla, pid, {"carpeta": "https://otro.example.test/otra"}, **k)
+    mp.setattr(crud, "editar", otro)
+
+
 def _editar_que_la_puerta_rechaza(mp, m_):
     async def rechaza(*a, **k):
         raise ValueError("la puerta de la carpeta dijo que no")
@@ -567,13 +576,16 @@ def _sin_la_columna(mp, m_):
     mp.setattr(db, "carpetas_de_proyectos", sin_columna)
 
 
-@pytest.mark.parametrize("como", [_enlace_roto, _editar_que_no_escribe, _editar_que_la_puerta_rechaza, _sin_la_columna],
-                         ids=["editar_revienta", "editar_no_escribe", "la_puerta_rechaza", "sin_la_columna"])
+@pytest.mark.parametrize("como", [_enlace_roto, _editar_que_no_escribe, _editar_que_escribe_otro_valor,
+                                  _editar_que_la_puerta_rechaza, _sin_la_columna],
+                         ids=["editar_revienta", "editar_no_escribe", "editar_escribe_otro_valor", "la_puerta_rechaza",
+                              "sin_la_columna"])
 def test_si_el_enlace_no_se_pudo_poner_la_carpeta_de_drive_se_crea_pero_la_funcion_lo_dice_y_nada_dice_que_quedo(m, nube, monkeypatch, como):
     como(monkeypatch, m)
     r = _preparar(2)
     assert r == {"resultado": "lista", "causa": None, "carpeta": cd.ENLACE_NO_SE_PUDO}, r
-    assert _carpetas(m, 2) is not None and _proyecto(m, 2)["carpeta"] is None
+    assert _carpetas(m, 2) is not None
+    assert _proyecto(m, 2)["carpeta"] in (None, "https://otro.example.test/otra")
     frase = cd.frase_de_la_carpeta(r)
     assert frase.startswith("Carpeta de Drive creada.") and "NO se pudo poner su enlace en el proyecto" in frase
     assert cd.clave_de_aviso_de_la_carpeta(r) == "carpeta_drive_enlace"
@@ -676,9 +688,47 @@ def test_lo_que_la_frase_no_entiende_lo_dice_como_que_no_se_creo(basura):
 
 
 def test_cada_aviso_del_panel_cuenta_un_resultado_y_la_clave_vuelve_a_su_resultado():
-    assert sorted(cd.AVISOS_DE_LA_CARPETA) == ["carpeta_drive_enlace", "carpeta_drive_fallo"]
+    assert sorted(cd.AVISOS_DE_LA_CARPETA) == ["carpeta_drive_enlace", "carpeta_drive_fallo", "carpeta_drive_no_esta",
+                                               "carpeta_drive_ya_enlace"]
     for clave, resultado in cd.AVISOS_DE_LA_CARPETA.items():
         assert cd.clave_de_aviso_de_la_carpeta(resultado) == clave
+
+
+def _resultados_que_preparar_puede_dar() -> list[dict]:
+    """Todos los resultados posibles, SACADOS DE LO REAL: los textos de `"resultado"` de los diccionarios que
+    `preparar_la_carpeta` devuelve (por `ast`) combinados con cada `ENLACE_*` del módulo (y sin enlace)."""
+    arbol = ast.parse((_ROOT / "cotizaciones_drive.py").read_text(encoding="utf-8"))
+    preparar = next(f for f in _funciones(arbol) if f.name == "preparar_la_carpeta")
+    nombres = {v.value for n in ast.walk(preparar) if isinstance(n, ast.Dict)
+               for k, v in zip(n.keys, n.values)
+               if isinstance(k, ast.Constant) and k.value == "resultado" and isinstance(v, ast.Constant)}
+    enlaces = [None] + [getattr(cd, a) for a in dir(cd) if a.startswith("ENLACE_")]
+    assert nombres >= {"lista", "ya_estaba", "no_esta", "fallo"}, nombres
+    return [{"resultado": r, "causa": None, "carpeta": e} for r in sorted(nombres) for e in enlaces]
+
+
+def test_para_cada_resultado_posible_el_panel_dice_lo_mismo_que_la_frase_real():
+    """El panel no lleva la causa en la dirección: su frase es la del resultado SIN causa. Todo resultado con algo que
+    avisar tiene clave, y la frase de esa clave es idéntica a `frase_de_la_carpeta` de ese resultado."""
+    resultados = _resultados_que_preparar_puede_dar()
+    assert len(resultados) >= 12
+    for r in resultados:
+        clave = cd.clave_de_aviso_de_la_carpeta(r)
+        if clave is None:
+            assert r["resultado"] in ("lista", "ya_estaba") and r["carpeta"] != cd.ENLACE_NO_SE_PUDO, r
+            continue
+        assert cd.frase_de_la_carpeta(cd.AVISOS_DE_LA_CARPETA[clave]) == cd.frase_de_la_carpeta(r), (r, clave)
+    # y la guarda ve lo inventado: un resultado nuevo que la clave no distingue se nota
+    assert cd.frase_de_la_carpeta({"resultado": "no_esta"}) != cd.frase_de_la_carpeta({"resultado": "fallo"})
+
+
+@pytest.mark.parametrize("prefijo", ["", "cliente_nuevo_"])
+@pytest.mark.parametrize("clave", sorted(cd.AVISOS_DE_LA_CARPETA))
+def test_la_pagina_pinta_la_frase_de_cada_clave_de_aviso(m, nube, clave, prefijo):
+    from test_pagina_proyectos import ver_r
+    html = _html.unescape(ver_r(m, error=prefijo + clave, p=1))
+    assert cd.frase_de_la_carpeta(cd.AVISOS_DE_LA_CARPETA[clave]) in html
+    assert ("SIN cliente: Noco" in html) == bool(prefijo)
 
 
 def _fragmentos_de_las_frases() -> set[str]:

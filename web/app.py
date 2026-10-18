@@ -1641,8 +1641,7 @@ async def crear_proyecto_nuevo(request: Request):
             await db.poner_cliente(nuevo["id"], int(crudo), leer_persona=noco_lectura.persona)
         except (ValueError, noco_lectura.NocoNoContesta) as e:
             log.warning("Panel de proyectos: el proyecto #%s se creó sin cliente: %s", nuevo["id"], e)
-            error = {None: "cliente_nuevo", "carpeta_drive_fallo": "cliente_nuevo_carpeta_drive_fallo",
-                     "carpeta_drive_enlace": "cliente_nuevo_carpeta_drive_enlace"}[aviso_carpeta]
+            error = "cliente_nuevo" if aviso_carpeta is None else f"cliente_nuevo_{aviso_carpeta}"
             return RedirectResponse(
                 f"/proyectos?hecho=proyecto_nuevo&error={error}&p={nuevo['id']}", status_code=303)
     cola = f"&error={aviso_carpeta}" if aviso_carpeta else ""

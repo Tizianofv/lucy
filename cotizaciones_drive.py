@@ -149,7 +149,9 @@ def frase_de_la_carpeta(resultado: dict) -> str:
 # Las claves de aviso del panel (`?error=`) y el resultado que cada una cuenta. La causa no viaja en la dirección.
 AVISOS_DE_LA_CARPETA = {
     "carpeta_drive_fallo": {"resultado": "fallo", "causa": None},
+    "carpeta_drive_no_esta": {"resultado": "no_esta", "causa": None},
     "carpeta_drive_enlace": {"resultado": "lista", "causa": None, "carpeta": ENLACE_NO_SE_PUDO},
+    "carpeta_drive_ya_enlace": {"resultado": "ya_estaba", "causa": None, "carpeta": ENLACE_NO_SE_PUDO},
 }
 
 
@@ -157,9 +159,13 @@ def clave_de_aviso_de_la_carpeta(resultado: dict) -> str | None:
     """La clave de aviso del panel para lo que pasó con la carpeta, o `None` si no hay nada que avisar (la carpeta
     quedó y su enlace también, o ya los tenía)."""
     r = resultado.get("resultado") if isinstance(resultado, dict) else None
+    if r == "no_esta":
+        return "carpeta_drive_no_esta"
     if r not in ("lista", "ya_estaba"):
         return "carpeta_drive_fallo"
-    return "carpeta_drive_enlace" if resultado.get("carpeta") == ENLACE_NO_SE_PUDO else None
+    if resultado.get("carpeta") != ENLACE_NO_SE_PUDO:
+        return None
+    return "carpeta_drive_enlace" if r == "lista" else "carpeta_drive_ya_enlace"
 
 
 def enlace_de_carpeta_de_drive(carpeta_id) -> str | None:

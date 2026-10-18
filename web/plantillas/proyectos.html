@@ -932,8 +932,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     {% elif error == 'cliente_noco' %}<p class="aviso">Noco no contestó: el cliente NO se cambió. Intenta otra vez en un momento.</p>
     {% elif error == 'cliente_igual' %}<p class="aviso">No cambió nada: ese ya era el cliente.</p>
     {% elif error == 'cliente_nuevo' %}<p class="aviso">El proyecto se creó, pero SIN cliente: Noco no contestó o la ficha ya no está. Se puede poner desde la cabecera.</p>
-    {% elif error == 'carpeta_drive_fallo' or error == 'carpeta_drive_enlace' %}<p class="aviso">El proyecto se creó. {{ frase_del_alta_en_drive }}</p>
-    {% elif error == 'cliente_nuevo_carpeta_drive_fallo' or error == 'cliente_nuevo_carpeta_drive_enlace' %}<p class="aviso">El proyecto se creó, pero SIN cliente: Noco no contestó o la ficha ya no está. Se puede poner desde la cabecera. {{ frase_del_alta_en_drive }}</p>
+    {% elif frase_del_alta_en_drive %}<p class="aviso">{% if error.startswith('cliente_nuevo_') %}El proyecto se creó, pero SIN cliente: Noco no contestó o la ficha ya no está. Se puede poner desde la cabecera.{% else %}El proyecto se creó.{% endif %} {{ frase_del_alta_en_drive }}</p>
     {% elif error == 'persona_noco' %}<p class="aviso">Noco no contestó: la persona NO se agregó. Intenta otra vez en un momento.</p>
     {% elif error == 'persona_falta' %}<p class="aviso">Escoge a la persona antes de agregarla: búscala y toca su nombre.</p>
     {% elif error == 'persona_ficha' %}<p class="aviso">Esa persona ya no está en Noco, o no se pudo leer su ficha.</p>
