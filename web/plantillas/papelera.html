@@ -3,8 +3,10 @@
 {% block cuerpo %}
 <h1>Papelera</h1>
 {% if restaurado %}<p class="vacio">Restaurado. Ya volvió a las listas.</p>{% endif %}
-{#- Los avisos de proyectos y tareas dicen un ESTADO comprobado al pintar (vivo, en
-    la lista), no que la acción ocurrió: una dirección escrita a mano no los fuerza. -#}
+{#- Cada aviso lo manda una ruta con la clave de la causa que de verdad pasó, y aquí solo se pinta el texto fijo de esa
+    clave: una dirección escrita a mano con `?error=` pinta su texto aunque esa causa no haya ocurrido. Lo único que esta
+    página comprueba al pintar es el proyecto que ocupa al cliente (`ocupante`: su nombre y «Abrir» salen solo si de verdad
+    sigue ocupando). -#}
 {% if error == 'restaurar_no_esta' %}<p class="aviso">Eso ya no está en la papelera, o no hay registro de cómo se borró: no se restauró nada.</p>
 {% elif error == 'restaurar_cliente_ocupado' %}<p class="aviso">No se restauró: el cliente tiene un proyecto activo{% if ocupante %} («{{ ocupante.nombre }}»){% endif %} y no se pueden activar 2.{% if ocupante %} <a href="/proyectos?p={{ ocupante.id }}">Abrir</a>{% endif %}</p>
 {% elif error == 'restaurar_sin_cliente' %}<p class="aviso">No se restauró: este proyecto no tiene cliente y su grupo lo exige (todo menos IA).</p>

@@ -371,9 +371,10 @@ def test_crear_proyecto_con_datos_buenos_crea_por_la_puerta_con_su_huella():
     assert "Documental" in acciones[0]["que"], acciones
 
 
-def test_crear_proyecto_sin_cliente_y_el_cliente_no_se_pide_por_telegram():
-    """Tiziano (1-oct-2026): «no todo necesita cliente». La fila nace sin
-    cliente y el texto no promete uno que no hay."""
+def test_crear_proyecto_en_ia_nace_sin_cliente_y_el_texto_no_promete_uno():
+    """Tiziano (18-oct-2026): IA queda como está, sin cliente. La fila nace sin
+    cliente y el texto no promete uno que no hay. (En CDS y ACD el cliente es
+    obligatorio y se escoge con `buscar_cliente`: ver `test_telegram_cliente_p4.py`.)"""
     _casa()
     m = Mundo()
     r, _ = _herramienta(m, "crear_proyecto", {
@@ -512,15 +513,15 @@ def _bloque_de(herramienta: str, texto: str | None = None) -> str:
     return resto if fin < 0 else resto[:fin]
 
 
-def test_el_prompt_describe_la_herramienta_nueva_con_sus_tres_campos():
+def test_el_prompt_describe_la_herramienta_nueva_con_sus_campos():
     bloque = _bloque_de("crear_proyecto")
     for campo in ('"nombre"', '"grupo"', '"responsable"'):
         assert campo in bloque, (campo, bloque)
     assert "{AREAS}" in bloque and "{PERSONAS_Y_CODE}" in bloque, (
         "el grupo y el responsable tienen que salir de su lista real, no de "
         "un texto tecleado")
-    assert "cliente" in bloque.lower(), (
-        "el prompt tiene que decir que el cliente NO se pide por acá")
+    assert '"cliente_id"' in bloque, (
+        "el prompt tiene que decir cómo se manda el cliente en CDS y ACD")
 
 
 # LO QUE SE VIGILA ES EL SENTIDO, no una frase: ninguna oración del prompt de
@@ -602,7 +603,8 @@ def test_las_listas_del_prompt_salen_de_su_fuente_y_no_estan_tecleadas():
     texto = agente.herramientas_del_prompt([{"clave": "Banda", "color": "#1"}])
     bloque = _bloque_de("crear_proyecto", texto)
     assert "Banda" in bloque, bloque
-    assert "ACD" not in bloque and "IA" not in bloque, bloque
+    assert "ACD" not in bloque and "CDS" not in bloque, bloque
+    assert f'"{db.AREA_TECNICA}"' in bloque, "el grupo sin cliente sale de `db.AREA_TECNICA`, no de un texto"
     assert "Zutana" in bloque, bloque
 
 

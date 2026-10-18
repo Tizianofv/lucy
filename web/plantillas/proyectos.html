@@ -945,8 +945,10 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     {% elif error == 'tarea_siguiente_sin_proyecto' %}<p class="aviso">Esa tarea no está en un proyecto abierto: no se agregó la que sigue.</p>
     {% elif error == 'tarea_siguiente_no_hecha' %}<p class="aviso">Esa tarea ya no está hecha: no se agregó la que sigue.</p>
     {% elif error == 'tarea_derivada_cerrado' %}<p class="aviso">Ese proyecto está cerrado: no recibe la tarea nueva, así que la tarea NO se marcó hecha.</p>
-    {#- LOS AVISOS DEL CLIENTE (pieza 2): cada uno dice la causa que de verdad pasó; las rutas eligen la clave por la clase
-        con que la puerta rechazó, no por el texto del mensaje. -#}
+    {#- LOS AVISOS DEL CLIENTE (pieza 2): las rutas eligen la clave por la clase con que la puerta rechazó, no por el
+        texto del mensaje, así que la clave que manda una ruta dice la causa que de verdad pasó. Aquí solo se pinta el
+        texto fijo de la clave: una dirección escrita a mano con `?error=` lo pinta aunque esa causa no haya ocurrido (lo
+        único que esta página comprueba es el proyecto `ocupante`: su nombre y «Abrir» salen solo si de verdad ocupa). -#}
     {% elif error == 'cliente' %}<p class="aviso">Falta escoger al cliente: búscalo y toca su nombre en la lista. No se guardó nada.</p>
     {% elif error == 'cliente_ficha' %}<p class="aviso">Esa ficha no está en Noco, o no se pudo leer bien: busca al cliente otra vez. No se guardó nada.</p>
     {% elif error == 'cliente_ocupado' %}<p class="aviso">El cliente tiene un proyecto activo{% if ocupante %} («{{ ocupante.nombre }}»){% endif %} y no se pueden activar 2. No se guardó nada.{% if ocupante %} <a href="/proyectos?p={{ ocupante.id }}">Abrir</a>{% endif %}</p>

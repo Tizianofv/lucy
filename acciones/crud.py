@@ -294,6 +294,23 @@ async def los_grupos_y_los_responsables() -> str:
             f"({de_responsables})")
 
 
+async def buscar_cliente(texto: str) -> list[dict]:
+    """Los candidatos de Personas (Noco) para el cliente de un proyecto, pedidos por Telegram:
+    `[{"id", "nombre"}]`, hasta cinco, de `noco_lectura.buscar_personas`.
+
+    SOLO LEE (esa función solo hace GET: lo exige `tests/test_noco_lectura.py`). Es la única fuente del `cliente_id`
+    que el modelo le manda a `crear_proyecto`; aun así `db.crear_proyecto` vuelve a leer la ficha, así que un Id que
+    no salió de acá no crea nada. Noco sin contestar NO es «0 fichas»: se dice con su causa (`NoDeNegocio`) y
+    nunca se devuelve una lista vacía en su lugar.
+    """
+    try:
+        return await noco_lectura.buscar_personas(str(texto or ""))
+    except noco_lectura.NocoNoContesta as e:
+        raise NoDeNegocio(
+            "No pude buscar al cliente: Noco no contesta. Dile a Tiziano que lo intente en un momento; "
+            "no es lo mismo que \"no hay nadie con ese nombre\".") from e
+
+
 async def crear_proyecto(nombre: str | None, grupo: str,
                          responsable, cliente_id=None) -> tuple[dict, int | None]:
     """El alta de un proyecto pedida por Telegram (E8, 1-oct-2026).
@@ -338,8 +355,10 @@ async def crear_proyecto(nombre: str | None, grupo: str,
         raise NoDeNegocio(
             f"No creé el proyecto: {e}. Pregúntale a Tiziano "
             f"{await los_grupos_y_los_responsables()}.") from e
-    if isinstance(cliente_id, str) and cliente_id.strip().isdigit():
-        cliente_id = int(cliente_id.strip())              # el modelo manda el Id como texto a veces
+    if isinstance(cliente_id, str):
+        # El modelo manda el Id como texto a veces; un texto en blanco es «no mandó cliente».
+        cliente_id = int(cliente_id.strip()) if cliente_id.strip().isdigit() else (cliente_id.strip() or None)
+    vino_cliente = cliente_id is not None
     try:
         nuevo = await db.crear_proyecto(
             None if nombre is None else str(nombre), str(grupo or "").strip(), chat,
@@ -350,10 +369,14 @@ async def crear_proyecto(nombre: str | None, grupo: str,
                 "No creé el proyecto: le falta el responsable, y un proyecto "
                 "nace con uno. Pregúntale a Tiziano "
                 f"{await los_grupos_y_los_responsables()}.") from e
+        if e.clave == "cliente" and not vino_cliente:
+            raise NoDeNegocio(
+                "No creé el proyecto: falta el cliente. Un proyecto de este grupo es de un cliente: búscalo con "
+                "`buscar_cliente` (si Tiziano no dijo cuál, pregúntaselo) y manda su `cliente_id`.") from e
         if e.clave == "cliente":
             raise NoDeNegocio(
-                f"No creé el proyecto: {e}. En CDS y ACD el cliente es obligatorio y tiene que ser una ficha "
-                "de Personas que exista (`cliente_id`); no lo adivines.") from e
+                f"No creé el proyecto: ese `cliente_id` no es una ficha de Personas que sirva ({e}). Usa solo el "
+                "`id` de lo que te devolvió `buscar_cliente`; si no lo has buscado, búscalo ahora.") from e
         if e.clave == "nombre":
             raise NoDeNegocio(
                 f"No creé el proyecto: {e}. No mandes `nombre`: el proyecto toma el del cliente.") from e
