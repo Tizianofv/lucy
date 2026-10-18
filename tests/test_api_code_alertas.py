@@ -111,6 +111,7 @@ class _Cur:
         emulado = _emular_deshacer(self._con, sql, params)
         if emulado is not None:
             self._filas = []
+            self.rowcount = emulado.rowcount     # como psycopg: cuántas filas tocó (`crud.deshacer` lo mira)
             return self
         # `= ANY(%s)` es de Postgres: con una lista se emula con json_each.
         sql = sql.replace("= ANY(%s)", "IN (SELECT value FROM json_each(%s))")
@@ -122,6 +123,7 @@ class _Cur:
                 raise _ErrorSQL("42703") from None
             raise
         self._filas = [_Fila(_como_jsonb(dict(f))) for f in cur.fetchall()] if cur.description else []
+        self.rowcount = cur.rowcount
         return self
 
     async def fetchone(self):

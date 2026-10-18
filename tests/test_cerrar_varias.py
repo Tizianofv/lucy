@@ -926,6 +926,10 @@ class _CursorEspia:
     justamente una de las formas en que se cuela una escritura muda.
     """
 
+    # Como el cursor de psycopg tras un UPDATE que encontró su fila: tocó 1. `crud.deshacer` lo mira antes de
+    # afirmar nada; sin esto el barrido no pasaría de la sentencia y vería un UPDATE sin huella que no es real.
+    rowcount = 1
+
     def __init__(self, libro: _Libro, bloque: int, como_dict: bool):
         self._libro, self._bloque = libro, bloque
         self._dict = como_dict

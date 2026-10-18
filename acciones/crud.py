@@ -2580,6 +2580,24 @@ async def _recibir_al_deshacer(cur, tarea_id, quedara, reaparece=False):
         raise ValueError(f"No lo deshice: {e}.") from e
 
 
+DESHACER_YA_NO_EXISTE = "No lo deshice: eso ya no existe (se borró de verdad)."
+
+
+async def _el_deshacer_toco(cur, escribio, tabla, registro_id, si_sigue_ahi):
+    """LA PUERTA ÚNICA de «¿lo que `deshacer` iba a cambiar se cambió?». Se llama con lo que devolvió el
+    `UPDATE` de cada rama: si tocó una fila no hace nada; si no tocó ninguna, NUNCA se sigue (ni se escribe la
+    huella `deshacer`, ni se dice «revertí …»): se mira por qué. Si la fila ya no existe (la purga de la papelera
+    la borró de verdad) → `DESHACER_YA_NO_EXISTE`; si sigue ahí, `si_sigue_ahi` dice qué pasó con ella.
+    Postgres no da error cuando un `UPDATE ... WHERE id = x` no encuentra la fila; sin esta mirada, `deshacer`
+    contestaba «revertí …» y dejaba otra huella sin haber hecho nada."""
+    if escribio.rowcount:
+        return
+    await cur.execute(f"SELECT 1 AS x FROM {tabla} WHERE id = %s", (registro_id,))
+    if await cur.fetchone() is None:
+        raise ValueError(DESHACER_YA_NO_EXISTE)
+    raise ValueError(si_sigue_ahi)
+
+
 async def deshacer(log_id: int) -> str:
     """Revierte una acción registrada. Devuelve una frase de qué se revirtió.
 
@@ -2613,9 +2631,10 @@ async def deshacer(log_id: int) -> str:
         # (`borrar` y `editar`), ANTES de escribir.
 
         if huella["accion"] == "crear":
-            await conn.execute(
+            c = await conn.execute(
                 f"UPDATE {tabla} SET borrado_en = now() "
                 f"WHERE id = %s AND borrado_en IS NULL", (registro_id,))
+            await _el_deshacer_toco(cur, c, tabla, registro_id, "No lo deshice: eso ya estaba en la papelera.")
             que = "lo que había creado"
 
         elif huella["accion"] == "borrar":
@@ -2656,8 +2675,11 @@ async def deshacer(log_id: int) -> str:
                     except db.NombreDeProyectoNoVale as e:
                         raise ValueError(
                             "No lo deshice: ya hay otro proyecto vivo con ese nombre.") from e
-            await conn.execute(
+            c = await conn.execute(
                 f"UPDATE {tabla} SET borrado_en = NULL WHERE id = %s", (registro_id,))
+            # (Si la fila sigue ahí pero ya estaba viva, el UPDATE la toca igual —NULL a NULL— y nada se afirma de
+            # más: repetir un deshacer viejo es un caso probado, `test_un_deshacer_viejo_no_trae_…`.)
+            await _el_deshacer_toco(cur, c, tabla, registro_id, "No lo deshice: no encontré qué restaurar.")
             que = "lo que había archivado"
             if tabla == "proyectos":
                 # UN PROYECTO VUELVE CON SUS TAREAS: las que se fueron con él EN ESE ACTO
@@ -2717,6 +2739,11 @@ async def deshacer(log_id: int) -> str:
                 if que is None:
                     raise ValueError(f"No lo deshice: {e}.") from e
                 raise ValueError(f"No lo deshice: {que}, y {e}.") from e
+            # Una fila que ya no existe se dice ANTES de las comprobaciones de abajo (el proyecto que la recibe, las
+            # fechas, la descripción): contestarían otra cosa que no es la causa.
+            await cur.execute(f"SELECT 1 AS x FROM {tabla} WHERE id = %s", (registro_id,))
+            if await cur.fetchone() is None:
+                raise ValueError(DESHACER_YA_NO_EXISTE)
             # LAS FECHAS DE UN PROYECTO (parte 4): volver atrás una sola de las dos no puede dejar la
             # entrega antes del inicio. Se compara lo que va a quedar: lo que esta edición devuelve, o lo
             # que hay AHORA en la fila para la que no devuelve. (La base lo repite en su CHECK, pero
@@ -2787,8 +2814,9 @@ async def deshacer(log_id: int) -> str:
                     f"FROM jsonb_populate_record(null::{tabla}, %s) r WHERE t.id = %s{condicion}",
                     (json.dumps(antes, default=str, ensure_ascii=False), registro_id,
                      *(actuales[c] for c in candado)))
-                if candado and devuelta.rowcount == 0:
-                    raise ValueError(DESHACER_PISARIA_LA_DESCRIPCION)
+                await _el_deshacer_toco(
+                    cur, devuelta, tabla, registro_id,
+                    DESHACER_PISARIA_LA_DESCRIPCION if candado else "No lo deshice: la fila no cambió.")
             except ValueError:
                 raise
             except Exception as e:

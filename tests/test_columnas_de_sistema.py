@@ -151,6 +151,8 @@ def test_sonda_deshacer_no_devuelve_columnas_de_sistema():
             if "FROM log_acciones" in s2 or s2.startswith("UPDATE tareas t SET"):
                 self._base.sql.append((s2, params))
                 self._filas = [huella] if "FROM log_acciones" in s2 else []
+                # Como el cursor de psycopg: el UPDATE sobre la fila que existe toca 1 (`deshacer` lo mira).
+                self.rowcount = 1
                 return self
             return await super().execute(sql, params)
 

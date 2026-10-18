@@ -86,6 +86,10 @@ class _Transaccion:
 
 
 class _Cur:
+    # Como el cursor de psycopg tras un UPDATE sobre una fila que existe: tocó 1 (`crud.deshacer` lo mira antes de
+    # afirmar que revirtió algo). Un UPDATE que no encuentra la fila vale 0; eso se prueba en tests/test_deshacer_no_miente.py.
+    rowcount = 1
+
     def __init__(self, row=None, filas=None):
         self._row = row
         self._filas = filas if filas is not None else ([row] if row is not None else [])

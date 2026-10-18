@@ -893,6 +893,9 @@ def test_el_antes_que_guarda_tomar_tiene_solo_columnas_reales_de_tareas():
 
 
 class _CurDeshacer:
+    # Como el cursor de psycopg tras un UPDATE sobre una fila que existe: tocó 1 (`crud.deshacer` lo mira).
+    rowcount = 1
+
     def __init__(self, conn):
         self._conn = conn
         self._filas: list = []
@@ -902,6 +905,8 @@ class _CurDeshacer:
         self._conn.sql.append((s, params))
         if s.startswith("SELECT accion, tabla, registro_id, antes, despues"):
             self._filas = [self._conn.huella]
+        elif s.startswith("SELECT 1 AS x FROM"):
+            self._filas = [{"x": 1}]       # «¿la fila sigue existiendo?» de `crud.deshacer`: sí
         elif s.upper().startswith("INSERT INTO LOG_ACCIONES"):
             self._filas = [(999,)]
         else:
