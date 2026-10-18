@@ -155,6 +155,16 @@ def test_G6_un_reabierto_no_muestra_fecha(mundo):
     assert _lineas_cerrado_el(html) == [] and "Cerrado el" not in html
 
 
+def test_G6_el_modelo_solo_da_fecha_a_los_cerrados_aunque_la_huella_exista():
+    """Se sostiene en el modelo y no solo en la plantilla: un reabierto trae `cerrado_el` en None."""
+    cuando = datetime(2026, 10, 5, 15, tzinfo=timezone.utc)
+    pr = [dict(id=1, nombre="A", area="CDS", estado="cerrado"), dict(id=2, nombre="B", area="CDS", estado="activo")]
+    base = {"creado_en": tp.CREADO, "descripcion": None, "responsable_chat_id": None, "cliente_nombre": None}
+    m = db.armar_pagina(list(tp.AREAS), [{**base, **p} for p in pr], [], [], [], {}, tp.HOY,
+                        cierres={1: cuando, 2: cuando})
+    assert m["proyectos"][1]["cerrado_el"] == cuando.date() and m["proyectos"][2]["cerrado_el"] is None
+
+
 def test_G6_el_dia_es_el_de_santo_domingo_no_el_de_utc(mundo):
     """02:00 UTC del 6 de oct son las 22:00 del 5 de oct en Santo Domingo."""
     mundo.proyecto(1, "Uno", area="CDS", estado="cerrado")
