@@ -12,8 +12,9 @@ dos cosas.
 RUTAS DE ESTA PARTE, y solo éstas: `GET /tareas` (listar),
 `POST /tareas/{id}/cerrar`, `POST /tareas/{id}/tomar`, (1-oct-2026) los
 comentarios de una tarea de Code: `GET`/`POST /tareas/{id}/comentarios`, y
-(4-oct-2026) `POST /alertas`, la ÚNICA ruta de Natalia (permiso
-`alertas:crear`). Una ruta a medias —que exista pero siempre falle, o que
+(4-oct-2026) `POST /alertas` (permiso `alertas:crear`) y, desde el 18-oct-2026, la lectura
+`GET /clientes/{noco_id}/proyectos` (permiso `proyectos:leer_de_cliente`): las
+dos rutas de Natalia. Una ruta a medias —que exista pero siempre falle, o que
 acepte un permiso que nada usa— es peor que no tenerla: por eso `alertas:
 crear` no tuvo ruta hasta que esta estuvo completa.
 
@@ -38,7 +39,7 @@ import re
 import time
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Request
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr
 
 import config
@@ -403,6 +404,67 @@ async def crear_alerta(
             "repeticion_omitida": informe["omitida"],
             "recortado": (titulo_recortado or detalle_recortado
                           or informe["recortada"])}
+
+
+# ── Los proyectos de un cliente, para Natalia (18-oct-2026, pieza L1) ─────
+#
+# Diseño aprobado: disenos/natalia-tareas-en-proyectos/DISENO.md §4. Natalia le
+# cuenta al cliente SOLO el estado de su proyecto, la tarea que sigue y su
+# fecha estimada. Tres cerrojos, los tres de ESTA ruta y de `db`:
+#   1. Lucy filtra en la consulta por la ficha del cliente
+#      (`db.proyectos_de_cliente`): lo de otro cliente ni sale de la base.
+#   2. Lucy recorta los campos AQUÍ, armando la respuesta campo por campo
+#      (no copiando el modelo de `db`): lo que no se nombra no sale.
+#   3. NINGÚN número de chat sale: los responsables van por NOMBRE.
+# Es de solo lectura: no escribe nada ni avisa a nadie.
+_ID_MAXIMO_BIGINT = 9223372036854775807
+
+
+def _siguiente_para_natalia(proxima: dict | None) -> dict | None:
+    """La tarea que sigue, recortada: id, título, fecha (día de Santo Domingo,
+    `AAAA-MM-DD`, o `None` si no tiene) y si está vencida. `grave` no sale."""
+    if proxima is None:
+        return None
+    return {"tarea_id": proxima["id"], "titulo": proxima["titulo"],
+            "fecha": proxima["vence"].isoformat() if proxima["vence"] else None,
+            "vencida": bool(proxima["vencida"])}
+
+
+def responsables_para_natalia() -> list[str]:
+    """Los NOMBRES de quienes pueden ser responsables de una tarea
+    (`config.puede_ser_responsable`) Y a quienes Lucy les puede escribir por
+    Telegram (`config.puede_recibir_telegram`): Code no sale. Sale de
+    `personas_del_panel()`, nunca de una lista tecleada."""
+    return [nombre for chat, nombre in config.personas_del_panel()
+            if config.puede_ser_responsable(chat)
+            and config.puede_recibir_telegram(chat)]
+
+
+@router.get("/clientes/{noco_id}/proyectos")
+async def proyectos_del_cliente(
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere("proyectos:leer_de_cliente")),
+) -> dict:
+    """Los proyectos (no borrados, de cualquier estado) del cliente cuya ficha
+    de NocoDB es `noco_id`. 200 `{"noco_id", "proyectos": [{"id", "nombre",
+    "estado", "siguiente": {"tarea_id", "titulo", "fecha", "vencida"} | null,
+    "admite_tareas", "responsable"}], "responsables": [nombre, …]}`.
+    Un cliente sin proyecto (o un id inventado) da `proyectos: []` y
+    `responsables: []`, igual. 401/403/429 son los de siempre; un `noco_id` que
+    no es un entero positivo es 422. No escribe nada.
+    """
+    modelos = await db.proyectos_de_cliente(noco_id)
+    if not modelos:
+        return {"noco_id": noco_id, "proyectos": [], "responsables": []}
+    nombres = config.nombres_con_code()
+    proyectos = [{
+        "id": m["id"], "nombre": m["nombre"], "estado": m["estado"],
+        "siguiente": _siguiente_para_natalia(m["proxima"]),
+        "admite_tareas": bool(m["admite_tareas"]),
+        "responsable": nombres.get(m["responsable_chat_id"]),
+    } for m in modelos]
+    return {"noco_id": noco_id, "proyectos": proyectos,
+            "responsables": responsables_para_natalia()}
 
 
 def avisar_si_alertas_mal_nombradas() -> list[str]:

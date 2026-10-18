@@ -305,8 +305,10 @@ def _quien_llama(nombre):
 
 def test_G5_solo_la_funcion_unica_decide_el_estado_con_sus_palabras():
     assert _quien_llama("estado_calculado") == {("db/db.py", "situacion_de_proyecto")}
-    # y la función única la llama quien arma la página y nadie más
-    assert _quien_llama("situacion_de_proyecto") == {("db/db.py", "armar_pagina")}
+    # y la función única la llaman quien arma la página y quien le cuenta a Natalia los proyectos de un
+    # cliente (`proyectos_de_cliente`, 18-oct-2026, pieza L1) y nadie más; otro llamador nuevo rompe esto
+    assert _quien_llama("situacion_de_proyecto") == {("db/db.py", "armar_pagina"),
+                                                      ("db/db.py", "proyectos_de_cliente")}
 
 
 def test_G5_solo_repartir_ordena_y_solo_la_funcion_unica_reparte_a_un_proyecto():
