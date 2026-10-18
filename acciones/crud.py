@@ -2844,9 +2844,15 @@ async def deshacer(log_id: int) -> str:
     return que
 
 
+# La causa de que no haya nada que restaurar → la frase que dicen TODOS los caminos (esta es su única fuente; la
+# página la pinta desde acá, no la reescribe).
+FRASE_DE_NADA_QUE_RESTAURAR = {"ya_no_existe": DESHACER_YA_NO_EXISTE, "ya_recuperado": DESHACER_YA_ESTABA_RECUPERADO}
+
+
 class NadaQueRestaurar(ValueError):
-    """`clave`: `no_esta_borrado` (no existe o ya está vivo) o `sin_huella` (está en
-    la papelera pero no hay una huella `borrar` con la que devolverlo)."""
+    """`clave`: `ya_no_existe` (la fila no existe), `ya_recuperado` (existe y ya está viva; las dos con su frase en
+    `FRASE_DE_NADA_QUE_RESTAURAR`) o `sin_huella` (está en la papelera pero no hay una huella `borrar` con la que
+    devolverla)."""
 
     def __init__(self, clave: str, mensaje: str):
         super().__init__(mensaje)
@@ -2870,9 +2876,8 @@ async def deshacer_borrado(tabla: str, registro_id: int) -> tuple[str, int]:
         if fila is None or fila["borrado_en"] is None:
             # Las MISMAS frases que `deshacer` (una sola fuente): la página, Telegram, el agente y «deshacer todo»
             # dicen lo mismo de una fila que no existe o que ya estaba recuperada.
-            raise NadaQueRestaurar(
-                "no_esta_borrado",
-                DESHACER_YA_NO_EXISTE if fila is None else DESHACER_YA_ESTABA_RECUPERADO)
+            clave = "ya_no_existe" if fila is None else "ya_recuperado"
+            raise NadaQueRestaurar(clave, FRASE_DE_NADA_QUE_RESTAURAR[clave])
         # (La regla «una nota de un proyecto en la papelera no vuelve sola» vive en `deshacer`, que es por
         # donde pasa este camino: la página y Telegram no pueden decidir distinto.)
         await cur.execute(

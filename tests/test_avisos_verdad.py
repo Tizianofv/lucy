@@ -414,7 +414,7 @@ def test_el_aviso_de_una_accion_hecha_sale_una_vez_en_proyectos_y_papelera(pap):
     _sale_una_vez(c, lambda: c.post("/papelera/restaurar", data={"tabla": "proyectos", "id": 2}, follow_redirects=False),
                   "ya está de vuelta", limpia_p)
     _sale_una_vez(c, lambda: c.post("/papelera/restaurar", data={"tabla": "tareas", "id": 9999}, follow_redirects=False),
-                  "no se restauró nada", limpia_p)
+                  crud.DESHACER_YA_NO_EXISTE, limpia_p)       # la frase de `crud`, la misma de Telegram
 
 
 def test_el_aviso_de_una_accion_hecha_sale_una_vez_en_tareas(monkeypatch):

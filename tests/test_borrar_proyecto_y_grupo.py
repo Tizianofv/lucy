@@ -175,6 +175,26 @@ async def test_un_deshacer_viejo_no_trae_lo_que_se_borro_aparte_despues(base):
     assert not _borrada(base, "proyectos", 1)
 
 
+async def test_un_deshacer_viejo_de_un_proyecto_en_la_papelera_no_trae_las_tareas_borradas_despues_de_su_huella(base):
+    """LA GUARDA DE «TAREAS APARTE» LLEGA A EJECUTARSE (Archivar y borrar, pieza 1). Las dos pruebas de arriba
+    dejaron de pasar por el bucle de tareas cuando `deshacer` empezó a rechazar un proyecto ya vivo; esta sí: el
+    proyecto ESTÁ en la papelera (el `UPDATE` lo toca), así que el bucle corre, y la huella vieja `L1` lista las
+    tareas 10, 11 y 12. Ninguna vuelve: cada una tiene una huella `borrar` MÁS NUEVA que `L1` (la 10 por la mano,
+    la 11 y la 12 por el segundo borrado del proyecto), que es lo que mira el `max(l.id) < L1` del `UPDATE`."""
+    _sembrar(base)
+    l1 = await crud.borrar("proyectos", 1, "primera", actor="panel")
+    await crud.deshacer(l1)
+    await crud.borrar("tareas", 10, "a mano", actor="panel")
+    await crud.borrar("proyectos", 1, "segunda", actor="panel")
+    assert _borrada(base, "proyectos", 1) and all(_borrada(base, "tareas", t) for t in (10, 11, 12))
+    huellas = len(_huellas(base))
+    que = await crud.deshacer(l1)
+    assert que == "lo que había archivado", que                 # sin «y N tareas»: ninguna volvió
+    assert not _borrada(base, "proyectos", 1)
+    assert all(_borrada(base, "tareas", t) for t in (10, 11, 12)), "trajo una tarea con una huella `borrar` más nueva"
+    assert [h["accion"] for h in _huellas(base)[huellas:]] == ["deshacer"], "debía quedar solo la huella del proyecto"
+
+
 async def test_restaurar_una_tarea_cuyo_proyecto_sigue_borrado_se_rechaza_y_lo_dice(base):
     _sembrar(base)
     await crud.borrar("proyectos", 1, "x", actor="panel")

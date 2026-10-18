@@ -203,9 +203,9 @@ def test_G4b_los_cuatro_caminos_dicen_lo_mismo_de_una_fila_que_ya_estaba_recuper
     assert tnp._correr(m, lambda: crud.deshacer_varias([log_id])) == (0, [f"#{log_id}: {YA_RECUPERADO}"])
     # la Papelera de la página: su propia puerta (`NadaQueRestaurar`), con la MISMA frase
     e = tnp._rechazo(m, lambda: crud.deshacer_borrado("tareas", 1))
-    assert isinstance(e, crud.NadaQueRestaurar) and e.clave == "no_esta_borrado" and str(e) == YA_RECUPERADO, e
+    assert isinstance(e, crud.NadaQueRestaurar) and e.clave == "ya_recuperado" and str(e) == YA_RECUPERADO, e
     e = tnp._rechazo(m, lambda: crud.deshacer_borrado("tareas", 999))
-    assert isinstance(e, crud.NadaQueRestaurar) and str(e) == YA_NO_EXISTE, e
+    assert isinstance(e, crud.NadaQueRestaurar) and e.clave == "ya_no_existe" and str(e) == YA_NO_EXISTE, e
     assert m.foto_del_log() == antes
 
 
