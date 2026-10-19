@@ -183,6 +183,7 @@ class _Base:
         self.ids = itertools.count(1)
         self.gancho = None
         self.commits = 0
+        self.max_profundidad = 0          # cuántas conexiones hubo abiertas a la vez, como mucho
 
     def connection(self):
         base = self
@@ -190,6 +191,7 @@ class _Base:
         class _CM:
             async def __aenter__(self_):
                 base.profundidad += 1
+                base.max_profundidad = max(base.max_profundidad, base.profundidad)
                 if base.profundidad == 1:
                     base.con.execute("BEGIN")
                 else:
@@ -640,6 +642,18 @@ def test_G4_el_no_tampoco_queda_a_medias(mundo):
     con.execute("CREATE TRIGGER falla BEFORE UPDATE ON consultas_de_natalia BEGIN SELECT RAISE(ABORT, 'falla inyectada'); END")
     q = tocar(no, ANA)
     assert consulta(con) == c0 and foto(con) == antes and q.editados == []
+
+
+@pytest.mark.parametrize("lado", [0, 1])
+def test_G4_durante_un_toque_nunca_hay_dos_conexiones_abiertas_a_la_vez(mundo, lado):
+    """Dos conexiones abiertas a la vez son dos transacciones: lo que una confirma, la otra no lo deshace. El «Sí» (la
+    tarea, su fila de bandeja, el comentario, la persona y el cambio de estado) y el «No» usan UNA mientras escriben (la
+    relectura de después abre otra, pero cuando la primera ya cerró)."""
+    con, si, no = con_tarjeta(mundo)
+    mundo.base.max_profundidad = 0
+    tocar((si, no)[lado], ANA)
+    assert consulta(con)["estado"] == ("anotada", "rechazada")[lado]
+    assert mundo.base.max_profundidad == 1
 
 
 def test_G4_una_sola_transaccion_confirmada_por_cada_toque(mundo):
