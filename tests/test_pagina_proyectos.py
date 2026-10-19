@@ -206,7 +206,8 @@ def titulo_de(html: str):
     """El texto del título (`<h1>`) de la página, o None si no hay. El título
     lleva atributos (`data-dbl`, `title`): se lee el contenido, no la etiqueta."""
     m = re.search(r"<h1[^>]*>(.*?)</h1>", html.split('<main data-region="centro">', 1)[-1], re.S)
-    return m.group(1) if m else None
+    # Sin la marca de Natalia (19-oct-2026, `web/marca_natalia.py`): es un icono junto al nombre, no parte del título.
+    return re.sub(r'<span class="marca-natalia"[^>]*></span>', "", m.group(1)) if m else None
 
 
 def tareas_en(html: str) -> list[int]:
