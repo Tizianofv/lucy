@@ -123,7 +123,8 @@ class _Espia:
                 ("deshacer", crud), ("deshacer_varias", crud),
                 ("borrar", crud), ("editar", crud),
                 ("crear_desde_interpretacion", crud),
-                ("cambiar_estado", db), ("obtener", db)):
+                ("cambiar_estado", db), ("obtener", db),
+                ("contestar_consulta_de_natalia", db)):
             guardados[(nombre, mod)] = getattr(mod, nombre)
 
             async def _espia(*a, _nombre=nombre, **k):
@@ -190,7 +191,8 @@ def test_la_lista_de_botones_sale_del_codigo_real():
     "Marcar hecha" y "posponer" -- que el encargo nombra -- NO son botones
     de Telegram en este código: son acciones del PANEL
     (`db.marcar_tarea_hecha`, `db.mover_vence`), sin manejador acá."""
-    assert set(_acciones_reales()) == {"ok", "alt", "no", "acc", "und", "undt"}
+    # + "cns" / "cnn": Sí / No de una consulta de Natalia (L5, 18-oct-2026; `tests/test_botones_de_consultas.py`).
+    assert set(_acciones_reales()) == {"ok", "alt", "no", "acc", "und", "undt", "cns", "cnn"}
 
 
 def test_todo_manejador_de_boton_pasa_por_la_misma_puerta():

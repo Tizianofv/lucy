@@ -729,12 +729,16 @@ def test_G4_sin_PANEL_URL_la_tarjeta_va_sin_enlaces(mundo):
     assert "/entrar" not in mundo.enviados[0]["text"] and "/proyectos" not in mundo.enviados[0]["text"]
 
 
-def test_la_tarjeta_de_tarea_nueva_no_lleva_enlaces_espera_a_los_botones_de_L5(mundo):
+def test_la_tarjeta_de_tarea_nueva_no_lleva_enlaces_y_lleva_los_botones_si_no_de_L5(mundo):
     con = mundo.poner_base()
     config.PANEL_URL = PANEL
     abrir_tarea_nueva()
     vuelta(mundo)
-    assert "/entrar" not in mundo.enviados[0]["text"] and "reply_markup" not in mundo.enviados[0]
+    e = mundo.enviados[0]
+    assert "/entrar" not in e["text"]
+    datos = [b.callback_data for fila in e["reply_markup"].inline_keyboard for b in fila]
+    assert datos == ["cns:1", "cnn:1"]          # los botones Sí/No de esa consulta; la prueba de punta a punta está en
+                                                # tests/test_botones_de_consultas.py
 
 
 # ═══════════════════════════════════════════════════════════════════════

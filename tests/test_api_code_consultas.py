@@ -1257,6 +1257,7 @@ def test_el_tolerar_la_base_sin_migrar_es_de_la_tabla_nueva_y_nada_mas(natalia):
                          "db/db.py::consultas_de_natalia_sin_tarjeta",
                          "db/db.py::consultas_de_natalia_para_recordar",
                          "db/db.py::consultas_de_natalia_de_fecha_vivas",
+                         "db/db.py::_leer_consulta_para_contestar",     # L5: lee la consulta para contestarla
                          "tools/humo.py::_consultas_de_natalia_sin_tolerancia"}
 
 

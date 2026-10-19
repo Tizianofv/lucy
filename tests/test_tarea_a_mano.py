@@ -761,6 +761,9 @@ def test_el_alta_solo_toca_columnas_que_el_esquema_declara():
     Esto NO reemplaza a `tools/humo.py` —schema.sql describe la base, no ES la
     base— pero agarra el typo sin necesidad de DATABASE_URL.
 
+    DESDE L5 (18-oct-2026) hay SEIS: `bandeja` y `log_acciones` aparecen dos veces, una para el panel y otra para
+    la tarea que anota Natalia (`desde='natalia'`; el censo de orígenes de `bandeja` necesita ver los dos literales).
+
     DESDE EL ENCARGO 4 (áreas, 22-sep-2026) hay CUATRO `INSERT`, no tres:
     `tareas` aparece dos veces —`con_area` (con la columna `area`) y `sin_area`
     (la de siempre, a la que se cae si la migración todavía no corrió, ver
@@ -770,8 +773,8 @@ def test_el_alta_solo_toca_columnas_que_el_esquema_declara():
     fuente = inspect.getsource(db.crear_tarea_desde_el_panel)
     declaradas = db.columnas_declaradas()
     tablas = re.findall(r"INSERT INTO (\w+)\s*\(([^)]*)\)", fuente)
-    assert len(tablas) == 4, (
-        f"se esperaban cuatro INSERT (bandeja, tareas x2, log_acciones): "
+    assert len(tablas) == 6, (
+        f"se esperaban seis INSERT (bandeja x2, tareas x2, log_acciones x2): "
         f"{tablas}")
     vistas_tareas = 0
     for tabla, crudo in tablas:

@@ -10,6 +10,7 @@ Estados que maneja la bandeja acá:
 """
 from __future__ import annotations
 
+import html
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -115,6 +116,16 @@ def teclado_orden(
     return InlineKeyboardMarkup(filas)
 
 
+def teclado_de_consulta(consulta_id: int) -> InlineKeyboardMarkup:
+    """Los botones de la tarjeta con que Lucy le pregunta al responsable si se puede hacer lo que un cliente pidió
+    por Natalia (pieza L5 del diseño «Natalia y los Proyectos»). `cns:<id>` = sí, `cnn:<id>` = no; el id es el de la
+    CONSULTA (no el de la bandeja). Las ramas que los leen están en `al_pulsar`, detrás de su misma puerta."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Sí, se puede", callback_data=f"cns:{consulta_id}"),
+        InlineKeyboardButton("❌ No", callback_data=f"cnn:{consulta_id}"),
+    ]])
+
+
 async def _cerrar_tarjeta(q, remate: str) -> None:
     """Saca los botones y deja escrito en qué terminó la tarjeta.
 
@@ -141,6 +152,55 @@ def _quien(chat_id: int) -> str:
     así, nunca el número de chat: Tiziano ya descartó enseñarlo en el
     panel, y acá tampoco corresponde."""
     return config.NOMBRES_POR_CHAT.get(chat_id, "alguien sin nombre")
+
+
+def _remate_de_consulta(r: dict) -> str:
+    """Lo que queda escrito en la tarjeta de una consulta ya contestada. Sale de `r`, que es lo RELEÍDO de la base
+    (`db.contestar_consulta_de_natalia`): «anotada» solo si la tarea está ahí. Si esta llamada no fue la que contestó
+    (otro toque ganó antes), lo dice y cuenta cómo quedó, sin cambiar el sentido."""
+    ya = "" if r.get("gano") else "ℹ️ <i>Ya estaba contestada.</i> "
+    resultado = r["resultado"]
+    if resultado == db.RESULTADO_ANOTADA:
+        donde = f" en {html.escape(r['proyecto_nombre'])}" if r.get("proyecto_nombre") else ""
+        return f"{ya}✅ <b>Anotada como tarea #{r['tarea_id']}</b>{donde}"
+    if resultado == db.RESULTADO_RECHAZADA:
+        return f"{ya}❌ <b>Dijiste que no</b>" if r.get("gano") else f"{ya}Quedó en «no»."
+    if resultado == db.RESULTADO_NO_SE_PUDO:
+        return f"{ya}❗ <b>No se pudo anotar:</b> {html.escape(r.get('motivo') or 'sin motivo')}"
+    return (f"{ya}❗ <b>No pude confirmar que la tarea quedó anotada.</b> "
+            "Revisa el proyecto antes de contestarle al cliente.")
+
+
+async def _contestar_consulta(q, consulta_id: int, acepta: bool) -> None:
+    """Los botones Sí/No de una consulta de Natalia. TODA la decisión está en `db.contestar_consulta_de_natalia`
+    (quién puede, el primero gana, la tarea y la consulta en una transacción); esto solo dice el resultado."""
+    chat = q.message.chat_id
+    try:
+        r = await db.contestar_consulta_de_natalia(consulta_id, chat, acepta)
+    except db.ConsultasSinTabla:
+        await q.message.reply_text("Las preguntas de Natalia todavía no están disponibles.")
+        return
+    except Exception:
+        # Nada quedó escrito (la transacción se deshizo): la tarjeta y sus botones siguen ahí.
+        log.exception("No pude guardar la respuesta a la consulta #%s", consulta_id)
+        await q.message.reply_text("No pude guardar tu respuesta. La pregunta sigue abierta: toca de nuevo.")
+        return
+    resultado = r["resultado"]
+    if resultado == db.RESULTADO_NO_ES_TUYA:
+        quien = config.NOMBRES_POR_CHAT.get(r.get("responsable_chat_id"), "otra persona")
+        await q.message.reply_text(f"Esto le toca a {quien}.")
+        return
+    if resultado == db.RESULTADO_NO_EXISTE:
+        await q.message.reply_text("Esa pregunta ya no existe.")
+        return
+    if resultado == db.RESULTADO_NO_APLICA:
+        await q.message.reply_text("Esa pregunta no se contesta con Sí o No.")
+        return
+    if resultado in (db.RESULTADO_TODAVIA, db.RESULTADO_PENDIENTE):
+        await q.message.reply_text("La pregunta todavía se está preparando. Toca de nuevo en unos segundos.")
+        return
+    await _cerrar_tarjeta(q, _remate_de_consulta(r))
+    log.info("Consulta #%s contestada: %s", consulta_id, resultado)
 
 
 async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -182,6 +242,11 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Cortar el relojito de Telegram cuanto antes; si no, parece que se colgó.
     await q.answer()
+
+    # ── Las consultas de Natalia: Sí / No (pieza L5). Acá `bandeja_id` es el id de la CONSULTA ─────────
+    if accion == "cns" or accion == "cnn":
+        await _contestar_consulta(q, bandeja_id, acepta=(accion == "cns"))
+        return
 
     # ── Deshacer: acá bandeja_id es en realidad el id de la huella ──────
     if accion == "und":

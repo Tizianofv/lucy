@@ -223,6 +223,10 @@ async def main() -> int:
         ("consultas_de_natalia_sin_tarjeta", lambda: db.consultas_de_natalia_sin_tarjeta()),
         ("consultas_de_natalia_para_recordar", lambda: db.consultas_de_natalia_para_recordar(datetime.now(timezone.utc))),
         ("consultas_de_natalia_de_fecha_vivas", lambda: db.consultas_de_natalia_de_fecha_vivas()),
+        # La lectura con que el botón Sí/No (pieza L5) decide y cuenta cómo quedó la consulta: el SELECT con sus dos LEFT
+        # JOIN, contra Postgres de verdad, con un id que no existe (devuelve `None`). LECTURA; la escritura del «Sí»
+        # (`contestar_consulta_de_natalia`) no se ejerce acá: escribiría una tarea.
+        ("consulta_de_natalia_leida", lambda: db.consulta_de_natalia_leida(0)),
         # La lectura de las cotizaciones (pieza 3): TOLERA que la tabla no exista (devuelve `None`), así
         # que la línea de arriba es la que dice si falta; ésta corre el SELECT con sus columnas y el JOIN
         # contra la base de verdad. Es una LECTURA; `guardar_cotizacion` escribe y no se prueba acá.

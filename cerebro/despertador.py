@@ -346,7 +346,7 @@ def _enlaces_de_tarjeta(c: dict) -> str:
     `cerebro/agente.py`) y, aparte, la dirección de la tarea. `/entrar` no lleva destino (siempre vuelve a `/`),
     por eso van los dos. Vacío (la tarjeta sin enlaces) en los mismos casos en que la herramienta «panel» no manda
     enlace: sin `config.PANEL_URL`, o si ese chat no entra al panel (`web.auth.puede_entrar`). La `tarea_nueva`
-    espera sus botones Sí/No (pieza L5) y no lleva enlaces. Solo la tarjeta los lleva: ni el recordatorio ni la
+    lleva sus botones Sí/No (pieza L5, `_botones_de_tarjeta`) y no lleva enlaces. Solo la tarjeta los lleva: ni el recordatorio ni la
     constancia de la bandeja (un token vive `web.auth.VIDA_ENLACE`)."""
     if c["tipo"] != db.TIPO_CONSULTA_NUEVA_FECHA or not config.PANEL_URL:
         return ""
@@ -358,7 +358,17 @@ def _enlaces_de_tarjeta(c: dict) -> str:
             f"\nLa tarea: {config.PANEL_URL}/proyectos?p={c['proyecto_id']}&t={c['tarea_id']}#tarea-{c['tarea_id']}")
 
 
-async def _mandar_al_responsable(bot, c: dict, texto: str, *, responder_a: int | None = None):
+def _botones_de_tarjeta(c: dict):
+    """Los botones Sí/No de la tarjeta de una `tarea_nueva` (pieza L5). La `nueva_fecha` no lleva: se contesta
+    poniéndole la fecha a la tarea, no con un botón. Los arma `acciones.botones.teclado_de_consulta`, el mismo módulo
+    que lee `cns:`/`cnn:` al pulsarse. Solo la tarjeta: el recordatorio responde a ella y no repite los botones."""
+    if c["tipo"] != db.TIPO_CONSULTA_TAREA_NUEVA:
+        return None
+    from acciones.botones import teclado_de_consulta
+    return teclado_de_consulta(c["id"])
+
+
+async def _mandar_al_responsable(bot, c: dict, texto: str, *, responder_a: int | None = None, botones=None):
     """Manda `texto` AL RESPONSABLE de la consulta y a nadie más, y devuelve el mensaje que Telegram devolvió
     (`None` si no se mandó). Las dos puertas de siempre: solo a quien `config.puede_recibir_telegram` deja
     (Code no tiene Telegram), y `sin_copiar()`: la copia al dueño (`copia_dueno`) mandaría la tarjeta, con
@@ -368,6 +378,8 @@ async def _mandar_al_responsable(bot, c: dict, texto: str, *, responder_a: int |
         log.warning("Consulta #%s: su responsable ya no puede recibir Telegram; no se manda.", c["id"])
         return None
     extra = {}
+    if botones is not None:
+        extra["reply_markup"] = botones
     if responder_a is not None:
         from telegram import ReplyParameters
         extra["reply_parameters"] = ReplyParameters(message_id=responder_a, allow_sending_without_reply=True)
@@ -431,7 +443,8 @@ async def _mandar_tarjetas_de_consultas(bot, ahora) -> int:
     for c in await db.consultas_de_natalia_sin_tarjeta():
         texto = _texto_de_tarjeta(c)
         try:
-            mensaje = await _mandar_al_responsable(bot, c, texto + _enlaces_de_tarjeta(c))
+            mensaje = await _mandar_al_responsable(
+                bot, c, texto + _enlaces_de_tarjeta(c), botones=_botones_de_tarjeta(c))
         except Exception:
             log.warning("Consulta #%s: la tarjeta no salió; sigue abierta.", c["id"], exc_info=True)
             continue

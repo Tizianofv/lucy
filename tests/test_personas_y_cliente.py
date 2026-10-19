@@ -633,8 +633,12 @@ def _escritores_de(patron: str, archivos=None) -> set:
 
 
 def test_solo_las_dos_puertas_escriben_participantes():
+    # Las dos puertas de las personas del panel, y una tercera que NO es del panel: el «Sí» del responsable a una
+    # consulta de Natalia (L5) pone al cliente como persona de la tarea que nace, dentro de la transacción que la crea
+    # (`_poner_al_cliente_en_la_tarea`: solo INSERT, rol «Cliente», autora Natalia; lo vigila
+    # `tests/test_botones_de_consultas.py`).
     assert _escritores_de(r"(INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+participantes\b") == {
-        "agregar_participante", "quitar_participante"}
+        "agregar_participante", "quitar_participante", "_poner_al_cliente_en_la_tarea"}
 
 
 def test_solo_poner_cliente_escribe_las_columnas_del_cliente_en_proyectos():
