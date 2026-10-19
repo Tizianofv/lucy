@@ -65,6 +65,7 @@ import web.auth as auth
 import web.menu as _menu
 import web.avisos as avisos_mod
 import web.cotizacion_rechazada as cotizacion_rechazada
+import web.marca_natalia as marca_natalia
 from web.avisos import Aviso, AvisoQueElige, Navegacion, NavegacionSellada, PuertaDeAvisos
 from acciones import crud
 from cerebro.bancos.categorias import (CATEGORIAS, NO_SUMAN,
@@ -367,6 +368,11 @@ plantillas.env.filters["iniciales"] = _iniciales
 # misma que usan las rutas y la base) y no una comparación escrita en el HTML. Se entrega como global de las plantillas
 # (no por el contexto de cada página) para que ninguna vista tenga que pedírsela al módulo `db` al pintarse.
 plantillas.env.globals["cliente_es_obligatorio"] = db.cliente_es_obligatorio
+# LA MARCA DE NATALIA (19-oct-2026): qué datos de un proyecto lee Natalia lo dice UNA lista (`web/marca_natalia.py`), no
+# la plantilla; aquí solo se le entrega, junto con el icono y el texto.
+plantillas.env.globals["campos_natalia"] = marca_natalia.LEE
+plantillas.env.globals["icono_natalia"] = marca_natalia.ICONO
+plantillas.env.globals["texto_natalia"] = marca_natalia.TEXTO
 # El buscador de la página de proyectos filtra EN VIVO en el navegador (1-oct-2026,
 # como la maqueta): cada proyecto de la lista lleva su nombre y su cliente ya
 # sin tildes ni mayúsculas (`data-n`, `data-c`), con la MISMA función con la que

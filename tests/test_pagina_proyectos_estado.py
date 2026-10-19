@@ -189,6 +189,13 @@ TABLA_DE_LA_VISTA = {
     "{% if x.abiertos or x.cerrados %}": CONTROL,
     "{% if q %}": CONTROL,
     "{% if m.cliente %}": CONTROL,
+    # La marca de Natalia (19-oct-2026): pinta un `<span>` fijo (icono y texto de `web/marca_natalia.py`), sin texto de
+    # nadie; `tests/test_marca_natalia.py` vigila dónde sale y con qué campo. Las cuatro llamadas del renglón.
+    "{{ marca_natalia('nombre', m) }}": CONTROL,
+    "{{ marca_natalia('estado', m) }}": CONTROL,
+    "{{ marca_natalia('siguiente.titulo', m) }}": CONTROL,
+    "{{ marca_natalia('siguiente.fecha', m) }}": CONTROL,
+    "{% if not m.proxima.vencida %}": CONTROL,      # la fecha vencida no llega a Natalia: sin marca
     "{% if m.proxima %}": CONTROL,
     "{% if m.proxima.vence %}": CONTROL,
     "{% if m.proxima.grave %}": CONTROL,

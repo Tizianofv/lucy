@@ -409,6 +409,9 @@ a.ver-estado[aria-current="true"]{border-color:var(--marca);color:var(--marca)}
 .estados .proxima .cuando.vencida{color:var(--vencida);font-weight:600}
 .estados .sin-proxima{color:var(--suave)}
 .estados .cuenta-p{font-size:.8rem;color:var(--suave);white-space:nowrap}
+/* La marca de Natalia (19-oct-2026): al lado de cada dato que Natalia le puede contar al cliente. El icono va dentro de la
+   hoja (data:), sin pedir nada afuera; el borde fino se ve igual en el tema claro y en el oscuro. */
+.marca-natalia{display:inline-block;width:16px;height:16px;margin-left:.3em;vertical-align:-.2em;border-radius:3px;background:#000 url({{ icono_natalia }}) center/cover no-repeat;box-shadow:0 0 0 1px var(--linea);flex:none}
 a.nuevo-grupo:hover{color:var(--tinta);background:color-mix(in srgb, var(--suave) 12%, transparent)}
 .nuevo-grupo-form{display:flex;flex-direction:column;gap:.6rem;font-size:.86rem}
 .nuevo-grupo-form label{display:flex;flex-direction:column;gap:.25rem}
@@ -534,7 +537,11 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
   </form>
 </div>{% endif %}{% endmacro %}
 
-{% macro fila_tarea(t) %}
+{#- LA MARCA DE NATALIA (19-oct-2026): `campo` es un camino del JSON de la ruta de Natalia (`nombre`, `estado`, `siguiente.titulo`,
+    `siguiente.fecha`). Sale SOLO si `web/marca_natalia.py` dice que Natalia lo lee y el proyecto tiene cliente (a Natalia se le
+    piden los proyectos de la ficha de un cliente: sin cliente, no los ve). -#}
+{% macro marca_natalia(campo, m) %}{% if m.cliente_noco_id and campo in campos_natalia %}<span class="marca-natalia" role="img" aria-label="{{ texto_natalia }}" title="{{ texto_natalia }}" data-natalia="{{ campo }}"></span>{% endif %}{% endmacro %}
+{% macro fila_tarea(t, natalia_la_ve=None) %}
 {% set u = vuelta %}
 {% set abierta = t_abierta == t.id %}
 {#- «LA TAREA QUE SIGUE» (Tiziano, 14-oct-2026): al marcar una tarea hecha, ENCIMA de ella sale un
@@ -582,7 +589,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
         primer clic espera un momento por si llega el segundo, que es el doble
         clic que renombra. El `href` lo escribe el servidor: el guion no calcula
         a dónde va. -#}
-    <a class="titulo" {% if not solo_ver %}data-dbl="titulo" {% endif %}href="{{ u }}{{ '' if abierta else '&t=' ~ t.id }}#tarea-{{ t.id }}" title="{{ 'Un clic abre el detalle' if solo_ver else 'Un clic abre el detalle; doble clic cambia el título' }}" aria-label="{{ 'Cerrar' if abierta else 'Abrir' }} el detalle de la tarea" {% if editar_tarea == t.id %}hidden{% endif %}>{{ t.titulo }}</a>
+    <a class="titulo" {% if not solo_ver %}data-dbl="titulo" {% endif %}href="{{ u }}{{ '' if abierta else '&t=' ~ t.id }}#tarea-{{ t.id }}" title="{{ 'Un clic abre el detalle' if solo_ver else 'Un clic abre el detalle; doble clic cambia el título' }}" aria-label="{{ 'Cerrar' if abierta else 'Abrir' }} el detalle de la tarea" {% if editar_tarea == t.id %}hidden{% endif %}>{{ t.titulo }}</a>{% if natalia_la_ve %}{{ marca_natalia('siguiente.titulo', natalia_la_ve) }}{% endif %}
     {% if t.grave %}<span class="nota" style="color:#c0392b;font-weight:600" title="Alerta técnica grave: la sala la atiende primero">🚨 grave</span>{% endif %}
         {% if t.comentarios %}<span class="nota comentarios-n" title="Comentarios de la tarea">{{ t.comentarios|length }} coment.</span>{% endif %}
     {% if not solo_ver %}<form class="renombrar" method="post" action="/proyectos/tarea/{{ t.id }}/titulo{{ consulta_filtro }}" data-auto {% if editar_tarea != t.id %}hidden{% endif %}>
@@ -593,7 +600,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     <noscript><a class="nota" href="{{ u }}&amp;editar_tarea={{ t.id }}#tarea-{{ t.id }}">Cambiar el título</a></noscript>{% endif %}
     {% if not t.es_pendiente and not t.es_hecha %}<span class="vence" style="min-width:0">{{ t.estado }}</span>{% endif %}
     <span class="caritas">{% if t.responsable %}<span class="ini" title="Responsable: {{ t.responsable }}">{{ t.responsable|iniciales }}</span>{% endif %}{% for x in t.personas %}<span class="ini" title="{{ x.nombre }} · {{ x.rol }}">{{ x.nombre|iniciales }}</span>{% endfor %}</span>
-    <span class="vence" {% if t.vence_en %}title="{{ t.vence_en|hora_rd }}"{% endif %}>{{ 'Venció el ' if t.vencida }}{{ t.dia|dia_corto }}</span>
+    <span class="vence" {% if t.vence_en %}title="{{ t.vence_en|hora_rd }}"{% endif %}>{{ 'Venció el ' if t.vencida }}{{ t.dia|dia_corto }}</span>{% if natalia_la_ve and t.vence_en and not t.vencida %}{{ marca_natalia('siguiente.fecha', natalia_la_ve) }}{% endif %}
     {% if solo_ver %}{% elif confirmar_borrar == t.id %}
     <span class="confirmar">¿Borrarla?
       <form class="en-linea" method="post" action="/proyectos/tarea/{{ t.id }}/borrar{{ consulta_filtro }}"><button class="btn-lleno">Sí</button></form>
@@ -700,9 +707,9 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
 
 {#- LAS TAREAS (pendientes, y las hechas plegadas) de un proyecto o de un
     apartado de «Tareas sin proyecto». -#}
-{% macro lista_de_tareas(pendientes, otras, n_hechas, n_otras, vacio) %}
+{% macro lista_de_tareas(pendientes, otras, n_hechas, n_otras, vacio, natalia_m=None) %}
 <div class="col-fecha"><span>Fecha límite</span></div>
-<div class="tareas">{% for t in pendientes %}{{ fila_tarea(t) }}{% else %}<p class="vacio">{{ vacio }}</p>{% endfor %}</div>
+<div class="tareas">{% for t in pendientes %}{{ fila_tarea(t, natalia_m if natalia_m and natalia_m.proxima and natalia_m.proxima.id == t.id else None) }}{% else %}<p class="vacio">{{ vacio }}</p>{% endfor %}</div>
 {% if otras %}
 <details class="plegar"><summary>{{ n_hechas }} hecha{{ 's' if n_hechas != 1 }}{% if n_otras %} y {{ n_otras }} con otro estado{% endif %}</summary>
   <div class="tareas">{% for t in otras %}{{ fila_tarea(t) }}{% endfor %}</div>
@@ -714,7 +721,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
 {% macro un_proyecto(m, actual, cerrado=False) %}
 {% set bq = ('&q=' ~ (q|urlencode)) if q else '' %}
 <a class="proy {{ 'cerrado' if cerrado }}" data-n="{{ m.nombre|sin_tildes }}" data-c="{{ (m.cliente or '')|sin_tildes }}" href="/proyectos?p={{ m.id }}{{ bq }}" aria-current="{{ 'true' if actual and actual.id == m.id else 'false' }}">
-  <span>{{ m.nombre }}
+  <span>{{ m.nombre }}{{ marca_natalia('nombre', m) }}
     {%- if m.cliente %}<span class="sub">{{ m.cliente }}</span>{% elif not cerrado %}<span class="sub">Sin cliente</span>{% endif %}
     {%- if cerrado %}<span class="sub cerrado-el">{{ ('Cerrado el ' ~ (m.cerrado_el|dia_largo)) if m.cerrado_el else 'Cerrado' }}</span>{% endif %}
     {%- if not cerrado %}<span class="sub {{ 'dormido' if m.dormido }}">{{ 'Sin movimiento ' if m.dormido else 'Último movimiento: ' }}{{ m.dias_sin_movimiento|hace_dias }}</span>{% endif %}</span>
@@ -1034,7 +1041,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
       {#- El nombre se cambia con doble clic (el script de abajo solo muestra el
           formulario); sin JavaScript, el enlace de `<noscript>` abre el mismo
           formulario desde el servidor. -#}
-      <h1 {% if not solo_ver %}data-dbl="nombre" title="Doble clic para cambiar el nombre" {% endif %}{% if editar == 'nombre' %}hidden{% endif %}>{{ m.nombre }}</h1>
+      <h1 {% if not solo_ver %}data-dbl="nombre" title="Doble clic para cambiar el nombre" {% endif %}{% if editar == 'nombre' %}hidden{% endif %}>{{ m.nombre }}{{ marca_natalia('nombre', m) }}</h1>
       {% if not solo_ver %}<form class="renombrar" method="post" action="/proyectos/{{ m.id }}/nombre" data-auto {% if editar != 'nombre' %}hidden{% endif %}>
         <input name="nombre" type="text" required maxlength="{{ largo_nombre }}" value="{{ m.nombre }}" aria-label="Nombre del proyecto">
         <button class="guardar">Guardar</button>
@@ -1075,7 +1082,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
         </form>{% endif %}
       </div>
       <div class="meta">
-        <span class="pastilla">{{ m.estado_calculado }}</span>
+        <span class="pastilla">{{ m.estado_calculado }}</span>{{ marca_natalia('estado', m) }}
         <span class="pastilla {{ 'dormido' if m.dormido }}">Último movimiento: {{ m.dias_sin_movimiento|hace_dias }}</span>
         <span class="pastilla">{{ m.n_pendientes }} pendiente{{ 's' if m.n_pendientes != 1 }}</span>
       </div>
@@ -1147,7 +1154,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
         {% for n in personas_filtro %}<a href="{{ base }}&amp;filtro=persona&amp;quien={{ n|urlencode }}"{% if filtro == 'persona' and quien == n %} aria-current="true"{% endif %}>{{ n }}</a>{% endfor %}{% endif %}
       </nav>
       {% endif %}
-      {{ lista_de_tareas(tareas_p.pendientes, tareas_p.otras, tareas_p.n_hechas, tareas_p.n_otras, 'Sin tareas todavía.' if not m.n_total else ('Ninguna tarea pendiente con este filtro.' if filtro else 'No queda nada pendiente.')) }}
+      {{ lista_de_tareas(tareas_p.pendientes, tareas_p.otras, tareas_p.n_hechas, tareas_p.n_otras, 'Sin tareas todavía.' if not m.n_total else ('Ninguna tarea pendiente con este filtro.' if filtro else 'No queda nada pendiente.'), m) }}
       {% if not m.cerrado and not solo_ver %}
       <form class="nueva-tarea" method="post" action="/proyectos/{{ m.id }}/tareas">
         <input name="titulo" type="text" required maxlength="{{ largo_titulo }}" placeholder="Nueva tarea" aria-label="Nueva tarea">
@@ -1591,11 +1598,11 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
       <ul class="estados">
         {% for m in x.abiertos + x.cerrados %}
         <li>
-          <a class="nombre" href="/proyectos?p={{ m.id }}">{{ m.nombre }}{% if m.cliente %}<span class="sub">{{ m.cliente }}</span>{% endif %}</a>
-          <span class="pastilla">{{ m.estado_calculado }}</span>
+          <a class="nombre" href="/proyectos?p={{ m.id }}">{{ m.nombre }}{% if m.cliente %}<span class="sub">{{ m.cliente }}</span>{% endif %}</a>{{ marca_natalia('nombre', m) }}
+          <span class="pastilla">{{ m.estado_calculado }}</span>{{ marca_natalia('estado', m) }}
           <span class="proxima">
-            {%- if m.proxima %}Próxima: {{ m.proxima.titulo }}
-              {%- if m.proxima.vence %} <span class="cuando {{ 'vencida' if m.proxima.vencida }}">· {{ 'venció el' if m.proxima.vencida else 'vence el' }} {{ m.proxima.vence|dia_largo }}</span>{% else %} <span class="cuando">· sin fecha</span>{% endif %}
+            {%- if m.proxima %}Próxima: {{ m.proxima.titulo }}{{ marca_natalia('siguiente.titulo', m) }}
+              {%- if m.proxima.vence %} <span class="cuando {{ 'vencida' if m.proxima.vencida }}">· {{ 'venció el' if m.proxima.vencida else 'vence el' }} {{ m.proxima.vence|dia_largo }}</span>{% if not m.proxima.vencida %}{{ marca_natalia('siguiente.fecha', m) }}{% endif %}{% else %} <span class="cuando">· sin fecha</span>{% endif %}
               {%- if m.proxima.grave %} <span class="pastilla roja">Grave</span>{% endif %}
             {%- elif m.cerrado %}<span class="sin-proxima">Archivado: sin próxima tarea</span>
             {%- else %}<span class="sin-proxima">Nada pendiente</span>{% endif -%}
