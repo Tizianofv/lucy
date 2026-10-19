@@ -781,6 +781,21 @@ def test_G6_el_responsable_dejo_de_poder_serlo(mundo):
     assert foto(con) == antes and "No se pudo anotar" in q.texto_final
 
 
+@pytest.mark.parametrize("cambio", ["UPDATE proyectos SET cliente_noco_id = NULL, cliente_nombre = NULL WHERE id = 1",
+                                    "UPDATE proyectos SET cliente_noco_id = 5002, cliente_nombre = 'Cliente Beta' WHERE id = 1"],
+                         ids=["perdio_el_cliente", "cambio_de_A_a_B"])
+def test_G6_el_proyecto_ya_no_es_de_la_ficha_de_la_consulta(mundo, cambio):
+    con, si, no = con_tarjeta(mundo)
+    antes = foto(con)
+    con.execute(cambio)
+    q = tocar(si, ANA)
+    c = consulta(con)
+    assert c["estado"] == "no_se_pudo" and c["tarea_resultante_id"] is None
+    assert c["motivo"] == "el proyecto ya no es de ese cliente" and c["contestada_por_chat_id"] == ANA
+    assert foto(con) == antes, "no debe haber tarea, ni participante, ni comentario"
+    assert "No se pudo anotar" in q.texto_final and "ya no es de ese cliente" in q.texto_final
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # El sistema no miente
 # ═══════════════════════════════════════════════════════════════════════

@@ -6401,6 +6401,7 @@ RESULTADO_NO_SE_PUDO = "no_se_pudo"
 RESULTADO_SIN_CONFIRMAR = "sin_confirmar"  # la consulta dice anotada y la tarea no se encuentra
 RESULTADO_PENDIENTE = "pendiente"          # sigue sin contestarse (no debería verse tras contestar)
 ROL_DEL_CLIENTE_EN_LA_TAREA = "Cliente"
+MOTIVO_PROYECTO_YA_NO_ES_DEL_CLIENTE = "el proyecto ya no es de ese cliente"
 LARGO_NOMBRE_EN_COMENTARIO = 100
 
 
@@ -6416,7 +6417,7 @@ async def _leer_consulta_para_contestar(cur, consulta_id: int):
         await cur.execute(
             "SELECT c.id, c.tipo, c.estado, c.cliente_noco_id, c.proyecto_id, c.titulo, c.pedido, c.vence_en, "
             "c.responsable_chat_id, c.tarea_resultante_id, c.motivo, "
-            "p.nombre AS proyecto_nombre, p.cliente_nombre, "
+            "p.nombre AS proyecto_nombre, p.cliente_nombre, p.cliente_noco_id AS proyecto_cliente_noco_id, "
             "t.id AS tarea_id, t.titulo AS tarea_titulo "
             "FROM consultas_de_natalia c "
             "LEFT JOIN proyectos p ON p.id = c.proyecto_id "
@@ -6446,6 +6447,10 @@ async def _poner_al_cliente_en_la_tarea(cur, tarea_id: int, c: dict) -> None:
     """El cliente como persona de la tarea (rol «Cliente», DISENO.md §5.3). Su nombre es el que Lucy ya guarda en el
     proyecto (`proyectos.cliente_nombre`, el de Noco al asignarlo).
 
+    EL CLIENTE DE LA CONSULTA Y EL DEL PROYECTO SON EL MISMO aquí: `_anotar_la_tarea_de_la_consulta` rechaza (`no_se_pudo`,
+    «el proyecto ya no es de ese cliente») antes de llegar, si `proyectos.cliente_noco_id` es distinto del de la consulta
+    (incluido NULL). Por eso `cliente_noco_id` (de la consulta) y `cliente_nombre` (del proyecto) son de la misma ficha.
+
     UN PROYECTO CON CLIENTE SIN NOMBRE NO EXISTE HOY: las tres puertas que ponen el cliente (`poner_cliente`,
     `crear_proyecto`, `convertir_tarea_en_proyecto`) escriben `cliente_noco_id` y `cliente_nombre` juntos, y el nombre
     sale de `_ficha_de_noco_que_vale`, que rechaza uno vacío. Medido por la sala el 18-oct-2026 en producción: 10
@@ -6471,7 +6476,16 @@ async def _anotar_la_tarea_de_la_consulta(conn, cur, c: dict, chat_id: int, quie
     """El «Sí»: la tarea, su comentario, el cliente como persona y la consulta `preguntada → anotada`, en la transacción
     de `conn`. Devuelve si esta llamada ganó. Si el escritor de la tarea la rechaza (proyecto cerrado, responsable que
     ya no vale) NO queda nada de la tarea y la consulta pasa a `no_se_pudo` con el motivo. Cualquier otro fallo sube y
-    lo deshace todo: la consulta sigue `preguntada` y el botón sigue sirviendo."""
+    lo deshace todo: la consulta sigue `preguntada` y el botón sigue sirviendo.
+
+    ANTES de escribir nada: si el proyecto YA NO ES DE LA FICHA de la consulta (`proyectos.cliente_noco_id` distinto de
+    `consultas_de_natalia.cliente_noco_id`, incluido que el proyecto haya quedado sin cliente) es un rechazo como los del
+    escritor: la consulta pasa a `no_se_pudo` con ese motivo y no se crea nada. Lo de otro cliente no se toca (G2 de L3), y
+    así nunca se mezcla el id de la ficha de la consulta con el nombre de otro cliente en el participante."""
+    if c["proyecto_cliente_noco_id"] != c["cliente_noco_id"]:
+        return await pasar_consulta_de_natalia(
+            cur, c["id"], ESTADO_CONSULTA_PREGUNTADA, ESTADO_CONSULTA_NO_SE_PUDO,
+            contestada_por_chat_id=chat_id, contestada_en=ahora, motivo=MOTIVO_PROYECTO_YA_NO_ES_DEL_CLIENTE)
     try:
         # El SAVEPOINT es lo que deja la tarea (y su fila de bandeja) en NADA cuando el escritor la rechaza o
         # cuando otro ganó la carrera, sin tirar la transacción entera.
