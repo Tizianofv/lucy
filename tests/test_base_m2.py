@@ -491,20 +491,40 @@ async def test_G6_deshacer_tampoco_escribe_el_cliente_desde_el_chat(base, gente)
                             "tenía, y el cliente de un proyecto se elige en el panel."), str(e.value)
 
 
+_DESTINO_DE_ESCRITURA = re.compile(r"\b(?:INSERT\s+INTO|UPDATE)\s+(?:ONLY\s+)?([\w.\"]+)", re.I)
+# La única tabla ajena a los proyectos que lleva una columna `cliente_noco_id` propia (la ficha de SU consulta).
+_TABLA_CON_CLIENTE_PROPIO = "consultas_de_natalia"
+
+
+def _destinos_de_escritura(sql: str) -> list[str]:
+    """TODAS las tablas a las que escribe un texto SQL (`INSERT INTO <t>` / `UPDATE <t>`, sin mirar mayúsculas ni
+    espacios, esté donde esté: también dentro de un `WITH …`), en minúsculas y sin el esquema `public.`."""
+    return [d.replace('"', "").lower().removeprefix("public.") for d in _DESTINO_DE_ESCRITURA.findall(sql)]
+
+
 def _funciones_que_escriben_cliente(arbol) -> set[str]:
+    """Las funciones con algún texto SQL que ESCRIBE una columna `cliente_noco_id` o `cliente_nombre`.
+
+    UNA SOLA REGLA, que mira lo que el texto escribe y no quién lo escribe: de cada texto se sacan TODOS sus
+    destinos de escritura; el texto no cuenta únicamente si TODOS sus destinos son `consultas_de_natalia`. Si
+    cualquier otro destino (o ninguno que se pueda leer) acompaña a una columna de cliente, cuenta, se llame como
+    se llame la función.
+
+    FRONTERA, dicha y no prometida: solo se ven los textos SQL escritos como cadenas en el código. Un SQL armado por
+    partes, con el nombre de la tabla o de la columna en una variable, o por un escritor genérico (`crud.editar`,
+    `deshacer`) no aparece; esos los cubren las pruebas de arriba. Y un texto que mezcla dos tablas se juzga entero:
+    no distingue a cuál de las dos pertenece la columna de cliente."""
     hallados = set()
     for fn in ast.walk(arbol):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         for n in ast.walk(fn):
-            if (isinstance(n, ast.Constant) and isinstance(n.value, str)
+            if not (isinstance(n, ast.Constant) and isinstance(n.value, str)
                     and re.search(r"\b(UPDATE|INSERT)\b", n.value, re.I)
-                    and re.search(r"cliente_(noco_id|nombre)", n.value)
-                    # Se mira LO QUE SE ESCRIBE, no quién lo escribe: un SQL cuya tabla destino es
-                    # `consultas_de_natalia` guarda la ficha de SU consulta (pieza L3), no el cliente de un
-                    # proyecto. Es por cada texto de SQL: la misma función con OTRO texto que escriba
-                    # `proyectos` (u otra tabla) sigue saliendo.
-                    and not re.search(r"\b(INSERT\s+INTO|UPDATE)\s+consultas_de_natalia\b", n.value, re.I)):
+                    and re.search(r"cliente_(noco_id|nombre)", n.value)):
+                continue
+            destinos = _destinos_de_escritura(n.value)
+            if not destinos or any(d != _TABLA_CON_CLIENTE_PROPIO for d in destinos):
                 hallados.add(fn.name)
     return hallados
 
@@ -547,19 +567,31 @@ def test_G6_el_censo_ve_un_escritor_inventado():
     assert _funciones_que_escriben_cliente(falso) == {"otro", "y_otro_mas"}
 
 
-def test_G6_la_tabla_de_consultas_queda_libre_pero_solo_por_lo_que_escribe():
-    """`consultas_de_natalia` tiene su propia `cliente_noco_id` y no cuenta; pero una función que además escribe el
-    cliente de un proyecto (o de cualquier otra tabla) sale, se llame como se llame."""
+def test_G6_la_tabla_de_consultas_queda_libre_pero_solo_si_todo_lo_que_el_texto_escribe_es_de_ella():
+    """`consultas_de_natalia` tiene su propia `cliente_noco_id` y no cuenta, pero solo cuando TODOS los destinos de
+    escritura del texto son esa tabla: un texto (o una función) que además escribe `proyectos` u otra tabla con
+    columna de cliente sale, con el nombre que tenga y escrito como se escriba. Entradas inventadas."""
     falso = ast.parse(
         "async def solo_consultas(c):\n"
         "    await c.execute('INSERT INTO consultas_de_natalia (clave, cliente_noco_id) VALUES (1, 2)')\n"
         "    await c.execute('UPDATE consultas_de_natalia SET cliente_noco_id = 3')\n"
+        "    await c.execute('update  \"public\".consultas_de_natalia set cliente_noco_id = 3')\n"
         "async def abrir_consulta_de_natalia(c):\n"
         "    await c.execute('INSERT INTO consultas_de_natalia (clave, cliente_noco_id) VALUES (1, 2)')\n"
         "    await c.execute('UPDATE proyectos SET cliente_noco_id = 9 WHERE id = 1')\n"
         "async def otra_tabla(c):\n"
-        "    await c.execute('UPDATE cotizaciones SET cliente_nombre = 1')\n")
-    assert _funciones_que_escriben_cliente(falso) == {"abrir_consulta_de_natalia", "otra_tabla"}
+        "    await c.execute('UPDATE cotizaciones SET cliente_nombre = 1')\n"
+        "async def mezclado_en_un_texto(c):\n"
+        "    await c.execute('WITH p AS (UPDATE proyectos SET cliente_noco_id = %s WHERE id = %s RETURNING id) '\n"
+        "                    'INSERT INTO consultas_de_natalia (clave, cliente_noco_id) VALUES (%s, %s)')\n"
+        "async def mezclado_en_minusculas(c):\n"
+        "    await c.execute('with p as (update   proyectos\\n\\tset cliente_nombre = %s where id = %s returning id) '\n"
+        "                    'update\\n consultas_de_natalia set cliente_noco_id = 1')\n"
+        "async def esquema_y_comillas(c):\n"
+        "    await c.execute('UPDATE \"public\".\"proyectos\" SET cliente_noco_id = 1')\n")
+    assert _funciones_que_escriben_cliente(falso) == {
+        "abrir_consulta_de_natalia", "otra_tabla", "mezclado_en_un_texto", "mezclado_en_minusculas",
+        "esquema_y_comillas"}
 
 
 # ═══════════════════════════════════════════════════════════════════════
