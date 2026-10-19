@@ -327,6 +327,12 @@ PUERTAS = ("nombres_con_code", "puede_ser_responsable", "_chat_del_nombre")
 # DECLARA; lo que la prueba exige es que no crezca sin que alguien lo decida.
 PINTAN_AUTOR = {("db/db.py", "armar_pagina"), ("db/db.py", "comentarios_de_tarea"),
                 ("web/api_code.py", "leer_comentarios")}
+# L5 (18-oct-2026): los sitios que ESCRIBEN con ella como autora, y solo en la transacción del «Sí» del responsable
+# (`db.contestar_consulta_de_natalia`). `_es_de_natalia` es la única pregunta que las escrituras generales le hacen
+# al valor reservado; los otros dos pasan el valor como autor de lo que escriben. Ninguno decide quién es responsable
+# ni quién entra.
+ESCRIBEN_COMO_NATALIA = {("db/db.py", "_es_de_natalia"), ("db/db.py", "_anotar_la_tarea_de_la_consulta"),
+                         ("db/db.py", "_poner_al_cliente_en_la_tarea")}
 NOMBRAN_A_NATALIA = ("CHAT_ID_NATALIA", "NOMBRE_NATALIA", "autores_reservados",
                      "nombre_de_autor")
 
@@ -368,10 +374,10 @@ def test_G3_los_hermanos_salen_de_lo_real_y_ninguno_nombra_a_Natalia():
     nombran = [(rel, nombre) for rel, nombre, nodo in _funciones_del_repo()
                if _nombres_usados(nodo) & set(NOMBRAN_A_NATALIA)
                and rel != "config.py"]
-    assert set(nombran) == PINTAN_AUTOR, (
-        f"alguien más nombra a Natalia: {sorted(set(nombran) - PINTAN_AUTOR)}; "
-        f"si es un sitio que PINTA un autor, se agrega a PINTAN_AUTOR; si "
-        f"DECIDE quién es responsable o quién entra, no puede")
+    assert set(nombran) == PINTAN_AUTOR | ESCRIBEN_COMO_NATALIA, (
+        f"alguien más nombra a Natalia: {sorted(set(nombran) - PINTAN_AUTOR - ESCRIBEN_COMO_NATALIA)}; "
+        f"si es un sitio que PINTA un autor, se agrega a PINTAN_AUTOR; si escribe CON ella como autora, a "
+        f"ESCRIBEN_COMO_NATALIA; si DECIDE quién es responsable o quién entra, no puede")
     # Y ninguno de los hermanos que decide es uno de los que pintan, salvo
     # `armar_pagina`, que pinta con `nombres_con_code` y los reservados aparte.
     decidores = {h for h in hermanos if h not in PINTAN_AUTOR}

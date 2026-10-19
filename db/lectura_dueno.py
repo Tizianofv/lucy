@@ -115,6 +115,10 @@ LIMITE_MAXIMO = 500
 #                        un valor por default.
 #     "copia_dueno"  -- cerebro/copia_dueno.py:174: chat_id = destino, el
 #                        chat al que Lucy copió el mensaje de verdad.
+#     "natalia"      -- db/db.py `crear_tarea_desde_el_panel(desde='natalia')`
+#                        (L5, 18-oct-2026): chat_id = CHAT_ID_NATALIA, el valor
+#                        reservado de quien de verdad la originó. Nunca es el
+#                        chat del dueño, así que el filtro de dueño no la trae.
 #
 #   NO CONFIABLES (el chat_id NO dice quién originó el contenido):
 #     "banco"        -- captura/consumos.py:455,588,615,641,688: SIEMPRE
@@ -126,7 +130,7 @@ LIMITE_MAXIMO = 500
 #   _origenes_reales_de_bandeja()` sobre este mismo commit -- no tecleada
 #   de memoria.
 _ORIGENES_CONFIABLES_DE_BANDEJA = (
-    "telegram", "despertador", "correo", "panel", "copia_dueno")
+    "telegram", "despertador", "correo", "panel", "copia_dueno", "natalia")
 _ORIGENES_NO_CONFIABLES_DE_BANDEJA = ("banco",)
 
 

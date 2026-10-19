@@ -7,6 +7,7 @@ a salvo aquí.
 from __future__ import annotations
 
 import colorsys
+import contextlib
 import hashlib
 import json
 import logging
@@ -36,7 +37,7 @@ import db.sin_preparadas  # noqa: F401
 # puede quedar con una tarea pendiente, y tiene que ser la misma para la ruta
 # del panel y para la escritura de acá. Dos copias del criterio se separan.
 import config as _config
-from config import (CHAT_ID_CODE, CHAT_ID_DUENO, DATABASE_URL, QUIEN_DE_NATALIA, TZ,
+from config import (CHAT_ID_CODE, CHAT_ID_DUENO, CHAT_ID_NATALIA, DATABASE_URL, QUIEN_DE_NATALIA, TZ,
                     nombres_con_code, puede_ser_responsable)
 
 # HALLAZGO LATERAL (25-sep-2026, mientras se escribía `cerrar_y_derivar`):
@@ -5945,7 +5946,7 @@ async def proyectos_de_cliente(noco_id: int, hoy: date | None = None) -> list[di
 # responsable (DISENO.md §5). Esta pieza es la tabla (`consultas_de_natalia`, migración
 # `2026-10-18_consultas_de_natalia.sql`), abrirla (`abrir_consulta_de_natalia`), leerla
 # (`consultas_de_natalia_de_cliente`) y la UNA función que cambia su estado (`pasar_consulta_de_natalia`).
-# La tarjeta al responsable (L4) y los botones Sí/No (L5) llegan después y usan esa función.
+# La tarjeta al responsable (L4) y los botones Sí/No (L5, `contestar_consulta_de_natalia`) usan esa función.
 #
 # EL CERROJO DE «UN CLIENTE SOLO ABRE CONSULTAS DE SU PROYECTO» es UNO: `proyectos_de_cliente`, que filtra
 # por la ficha EN su consulta SQL. Abrir una consulta busca el proyecto (o la tarea) ENTRE los de esa
@@ -6232,7 +6233,7 @@ async def pasar_consulta_de_natalia(cur, consulta_id: int, de: str, a: str, *, t
                                     enviada_en=None, contestada_por_chat_id=None, contestada_en=None,
                                     tarea_resultante_id=None, motivo=None) -> bool:
     """LA ÚNICA FUNCIÓN QUE CAMBIA EL ESTADO de una consulta de Natalia. `cur` es un cursor con `dict_row`
-    de la conexión de quien llama (L5 la mete en la MISMA transacción que crea la tarea). Solo pasa los
+    de la conexión de quien llama (L5, `contestar_consulta_de_natalia`, la mete en la MISMA transacción que crea la tarea). Solo pasa los
     pares de `TRANSICIONES_DE_CONSULTA` (otro es `ValueError`, nada escrito), y el `UPDATE` lleva
     `WHERE estado = <el de antes>`: si otro ya la movió, no cambia nada y devuelve `False` (el primero
     gana). Los campos que no se pasan (`None`) se quedan como estaban. El CHECK de la tabla impide un
@@ -6255,6 +6256,318 @@ async def pasar_consulta_de_natalia(cur, consulta_id: int, de: str, a: str, *, t
         (a, tarjeta_msg_id, enviada_en, contestada_por_chat_id, contestada_en, tarea_resultante_id,
          motivo, consulta_id, de))
     return (await cur.fetchone()) is not None
+
+
+# ── EL DESPERTADOR DE LAS CONSULTAS (pieza L4 del diseño «Natalia y los Proyectos», 18-oct-2026) ───────────
+#
+# Lo que el despertador (`cerebro/despertador.py::revisar_consultas_de_natalia`) necesita de la base: qué
+# consultas esperan su tarjeta, cuáles piden su recordatorio, cuáles son `nueva_fecha` vivas, y cómo se
+# cambia el estado SIN que nadie más lo escriba (`pasar_consulta_de_natalia_sola` solo abre la conexión y
+# llama a la única función que lo hace). Las lecturas traen lo que hace falta para escribir el texto de la
+# tarjeta (proyecto, cliente, tarea); ninguna sale de la casa: el texto va al Telegram del responsable.
+def _sin_tabla_de_consultas(e: Exception) -> Exception:
+    """Lo que hay que lanzar ante `e` al leer las consultas: `ConsultasSinTabla` si falta la migración (42P01), el
+    mismo error si es otra cosa (no se disfraza)."""
+    return ConsultasSinTabla("falta la migración de las consultas de Natalia") if _tabla_ausente(e) else e
+
+
+async def consultas_de_natalia_sin_tarjeta() -> list[dict]:
+    """Las consultas `abierta` (la tarjeta al responsable todavía no salió), de la más vieja a la más nueva."""
+    try:
+        async with pool.connection() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(
+                "SELECT c.id, c.tipo, c.estado, c.cliente_noco_id, c.proyecto_id, c.titulo, c.pedido, c.vence_en, "
+                "c.tarea_id, c.responsable_chat_id, c.tarjeta_msg_id, c.enviada_en, c.recordada_en, "
+                "p.nombre AS proyecto_nombre, p.cliente_nombre, "
+                "t.titulo AS tarea_titulo, t.estado AS tarea_estado, t.vence_en AS tarea_vence_en, "
+                "t.borrado_en AS tarea_borrada_en "
+                "FROM consultas_de_natalia c "
+                "LEFT JOIN proyectos p ON p.id = c.proyecto_id "
+                "LEFT JOIN tareas t ON t.id = c.tarea_id "
+                "WHERE c.estado = %s ORDER BY c.id",
+                (ESTADO_CONSULTA_ABIERTA,))
+            return [dict(f) for f in await cur.fetchall()]
+    except Exception as e:
+        raise _sin_tabla_de_consultas(e) from None
+
+
+async def consultas_de_natalia_para_recordar(enviada_antes_de: datetime) -> list[dict]:
+    """Las `preguntada` cuya tarjeta salió en `enviada_antes_de` o antes y a las que todavía no se les
+    recordó (`recordada_en` vacío). NO hay tope por arriba: una consulta nunca caduca (respuesta 2A de
+    Tiziano, DISENO.md §5.3)."""
+    try:
+        async with pool.connection() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(
+                "SELECT c.id, c.tipo, c.estado, c.cliente_noco_id, c.proyecto_id, c.titulo, c.pedido, c.vence_en, "
+                "c.tarea_id, c.responsable_chat_id, c.tarjeta_msg_id, c.enviada_en, c.recordada_en, "
+                "p.nombre AS proyecto_nombre, p.cliente_nombre, "
+                "t.titulo AS tarea_titulo, t.estado AS tarea_estado, t.vence_en AS tarea_vence_en, "
+                "t.borrado_en AS tarea_borrada_en "
+                "FROM consultas_de_natalia c "
+                "LEFT JOIN proyectos p ON p.id = c.proyecto_id "
+                "LEFT JOIN tareas t ON t.id = c.tarea_id "
+                "WHERE c.estado = %s AND c.recordada_en IS NULL "
+                "AND c.enviada_en IS NOT NULL AND c.enviada_en <= %s ORDER BY c.id",
+                (ESTADO_CONSULTA_PREGUNTADA, enviada_antes_de))
+            return [dict(f) for f in await cur.fetchall()]
+    except Exception as e:
+        raise _sin_tabla_de_consultas(e) from None
+
+
+async def consultas_de_natalia_de_fecha_vivas() -> list[dict]:
+    """Las `nueva_fecha` que siguen vivas (`abierta` o `preguntada`): las que el despertador vuelve a
+    mirar en cada vuelta para saber si la fecha ya se arregló."""
+    try:
+        async with pool.connection() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(
+                "SELECT c.id, c.tipo, c.estado, c.cliente_noco_id, c.proyecto_id, c.titulo, c.pedido, c.vence_en, "
+                "c.tarea_id, c.responsable_chat_id, c.tarjeta_msg_id, c.enviada_en, c.recordada_en, "
+                "p.nombre AS proyecto_nombre, p.cliente_nombre, "
+                "t.titulo AS tarea_titulo, t.estado AS tarea_estado, t.vence_en AS tarea_vence_en, "
+                "t.borrado_en AS tarea_borrada_en "
+                "FROM consultas_de_natalia c "
+                "LEFT JOIN proyectos p ON p.id = c.proyecto_id "
+                "LEFT JOIN tareas t ON t.id = c.tarea_id "
+                "WHERE c.tipo = %s AND c.estado IN (%s, %s) ORDER BY c.id",
+                (TIPO_CONSULTA_NUEVA_FECHA, ESTADO_CONSULTA_ABIERTA, ESTADO_CONSULTA_PREGUNTADA))
+            return [dict(f) for f in await cur.fetchall()]
+    except Exception as e:
+        raise _sin_tabla_de_consultas(e) from None
+
+
+def consulta_de_fecha_sigue_viva(proxima: dict | None, tarea_id: int) -> bool:
+    """LA PUERTA ÚNICA de «¿esta `nueva_fecha` sigue pendiente?». `proxima` es la `proxima` de
+    `situacion_de_proyecto` (la de la página y la de `proyectos_de_cliente`) del proyecto de la consulta.
+    Sigue viva solo si la tarea de la consulta SIGUE siendo la que sigue y esa tarea SIGUE vencida, en el
+    sentido de `grupo_de_tarea` (por día de Santo Domingo, no por instante). Que la tarea se haya hecho, se
+    haya borrado, ya no sea la siguiente, tenga fecha de hoy o de mañana, o se haya quedado sin fecha, la
+    resuelve: no se mira QUIÉN movió la fecha ni por dónde."""
+    return proxima is not None and proxima["id"] == tarea_id and bool(proxima["vencida"])
+
+
+async def proxima_de_proyecto_de_cliente(noco_id: int, proyecto_id: int, hoy: date | None = None) -> dict | None:
+    """La `proxima` (la de `situacion_de_proyecto`) del proyecto `proyecto_id` DE ESA FICHA, o `None` (no
+    tiene ninguna, está cerrado, o ya no es de esa ficha o está en la papelera)."""
+    for m in await proyectos_de_cliente(noco_id, hoy):
+        if m["id"] == proyecto_id:
+            return m["proxima"]
+    return None
+
+
+async def marcar_consulta_de_natalia_recordada(consulta_id: int, cuando: datetime) -> bool:
+    """Deja `recordada_en = cuando` en una consulta `preguntada` que todavía no la tenía. Cada vuelta del despertador
+    manda el recordatorio una vez y lo marca DESPUÉS de enviar; si dos contenedores coinciden en un redespliegue,
+    el recordatorio puede salir dos veces y la base guarda la marca del primero. Devuelve si cambió. NO toca el estado (eso es solo de `pasar_consulta_de_natalia`)."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "UPDATE consultas_de_natalia SET recordada_en = %s "
+            "WHERE id = %s AND estado = %s AND recordada_en IS NULL RETURNING id",
+            (cuando, consulta_id, ESTADO_CONSULTA_PREGUNTADA))
+        return (await cur.fetchone()) is not None
+
+
+async def pasar_consulta_de_natalia_sola(consulta_id: int, de: str, a: str, **campos) -> bool:
+    """`pasar_consulta_de_natalia` en su propia conexión, para quien (el despertador) no tiene transacción
+    que compartir. No decide nada: los pares, el `WHERE estado = <el de antes>` y los campos son los de ella."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        return await pasar_consulta_de_natalia(cur, consulta_id, de, a, **campos)
+
+
+# ── LOS BOTONES SÍ/NO DE LAS CONSULTAS (pieza L5 del diseño «Natalia y los Proyectos», 18-oct-2026) ──────────
+#
+# El responsable toca «Sí, se puede» o «No» en la tarjeta que mandó L4 (`acciones/botones.py::al_pulsar`, ramas `cns`
+# y `cnn`), y ESTA es la función que decide, `contestar_consulta_de_natalia`. Todo lo que cambia —la consulta, y con el
+# «Sí» la tarea, su comentario y el cliente como persona de la tarea— pasa en UNA transacción: o entra todo o no entra
+# nada. Quedar `anotada` sin tarea (o con tarea y la consulta sin contestar) es exactamente lo que esa transacción impide.
+#
+#   · quién decide: SOLO el `responsable_chat_id` de la consulta (se compara aquí, no en el botón: cualquier camino
+#     que llegue a esta función pasa por la misma comparación);
+#   · el primero gana: el cambio de estado es `pasar_consulta_de_natalia` (`UPDATE … WHERE estado = <el de antes>`); si
+#     devuelve que no cambió nada, esta llamada PERDIÓ y lo que se escribió con ella se deshace;
+#   · lo que se le dice a quien tocó sale de RELEER la consulta (y su tarea) después del commit, no de lo que esta
+#     función creía estar escribiendo: «anotada» solo si la tarea está ahí.
+RESULTADO_NO_EXISTE = "no_existe"          # esa consulta no existe
+RESULTADO_NO_APLICA = "no_aplica"          # es una `nueva_fecha`: no tiene Sí/No
+RESULTADO_NO_ES_TUYA = "no_es_tuya"        # la decide otra persona
+RESULTADO_TODAVIA = "todavia"              # su tarjeta aún no está marcada como enviada (`abierta`)
+RESULTADO_ANOTADA = "anotada"
+RESULTADO_RECHAZADA = "rechazada"
+RESULTADO_NO_SE_PUDO = "no_se_pudo"
+RESULTADO_SIN_CONFIRMAR = "sin_confirmar"  # la consulta dice anotada y la tarea no se encuentra
+RESULTADO_PENDIENTE = "pendiente"          # sigue sin contestarse (no debería verse tras contestar)
+ROL_DEL_CLIENTE_EN_LA_TAREA = "Cliente"
+MOTIVO_PROYECTO_YA_NO_ES_DEL_CLIENTE = "el proyecto ya no es de ese cliente"
+LARGO_NOMBRE_EN_COMENTARIO = 100
+
+
+class _PerdioLaCarrera(Exception):
+    """Otro ya contestó esa consulta (el `UPDATE … WHERE estado` no cambió nada): lo escrito en esta llamada se deshace."""
+
+
+async def _leer_consulta_para_contestar(cur, consulta_id: int):
+    """La consulta con lo que hace falta para contestarla y para decir cómo quedó: su proyecto, el cliente y la tarea que
+    nació de ella (solo si sigue viva). UNA lectura para las dos cosas, así lo que se decide y lo que se cuenta salen
+    del mismo SQL. `None` si no existe."""
+    try:
+        await cur.execute(
+            "SELECT c.id, c.tipo, c.estado, c.cliente_noco_id, c.proyecto_id, c.titulo, c.pedido, c.vence_en, "
+            "c.responsable_chat_id, c.tarea_resultante_id, c.motivo, "
+            "p.nombre AS proyecto_nombre, p.cliente_nombre, p.cliente_noco_id AS proyecto_cliente_noco_id, "
+            "t.id AS tarea_id, t.titulo AS tarea_titulo "
+            "FROM consultas_de_natalia c "
+            "LEFT JOIN proyectos p ON p.id = c.proyecto_id "
+            "LEFT JOIN tareas t ON t.id = c.tarea_resultante_id AND t.borrado_en IS NULL "
+            "WHERE c.id = %s", (consulta_id,))
+        fila = await cur.fetchone()
+    except Exception as e:
+        raise _sin_tabla_de_consultas(e) from None
+    return dict(fila) if fila is not None else None
+
+
+async def consulta_de_natalia_leida(consulta_id: int):
+    """`_leer_consulta_para_contestar` en su propia conexión (la relectura de después del commit, y la que corre
+    `tools/humo.py`)."""
+    async with pool.connection() as conn:
+        return await _leer_consulta_para_contestar(conn.cursor(row_factory=dict_row), consulta_id)
+
+
+def _comentario_del_pedido(c: dict, quien: str) -> str:
+    """El comentario que Natalia deja en la tarea: lo que pidió el cliente y quién lo confirmó. `pedido` tiene tope
+    (`LARGO_PEDIDO_DE_CONSULTA`) y el nombre se corta para que el comentario quepa siempre en `LARGO_COMENTARIO`."""
+    quien = (quien or "").strip()[:LARGO_NOMBRE_EN_COMENTARIO]
+    return f"Pedido del cliente: «{c['pedido']}». Confirmó {quien}."
+
+
+async def _poner_al_cliente_en_la_tarea(cur, tarea_id: int, c: dict) -> None:
+    """El cliente como persona de la tarea (rol «Cliente», DISENO.md §5.3). Su nombre es el que Lucy ya guarda en el
+    proyecto (`proyectos.cliente_nombre`, el de Noco al asignarlo).
+
+    EL CLIENTE DE LA CONSULTA Y EL DEL PROYECTO SON EL MISMO aquí: `_anotar_la_tarea_de_la_consulta` rechaza (`no_se_pudo`,
+    «el proyecto ya no es de ese cliente») antes de llegar, si `proyectos.cliente_noco_id` es distinto del de la consulta
+    (incluido NULL), lo que cubre un cambio de cliente hecho antes del «Sí». NO cubre uno que se confirme DURANTE la
+    transacción del «Sí» (la lectura no lleva candado; ventana no medida, ver `_anotar_la_tarea_de_la_consulta`).
+
+    UN PROYECTO CON CLIENTE SIN NOMBRE NO EXISTE HOY: las tres puertas que ponen el cliente (`poner_cliente`,
+    `crear_proyecto`, `convertir_tarea_en_proyecto`) escriben `cliente_noco_id` y `cliente_nombre` juntos, y el nombre
+    sale de `_ficha_de_noco_que_vale`, que rechaza uno vacío. Medido por la sala el 18-oct-2026 en producción: 10
+    proyectos vivos con `cliente_noco_id`, 0 sin `cliente_nombre`. Si algún día pasara, el lado estricto: se lanza
+    `RuntimeError`, se deshace TODO el «Sí» y la consulta queda `preguntada` (nunca nace una tarea anotada sin la
+    persona del cliente, ni se inventa un nombre)."""
+    nombre = (c.get("cliente_nombre") or "").strip()
+    if not nombre:
+        raise RuntimeError("el proyecto tiene cliente pero no el nombre de su ficha: no se anota la tarea sin la persona del cliente")
+    await cur.execute(
+        "INSERT INTO participantes (tarea_id, noco_id, nombre, rol, creado_por_chat_id) "
+        "VALUES (%s, %s, %s, %s, %s) RETURNING *",
+        (tarea_id, c["cliente_noco_id"], nombre, ROL_DEL_CLIENTE_EN_LA_TAREA, CHAT_ID_NATALIA))
+    nueva = await cur.fetchone()
+    await cur.execute(
+        "INSERT INTO log_acciones (actor, accion, tabla, registro_id, antes, despues, motivo) "
+        "VALUES ('natalia', 'crear', 'participantes', %s, NULL, %s, "
+        "'el cliente, como persona de la tarea que Natalia anotó')",
+        (nueva["id"], json.dumps(dict(nueva), default=str, ensure_ascii=False)))
+
+
+async def _anotar_la_tarea_de_la_consulta(conn, cur, c: dict, chat_id: int, quien: str, ahora) -> bool:
+    """El «Sí»: la tarea, su comentario, el cliente como persona y la consulta `preguntada → anotada`, en la transacción
+    de `conn`. Devuelve si esta llamada ganó. Si el escritor de la tarea la rechaza (proyecto cerrado, responsable que
+    ya no vale) NO queda nada de la tarea y la consulta pasa a `no_se_pudo` con el motivo. Cualquier otro fallo sube y
+    lo deshace todo: la consulta sigue `preguntada` y el botón sigue sirviendo.
+
+    ANTES de escribir nada: si el proyecto YA NO ES DE LA FICHA de la consulta (`proyectos.cliente_noco_id` distinto de
+    `consultas_de_natalia.cliente_noco_id`, incluido que el proyecto haya quedado sin cliente) es un rechazo como los del
+    escritor: la consulta pasa a `no_se_pudo` con ese motivo y no se crea nada. Lo de otro cliente no se toca (G2 de L3).
+    Protege contra un cambio de cliente hecho ANTES del «Sí». FRONTERA: la lectura del proyecto (`_leer_consulta_para_contestar`)
+    es una lectura plana, sin candado de fila (ni `FOR SHARE` ni el otro) (Lucy no usa candados de fila sobre proyectos en ningún otro sitio y
+    el arnés de SQLite de las pruebas no los traduce); un `poner_cliente` confirmado entre esa lectura y la escritura del
+    participante, dentro de la transacción del «Sí», no se ve y podría dejar el id de la ficha de la consulta con el nombre del
+    cliente nuevo. Esa ventana (milisegundos) no está medida ni cerrada."""
+    if c["proyecto_cliente_noco_id"] != c["cliente_noco_id"]:
+        return await pasar_consulta_de_natalia(
+            cur, c["id"], ESTADO_CONSULTA_PREGUNTADA, ESTADO_CONSULTA_NO_SE_PUDO,
+            contestada_por_chat_id=chat_id, contestada_en=ahora, motivo=MOTIVO_PROYECTO_YA_NO_ES_DEL_CLIENTE)
+    try:
+        # El SAVEPOINT es lo que deja la tarea (y su fila de bandeja) en NADA cuando el escritor la rechaza o
+        # cuando otro ganó la carrera, sin tirar la transacción entera.
+        async with conn.transaction():
+            tarea_id = await crear_tarea_desde_el_panel(
+                CHAT_ID_NATALIA, c["titulo"], c["vence_en"], None, c["responsable_chat_id"],
+                proyecto_id=c["proyecto_id"], conexion=conn, desde=DESDE_DE_NATALIA,
+                motivo=f"confirmada por {quien} (consulta #{c['id']})")
+            await _poner_al_cliente_en_la_tarea(cur, tarea_id, c)
+            if await comentar_tarea(tarea_id, CHAT_ID_NATALIA, _comentario_del_pedido(c, quien), conexion=conn) is None:
+                raise RuntimeError("no se guardó el comentario de la tarea que Natalia anotó")
+            if not await pasar_consulta_de_natalia(
+                    cur, c["id"], ESTADO_CONSULTA_PREGUNTADA, ESTADO_CONSULTA_ANOTADA,
+                    contestada_por_chat_id=chat_id, contestada_en=ahora, tarea_resultante_id=tarea_id):
+                raise _PerdioLaCarrera()
+    except _PerdioLaCarrera:
+        return False
+    except (TareaNoValida, ProyectoNoAdmiteTareas) as e:
+        return await pasar_consulta_de_natalia(
+            cur, c["id"], ESTADO_CONSULTA_PREGUNTADA, ESTADO_CONSULTA_NO_SE_PUDO,
+            contestada_por_chat_id=chat_id, contestada_en=ahora, motivo=str(e))
+    return True
+
+
+async def contestar_consulta_de_natalia(consulta_id: int, chat_id: int, acepta: bool, *, ahora=None) -> dict:
+    """LA PUERTA ÚNICA de «el responsable contestó Sí o No». `chat_id` es el chat que tocó el botón; `acepta`, cuál
+    botón. Devuelve `{"resultado", "gano", "tarea_id", "tarea_titulo", "motivo", "responsable_chat_id",
+    "proyecto_nombre"}`; `resultado` es una de las constantes `RESULTADO_*`. Sin la migración lanza
+    `ConsultasSinTabla`.
+
+    · No existe / no es de Sí-No / la decide otro chat / su tarjeta aún no está marcada: no escribe nada.
+    · `acepta=False`: `preguntada → rechazada`.
+    · `acepta=True`: ver `_anotar_la_tarea_de_la_consulta`.
+    · Una consulta que ya no está `preguntada` (otro toque ganó antes) no se toca: se cuenta cómo quedó.
+    `gano` dice si ESTA llamada fue la que la contestó. Todo lo que dice `resultado` sale de releer la consulta
+    después del commit."""
+    ahora = ahora or datetime.now(timezone.utc)
+    quien = _config.NOMBRES_POR_CHAT.get(chat_id) or "alguien de la casa"
+    gano = False
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        c = await _leer_consulta_para_contestar(cur, consulta_id)
+        if c is None:
+            return {"resultado": RESULTADO_NO_EXISTE, "gano": False}
+        if c["tipo"] != TIPO_CONSULTA_TAREA_NUEVA:
+            return {"resultado": RESULTADO_NO_APLICA, "gano": False}
+        if c["responsable_chat_id"] != chat_id:
+            return {"resultado": RESULTADO_NO_ES_TUYA, "gano": False, "responsable_chat_id": c["responsable_chat_id"]}
+        if c["estado"] == ESTADO_CONSULTA_ABIERTA:
+            return {"resultado": RESULTADO_TODAVIA, "gano": False}
+        if c["estado"] == ESTADO_CONSULTA_PREGUNTADA:
+            if not acepta:
+                gano = await pasar_consulta_de_natalia(
+                    cur, c["id"], ESTADO_CONSULTA_PREGUNTADA, ESTADO_CONSULTA_RECHAZADA,
+                    contestada_por_chat_id=chat_id, contestada_en=ahora)
+            else:
+                gano = await _anotar_la_tarea_de_la_consulta(conn, cur, c, chat_id, quien, ahora)
+    leida = await consulta_de_natalia_leida(consulta_id)
+    return _lo_que_quedo(leida, gano)
+
+
+def _lo_que_quedo(leida, gano: bool) -> dict:
+    """Cómo quedó una consulta contestada, dicho a partir de lo RELEÍDO: «anotada» solo si la tarea está viva."""
+    if leida is None:
+        return {"resultado": RESULTADO_NO_EXISTE, "gano": gano}
+    estado = leida["estado"]
+    if estado == ESTADO_CONSULTA_ANOTADA:
+        resultado = RESULTADO_ANOTADA if leida["tarea_id"] is not None else RESULTADO_SIN_CONFIRMAR
+    elif estado == ESTADO_CONSULTA_RECHAZADA:
+        resultado = RESULTADO_RECHAZADA
+    elif estado == ESTADO_CONSULTA_NO_SE_PUDO:
+        resultado = RESULTADO_NO_SE_PUDO
+    else:
+        resultado = RESULTADO_PENDIENTE
+    return {"resultado": resultado, "gano": gano, "tarea_id": leida["tarea_id"], "tarea_titulo": leida["tarea_titulo"],
+            "motivo": leida["motivo"], "responsable_chat_id": leida["responsable_chat_id"],
+            "proyecto_nombre": leida["proyecto_nombre"]}
 
 
 async def derivaciones() -> dict[int, int]:
@@ -8039,7 +8352,7 @@ async def comentarios_de_tarea_de_code(tarea_id: int) -> list[dict] | None:
 
 
 async def comentar_tarea(tarea_id: int, autor_chat_id: int,
-                         texto: str) -> int | None:
+                         texto: str, *, conexion=None) -> int | None:
     """Guarda UN comentario. Devuelve su id, o None si no se guardó.
 
     `autor_chat_id` es el chat de la SESIÓN del panel, el mismo que ya se
@@ -8054,6 +8367,14 @@ async def comentar_tarea(tarea_id: int, autor_chat_id: int,
     es de actor 'sala', como la de tomar y cerrar. La regla vive acá, no en la
     ruta: cualquiera que llame con ese autor pasa por ella.
 
+    OTRA EXCEPCIÓN, Natalia (L5, 18-oct-2026): `CHAT_ID_NATALIA` solo comenta
+    CON `conexion`, o sea dentro de la transacción de quien la llama (el «Sí»
+    del responsable a una consulta suya, `contestar_consulta_de_natalia`, que
+    escribe la tarea, este comentario y el cambio de estado de la consulta
+    como UNA sola cosa). Sin `conexion` Natalia no comenta (`None`): no hay una
+    ruta, ni un botón, ni un llamado suelto desde el que pueda. Su huella es de
+    actor 'natalia'.
+
     Deja su huella en log_acciones con actor 'panel', como toda escritura del
     panel. La fila y la huella van en la misma transacción.
     """
@@ -8061,9 +8382,10 @@ async def comentar_tarea(tarea_id: int, autor_chat_id: int,
 
     limpio = (texto or "").strip()
     de_la_sala = autor_chat_id == CHAT_ID_CODE
-    if not limpio or not (de_la_sala or puede_entrar(autor_chat_id)):
+    de_natalia = _es_de_natalia(autor_chat_id) and conexion is not None
+    if not limpio or not (de_la_sala or de_natalia or puede_entrar(autor_chat_id)):
         return None
-    async with pool.connection() as conn:
+    async with _conexion_de(conexion) as conn:
         cur = conn.cursor(row_factory=dict_row)
         if de_la_sala:
             tarea = await tarea_de_code(cur, tarea_id)
@@ -8091,6 +8413,16 @@ async def comentar_tarea(tarea_id: int, autor_chat_id: int,
                    bandeja_id)
                 VALUES ('sala', 'crear', 'comentarios_tarea', %s, NULL, %s,
                         'comentario escrito por la sala de control (Code)', %s)
+                """,
+                (fila["id"], huella, tarea.get("bandeja_id")))
+        elif de_natalia:
+            await conn.execute(
+                """
+                INSERT INTO log_acciones
+                  (actor, accion, tabla, registro_id, antes, despues, motivo,
+                   bandeja_id)
+                VALUES ('natalia', 'crear', 'comentarios_tarea', %s, NULL, %s,
+                        'comentario de Natalia al anotar la tarea que confirmó el responsable', %s)
                 """,
                 (fila["id"], huella, tarea.get("bandeja_id")))
         else:
@@ -8448,6 +8780,32 @@ async def mover_paso(tarea_id: int, paso_id: int, direccion: str) -> bool:
 # Poner una hora de aviso es una decisión de Tiziano y este código no la toma.
 SIN_ANTICIPOS: list[int] = []
 
+# QUIÉN ESCRIBE UNA TAREA POR `crear_tarea_desde_el_panel` (`desde`): el panel (lo de siempre) o Natalia, cuando el
+# responsable le dice «sí» a una consulta suya (L5 del diseño «Natalia y los Proyectos», 18-oct-2026). Es el origen
+# de la fila de `bandeja` Y el actor de la huella: no se pueden separar (una tarea de Natalia con huella del panel
+# mentiría quién la puso). Cerrado a propósito: otro valor es `ValueError`.
+DESDE_DEL_PANEL = "panel"
+DESDE_DE_NATALIA = "natalia"
+ESCRITORES_DE_TAREA = (DESDE_DEL_PANEL, DESDE_DE_NATALIA)
+
+
+def _es_de_natalia(chat_id) -> bool:
+    """¿Este chat es el de Natalia COMO AUTORA (el valor reservado `config.CHAT_ID_NATALIA`)? Es la única pregunta que
+    las escrituras de L5 le hacen a ese valor. No dice quién entra al panel ni quién puede ser responsable: Natalia no es
+    ni una cosa ni la otra."""
+    return chat_id == CHAT_ID_NATALIA
+
+
+@contextlib.asynccontextmanager
+async def _conexion_de(conexion):
+    """La conexión en la que se escribe: la que le pasan (una transacción que NO es de esta función, ella ni la abre
+    ni la cierra ni hace commit) o, sin ninguna, una del pool (el bloque ES la transacción)."""
+    if conexion is not None:
+        yield conexion
+        return
+    async with pool.connection() as propia:
+        yield propia
+
 
 async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
                                      vence_en: datetime | None,
@@ -8456,8 +8814,19 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
                                      *, proyecto_id: int | None = None,
                                      primero_id: int | None = None,
                                      detalle: str | None = None,
-                                     persona_id: int | None = None) -> int:
+                                     persona_id: int | None = None,
+                                     conexion=None,
+                                     desde: str = DESDE_DEL_PANEL,
+                                     motivo: str | None = None) -> int:
     """Una tarea escrita a mano en el panel. La cuarta escritura del panel.
+
+    LA TAREA QUE NATALIA ANOTA (L5, 18-oct-2026): `desde='natalia'`, `conexion` y `motivo`. La escribe el botón «Sí»
+    del responsable (`contestar_consulta_de_natalia`) DENTRO de la transacción que también cambia la consulta, por
+    eso recibe la `conexion` de quien la llama (la usa, no hace commit: lo hace quien la abrió; el área con
+    SAVEPOINT de más abajo sigue siendo un savepoint dentro de ella). Con `desde='natalia'` la fila de `bandeja`
+    lleva `origen='natalia'` y la huella `actor='natalia'` con ese `motivo`, y `chat_id` TIENE que ser
+    `CHAT_ID_NATALIA` (una fila de Natalia con el chat de una persona de la casa mentiría quién la puso). Lo demás
+    (las validaciones, `anticipos_min` vacío, la fila muda) es lo mismo que para el panel.
 
     QUIÉN LA ANOTÓ NO SE PUEDE MENTIR, y por eso esta función escribe DOS filas
     y no una. La fila de `bandeja` se crea de verdad, con el chat de la SESIÓN
@@ -8575,6 +8944,13 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
     proyecto. Por lo mismo la regla «Code → área técnica» de arriba NO aplica
     con proyecto: quien llama dice, con `sala_ve`, si la sala no la va a ver.
     """
+    if desde not in ESCRITORES_DE_TAREA:
+        raise ValueError("una tarea la escribe el panel o Natalia, no otro")
+    if (desde == DESDE_DE_NATALIA) != _es_de_natalia(chat_id):
+        raise ValueError("el chat de la fila tiene que ser el de quien la escribe")
+    if desde == DESDE_DE_NATALIA and conexion is None:
+        # Sin la transacción del «Sí» esto abriría la suya y haría commit: una tarea de Natalia sin que la consulta cambie.
+        raise ValueError("la tarea de Natalia se escribe dentro de la transacción de su consulta")
     if responsable_chat_id is not None:
         if not puede_ser_responsable(responsable_chat_id):
             raise TareaNoValida(
@@ -8584,7 +8960,7 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
     if proyecto_id is not None:
         area = None
 
-    async with pool.connection() as conn:
+    async with _conexion_de(conexion) as conn:
         cur = conn.cursor(row_factory=dict_row)
         if proyecto_id is not None:
             await proyecto_admite_tareas(cur, proyecto_id)
@@ -8597,14 +8973,24 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
             if await cur.fetchone() is None:
                 raise TareaNoValida(
                     "primero", "esa tarea de «Primero:» no existe o está archivada")
-        await cur.execute(
-            """
-            INSERT INTO bandeja
-              (origen, tipo_entrada, chat_id, estado, procesado_en)
-            VALUES ('panel', 'panel', %s, 'procesado', now())
-            RETURNING id
-            """,
-            (chat_id,))
+        if desde == DESDE_DE_NATALIA:
+            await cur.execute(
+                """
+                INSERT INTO bandeja
+                  (origen, tipo_entrada, chat_id, estado, procesado_en)
+                VALUES ('natalia', 'natalia', %s, 'procesado', now())
+                RETURNING id
+                """,
+                (chat_id,))
+        else:
+            await cur.execute(
+                """
+                INSERT INTO bandeja
+                  (origen, tipo_entrada, chat_id, estado, procesado_en)
+                VALUES ('panel', 'panel', %s, 'procesado', now())
+                RETURNING id
+                """,
+                (chat_id,))
         bandeja_id = (await cur.fetchone())["id"]
 
         # EL ÁREA TOLERA LA MIGRACIÓN SIN APLICAR, igual que el lado de lectura
@@ -8655,16 +9041,28 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
                            detalle, persona_id))
             fila = await cur.fetchone()
 
-        await conn.execute(
-            """
-            INSERT INTO log_acciones
-              (actor, accion, tabla, registro_id, antes, despues, motivo,
-               bandeja_id)
-            VALUES ('panel', 'crear', 'tareas', %s, NULL, %s,
-                    'tarea escrita a mano desde el panel de tareas', %s)
-            """,
-            (fila["id"],
-             json.dumps(fila, default=str, ensure_ascii=False), bandeja_id))
+        if desde == DESDE_DE_NATALIA:
+            await conn.execute(
+                """
+                INSERT INTO log_acciones
+                  (actor, accion, tabla, registro_id, antes, despues, motivo,
+                   bandeja_id)
+                VALUES ('natalia', 'crear', 'tareas', %s, NULL, %s, %s, %s)
+                """,
+                (fila["id"],
+                 json.dumps(fila, default=str, ensure_ascii=False),
+                 motivo or "tarea anotada por Natalia", bandeja_id))
+        else:
+            await conn.execute(
+                """
+                INSERT INTO log_acciones
+                  (actor, accion, tabla, registro_id, antes, despues, motivo,
+                   bandeja_id)
+                VALUES ('panel', 'crear', 'tareas', %s, NULL, %s,
+                        'tarea escrita a mano desde el panel de tareas', %s)
+                """,
+                (fila["id"],
+                 json.dumps(fila, default=str, ensure_ascii=False), bandeja_id))
         return fila["id"]
 
 
