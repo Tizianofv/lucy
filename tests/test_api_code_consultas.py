@@ -779,6 +779,23 @@ def test_G5_dos_pedidos_A_LA_VEZ_con_la_misma_clave_dejan_una_fila(natalia):
     assert len(filas(con)) == 1
 
 
+def test_G5_la_clave_es_unica_entre_los_dos_tipos_tambien_A_LA_VEZ(natalia):
+    """Una tarea_nueva y una nueva_fecha con la MISMA clave a la vez: una sola entra y la otra es 409. Si la unicidad
+    fuera por (clave, tipo) entrarían las dos y «la misma clave es la misma consulta» sería mentira."""
+    con = natalia()
+
+    async def las_dos():
+        return await asyncio.gather(
+            db.abrir_consulta_de_natalia(A, "cruzada", "tarea_nueva", proyecto_id=1, titulo="T", pedido="P"),
+            db.abrir_consulta_de_natalia(A, "cruzada", "nueva_fecha", tarea_id=12),
+            return_exceptions=True)
+    resultados = asyncio.run(las_dos())
+    buenos = [r for r in resultados if isinstance(r, tuple)]
+    malos = [r for r in resultados if isinstance(r, db.ConsultaNoVale)]
+    assert len(buenos) == 1 and len(malos) == 1 and malos[0].clave == "clave_distinta", resultados
+    assert len(filas(con)) == 1
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # G6: lo que responde sale de una RELECTURA
 # ═══════════════════════════════════════════════════════════════════════
