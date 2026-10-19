@@ -184,14 +184,15 @@ def _param(v):
 
 
 class _Cur:
-    def __init__(self, con, como_dict: bool):
-        self._con, self._dict, self._cur = con, como_dict, None
+    def __init__(self, con, como_dict: bool, demoras: dict):
+        self._con, self._dict, self._cur, self._demoras = con, como_dict, None, demoras
 
     async def execute(self, sql, params=None):
         # Con Postgres de verdad cada sentencia espera la red, y en esa espera corre cualquier otra
         # tarea. sqlite contesta sin soltar el turno, así que se suelta a propósito: sin esto una
         # tarea lanzada antes de tiempo nunca se cruzaría con las escrituras del turno.
-        for _ in range(_PASADAS_DE_LA_BASE):
+        extra = sum(n for que, n in self._demoras.items() if que in str(params))
+        for _ in range(_PASADAS_DE_LA_BASE + extra):
             await asyncio.sleep(0)
         self._cur = self._con.execute(_sql_para_sqlite(sql),
                                       tuple(_param(v) for v in (params or ())))
@@ -214,14 +215,14 @@ class _Cur:
 
 
 class _Conn:
-    def __init__(self, con):
-        self._con = con
+    def __init__(self, con, demoras):
+        self._con, self._demoras = con, demoras
 
     def cursor(self, row_factory=None):
-        return _Cur(self._con, row_factory is not None)
+        return _Cur(self._con, row_factory is not None, self._demoras)
 
     async def execute(self, sql, params=None):
-        return await _Cur(self._con, False).execute(sql, params)
+        return await _Cur(self._con, False, self._demoras).execute(sql, params)
 
     def transaction(self):
         class _T:
@@ -234,15 +235,15 @@ class _Conn:
 
 
 class _Pool:
-    def __init__(self, con):
-        self._con = con
+    def __init__(self, con, demoras):
+        self._con, self._demoras = con, demoras
 
     def connection(self):
-        con = self._con
+        con, demoras = self._con, self._demoras
 
         class _Ctx:
             async def __aenter__(s):
-                return _Conn(con)
+                return _Conn(con, demoras)
 
             async def __aexit__(s, *e):
                 return False
@@ -265,6 +266,9 @@ class Mundo:
         self.con = sqlite3.connect(":memory:", check_same_thread=False)
         self.con.create_function("now", 0, lambda: "2026-10-19T12:00:00+00:00")
         self.tablas = db.columnas_declaradas()
+        # {texto: pasadas extra}: toda sentencia cuyos parámetros lleven ese texto se demora más
+        # (un bloqueo, un disco lento). Sirve para probar el orden de las escrituras.
+        self.demoras: dict[str, int] = {}
         for tabla, columnas in self.tablas.items():
             defs = []
             for c in columnas:
@@ -278,7 +282,7 @@ class Mundo:
         self.con.commit()
 
     def pool(self):
-        return _Pool(self.con)
+        return _Pool(self.con, self.demoras)
 
     def fila(self, id: int, chat_id: int, texto: str, tipo: str = "texto", **extra):
         campos = {"id": id, "chat_id": chat_id, "telegram_msg_id": 100 + id,
@@ -525,6 +529,17 @@ async def test_L12_la_memoria_de_largo_plazo_no_recibe_la_respuesta(
     mandado = "\n".join(embeddings.textos)
     assert PREGUNTA in mandado and crm.MARCA_CONTESTO in mandado
     assert "RESPUESTA-DEL-CRM" not in mandado, "la respuesta se mandó a embeddings"
+
+
+async def test_L12_la_marca_final_es_la_de_la_tarea_aunque_la_base_se_demore_con_la_del_turno(
+        mundo, modulo, modelo, telegram_falso, bot):
+    """El turno guarda «[consultando el CRM]» y la tarea guarda «[contestó el CRM]»: la segunda tiene
+    que ganar siempre. La base se demora justo en la primera; si la tarea ya hubiera arrancado, su
+    marca llegaría antes y la del turno la pisaría."""
+    _casa(copia_a_rosi=False)
+    mundo.demoras[crm.MARCA_CONSULTANDO] = 20000
+    fila = await _preguntar(mundo, bot)
+    assert mundo.valor(fila["id"], "respuesta_lucy") == crm.MARCA_CONTESTO
 
 
 async def test_L12_cuando_el_modulo_no_contesta_queda_la_frase_y_no_un_texto_del_modulo(
