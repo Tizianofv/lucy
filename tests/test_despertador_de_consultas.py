@@ -514,6 +514,17 @@ def test_G3_si_el_recordatorio_no_sale_no_se_marca_y_se_reintenta(mundo):
     assert consulta(con)["recordada_en"] is not None
 
 
+@pytest.mark.parametrize("modo", ["nada", "sin_numero"])
+def test_G3_si_telegram_no_devuelve_el_mensaje_el_recordatorio_no_se_marca(mundo, modo):
+    con = mundo.poner_base()
+    sembrar(con, "preguntada", enviada_en=AHORA - timedelta(minutes=40))
+    mundo.modo = modo
+    assert vuelta(mundo) == 0
+    assert consulta(con)["recordada_en"] is None
+    mundo.modo = "ok"
+    assert vuelta(mundo) == 1
+
+
 def test_G3_solo_las_preguntadas_se_recuerdan(mundo):
     con = mundo.poner_base()
     vieja = AHORA - timedelta(hours=5)
