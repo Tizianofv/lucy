@@ -7612,35 +7612,10 @@ async def crear_o_reusar_alerta_tecnica(
 # `canario:<remitente>:<señal>`) y nunca empiezan por ninguno de estos
 # prefijos. Las de Natalia y las del módulo de consultas
 # (`config.QUIENES_DE_ALERTAS_DE_FUERA`, la única lista) no disparan el aviso
-# de Telegram de `tareas_tecnicas_atrasadas`: los graves ya le llegan a Tiziano
-# por Telegram desde el propio sistema, y lo técnico va a Code, no a Telegram
-# (Tiziano, 4-oct-2026).
-
-def _consulta_de_atrasadas(umbral_horas: int) -> tuple[str, tuple]:
-    """El SELECT de `tareas_tecnicas_atrasadas` y sus parámetros en orden. Un
-    renglón de exclusión por cada prefijo de `PREFIJOS_DE_ALERTAS_DE_FUERA`."""
-    exclusion = "".join(
-        "           AND substr(t.clave_tecnica, 1, %s) <> %s\n"
-        for _ in PREFIJOS_DE_ALERTAS_DE_FUERA)
-    consulta = """
-        SELECT t.id, t.titulo, t.clave_tecnica
-          FROM tareas t
-         WHERE t.clave_tecnica IS NOT NULL
-           AND t.borrado_en IS NULL
-           AND t.estado = %s
-           AND t.tomada_en IS NULL
-""" + exclusion + """           AND COALESCE(t.ultima_alarma_en, t.creado_en)
-                 < now() - make_interval(hours => %s)
-           AND NOT EXISTS (
-                 SELECT 1 FROM log_acciones la
-                  WHERE la.tabla = 'tareas' AND la.registro_id = t.id
-                    AND la.accion = 'aviso_atraso_code')
-         ORDER BY t.id
-        """
-    parametros = [ESTADO_PENDIENTE]
-    for prefijo in PREFIJOS_DE_ALERTAS_DE_FUERA:
-        parametros += [len(prefijo), prefijo]
-    return consulta, (*parametros, int(umbral_horas))
+# de Telegram de `tareas_tecnicas_atrasadas` (que las deja fuera por
+# `PREFIJOS_DE_ALERTAS_DE_FUERA`, no por una lista suya): los graves ya le
+# llegan a Tiziano por Telegram desde el propio sistema, y lo técnico va a
+# Code, no a Telegram (Tiziano, 4-oct-2026).
 
 
 async def tareas_tecnicas_atrasadas(umbral_horas: int = 6) -> list[dict]:
@@ -7657,19 +7632,37 @@ async def tareas_tecnicas_atrasadas(umbral_horas: int = 6) -> list[dict]:
 
     LAS ALERTAS DE FUERA NO ENTRAN (Natalia 4-oct-2026; el módulo de consultas
     19-oct-2026): las tareas cuya `clave_tecnica` empieza por alguno de
-    `PREFIJOS_DE_ALERTAS_DE_FUERA` se excluyen en el `WHERE`, graves o no.
+    `PREFIJOS_DE_ALERTAS_DE_FUERA` se quitan del resultado, graves o no.
     Las cinco alarmas de Lucy siguen como estaban.
 
     SIN LA MIGRACIÓN (`clave_tecnica`/`ultima_alarma_en`/`tomada_en`
     ausentes, SQLSTATE 42703), devuelve `[]`: nada que revisar todavía,
     nunca revienta.
     """
-    consulta, parametros = _consulta_de_atrasadas(umbral_horas)
+    consulta = """
+        SELECT t.id, t.titulo, t.clave_tecnica
+          FROM tareas t
+         WHERE t.clave_tecnica IS NOT NULL
+           AND t.borrado_en IS NULL
+           AND t.estado = %s
+           AND t.tomada_en IS NULL
+           AND COALESCE(t.ultima_alarma_en, t.creado_en)
+                 < now() - make_interval(hours => %s)
+           AND NOT EXISTS (
+                 SELECT 1 FROM log_acciones la
+                  WHERE la.tabla = 'tareas' AND la.registro_id = t.id
+                    AND la.accion = 'aviso_atraso_code')
+         ORDER BY t.id
+        """
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         try:
-            await cur.execute(consulta, parametros)
-            return list(await cur.fetchall())
+            await cur.execute(consulta, (ESTADO_PENDIENTE, int(umbral_horas)))
+            # Las de fuera se quitan aquí y no en el WHERE: así el SQL sigue
+            # siendo un literal (el censo de `tests/test_responsable.py` lo lee)
+            # y la lista de quiénes es una sola, la de `config`.
+            return [f for f in await cur.fetchall()
+                    if not f["clave_tecnica"].startswith(PREFIJOS_DE_ALERTAS_DE_FUERA)]
         except Exception as e:
             try:
                 sqlstate = e.sqlstate

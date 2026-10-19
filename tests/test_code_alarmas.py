@@ -890,7 +890,7 @@ def test_revisar_alertas_tecnicas_no_avisa_dos_veces_por_la_misma_tarea():
 
 
 def test_la_consulta_de_atrasadas_excluye_tomadas_y_marcadas():
-    fuente = _extraer_sql_atrasadas()
+    fuente = inspect.getsource(db.tareas_tecnicas_atrasadas)
     assert "tomada_en IS NULL" in fuente
     assert "NOT EXISTS" in fuente
     assert "aviso_atraso_code" in fuente
@@ -905,9 +905,16 @@ def test_la_consulta_de_atrasadas_excluye_tomadas_y_marcadas():
 # ═══════════════════════════════════════════════════════════════════════
 
 def _extraer_sql_atrasadas() -> str:
-    """El texto del SELECT tal como lo arma producción (`db._consulta_de_atrasadas`,
-    la función que usa `tareas_tecnicas_atrasadas`)."""
-    return db._consulta_de_atrasadas(6)[0]
+    arbol = ast.parse(
+        textwrap.dedent(inspect.getsource(db.tareas_tecnicas_atrasadas)))
+    for nodo in ast.walk(arbol):
+        if (isinstance(nodo, ast.Assign) and len(nodo.targets) == 1
+                and isinstance(nodo.targets[0], ast.Name)
+                and nodo.targets[0].id == "consulta"
+                and isinstance(nodo.value, ast.Constant)
+                and isinstance(nodo.value.value, str)):
+            return nodo.value.value
+    raise AssertionError("no encontré 'consulta' en tareas_tecnicas_atrasadas")
 
 
 def _corre_atrasadas_sqlite(filas: list[dict], marcas: list[int], umbral_horas: int = 6):
@@ -937,15 +944,41 @@ def _corre_atrasadas_sqlite(filas: list[dict], marcas: list[int], umbral_horas: 
     # Traducción MÍNIMA para que corra en SQLite: `now() - make_interval(hours
     # => %s)` -> `datetime('now', '-' || ? || ' hours')` (mismo umbral, misma
     # posición del parámetro) y el resto de `%s` -> `?`. El resto del texto
-    # -- el WHERE, el NOT EXISTS -- es EL MISMO que ejecuta producción.
-    sql, parametros = db._consulta_de_atrasadas(umbral_horas)
-    assert "now() - make_interval(hours => %s)" in sql
-    sql = sql.replace(
-        "now() - make_interval(hours => %s)",
-        "datetime('now', '-' || ? || ' hours')")
-    sql = sql.replace("%s", "?")
-    cur = conn.execute(sql, parametros)
-    salida = [dict(r) for r in cur.fetchall()]
+    # -- el WHERE, el NOT EXISTS -- es EL MISMO que ejecuta producción, y la que
+    # corre es la FUNCIÓN de producción entera (`db.tareas_tecnicas_atrasadas`,
+    # con lo que quita de lo que trae), no una copia de su filtro.
+    assert "now() - make_interval(hours => %s)" in _extraer_sql_atrasadas()
+
+    class _C:
+        async def execute(self, sql, params=None):
+            sql = sql.replace("now() - make_interval(hours => %s)",
+                              "datetime('now', '-' || ? || ' hours')").replace("%s", "?")
+            self._cur = conn.execute(sql, tuple(params or ()))
+            return self
+
+        async def fetchall(self):
+            return [dict(r) for r in self._cur.fetchall()]
+
+    class _Conn:
+        def cursor(self, row_factory=None):
+            return _C()
+
+    class _Pool:
+        def connection(self):
+            class _CM:
+                async def __aenter__(self):
+                    return _Conn()
+
+                async def __aexit__(self, *e):
+                    return False
+            return _CM()
+
+    guardado = db.pool
+    db.pool = _Pool()
+    try:
+        salida = asyncio.run(db.tareas_tecnicas_atrasadas(umbral_horas))
+    finally:
+        db.pool = guardado
     conn.close()
     return salida
 
@@ -1202,15 +1235,6 @@ def test_el_sql_real_de_atrasadas_deja_fuera_a_TODO_quien_de_alertas_de_fuera():
         esperadas.append(i)
     salida = _corre_atrasadas_sqlite(filas, marcas=[])
     assert sorted(f["id"] for f in salida) == esperadas, salida
-
-
-def test_la_consulta_de_atrasadas_lleva_un_renglon_de_exclusion_por_cada_prefijo():
-    sql, parametros = db._consulta_de_atrasadas(6)
-    n = len(config.PREFIJOS_DE_ALERTAS_DE_FUERA)
-    assert sql.count("substr(t.clave_tecnica, 1, %s) <> %s") == n
-    assert sql.count("%s") == len(parametros) == 1 + 2 * n + 1
-    for p in config.PREFIJOS_DE_ALERTAS_DE_FUERA:
-        assert (len(p), p) == tuple(parametros[1 + 2 * config.PREFIJOS_DE_ALERTAS_DE_FUERA.index(p):][:2])
 
 
 def test_el_prefijo_lo_escribe_la_autenticacion_y_es_el_de_la_constante():
