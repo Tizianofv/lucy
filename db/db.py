@@ -6357,8 +6357,9 @@ async def proxima_de_proyecto_de_cliente(noco_id: int, proyecto_id: int, hoy: da
 
 
 async def marcar_consulta_de_natalia_recordada(consulta_id: int, cuando: datetime) -> bool:
-    """Deja `recordada_en = cuando` en una consulta `preguntada` que todavía no la tenía: el recordatorio sale
-    UNA vez. Devuelve si cambió. NO toca el estado (eso es solo de `pasar_consulta_de_natalia`)."""
+    """Deja `recordada_en = cuando` en una consulta `preguntada` que todavía no la tenía. Cada vuelta del despertador
+    manda el recordatorio una vez y lo marca DESPUÉS de enviar; si dos contenedores coinciden en un redespliegue,
+    el recordatorio puede salir dos veces y la base guarda la marca del primero. Devuelve si cambió. NO toca el estado (eso es solo de `pasar_consulta_de_natalia`)."""
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(

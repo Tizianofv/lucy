@@ -757,13 +757,15 @@ def _texto_de(nodo) -> str | None:
     return None
 
 
-_ESCRIBE_TAREAS = re.compile(r"\bUPDATE\s+(tareas|\{\})\s+SET\b", re.I)
+_ESCRIBE_TAREAS = re.compile(r"\bUPDATE\s+(tareas|\{\})(?:\s+(?!SET\b)\w+)?\s+SET\b", re.I)    # con o sin alias
 
 
 def _escritores_de_fechas(arbol) -> set[str]:
     """Funciones con un `UPDATE tareas SET …` que nombra `vence_en`, y funciones con un `UPDATE {tabla} SET …` GENÉRICO
     (la tabla interpolada, como `crud.editar`/`deshacer`/`borrar` y `despertador.revisar`): estas últimas pueden mover una
-    fecha sin nombrarla. Las otras (`UPDATE tareas` que no nombran `vence_en`) no la escriben."""
+    fecha sin nombrarla. Las otras (`UPDATE tareas` que no nombran `vence_en`) no la escriben. LO QUE VE: un texto
+    literal o f-string (con la tabla literal o interpolada, con o sin alias). FRONTERA: un SQL armado concatenando
+    con `+` o en trozos sueltos no se ve."""
     salida = set()
     for fn in ast.walk(arbol):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -772,13 +774,14 @@ def _escritores_de_fechas(arbol) -> set[str]:
             t = _texto_de(n)
             if t is None or not _ESCRIBE_TAREAS.search(t):
                 continue
-            if "vence_en" in t or re.search(r"\bUPDATE\s+\{\}\s+SET\b", t, re.I):
+            if "vence_en" in t or re.search(r"\bUPDATE\s+\{\}(?:\s+(?!SET\b)\w+)?\s+SET\b", t, re.I):
                 salida.add(fn.name)
     return salida
 
 
 # Cada escritor que el barrido encuentra, y por dónde lo cubre una prueba de ESTE archivo. La lista se compara con el código:
-# un escritor nuevo hace fallar la prueba hasta que alguien decida cómo se cubre.
+# un escritor nuevo que el barrido VE hace fallar la prueba hasta que alguien decida cómo se cubre (no ve SQL concatenado
+# con `+` ni armado en trozos sueltos).
 ESCRITORES_DE_FECHAS = {
     "db/db.py::mover_vence": "el panel (`CAMINOS_DE_LA_FECHA['panel']`)",
     "acciones/crud.py::editar": "Telegram (`CAMINOS_DE_LA_FECHA['telegram']`)",
@@ -806,8 +809,9 @@ def test_G4_el_barrido_ve_un_escritor_inventado():
     falso = ast.parse(
         "async def mueve(c):\n    await c.execute('UPDATE tareas SET vence_en = %s WHERE id = %s')\n"
         "async def generico(c, t):\n    await c.execute(f'UPDATE {t} SET {a} WHERE id = %s')\n"
+        "async def con_alias(c, t):\n    await c.execute(f'UPDATE {t} x SET {a} WHERE id = %s')\n"
         "async def no_la_toca(c):\n    await c.execute('UPDATE tareas SET titulo = %s WHERE id = %s')\n")
-    assert _escritores_de_fechas(falso) == {"mueve", "generico"}
+    assert _escritores_de_fechas(falso) == {"mueve", "generico", "con_alias"}
 
 
 def test_G4_la_decision_no_mira_quien_escribe_solo_lo_que_la_base_dice_ahora():
@@ -910,3 +914,51 @@ def test_nada_de_L4_toca_el_estado_salvo_por_la_unica_funcion():
             and re.search(r"\bUPDATE\s+consultas_de_natalia\b", n.value, re.I)]
     assert sets == ["recordada_en = %s"]
     assert "pasar_consulta_de_natalia(" in inspect.getsource(db.pasar_consulta_de_natalia_sola)
+
+
+def test_el_bucle_sigue_con_lo_demas_aunque_las_consultas_revienten(monkeypatch):
+    """Comportamiento, no árbol: `revisar_consultas_de_natalia` lanza `RuntimeError` en la vuelta 6 y en la 12; el
+    bucle tiene que llegar a la vuelta 12 y hacer lo que le toca ahí (indexar la memoria) y seguir mirando."""
+    cuenta = {"consultas": 0, "revisar": 0, "indexar": 0, "vueltas": 0}
+
+    async def _pendientes():
+        return []
+
+    async def _revisar(bot):
+        cuenta["revisar"] += 1
+        return 0
+
+    async def _consultas(bot, *a, **k):
+        cuenta["consultas"] += 1
+        raise RuntimeError("fallo de las consultas")
+
+    async def _indexar():
+        cuenta["indexar"] += 1
+
+    async def _dormir(segundos):
+        cuenta["vueltas"] += 1
+        if cuenta["vueltas"] >= 13:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(interpretar.db, "tomar_pendientes", _pendientes)
+    monkeypatch.setattr(interpretar.despertador, "revisar", _revisar)
+    monkeypatch.setattr(interpretar.despertador, "revisar_consultas_de_natalia", _consultas)
+    monkeypatch.setattr(interpretar.memoria, "indexar_pendientes", _indexar)
+    monkeypatch.setattr(interpretar.asyncio, "sleep", _dormir)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(interpretar.bucle(object()))
+    assert cuenta["consultas"] == 2                       # vueltas 6 y 12: falló y se volvió a intentar
+    assert cuenta["revisar"] == 2 and cuenta["indexar"] == 1
+
+
+def test_los_minutos_del_enlace_salen_de_VIDA_ENLACE(mundo, monkeypatch):
+    con = mundo.poner_base()
+    config.PANEL_URL = PANEL
+    abrir_nueva_fecha()
+    for vida, minutos in ((600, 10), (1800, 30)):
+        monkeypatch.setattr(auth, "VIDA_ENLACE", vida)
+        mundo.enviados.clear()
+        con.execute("UPDATE consultas_de_natalia SET estado = 'abierta', tarjeta_msg_id = NULL, enviada_en = NULL")
+        con.commit()
+        vuelta(mundo)
+        assert f"vence en {minutos} minutos" in mundo.enviados[0]["text"]

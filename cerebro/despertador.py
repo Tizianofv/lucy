@@ -290,9 +290,11 @@ async def revisar_alertas_tecnicas_sin_tomar(bot) -> int:
 # el que le pregunta al responsable por el Telegram de Lucy. Tres cosas, siempre en este orden:
 #   1. CERRAR las `nueva_fecha` que ya no hacen falta (la fecha se arregló por donde sea);
 #   2. mandar la TARJETA de las `abierta`;
-#   3. RECORDAR UNA vez las `preguntada` a los `RECORDAR_CONSULTA_MIN` minutos.
-# Cada paso mira la base en cada vuelta, no un diccionario en memoria: un redespliegue no pierde nada y
-# no repite nada (la marca es `estado`/`recordada_en`, escrita DESPUÉS de que Telegram devolvió el mensaje).
+#   3. RECORDAR las `preguntada` a los `RECORDAR_CONSULTA_MIN` minutos, una vez por vuelta (la marca la pone).
+# Cada paso mira la base en cada vuelta, no un diccionario en memoria: un redespliegue no pierde nada. La marca
+# (`estado`/`recordada_en`) se escribe DESPUÉS de que Telegram devolvió el mensaje, así que nunca dice «avisado»
+# sin haber avisado. LO QUE NO CUBRE: si dos contenedores coinciden en un redespliegue, la tarjeta o el
+# recordatorio pueden salir dos veces; la base guarda el primero. (No medido en producción; sin candado a propósito.)
 RECORDAR_CONSULTA_MIN = 30
 
 
@@ -345,14 +347,14 @@ def _enlaces_de_tarjeta(c: dict) -> str:
     por eso van los dos. Vacío (la tarjeta sin enlaces) en los mismos casos en que la herramienta «panel» no manda
     enlace: sin `config.PANEL_URL`, o si ese chat no entra al panel (`web.auth.puede_entrar`). La `tarea_nueva`
     espera sus botones Sí/No (pieza L5) y no lleva enlaces. Solo la tarjeta los lleva: ni el recordatorio ni la
-    constancia de la bandeja (un token vive 10 minutos)."""
+    constancia de la bandeja (un token vive `web.auth.VIDA_ENLACE`)."""
     if c["tipo"] != db.TIPO_CONSULTA_NUEVA_FECHA or not config.PANEL_URL:
         return ""
     import web.auth as _auth
     if not _auth.puede_entrar(c["responsable_chat_id"]):
         return ""
-    token = _auth.crear_token(c["responsable_chat_id"])
-    return (f"\n\nEntra al panel (vence en 10 minutos): {config.PANEL_URL}/entrar?t={token}"
+    token = _auth.crear_token(c["responsable_chat_id"], _auth.VIDA_ENLACE)
+    return (f"\n\nEntra al panel (vence en {_auth.VIDA_ENLACE // 60} minutos): {config.PANEL_URL}/entrar?t={token}"
             f"\nLa tarea: {config.PANEL_URL}/proyectos?p={c['proyecto_id']}&t={c['tarea_id']}#tarea-{c['tarea_id']}")
 
 
@@ -447,8 +449,8 @@ async def _mandar_tarjetas_de_consultas(bot, ahora) -> int:
 
 
 async def _recordar_consultas(bot, ahora) -> int:
-    """UNA vez, a los `RECORDAR_CONSULTA_MIN` minutos de `enviada_en`, a las `preguntada` sin contestar. Nada
-    las caduca. La marca (`recordada_en`) se escribe DESPUÉS de que Telegram devolvió el mensaje."""
+    """A los `RECORDAR_CONSULTA_MIN` minutos de `enviada_en`, a las `preguntada` sin contestar: una vez por vuelta
+    y luego queda marcada (dos contenedores a la vez podrían mandarlo dos veces). Nada las caduca. La marca (`recordada_en`) se escribe DESPUÉS de que Telegram devolvió el mensaje."""
     recordadas = 0
     for c in await db.consultas_de_natalia_para_recordar(ahora - timedelta(minutes=RECORDAR_CONSULTA_MIN)):
         texto = _texto_de_recordatorio(c)
