@@ -6449,7 +6449,8 @@ async def _poner_al_cliente_en_la_tarea(cur, tarea_id: int, c: dict) -> None:
 
     EL CLIENTE DE LA CONSULTA Y EL DEL PROYECTO SON EL MISMO aquí: `_anotar_la_tarea_de_la_consulta` rechaza (`no_se_pudo`,
     «el proyecto ya no es de ese cliente») antes de llegar, si `proyectos.cliente_noco_id` es distinto del de la consulta
-    (incluido NULL). Por eso `cliente_noco_id` (de la consulta) y `cliente_nombre` (del proyecto) son de la misma ficha.
+    (incluido NULL), lo que cubre un cambio de cliente hecho antes del «Sí». NO cubre uno que se confirme DURANTE la
+    transacción del «Sí» (la lectura no lleva candado; ventana no medida, ver `_anotar_la_tarea_de_la_consulta`).
 
     UN PROYECTO CON CLIENTE SIN NOMBRE NO EXISTE HOY: las tres puertas que ponen el cliente (`poner_cliente`,
     `crear_proyecto`, `convertir_tarea_en_proyecto`) escriben `cliente_noco_id` y `cliente_nombre` juntos, y el nombre
@@ -6480,8 +6481,12 @@ async def _anotar_la_tarea_de_la_consulta(conn, cur, c: dict, chat_id: int, quie
 
     ANTES de escribir nada: si el proyecto YA NO ES DE LA FICHA de la consulta (`proyectos.cliente_noco_id` distinto de
     `consultas_de_natalia.cliente_noco_id`, incluido que el proyecto haya quedado sin cliente) es un rechazo como los del
-    escritor: la consulta pasa a `no_se_pudo` con ese motivo y no se crea nada. Lo de otro cliente no se toca (G2 de L3), y
-    así nunca se mezcla el id de la ficha de la consulta con el nombre de otro cliente en el participante."""
+    escritor: la consulta pasa a `no_se_pudo` con ese motivo y no se crea nada. Lo de otro cliente no se toca (G2 de L3).
+    Protege contra un cambio de cliente hecho ANTES del «Sí». FRONTERA: la lectura del proyecto (`_leer_consulta_para_contestar`)
+    es una lectura plana, sin candado de fila (ni `FOR SHARE` ni el otro) (Lucy no usa candados de fila sobre proyectos en ningún otro sitio y
+    el arnés de SQLite de las pruebas no los traduce); un `poner_cliente` confirmado entre esa lectura y la escritura del
+    participante, dentro de la transacción del «Sí», no se ve y podría dejar el id de la ficha de la consulta con el nombre del
+    cliente nuevo. Esa ventana (milisegundos) no está medida ni cerrada."""
     if c["proyecto_cliente_noco_id"] != c["cliente_noco_id"]:
         return await pasar_consulta_de_natalia(
             cur, c["id"], ESTADO_CONSULTA_PREGUNTADA, ESTADO_CONSULTA_NO_SE_PUDO,
