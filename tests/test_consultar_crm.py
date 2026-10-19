@@ -182,6 +182,10 @@ class _Cur:
         self._con, self._dict, self._cur = con, como_dict, None
 
     async def execute(self, sql, params=None):
+        # Con Postgres de verdad cada sentencia espera la red, y en esa espera corre cualquier otra
+        # tarea. sqlite contesta sin soltar el turno, así que se suelta a propósito: sin esto una
+        # tarea lanzada antes de tiempo nunca se cruzaría con las escrituras del turno.
+        await asyncio.sleep(0)
         self._cur = self._con.execute(_sql_para_sqlite(sql),
                                       tuple(_param(v) for v in (params or ())))
         return self
