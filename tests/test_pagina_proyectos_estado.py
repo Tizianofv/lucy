@@ -195,6 +195,7 @@ TABLA_DE_LA_VISTA = {
     "{{ marca_natalia('estado', m) }}": CONTROL,
     "{{ marca_natalia('siguiente.titulo', m) }}": CONTROL,
     "{{ marca_natalia('siguiente.fecha', m) }}": CONTROL,
+    "{% if not m.proxima.vencida %}": CONTROL,      # la fecha vencida no llega a Natalia: sin marca
     "{% if m.proxima %}": CONTROL,
     "{% if m.proxima.vence %}": CONTROL,
     "{% if m.proxima.grave %}": CONTROL,

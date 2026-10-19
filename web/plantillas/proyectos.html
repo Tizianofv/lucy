@@ -600,7 +600,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     <noscript><a class="nota" href="{{ u }}&amp;editar_tarea={{ t.id }}#tarea-{{ t.id }}">Cambiar el título</a></noscript>{% endif %}
     {% if not t.es_pendiente and not t.es_hecha %}<span class="vence" style="min-width:0">{{ t.estado }}</span>{% endif %}
     <span class="caritas">{% if t.responsable %}<span class="ini" title="Responsable: {{ t.responsable }}">{{ t.responsable|iniciales }}</span>{% endif %}{% for x in t.personas %}<span class="ini" title="{{ x.nombre }} · {{ x.rol }}">{{ x.nombre|iniciales }}</span>{% endfor %}</span>
-    <span class="vence" {% if t.vence_en %}title="{{ t.vence_en|hora_rd }}"{% endif %}>{{ 'Venció el ' if t.vencida }}{{ t.dia|dia_corto }}</span>{% if natalia_la_ve %}{{ marca_natalia('siguiente.fecha', natalia_la_ve) }}{% endif %}
+    <span class="vence" {% if t.vence_en %}title="{{ t.vence_en|hora_rd }}"{% endif %}>{{ 'Venció el ' if t.vencida }}{{ t.dia|dia_corto }}</span>{% if natalia_la_ve and t.vence_en and not t.vencida %}{{ marca_natalia('siguiente.fecha', natalia_la_ve) }}{% endif %}
     {% if solo_ver %}{% elif confirmar_borrar == t.id %}
     <span class="confirmar">¿Borrarla?
       <form class="en-linea" method="post" action="/proyectos/tarea/{{ t.id }}/borrar{{ consulta_filtro }}"><button class="btn-lleno">Sí</button></form>
@@ -1602,7 +1602,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
           <span class="pastilla">{{ m.estado_calculado }}</span>{{ marca_natalia('estado', m) }}
           <span class="proxima">
             {%- if m.proxima %}Próxima: {{ m.proxima.titulo }}{{ marca_natalia('siguiente.titulo', m) }}
-              {%- if m.proxima.vence %} <span class="cuando {{ 'vencida' if m.proxima.vencida }}">· {{ 'venció el' if m.proxima.vencida else 'vence el' }} {{ m.proxima.vence|dia_largo }}</span>{% else %} <span class="cuando">· sin fecha</span>{% endif %}{{ marca_natalia('siguiente.fecha', m) }}
+              {%- if m.proxima.vence %} <span class="cuando {{ 'vencida' if m.proxima.vencida }}">· {{ 'venció el' if m.proxima.vencida else 'vence el' }} {{ m.proxima.vence|dia_largo }}</span>{% if not m.proxima.vencida %}{{ marca_natalia('siguiente.fecha', m) }}{% endif %}{% else %} <span class="cuando">· sin fecha</span>{% endif %}
               {%- if m.proxima.grave %} <span class="pastilla roja">Grave</span>{% endif %}
             {%- elif m.cerrado %}<span class="sin-proxima">Archivado: sin próxima tarea</span>
             {%- else %}<span class="sin-proxima">Nada pendiente</span>{% endif -%}

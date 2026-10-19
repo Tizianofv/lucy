@@ -181,8 +181,11 @@ def test_M2_la_vista_de_estado_marca_por_proyecto_lo_que_la_ruta_manda(mundo):
         esperado = []
         if pid in por_ruta:
             esperado = ["nombre", "estado"]
-            if por_ruta[pid]["siguiente"]:
-                esperado += ["siguiente.titulo", "siguiente.fecha"]
+            sig = por_ruta[pid]["siguiente"]
+            if sig:
+                esperado += ["siguiente.titulo"]
+                if sig["fecha"] and not sig["vencida"]:        # la fecha vencida no llega a Natalia (su mapa, N1)
+                    esperado += ["siguiente.fecha"]
         assert sorted(marcas(texto)) == sorted(esperado), (pid, marcas(texto), esperado)
 
 
@@ -217,8 +220,28 @@ def test_M3_solo_la_fila_de_la_tarea_siguiente_de_la_ruta_lleva_marca(mundo):
     assert siguiente == 11                      # la vencida: la misma regla que la página
     filas = filas_de_tarea(ver(mundo, p=1))
     assert {10, 11, 12, 13} <= set(filas)
+    # vencida: lleva la marca del título y NO la de la fecha (la fecha vieja no llega a Natalia)
     for tid, fila in filas.items():
-        assert sorted(marcas(fila)) == (["siguiente.fecha", "siguiente.titulo"] if tid == siguiente else []), tid
+        assert sorted(marcas(fila)) == (["siguiente.titulo"] if tid == siguiente else []), tid
+
+
+def test_M3_la_fecha_lleva_marca_solo_si_la_siguiente_no_esta_vencida(mundo):
+    sembrar(mundo)
+    cuerpo = {p["id"]: p["siguiente"] for p in de_la_ruta()["proyectos"]}
+    assert cuerpo[1]["vencida"] is True and cuerpo[4]["vencida"] is False and cuerpo[4]["fecha"]
+    # fila: vencida (proyecto 1) sin marca de fecha; no vencida y con fecha (proyecto 4) con ella
+    assert "siguiente.fecha" not in marcas(filas_de_tarea(ver(mundo, p=1))[11])
+    assert sorted(marcas(filas_de_tarea(ver(mundo, p=4))[40])) == ["siguiente.fecha", "siguiente.titulo"]
+    # vista de estado: lo mismo en el «Próxima: …» de cada uno
+    renglones = dict(re.findall(r'<li>\s*<a class="nombre" href="/proyectos\?p=(\d+)">(.*?)</li>',
+                                centro(ver(mundo, estado=1)), re.S))
+    assert "siguiente.fecha" not in marcas(renglones["1"]) and "siguiente.titulo" in marcas(renglones["1"])
+    assert "siguiente.fecha" in marcas(renglones["4"])
+    # una siguiente sin fecha: el título sí, la fecha no
+    mundo.proyecto(5, "Solo sin fecha", area="CDS", cliente="Cliente X")
+    mundo.tarea(60, "Sin fecha sola", proyecto=5)
+    assert {p["id"]: p["siguiente"] for p in de_la_ruta()["proyectos"]}[5]["fecha"] is None
+    assert sorted(marcas(filas_de_tarea(ver(mundo, p=5))[60])) == ["siguiente.titulo"]
 
 
 def test_M3_las_sueltas_no_llevan_marca_en_sus_filas(mundo):
