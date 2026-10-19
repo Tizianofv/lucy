@@ -486,9 +486,9 @@ async def test_L11_el_modelo_no_ve_la_respuesta_ni_en_este_turno_ni_en_el_siguie
     await _hasta_que_terminen_las_consultas()
 
     visto = modelo.todo_lo_que_vio()
-    assert len(modelo.pedidos) == 2, "esperaba una llamada por turno"
     assert "RESPUESTA-DEL-CRM" not in visto, "el modelo vio la respuesta del CRM"
     assert "000-000-0000" not in visto
+    assert len(modelo.pedidos) == 2, "esperaba una llamada al modelo por turno"
     # No vacío: lo que el modelo SÍ ve del primer turno es la pregunta y la marca.
     assert PREGUNTA in visto
     assert crm.MARCA_CONTESTO in "".join(m["content"] for m in modelo.pedidos[1]), (
