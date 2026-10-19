@@ -473,12 +473,16 @@ def test_el_no_deja_la_consulta_rechazada_y_no_escribe_ninguna_tarea(mundo):
     assert "Dijiste que no" in q.texto_final and "Anotada" not in q.texto_final
 
 
-def test_sin_proyecto_con_nombre_de_cliente_no_se_inventa_la_persona(mundo):
+@pytest.mark.parametrize("vacio", [None, "", "   "])
+def test_un_proyecto_sin_nombre_de_cliente_no_anota_nada_y_el_boton_sigue_sirviendo(mundo, vacio):
+    """Lado estricto (DISENO §5.3: la ficha del cliente es persona de la tarea): sin nombre el Sí falla como cualquier
+    otro error, deshace todo y la consulta sigue `preguntada`. Hoy ese caso no existe (medido por la sala, 18-oct-2026)."""
     con, si, no = con_tarjeta(mundo)
-    con.execute("UPDATE proyectos SET cliente_nombre = NULL WHERE id = 1")
-    tocar(si, ANA)
-    assert consulta(con)["estado"] == "anotada"
-    assert foto(con)["participantes"] == 0, "no se inventa un nombre de cliente"
+    antes, c0 = foto(con), consulta(con)
+    con.execute("UPDATE proyectos SET cliente_nombre = ? WHERE id = 1", (vacio,))
+    q = tocar(si, ANA)
+    assert foto(con) == antes and consulta(con) == c0 and c0["estado"] == "preguntada"
+    assert q.editados == [] and q.avisos and "No pude guardar" in q.avisos[0]
 
 
 def test_un_nombre_de_proyecto_con_html_sale_escapado_en_la_tarjeta_cerrada(mundo):
@@ -698,6 +702,14 @@ def test_G5_el_escritor_solo_acepta_a_natalia_o_al_panel_y_cada_uno_con_su_chat(
     with pytest.raises(ValueError):
         correr(db.crear_tarea_desde_el_panel(ANA, "x", None, None, None, proyecto_id=1, desde="otro"))
     assert foto(con)["tareas"] == len(TAREAS) and foto(con)["bandeja"] == 0
+
+
+def test_G5_la_tarea_de_natalia_sin_la_transaccion_del_si_no_se_escribe_nada(mundo):
+    """Sin `conexion` el escritor abriría su propia conexión y haría commit: tarea de Natalia sin cambiar la consulta."""
+    con = mundo.poner_base()
+    with pytest.raises(ValueError):
+        correr(db.crear_tarea_desde_el_panel(config.CHAT_ID_NATALIA, "x", None, None, None, proyecto_id=1, desde="natalia"))
+    assert foto(con)["tareas"] == len(TAREAS) and foto(con)["bandeja"] == 0 and mundo.base.commits == 0
 
 
 def test_G5_el_panel_sigue_escribiendo_como_panel(mundo):

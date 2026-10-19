@@ -6443,12 +6443,18 @@ def _comentario_del_pedido(c: dict, quien: str) -> str:
 
 
 async def _poner_al_cliente_en_la_tarea(cur, tarea_id: int, c: dict) -> None:
-    """El cliente como persona de la tarea (rol «Cliente»). Su nombre es el que Lucy ya guarda en el proyecto
-    (`proyectos.cliente_nombre`, el de Noco al asignarlo): si el proyecto no tiene nombre de cliente NO se inventa
-    uno y la persona no se agrega (la tarea y su comentario salen igual)."""
+    """El cliente como persona de la tarea (rol «Cliente», DISENO.md §5.3). Su nombre es el que Lucy ya guarda en el
+    proyecto (`proyectos.cliente_nombre`, el de Noco al asignarlo).
+
+    UN PROYECTO CON CLIENTE SIN NOMBRE NO EXISTE HOY: las tres puertas que ponen el cliente (`poner_cliente`,
+    `crear_proyecto`, `convertir_tarea_en_proyecto`) escriben `cliente_noco_id` y `cliente_nombre` juntos, y el nombre
+    sale de `_ficha_de_noco_que_vale`, que rechaza uno vacío. Medido por la sala el 18-oct-2026 en producción: 10
+    proyectos vivos con `cliente_noco_id`, 0 sin `cliente_nombre`. Si algún día pasara, el lado estricto: se lanza
+    `RuntimeError`, se deshace TODO el «Sí» y la consulta queda `preguntada` (nunca nace una tarea anotada sin la
+    persona del cliente, ni se inventa un nombre)."""
     nombre = (c.get("cliente_nombre") or "").strip()
     if not nombre:
-        return
+        raise RuntimeError("el proyecto tiene cliente pero no el nombre de su ficha: no se anota la tarea sin la persona del cliente")
     await cur.execute(
         "INSERT INTO participantes (tarea_id, noco_id, nombre, rol, creado_por_chat_id) "
         "VALUES (%s, %s, %s, %s, %s) RETURNING *",
@@ -8923,6 +8929,9 @@ async def crear_tarea_desde_el_panel(chat_id: int, titulo: str,
         raise ValueError("una tarea la escribe el panel o Natalia, no otro")
     if (desde == DESDE_DE_NATALIA) != _es_de_natalia(chat_id):
         raise ValueError("el chat de la fila tiene que ser el de quien la escribe")
+    if desde == DESDE_DE_NATALIA and conexion is None:
+        # Sin la transacción del «Sí» esto abriría la suya y haría commit: una tarea de Natalia sin que la consulta cambie.
+        raise ValueError("la tarea de Natalia se escribe dentro de la transacción de su consulta")
     if responsable_chat_id is not None:
         if not puede_ser_responsable(responsable_chat_id):
             raise TareaNoValida(
