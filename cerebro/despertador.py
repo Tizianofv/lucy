@@ -284,6 +284,198 @@ async def revisar_alertas_tecnicas_sin_tomar(bot) -> int:
     return avisadas
 
 
+# ── Las consultas de Natalia al responsable (pieza L4 del diseño «Natalia y los Proyectos», 18-oct-2026) ──
+#
+# Natalia no le escribe al equipo: abre una CONSULTA en Lucy (`consultas_de_natalia`, L3) y es ESTE despertador
+# el que le pregunta al responsable por el Telegram de Lucy. Tres cosas, siempre en este orden:
+#   1. CERRAR las `nueva_fecha` que ya no hacen falta (la fecha se arregló por donde sea);
+#   2. mandar la TARJETA de las `abierta`;
+#   3. RECORDAR UNA vez las `preguntada` a los `RECORDAR_CONSULTA_MIN` minutos.
+# Cada paso mira la base en cada vuelta, no un diccionario en memoria: un redespliegue no pierde nada y
+# no repite nada (la marca es `estado`/`recordada_en`, escrita DESPUÉS de que Telegram devolvió el mensaje).
+RECORDAR_CONSULTA_MIN = 30
+
+
+def _dia_corto(cuando) -> str:
+    """`dd/mm` del día de Santo Domingo de un instante (`db.dia_rd`), o «sin fecha»."""
+    dia = db.dia_rd(cuando)
+    return dia.strftime("%d/%m") if dia is not None else "sin fecha"
+
+
+def _quien_y_donde(c: dict) -> str:
+    """«Proyecto · Cliente» de la tarjeta (el cliente solo si el proyecto lo guarda)."""
+    proyecto = c.get("proyecto_nombre") or "un proyecto"
+    return f"{proyecto} · {c['cliente_nombre']}" if c.get("cliente_nombre") else proyecto
+
+
+def _texto_de_tarjeta(c: dict) -> str:
+    """La tarjeta que se le manda al responsable, de una consulta `abierta`. Texto plano (sin parse_mode): lo
+    que escribió el cliente no se interpreta como formato."""
+    if c["tipo"] == db.TIPO_CONSULTA_NUEVA_FECHA:
+        return (f"📅 {_quien_y_donde(c)} preguntó cómo va. La tarea siguiente «{c['tarea_titulo']}» venció el "
+                f"{_dia_corto(c['tarea_vence_en'])}. ¿Nueva fecha estimada? Ponle la fecha a la tarea.")
+    return (f"📋 {_quien_y_donde(c)}: el cliente pide «{c['pedido']}». Tarea propuesta: «{c['titulo']}». "
+            f"Fecha propuesta: {_dia_corto(c['vence_en'])}. ¿Se puede?")
+
+
+def _texto_de_recordatorio(c: dict) -> str:
+    if c["tipo"] == db.TIPO_CONSULTA_NUEVA_FECHA:
+        return f"⏰ Sigue pendiente: {_quien_y_donde(c)}, ¿nueva fecha estimada para «{c['tarea_titulo']}»?"
+    return f"⏰ Sigue pendiente: {_quien_y_donde(c)}, el cliente pide «{c['titulo']}». ¿Se puede?"
+
+
+def _texto_de_cierre(c: dict, hoy) -> str:
+    """Cómo queda la tarjeta de una `nueva_fecha` que ya no hace falta. Dice lo que pasó mirando la tarea tal
+    como está ahora (`c` trae su estado y su fecha de la lectura de esta vuelta). «Vencida» es la definición de
+    siempre (`db.grupo_de_tarea`, por día de Santo Domingo): este texto no decide nada, solo cuenta."""
+    titulo = c.get("tarea_titulo") or "la tarea"
+    if c.get("tarea_borrada_en") is not None or c.get("tarea_estado") != db.ESTADO_PENDIENTE:
+        return f"✅ Ya no hace falta: «{titulo}» ya no está pendiente."
+    if c.get("tarea_vence_en") is None:
+        return f"✅ «{titulo}» quedó sin fecha."
+    if db.grupo_de_tarea(c["tarea_estado"], c["tarea_vence_en"], hoy) != "atrasadas":
+        return f"✅ Nueva fecha estimada de «{titulo}»: {_dia_corto(c['tarea_vence_en'])}."
+    return f"✅ Ya no hace falta: «{titulo}» ya no es la tarea que sigue."
+
+
+def _botones_de_tarjeta(c: dict):
+    """Los botones de la tarjeta, o `None`. La `nueva_fecha` lleva «Abrir la tarea» (un enlace al detalle de la
+    tarea en Proyectos; Telegram solo acepta https). La `tarea_nueva` espera sus botones Sí/No (pieza L5)."""
+    if c["tipo"] != db.TIPO_CONSULTA_NUEVA_FECHA or not config.PANEL_URL.startswith("https://"):
+        return None
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+    url = f"{config.PANEL_URL}/proyectos?p={c['proyecto_id']}&t={c['tarea_id']}#tarea-{c['tarea_id']}"
+    return InlineKeyboardMarkup([[InlineKeyboardButton("📅 Abrir la tarea", url=url)]])
+
+
+async def _mandar_al_responsable(bot, c: dict, texto: str, *, botones=None, responder_a: int | None = None):
+    """Manda `texto` AL RESPONSABLE de la consulta y a nadie más, y devuelve el mensaje que Telegram devolvió
+    (`None` si no se mandó). Las dos puertas de siempre: solo a quien `config.puede_recibir_telegram` deja
+    (Code no tiene Telegram), y `sin_copiar()`: la copia al dueño (`copia_dueno`) mandaría la tarjeta, con
+    lo que pidió un cliente, a quien no es su responsable."""
+    destino = c["responsable_chat_id"]
+    if not config.puede_recibir_telegram(destino):
+        log.warning("Consulta #%s: su responsable ya no puede recibir Telegram; no se manda.", c["id"])
+        return None
+    extra = {}
+    if botones is not None:
+        extra["reply_markup"] = botones
+    if responder_a is not None:
+        from telegram import ReplyParameters
+        extra["reply_parameters"] = ReplyParameters(message_id=responder_a, allow_sending_without_reply=True)
+    with copia_dueno.sin_copiar():
+        return await bot.send_message(chat_id=destino, text=texto[:4000], **extra)
+
+
+def _id_del_mensaje(mensaje) -> int | None:
+    """El `message_id` de lo que Telegram devolvió, o `None` si no devolvió un mensaje. «Mandado» es esto, no
+    que `send_message` no haya lanzado una excepción."""
+    try:
+        numero = mensaje.message_id
+    except AttributeError:
+        return None
+    return numero if isinstance(numero, int) and not isinstance(numero, bool) else None
+
+
+async def _constancia(c: dict, texto: str) -> None:
+    """La tarjeta o el recordatorio queda en la bandeja del responsable, como todo aviso del despertador. Si
+    esto falla, el aviso YA salió y ya está marcado: no se reintenta nada."""
+    try:
+        await db.registrar_aviso(c["responsable_chat_id"], texto)
+    except Exception:
+        log.warning("Consulta #%s: no pude dejar constancia del aviso; sigo igual.", c["id"], exc_info=True)
+
+
+async def _cerrar_consultas_de_fecha(bot, hoy, ahora) -> int:
+    """Pasa a `resuelta` las `nueva_fecha` vivas cuya tarea ya no es la siguiente vencida, y edita su tarjeta.
+    La decisión es `db.consulta_de_fecha_sigue_viva` sobre la `proxima` LEÍDA ahora de la base: no importa
+    quién movió la fecha (el panel, Telegram, otro proceso)."""
+    cerradas = 0
+    proximas: dict[tuple[int, int], dict | None] = {}
+    for c in await db.consultas_de_natalia_de_fecha_vivas():
+        clave = (c["cliente_noco_id"], c["proyecto_id"])
+        if clave not in proximas:
+            proximas[clave] = await db.proxima_de_proyecto_de_cliente(c["cliente_noco_id"], c["proyecto_id"], hoy)
+        proxima = proximas[clave]
+        if db.consulta_de_fecha_sigue_viva(proxima, c["tarea_id"]):
+            continue
+        if not await db.pasar_consulta_de_natalia_sola(
+                c["id"], c["estado"], db.ESTADO_CONSULTA_RESUELTA, contestada_en=ahora):
+            continue                      # otro la movió primero: no se toca la tarjeta
+        cerradas += 1
+        log.info("Consulta #%s (nueva_fecha) resuelta: la tarea ya no es la siguiente vencida.", c["id"])
+        if c["estado"] == db.ESTADO_CONSULTA_PREGUNTADA and c["tarjeta_msg_id"] is not None:
+            try:
+                await bot.edit_message_text(
+                    chat_id=c["responsable_chat_id"], message_id=c["tarjeta_msg_id"],
+                    text=_texto_de_cierre(c, hoy)[:4000])
+            except Exception:
+                log.warning("Consulta #%s: no pude editar la tarjeta; la consulta ya está resuelta.",
+                            c["id"], exc_info=True)
+    return cerradas
+
+
+async def _mandar_tarjetas_de_consultas(bot, ahora) -> int:
+    """Manda la tarjeta de cada consulta `abierta` y la pasa a `preguntada` SOLO si Telegram devolvió el
+    mensaje (con su `message_id`). Si el envío falla, la consulta sigue `abierta` y se reintenta en la
+    vuelta siguiente: nunca queda `preguntada` una pregunta que no salió."""
+    mandadas = 0
+    for c in await db.consultas_de_natalia_sin_tarjeta():
+        texto = _texto_de_tarjeta(c)
+        try:
+            mensaje = await _mandar_al_responsable(bot, c, texto, botones=_botones_de_tarjeta(c))
+        except Exception:
+            log.warning("Consulta #%s: la tarjeta no salió; sigue abierta.", c["id"], exc_info=True)
+            continue
+        numero = _id_del_mensaje(mensaje)
+        if numero is None:
+            continue
+        if not await db.pasar_consulta_de_natalia_sola(
+                c["id"], db.ESTADO_CONSULTA_ABIERTA, db.ESTADO_CONSULTA_PREGUNTADA,
+                tarjeta_msg_id=numero, enviada_en=ahora):
+            log.warning("Consulta #%s: la tarjeta salió pero la consulta ya no estaba abierta.", c["id"])
+            continue
+        mandadas += 1
+        await _constancia(c, texto)
+    return mandadas
+
+
+async def _recordar_consultas(bot, ahora) -> int:
+    """UNA vez, a los `RECORDAR_CONSULTA_MIN` minutos de `enviada_en`, a las `preguntada` sin contestar. Nada
+    las caduca. La marca (`recordada_en`) se escribe DESPUÉS de que Telegram devolvió el mensaje."""
+    recordadas = 0
+    for c in await db.consultas_de_natalia_para_recordar(ahora - timedelta(minutes=RECORDAR_CONSULTA_MIN)):
+        texto = _texto_de_recordatorio(c)
+        try:
+            mensaje = await _mandar_al_responsable(bot, c, texto, responder_a=c["tarjeta_msg_id"])
+        except Exception:
+            log.warning("Consulta #%s: el recordatorio no salió; se reintenta.", c["id"], exc_info=True)
+            continue
+        if _id_del_mensaje(mensaje) is None:
+            continue
+        if not await db.marcar_consulta_de_natalia_recordada(c["id"], ahora):
+            continue
+        recordadas += 1
+        await _constancia(c, texto)
+    return recordadas
+
+
+async def revisar_consultas_de_natalia(bot, hoy=None, ahora=None) -> int:
+    """Una vuelta del despertador sobre las consultas de Natalia. Devuelve cuántos mensajes salieron
+    (tarjetas + recordatorios). `hoy` y `ahora` se pueden pasar para probar los bordes. Sin la migración
+    (`ConsultasSinTabla`) no hace nada."""
+    hoy = hoy or db.hoy_rd()
+    ahora = ahora or datetime.now(timezone.utc)
+    try:
+        await _cerrar_consultas_de_fecha(bot, hoy, ahora)
+        mandadas = await _mandar_tarjetas_de_consultas(bot, ahora)
+        recordadas = await _recordar_consultas(bot, ahora)
+    except db.ConsultasSinTabla:
+        log.debug("Consultas de Natalia: la tabla todavía no existe; nada que hacer.")
+        return 0
+    return mandadas + recordadas
+
+
 def _campanadas(anticipos, enviados, faltan: int) -> set[int]:
     """Cuáles de los minutos-antes de una fila deben sonar AHORA.
 

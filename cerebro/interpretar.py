@@ -267,6 +267,14 @@ async def bucle(bot) -> None:
             except Exception:
                 log.warning("El despertador tropezó; reintento en la próxima.",
                             exc_info=True)
+            # Las consultas de Natalia al responsable (L4): aparte, con su propio
+            # try, para que una falla de ellas no apague los recordatorios y
+            # viceversa.
+            try:
+                await despertador.revisar_consultas_de_natalia(bot)
+            except Exception:
+                log.warning("Las consultas de Natalia tropezaron; reintento en "
+                            "la próxima.", exc_info=True)
         if vuelta % 12 == 0:
             try:
                 await memoria.indexar_pendientes()

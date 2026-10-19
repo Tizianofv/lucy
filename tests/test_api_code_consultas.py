@@ -1120,8 +1120,11 @@ def test_G7_censo_una_sola_funcion_cambia_el_estado_otra_inserta_y_nadie_borra()
     for ruta in _py_del_repo():
         for nombre, ops in _escritores_de_la_tabla(ast.parse(ruta.read_text(encoding="utf-8"))).items():
             vistos[f"{ruta.relative_to(_ROOT)}::{nombre}"] = ops
+    # `marcar_consulta_de_natalia_recordada` (L4) escribe SOLO `recordada_en`: su SET lo vigila
+    # `test_despertador_de_consultas.py::test_nada_de_L4_toca_el_estado_salvo_por_la_unica_funcion`.
     assert vistos == {"db/db.py::abrir_consulta_de_natalia": {"INSERT"},
-                      "db/db.py::pasar_consulta_de_natalia": {"UPDATE"}}
+                      "db/db.py::pasar_consulta_de_natalia": {"UPDATE"},
+                      "db/db.py::marcar_consulta_de_natalia_recordada": {"UPDATE"}}
 
 
 def test_G7_el_censo_ve_un_escritor_inventado():
@@ -1236,7 +1239,7 @@ def test_ni_abrir_ni_leer_ni_pasar_mandan_nada_a_telegram(natalia, monkeypatch):
 
 
 def test_el_tolerar_la_base_sin_migrar_es_de_la_tabla_nueva_y_nada_mas(natalia):
-    """El código viejo de la base no nombra la tabla: la única mención en SQL es de estas tres funciones y la
+    """El código viejo de la base no nombra la tabla: la única mención en SQL es de estas funciones y la
     migración."""
     menciones = set()
     for ruta in _py_del_repo():
@@ -1250,6 +1253,10 @@ def test_el_tolerar_la_base_sin_migrar_es_de_la_tabla_nueva_y_nada_mas(natalia):
                         menciones.add(f"{ruta.relative_to(_ROOT)}::{fn.name}")
     assert menciones == {"db/db.py::abrir_consulta_de_natalia", "db/db.py::pasar_consulta_de_natalia",
                          "db/db.py::consultas_de_natalia_de_cliente", "db/db.py::_consulta_por_clave",
+                         "db/db.py::marcar_consulta_de_natalia_recordada",
+                         "db/db.py::consultas_de_natalia_sin_tarjeta",
+                         "db/db.py::consultas_de_natalia_para_recordar",
+                         "db/db.py::consultas_de_natalia_de_fecha_vivas",
                          "tools/humo.py::_consultas_de_natalia_sin_tolerancia"}
 
 

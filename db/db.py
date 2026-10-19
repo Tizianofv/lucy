@@ -6257,6 +6257,125 @@ async def pasar_consulta_de_natalia(cur, consulta_id: int, de: str, a: str, *, t
     return (await cur.fetchone()) is not None
 
 
+# ── EL DESPERTADOR DE LAS CONSULTAS (pieza L4 del diseño «Natalia y los Proyectos», 18-oct-2026) ───────────
+#
+# Lo que el despertador (`cerebro/despertador.py::revisar_consultas_de_natalia`) necesita de la base: qué
+# consultas esperan su tarjeta, cuáles piden su recordatorio, cuáles son `nueva_fecha` vivas, y cómo se
+# cambia el estado SIN que nadie más lo escriba (`pasar_consulta_de_natalia_sola` solo abre la conexión y
+# llama a la única función que lo hace). Las lecturas traen lo que hace falta para escribir el texto de la
+# tarjeta (proyecto, cliente, tarea); ninguna sale de la casa: el texto va al Telegram del responsable.
+def _sin_tabla_de_consultas(e: Exception) -> Exception:
+    """Lo que hay que lanzar ante `e` al leer las consultas: `ConsultasSinTabla` si falta la migración (42P01), el
+    mismo error si es otra cosa (no se disfraza)."""
+    return ConsultasSinTabla("falta la migración de las consultas de Natalia") if _tabla_ausente(e) else e
+
+
+async def consultas_de_natalia_sin_tarjeta() -> list[dict]:
+    """Las consultas `abierta` (la tarjeta al responsable todavía no salió), de la más vieja a la más nueva."""
+    try:
+        async with pool.connection() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(
+                "SELECT c.id, c.tipo, c.estado, c.cliente_noco_id, c.proyecto_id, c.titulo, c.pedido, c.vence_en, "
+                "c.tarea_id, c.responsable_chat_id, c.tarjeta_msg_id, c.enviada_en, c.recordada_en, "
+                "p.nombre AS proyecto_nombre, p.cliente_nombre, "
+                "t.titulo AS tarea_titulo, t.estado AS tarea_estado, t.vence_en AS tarea_vence_en, "
+                "t.borrado_en AS tarea_borrada_en "
+                "FROM consultas_de_natalia c "
+                "LEFT JOIN proyectos p ON p.id = c.proyecto_id "
+                "LEFT JOIN tareas t ON t.id = c.tarea_id "
+                "WHERE c.estado = %s ORDER BY c.id",
+                (ESTADO_CONSULTA_ABIERTA,))
+            return [dict(f) for f in await cur.fetchall()]
+    except Exception as e:
+        raise _sin_tabla_de_consultas(e) from None
+
+
+async def consultas_de_natalia_para_recordar(enviada_antes_de: datetime) -> list[dict]:
+    """Las `preguntada` cuya tarjeta salió en `enviada_antes_de` o antes y a las que todavía no se les
+    recordó (`recordada_en` vacío). NO hay tope por arriba: una consulta nunca caduca (respuesta 2A de
+    Tiziano, DISENO.md §5.3)."""
+    try:
+        async with pool.connection() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(
+                "SELECT c.id, c.tipo, c.estado, c.cliente_noco_id, c.proyecto_id, c.titulo, c.pedido, c.vence_en, "
+                "c.tarea_id, c.responsable_chat_id, c.tarjeta_msg_id, c.enviada_en, c.recordada_en, "
+                "p.nombre AS proyecto_nombre, p.cliente_nombre, "
+                "t.titulo AS tarea_titulo, t.estado AS tarea_estado, t.vence_en AS tarea_vence_en, "
+                "t.borrado_en AS tarea_borrada_en "
+                "FROM consultas_de_natalia c "
+                "LEFT JOIN proyectos p ON p.id = c.proyecto_id "
+                "LEFT JOIN tareas t ON t.id = c.tarea_id "
+                "WHERE c.estado = %s AND c.recordada_en IS NULL "
+                "AND c.enviada_en IS NOT NULL AND c.enviada_en <= %s ORDER BY c.id",
+                (ESTADO_CONSULTA_PREGUNTADA, enviada_antes_de))
+            return [dict(f) for f in await cur.fetchall()]
+    except Exception as e:
+        raise _sin_tabla_de_consultas(e) from None
+
+
+async def consultas_de_natalia_de_fecha_vivas() -> list[dict]:
+    """Las `nueva_fecha` que siguen vivas (`abierta` o `preguntada`): las que el despertador vuelve a
+    mirar en cada vuelta para saber si la fecha ya se arregló."""
+    try:
+        async with pool.connection() as conn:
+            cur = conn.cursor(row_factory=dict_row)
+            await cur.execute(
+                "SELECT c.id, c.tipo, c.estado, c.cliente_noco_id, c.proyecto_id, c.titulo, c.pedido, c.vence_en, "
+                "c.tarea_id, c.responsable_chat_id, c.tarjeta_msg_id, c.enviada_en, c.recordada_en, "
+                "p.nombre AS proyecto_nombre, p.cliente_nombre, "
+                "t.titulo AS tarea_titulo, t.estado AS tarea_estado, t.vence_en AS tarea_vence_en, "
+                "t.borrado_en AS tarea_borrada_en "
+                "FROM consultas_de_natalia c "
+                "LEFT JOIN proyectos p ON p.id = c.proyecto_id "
+                "LEFT JOIN tareas t ON t.id = c.tarea_id "
+                "WHERE c.tipo = %s AND c.estado IN (%s, %s) ORDER BY c.id",
+                (TIPO_CONSULTA_NUEVA_FECHA, ESTADO_CONSULTA_ABIERTA, ESTADO_CONSULTA_PREGUNTADA))
+            return [dict(f) for f in await cur.fetchall()]
+    except Exception as e:
+        raise _sin_tabla_de_consultas(e) from None
+
+
+def consulta_de_fecha_sigue_viva(proxima: dict | None, tarea_id: int) -> bool:
+    """LA PUERTA ÚNICA de «¿esta `nueva_fecha` sigue pendiente?». `proxima` es la `proxima` de
+    `situacion_de_proyecto` (la de la página y la de `proyectos_de_cliente`) del proyecto de la consulta.
+    Sigue viva solo si la tarea de la consulta SIGUE siendo la que sigue y esa tarea SIGUE vencida, en el
+    sentido de `grupo_de_tarea` (por día de Santo Domingo, no por instante). Que la tarea se haya hecho, se
+    haya borrado, ya no sea la siguiente, tenga fecha de hoy o de mañana, o se haya quedado sin fecha, la
+    resuelve: no se mira QUIÉN movió la fecha ni por dónde."""
+    return proxima is not None and proxima["id"] == tarea_id and bool(proxima["vencida"])
+
+
+async def proxima_de_proyecto_de_cliente(noco_id: int, proyecto_id: int, hoy: date | None = None) -> dict | None:
+    """La `proxima` (la de `situacion_de_proyecto`) del proyecto `proyecto_id` DE ESA FICHA, o `None` (no
+    tiene ninguna, está cerrado, o ya no es de esa ficha o está en la papelera)."""
+    for m in await proyectos_de_cliente(noco_id, hoy):
+        if m["id"] == proyecto_id:
+            return m["proxima"]
+    return None
+
+
+async def marcar_consulta_de_natalia_recordada(consulta_id: int, cuando: datetime) -> bool:
+    """Deja `recordada_en = cuando` en una consulta `preguntada` que todavía no la tenía: el recordatorio sale
+    UNA vez. Devuelve si cambió. NO toca el estado (eso es solo de `pasar_consulta_de_natalia`)."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "UPDATE consultas_de_natalia SET recordada_en = %s "
+            "WHERE id = %s AND estado = %s AND recordada_en IS NULL RETURNING id",
+            (cuando, consulta_id, ESTADO_CONSULTA_PREGUNTADA))
+        return (await cur.fetchone()) is not None
+
+
+async def pasar_consulta_de_natalia_sola(consulta_id: int, de: str, a: str, **campos) -> bool:
+    """`pasar_consulta_de_natalia` en su propia conexión, para quien (el despertador) no tiene transacción
+    que compartir. No decide nada: los pares, el `WHERE estado = <el de antes>` y los campos son los de ella."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        return await pasar_consulta_de_natalia(cur, consulta_id, de, a, **campos)
+
+
 async def derivaciones() -> dict[int, int]:
     """`{hija_id: madre_id}` de las tareas VIVAS que salen de otra.
 
