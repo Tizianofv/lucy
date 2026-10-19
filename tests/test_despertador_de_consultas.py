@@ -674,27 +674,67 @@ def test_G4_el_recordatorio_de_una_resuelta_no_sale(mundo):
     assert [e for e in mundo.enviados if "Sigue pendiente" in e["text"]] == []
 
 
-def test_G4_la_tarjeta_de_la_nueva_fecha_dice_la_tarea_y_lleva_el_enlace_si_hay_panel(mundo):
+PANEL = "https://panel.ejemplo.invalido"
+
+
+def _token_de(texto):
+    """El token del enlace de entrada que lleva un texto (o `None`)."""
+    m = re.search(r"/entrar\?t=(\S+)", texto)
+    return m.group(1) if m else None
+
+
+def test_G4_la_tarjeta_de_la_nueva_fecha_lleva_el_enlace_de_entrada_del_responsable_y_aparte_la_tarea(mundo):
     con = mundo.poner_base()
-    config.PANEL_URL = "https://panel.ejemplo.invalido"
+    config.PANEL_URL = PANEL
     abrir_nueva_fecha()
     vuelta(mundo)
     e = mundo.enviados[0]
     assert "Grabar las voces" in e["text"] and "05/03" in e["text"] and "¿Nueva fecha estimada?" in e["text"]
-    boton = e["reply_markup"].inline_keyboard[0][0]
-    assert boton.url == "https://panel.ejemplo.invalido/proyectos?p=1&t=12#tarea-12"
+    assert "reply_markup" not in e
+    assert f"{PANEL}/proyectos?p=1&t=12#tarea-12" in e["text"]
+    token = _token_de(e["text"])
+    assert token is not None and auth.validar(token) == ANA == e["chat_id"]      # SU token, no el de otro
 
 
-def test_G4_sin_panel_https_la_tarjeta_va_sin_boton_y_la_de_tarea_nueva_espera_a_L5(mundo):
+def test_G4_el_token_es_del_responsable_aunque_sea_el_dueno(mundo):
     con = mundo.poner_base()
-    config.PANEL_URL = "http://localhost:8000"            # Telegram solo acepta https en un botón
-    abrir_nueva_fecha()
-    abrir_tarea_nueva()
-    config.PANEL_URL = "https://panel.ejemplo.invalido"
+    config.PANEL_URL = PANEL
+    sembrar(con, "abierta", tipo="nueva_fecha", clave="nf", tarea=12, resp=mundo.dueno)
     vuelta(mundo)
-    por_titulo = {("nueva_fecha" if "venció" in e["text"] else "tarea_nueva"): e for e in mundo.enviados}
-    assert "reply_markup" in por_titulo["nueva_fecha"]
-    assert "reply_markup" not in por_titulo["tarea_nueva"]  # los botones Sí/No son de la pieza L5
+    assert auth.validar(_token_de(mundo.enviados[0]["text"])) == mundo.dueno
+
+
+def test_G4_el_enlace_va_solo_en_la_tarjeta_al_responsable_sin_copia(mundo):
+    """Ni la copia a Rosi, ni el recordatorio, ni la constancia de la bandeja llevan el token."""
+    con = mundo.poner_base()
+    config.PANEL_URL = PANEL
+    config._NOMBRES_DE_COPIA = ("Rosi Inventada",)
+    sembrar(con, "abierta", tipo="nueva_fecha", clave="nf", tarea=12, resp=mundo.dueno)
+    vuelta(mundo)
+    assert [e["chat_id"] for e in mundo.enviados] == [mundo.dueno]
+    assert "/entrar?t=" in mundo.enviados[0]["text"]
+    vuelta(mundo, ahora=AHORA + timedelta(hours=1))                  # sale el recordatorio
+    assert len(mundo.enviados) == 2 and "Sigue pendiente" in mundo.enviados[1]["text"]
+    assert "/entrar" not in mundo.enviados[1]["text"] and mundo.a(ROSI) == []
+    for fila in con.execute("SELECT respuesta_lucy FROM bandeja"):
+        assert "/entrar" not in fila["respuesta_lucy"]
+
+
+def test_G4_sin_PANEL_URL_la_tarjeta_va_sin_enlaces(mundo):
+    """Como la herramienta «panel»: sin `config.PANEL_URL` no hay enlace. (La otra condición, `puede_entrar`, no se puede
+    probar aparte: quien no entra al panel tampoco pasa `puede_recibir_telegram`, y la tarjeta ni sale.)"""
+    con = mundo.poner_base()
+    abrir_nueva_fecha()
+    vuelta(mundo)                                                     # PANEL_URL vacío
+    assert "/entrar" not in mundo.enviados[0]["text"] and "/proyectos" not in mundo.enviados[0]["text"]
+
+
+def test_la_tarjeta_de_tarea_nueva_no_lleva_enlaces_espera_a_los_botones_de_L5(mundo):
+    con = mundo.poner_base()
+    config.PANEL_URL = PANEL
+    abrir_tarea_nueva()
+    vuelta(mundo)
+    assert "/entrar" not in mundo.enviados[0]["text"] and "reply_markup" not in mundo.enviados[0]
 
 
 # ═══════════════════════════════════════════════════════════════════════
