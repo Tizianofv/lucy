@@ -748,6 +748,14 @@ async def _avisar_choques(evento_id: int) -> str:
 # a Lucy que cree la tarea cuando el correo la pide claramente y que se lo diga.
 # Cerrarlas rompería lo que el reporte existe para hacer, y son
 # reversibles y VISIBLES — aparecen en el mensaje que él lee esa misma mañana.
+def _tipo_de_entrada(fila: dict) -> str:
+    """De dónde vino el turno, tal cual lo escribió quien lo guardó. Lo que falte
+    o venga vacío NO se toma por «texto» (un mensaje de una persona): queda como
+    '' y ninguna lista de canales lo reconoce, así que cae del lado estricto
+    (ni abre el registro de clientes ni deja correr `SOLO_A_MANO`)."""
+    return str(fila.get("tipo_entrada") or "")
+
+
 CANALES_DE_TIZIANO = ("texto", "audio", "foto")
 SOLO_A_MANO = ("archivar", "preferencia")
 
@@ -1546,7 +1554,7 @@ async def atender(fila: dict, texto: str, bot) -> None:
         # devuelve ERROR. Va el texto de la PERSONA (`texto`), nunca un argumento que
         # arme el modelo; y sin copia a nadie.
         if nombre == "consultar_crm" and crm.se_puede(
-                chat_id, str(fila.get("tipo_entrada") or "texto")):
+                chat_id, _tipo_de_entrada(fila)):
             await _fin_del_turno(
                 crm.FRASE_BUSCANDO, clasificacion="pregunta",
                 motivo="consultar_crm", copiar=False, consulta_crm=texto)
@@ -1577,7 +1585,7 @@ async def atender(fila: dict, texto: str, bot) -> None:
 
         # ── cualquier otra herramienta: ejecutar y seguir ────────────────
         resultado = await _ejecutar_herramienta(
-            nombre, args, bandeja_id, acciones, str(fila.get("tipo_entrada") or "texto"))
+            nombre, args, bandeja_id, acciones, _tipo_de_entrada(fila))
         pasos += 1
         log.info("#%s paso %s: %s -> %s",
                  bandeja_id, pasos, nombre, resultado[:120])

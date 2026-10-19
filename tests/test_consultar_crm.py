@@ -804,6 +804,37 @@ async def test_L16_un_turno_que_no_es_de_una_persona_con_texto_o_voz_no_llega_al
     assert modulo.pedidos == [], f"un turno '{tipo}' llegó al módulo"
 
 
+@pytest.mark.parametrize("tipo", ["", None, "inventado", "TEXTO", " texto"])
+async def test_L16_un_tipo_de_entrada_vacio_o_inventado_no_llega_al_modulo(
+        tipo, mundo, modulo, modelo, telegram_falso, bot):
+    """Lo no clasificado cae del lado estricto: un tipo vacío no se toma por «texto» de una persona."""
+    _casa(copia_a_rosi=False)
+    await _preguntar(mundo, bot, chat_id=DUENO, tipo=tipo)
+    assert modulo.pedidos == [], f"un turno con tipo {tipo!r} llegó al módulo"
+
+
+@pytest.mark.parametrize("tipo", ["", None, "inventado", "TEXTO", " texto"])
+async def test_un_tipo_de_entrada_vacio_o_inventado_no_deja_correr_lo_que_es_solo_de_tiziano(
+        tipo, mundo, modulo, modelo, telegram_falso, bot, monkeypatch):
+    """El otro sitio que lee el tipo del turno: `_ejecutar_herramienta` por el bucle de `atender`."""
+    _casa(copia_a_rosi=False)
+    tocadas = []
+
+    async def _no_debe_correr(*a, **k):
+        tocadas.append(a)
+        return None
+    monkeypatch.setattr(agente.crud, "borrar", _no_debe_correr, raising=False)
+    monkeypatch.setattr(agente.crud, "guardar_preferencia", _no_debe_correr, raising=False)
+    modelo.guion = lambda mensajes: (
+        {"herramienta": "responder", "argumentos": {"texto": "Listo.", "clasificacion": "charla"}}
+        if mensajes[-1]["content"].startswith("[resultado]")
+        else {"herramienta": "preferencia", "argumentos": {"texto": "x"}})
+    await _preguntar(mundo, bot, chat_id=DUENO, tipo=tipo)
+    assert tocadas == [], f"con tipo {tipo!r} corrió una herramienta solo de Tiziano"
+    assert any("turno automático" in m["content"] for p in modelo.pedidos for m in p), \
+        "el modelo no recibió el ERROR de turno automático"
+
+
 def test_L16_se_puede_lee_la_lista_de_ahora_y_no_la_de_cuando_se_importo():
     permitidos = config.CHAT_IDS_PERMITIDOS
     try:
