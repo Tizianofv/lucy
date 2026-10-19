@@ -967,13 +967,14 @@ def test_con_la_configuracion_bien_el_arranque_no_grita(puerta, caplog):
 
 
 def test_el_prefijo_que_excluye_el_aviso_sale_del_mismo_nombre_que_acepta_la_puerta(puerta):
-    """Una sola fuente: `config.QUIEN_DE_NATALIA`. Se cambia y las tres cosas
-    (lo que acepta la puerta, el prefijo guardado, lo que excluye el aviso) siguen."""
-    assert db.PREFIJO_ALERTAS_DE_NATALIA == f"{config.QUIEN_DE_NATALIA}:"
+    """Una sola fuente: `config.QUIENES_DE_ALERTAS_DE_FUERA`. De ahí salen lo que
+    acepta la puerta, el prefijo guardado y lo que excluye el aviso."""
+    assert config.PREFIJOS_DE_ALERTAS_DE_FUERA == tuple(
+        f"{q}:" for q in config.QUIENES_DE_ALERTAS_DE_FUERA)
     con = puerta()
     CLIENTE.post(RUTA, headers=_h(), json=_alerta(clave="z"))
     assert con.execute("SELECT clave_tecnica FROM tareas").fetchone()[0].startswith(
-        db.PREFIJO_ALERTAS_DE_NATALIA)
+        config.PREFIJOS_DE_ALERTAS_DE_FUERA)
 
 
 def test_lo_grave_solo_cuenta_entre_las_pendientes_en_la_pagina():
@@ -1072,3 +1073,104 @@ def test_el_arranque_del_modulo_no_grita_con_la_configuracion_bien(puerta, caplo
     with caplog.at_level(logging.ERROR):
         _arrancar_una_copia_del_modulo()
     assert not caplog.records
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# El módulo de consultas deja alertas con su propia clave (19-oct-2026)
+# ═══════════════════════════════════════════════════════════════════════
+
+CLAVE_MODULO = "clave-de-prueba-alertas-modulo-no-es-real"
+CLAVE_INVENTADA = "clave-de-prueba-alertas-inventada-no-es-real"
+
+
+def _con_quien(quien, permisos=frozenset({"alertas:crear"})):
+    config.CLAVES_API_CODE = {CLAVE_INVENTADA: quien, CLAVE_SALA: "sala_mac"}
+    config.PERMISOS_API_CODE = {quien: permisos, "sala_mac": PERMISOS_SALA}
+
+
+def test_el_modulo_de_consultas_crea_la_alerta_con_su_propio_prefijo(puerta):
+    con = puerta()
+    _con_quien(config.QUIEN_DEL_MODULO_DE_CONSULTAS)
+    r = CLIENTE.post(RUTA, headers=_h(CLAVE_INVENTADA), json=_alerta(clave="falla_x"))
+    assert r.status_code == 200, r.text
+    t = dict(con.execute("SELECT * FROM tareas").fetchone())
+    assert (t["clave_tecnica"], t["area"], t["responsable_chat_id"]) == (
+        f"{config.QUIEN_DEL_MODULO_DE_CONSULTAS}:falla_x", db.AREA_TECNICA, config.CHAT_ID_CODE)
+
+
+def test_las_claves_de_natalia_y_del_modulo_no_se_pisan_el_dedupe(puerta):
+    con = puerta()
+    config.CLAVES_API_CODE = {CLAVE_NATALIA: "natalia", CLAVE_MODULO: "modulo_consultas"}
+    config.PERMISOS_API_CODE = {"natalia": frozenset({"alertas:crear"}),
+                                "modulo_consultas": frozenset({"alertas:crear"})}
+    a = CLIENTE.post(RUTA, headers=_h(CLAVE_NATALIA), json=_alerta(clave="igual")).json()
+    b = CLIENTE.post(RUTA, headers=_h(CLAVE_MODULO), json=_alerta(clave="igual")).json()
+    assert (a["reusada"], b["reusada"]) == (False, False) and a["tarea_id"] != b["tarea_id"]
+    assert sorted(x[0] for x in con.execute("SELECT clave_tecnica FROM tareas")) == [
+        "modulo_consultas:igual", "natalia:igual"]
+
+
+def test_cada_quien_aceptado_recibe_el_mismo_trato_en_todos_los_sitios_que_leen_el_prefijo(puerta):
+    """HERMANOS, sacados de lo real: por cada `quien` de
+    `config.QUIENES_DE_ALERTAS_DE_FUERA` (1) la puerta lo acepta, (2) guarda el
+    prefijo de `config.PREFIJOS_DE_ALERTAS_DE_FUERA`, (3) el arranque no grita
+    por él y (4) el SQL real del aviso de 6 horas (el de producción, en SQLite)
+    no trae lo que la puerta guardó. Los sitios que leen el prefijo son esos
+    cuatro: `crear_alerta`, `tareas_tecnicas_atrasadas`,
+    `config.quienes_con_alertas_fuera_de_nombre` y su aviso de arranque."""
+    from test_code_alarmas import _corre_atrasadas_sqlite, _hace
+    assert len(config.QUIENES_DE_ALERTAS_DE_FUERA) >= 2
+    for quien, prefijo in zip(config.QUIENES_DE_ALERTAS_DE_FUERA,
+                              config.PREFIJOS_DE_ALERTAS_DE_FUERA):
+        con = puerta()
+        _con_quien(quien)
+        r = CLIENTE.post(RUTA, headers=_h(CLAVE_INVENTADA), json=_alerta(clave="k", grave=True))
+        assert r.status_code == 200, (quien, r.text)
+        guardada = con.execute("SELECT clave_tecnica FROM tareas").fetchone()[0]
+        assert guardada == f"{prefijo}k"
+        assert api_code.avisar_si_alertas_mal_nombradas() == [], quien
+        filas = [{"id": 1, "clave_tecnica": guardada, "creado_en": _hace(7)},
+                 {"id": 2, "clave_tecnica": "backup", "creado_en": _hace(7)}]
+        assert [f["id"] for f in _corre_atrasadas_sqlite(filas, marcas=[])] == [2], quien
+
+
+@pytest.mark.parametrize("quien", [
+    "modulo", "consultas", "natalia_prod", "Natalia", "NATALIA", "modulo_consultas2",
+    "xmodulo_consultas", "modulo_consultas ", "natalia:", "max", "a"])
+def test_una_clave_con_alertas_crear_de_un_quien_inventado_da_503_y_no_guarda(puerta, quien):
+    con = puerta()
+    _con_quien(quien)
+    r = CLIENTE.post(RUTA, headers=_h(CLAVE_INVENTADA), json=_alerta())
+    assert r.status_code == 503, (quien, r.status_code)
+    assert _n(con) == 0 and _n(con, "log_acciones") == 0
+    assert quien in api_code.avisar_si_alertas_mal_nombradas()
+
+
+def test_el_modulo_sin_alertas_crear_es_403_y_no_guarda(puerta):
+    con = puerta()
+    _con_quien(config.QUIEN_DEL_MODULO_DE_CONSULTAS, frozenset({"tareas:listar"}))
+    assert CLIENTE.post(RUTA, headers=_h(CLAVE_INVENTADA), json=_alerta()).status_code == 403
+    assert _n(con) == 0
+
+
+def test_el_modulo_con_solo_alertas_crear_es_403_en_todas_las_demas_rutas(puerta):
+    con = puerta()
+    _con_quien(config.QUIEN_DEL_MODULO_DE_CONSULTAS)
+    otras = [(m, p) for m, p, perm in api_code.rutas_registradas(panel.app) if perm != "alertas:crear"]
+    assert len(otras) >= 5
+    for metodo, path in otras:
+        api_code._pedidos_por_quien.clear()
+        r = CLIENTE.request(metodo, path.replace("{tid}", "1").replace("{noco_id}", "1"),
+                            headers=_h(CLAVE_INVENTADA),
+                            json={"texto": "x"} if metodo == "POST" else None)
+        assert r.status_code == 403, (metodo, path, r.status_code)
+    assert _n(con) == 0
+
+
+def test_el_nombre_del_modulo_no_choca_con_los_prefijos_de_las_alarmas_ni_entre_si():
+    pref = config.PREFIJOS_DE_ALERTAS_DE_FUERA
+    for q in config.QUIENES_DE_ALERTAS_DE_FUERA:
+        assert q and ":" not in q and "=" not in q and "+" not in q and "," not in q and ";" not in q
+    assert len(set(pref)) == len(pref)
+    assert not [(a, b) for a in pref for b in pref if a != b and a.startswith(b)]
+    assert not [p for p in pref if p.startswith(("backup", "latido_cosecha", "canario:"))]

@@ -311,7 +311,8 @@ async def comentar_tarea_de_code(
 # LA CLAVE LA PREFIJA LA AUTENTICACIÓN: lo que llega en `clave` se guarda como
 # `f"{quien}:{clave}"`. Así el dedupe de Natalia no puede pisar el de otro
 # llamador ni el de las alarmas de Lucy (`backup`, `latido_cosecha`,
-# `canario:...`, que nunca llevan `natalia:` delante).
+# `canario:...`, que nunca llevan delante un prefijo de
+# `config.PREFIJOS_DE_ALERTAS_DE_FUERA`).
 #
 # EL DETALLE PUEDE TRAER DATOS DE CLIENTES (nombres, teléfonos): queda en
 # `tareas.detalle`, en la base de Lucy, y lo ven quien entra al panel (Tiziano
@@ -365,17 +366,19 @@ async def crear_alerta(
       · Cualquier otro fallo es un 500: tampoco se guardó nada que se pueda
         asegurar. Natalia decide qué hace; esta ruta no avisa a nadie.
     """
-    if quien != config.QUIEN_DE_NATALIA:
-        # La exclusión del aviso por Telegram se lee del prefijo `natalia:`;
-        # una clave con `alertas:crear` que se llame de otra forma guardaría
-        # otro prefijo y volvería a disparar el aviso. No se guarda nada.
+    if quien not in config.QUIENES_DE_ALERTAS_DE_FUERA:
+        # La exclusión del aviso por Telegram se lee del prefijo `<quien>:`
+        # (`config.PREFIJOS_DE_ALERTAS_DE_FUERA`); una clave con `alertas:crear`
+        # que se llame de otra forma guardaría otro prefijo y volvería a
+        # disparar el aviso. No se guarda nada.
         log.error("puerta de Code: %s tiene alertas:crear pero la puerta de "
-                  "alertas solo acepta a %r", quien, config.QUIEN_DE_NATALIA)
+                  "alertas solo acepta a %r", quien,
+                  config.QUIENES_DE_ALERTAS_DE_FUERA)
         raise HTTPException(
             status_code=503,
             detail="no se guardó: la clave con alertas:crear no se llama "
-                   f"{config.QUIEN_DE_NATALIA!r} en la configuración de Lucy. "
-                   "Avisale a la sala/Tiziano.")
+                   f"{' ni '.join(map(repr, config.QUIENES_DE_ALERTAS_DE_FUERA))} "
+                   "en la configuración de Lucy. Avisale a la sala/Tiziano.")
     for crudo in (cuerpo.clave, cuerpo.titulo, cuerpo.detalle):
         if "\x00" in crudo:
             raise HTTPException(status_code=422,
@@ -627,13 +630,13 @@ async def leer_consultas(
 
 def avisar_si_alertas_mal_nombradas() -> list[str]:
     """Al arrancar: si la configuración trae un `quien` con `alertas:crear` que no
-    se llama `config.QUIEN_DE_NATALIA`, lo dice en voz alta (log de error) y
-    devuelve cuáles son. La ruta además se niega a atenderlos (503)."""
+    está en `config.QUIENES_DE_ALERTAS_DE_FUERA`, lo dice en voz alta (log de
+    error) y devuelve cuáles son. La ruta además se niega a atenderlos (503)."""
     mal = config.quienes_con_alertas_fuera_de_nombre()
     if mal:
         log.error("CONFIGURACIÓN DE LA PUERTA DE CODE: %s tiene alertas:crear y "
-                  "no se llama %r: la puerta de alertas no los atiende",
-                  ", ".join(mal), config.QUIEN_DE_NATALIA)
+                  "no es ninguno de %r: la puerta de alertas no los atiende",
+                  ", ".join(mal), config.QUIENES_DE_ALERTAS_DE_FUERA)
     return mal
 
 

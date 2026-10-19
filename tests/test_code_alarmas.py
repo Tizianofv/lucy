@@ -890,7 +890,7 @@ def test_revisar_alertas_tecnicas_no_avisa_dos_veces_por_la_misma_tarea():
 
 
 def test_la_consulta_de_atrasadas_excluye_tomadas_y_marcadas():
-    fuente = inspect.getsource(db.tareas_tecnicas_atrasadas)
+    fuente = _extraer_sql_atrasadas()
     assert "tomada_en IS NULL" in fuente
     assert "NOT EXISTS" in fuente
     assert "aviso_atraso_code" in fuente
@@ -905,16 +905,9 @@ def test_la_consulta_de_atrasadas_excluye_tomadas_y_marcadas():
 # ═══════════════════════════════════════════════════════════════════════
 
 def _extraer_sql_atrasadas() -> str:
-    arbol = ast.parse(
-        textwrap.dedent(inspect.getsource(db.tareas_tecnicas_atrasadas)))
-    for nodo in ast.walk(arbol):
-        if (isinstance(nodo, ast.Assign) and len(nodo.targets) == 1
-                and isinstance(nodo.targets[0], ast.Name)
-                and nodo.targets[0].id == "consulta"
-                and isinstance(nodo.value, ast.Constant)
-                and isinstance(nodo.value.value, str)):
-            return nodo.value.value
-    raise AssertionError("no encontré 'consulta' en tareas_tecnicas_atrasadas")
+    """El texto del SELECT tal como lo arma producción (`db._consulta_de_atrasadas`,
+    la función que usa `tareas_tecnicas_atrasadas`)."""
+    return db._consulta_de_atrasadas(6)[0]
 
 
 def _corre_atrasadas_sqlite(filas: list[dict], marcas: list[int], umbral_horas: int = 6):
@@ -945,14 +938,13 @@ def _corre_atrasadas_sqlite(filas: list[dict], marcas: list[int], umbral_horas: 
     # => %s)` -> `datetime('now', '-' || ? || ' hours')` (mismo umbral, misma
     # posición del parámetro) y el resto de `%s` -> `?`. El resto del texto
     # -- el WHERE, el NOT EXISTS -- es EL MISMO que ejecuta producción.
-    sql = _extraer_sql_atrasadas()
+    sql, parametros = db._consulta_de_atrasadas(umbral_horas)
     assert "now() - make_interval(hours => %s)" in sql
     sql = sql.replace(
         "now() - make_interval(hours => %s)",
         "datetime('now', '-' || ? || ' hours')")
     sql = sql.replace("%s", "?")
-    cur = conn.execute(sql, (db.ESTADO_PENDIENTE, len(db.PREFIJO_ALERTAS_DE_NATALIA),
-                             db.PREFIJO_ALERTAS_DE_NATALIA, umbral_horas))
+    cur = conn.execute(sql, parametros)
     salida = [dict(r) for r in cur.fetchall()]
     conn.close()
     return salida
@@ -1162,7 +1154,8 @@ def _pool_sqlite_de_atrasadas(filas):
 
 def test_el_aviso_de_6_horas_corre_entero_sin_avisar_las_de_natalia_y_si_las_de_lucy():
     claves = ["backup", "latido_cosecha", "canario:algunbanco:sin_ruta",
-              "natalia:whatsapp_caido", "natalia:nocodb", "natalia:x:y"]
+              "natalia:whatsapp_caido", "natalia:nocodb", "natalia:x:y",
+              f"{config.QUIEN_DEL_MODULO_DE_CONSULTAS}:falla"]
     filas = [{"id": i + 1, "clave_tecnica": c} for i, c in enumerate(claves)]
     guardado, g_aviso = db.pool, db.registrar_aviso
 
@@ -1179,7 +1172,7 @@ def test_el_aviso_de_6_horas_corre_entero_sin_avisar_las_de_natalia_y_si_las_de_
     avisadas = " ".join(bot.mensajes)
     for c in claves[:3]:
         assert f"«{c}»" in avisadas
-    assert "natalia:" not in avisadas
+    assert not [p for p in config.PREFIJOS_DE_ALERTAS_DE_FUERA if p in avisadas]
 
 
 def test_el_sql_real_de_atrasadas_deja_fuera_toda_clave_que_empieza_por_natalia():
@@ -1192,13 +1185,41 @@ def test_el_sql_real_de_atrasadas_deja_fuera_toda_clave_que_empieza_por_natalia(
     assert sorted(f["id"] for f in filas) == [3, 4, 5]
 
 
+def test_el_sql_real_de_atrasadas_deja_fuera_a_TODO_quien_de_alertas_de_fuera():
+    """Los hermanos salen de lo real (`config.QUIENES_DE_ALERTAS_DE_FUERA`): cada
+    uno recibe el mismo trato que Natalia, y una clave de un quien que NO está en
+    la lista (o que solo se le parece) sigue avisándose."""
+    quienes = list(config.QUIENES_DE_ALERTAS_DE_FUERA)
+    assert config.QUIEN_DEL_MODULO_DE_CONSULTAS in quienes and config.QUIEN_DE_NATALIA in quienes
+    filas, esperadas, i = [], [], 0
+    for q in quienes:
+        for clave in (f"{q}:a", f"{q}:", f"{q}:x:y"):
+            i += 1
+            filas.append({"id": i, "clave_tecnica": clave, "creado_en": _hace(7)})
+    for clave in ("backup", "otro_sistema:a", f"x{quienes[-1]}:a", f"{quienes[-1].upper()}:a"):
+        i += 1
+        filas.append({"id": i, "clave_tecnica": clave, "creado_en": _hace(7)})
+        esperadas.append(i)
+    salida = _corre_atrasadas_sqlite(filas, marcas=[])
+    assert sorted(f["id"] for f in salida) == esperadas, salida
+
+
+def test_la_consulta_de_atrasadas_lleva_un_renglon_de_exclusion_por_cada_prefijo():
+    sql, parametros = db._consulta_de_atrasadas(6)
+    n = len(config.PREFIJOS_DE_ALERTAS_DE_FUERA)
+    assert sql.count("substr(t.clave_tecnica, 1, %s) <> %s") == n
+    assert sql.count("%s") == len(parametros) == 1 + 2 * n + 1
+    for p in config.PREFIJOS_DE_ALERTAS_DE_FUERA:
+        assert (len(p), p) == tuple(parametros[1 + 2 * config.PREFIJOS_DE_ALERTAS_DE_FUERA.index(p):][:2])
+
+
 def test_el_prefijo_lo_escribe_la_autenticacion_y_es_el_de_la_constante():
     """De dónde vino la alerta es el dato escrito: `clave_tecnica` de la
     puerta HTTP = `f"{quien}:{clave}"`, con `quien` salido de la clave Bearer
     (`config.CLAVES_API_CODE`), nunca del cuerpo."""
     fuente = inspect.getsource(api_code_modulo().crear_alerta)
     assert 'f"{quien}:{clave}"' in fuente
-    assert db.PREFIJO_ALERTAS_DE_NATALIA == "natalia:"
+    assert config.PREFIJOS_DE_ALERTAS_DE_FUERA == ("natalia:", "modulo_consultas:")
 
 
 def api_code_modulo():
@@ -1239,4 +1260,4 @@ def test_ninguna_alarma_de_lucy_escribe_una_clave_que_empiece_por_el_prefijo_de_
                 opacas.append(f"{py.relative_to(raiz)}:{n.lineno}")
     assert len(vistas) >= 5, vistas      # el respaldo, el latido y las 3 señales del canario
     assert not opacas, opacas
-    assert not [v for v in vistas if v.startswith(db.PREFIJO_ALERTAS_DE_NATALIA)], vistas
+    assert not [v for v in vistas if v.startswith(config.PREFIJOS_DE_ALERTAS_DE_FUERA)], vistas
