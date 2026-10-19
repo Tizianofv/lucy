@@ -538,6 +538,10 @@ LO_QUE_APUNTA_A_UN_PROYECTO = {
     # Drive de las cotizaciones (16-oct-2026, pieza 8): las carpetas de Drive del proyecto, por id. Borrar el
     # proyecto no las toca (ni toca nada en Drive): siguen con su `proyecto_id` y vuelven con él.
     "drive_de_proyectos": "no se tocan: siguen nombrando al proyecto en la papelera, no se pierde nada",
+    # Las consultas de Natalia (18-oct-2026, pieza L3): igual. Borrar el proyecto no las toca (la llave no lleva
+    # `ON DELETE`): siguen con su `proyecto_id`. Una consulta viva de un proyecto que se archivó la resuelve o la
+    # deja `no_se_pudo` la pieza L5 (el escritor de la tarea rechaza un proyecto en la papelera).
+    "consultas_de_natalia": "no se tocan: siguen nombrando al proyecto en la papelera, no se pierde nada",
 }
 LO_QUE_APUNTA_A_UN_GRUPO = {
     "proyectos": "su `area` pasa a NULL (lo vivo, antes, se borra)",

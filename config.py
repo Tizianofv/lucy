@@ -305,7 +305,10 @@ def opciones_de_responsable() -> tuple[tuple[str, str], ...]:
 # `natalia=alertas:crear`. Desde el 18-oct-2026 también existe
 # `proyectos:leer_de_cliente` (`GET /api/code/clientes/{noco_id}/proyectos`):
 # para que Natalia lo use, la sala lo suma así:
-# `natalia=alertas:crear+proyectos:leer_de_cliente`.
+# `natalia=alertas:crear+proyectos:leer_de_cliente`. Y desde la pieza L3 (18-oct-2026)
+# las consultas al responsable: `consultas:abrir` (`POST /api/code/clientes/{noco_id}/consultas`)
+# y `consultas:leer` (`GET /api/code/clientes/{noco_id}/consultas?ids=…`); con los dos:
+# `natalia=alertas:crear+proyectos:leer_de_cliente+consultas:abrir+consultas:leer`.
 #
 # CERRADO POR DEFECTO, en dos niveles independientes:
 #   · Si `CLAVES_API_CODE` no está puesta (o no tiene ninguna pieza legible),
