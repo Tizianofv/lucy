@@ -71,6 +71,15 @@ REGISTRO_URL = os.environ.get("REGISTRO_URL", "").strip().rstrip("/")
 # nada al registro y la página lo dice.
 LUCY_LLAVE_SERVICIO = os.environ.get("LUCY_LLAVE_SERVICIO", "").strip()
 
+# El módulo que contesta lo que el equipo pregunta sobre el registro de clientes
+# (pieza L-1, herramienta `consultar_crm`; `cerebro/crm.py`). La dirección es la
+# pública del servicio, sin barra al final; la llave viaja solo en una cabecera,
+# nunca en la dirección ni en un mensaje, y no se imprime en ningún registro.
+# Las pone la sala en Railway. Vacías = Lucy no le pregunta nada al módulo y
+# contesta con la frase fija de «no me contestó».
+CRM_MODULO_URL = os.environ.get("CRM_MODULO_URL", "").strip().rstrip("/")
+CRM_MODULO_LLAVE = os.environ.get("CRM_MODULO_LLAVE", "").strip()
+
 # Candado de seguridad (pilar): Lucy SOLO le responde a este chat.
 # Cualquier otro que le escriba es ignorado sin más.
 CHAT_ID_DUENO = int(os.environ["CHAT_ID_DUENO"])
