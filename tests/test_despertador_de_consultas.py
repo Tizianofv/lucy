@@ -763,9 +763,9 @@ _ESCRIBE_TAREAS = re.compile(r"\bUPDATE\s+(tareas|\{\})(?:\s+(?!SET\b)\w+)?\s+SE
 def _escritores_de_fechas(arbol) -> set[str]:
     """Funciones con un `UPDATE tareas SET …` que nombra `vence_en`, y funciones con un `UPDATE {tabla} SET …` GENÉRICO
     (la tabla interpolada, como `crud.editar`/`deshacer`/`borrar` y `despertador.revisar`): estas últimas pueden mover una
-    fecha sin nombrarla. Las otras (`UPDATE tareas` que no nombran `vence_en`) no la escriben. LO QUE VE: un texto
-    literal o f-string (con la tabla literal o interpolada, con o sin alias). FRONTERA: un SQL armado concatenando
-    con `+` o en trozos sueltos no se ve."""
+    fecha sin nombrarla. Las otras (`UPDATE tareas` que no nombran `vence_en`) no la escriben. LO QUE VE, exactamente:
+    `UPDATE <tareas o {…}> [alias sin AS] SET`, en un texto literal o f-string. FRONTERA (no lo ve): `AS`, `ONLY`, el
+    nombre entre comillas, el esquema delante (`public.`) y el SQL concatenado con `+` o en trozos."""
     salida = set()
     for fn in ast.walk(arbol):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -810,8 +810,14 @@ def test_G4_el_barrido_ve_un_escritor_inventado():
         "async def mueve(c):\n    await c.execute('UPDATE tareas SET vence_en = %s WHERE id = %s')\n"
         "async def generico(c, t):\n    await c.execute(f'UPDATE {t} SET {a} WHERE id = %s')\n"
         "async def con_alias(c, t):\n    await c.execute(f'UPDATE {t} x SET {a} WHERE id = %s')\n"
+        "async def con_as(c):\n    await c.execute('UPDATE tareas AS t SET vence_en = %s')\n"
+        "async def con_only(c):\n    await c.execute('UPDATE ONLY tareas SET vence_en = %s')\n"
+        "async def entre_comillas(c):\n    await c.execute('UPDATE \"tareas\" SET vence_en = %s')\n"
+        "async def con_esquema(c):\n    await c.execute('UPDATE public.tareas SET vence_en = %s')\n"
+        "async def generico_con_as(c, t):\n    await c.execute(f'UPDATE {t} AS x SET {a}')\n"
+        "async def concatenado(c):\n    await c.execute('UPDATE tareas ' + 'SET vence_en = %s')\n"
         "async def no_la_toca(c):\n    await c.execute('UPDATE tareas SET titulo = %s WHERE id = %s')\n")
-    assert _escritores_de_fechas(falso) == {"mueve", "generico", "con_alias"}
+    assert _escritores_de_fechas(falso) == {"mueve", "generico", "con_alias"}   # y NO ve las de la frontera (con_as, con_only, entre_comillas, con_esquema, generico_con_as, concatenado)
 
 
 def test_G4_la_decision_no_mira_quien_escribe_solo_lo_que_la_base_dice_ahora():
