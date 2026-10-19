@@ -499,7 +499,12 @@ def _funciones_que_escriben_cliente(arbol) -> set[str]:
         for n in ast.walk(fn):
             if (isinstance(n, ast.Constant) and isinstance(n.value, str)
                     and re.search(r"\b(UPDATE|INSERT)\b", n.value, re.I)
-                    and re.search(r"cliente_(noco_id|nombre)", n.value)):
+                    and re.search(r"cliente_(noco_id|nombre)", n.value)
+                    # Se mira LO QUE SE ESCRIBE, no quién lo escribe: un SQL cuya tabla destino es
+                    # `consultas_de_natalia` guarda la ficha de SU consulta (pieza L3), no el cliente de un
+                    # proyecto. Es por cada texto de SQL: la misma función con OTRO texto que escriba
+                    # `proyectos` (u otra tabla) sigue saliendo.
+                    and not re.search(r"\b(INSERT\s+INTO|UPDATE)\s+consultas_de_natalia\b", n.value, re.I)):
                 hallados.add(fn.name)
     return hallados
 
@@ -525,10 +530,7 @@ def test_G6_los_unicos_escritores_del_cliente_son_las_tres_puertas():
     """Desde la pieza 1 de «Un proyecto no se crea sin cliente» (18-oct-2026) el cliente nace con el proyecto: lo
     escriben `crear_proyecto` y `convertir_tarea_en_proyecto` en su INSERT, y `poner_cliente` en el UPDATE de un
     proyecto que existe. Un cuarto escritor se pone rojo acá."""
-    # `abrir_consulta_de_natalia` (18-oct-2026, pieza L3) escribe la columna `cliente_noco_id` de OTRA tabla,
-    # `consultas_de_natalia` (la ficha del cliente de la consulta), no la del proyecto: se declara aparte para que
-    # la guarda siga viendo cualquier cuarto escritor del cliente de un PROYECTO.
-    assert _escritores_de_cliente() - {"abrir_consulta_de_natalia"} == {
+    assert _escritores_de_cliente() == {
         "poner_cliente", "crear_proyecto", "convertir_tarea_en_proyecto"}
 
 
@@ -543,6 +545,21 @@ def test_G6_el_censo_ve_un_escritor_inventado():
         "async def lector(c):\n"
         "    await c.execute('SELECT cliente_nombre FROM proyectos')\n")
     assert _funciones_que_escriben_cliente(falso) == {"otro", "y_otro_mas"}
+
+
+def test_G6_la_tabla_de_consultas_queda_libre_pero_solo_por_lo_que_escribe():
+    """`consultas_de_natalia` tiene su propia `cliente_noco_id` y no cuenta; pero una función que además escribe el
+    cliente de un proyecto (o de cualquier otra tabla) sale, se llame como se llame."""
+    falso = ast.parse(
+        "async def solo_consultas(c):\n"
+        "    await c.execute('INSERT INTO consultas_de_natalia (clave, cliente_noco_id) VALUES (1, 2)')\n"
+        "    await c.execute('UPDATE consultas_de_natalia SET cliente_noco_id = 3')\n"
+        "async def abrir_consulta_de_natalia(c):\n"
+        "    await c.execute('INSERT INTO consultas_de_natalia (clave, cliente_noco_id) VALUES (1, 2)')\n"
+        "    await c.execute('UPDATE proyectos SET cliente_noco_id = 9 WHERE id = 1')\n"
+        "async def otra_tabla(c):\n"
+        "    await c.execute('UPDATE cotizaciones SET cliente_nombre = 1')\n")
+    assert _funciones_que_escriben_cliente(falso) == {"abrir_consulta_de_natalia", "otra_tabla"}
 
 
 # ═══════════════════════════════════════════════════════════════════════
