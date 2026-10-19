@@ -167,6 +167,12 @@ def modulo(monkeypatch):
 # La base de prueba: sqlite que ejecuta el SQL del repo, con TODAS las tablas del esquema
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Cuántas veces cede el turno una sentencia antes de contestar. Una ida y vuelta a Postgres cuesta
+# más que una llamada al módulo doblado en memoria: con 200 pasadas la base es MÁS LENTA que el
+# módulo, que es el horario donde una tarea lanzada antes de tiempo pisaría lo que el turno guarda.
+_PASADAS_DE_LA_BASE = 200
+
+
 def _sql_para_sqlite(sql: str) -> str:
     s = str(sql).replace("%s", "?")
     s = re.sub(r"(\w+)\s*=\s*ANY\(\?\)", r"\1 IN (SELECT value FROM json_each(?))", s)
@@ -185,7 +191,8 @@ class _Cur:
         # Con Postgres de verdad cada sentencia espera la red, y en esa espera corre cualquier otra
         # tarea. sqlite contesta sin soltar el turno, así que se suelta a propósito: sin esto una
         # tarea lanzada antes de tiempo nunca se cruzaría con las escrituras del turno.
-        await asyncio.sleep(0)
+        for _ in range(_PASADAS_DE_LA_BASE):
+            await asyncio.sleep(0)
         self._cur = self._con.execute(_sql_para_sqlite(sql),
                                       tuple(_param(v) for v in (params or ())))
         return self
