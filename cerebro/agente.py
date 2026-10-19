@@ -38,6 +38,7 @@ import acciones.crud as crud
 import captura.correo as correo
 import cerebro.consultar as consultar
 import cerebro.copia_dueno as copia_dueno
+import cerebro.crm as crm
 import cerebro.deepseek as motor
 import cerebro.memoria as memoria
 import cerebro.viaje as viaje
@@ -413,6 +414,19 @@ HERRAMIENTAS DISPONIBLES:
 · deshacer  {"accion": N}
   Revierte una acción del log. El resultado de crear/editar te da el número.
 
+· consultar_crm  {}
+  El REGISTRO DE CLIENTES del estudio: la ficha de un cliente (su teléfono,
+  cómo se llama), sus sesiones y sus códigos, lo que pagó o lo que debe, el
+  inventario y sus costos. Cuando lo que pregunta la persona sea de eso, usá
+  esta herramienta y NO mandes argumentos: la pregunta viaja sola, tal como la
+  escribió. Los proyectos y las tareas del equipo NO son de ahí: son tuyos y
+  los mirás con consultar.
+  La respuesta le llega a la persona directo al chat, sin pasar por vos: no
+  la ves, así que no la repitas, no la comentes ni la adivines. Esta
+  herramienta TERMINA tu turno, igual que responder: no la acompañes de nada
+  más. Solo sirve cuando una persona te pregunta por texto o por voz (no con un
+  correo, una foto ni un mensaje [sistema]); si no, devuelve ERROR.
+
 · preguntar  {"texto": "..."}
   TU VENTANA. Le mandás eso a Tiziano por Telegram y la conversación queda
   abierta esperando su respuesta; cuando conteste, seguís con todo el
@@ -547,7 +561,7 @@ estructura visual es importante". Un muro de texto no se lee, se saltea.
   más cerca?", eso lo seguís contestando con viaje y buscar_lugar, con el
   tráfico real — lo que se murió es que hables vos primero, no tu capacidad de
   responder.
-· Terminá SIEMPRE con preguntar o con responder.\
+· Terminá SIEMPRE con preguntar, con responder o con consultar_crm.\
 """
 
 
@@ -734,6 +748,14 @@ async def _avisar_choques(evento_id: int) -> str:
 # a Lucy que cree la tarea cuando el correo la pide claramente y que se lo diga.
 # Cerrarlas rompería lo que el reporte existe para hacer, y son
 # reversibles y VISIBLES — aparecen en el mensaje que él lee esa misma mañana.
+def _tipo_de_entrada(fila: dict) -> str:
+    """De dónde vino el turno, tal cual lo escribió quien lo guardó. Lo que falte
+    o venga vacío NO se toma por «texto» (un mensaje de una persona): queda como
+    '' y ninguna lista de canales lo reconoce, así que cae del lado estricto
+    (ni abre el registro de clientes ni deja correr `SOLO_A_MANO`)."""
+    return str(fila.get("tipo_entrada") or "")
+
+
 CANALES_DE_TIZIANO = ("texto", "audio", "foto")
 SOLO_A_MANO = ("archivar", "preferencia")
 
@@ -945,7 +967,7 @@ def _parte_de_lo_hecho(acciones: list[dict]) -> str:
 HERRAMIENTAS_QUE_HAY = (
     "consultar", "crear", "buscar_cliente", "crear_proyecto", "editar", "archivar", "pasos",
     "deshacer", "perfil", "preferencia", "correo", "lugar", "buscar_lugar",
-    "viaje", "panel", "recordar", "preguntar", "responder")
+    "viaje", "panel", "recordar", "preguntar", "responder", "consultar_crm")
 
 
 async def _ejecutar_herramienta(
@@ -1251,6 +1273,14 @@ async def _ejecutar_herramienta(
                 resumen.append(fila)
             return json.dumps(resumen, ensure_ascii=False)
 
+        if nombre == "consultar_crm":
+            # `atender` la atiende cuando el turno es de una persona de la casa por texto o
+            # voz y termina el turno ahí (`crm.se_puede`). Si llegó hasta acá es porque NO
+            # se pudo: se lo dice al modelo como ERROR, igual que `SOLO_A_MANO`.
+            return ("ERROR: no puedo consultar el registro de clientes en este turno: solo "
+                    "contesto eso cuando una persona de la casa lo pregunta por texto o por "
+                    "voz. Si hace falta, díselo a Tiziano y que te lo pida él.")
+
         if nombre == "recordar":
             filas = await memoria.buscar(
                 str(args.get("texto") or ""),
@@ -1369,6 +1399,7 @@ async def atender(fila: dict, texto: str, bot) -> None:
         estado: str = "procesado",
         motivo: str = "panel",
         copiar: bool = True,
+        consulta_crm: str | None = None,
     ) -> None:
         """LA ÚNICA SALIDA DEL TURNO. Manda, reporta lo escrito y cierra la fila.
 
@@ -1396,6 +1427,13 @@ async def atender(fila: dict, texto: str, bot) -> None:
         (`cerebro/copia_dueno.py`): la usa la herramienta "panel", porque el
         enlace que se manda entra en el panel COMO el dueño — copiarlo sería
         mandarle a otra persona una llave a nombre de Tiziano.
+
+        `consulta_crm` es la pregunta de la persona, tal como la escribió: solo la usa la
+        herramienta `consultar_crm`. Con ella, lo que se manda y se guarda aquí es la
+        frase de «buscando», y al FINAL (después de cerrar la fila, para que la marca
+        que deja la tarea no la pise este guardado) arranca la consulta en una tarea
+        aparte (`cerebro/crm.py::lanzar`). La respuesta no pasa por esta función: sale
+        de esa tarea directo al chat, y en la base solo queda la marca.
         """
         parte = _parte_de_lo_hecho(acciones)
         texto_final = f"{salida}\n\n{parte}".strip() if parte else salida
@@ -1406,7 +1444,8 @@ async def atender(fila: dict, texto: str, bot) -> None:
         else:
             with copia_dueno.sin_copiar():
                 await _enviar(bot, texto_final, reply_markup=markup, **responder_kw)
-        await db.guardar_respuesta(bandeja_id, texto_final)
+        await db.guardar_respuesta(
+            bandeja_id, texto_final if consulta_crm is None else crm.MARCA_CONSULTANDO)
         await db.guardar_interpretacion(
             bandeja_id, clasificacion,
             {"dialogo": dialogo[-30:],
@@ -1415,6 +1454,9 @@ async def atender(fila: dict, texto: str, bot) -> None:
         await _cerrar_pendiente()
         log.info("#%s resuelto en %s paso(s), %s acción(es) (%s)",
                  bandeja_id, pasos, len(acciones), motivo)
+        if consulta_crm is not None:
+            crm.lanzar(lambda t, **kw: _enviar(bot, t, **kw),
+                       chat_id, consulta_crm, bandeja_id)
 
     log.info("#%s atender: contexto listo, arranco los pasos", bandeja_id)
     while pasos < MAX_PASOS and tropiezos < MAX_TROPIEZOS:
@@ -1506,6 +1548,18 @@ async def atender(fila: dict, texto: str, bot) -> None:
                 copiar=False)
             return
 
+        # CONSULTAR_CRM: la pregunta va al módulo del registro de clientes y la respuesta
+        # llega al chat sin pasar por acá (`cerebro/crm.py`). Como `panel`, termina el
+        # turno; si el turno no puede preguntarle al registro cae al despachador, que
+        # devuelve ERROR. Va el texto de la PERSONA (`texto`), nunca un argumento que
+        # arme el modelo; y sin copia a nadie.
+        if nombre == "consultar_crm" and crm.se_puede(
+                chat_id, _tipo_de_entrada(fila)):
+            await _fin_del_turno(
+                crm.FRASE_BUSCANDO, clasificacion="pregunta",
+                motivo="consultar_crm", copiar=False, consulta_crm=texto)
+            return
+
         if nombre == "responder":
             await _fin_del_turno(
                 str(args.get("texto") or ""),
@@ -1531,7 +1585,7 @@ async def atender(fila: dict, texto: str, bot) -> None:
 
         # ── cualquier otra herramienta: ejecutar y seguir ────────────────
         resultado = await _ejecutar_herramienta(
-            nombre, args, bandeja_id, acciones, str(fila.get("tipo_entrada") or "texto"))
+            nombre, args, bandeja_id, acciones, _tipo_de_entrada(fila))
         pasos += 1
         log.info("#%s paso %s: %s -> %s",
                  bandeja_id, pasos, nombre, resultado[:120])

@@ -4252,13 +4252,13 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # EXENTO por `tests/test_botones_de_consultas.py` (nuevo, exento por rol); VIGILADOS sin cambio (se tocaron
     # `acciones/botones.py`, `cerebro/despertador.py`, `db/db.py` y `db/lectura_dueno.py`, ya vigilados). Medida corriendo la
     # prueba: 201, 146, 55.
-    # 19-oct-2026, rama `trabajo/marca-natalia` (la marca de Natalia en Proyectos), sobre `42eb0da`: +2 en disco, +1 EXENTO por
-    # `tests/test_marca_natalia.py` (nuevo, exento por rol) y +1 VIGILADO por `web/marca_natalia.py` (nuevo: el icono y la
-    # lista de qué lee Natalia, sin SQL). Medida corriendo la prueba: 203, 147, 56.
-    assert medido == {"en disco": 203, "exentos": 147, "vigilados": 56}, (
+    # 19-oct-2026, `trabajo/marca-natalia` (+1 EXENTO `tests/test_marca_natalia.py`, +1 VIGILADO `web/marca_natalia.py`) y
+    # `trabajo/crm-l1` (+1 EXENTO `tests/test_consultar_crm.py`, +1 VIGILADO `cerebro/crm.py`, que no lee la lista cruda de
+    # buzones de `config`), juntadas en `main`: +4 en disco sobre `42eb0da`. Medida corriendo la prueba: 205, 148, 57.
+    assert medido == {"en disco": 205, "exentos": 148, "vigilados": 57}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "19-oct-2026 (marca-natalia) era {'en disco': 203, "
-        "'exentos': 147, 'vigilados': 56}. La aserción de fondo —cero "
+        "19-oct-2026 (marca-natalia + crm-l1) era {'en disco': 205, "
+        "'exentos': 148, 'vigilados': 57}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

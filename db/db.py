@@ -37,7 +37,7 @@ import db.sin_preparadas  # noqa: F401
 # puede quedar con una tarea pendiente, y tiene que ser la misma para la ruta
 # del panel y para la escritura de acá. Dos copias del criterio se separan.
 import config as _config
-from config import (CHAT_ID_CODE, CHAT_ID_DUENO, CHAT_ID_NATALIA, DATABASE_URL, QUIEN_DE_NATALIA, TZ,
+from config import (CHAT_ID_CODE, CHAT_ID_DUENO, CHAT_ID_NATALIA, DATABASE_URL, PREFIJOS_DE_ALERTAS_DE_FUERA, TZ,
                     nombres_con_code, puede_ser_responsable)
 
 # HALLAZGO LATERAL (25-sep-2026, mientras se escribía `cerrar_y_derivar`):
@@ -7609,11 +7609,13 @@ async def crear_o_reusar_alerta_tecnica(
 # `f"{quien}:{clave}"`, y `quien` lo resuelve la autenticación de la clave de
 # Bearer (`config.CLAVES_API_CODE`), nunca el cuerpo del pedido. Las cinco
 # alarmas de Lucy escriben claves fijas (`backup`, `latido_cosecha`,
-# `canario:<remitente>:<señal>`) y nunca empiezan por este prefijo. Las de
-# Natalia no disparan el aviso de Telegram de `tareas_tecnicas_atrasadas`:
-# los graves ya le llegan a Tiziano por Telegram desde la propia Natalia, y
-# lo técnico va a Code, no a Telegram (Tiziano, 4-oct-2026).
-PREFIJO_ALERTAS_DE_NATALIA = f"{QUIEN_DE_NATALIA}:"
+# `canario:<remitente>:<señal>`) y nunca empiezan por ninguno de estos
+# prefijos. Las de Natalia y las del módulo de consultas
+# (`config.QUIENES_DE_ALERTAS_DE_FUERA`, la única lista) no disparan el aviso
+# de Telegram de `tareas_tecnicas_atrasadas` (que las deja fuera por
+# `PREFIJOS_DE_ALERTAS_DE_FUERA`, no por una lista suya): los graves ya le
+# llegan a Tiziano por Telegram desde el propio sistema, y lo técnico va a
+# Code, no a Telegram (Tiziano, 4-oct-2026).
 
 
 async def tareas_tecnicas_atrasadas(umbral_horas: int = 6) -> list[dict]:
@@ -7628,9 +7630,10 @@ async def tareas_tecnicas_atrasadas(umbral_horas: int = 6) -> list[dict]:
     reiniciar el proceso -- y sin perderse -- no depende de que el proceso
     seguido sea el mismo que detectó el atraso la primera vez.
 
-    LAS ALERTAS DE NATALIA NO ENTRAN (4-oct-2026): las tareas cuya
-    `clave_tecnica` empieza por `PREFIJO_ALERTAS_DE_NATALIA` se excluyen en el
-    `WHERE`, graves o no. Las cinco alarmas de Lucy siguen como estaban.
+    LAS ALERTAS DE FUERA NO ENTRAN (Natalia 4-oct-2026; el módulo de consultas
+    19-oct-2026): las tareas cuya `clave_tecnica` empieza por alguno de
+    `PREFIJOS_DE_ALERTAS_DE_FUERA` se quitan del resultado, graves o no.
+    Las cinco alarmas de Lucy siguen como estaban.
 
     SIN LA MIGRACIÓN (`clave_tecnica`/`ultima_alarma_en`/`tomada_en`
     ausentes, SQLSTATE 42703), devuelve `[]`: nada que revisar todavía,
@@ -7643,7 +7646,6 @@ async def tareas_tecnicas_atrasadas(umbral_horas: int = 6) -> list[dict]:
            AND t.borrado_en IS NULL
            AND t.estado = %s
            AND t.tomada_en IS NULL
-           AND substr(t.clave_tecnica, 1, %s) <> %s
            AND COALESCE(t.ultima_alarma_en, t.creado_en)
                  < now() - make_interval(hours => %s)
            AND NOT EXISTS (
@@ -7655,10 +7657,12 @@ async def tareas_tecnicas_atrasadas(umbral_horas: int = 6) -> list[dict]:
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         try:
-            await cur.execute(
-                consulta, (ESTADO_PENDIENTE, len(PREFIJO_ALERTAS_DE_NATALIA),
-                           PREFIJO_ALERTAS_DE_NATALIA, int(umbral_horas)))
-            return list(await cur.fetchall())
+            await cur.execute(consulta, (ESTADO_PENDIENTE, int(umbral_horas)))
+            # Las de fuera se quitan aquí y no en el WHERE: así el SQL sigue
+            # siendo un literal (el censo de `tests/test_responsable.py` lo lee)
+            # y la lista de quiénes es una sola, la de `config`.
+            return [f for f in await cur.fetchall()
+                    if not f["clave_tecnica"].startswith(PREFIJOS_DE_ALERTAS_DE_FUERA)]
         except Exception as e:
             try:
                 sqlstate = e.sqlstate

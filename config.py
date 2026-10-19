@@ -71,6 +71,15 @@ REGISTRO_URL = os.environ.get("REGISTRO_URL", "").strip().rstrip("/")
 # nada al registro y la página lo dice.
 LUCY_LLAVE_SERVICIO = os.environ.get("LUCY_LLAVE_SERVICIO", "").strip()
 
+# El módulo que contesta lo que el equipo pregunta sobre el registro de clientes
+# (pieza L-1, herramienta `consultar_crm`; `cerebro/crm.py`). La dirección es la
+# pública del servicio, sin barra al final; la llave viaja solo en una cabecera,
+# nunca en la dirección ni en un mensaje, y no se imprime en ningún registro.
+# Las pone la sala en Railway. Vacías = Lucy no le pregunta nada al módulo y
+# contesta con la frase fija de «no me contestó».
+CRM_MODULO_URL = os.environ.get("CRM_MODULO_URL", "").strip().rstrip("/")
+CRM_MODULO_LLAVE = os.environ.get("CRM_MODULO_LLAVE", "").strip()
+
 # Candado de seguridad (pilar): Lucy SOLO le responde a este chat.
 # Cualquier otro que le escriba es ignorado sin más.
 CHAT_ID_DUENO = int(os.environ["CHAT_ID_DUENO"])
@@ -309,6 +318,10 @@ def opciones_de_responsable() -> tuple[tuple[str, str], ...]:
 # las consultas al responsable: `consultas:abrir` (`POST /api/code/clientes/{noco_id}/consultas`)
 # y `consultas:leer` (`GET /api/code/clientes/{noco_id}/consultas?ids=…`); con los dos:
 # `natalia=alertas:crear+proyectos:leer_de_cliente+consultas:abrir+consultas:leer`.
+# Desde el 19-oct-2026 el módulo de consultas deja sus fallas por la misma ruta con su
+# propia clave: `modulo_consultas:<clave larga>` en `CLAVES_API_CODE` y
+# `modulo_consultas=alertas:crear` en `PERMISOS_API_CODE` (nombre en
+# `QUIEN_DEL_MODULO_DE_CONSULTAS`).
 #
 # CERRADO POR DEFECTO, en dos niveles independientes:
 #   · Si `CLAVES_API_CODE` no está puesta (o no tiene ninguna pieza legible),
@@ -377,12 +390,20 @@ def _leer_permisos_api_code(crudo: str) -> tuple[dict[str, frozenset[str]], int]
     return permisos, malos
 
 
-# EL NOMBRE DE NATALIA EN `CLAVES_API_CODE`/`PERMISOS_API_CODE` (4-oct-2026): la
-# única fuente. De él sale el prefijo de las claves que guarda la puerta de
-# alertas (`natalia:<clave>`) y, con él, que esas alertas no disparen el aviso de
-# 6 horas por Telegram. Una clave con `alertas:crear` que se llame de otra forma
-# no entra: la puerta la rechaza (503) y `web/api_code.py` lo grita al arrancar.
+# QUIÉN PUEDE DEJAR ALERTAS POR LA PUERTA, EN `CLAVES_API_CODE`/`PERMISOS_API_CODE`
+# (4-oct-2026 Natalia; 19-oct-2026 el módulo de consultas): la ÚNICA fuente.
+# De estos nombres sale (1) quién puede llamar a `POST /api/code/alertas`
+# (`web/api_code.py::crear_alerta`), (2) el prefijo con que la puerta guarda la
+# clave (`<quien>:<clave>`) y (3) qué prefijos excluye el aviso de 6 horas por
+# Telegram (`db.tareas_tecnicas_atrasadas`): lo técnico de un sistema de fuera
+# va a Code y no a Telegram (Tiziano, 4-oct-2026), y los graves ya le llegan a
+# Tiziano por Telegram desde el propio sistema. Una clave con `alertas:crear`
+# que se llame de otra forma no entra: la puerta la rechaza (503) y
+# `web/api_code.py` lo grita al arrancar. Para sumar un llamador: un nombre aquí.
 QUIEN_DE_NATALIA = "natalia"
+QUIEN_DEL_MODULO_DE_CONSULTAS = "modulo_consultas"
+QUIENES_DE_ALERTAS_DE_FUERA = (QUIEN_DE_NATALIA, QUIEN_DEL_MODULO_DE_CONSULTAS)
+PREFIJOS_DE_ALERTAS_DE_FUERA = tuple(f"{q}:" for q in QUIENES_DE_ALERTAS_DE_FUERA)
 
 CLAVES_API_CODE, CLAVES_API_CODE_MAL_ESCRITAS = _leer_claves_api_code(
     os.environ.get("CLAVES_API_CODE", ""))
@@ -391,10 +412,11 @@ PERMISOS_API_CODE, PERMISOS_API_CODE_MAL_ESCRITOS = _leer_permisos_api_code(
 
 
 def quienes_con_alertas_fuera_de_nombre() -> list[str]:
-    """Los `quien` de `PERMISOS_API_CODE` que tienen `alertas:crear` y no se
-    llaman `QUIEN_DE_NATALIA`. Se calcula al llamar, de la configuración viva."""
+    """Los `quien` de `PERMISOS_API_CODE` que tienen `alertas:crear` y no son
+    ninguno de `QUIENES_DE_ALERTAS_DE_FUERA`. Se calcula al llamar, de la
+    configuración viva."""
     return sorted(q for q, p in PERMISOS_API_CODE.items()
-                  if "alertas:crear" in p and q != QUIEN_DE_NATALIA)
+                  if "alertas:crear" in p and q not in QUIENES_DE_ALERTAS_DE_FUERA)
 
 
 # ── COPIA AL DUEÑO ────────────────────────────────────────────────────────
