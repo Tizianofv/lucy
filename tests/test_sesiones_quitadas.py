@@ -279,7 +279,7 @@ def test_quitar_no_le_manda_ninguna_escritura_al_registro(dos, registro):
 def test_la_quitada_sale_de_la_lista_y_de_los_totales(dos):
     antes = _pintadas(_bloque(ver(dos, p=1)))
     assert "s011" in antes and "RD$ 9,000.00" in antes
-    assert "<b>RD$ 15,000.00</b>" in antes, antes       # facturado: 9 000 + 6 000
+    assert "<b>RD$ 15,000.00</b>" in antes, antes       # costo de las sesiones: 9 000 + 6 000
 
     assert "hecho=sesion_quitada" in _donde(quitar(1, 11))
     # Cómo se pinta el aviso, con el recibo puesto (como en las otras partes: la puerta de los
