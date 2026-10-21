@@ -265,6 +265,11 @@ async def main() -> int:
         ("numero_que_sigue_de_cotizacion", lambda: db.numero_que_sigue_de_cotizacion()),
         # Las tablas de las facturas (pieza 1) y que ninguna factura quede sin liga: ver `_tablas_de_facturas`. LECTURA.
         ("tablas de facturas (sin tolerancia)", _tablas_de_facturas),
+        # La lectura de una factura (cuatro SELECT: la fila, los renglones, las ligas) con un id que no existe, y la
+        # lista con sus CAST de filtros sin filtrar (pieza 2). LECTURAS: las que escriben (`crear_borrador_de_factura`
+        # y las demás) no se ejercen acá.
+        ("factura_por_id", lambda: db.factura_por_id(0)),
+        ("facturas_para_la_lista", lambda: db.facturas_para_la_lista()),
     ]
 
     rojas = []

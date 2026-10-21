@@ -4259,10 +4259,13 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # +2 EXENTOS por `tests/test_facturas_tablas.py` y `tests/test_numero_de_factura.py` (nuevos, exentos por rol) y +1
     # VIGILADO por `tools/ensayo_facturas.py` (nuevo; solo imprime SQL, no lee la lista cruda de buzones de `config`).
     # Medida corriendo la prueba: 208, 150, 58.
-    assert medido == {"en disco": 208, "exentos": 150, "vigilados": 58}, (
+    # 21-oct-2026, rama `trabajo/facturas-2` (guardar y leer las facturas, pieza 2), sobre `e262b75`: +1 en disco y +1 EXENTO por
+    # `tests/test_guardar_factura.py` (nuevo, exento por rol); VIGILADOS sin cambio (se tocaron `db/db.py` y `tools/humo.py`, ya
+    # vigilados). Medida corriendo la prueba: 209, 151, 58.
+    assert medido == {"en disco": 209, "exentos": 151, "vigilados": 58}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "20-oct-2026 (facturas-1) era {'en disco': 208, "
-        "'exentos': 150, 'vigilados': 58}. La aserción de fondo —cero "
+        "21-oct-2026 (facturas-2) era {'en disco': 209, "
+        "'exentos': 151, 'vigilados': 58}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

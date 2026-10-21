@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import colorsys
 import contextlib
+import functools
 import hashlib
 import json
 import logging
@@ -16,7 +17,7 @@ import os
 import re
 import unicodedata
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from urllib.parse import urlsplit
 
 import psycopg
@@ -2687,6 +2688,707 @@ def codigo_de_factura(anio: int, numero: int) -> str:
     if not _anio_de_cotizacion_que_vale(anio):
         raise ValueError("el año de la factura no es un año")
     return f"FAC-{anio}-{numero:03d}"
+
+
+# ── GUARDAR Y LEER LAS FACTURAS (pieza 2 del diseño «Facturas», 21-oct-2026) ───────────────────────────
+#
+# UNA SOLA PUERTA para escribir `facturas`, `factura_renglones`, `factura_ligas` y (solo para pasar a «no se
+# pudo» los envíos que quedan colgados al anular) `factura_envios`: las funciones públicas de abajo, cada una
+# UNA transacción. Solo la casa (`puede_entrar`): la puerta de Natalia es la pieza 9 y su `hecha_por` será otro.
+#
+#   crear_borrador_de_factura              la factura, sus renglones y su primera liga a una sesión o a un
+#                                          trabajo del Registro, TODO en la misma transacción (nunca hay una
+#                                          factura sin liga viva a sesión o trabajo)
+#   corregir_borrador_de_factura           nombre, cliente, fecha, ITBIS, NCF, RNC/cédula y renglones
+#   ligar_factura_a_registro / desligar_…  sesión o trabajo (solo borrador; la última liga viva no se suelta)
+#   poner_proyecto_de_factura              proyecto, o ninguno: borrador y emitida («antes, durante o después»)
+#   poner_cotizacion_de_factura            cotización de origen y su opción (solo borrador)
+#   emitir_factura                         borrador → emitida: AQUÍ se saca el número `FAC-AAAA-NNN`
+#   anular_factura                         emitida → anulada, con motivo; el NCF no se reusa (lo impide la base)
+#
+# Lo que decidió Tiziano (20-oct-2026): ITBIS «antes o después» según la factura (18%, `ITBIS_DE_FACTURA`),
+# NCF a mano, toda factura nace ligada a una sesión o a un trabajo, la emitida no se corrige («se anula y se
+# hace otra»), el proyecto se liga «antes, durante o después». Decidió la SALA (no Tiziano): se numera al emitir
+# (un borrador abandonado no deja hueco); la misma sesión o trabajo no va en dos facturas VIVAS (borrador o
+# emitida; la anulada la suelta); una anulada no se toca; el monto con más de dos decimales se rechaza, no se
+# redondea. Los totales NO se guardan: salen de los renglones (`totales_de_factura`).
+#
+# Cada función de las que cambian algo empieza por tomar la fila de la factura con una sentencia que no cambia
+# nada (`SENTENCIA_DE_TOMAR_FACTURA`): en Postgres eso bloquea la fila hasta el final de la transacción, y lo que se
+# decide después (estado, última liga viva) se decide sin que otro escriba en medio. Lo que la fila no puede
+# bloquear (que una sesión no esté ya en otra factura) lo serializa un candado de asesoría por (tipo, ref).
+ITBIS_DE_FACTURA = Decimal("18")
+# Tope de renglones por factura: decisión de la puerta, no una medición. Con el tope por renglón de las
+# cotizaciones el subtotal más el ITBIS cabe de sobra en NUMERIC(14,2) (lo vigila una prueba).
+LIMITE_DE_RENGLONES_DE_FACTURA = 100
+# Los vocabularios y largos de abajo repiten los CHECK de la base; `tests/test_guardar_factura.py` los compara
+# con el texto de `db/schema.sql`.
+TIPOS_DE_LIGA_DE_FACTURA = ("sesion", "trabajo")
+LARGOS_DE_FACTURA = {"para_nombre": 200, "descripcion": 300, "detalle": 2000, "ncf": 20, "ncf_tipo": 20,
+                     "motivo": 500, "ref": 100, "codigo": 100}
+CAMPOS_QUE_CORRIGE_UN_BORRADOR = ("cliente_noco_id", "para_nombre", "fecha", "itbis_pct", "ncf", "ncf_tipo",
+                                  "rnc_cedula", "renglones")
+_CENTAVOS = Decimal("0.01")
+
+
+class FacturaSinSesion(Exception):
+    """Quien escribe no entra al panel (la cookie de solo ver tampoco)."""
+
+
+class FacturaNoVale(ValueError):
+    """Algo de lo que llegó no puede quedar. `clave` dice por qué para que una pantalla lo traduzca sin
+    adivinar por el texto. El mensaje NUNCA repite lo que se pidió."""
+
+    def __init__(self, clave: str, mensaje: str):
+        super().__init__(mensaje)
+        self.clave = clave
+
+
+class FacturaNoEsta(Exception):
+    """La factura, el proyecto o la cotización no existen (o están en la papelera)."""
+
+
+class FacturaCambio(Exception):
+    """El candado: la factura cambió desde que se leyó. NO se guardó nada."""
+
+
+class FacturaYaNoSeCorrige(Exception):
+    """El estado de la factura no deja hacer eso (`estado` dice cuál es)."""
+
+    def __init__(self, estado: str, mensaje: str):
+        super().__init__(mensaje)
+        self.estado = estado
+
+
+class FacturasSinTabla(Exception):
+    """Falta la migración de las facturas (SQLSTATE 42P01)."""
+
+
+def _como_factura_no_vale(funcion, *args, **kw):
+    try:
+        return funcion(*args, **kw)
+    except CotizacionNoVale as e:
+        raise FacturaNoVale(e.clave.replace("total_", "monto_"), str(e).replace("el total", "el monto")) from None
+
+
+def _texto_de_factura(crudo, campo: str, largo: int, *, minimo: int = 1, varias_lineas: bool = False) -> str:
+    """Los textos de una factura se limpian igual que los de una cotización (`_texto_de_cotizacion`): el PDF de
+    las dos sale con la misma letra."""
+    return _como_factura_no_vale(_texto_de_cotizacion, crudo, campo, largo, minimo=minimo, varias_lineas=varias_lineas)
+
+
+def _dinero_de_factura(crudo) -> Decimal:
+    """Un monto: el dinero de las cotizaciones (`total_de_cotizacion_que_vale`: mayor que cero, a lo sumo dos
+    decimales, sin `float`), como `Decimal` con dos decimales."""
+    return Decimal(_como_factura_no_vale(total_de_cotizacion_que_vale, crudo))
+
+
+def _dinero_leido(valor) -> Decimal:
+    """Lo que devuelve la base (`Decimal` en Postgres) como `Decimal` con dos decimales."""
+    return Decimal(str(valor)).quantize(_CENTAVOS)
+
+
+def _entero_de_factura(crudo, campo: str) -> int:
+    if isinstance(crudo, bool) or not isinstance(crudo, int) or crudo < 1:
+        raise FacturaNoVale(f"{campo}_tipo", f"{campo}: tiene que ser un entero positivo")
+    return crudo
+
+
+def _fecha_de_factura(crudo) -> date:
+    return _como_factura_no_vale(_fecha_de_cotizacion, crudo)
+
+
+def _itbis_de_factura(crudo) -> Decimal | None:
+    """`None` (sin ITBIS) o el único porcentaje que acepta la puerta: `ITBIS_DE_FACTURA`. Llega como `int`,
+    `Decimal` o texto («18», «18.00»); un `float` o un `bool` no."""
+    if crudo is None:
+        return None
+    if isinstance(crudo, bool) or not isinstance(crudo, (int, str, Decimal)):
+        raise FacturaNoVale("itbis", "el ITBIS tiene que ser el que se usa o ninguno")
+    try:
+        valor = Decimal(str(crudo).strip())
+    except ArithmeticError:
+        raise FacturaNoVale("itbis", "el ITBIS tiene que ser el que se usa o ninguno") from None
+    if not valor.is_finite() or valor != ITBIS_DE_FACTURA:
+        raise FacturaNoVale("itbis", "el ITBIS tiene que ser el que se usa o ninguno")
+    return ITBIS_DE_FACTURA.quantize(_CENTAVOS)
+
+
+def ncf_normalizado(crudo) -> str:
+    """El NCF como se guarda: sin espacios ni guiones y en mayúsculas, de 1 a 20 letras ASCII o cifras (lo que
+    pide el CHECK `facturas_ncf_normalizado`). Lo no ASCII se rechaza ANTES de pasar a mayúsculas («ß» pasaría
+    a «SS»)."""
+    if not isinstance(crudo, str):
+        raise FacturaNoVale("ncf_tipo", "el NCF tiene que ser un texto")
+    limpio = re.sub(r"[\s\-]", "", crudo)
+    if not limpio.isascii():
+        raise FacturaNoVale("ncf_formato", "el NCF solo lleva letras y cifras")
+    limpio = limpio.upper()
+    if not re.fullmatch(r"[A-Z0-9]{1,%d}" % LARGOS_DE_FACTURA["ncf"], limpio):
+        raise FacturaNoVale("ncf_formato", "el NCF solo lleva letras y cifras, de 1 a 20")
+    return limpio
+
+
+def rnc_o_cedula_que_vale(crudo) -> str:
+    """RNC (9 cifras) o cédula (11): solo cifras ASCII, tras quitar espacios y guiones."""
+    if not isinstance(crudo, str):
+        raise FacturaNoVale("rnc_tipo", "el RNC o la cédula tiene que ser un texto")
+    limpio = re.sub(r"[\s\-]", "", crudo)
+    if not re.fullmatch(r"[0-9]{9}|[0-9]{11}", limpio):
+        raise FacturaNoVale("rnc_formato", "el RNC lleva 9 cifras y la cédula 11")
+    return limpio
+
+
+def _ncf_de_factura(ncf, ncf_tipo) -> tuple[str | None, str | None]:
+    """El par que se guarda: los dos o ninguno (`facturas_ncf_completo`)."""
+    if ncf in (None, "") and ncf_tipo in (None, ""):
+        return None, None
+    if ncf in (None, "") or ncf_tipo in (None, ""):
+        raise FacturaNoVale("ncf_incompleto", "el NCF y su tipo van juntos")
+    return ncf_normalizado(ncf), _texto_de_factura(ncf_tipo, "ncf_tipo", LARGOS_DE_FACTURA["ncf_tipo"])
+
+
+def _renglones_de_factura(crudo) -> list[dict]:
+    if isinstance(crudo, (str, bytes, dict)) or not isinstance(crudo, (list, tuple)):
+        raise FacturaNoVale("renglones_tipo", "los renglones tienen que ser una lista")
+    if not crudo:
+        raise FacturaNoVale("sin_renglones", "la factura necesita al menos un renglón")
+    if len(crudo) > LIMITE_DE_RENGLONES_DE_FACTURA:
+        raise FacturaNoVale("renglones_muchos", "la factura lleva demasiados renglones")
+    hechos = []
+    for i, r in enumerate(crudo, start=1):
+        if not isinstance(r, dict) or not {"descripcion", "monto"} <= set(r) <= {"descripcion", "detalle", "monto"}:
+            raise FacturaNoVale("renglon_forma", "cada renglón lleva descripción y monto, y a lo sumo un detalle")
+        detalle = _texto_de_factura(r.get("detalle"), "detalle", LARGOS_DE_FACTURA["detalle"],
+                                    minimo=0, varias_lineas=True)
+        hechos.append({"orden": i,
+                       "descripcion": _texto_de_factura(r["descripcion"], "descripcion", LARGOS_DE_FACTURA["descripcion"]),
+                       "detalle": detalle or None,
+                       "monto": _dinero_de_factura(r["monto"])})
+    return hechos
+
+
+def _liga_de_factura(tipo, ref, codigo=None) -> tuple[str, str, str | None]:
+    """`(tipo, ref, codigo)` de una liga a una sesión o a un trabajo del Registro. La referencia se guarda tal
+    cual llega (validarla contra la App es la pieza 6): texto o entero, sin espacios de alrededor ni caracteres
+    de control, de 1 a 100."""
+    if tipo not in TIPOS_DE_LIGA_DE_FACTURA:
+        raise FacturaNoVale("liga_tipo", "la liga es a una sesión o a un trabajo")
+    if isinstance(ref, int) and not isinstance(ref, bool):
+        ref = str(ref)
+    if not isinstance(ref, str) or ref != ref.strip() or not 1 <= len(ref) <= LARGOS_DE_FACTURA["ref"] \
+            or any(unicodedata.category(c) in ("Cc", "Zl", "Zp") for c in ref):
+        raise FacturaNoVale("liga_ref", "la referencia de la sesión o del trabajo no se entiende")
+    try:
+        ref.encode("utf-8")
+    except UnicodeEncodeError:
+        raise FacturaNoVale("liga_ref", "la referencia de la sesión o del trabajo no se entiende") from None
+    el_codigo = None if codigo in (None, "") else _texto_de_factura(codigo, "codigo", LARGOS_DE_FACTURA["codigo"])
+    return tipo, ref, el_codigo
+
+
+def totales_de_factura(montos, itbis_pct) -> dict:
+    """`{"subtotal", "itbis", "total"}` (`Decimal`, dos decimales): el ITBIS es `itbis_pct` por ciento del
+    subtotal, redondeado a centavos hacia arriba en la mitad. Sin `itbis_pct` el ITBIS es 0. ÚNICO sitio donde
+    se hace esta cuenta: ni la base ni la lista la guardan."""
+    subtotal = sum((Decimal(m) for m in montos), Decimal("0")).quantize(_CENTAVOS)
+    itbis = (Decimal("0") if itbis_pct is None
+             else (subtotal * Decimal(itbis_pct) / 100).quantize(_CENTAVOS, rounding=ROUND_HALF_UP))
+    return {"subtotal": subtotal, "itbis": itbis, "total": subtotal + itbis}
+
+
+def _llave_de_asesoria_de_liga(tipo: str, ref: str) -> int:
+    """El número (de 64 bits, con signo) del candado de asesoría de una sesión o un trabajo."""
+    return int.from_bytes(hashlib.sha256(f"factura-liga:{tipo}:{ref}".encode("utf-8")).digest()[:8], "big", signed=True)
+
+
+# Las dos que bloquean la fila (ver arriba). Devuelven el estado; el resto de la fila se lee después con
+# `SENTENCIA_DE_LEER_FACTURA`. La del candado exige además que `cambiado_en` sea el que se leyó.
+SENTENCIA_DE_TOMAR_FACTURA = (
+    "UPDATE facturas SET creado_en = creado_en WHERE id = %s RETURNING id, estado")
+SENTENCIA_DE_TOMAR_FACTURA_CON_CANDADO = (
+    "UPDATE facturas SET creado_en = creado_en WHERE id = %s AND cambiado_en = %s RETURNING id, estado")
+SENTENCIA_DE_EXISTE_FACTURA = "SELECT id FROM facturas WHERE id = %s"
+SENTENCIA_DEL_CANDADO_DE_LIGA = "SELECT pg_advisory_xact_lock(CAST(%s AS BIGINT))"
+SENTENCIA_DE_LEER_FACTURA = (
+    "SELECT id, anio, numero, estado, cliente_noco_id, para_nombre, fecha, proyecto_id, cotizacion_id, "
+    "cotizacion_opcion, itbis_pct, ncf, ncf_tipo, rnc_cedula, hecha_por, hecha_por_chat_id, creado_en, "
+    "cambiado_en, emitida_en, anulada_en, anulada_por_chat_id, motivo_anulacion FROM facturas WHERE id = %s")
+SENTENCIA_DE_LOS_RENGLONES = (
+    "SELECT orden, descripcion, detalle, monto FROM factura_renglones WHERE factura_id = %s ORDER BY orden")
+SENTENCIA_DE_LAS_LIGAS = (
+    "SELECT id, tipo, ref, codigo, creado_en, creado_por_chat_id, desligada_en FROM factura_ligas "
+    "WHERE factura_id = %s ORDER BY id")
+SENTENCIA_DE_LA_LISTA_DE_FACTURAS = (
+    "SELECT f.id, f.anio, f.numero, f.estado, f.cliente_noco_id, f.para_nombre, f.fecha, f.proyecto_id, "
+    "f.itbis_pct, f.ncf, f.hecha_por, f.creado_en, f.cambiado_en, f.emitida_en, "
+    "(SELECT count(*) FROM factura_ligas l WHERE l.factura_id = f.id AND l.desligada_en IS NULL) AS ligas_vivas, "
+    "(SELECT coalesce(sum(r.monto), 0) FROM factura_renglones r WHERE r.factura_id = f.id) AS subtotal "
+    "FROM facturas f "
+    "WHERE (CAST(%s AS TEXT) IS NULL OR f.estado = %s) "
+    "AND (CAST(%s AS BIGINT) IS NULL OR f.proyecto_id = %s) "
+    "AND (CAST(%s AS BIGINT) IS NULL OR f.cliente_noco_id = %s) "
+    "ORDER BY f.creado_en DESC, f.id DESC")
+# Una sesión o un trabajo que ya está en una factura VIVA (borrador o emitida; la anulada la suelta).
+SENTENCIA_DE_LA_LIGA_OCUPADA = (
+    "SELECT l.factura_id FROM factura_ligas l JOIN facturas f ON f.id = l.factura_id "
+    "WHERE l.tipo = %s AND l.ref = %s AND l.desligada_en IS NULL AND f.estado <> 'anulada'")
+SENTENCIA_DEL_NCF_REPETIDO = "SELECT id FROM facturas WHERE ncf = %s AND id <> %s"
+SENTENCIA_DEL_PROYECTO_VIVO = "SELECT id FROM proyectos WHERE id = %s AND borrado_en IS NULL"
+SENTENCIA_DE_LA_COTIZACION_VIVA = "SELECT id, proyecto_id, contenido FROM cotizaciones WHERE id = %s AND borrado_en IS NULL"
+
+# Las que escriben. Cada UPDATE de `facturas` (menos la de tomar la fila) dice en su WHERE en qué estados vale.
+SENTENCIA_DE_CREAR_FACTURA = (
+    "INSERT INTO facturas (cliente_noco_id, para_nombre, fecha, proyecto_id, cotizacion_id, cotizacion_opcion, itbis_pct, ncf, ncf_tipo, rnc_cedula, hecha_por, hecha_por_chat_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'casa', %s) RETURNING id")
+SENTENCIA_DE_CREAR_RENGLON = (
+    "INSERT INTO factura_renglones (factura_id, orden, descripcion, detalle, monto) VALUES (%s, %s, %s, %s, %s)")
+SENTENCIA_DE_BORRAR_RENGLONES = "DELETE FROM factura_renglones WHERE factura_id = %s"
+SENTENCIA_DE_CREAR_LIGA = (
+    "INSERT INTO factura_ligas (factura_id, tipo, ref, codigo, creado_por_chat_id) VALUES (%s, %s, %s, %s, %s)")
+SENTENCIA_DE_DESLIGAR = (
+    "UPDATE factura_ligas SET desligada_en = now() "
+    "WHERE factura_id = %s AND tipo = %s AND ref = %s AND desligada_en IS NULL RETURNING id")
+SENTENCIA_DE_CORREGIR_BORRADOR = (
+    "UPDATE facturas SET cliente_noco_id = %s, para_nombre = %s, fecha = %s, itbis_pct = %s, ncf = %s, "
+    "ncf_tipo = %s, rnc_cedula = %s, cambiado_en = now() WHERE id = %s AND estado = 'borrador' RETURNING id")
+SENTENCIA_DE_PONER_PROYECTO = (
+    "UPDATE facturas SET proyecto_id = %s, cambiado_en = now() "
+    "WHERE id = %s AND estado IN ('borrador', 'emitida') RETURNING id")
+SENTENCIA_DE_PONER_COTIZACION = (
+    "UPDATE facturas SET cotizacion_id = %s, cotizacion_opcion = %s, cambiado_en = now() "
+    "WHERE id = %s AND estado = 'borrador' RETURNING id")
+SENTENCIA_DE_TOCAR_BORRADOR = (
+    "UPDATE facturas SET cambiado_en = now() WHERE id = %s AND estado = 'borrador' RETURNING id")
+SENTENCIA_DE_EMITIR = (
+    "UPDATE facturas SET estado = 'emitida', anio = %s, numero = %s, emitida_en = now(), cambiado_en = now() "
+    "WHERE id = %s AND estado = 'borrador' RETURNING id")
+SENTENCIA_DE_ANULAR = (
+    "UPDATE facturas SET estado = 'anulada', anulada_en = now(), anulada_por_chat_id = %s, "
+    "motivo_anulacion = %s, cambiado_en = now() WHERE id = %s AND estado = 'emitida' RETURNING id")
+SENTENCIA_DE_ENVIOS_DE_LA_FACTURA = "SELECT id FROM factura_envios WHERE factura_id = %s"
+# Descartar un borrador: se borra de verdad (nunca tuvo número) y las tres sentencias dicen en su WHERE que vale solo
+# para un borrador. La huella `descartar` de `log_acciones` guarda cómo era.
+SENTENCIA_DE_DESCARTAR_LIGAS = (
+    "DELETE FROM factura_ligas WHERE factura_id = %s AND factura_id IN "
+    "(SELECT id FROM facturas WHERE id = %s AND estado = 'borrador')")
+SENTENCIA_DE_DESCARTAR_RENGLONES = (
+    "DELETE FROM factura_renglones WHERE factura_id = %s AND factura_id IN "
+    "(SELECT id FROM facturas WHERE id = %s AND estado = 'borrador')")
+SENTENCIA_DE_DESCARTAR_FACTURA = "DELETE FROM facturas WHERE id = %s AND estado = 'borrador' RETURNING id"
+SENTENCIA_DE_SOLTAR_ENVIOS = (
+    "UPDATE factura_envios SET estado = 'no_se_pudo', motivo = %s "
+    "WHERE factura_id = %s AND estado IN ('pendiente', 'aprobado') RETURNING id")
+
+
+async def _huella_de_factura(conn, accion: str, registro_id: int, antes, despues, motivo: str) -> None:
+    await conn.execute(
+        """
+        INSERT INTO log_acciones
+          (actor, accion, tabla, registro_id, antes, despues, motivo, bandeja_id)
+        VALUES ('panel', %s, 'facturas', %s, %s, %s, %s, NULL)
+        """,
+        (accion, registro_id,
+         json.dumps(antes, default=str, ensure_ascii=False) if antes else None,
+         json.dumps(despues, default=str, ensure_ascii=False) if despues else None,
+         motivo))
+
+
+def _pedir_sesion_de_la_casa(chat_id) -> None:
+    from web.auth import puede_entrar
+
+    if chat_id is None or not puede_entrar(chat_id):
+        raise FacturaSinSesion("quien escribe no entra al panel")
+
+
+def _con_el_aviso_de_la_tabla(funcion):
+    """Cada función pública de las facturas: la tabla ausente (SQLSTATE 42P01) sale como `FacturasSinTabla`; los
+    demás errores pasan como vienen."""
+    @functools.wraps(funcion)
+    async def envuelta(*args, **kw):
+        try:
+            return await funcion(*args, **kw)
+        except Exception as e:
+            if _tabla_ausente(e):
+                raise FacturasSinTabla("facturas no existe todavía") from e
+            raise
+    return envuelta
+
+
+async def _factura_completa(cur, factura_id: int) -> dict | None:
+    """La factura con `codigo` (`None` mientras es borrador), `renglones`, `ligas` (todas; `viva` dice cuáles
+    siguen) y `subtotal`/`itbis`/`total` (`totales_de_factura`). Lee con el cursor que le dan."""
+    await cur.execute(SENTENCIA_DE_LEER_FACTURA, (factura_id,))
+    fila = await cur.fetchone()
+    if fila is None:
+        return None
+    f = dict(fila)
+    await cur.execute(SENTENCIA_DE_LOS_RENGLONES, (factura_id,))
+    renglones = [{**dict(r), "monto": _dinero_leido(r["monto"])} for r in await cur.fetchall()]
+    await cur.execute(SENTENCIA_DE_LAS_LIGAS, (factura_id,))
+    ligas = [{**dict(l), "viva": l["desligada_en"] is None} for l in await cur.fetchall()]
+    f["itbis_pct"] = None if f["itbis_pct"] is None else _dinero_leido(f["itbis_pct"])
+    f["codigo"] = None if f["numero"] is None else codigo_de_factura(f["anio"], f["numero"])
+    f.update(totales_de_factura([r["monto"] for r in renglones], f["itbis_pct"]))
+    f["renglones"], f["ligas"] = renglones, ligas
+    return f
+
+
+async def _tomar_factura(cur, factura_id: int, candado=None) -> str:
+    """Bloquea la fila y devuelve su estado. `FacturaNoEsta` si no existe, `FacturaCambio` si hay candado y ya
+    no es ese."""
+    if candado is None:
+        await cur.execute(SENTENCIA_DE_TOMAR_FACTURA, (factura_id,))
+    else:
+        await cur.execute(SENTENCIA_DE_TOMAR_FACTURA_CON_CANDADO, (factura_id, candado))
+    fila = await cur.fetchone()
+    if fila is not None:
+        return fila["estado"]
+    await cur.execute(SENTENCIA_DE_EXISTE_FACTURA, (factura_id,))
+    if await cur.fetchone() is None:
+        raise FacturaNoEsta("esa factura no está")
+    raise FacturaCambio("la factura cambió mientras se editaba")
+
+
+def _que_sea(estado: str, validos: tuple, que: str) -> None:
+    if estado not in validos:
+        raise FacturaYaNoSeCorrige(estado, f"una factura {estado} no admite {que}")
+
+
+async def _revisar_proyecto_y_cotizacion(cur, proyecto_id, cotizacion_id, cotizacion_opcion) -> None:
+    """El proyecto existe y está vivo; la cotización existe, está viva y, si hay proyecto, es DE ese proyecto
+    (`cotizaciones.proyecto_id`); la opción existe en esa cotización."""
+    if cotizacion_opcion is not None and cotizacion_id is None:
+        raise FacturaNoVale("opcion_sin_cotizacion", "la opción de la cotización necesita la cotización")
+    if proyecto_id is not None:
+        await cur.execute(SENTENCIA_DEL_PROYECTO_VIVO, (proyecto_id,))
+        if await cur.fetchone() is None:
+            raise FacturaNoEsta("ese proyecto no está")
+    if cotizacion_id is None:
+        return
+    await cur.execute(SENTENCIA_DE_LA_COTIZACION_VIVA, (cotizacion_id,))
+    cot = await cur.fetchone()
+    if cot is None:
+        raise FacturaNoEsta("esa cotización no está")
+    if proyecto_id is not None and cot["proyecto_id"] != proyecto_id:
+        raise FacturaNoVale("cotizacion_de_otro_proyecto", "esa cotización es de otro proyecto")
+    if cotizacion_opcion is not None:
+        try:
+            opciones = len(json.loads(cot["contenido"])["opciones"])
+        except (ValueError, KeyError, TypeError):
+            raise FacturaNoVale("cotizacion_ilegible", "no se pudo leer la cotización") from None
+        if not 1 <= cotizacion_opcion <= opciones:
+            raise FacturaNoVale("opcion_no_esta", "esa opción no está en la cotización")
+
+
+async def _revisar_ncf_libre(cur, ncf, factura_id) -> None:
+    """El NCF no lo tiene otra factura, anulada o no (la base lo impide también: `facturas_ncf_unico`; esto es
+    para dar la razón sin esperar al choque)."""
+    if ncf is None:
+        return
+    await cur.execute(SENTENCIA_DEL_NCF_REPETIDO, (ncf, factura_id))
+    if await cur.fetchone() is not None:
+        raise FacturaNoVale("ncf_repetido", "ese NCF ya está en otra factura")
+
+
+async def _liga_libre(cur, tipo: str, ref: str, factura_id: int | None) -> None:
+    """Toma el candado de asesoría de (tipo, ref) y exige que no esté en una factura viva. Si ya está en esta
+    misma factura lo dice aparte."""
+    await cur.execute(SENTENCIA_DEL_CANDADO_DE_LIGA, (_llave_de_asesoria_de_liga(tipo, ref),))
+    await cur.execute(SENTENCIA_DE_LA_LIGA_OCUPADA, (tipo, ref))
+    ocupante = await cur.fetchone()
+    if ocupante is not None:
+        if factura_id is not None and ocupante["factura_id"] == factura_id:
+            raise FacturaNoVale("ya_ligada", "esa sesión o ese trabajo ya está en esta factura")
+        raise FacturaNoVale("sesion_ya_facturada", "esa sesión o ese trabajo ya está en otra factura")
+
+
+async def _escribir_renglones(cur, factura_id: int, renglones: list[dict]) -> None:
+    for r in renglones:
+        await cur.execute(SENTENCIA_DE_CREAR_RENGLON,
+                          (factura_id, r["orden"], r["descripcion"], r["detalle"], r["monto"]))
+
+
+def _ncf_ya_estaba(e: Exception) -> bool:
+    """El choque de `facturas_ncf_unico` en Postgres (SQLSTATE 23505), por si otro escribió el mismo NCF en
+    medio."""
+    try:
+        return e.sqlstate == "23505" and e.diag.constraint_name == "facturas_ncf_unico"
+    except AttributeError:
+        return False
+
+
+@_con_el_aviso_de_la_tabla
+async def crear_borrador_de_factura(chat_id: int, *, cliente_noco_id, para_nombre, renglones, liga,
+                                    fecha=None, proyecto_id=None, cotizacion_id=None, cotizacion_opcion=None,
+                                    itbis_pct=None, ncf=None, ncf_tipo=None, rnc_cedula=None) -> dict:
+    """Crea UN borrador (sin número: se numera al emitir) con sus renglones y su primera liga, en una
+    transacción, y devuelve la factura completa (`_factura_completa`) más `creada=True`. `liga` es
+    `{"tipo": "sesion"|"trabajo", "ref": ..., "codigo": ... (opcional)}`. `renglones` es una lista de
+    `{"descripcion", "monto", "detalle" (opcional)}`. `fecha=None` es hoy. `itbis_pct`: `None` o 18.
+    `ncf`+`ncf_tipo` van juntos o ninguno. Errores: `FacturaSinSesion`, `FacturaNoVale`, `FacturaNoEsta`,
+    `FacturasSinTabla`. Lo que no vale no toca la base."""
+    _pedir_sesion_de_la_casa(chat_id)
+    if not isinstance(liga, dict) or not {"tipo", "ref"} <= set(liga) <= {"tipo", "ref", "codigo"}:
+        raise FacturaNoVale("liga_forma", "la factura nace ligada a una sesión o a un trabajo")
+    el_tipo, la_ref, el_codigo = _liga_de_factura(liga["tipo"], liga["ref"], liga.get("codigo"))
+    datos = {
+        "cliente_noco_id": _entero_de_factura(cliente_noco_id, "cliente"),
+        "para_nombre": _texto_de_factura(para_nombre, "para_nombre", LARGOS_DE_FACTURA["para_nombre"]),
+        "fecha": hoy_rd() if fecha is None else _fecha_de_factura(fecha),
+        "itbis_pct": _itbis_de_factura(itbis_pct),
+        "rnc_cedula": None if rnc_cedula in (None, "") else rnc_o_cedula_que_vale(rnc_cedula)}
+    datos["ncf"], datos["ncf_tipo"] = _ncf_de_factura(ncf, ncf_tipo)
+    los_renglones = _renglones_de_factura(renglones)
+    el_proyecto = None if proyecto_id is None else _entero_de_factura(proyecto_id, "proyecto")
+    la_cotizacion = None if cotizacion_id is None else _entero_de_factura(cotizacion_id, "cotizacion")
+    la_opcion = None if cotizacion_opcion is None else _entero_de_factura(cotizacion_opcion, "opcion")
+
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await _revisar_proyecto_y_cotizacion(cur, el_proyecto, la_cotizacion, la_opcion)
+        await _revisar_ncf_libre(cur, datos["ncf"], 0)
+        await _liga_libre(cur, el_tipo, la_ref, None)
+        try:
+            await cur.execute(SENTENCIA_DE_CREAR_FACTURA, (
+                datos["cliente_noco_id"], datos["para_nombre"], datos["fecha"], el_proyecto, la_cotizacion,
+                la_opcion, datos["itbis_pct"], datos["ncf"], datos["ncf_tipo"], datos["rnc_cedula"], chat_id))
+        except Exception as e:
+            if _ncf_ya_estaba(e):
+                raise FacturaNoVale("ncf_repetido", "ese NCF ya está en otra factura") from None
+            raise
+        factura_id = (await cur.fetchone())["id"]
+        await _escribir_renglones(cur, factura_id, los_renglones)
+        await cur.execute(SENTENCIA_DE_CREAR_LIGA, (factura_id, el_tipo, la_ref, el_codigo, chat_id))
+        hecha = await _factura_completa(cur, factura_id)
+        await _huella_de_factura(conn, "crear", factura_id, None, hecha,
+                                 "borrador de factura creado desde el panel")
+        return {**hecha, "creada": True}
+
+
+@_con_el_aviso_de_la_tabla
+async def corregir_borrador_de_factura(factura_id: int, chat_id: int, cambiado_en, cambios: dict) -> dict:
+    """Cambia lo que `cambios` trae de UN borrador (las claves son `CAMPOS_QUE_CORRIGE_UN_BORRADOR`; lo que no
+    viene no se toca; `renglones` reemplaza la lista entera). `cambiado_en` es el candado que se leyó: si ya
+    no es ese, `FacturaCambio` y no se escribe nada. Una emitida o anulada: `FacturaYaNoSeCorrige`. Las ligas,
+    el proyecto y la cotización se cambian con sus propias funciones. Devuelve la factura completa."""
+    _pedir_sesion_de_la_casa(chat_id)
+    if not isinstance(cambios, dict) or not cambios:
+        raise FacturaNoVale("sin_cambios", "no hay nada que cambiar")
+    if not set(cambios) <= set(CAMPOS_QUE_CORRIGE_UN_BORRADOR):
+        raise FacturaNoVale("campo_no_se_corrige", "ese dato de la factura no se corrige")
+    candado = _como_factura_no_vale(_instante_de_cotizacion, cambiado_en)
+    nuevos = {}
+    if "cliente_noco_id" in cambios:
+        nuevos["cliente_noco_id"] = _entero_de_factura(cambios["cliente_noco_id"], "cliente")
+    if "para_nombre" in cambios:
+        nuevos["para_nombre"] = _texto_de_factura(cambios["para_nombre"], "para_nombre", LARGOS_DE_FACTURA["para_nombre"])
+    if "fecha" in cambios:
+        nuevos["fecha"] = _fecha_de_factura(cambios["fecha"])
+    if "itbis_pct" in cambios:
+        nuevos["itbis_pct"] = _itbis_de_factura(cambios["itbis_pct"])
+    if "rnc_cedula" in cambios:
+        crudo = cambios["rnc_cedula"]
+        nuevos["rnc_cedula"] = None if crudo in (None, "") else rnc_o_cedula_que_vale(crudo)
+    los_renglones = _renglones_de_factura(cambios["renglones"]) if "renglones" in cambios else None
+
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        _que_sea(await _tomar_factura(cur, factura_id, candado), ("borrador",), "correcciones")
+        antes = await _factura_completa(cur, factura_id)
+        if "ncf" in cambios or "ncf_tipo" in cambios:
+            nuevos["ncf"], nuevos["ncf_tipo"] = _ncf_de_factura(
+                cambios.get("ncf", antes["ncf"]), cambios.get("ncf_tipo", antes["ncf_tipo"]))
+            await _revisar_ncf_libre(cur, nuevos["ncf"], factura_id)
+        quedan = {c: nuevos.get(c, antes[c]) for c in ("cliente_noco_id", "para_nombre", "fecha", "itbis_pct",
+                                                       "ncf", "ncf_tipo", "rnc_cedula")}
+        try:
+            await cur.execute(SENTENCIA_DE_CORREGIR_BORRADOR, (
+                quedan["cliente_noco_id"], quedan["para_nombre"], quedan["fecha"], quedan["itbis_pct"],
+                quedan["ncf"], quedan["ncf_tipo"], quedan["rnc_cedula"], factura_id))
+        except Exception as e:
+            if _ncf_ya_estaba(e):
+                raise FacturaNoVale("ncf_repetido", "ese NCF ya está en otra factura") from None
+            raise
+        if los_renglones is not None:
+            await cur.execute(SENTENCIA_DE_BORRAR_RENGLONES, (factura_id,))
+            await _escribir_renglones(cur, factura_id, los_renglones)
+        despues = await _factura_completa(cur, factura_id)
+        await _huella_de_factura(conn, "corregir", factura_id, antes, despues,
+                                 "borrador de factura corregido desde el panel")
+        return {**despues, "creada": False}
+
+
+@_con_el_aviso_de_la_tabla
+async def ligar_factura_a_registro(factura_id: int, chat_id: int, tipo, ref, codigo=None) -> dict:
+    """Agrega a un BORRADOR la liga a una sesión o a un trabajo del Registro (`ref` tal cual llega). No se deja
+    si ya está en otra factura viva (`sesion_ya_facturada`) ni si ya está en esta (`ya_ligada`). Una emitida o
+    anulada: `FacturaYaNoSeCorrige`. Devuelve la factura completa."""
+    _pedir_sesion_de_la_casa(chat_id)
+    el_tipo, la_ref, el_codigo = _liga_de_factura(tipo, ref, codigo)
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        _que_sea(await _tomar_factura(cur, factura_id), ("borrador",), "cambiar sus sesiones o trabajos")
+        antes = await _factura_completa(cur, factura_id)
+        await _liga_libre(cur, el_tipo, la_ref, factura_id)
+        await cur.execute(SENTENCIA_DE_CREAR_LIGA, (factura_id, el_tipo, la_ref, el_codigo, chat_id))
+        await cur.execute(SENTENCIA_DE_TOCAR_BORRADOR, (factura_id,))
+        despues = await _factura_completa(cur, factura_id)
+        await _huella_de_factura(conn, "ligar", factura_id, antes, despues,
+                                 "sesión o trabajo ligado a un borrador de factura")
+        return despues
+
+
+@_con_el_aviso_de_la_tabla
+async def desligar_factura_de_registro(factura_id: int, chat_id: int, tipo, ref) -> dict:
+    """Suelta de un BORRADOR una sesión o un trabajo (la liga queda con `desligada_en`, no se borra). La
+    ÚLTIMA liga viva no se suelta (`ultima_liga`): primero se liga la otra. Devuelve la factura completa."""
+    _pedir_sesion_de_la_casa(chat_id)
+    el_tipo, la_ref, _ = _liga_de_factura(tipo, ref)
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        _que_sea(await _tomar_factura(cur, factura_id), ("borrador",), "cambiar sus sesiones o trabajos")
+        antes = await _factura_completa(cur, factura_id)
+        vivas = [l for l in antes["ligas"] if l["viva"]]
+        if not any(l["tipo"] == el_tipo and l["ref"] == la_ref for l in vivas):
+            raise FacturaNoVale("liga_no_esta", "esa sesión o ese trabajo no está ligado a la factura")
+        if len(vivas) <= 1:
+            raise FacturaNoVale("ultima_liga", "la factura no puede quedar sin sesión ni trabajo")
+        await cur.execute(SENTENCIA_DE_DESLIGAR, (factura_id, el_tipo, la_ref))
+        await cur.execute(SENTENCIA_DE_TOCAR_BORRADOR, (factura_id,))
+        despues = await _factura_completa(cur, factura_id)
+        await _huella_de_factura(conn, "desligar", factura_id, antes, despues,
+                                 "sesión o trabajo soltado de un borrador de factura")
+        return despues
+
+
+@_con_el_aviso_de_la_tabla
+async def poner_proyecto_de_factura(factura_id: int, chat_id: int, proyecto_id: int | None) -> dict:
+    """Liga la factura a un proyecto vivo, o la suelta (`None`). Vale en borrador y en emitida («antes, durante
+    o después», Tiziano); una anulada no. Si la factura ya tiene cotización, ésta tiene que ser del proyecto."""
+    _pedir_sesion_de_la_casa(chat_id)
+    el_proyecto = None if proyecto_id is None else _entero_de_factura(proyecto_id, "proyecto")
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        _que_sea(await _tomar_factura(cur, factura_id), ("borrador", "emitida"), "cambiar de proyecto")
+        antes = await _factura_completa(cur, factura_id)
+        await _revisar_proyecto_y_cotizacion(cur, el_proyecto, antes["cotizacion_id"], antes["cotizacion_opcion"])
+        await cur.execute(SENTENCIA_DE_PONER_PROYECTO, (el_proyecto, factura_id))
+        despues = await _factura_completa(cur, factura_id)
+        await _huella_de_factura(conn, "ligar_proyecto" if el_proyecto else "desligar_proyecto",
+                                 factura_id, antes, despues, "proyecto de la factura cambiado desde el panel")
+        return despues
+
+
+@_con_el_aviso_de_la_tabla
+async def poner_cotizacion_de_factura(factura_id: int, chat_id: int, cotizacion_id: int | None,
+                                      cotizacion_opcion: int | None = None) -> dict:
+    """Pone la cotización de origen (viva, del proyecto de la factura si lo tiene) y su opción, o las quita
+    (`None`). Solo en borrador: de ahí salen los renglones."""
+    _pedir_sesion_de_la_casa(chat_id)
+    la_cotizacion = None if cotizacion_id is None else _entero_de_factura(cotizacion_id, "cotizacion")
+    la_opcion = None if cotizacion_opcion is None else _entero_de_factura(cotizacion_opcion, "opcion")
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        _que_sea(await _tomar_factura(cur, factura_id), ("borrador",), "cambiar de cotización")
+        antes = await _factura_completa(cur, factura_id)
+        await _revisar_proyecto_y_cotizacion(cur, antes["proyecto_id"], la_cotizacion, la_opcion)
+        await cur.execute(SENTENCIA_DE_PONER_COTIZACION, (la_cotizacion, la_opcion, factura_id))
+        despues = await _factura_completa(cur, factura_id)
+        await _huella_de_factura(conn, "ligar_cotizacion" if la_cotizacion else "desligar_cotizacion",
+                                 factura_id, antes, despues, "cotización de la factura cambiada desde el panel")
+        return despues
+
+
+@_con_el_aviso_de_la_tabla
+async def emitir_factura(factura_id: int, chat_id: int, cambiado_en) -> dict:
+    """Borrador → emitida con el número que sigue en la serie del año de `hoy_rd()` (el de HOY, no el de
+    `fecha`), en la misma transacción: si algo falla el número vuelve. `cambiado_en` es el candado. Exige al
+    menos un renglón y una liga viva. Una ya emitida o anulada: `FacturaYaNoSeCorrige`. Devuelve la completa."""
+    _pedir_sesion_de_la_casa(chat_id)
+    candado = _como_factura_no_vale(_instante_de_cotizacion, cambiado_en)
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        _que_sea(await _tomar_factura(cur, factura_id, candado), ("borrador",), "emitirse otra vez")
+        antes = await _factura_completa(cur, factura_id)
+        if not antes["renglones"]:
+            raise FacturaNoVale("sin_renglones", "la factura necesita al menos un renglón")
+        if not any(l["viva"] for l in antes["ligas"]):
+            raise FacturaNoVale("sin_liga", "la factura necesita una sesión o un trabajo")
+        anio = hoy_rd().year
+        numero = await siguiente_numero_de_factura(cur, anio)
+        await cur.execute(SENTENCIA_DE_EMITIR, (anio, numero, factura_id))
+        despues = await _factura_completa(cur, factura_id)
+        await _huella_de_factura(conn, "emitir", factura_id, antes, despues,
+                                 "factura emitida desde el panel (se numera aquí)")
+        return despues
+
+
+@_con_el_aviso_de_la_tabla
+async def anular_factura(factura_id: int, chat_id: int, motivo) -> dict:
+    """Emitida → anulada, con `motivo` (1 a 500). Conserva su número y su NCF (el NCF no se reusa). Los envíos
+    que estaban pendientes o aprobados pasan a «no se pudo». No toca los pagos de la App. Un borrador no se
+    anula (no tiene número): `FacturaYaNoSeCorrige`."""
+    _pedir_sesion_de_la_casa(chat_id)
+    el_motivo = _texto_de_factura(motivo, "motivo", LARGOS_DE_FACTURA["motivo"])
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        _que_sea(await _tomar_factura(cur, factura_id), ("emitida",), "anularse")
+        antes = await _factura_completa(cur, factura_id)
+        await cur.execute(SENTENCIA_DE_ANULAR, (chat_id, el_motivo, factura_id))
+        await cur.execute(SENTENCIA_DE_SOLTAR_ENVIOS, ("la factura se anuló", factura_id))
+        despues = await _factura_completa(cur, factura_id)
+        await _huella_de_factura(conn, "anular", factura_id, antes, despues, "factura anulada desde el panel")
+        return despues
+
+
+@_con_el_aviso_de_la_tabla
+async def descartar_borrador_de_factura(factura_id: int, chat_id: int) -> dict:
+    """Borra de verdad UN borrador (sin número ni NCF gastado: no deja hueco) con sus renglones y sus ligas; la
+    sesión o el trabajo quedan libres para otra factura. Una emitida o anulada: `FacturaYaNoSeCorrige` (se anula).
+    Un borrador con envíos no se descarta (`tiene_envios`). Deja la huella `descartar` con cómo era. Devuelve
+    `{"id", "descartada": True}`."""
+    _pedir_sesion_de_la_casa(chat_id)
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        _que_sea(await _tomar_factura(cur, factura_id), ("borrador",), "descartarse (se anula)")
+        await cur.execute(SENTENCIA_DE_ENVIOS_DE_LA_FACTURA, (factura_id,))
+        if await cur.fetchone() is not None:
+            raise FacturaNoVale("tiene_envios", "un borrador con envíos no se descarta")
+        antes = await _factura_completa(cur, factura_id)
+        await cur.execute(SENTENCIA_DE_DESCARTAR_LIGAS, (factura_id, factura_id))
+        await cur.execute(SENTENCIA_DE_DESCARTAR_RENGLONES, (factura_id, factura_id))
+        await cur.execute(SENTENCIA_DE_DESCARTAR_FACTURA, (factura_id,))
+        await _huella_de_factura(conn, "descartar", factura_id, antes, None, "borrador de factura descartado desde el panel")
+        return {"id": factura_id, "descartada": True}
+
+
+@_con_el_aviso_de_la_tabla
+async def factura_por_id(factura_id: int) -> dict | None:
+    """La factura completa (`_factura_completa`) o `None` si no existe. Una lectura con su propia conexión:
+    no pide sesión (la ruta que la use decide quién entra). Sin la tabla: `FacturasSinTabla`."""
+    async with pool.connection() as conn:
+        return await _factura_completa(conn.cursor(row_factory=dict_row), factura_id)
+
+
+@_con_el_aviso_de_la_tabla
+async def facturas_para_la_lista(*, estado: str | None = None, proyecto_id: int | None = None,
+                                 cliente_noco_id: int | None = None) -> list[dict]:
+    """La lista para la pantalla, la más nueva primero, sin paginar: una fila por factura con `codigo`
+    (`None` en borrador), `ligas_vivas` y `subtotal`/`itbis`/`total` por `totales_de_factura`. Filtra por
+    estado, proyecto y cliente (`None` = todos). Sin la tabla: `FacturasSinTabla`."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_LA_LISTA_DE_FACTURAS,
+                          (estado, estado, proyecto_id, proyecto_id, cliente_noco_id, cliente_noco_id))
+        filas = await cur.fetchall()
+    lista = []
+    for fila in filas:
+        f = dict(fila)
+        f["itbis_pct"] = None if f["itbis_pct"] is None else _dinero_leido(f["itbis_pct"])
+        f["codigo"] = None if f["numero"] is None else codigo_de_factura(f["anio"], f["numero"])
+        f.update(totales_de_factura([_dinero_leido(f.pop("subtotal"))], f["itbis_pct"]))
+        lista.append(f)
+    return lista
 
 
 # ── GUARDAR Y LEER LAS COTIZACIONES (pieza 3 del diseño «Cotizaciones en Proyectos», 14-oct-2026) ─────
