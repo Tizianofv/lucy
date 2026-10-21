@@ -108,6 +108,17 @@ TABLAS_DE_MAQUINARIA = {
                             "estado lo cambia una sola función; es texto de un "
                             "cliente y Lucy no lo consulta por Telegram en esta "
                             "versión",
+    "facturas": "las facturas (cliente, ligas, NCF opcional, quién la hizo): las "
+                "escribe solo el panel o la puerta de Natalia y Lucy no las "
+                "consulta por Telegram en esta versión",
+    "factura_renglones": "los renglones de cada factura: los escribe solo la "
+                         "misma puerta que escribe la factura",
+    "factura_ligas": "a qué sesiones o trabajos del Registro pertenece cada "
+                     "factura: las escribe solo la puerta de las facturas",
+    "factura_envios": "por dónde salió cada factura y quién aprobó mandarla: "
+                      "lo escribe solo la puerta de las facturas",
+    "serie_facturas": "el contador de números de factura, una fila por año: lo "
+                      "mueve solo la puerta de las facturas al numerar una",
 }
 
 # ── Un comentario llega al modelo COMO DATO, no como orden ───────────────

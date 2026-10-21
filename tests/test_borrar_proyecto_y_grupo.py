@@ -542,6 +542,10 @@ LO_QUE_APUNTA_A_UN_PROYECTO = {
     # `ON DELETE`): siguen con su `proyecto_id`. Una consulta viva de un proyecto que se archivó la resuelve o la
     # deja `no_se_pudo` la pieza L5 (el escritor de la tarea rechaza un proyecto en la papelera).
     "consultas_de_natalia": "no se tocan: siguen nombrando al proyecto en la papelera, no se pierde nada",
+    # Las facturas (20-oct-2026, pieza 1): su `proyecto_id` es una liga OPCIONAL y la llave no lleva `ON DELETE`.
+    # Borrar el proyecto no las toca (una factura emitida no se borra ni se corrige: se anula) y vuelven con él
+    # desde la papelera. Esta fila declara lo que hace hoy el borrado, que no escribe en `facturas`.
+    "facturas": "no se tocan: siguen nombrando al proyecto en la papelera, no se pierde nada",
 }
 LO_QUE_APUNTA_A_UN_GRUPO = {
     "proyectos": "su `area` pasa a NULL (lo vivo, antes, se borra)",

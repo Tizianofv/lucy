@@ -228,9 +228,9 @@ def _texto_fijo(nodo):
     return None
 
 
-def _textos_que_escriben_la_serie(archivos, raiz) -> list[tuple[str, int, str]]:
+def _textos_que_escriben_la_serie(archivos, raiz, tabla: str = "serie_cotizaciones") -> list[tuple[str, int, str]]:
     """(archivo, línea, texto) de toda constante de texto de un `.py` fuera de `tests/` que nombra
-    `serie_cotizaciones` y trae INSERT, UPDATE, DELETE o REPLACE. Se juntan los pedazos que el parser
+    `tabla` (por omisión `serie_cotizaciones`; `tests/test_numero_de_factura.py` la usa con `serie_facturas`) y trae INSERT, UPDATE, DELETE o REPLACE. Se juntan los pedazos que el parser
     pega solo (paréntesis) y los que `_texto_fijo` pega (constantes unidas con `+`).
     FRONTERA (no se persigue): el nombre de la tabla en una variable, f-strings y SQL armado en ejecución."""
     hallados = []
@@ -250,7 +250,7 @@ def _textos_que_escriben_la_serie(archivos, raiz) -> list[tuple[str, int, str]]:
             v = _texto_fijo(nodo)
             if v is not None:
                 absorbidos.update(id(h) for h in ast.walk(nodo))
-                if re.search(r"serie_cotizaciones", v, re.I) and re.search(r"\b(INSERT|UPDATE|DELETE|REPLACE)\b", v, re.I):
+                if re.search(re.escape(tabla), v, re.I) and re.search(r"\b(INSERT|UPDATE|DELETE|REPLACE)\b", v, re.I):
                     hallados.append((rel, nodo.lineno, v))
     return hallados
 
