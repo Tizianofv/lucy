@@ -3677,19 +3677,26 @@ async def factura_y_envio_para_el_pdf_de_natalia(noco_id, factura_id: int, envio
     """La factura (completa) cuyo PDF puede bajar Natalia: SOLO si es suya y de esa ficha, está EMITIDA y el envío
     `envio_id` de esa factura está APROBADO (alguien lo aprobó y ella todavía no anotó cómo terminó). Si no es suya o
     no existe: `FacturaNoEsta`. Si el envío todavía no se aprobó, se rechazó o ya terminó, o la factura no está
-    emitida: `FacturaYaNoSeCorrige(estado)` con el estado del envío, para decírselo tal cual. Una lectura."""
+    emitida: `FacturaYaNoSeCorrige(estado)` con el estado del envío, para decírselo tal cual. **Esta es la puerta que
+    evita el segundo documento al cliente (pieza 9b): si la factura ya tiene OTRO envío `enviado` (por el canal que sea,
+    `mano` incluido), no se entrega el PDF** (`FacturaYaNoSeCorrige('enviado')`). Una lectura."""
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await _factura_de_natalia(cur, noco_id, factura_id)
         f = await _factura_completa(cur, factura_id)
         await cur.execute(SENTENCIA_DE_LOS_ENVIOS_DE_FACTURAS, (factura_id,))
-        el_envio = next((e for e in await cur.fetchall() if e["id"] == envio_id), None)
+        todos = await cur.fetchall()
+    el_envio = next((e for e in todos if e["id"] == envio_id), None)
     if el_envio is None:
         raise FacturaNoEsta("ese envío no está")
     if el_envio["estado"] != "aprobado":
         raise FacturaYaNoSeCorrige(el_envio["estado"], f"el envío está {el_envio['estado']}: el PDF se baja con el envío aprobado")
     if f["estado"] != "emitida":
         raise FacturaYaNoSeCorrige(f["estado"], f"la factura está {f['estado']}: solo se baja una emitida")
+    salio = next((e for e in todos if e["id"] != envio_id and e["estado"] == "enviado"), None)
+    if salio is not None:
+        raise FacturaYaNoSeCorrige(
+            "enviado", f"la factura ya salió al cliente por {salio['canal']}: no se manda dos veces")
     return f
 
 
@@ -3698,16 +3705,23 @@ async def anotar_envio_de_natalia(noco_id, factura_id: int, envio_id: int, salio
     """Natalia anota cómo terminó un envío APROBADO: `salio=True` → `enviado` (con la hora de ahora); `salio=False` →
     `no_se_pudo` con su `motivo` (1 a 500; obligatorio). Es lo ÚNICO que pone `enviado` por esta puerta: nada dice
     «enviada» si ella no lo anotó. Anotar dos veces lo mismo es lo mismo (no cambia nada); un envío que no está
-    aprobado, o que terminó de otra forma, es `FacturaYaNoSeCorrige(estado)`. Devuelve el envío releído."""
+    aprobado, o que terminó de otra forma, es `FacturaYaNoSeCorrige(estado)`. Devuelve el envío releído.
+
+    DOS ENVÍOS QUE SALIERON (pieza 9b): si la factura ya tiene otro envío `enviado` (por el canal que sea, `mano`
+    incluido) y Natalia dice que este también salió, **se anota igual** —negarlo escondería lo que pasó— y se deja un
+    aviso en la bandeja de quien revisa («la factura #N salió dos veces»). El que evita el segundo documento es el PDF:
+    `factura_y_envio_para_el_pdf_de_natalia` no lo entrega si la factura ya salió por otro envío."""
     if not isinstance(salio, bool):
         raise FacturaNoVale("salio", "salio es verdadero o falso")
     el_motivo = None if salio else _texto_de_factura(motivo, "motivo", LARGOS_DE_FACTURA["motivo"])
+    doble = None
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await _factura_de_natalia(cur, noco_id, factura_id)
         await _tomar_factura(cur, factura_id)
         await cur.execute(SENTENCIA_DE_LOS_ENVIOS_DE_FACTURAS, (factura_id,))
-        el_envio = next((e for e in await cur.fetchall() if e["id"] == envio_id), None)
+        todos = await cur.fetchall()
+        el_envio = next((e for e in todos if e["id"] == envio_id), None)
         if el_envio is None:
             raise FacturaNoEsta("ese envío no está")
         if el_envio["canal"] == "mano":
@@ -3719,6 +3733,7 @@ async def anotar_envio_de_natalia(noco_id, factura_id: int, envio_id: int, salio
             raise FacturaYaNoSeCorrige(
                 el_envio["estado"], f"el envío está {el_envio['estado']}: solo se anota uno que ya se aprobó")
         if salio:
+            doble = next((e for e in todos if e["id"] != envio_id and e["estado"] == "enviado"), None)
             await cur.execute(SENTENCIA_DE_ANOTAR_QUE_SALIO, (envio_id,))
         else:
             await cur.execute(SENTENCIA_DE_ANOTAR_QUE_NO_SALIO, (el_motivo, envio_id))
@@ -3728,7 +3743,25 @@ async def anotar_envio_de_natalia(noco_id, factura_id: int, envio_id: int, salio
         await _huella_de_factura(
             conn, "anotar_envio", factura_id, _envio_leido(el_envio), _envio_leido(despues),
             "Natalia anotó que la factura salió" if salio else "Natalia anotó que la factura no salió", "natalia")
-        return _envio_leido(despues)
+    if doble is not None:
+        await _avisar_de_la_factura_dos_veces(factura_id, el_envio["canal"], doble["canal"])
+    return _envio_leido(despues)
+
+
+async def _avisar_de_la_factura_dos_veces(factura_id: int, canal, otro_canal) -> None:
+    """Deja en la bandeja de quien revisa —el camino de avisos que ya tiene Lucy (`registrar_aviso`)— que una factura
+    salió dos veces. No hace fallar el anotado: lo que pasó ya pasó y se anota igual. Sin a quién avisarle (el nombre de
+    quien revisa no resuelve), lo deja en el registro y sigue."""
+    revisora = _config.chat_de_quien_revisa_las_facturas()
+    if revisora is None:
+        log.warning("Factura #%s salió dos veces y no hay a quién avisarle (REVISA_FACTURAS no resuelve).", factura_id)
+        return
+    texto = (f"⚠️ La factura #{factura_id} salió dos veces: se anotó que salió por {canal} y ya había salido por "
+             f"{otro_canal}. Revísalo.")
+    try:
+        await registrar_aviso(revisora, texto)
+    except Exception:
+        log.warning("Factura #%s: no pude dejar el aviso de que salió dos veces.", factura_id, exc_info=True)
 
 
 @_con_el_aviso_de_la_tabla

@@ -641,6 +641,74 @@ def test_la_aprobacion_que_la_puerta_hereda_tiene_que_ser_una_de_verdad_aprobada
     assert r.json()["envio"]["estado"] == "pendiente"
 
 
+# ── El PDF es la puerta que evita el segundo documento (9b, hallazgo del testigo) ───────────────────
+#
+# El testigo del 21-oct-2026 reprodujo dos envíos APROBADOS de la misma factura anotados los dos como `enviado`. La sala
+# decidió: anotar no se niega (negar lo que pasó lo escondería y se avisa al equipo), y el que de verdad evita mandar dos
+# veces es el PDF — Natalia no puede mandar lo que no puede bajar.
+
+def test_el_pdf_no_se_baja_si_la_factura_ya_salio_por_otro_envio(api, tg):
+    """Sonda del testigo, camino de la pieza 9: WhatsApp aprobado y correo aprobado; uno sale y el PDF del otro se niega."""
+    fid, eid = aprobada(tg)
+    e2 = pedir(fid, "correo").json()["envio"]["envio_id"]
+    assert vuelta(tg) == 1
+    tocar(f"fas:{e2}", ROSI)                                                    # los dos aprobados
+    assert pdf(fid, e2).status_code == 200                                      # todavía se puede
+    anotar(fid, eid, True)                                                      # sale por WhatsApp
+    antes = tgf.foto(api)
+    r = pdf(fid, e2)
+    assert r.status_code == 409 and "ya salió" in r.text and not r.content.startswith(b"%PDF")
+    assert tgf.foto(api) == antes                                               # el PDF no escribe nada
+
+
+def test_el_pdf_no_se_baja_por_el_camino_del_cambio_de_canal(api, tg):
+    """Sonda del testigo, camino de la 9b: WhatsApp no salió, correo nace aprobado, WhatsApp se pide otra vez y se aprueba."""
+    fid, eid = aprobada(tg)
+    anotar(fid, eid, False, "la ventana de 24 h está cerrada")
+    correo = pedir(fid, "correo").json()["envio"]                               # nace aprobado, sin tarjeta
+    assert correo["estado"] == "aprobado"
+    whatsapp2 = pedir(fid, "whatsapp").json()["envio"]["envio_id"]              # el mismo canal: otra vez pendiente
+    assert vuelta(tg) == 1
+    tocar(f"fas:{whatsapp2}", ROSI)
+    assert pdf(fid, correo["envio_id"]).status_code == 200
+    anotar(fid, correo["envio_id"], True)                                       # sale por correo
+    r = pdf(fid, whatsapp2)
+    assert r.status_code == 409 and "ya salió" in r.text and not r.content.startswith(b"%PDF")
+
+
+def test_anotar_que_salio_un_segundo_envio_se_anota_y_avisa_al_equipo(api, tg):
+    fid, eid = aprobada(tg)
+    e2 = pedir(fid, "correo").json()["envio"]["envio_id"]
+    assert vuelta(tg) == 1
+    tocar(f"fas:{e2}", ROSI)
+    anotar(fid, eid, True)
+    antes = len(tg.avisos)
+    r = anotar(fid, e2, True)                                                   # se anota la verdad, no se niega
+    assert r.status_code == 200 and r.json()["envio"]["estado"] == "enviado"
+    assert [x["estado"] for x in envios(api, fid)].count("enviado") == 2
+    nuevos = tg.avisos[antes:]
+    assert len(nuevos) == 1, nuevos
+    chat, texto = nuevos[0]
+    assert chat == ROSI and f"La factura #{fid} salió dos veces" in texto and "correo" in texto
+    assert acciones_de_la_huella(api)[-1] == ("natalia", "anotar_envio")
+
+
+def test_un_envio_a_mano_tambien_cierra_la_puerta_al_otro_canal_y_al_pdf(api, tg):
+    """El hueco que el testigo no vio: el `enviado` a mano cuenta igual que los demás."""
+    fid, eid = aprobada(tg)
+    assert cliente().post(f"/facturas/{fid}/mandada-a-mano", follow_redirects=False).status_code == 303
+    mano = next(e for e in envios(api, fid) if e["canal"] == "mano")
+    assert mano["estado"] == "enviado"
+    antes = tgf.foto(api)
+    pedido = pedir(fid, "correo")                                               # no abre otro: devuelve el de mano
+    assert pedido.status_code == 200
+    assert (pedido.json()["envio"]["envio_id"], pedido.json()["envio"]["canal"], pedido.json()["envio"]["estado"],
+            pedido.json()["reusada"]) == (mano["id"], "mano", "enviado", True)
+    assert tgf.foto(api) == antes
+    r = pdf(fid, eid)                                                           # ni se baja el PDF del aprobado
+    assert r.status_code == 409 and "ya salió" in r.text and not r.content.startswith(b"%PDF")
+
+
 # ── La tarjeta ──────────────────────────────────────────────────────────────────────────────────────
 
 def test_la_tarjeta_va_al_chat_de_quien_revisa_con_el_pdf_y_los_botones_y_a_nadie_mas(api, tg):

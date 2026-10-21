@@ -898,7 +898,8 @@ async def pdf_de_factura_aprobada(
     """El PDF de la factura, SOLO si ese envío está APROBADO: la factura es de Natalia y de esa ficha, está emitida y
     alguien aprobó mandarla por ese envío (y Natalia todavía no anotó cómo terminó). 200 `application/pdf` (el nombre es
     el número: `FAC-2026-001.pdf`). 404: no es suya / no existe / ese envío no es de esa factura. 409: el envío todavía
-    no se aprobó, se rechazó, ya terminó, o la factura no está emitida (el detalle dice cuál). 503: falta una migración.
+    no se aprobó, se rechazó, ya terminó, la factura no está emitida, o **la factura ya salió al cliente por otro envío
+    (por el canal que sea, `mano` incluido)** — es la puerta que evita el segundo documento. 503: falta una migración.
     Un borrador NUNCA se baja por aquí."""
     try:
         f = await db.factura_y_envio_para_el_pdf_de_natalia(noco_id, factura_id, envio_id)
