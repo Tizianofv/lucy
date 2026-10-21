@@ -59,6 +59,7 @@ import cotizaciones
 import cotizaciones_drive
 import cotizaciones_ia
 import db.db as db
+import facturas
 import noco_lectura
 import registro_lectura
 import web.auth as auth
@@ -2473,6 +2474,33 @@ async def pdf_de_una_cotizacion(request: Request, pid: int, cid: int):
                                          borrador=cot["estado"] != "enviada")
     return Response(pdf, media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="{cot["codigo"]}.pdf"',
+        "Cache-Control": "private, no-store"})
+
+
+@app.get("/facturas/{fid}/pdf")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def pdf_de_una_factura(request: Request, fid: int):
+    """El PDF de UNA factura (pieza 3 del diseño «Facturas»). Es la ruta que usarán la pantalla de Facturas (pieza
+    4) y la puerta de Natalia (pieza 9).
+
+    SOLO LA CASA (`auth.puede_entrar`): a diferencia del PDF de la cotización, la cookie de solo ver NO la baja
+    (decisión del encargo de la pieza 3: «solo para la casa»; una factura lleva el RNC o la cédula del cliente y
+    el NCF). Sin sesión de la casa: 401. Es una LECTURA: el PDF se arma en el momento desde lo guardado
+    (`db.factura_por_id` → `facturas.hoja_de_factura` → `pdf_de_factura`), nada se escribe. 404 si no existe o
+    falta la tabla. `attachment` con el número como nombre (`FAC-2026-001.pdf`; un borrador, sin número:
+    `Factura-borrador-<id>.pdf`). El borrador y la anulada se bajan, con su marca en cada página."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    try:
+        f = await db.factura_por_id(fid)
+    except db.FacturasSinTabla:
+        f = None
+    if f is None:
+        return Response("No existe esa factura.", status_code=404,
+                        media_type="text/plain; charset=utf-8")
+    pdf = facturas.pdf_de_factura(facturas.hoja_de_factura(f))
+    return Response(pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{facturas.nombre_del_archivo(f)}"',
         "Cache-Control": "private, no-store"})
 
 
