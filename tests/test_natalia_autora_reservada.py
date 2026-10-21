@@ -308,13 +308,52 @@ def test_G2_la_pantalla_de_la_tarea_pinta_Natalia(casa):
     assert html.count("<b>sin nombre</b>") == 1, "Natalia salió como «sin nombre»"
 
 
+def _donde_sale_el_id(x, id_, ruta="r"):
+    """Rutas de `x` donde sale `id_` como DATO: un número igual (int/float, no bool),
+    un texto que es el id entero, o el id como token suelto dentro de un texto.
+    No mira el `repr`: «-2» es subcadena de cualquier fecha del 20 al 29 («2026-10-20»)
+    y la prueba se ponía roja por el día. El token suelto exige que antes no haya letra,
+    dígito ni «_» y que después no haya dígito."""
+    import re
+
+    texto = str(id_)
+    suelto = re.compile(r"(?<!\w)" + re.escape(texto) + r"(?!\d)")
+    if isinstance(x, dict):
+        halladas = []
+        for k, v in x.items():
+            halladas += _donde_sale_el_id(k, id_, f"{ruta}.<clave {k!r}>")
+            halladas += _donde_sale_el_id(v, id_, f"{ruta}[{k!r}]")
+        return halladas
+    if isinstance(x, (list, tuple, set, frozenset)):
+        return [h for i, v in enumerate(x) for h in _donde_sale_el_id(v, id_, f"{ruta}[{i}]")]
+    if isinstance(x, bool):
+        return []
+    if isinstance(x, (int, float)):
+        return [ruta] if x == id_ else []
+    if isinstance(x, str):
+        return [ruta] if x.strip() == texto or suelto.search(x) else []
+    return [ruta] if suelto.search(repr(x)) else []
+
+
+def test_G2_el_buscador_del_id_no_confunde_una_fecha_y_si_ve_el_id():
+    n = config.CHAT_ID_NATALIA
+    # El día 20 al 29 de cada mes: la fecha contiene el texto «-2» y no es el id.
+    for dia in range(20, 30):
+        assert _donde_sale_el_id({"creado_en": f"2026-10-{dia}"}, n) == []
+    # El id como dato, en cualquiera de sus formas, sí se ve.
+    assert _donde_sale_el_id({"a": [{"autor_chat_id": n}]}, n) == ["r['a'][0]['autor_chat_id']"]
+    assert _donde_sale_el_id({"a": str(n)}, n) == ["r['a']"]
+    assert _donde_sale_el_id({"texto": f"escribió {n} ayer"}, n) == ["r['texto']"]
+
+
 def test_G2_la_puerta_de_la_sala_tambien_la_pinta(casa):
     db.pool = _Pool(_base(COMENTARIOS))
     # Misma función que atiende la ruta, con su permiso ya resuelto.
     r = _bucle(api_code.leer_comentarios(1, quien="sala_mac"))
     assert [c["autor"] for c in r["comentarios"]] == [
         "Natalia", "Mengano Inventado", "sin nombre"]
-    assert str(config.CHAT_ID_NATALIA) not in repr(r)
+    assert _donde_sale_el_id(r, config.CHAT_ID_NATALIA) == [], \
+        "el id reservado de Natalia salió en la respuesta de la sala"
 
 
 # ═══════════════════════════════════════════════════════════════════════
