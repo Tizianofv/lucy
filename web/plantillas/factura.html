@@ -91,6 +91,15 @@
       {% endif %}
     </div>
 
+    <div class="tarjeta" data-envios>
+      <b>Envío al cliente</b>
+      <p data-hecha-por>La hizo {{ hecha_por_texto }}.</p>
+      {% if envios is none %}<p class="aviso" data-envios-no-se-pudo>No se pudo leer cómo van los envíos de esta factura ahora.</p>
+      {% elif not envios %}<p class="suave" data-sin-envios>Todavía no se ha mandado ni se ha pedido mandarla.</p>{% endif %}
+      {% for e in (envios or []) %}<p data-envio="{{ e.estado }}"><span class="etiq">{{ e.etiqueta }}</span> {{ e.frase }}</p>{% endfor %}
+      {% if f.estado == 'emitida' %}<form method="post" action="/facturas/{{ f.id }}/mandada-a-mano" class="barra"><button class="linea" data-mandada-a-mano>Marcar como mandada a mano</button></form>{% endif %}
+    </div>
+
     {% if drive %}
     <div class="tarjeta" data-drive="{{ drive.estado }}">
       <b>Drive</b> <span class="etiq" data-drive-etiqueta>{{ drive.etiqueta }}</span>

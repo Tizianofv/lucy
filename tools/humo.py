@@ -166,6 +166,19 @@ async def _drive_de_las_facturas():
         return filas
 
 
+async def _envios_de_las_facturas():
+    """Los SELECT de lo que la pieza 9 de las facturas (la puerta de Natalia, 21-oct-2026) agregó, SIN tolerancia: las dos
+    columnas de la tarjeta de `factura_envios` (`tarjeta_msg_id`, `visto_cambiado_en`). `db.envios_de_factura` (la página de
+    una factura) NO las nombra a propósito y carga igual sin la migración; ésta es la línea que dice que
+    `db/migrations/2026-10-21_facturas_natalia.sql` no se aplicó. Son LECTURAS; pedir un envío, aprobarlo y anotarlo no se
+    ejercen acá (humo.py no escribe en producción)."""
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=db.dict_row)
+        await cur.execute("SELECT count(*) AS envios, count(tarjeta_msg_id) AS con_tarjeta, "
+                          "count(visto_cambiado_en) AS con_candado FROM factura_envios")
+        return {"factura_envios": dict(await cur.fetchone())}
+
+
 async def main() -> int:
     if not os.environ.get("DATABASE_URL", "").strip():
         print("Falta DATABASE_URL.", file=sys.stderr)
@@ -294,6 +307,12 @@ async def main() -> int:
         # existe. LECTURAS: subir y marcar no se ejercen acá (humo.py no escribe en producción).
         ("columnas y tablas de Drive de las facturas (sin tolerancia)", _drive_de_las_facturas),
         ("drive_de_factura", lambda: db.drive_de_factura(0)),
+        # La puerta de Natalia (pieza 9): las columnas de la tarjeta, y las lecturas que usa (con ids que no existen y la
+        # que busca las tarjetas sin mandar). LECTURAS.
+        ("columnas de la tarjeta de los envíos de facturas (sin tolerancia)", _envios_de_las_facturas),
+        ("envios_de_factura", lambda: db.envios_de_factura(0)),
+        ("facturas_de_natalia", lambda: db.facturas_de_natalia(0)),
+        ("envios_de_factura_sin_tarjeta", lambda: db.envios_de_factura_sin_tarjeta()),
     ]
 
     rojas = []

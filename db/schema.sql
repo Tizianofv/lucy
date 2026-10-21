@@ -717,6 +717,8 @@ CREATE TABLE factura_envios (
   aprobado_en          TIMESTAMPTZ,
   enviado_en           TIMESTAMPTZ,
   motivo               TEXT,
+  tarjeta_msg_id       BIGINT,
+  visto_cambiado_en    TIMESTAMPTZ,
   CONSTRAINT factura_envios_canal_valido
     CHECK (canal IN ('whatsapp', 'correo', 'mano')),
   CONSTRAINT factura_envios_estado_valido

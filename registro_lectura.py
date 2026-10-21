@@ -390,6 +390,17 @@ async def sesiones_de_cliente(noco_id, sesiones=()) -> dict:
             "canceladas": canceladas, "se_le_pregunto": True}
 
 
+async def lo_que_dice_el_registro_del_cliente(cliente_noco_id) -> dict | None:
+    """Lo que la App contesta por la FICHA de ese cliente (sus sesiones y trabajos, SIN pedirle sesiones sueltas), o
+    `None` si no contestó. Es la ÚNICA lectura con la que se decide si una sesión o un trabajo se puede ligar a una
+    factura, venga la factura de la pantalla (`web/app.py`) o de Natalia (`web/api_code.py`): la App devuelve
+    cualquier sesión que se le pida con `&sesion=` aunque sea de otra persona y la mezcla con las de la ficha, así
+    que solo lo que ella lista para la ficha prueba que la sesión es del cliente. De aquí sale también el tipo de cada
+    liga (`es_trabajo`) y si está cancelada: ni la persona ni Natalia escriben lo uno ni lo otro."""
+    lectura = await sesiones_de_cliente(cliente_noco_id)
+    return None if lectura["estado"] == "no_se_pudo" else lectura
+
+
 def _candidato(fila) -> dict | None:
     """Un renglón de la búsqueda (diseño 3.6) con lo que la página pinta, o None si no sirve.
 

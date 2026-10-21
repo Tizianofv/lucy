@@ -310,7 +310,7 @@ def test_G1_los_hermanos_con_noco_id_en_la_ruta_son_estos_y_todos_estan_cubierto
     «otro cliente no lo ve» vive en `tests/test_api_code_consultas.py`, G2 y su censo). El día que haya una
     cuarta esta prueba se rompe y obliga a escribirle su propia prueba antes de sumarla aquí."""
     con_ficha = sorted((m, p, perm) for m, p, perm in api_code.rutas_registradas(panel.app)
-                       if "{noco_id}" in p)
+                       if "{noco_id}" in p and "/facturas" not in p)     # las de las facturas: `tests/test_facturas_natalia.py`
     assert con_ficha == [
         ("GET", "/api/code/clientes/{noco_id}/consultas", "consultas:leer"),
         ("GET", "/api/code/clientes/{noco_id}/proyectos", PERMISO),

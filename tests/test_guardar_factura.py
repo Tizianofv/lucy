@@ -162,6 +162,8 @@ class _Mundo:
             con.execute(ft._a_sqlite(s))
         for s in ft._sentencias_que_corren(ft._texto_migracion_de_drive()):       # pieza 8: el Drive de las facturas
             con.execute(ft._a_sqlite(s))
+        for s in ft._sentencias_que_corren(ft._texto_migracion_de_natalia()):     # pieza 9: la tarjeta de los envíos
+            con.execute(ft._a_sqlite(s))
         dos_opciones = json.dumps({"opciones": [{"nombre": "A", "renglones": []}, {"nombre": "B", "renglones": []}]})
         una_opcion = json.dumps({"opciones": [{"nombre": "A", "renglones": []}]})
         for cid, proyecto, contenido in ((1, 1, dos_opciones), (2, 2, una_opcion), (3, 1, una_opcion)):
@@ -846,8 +848,11 @@ def _sentencias_sobre_facturas(archivos, raiz) -> list[tuple[str, int, str]]:
 
 
 def _lo_que_viola(hallados):
-    """Reglas: solo `db/db.py` escribe; nadie borra salvo los renglones de un borrador; las ligas solo se marcan
-    `desligada_en`; los envíos solo pasan a «no se pudo» y no nacen aquí (pieza 9); todo UPDATE de `facturas`
+    """Reglas: solo `db/db.py` escribe; nadie borra salvo los renglones de un borrador (y, con él, sus envíos que ya
+    terminaron mal); las ligas solo se marcan `desligada_en`; un envío solo nace de dos formas (Natalia lo pide `pendiente`,
+    la casa lo marca `mano` ya enviado), solo cambia las columnas de su vida, TODO UPDATE suyo dice el estado en su WHERE y
+    solo dos sentencias pueden ponerlo `enviado` (la que anota Natalia y la de «a mano»: nada dice «enviado» sin que alguien
+    lo anote; pieza 9); todo UPDATE de `facturas`
     (menos el que solo toma la fila) dice en su WHERE en qué estado vale y nunca toca `hecha_por*`, `creado_en`
     ni `id`; `anio`/`numero` solo los pone el que emite; el NCF solo lo toca el que corrige un borrador."""
     malos = []
@@ -858,14 +863,16 @@ def _lo_que_viola(hallados):
         if re.search(r"\bREPLACE\s+INTO\b", v, re.I):
             malos.append((rel, linea, "reemplaza"))
         if re.search(r"\bDELETE\s+FROM\b", v, re.I):
-            if tabla in ("factura_envios",):
-                malos.append((rel, linea, f"borra de {tabla}"))
-            elif "'borrador'" not in v and not (tabla == "factura_renglones" and v == db.SENTENCIA_DE_BORRAR_RENGLONES):
+            if "'borrador'" not in v and not (tabla == "factura_renglones" and v == db.SENTENCIA_DE_BORRAR_RENGLONES):
                 malos.append((rel, linea, f"borra de {tabla} sin decir borrador"))
         if tabla == "factura_renglones" and re.search(r"\bUPDATE\b", v, re.I):
             malos.append((rel, linea, "cambia un renglón en su sitio"))
-        if tabla == "factura_envios" and re.search(r"\bINSERT\b", v, re.I):
-            malos.append((rel, linea, "crea un envío"))
+        if tabla == "factura_envios" and re.search(r"\bINSERT\b", v, re.I) and v not in (
+                db.SENTENCIA_DE_PEDIR_ENVIO, db.SENTENCIA_DE_MANDADA_A_MANO):
+            malos.append((rel, linea, "crea un envío de una forma que no es de las dos"))
+        if tabla == "factura_envios" and re.search(r"'enviado'", v) and v not in (
+                db.SENTENCIA_DE_ANOTAR_QUE_SALIO, db.SENTENCIA_DE_MANDADA_A_MANO):
+            malos.append((rel, linea, "pone enviado fuera de las dos que lo anotan"))
         m = re.search(r"\bUPDATE\s+(\w+)\s+SET\b(.*?)\bWHERE\b(.*)", v, re.I | re.S)
         if re.search(r"\bUPDATE\b", v, re.I) and m is None:
             malos.append((rel, linea, "UPDATE sin WHERE"))
@@ -876,8 +883,12 @@ def _lo_que_viola(hallados):
         columnas = set(re.findall(r"\b(\w+)\s*=", puesto))
         if tabla == "factura_ligas" and columnas != {"desligada_en"}:
             malos.append((rel, linea, "cambia en una liga algo que no es desligada_en"))
-        if tabla == "factura_envios" and columnas != {"estado", "motivo"}:
-            malos.append((rel, linea, "cambia en un envío algo que no es estado y motivo"))
+        if tabla == "factura_envios":
+            if not columnas <= {"estado", "motivo", "aprobado_por_chat_id", "aprobado_en", "enviado_en", "tarjeta_msg_id",
+                                "visto_cambiado_en"}:
+                malos.append((rel, linea, "cambia en un envío una columna que no es de su vida"))
+            if not re.search(r"\bestado\b", donde):
+                malos.append((rel, linea, "UPDATE de envíos sin el estado en el WHERE"))
         if tabla == "facturas":
             if puesto.strip() == "creado_en = creado_en":
                 continue                                                   # tomar la fila: no cambia nada
@@ -906,7 +917,12 @@ def test_las_sentencias_que_escriben_facturas_son_las_de_la_puerta_y_cumplen_las
         # pieza 8 (Drive): anotar dónde quedó el PDF y el error del intento; no piden sesión ni dejan huella (como los de
         # las cotizaciones: los llama una ruta que ya la pidió) y todas dicen el estado en su WHERE
         db.SENTENCIA_DE_MARCAR_FACTURA_EN_DRIVE, db.SENTENCIA_DE_MARCAR_ANULADA_EN_DRIVE,
-        db.SENTENCIA_DE_ERROR_DE_DRIVE_DE_FACTURA))
+        db.SENTENCIA_DE_ERROR_DE_DRIVE_DE_FACTURA,
+        # pieza 9 (la puerta de Natalia): la vida de un envío, y borrar con un borrador los que ya terminaron mal
+        db.SENTENCIA_DE_PEDIR_ENVIO, db.SENTENCIA_DE_APROBAR_ENVIO, db.SENTENCIA_DE_RECHAZAR_ENVIO,
+        db.SENTENCIA_DE_ENVIO_QUE_NO_SE_PUDO_APROBAR, db.SENTENCIA_DE_ANOTAR_QUE_SALIO,
+        db.SENTENCIA_DE_ANOTAR_QUE_NO_SALIO, db.SENTENCIA_DE_MANDADA_A_MANO, db.SENTENCIA_DE_MARCAR_LA_TARJETA,
+        db.SENTENCIA_DE_DESCARTAR_ENVIOS))
     assert textos == esperadas, [h[:2] for h in hallados]
     assert _lo_que_viola(hallados) == []
 
@@ -925,6 +941,9 @@ def test_la_guarda_ve_lo_inventado(tmp_path):
         'H = "UPDATE factura_renglones SET monto = 1 WHERE id = 1"\n'
         'I = "INSERT INTO factura_envios (factura_id) VALUES (1)"\n'
         'J = "UPDATE factura_envios SET aprobado_en = now() WHERE id = 1"\n'
+        'N = "UPDATE factura_envios SET canal = \'mano\' WHERE id = 1 AND estado = \'pendiente\'"\n'
+        'O = "UPDATE factura_envios SET estado = \'enviado\' WHERE id = 1 AND estado = \'pendiente\'"\n'
+        'P = "DELETE FROM factura_envios WHERE id = 1"\n'
         'K = "UPDATE facturas SET estado = \'anulada\'"\n'
         'L = "REPLACE INTO facturas (id) VALUES (1)"\n', encoding="utf-8")
     (tmp_path / "otro.py").write_text('M = "INSERT INTO facturas (a) VALUES (1)"\n', encoding="utf-8")
@@ -934,7 +953,9 @@ def test_la_guarda_ve_lo_inventado(tmp_path):
         "pone el número fuera de emitir", "toca el NCF fuera de un borrador", "UPDATE de facturas sin el estado en el WHERE",
         "borra de facturas sin decir borrador", "cambia hecha_por", "cambia en una liga algo que no es desligada_en",
         "borra de factura_ligas sin decir borrador",
-        "cambia un renglón en su sitio", "crea un envío", "cambia en un envío algo que no es estado y motivo",
+        "cambia un renglón en su sitio", "crea un envío de una forma que no es de las dos",
+        "cambia en un envío una columna que no es de su vida", "UPDATE de envíos sin el estado en el WHERE",
+        "pone enviado fuera de las dos que lo anotan", "borra de factura_envios sin decir borrador",
         "UPDATE sin WHERE", "reemplaza", "escribe fuera de db/db.py"])
 
 
@@ -966,6 +987,8 @@ def _llamadas(f, chat):
         "emitir_factura": lambda: db.emitir_factura(f["id"], chat, f["cambiado_en"]),
         "anular_factura": lambda: db.anular_factura(f["id"], chat, "motivo"),
         "descartar_borrador_de_factura": lambda: db.descartar_borrador_de_factura(f["id"], chat),
+        "marcar_factura_mandada_a_mano": lambda: db.marcar_factura_mandada_a_mano(f["id"], chat),
+        "contestar_envio_de_factura": lambda: db.contestar_envio_de_factura(1, chat, True),
     }
 
 
@@ -988,11 +1011,13 @@ def test_cada_escritor_deja_una_huella_y_ninguna_mas(mundo):
     mundo.con.execute("DELETE FROM log_acciones")
     # el orden de una vida: se corrige, se liga, se emite, se anula (la emitida congela lo anterior)
     orden = ["corregir_borrador_de_factura", "ligar_factura_a_registro", "desligar_factura_de_registro",
-             "poner_cotizacion_de_factura", "poner_proyecto_de_factura", "emitir_factura", "anular_factura",
-             "descartar_borrador_de_factura"]
-    assert sorted(orden + ["crear_borrador_de_factura"]) == sorted(_escritores_publicos())
+             "poner_cotizacion_de_factura", "poner_proyecto_de_factura", "emitir_factura",
+             "marcar_factura_mandada_a_mano", "anular_factura", "descartar_borrador_de_factura"]
+    # `contestar_envio_de_factura` (pieza 9) necesita a quien revisa y una tarjeta enviada: su huella (una al rechazar, dos al
+    # aprobar un borrador, que también lo emite) la vigila `tests/test_facturas_natalia.py`.
+    assert sorted(orden + ["crear_borrador_de_factura", "contestar_envio_de_factura"]) == sorted(_escritores_publicos())
     for nombre in ["crear_borrador_de_factura"] + orden:
-        sujeto = e if nombre == "anular_factura" else leer(base)
+        sujeto = e if nombre in ("anular_factura", "marcar_factura_mandada_a_mano") else leer(base)
         if nombre == "descartar_borrador_de_factura":
             sujeto = crear(liga={"tipo": "sesion", "ref": "hermano-d"})
             mundo.con.execute("DELETE FROM log_acciones WHERE registro_id = ?", (sujeto["id"],))           # el candado se vuelve a leer en cada intento

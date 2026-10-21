@@ -488,6 +488,25 @@ def dueno_de_calendario(nombre: str | None) -> int | None:
     return por_nombre.get(nombre)
 
 
+# ── QUIÉN REVISA LAS FACTURAS QUE HACE NATALIA ───────────────────────────────
+#
+# Tiziano (20-oct-2026): «Rosi revisa las facturas». Antes de que Natalia le mande una factura a un cliente, la
+# tarjeta con el PDF le llega a esa persona por Telegram y solo ella la aprueba o la rechaza. Se dice por NOMBRE
+# (el mismo de `NOMBRES_POR_CHAT`) y NUNCA por chat: este archivo es público y el chat sale de `personas_del_panel()`,
+# la misma fuente que ya usan `chats_de_copia` y `dueno_de_calendario`. Cambiar quién revisa es cambiar esta variable
+# en Railway, sin desplegar nada.
+NOMBRE_DE_QUIEN_REVISA_LAS_FACTURAS = os.environ.get("REVISA_FACTURAS", "Rosi").strip()
+
+
+def chat_de_quien_revisa_las_facturas() -> int | None:
+    """El chat de la persona que revisa las facturas de Natalia, o `None` si no hay a quién mandarle la tarjeta: el
+    nombre no resuelve contra `personas_del_panel()` (no entra al panel o no tiene nombre) o no se le puede escribir
+    por Telegram (`puede_recibir_telegram`). Se calcula en cada llamada, como `chats_de_copia`. Quien la llama dice
+    la verdad cuando es `None` (no inventa un destino)."""
+    chat = dueno_de_calendario(NOMBRE_DE_QUIEN_REVISA_LAS_FACTURAS)
+    return chat if chat is not None and puede_recibir_telegram(chat) else None
+
+
 def chat_escrito(texto):
     """El chat que dice ese TEXTO, o None si ese texto no es un chat.
 

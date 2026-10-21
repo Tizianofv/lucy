@@ -2939,7 +2939,7 @@ SENTENCIA_DE_LA_COTIZACION_VIVA = "SELECT id, proyecto_id, contenido FROM cotiza
 
 # Las que escriben. Cada UPDATE de `facturas` (menos la de tomar la fila) dice en su WHERE en qué estados vale.
 SENTENCIA_DE_CREAR_FACTURA = (
-    "INSERT INTO facturas (cliente_noco_id, para_nombre, fecha, proyecto_id, cotizacion_id, cotizacion_opcion, itbis_pct, ncf, ncf_tipo, rnc_cedula, hecha_por, hecha_por_chat_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'casa', %s) RETURNING id")
+    "INSERT INTO facturas (cliente_noco_id, para_nombre, fecha, proyecto_id, cotizacion_id, cotizacion_opcion, itbis_pct, ncf, ncf_tipo, rnc_cedula, hecha_por, hecha_por_chat_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id")
 SENTENCIA_DE_CREAR_RENGLON = (
     "INSERT INTO factura_renglones (factura_id, orden, descripcion, detalle, monto) VALUES (%s, %s, %s, %s, %s)")
 SENTENCIA_DE_BORRAR_RENGLONES = "DELETE FROM factura_renglones WHERE factura_id = %s"
@@ -2965,7 +2965,13 @@ SENTENCIA_DE_EMITIR = (
 SENTENCIA_DE_ANULAR = (
     "UPDATE facturas SET estado = 'anulada', anulada_en = now(), anulada_por_chat_id = %s, "
     "motivo_anulacion = %s, cambiado_en = now() WHERE id = %s AND estado = 'emitida' RETURNING id")
-SENTENCIA_DE_ENVIOS_DE_LA_FACTURA = "SELECT id FROM factura_envios WHERE factura_id = %s"
+# Los envíos que IMPIDEN descartar un borrador: todos menos los que ya terminaron mal (rechazado, no_se_pudo). Un borrador que
+# Rosi rechazó se puede descartar y así sus sesiones quedan libres; uno que espera su respuesta, no.
+SENTENCIA_DE_ENVIOS_DE_LA_FACTURA = (
+    "SELECT id FROM factura_envios WHERE factura_id = %s AND estado NOT IN ('rechazado', 'no_se_pudo')")
+SENTENCIA_DE_DESCARTAR_ENVIOS = (
+    "DELETE FROM factura_envios WHERE factura_id = %s AND estado IN ('rechazado', 'no_se_pudo') AND factura_id IN "
+    "(SELECT id FROM facturas WHERE id = %s AND estado = 'borrador')")
 # Descartar un borrador: se borra de verdad (nunca tuvo número) y las tres sentencias dicen en su WHERE que vale solo
 # para un borrador. La huella `descartar` de `log_acciones` guarda cómo era.
 SENTENCIA_DE_DESCARTAR_LIGAS = (
@@ -2980,17 +2986,26 @@ SENTENCIA_DE_SOLTAR_ENVIOS = (
     "WHERE factura_id = %s AND estado IN ('pendiente', 'aprobado') RETURNING id")
 
 
-async def _huella_de_factura(conn, accion: str, registro_id: int, antes, despues, motivo: str) -> None:
-    await conn.execute(
-        """
-        INSERT INTO log_acciones
-          (actor, accion, tabla, registro_id, antes, despues, motivo, bandeja_id)
-        VALUES ('panel', %s, 'facturas', %s, %s, %s, %s, NULL)
-        """,
-        (accion, registro_id,
-         json.dumps(antes, default=str, ensure_ascii=False) if antes else None,
-         json.dumps(despues, default=str, ensure_ascii=False) if despues else None,
-         motivo))
+async def _huella_de_factura(conn, accion: str, registro_id: int, antes, despues, motivo: str,
+                             actor: str = "panel") -> None:
+    """Una fila de `log_acciones` con el antes y el después. `actor` es quien lo hizo: `panel` (una persona de la casa,
+    desde la pantalla o desde un botón de Telegram) o `natalia` (por su puerta). El actor va ESCRITO en cada sentencia,
+    nunca como variable que se pueda perder en silencio (`tests/test_proyectos_panel.py::
+    test_todo_actor_variable_en_log_acciones_pasa_por_registrar`); cualquier otro valor es un error."""
+    params = (accion, registro_id,
+              json.dumps(antes, default=str, ensure_ascii=False) if antes else None,
+              json.dumps(despues, default=str, ensure_ascii=False) if despues else None,
+              motivo)
+    if actor == "panel":
+        await conn.execute(
+            "INSERT INTO log_acciones (actor, accion, tabla, registro_id, antes, despues, motivo, bandeja_id) "
+            "VALUES ('panel', %s, 'facturas', %s, %s, %s, %s, NULL)", params)
+    elif actor == "natalia":
+        await conn.execute(
+            "INSERT INTO log_acciones (actor, accion, tabla, registro_id, antes, despues, motivo, bandeja_id) "
+            "VALUES ('natalia', %s, 'facturas', %s, %s, %s, %s, NULL)", params)
+    else:
+        raise ValueError(f"actor de la huella de una factura: panel o natalia, no {actor!r}")
 
 
 def _pedir_sesion_de_la_casa(chat_id) -> None:
@@ -3117,20 +3132,16 @@ def _ncf_ya_estaba(e: Exception) -> bool:
         return False
 
 
-@_con_el_aviso_de_la_tabla
-async def crear_borrador_de_factura(chat_id: int, *, cliente_noco_id, para_nombre, renglones, liga,
-                                    fecha=None, proyecto_id=None, cotizacion_id=None, cotizacion_opcion=None,
-                                    itbis_pct=None, ncf=None, ncf_tipo=None, rnc_cedula=None) -> dict:
-    """Crea UN borrador (sin número: se numera al emitir) con sus renglones y su primera liga, en una
-    transacción, y devuelve la factura completa (`_factura_completa`) más `creada=True`. `liga` es
-    `{"tipo": "sesion"|"trabajo", "ref": ..., "codigo": ... (opcional)}`. `renglones` es una lista de
-    `{"descripcion", "monto", "detalle" (opcional)}`. `fecha=None` es hoy. `itbis_pct`: `None` o 18.
-    `ncf`+`ncf_tipo` van juntos o ninguno. Errores: `FacturaSinSesion`, `FacturaNoVale`, `FacturaNoEsta`,
-    `FacturasSinTabla`. Lo que no vale no toca la base."""
-    _pedir_sesion_de_la_casa(chat_id)
-    if not isinstance(liga, dict) or not {"tipo", "ref"} <= set(liga) <= {"tipo", "ref", "codigo"}:
-        raise FacturaNoVale("liga_forma", "la factura nace ligada a una sesión o a un trabajo")
-    el_tipo, la_ref, el_codigo = _liga_de_factura(liga["tipo"], liga["ref"], liga.get("codigo"))
+async def _crear_el_borrador(*, hecha_por: str, chat_id, actor: str, motivo_de_la_huella: str, cliente_noco_id,
+                             para_nombre, renglones, ligas: list, fecha, proyecto_id, cotizacion_id, cotizacion_opcion,
+                             itbis_pct, ncf, ncf_tipo, rnc_cedula) -> dict:
+    """El cuerpo de crear UN borrador, que comparten el de la casa (`crear_borrador_de_factura`) y el de Natalia
+    (`crear_borrador_de_factura_de_natalia`): valida todo ANTES de abrir la base y escribe la factura, sus renglones
+    y TODAS sus ligas en una transacción. `hecha_por` es `casa` (con `chat_id`) o `natalia` (sin chat): la base lo
+    exige (`facturas_hecha_por_con_persona`). Lo que no vale no toca la base."""
+    las_ligas = [_liga_de_factura(l["tipo"], l["ref"], l.get("codigo")) for l in ligas]
+    if len({(tipo, ref) for tipo, ref, _ in las_ligas}) != len(las_ligas):
+        raise FacturaNoVale("liga_repetida", "la misma sesión o trabajo está dos veces")
     datos = {
         "cliente_noco_id": _entero_de_factura(cliente_noco_id, "cliente"),
         "para_nombre": _texto_de_factura(para_nombre, "para_nombre", LARGOS_DE_FACTURA["para_nombre"]),
@@ -3147,22 +3158,44 @@ async def crear_borrador_de_factura(chat_id: int, *, cliente_noco_id, para_nombr
         cur = conn.cursor(row_factory=dict_row)
         await _revisar_proyecto_y_cotizacion(cur, el_proyecto, la_cotizacion, la_opcion)
         await _revisar_ncf_libre(cur, datos["ncf"], 0)
-        await _liga_libre(cur, el_tipo, la_ref, None)
+        for tipo, ref, _ in las_ligas:
+            await _liga_libre(cur, tipo, ref, None)
         try:
             await cur.execute(SENTENCIA_DE_CREAR_FACTURA, (
                 datos["cliente_noco_id"], datos["para_nombre"], datos["fecha"], el_proyecto, la_cotizacion,
-                la_opcion, datos["itbis_pct"], datos["ncf"], datos["ncf_tipo"], datos["rnc_cedula"], chat_id))
+                la_opcion, datos["itbis_pct"], datos["ncf"], datos["ncf_tipo"], datos["rnc_cedula"], hecha_por,
+                chat_id))
         except Exception as e:
             if _ncf_ya_estaba(e):
                 raise FacturaNoVale("ncf_repetido", "ese NCF ya está en otra factura") from None
             raise
         factura_id = (await cur.fetchone())["id"]
         await _escribir_renglones(cur, factura_id, los_renglones)
-        await cur.execute(SENTENCIA_DE_CREAR_LIGA, (factura_id, el_tipo, la_ref, el_codigo, chat_id))
+        for tipo, ref, codigo in las_ligas:
+            await cur.execute(SENTENCIA_DE_CREAR_LIGA, (factura_id, tipo, ref, codigo, chat_id))
         hecha = await _factura_completa(cur, factura_id)
-        await _huella_de_factura(conn, "crear", factura_id, None, hecha,
-                                 "borrador de factura creado desde el panel")
+        await _huella_de_factura(conn, "crear", factura_id, None, hecha, motivo_de_la_huella, actor)
         return {**hecha, "creada": True}
+
+
+@_con_el_aviso_de_la_tabla
+async def crear_borrador_de_factura(chat_id: int, *, cliente_noco_id, para_nombre, renglones, liga,
+                                    fecha=None, proyecto_id=None, cotizacion_id=None, cotizacion_opcion=None,
+                                    itbis_pct=None, ncf=None, ncf_tipo=None, rnc_cedula=None) -> dict:
+    """Crea UN borrador (sin número: se numera al emitir) con sus renglones y su primera liga, en una
+    transacción, y devuelve la factura completa (`_factura_completa`) más `creada=True`. `liga` es
+    `{"tipo": "sesion"|"trabajo", "ref": ..., "codigo": ... (opcional)}`. `renglones` es una lista de
+    `{"descripcion", "monto", "detalle" (opcional)}`. `fecha=None` es hoy. `itbis_pct`: `None` o 18.
+    `ncf`+`ncf_tipo` van juntos o ninguno. Errores: `FacturaSinSesion`, `FacturaNoVale`, `FacturaNoEsta`,
+    `FacturasSinTabla`. Lo que no vale no toca la base."""
+    _pedir_sesion_de_la_casa(chat_id)
+    if not isinstance(liga, dict) or not {"tipo", "ref"} <= set(liga) <= {"tipo", "ref", "codigo"}:
+        raise FacturaNoVale("liga_forma", "la factura nace ligada a una sesión o a un trabajo")
+    return await _crear_el_borrador(
+        hecha_por="casa", chat_id=chat_id, actor="panel", motivo_de_la_huella="borrador de factura creado desde el panel",
+        cliente_noco_id=cliente_noco_id, para_nombre=para_nombre, renglones=renglones, ligas=[liga], fecha=fecha,
+        proyecto_id=proyecto_id, cotizacion_id=cotizacion_id, cotizacion_opcion=cotizacion_opcion, itbis_pct=itbis_pct,
+        ncf=ncf, ncf_tipo=ncf_tipo, rnc_cedula=rnc_cedula)
 
 
 @_con_el_aviso_de_la_tabla
@@ -3299,6 +3332,24 @@ async def poner_cotizacion_de_factura(factura_id: int, chat_id: int, cotizacion_
         return despues
 
 
+async def _emitir_dentro(conn, cur, factura_id: int, chat_id: int, candado, motivo_de_la_huella: str) -> dict:
+    """Borrador → emitida DENTRO de la transacción que le dan: la toma con el candado, exige un renglón y una liga
+    viva, saca el número y deja la huella `emitir`. La llaman `emitir_factura` (la pantalla) y la aprobación de Rosi
+    (`contestar_envio_de_factura`): el mismo camino, el mismo número y la misma huella."""
+    _que_sea(await _tomar_factura(cur, factura_id, candado), ("borrador",), "emitirse otra vez")
+    antes = await _factura_completa(cur, factura_id)
+    if not antes["renglones"]:
+        raise FacturaNoVale("sin_renglones", "la factura necesita al menos un renglón")
+    if not any(l["viva"] for l in antes["ligas"]):
+        raise FacturaNoVale("sin_liga", "la factura necesita una sesión o un trabajo")
+    anio = hoy_rd().year
+    numero = await siguiente_numero_de_factura(cur, anio)
+    await cur.execute(SENTENCIA_DE_EMITIR, (anio, numero, factura_id))
+    despues = await _factura_completa(cur, factura_id)
+    await _huella_de_factura(conn, "emitir", factura_id, antes, despues, motivo_de_la_huella)
+    return despues
+
+
 @_con_el_aviso_de_la_tabla
 async def emitir_factura(factura_id: int, chat_id: int, cambiado_en) -> dict:
     """Borrador → emitida con el número que sigue en la serie del año de `hoy_rd()` (el de HOY, no el de
@@ -3308,19 +3359,7 @@ async def emitir_factura(factura_id: int, chat_id: int, cambiado_en) -> dict:
     candado = _como_factura_no_vale(_instante_de_cotizacion, cambiado_en)
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        _que_sea(await _tomar_factura(cur, factura_id, candado), ("borrador",), "emitirse otra vez")
-        antes = await _factura_completa(cur, factura_id)
-        if not antes["renglones"]:
-            raise FacturaNoVale("sin_renglones", "la factura necesita al menos un renglón")
-        if not any(l["viva"] for l in antes["ligas"]):
-            raise FacturaNoVale("sin_liga", "la factura necesita una sesión o un trabajo")
-        anio = hoy_rd().year
-        numero = await siguiente_numero_de_factura(cur, anio)
-        await cur.execute(SENTENCIA_DE_EMITIR, (anio, numero, factura_id))
-        despues = await _factura_completa(cur, factura_id)
-        await _huella_de_factura(conn, "emitir", factura_id, antes, despues,
-                                 "factura emitida desde el panel (se numera aquí)")
-        return despues
+        return await _emitir_dentro(conn, cur, factura_id, chat_id, candado, "factura emitida desde el panel (se numera aquí)")
 
 
 @_con_el_aviso_de_la_tabla
@@ -3345,7 +3384,8 @@ async def anular_factura(factura_id: int, chat_id: int, motivo) -> dict:
 async def descartar_borrador_de_factura(factura_id: int, chat_id: int) -> dict:
     """Borra de verdad UN borrador (sin número ni NCF gastado: no deja hueco) con sus renglones y sus ligas; la
     sesión o el trabajo quedan libres para otra factura. Una emitida o anulada: `FacturaYaNoSeCorrige` (se anula).
-    Un borrador con envíos no se descarta (`tiene_envios`). Deja la huella `descartar` con cómo era. Devuelve
+    Un borrador con un envío que espera respuesta (o con cualquiera que no terminó mal) no se descarta
+    (`tiene_envios`); los rechazados o que no se pudieron se borran con él. Deja la huella `descartar` con cómo era. Devuelve
     `{"id", "descartada": True}`."""
     _pedir_sesion_de_la_casa(chat_id)
     async with pool.connection() as conn:
@@ -3353,8 +3393,11 @@ async def descartar_borrador_de_factura(factura_id: int, chat_id: int) -> dict:
         _que_sea(await _tomar_factura(cur, factura_id), ("borrador",), "descartarse (se anula)")
         await cur.execute(SENTENCIA_DE_ENVIOS_DE_LA_FACTURA, (factura_id,))
         if await cur.fetchone() is not None:
-            raise FacturaNoVale("tiene_envios", "un borrador con envíos no se descarta")
+            raise FacturaNoVale("tiene_envios", "un borrador con un envío que espera respuesta no se descarta")
         antes = await _factura_completa(cur, factura_id)
+        await cur.execute("SELECT id, canal, estado, motivo FROM factura_envios WHERE factura_id = %s ORDER BY id", (factura_id,))
+        antes["envios"] = [dict(e) for e in await cur.fetchall()]       # lo que se borra con ella, para la huella
+        await cur.execute(SENTENCIA_DE_DESCARTAR_ENVIOS, (factura_id, factura_id))
         await cur.execute(SENTENCIA_DE_DESCARTAR_LIGAS, (factura_id, factura_id))
         await cur.execute(SENTENCIA_DE_DESCARTAR_RENGLONES, (factura_id, factura_id))
         await cur.execute(SENTENCIA_DE_DESCARTAR_FACTURA, (factura_id,))
@@ -3389,6 +3432,395 @@ async def facturas_para_la_lista(*, estado: str | None = None, proyecto_id: int 
         f.update(totales_de_factura([_dinero_leido(f.pop("subtotal"))], f["itbis_pct"]))
         lista.append(f)
     return lista
+
+
+# ── LA PUERTA DE NATALIA PARA LAS FACTURAS (pieza 9 del diseño «Facturas», 21-oct-2026) ─────────────────────
+#
+# El camino (Tiziano, 20-oct-2026): el cliente le pide la factura a Natalia; NATALIA LA HACE (con las sesiones o el
+# trabajo de ese cliente); ROSI LA REVISA Y LA APRUEBA en Telegram; Natalia la manda por WhatsApp o por correo; Natalia
+# anota si salió. Todo esto escribe por las MISMAS tablas que la pantalla y por la misma puerta de este archivo.
+#
+# QUÉ FACTURAS VE Y TOCA NATALIA (decisión de la construcción, no de Tiziano): SOLO las que ELLA hizo
+# (`hecha_por = 'natalia'`) y SOLO las de la ficha que dice la ruta. Una factura de la casa, o de otra ficha, es para
+# ella como si no existiera (`FacturaNoEsta`, igual que una que no está). Las sentencias `*_DE_NATALIA` lo dicen en su
+# WHERE; nada de aquí se decide con lo que Natalia diga de sí misma. NATALIA NO ANULA NI DESCARTA: esas dos son de la
+# casa (`anular_factura`, `descartar_borrador_de_factura`, que piden sesión).
+#
+# EL ENVÍO es una fila de `factura_envios` y su vida es: `pendiente` (Natalia lo pidió; la tarjeta le llega a quien
+# revisa) → `aprobado` (la aprobó: el borrador se emitió en esa misma transacción) o `rechazado` (con motivo; no se
+# emite) → `enviado` o `no_se_pudo` (lo anota NATALIA, o la casa con «Marcar como mandada a mano»). NADA dice `enviado`
+# si no lo anotó una de esas dos; las únicas dos sentencias que lo ponen son `SENTENCIA_DE_ANOTAR_QUE_SALIO` y
+# `SENTENCIA_DE_MANDADA_A_MANO`.
+CANALES_QUE_PIDEN_APROBACION = ("whatsapp", "correo")
+CANALES_DE_ENVIO_DE_FACTURA = CANALES_QUE_PIDEN_APROBACION + ("mano",)
+ESTADOS_DE_ENVIO_DE_FACTURA = ("pendiente", "aprobado", "rechazado", "enviado", "no_se_pudo")
+ENVIOS_VIVOS = ("pendiente", "aprobado")                    # los que todavía esperan algo
+# Decisión de la puerta, no una medición: cuántas facturas de una ficha devuelve la lista de Natalia.
+TOPE_DE_FACTURAS_DE_NATALIA = 50
+
+SENTENCIA_DE_LA_FACTURA_DE_NATALIA = (
+    "SELECT id FROM facturas WHERE id = %s AND cliente_noco_id = %s AND hecha_por = 'natalia'")
+SENTENCIA_DE_LAS_FACTURAS_DE_NATALIA = (
+    "SELECT id FROM facturas WHERE cliente_noco_id = %s AND hecha_por = 'natalia' ORDER BY id DESC LIMIT %s")
+SENTENCIA_DE_LOS_ENVIOS_DE_FACTURAS = (
+    "SELECT id, factura_id, canal, estado, creado_en, aprobado_por_chat_id, aprobado_en, enviado_en, motivo "
+    "FROM factura_envios WHERE factura_id = %s ORDER BY id")
+SENTENCIA_DE_UN_ENVIO_VIVO_DEL_CANAL = (
+    "SELECT id, factura_id, canal, estado, creado_en, aprobado_por_chat_id, aprobado_en, enviado_en, motivo "
+    "FROM factura_envios WHERE factura_id = %s AND canal = %s AND estado IN ('pendiente', 'aprobado') ORDER BY id")
+SENTENCIA_DE_PEDIR_ENVIO = (
+    "INSERT INTO factura_envios (factura_id, canal, estado, tarjeta_msg_id) VALUES (%s, %s, 'pendiente', NULL) "
+    "RETURNING id")
+SENTENCIA_DE_LEER_ENVIO_PARA_CONTESTAR = (
+    "SELECT id, factura_id, canal, estado, tarjeta_msg_id, visto_cambiado_en FROM factura_envios WHERE id = %s")
+SENTENCIA_DE_APROBAR_ENVIO = (
+    "UPDATE factura_envios SET estado = 'aprobado', aprobado_por_chat_id = %s, aprobado_en = now() "
+    "WHERE id = %s AND estado = 'pendiente' RETURNING id")
+SENTENCIA_DE_RECHAZAR_ENVIO = (
+    "UPDATE factura_envios SET estado = 'rechazado', motivo = %s WHERE id = %s AND estado = 'pendiente' RETURNING id")
+SENTENCIA_DE_ENVIO_QUE_NO_SE_PUDO_APROBAR = (
+    "UPDATE factura_envios SET estado = 'no_se_pudo', motivo = %s WHERE id = %s AND estado = 'pendiente' RETURNING id")
+SENTENCIA_DE_ANOTAR_QUE_SALIO = (
+    "UPDATE factura_envios SET estado = 'enviado', enviado_en = now() WHERE id = %s AND estado = 'aprobado' "
+    "RETURNING id")
+SENTENCIA_DE_ANOTAR_QUE_NO_SALIO = (
+    "UPDATE factura_envios SET estado = 'no_se_pudo', motivo = %s WHERE id = %s AND estado = 'aprobado' RETURNING id")
+SENTENCIA_DE_MANDADA_A_MANO = (
+    "INSERT INTO factura_envios (factura_id, canal, estado, enviado_en) VALUES (%s, 'mano', 'enviado', now()) "
+    "RETURNING id")
+SENTENCIA_DE_LOS_ENVIOS_SIN_TARJETA = (
+    "SELECT e.id, e.factura_id, e.canal FROM factura_envios e "
+    "WHERE e.estado = 'pendiente' AND e.tarjeta_msg_id IS NULL AND e.canal IN ('whatsapp', 'correo') ORDER BY e.id")
+SENTENCIA_DE_MARCAR_LA_TARJETA = (
+    "UPDATE factura_envios SET tarjeta_msg_id = %s, visto_cambiado_en = %s "
+    "WHERE id = %s AND estado = 'pendiente' AND tarjeta_msg_id IS NULL RETURNING id")
+
+
+class EnviosSinMigrar(Exception):
+    """Falta `db/migrations/2026-10-21_facturas_natalia.sql` (SQLSTATE 42703: las columnas de la tarjeta). NO se
+    guardó nada."""
+
+
+def _columna_ausente(e: Exception) -> bool:
+    try:
+        return e.sqlstate == "42703"
+    except AttributeError:
+        return False
+
+
+def _instante_leido(valor):
+    """Un instante como `datetime` (Postgres ya lo da así; SQLite, en las pruebas, lo da como texto)."""
+    if isinstance(valor, str):
+        try:
+            return datetime.fromisoformat(valor)
+        except ValueError:
+            return valor
+    return valor
+
+
+def _envio_leido(fila) -> dict:
+    """Un envío como lo ve quien lo lee: nada de chats; `aprobada` dice si alguien la aprobó (la aprobación es lo que
+    deja a Natalia bajar el PDF)."""
+    e = dict(fila)
+    return {"id": e["id"], "factura_id": e["factura_id"], "canal": e["canal"], "estado": e["estado"],
+            "creado_en": _instante_leido(e["creado_en"]), "aprobado_en": _instante_leido(e["aprobado_en"]),
+            "enviado_en": _instante_leido(e["enviado_en"]),
+            "motivo": e["motivo"], "aprobada": e["estado"] in ("aprobado", "enviado") and e["canal"] != "mano"}
+
+
+async def _factura_de_natalia(cur, noco_id, factura_id) -> None:
+    """Sale con `FacturaNoEsta` si la factura no es de Natalia o no es de esa ficha (igual que si no existiera)."""
+    await cur.execute(SENTENCIA_DE_LA_FACTURA_DE_NATALIA, (factura_id, noco_id))
+    if await cur.fetchone() is None:
+        raise FacturaNoEsta("esa factura no está")
+
+
+@_con_el_aviso_de_la_tabla
+async def crear_borrador_de_factura_de_natalia(noco_id, *, para_nombre, renglones, ligas, fecha=None,
+                                               itbis_pct=None, rnc_cedula=None) -> dict:
+    """Natalia hace UNA factura (borrador, sin número) para la ficha `noco_id`, con sus renglones y TODAS sus ligas
+    (sesiones o trabajos) en una transacción. `hecha_por = 'natalia'`, sin chat. No lleva NCF, proyecto ni cotización:
+    el NCF lo escribe una persona y el proyecto se le pone después desde la pantalla. LA COMPROBACIÓN DE QUE LAS
+    SESIONES SON DEL CLIENTE NO ES DE ESTA FUNCIÓN: es de quien la llama (`registro_lectura` +
+    `facturas_panel.ligas_de_las_refs`), igual que en la pantalla; aquí solo se exige que haya al menos una liga y
+    que ninguna esté en otra factura viva. Errores: `FacturaNoVale`, `FacturasSinTabla`."""
+    if not isinstance(ligas, (list, tuple)) or not ligas or not all(
+            isinstance(l, dict) and {"tipo", "ref"} <= set(l) <= {"tipo", "ref", "codigo"} for l in ligas):
+        raise FacturaNoVale("liga_forma", "la factura nace ligada a una sesión o a un trabajo")
+    return await _crear_el_borrador(
+        hecha_por="natalia", chat_id=None, actor="natalia", motivo_de_la_huella="borrador de factura creado por Natalia",
+        cliente_noco_id=noco_id, para_nombre=para_nombre, renglones=renglones, ligas=list(ligas), fecha=fecha,
+        proyecto_id=None, cotizacion_id=None, cotizacion_opcion=None, itbis_pct=itbis_pct, ncf=None, ncf_tipo=None,
+        rnc_cedula=rnc_cedula)
+
+
+async def _facturas_con_sus_envios(cur, ids: list[int]) -> list[dict]:
+    salida = []
+    for i in ids:
+        f = await _factura_completa(cur, i)
+        if f is None:
+            continue
+        await cur.execute(SENTENCIA_DE_LOS_ENVIOS_DE_FACTURAS, (i,))
+        f["envios"] = [_envio_leido(e) for e in await cur.fetchall()]
+        salida.append(f)
+    return salida
+
+
+@_con_el_aviso_de_la_tabla
+async def facturas_de_natalia(noco_id, factura_id: int | None = None) -> list[dict]:
+    """Las facturas que HIZO Natalia para la ficha `noco_id` (la más nueva primero, hasta
+    `TOPE_DE_FACTURAS_DE_NATALIA`), o solo la `factura_id` si se dice y es una de ellas. Cada una completa
+    (`_factura_completa`) más `envios`. Una lectura: no pide sesión (la ruta decide quién entra)."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        if factura_id is None:
+            await cur.execute(SENTENCIA_DE_LAS_FACTURAS_DE_NATALIA, (noco_id, TOPE_DE_FACTURAS_DE_NATALIA))
+            ids = [r["id"] for r in await cur.fetchall()]
+        else:
+            await cur.execute(SENTENCIA_DE_LA_FACTURA_DE_NATALIA, (factura_id, noco_id))
+            ids = [r["id"] for r in await cur.fetchall()]
+        return await _facturas_con_sus_envios(cur, ids)
+
+
+@_con_el_aviso_de_la_tabla
+async def pedir_envio_de_factura_de_natalia(noco_id, factura_id: int, canal) -> dict:
+    """Natalia pide que se apruebe mandar SU factura por `canal` (`whatsapp` o `correo`). Crea el envío `pendiente`
+    (la tarjeta para quien revisa la manda el despertador) y devuelve `{"envio": ..., "reusada": bool}`. Si ya hay
+    uno vivo (pendiente o aprobado) de esa factura por ese canal devuelve ESE (`reusada`) y no crea otro. Vale para un
+    borrador (se emite al aprobarse) o una emitida; una anulada no (`FacturaYaNoSeCorrige`). Sin las columnas de la
+    tarjeta: `EnviosSinMigrar`, sin escribir nada."""
+    if canal not in CANALES_QUE_PIDEN_APROBACION:
+        raise FacturaNoVale("canal", f"el canal es {' o '.join(CANALES_QUE_PIDEN_APROBACION)}")
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await _factura_de_natalia(cur, noco_id, factura_id)
+        estado = await _tomar_factura(cur, factura_id)
+        _que_sea(estado, ("borrador", "emitida"), "mandarse")
+        await cur.execute(SENTENCIA_DE_UN_ENVIO_VIVO_DEL_CANAL, (factura_id, canal))
+        vivo = await cur.fetchone()
+        if vivo is not None:
+            return {"envio": _envio_leido(vivo), "reusada": True}
+        antes = await _factura_completa(cur, factura_id)
+        if not antes["renglones"] or not any(l["viva"] for l in antes["ligas"]):
+            raise FacturaNoVale("incompleta", "la factura necesita un renglón y una sesión o un trabajo")
+        try:
+            await cur.execute(SENTENCIA_DE_PEDIR_ENVIO, (factura_id, canal))
+        except Exception as e:
+            if _columna_ausente(e):
+                raise EnviosSinMigrar("faltan las columnas de la tarjeta") from e
+            raise
+        envio_id = (await cur.fetchone())["id"]
+        await cur.execute(SENTENCIA_DE_UN_ENVIO_VIVO_DEL_CANAL, (factura_id, canal))
+        creado = next(e for e in await cur.fetchall() if e["id"] == envio_id)
+        await _huella_de_factura(conn, "pedir_envio", factura_id, None, {"envio_id": envio_id, "canal": canal},
+                                 f"Natalia pidió mandar la factura por {canal}", "natalia")
+        return {"envio": _envio_leido(creado), "reusada": False}
+
+
+@_con_el_aviso_de_la_tabla
+async def factura_y_envio_para_el_pdf_de_natalia(noco_id, factura_id: int, envio_id: int) -> dict:
+    """La factura (completa) cuyo PDF puede bajar Natalia: SOLO si es suya y de esa ficha, está EMITIDA y el envío
+    `envio_id` de esa factura está APROBADO (alguien lo aprobó y ella todavía no anotó cómo terminó). Si no es suya o
+    no existe: `FacturaNoEsta`. Si el envío todavía no se aprobó, se rechazó o ya terminó, o la factura no está
+    emitida: `FacturaYaNoSeCorrige(estado)` con el estado del envío, para decírselo tal cual. Una lectura."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await _factura_de_natalia(cur, noco_id, factura_id)
+        f = await _factura_completa(cur, factura_id)
+        await cur.execute(SENTENCIA_DE_LOS_ENVIOS_DE_FACTURAS, (factura_id,))
+        el_envio = next((e for e in await cur.fetchall() if e["id"] == envio_id), None)
+    if el_envio is None:
+        raise FacturaNoEsta("ese envío no está")
+    if el_envio["estado"] != "aprobado":
+        raise FacturaYaNoSeCorrige(el_envio["estado"], f"el envío está {el_envio['estado']}: el PDF se baja con el envío aprobado")
+    if f["estado"] != "emitida":
+        raise FacturaYaNoSeCorrige(f["estado"], f"la factura está {f['estado']}: solo se baja una emitida")
+    return f
+
+
+@_con_el_aviso_de_la_tabla
+async def anotar_envio_de_natalia(noco_id, factura_id: int, envio_id: int, salio, motivo=None) -> dict:
+    """Natalia anota cómo terminó un envío APROBADO: `salio=True` → `enviado` (con la hora de ahora); `salio=False` →
+    `no_se_pudo` con su `motivo` (1 a 500; obligatorio). Es lo ÚNICO que pone `enviado` por esta puerta: nada dice
+    «enviada» si ella no lo anotó. Anotar dos veces lo mismo es lo mismo (no cambia nada); un envío que no está
+    aprobado, o que terminó de otra forma, es `FacturaYaNoSeCorrige(estado)`. Devuelve el envío releído."""
+    if not isinstance(salio, bool):
+        raise FacturaNoVale("salio", "salio es verdadero o falso")
+    el_motivo = None if salio else _texto_de_factura(motivo, "motivo", LARGOS_DE_FACTURA["motivo"])
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await _factura_de_natalia(cur, noco_id, factura_id)
+        await _tomar_factura(cur, factura_id)
+        await cur.execute(SENTENCIA_DE_LOS_ENVIOS_DE_FACTURAS, (factura_id,))
+        el_envio = next((e for e in await cur.fetchall() if e["id"] == envio_id), None)
+        if el_envio is None:
+            raise FacturaNoEsta("ese envío no está")
+        if el_envio["canal"] == "mano":
+            raise FacturaYaNoSeCorrige("mano", "un envío a mano no lo anota Natalia")
+        pedido = "enviado" if salio else "no_se_pudo"
+        if el_envio["estado"] == pedido:
+            return _envio_leido(el_envio)
+        if el_envio["estado"] != "aprobado":
+            raise FacturaYaNoSeCorrige(
+                el_envio["estado"], f"el envío está {el_envio['estado']}: solo se anota uno que ya se aprobó")
+        if salio:
+            await cur.execute(SENTENCIA_DE_ANOTAR_QUE_SALIO, (envio_id,))
+        else:
+            await cur.execute(SENTENCIA_DE_ANOTAR_QUE_NO_SALIO, (el_motivo, envio_id))
+        await cur.fetchone()
+        await cur.execute(SENTENCIA_DE_LOS_ENVIOS_DE_FACTURAS, (factura_id,))
+        despues = next(e for e in await cur.fetchall() if e["id"] == envio_id)
+        await _huella_de_factura(
+            conn, "anotar_envio", factura_id, _envio_leido(el_envio), _envio_leido(despues),
+            "Natalia anotó que la factura salió" if salio else "Natalia anotó que la factura no salió", "natalia")
+        return _envio_leido(despues)
+
+
+@_con_el_aviso_de_la_tabla
+async def marcar_factura_mandada_a_mano(factura_id: int, chat_id: int) -> dict:
+    """«Marcar como mandada a mano»: una persona de la casa dice que ella mandó la factura. Solo una EMITIDA
+    (`FacturaYaNoSeCorrige` si no). Crea un envío `mano` ya `enviado` (no pide aprobación: la persona que la manda es
+    del equipo); quién y cuándo quedan en la huella `mandada_a_mano`. Devuelve el envío."""
+    _pedir_sesion_de_la_casa(chat_id)
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        _que_sea(await _tomar_factura(cur, factura_id), ("emitida",), "marcarse como mandada a mano")
+        await cur.execute(SENTENCIA_DE_MANDADA_A_MANO, (factura_id,))
+        envio_id = (await cur.fetchone())["id"]
+        await cur.execute(SENTENCIA_DE_LOS_ENVIOS_DE_FACTURAS, (factura_id,))
+        creado = next(e for e in await cur.fetchall() if e["id"] == envio_id)
+        await _huella_de_factura(conn, "mandada_a_mano", factura_id, None, {"envio_id": envio_id, "canal": "mano"},
+                                 "factura marcada como mandada a mano desde el panel")
+        return _envio_leido(creado)
+
+
+@_con_el_aviso_de_la_tabla
+async def envios_de_factura(factura_id: int) -> list[dict]:
+    """Los envíos de UNA factura (el más viejo primero), para su pantalla. Nombra solo las columnas de siempre: la
+    página carga igual con la migración de la tarjeta sin aplicar. Una lectura."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_LOS_ENVIOS_DE_FACTURAS, (factura_id,))
+        return [_envio_leido(e) for e in await cur.fetchall()]
+
+
+@_con_el_aviso_de_la_tabla
+async def envios_de_factura_sin_tarjeta() -> list[dict]:
+    """Los envíos `pendiente` por WhatsApp o correo cuya tarjeta todavía no salió (`{id, factura_id, canal}`), el más
+    viejo primero. Sin las columnas de la tarjeta: `EnviosSinMigrar`. Una lectura (la llama el despertador)."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(SENTENCIA_DE_LOS_ENVIOS_SIN_TARJETA)
+        except Exception as e:
+            if _columna_ausente(e):
+                raise EnviosSinMigrar("faltan las columnas de la tarjeta") from e
+            raise
+        return [dict(r) for r in await cur.fetchall()]
+
+
+@_con_el_aviso_de_la_tabla
+async def marcar_tarjeta_de_envio(envio_id: int, mensaje_id: int, visto_cambiado_en) -> bool:
+    """Anota que la tarjeta del envío SALIÓ (el `message_id` que Telegram devolvió) y con qué `cambiado_en` de la
+    factura se armó su PDF. `True` si escribió; `False` si el envío ya no estaba pendiente sin tarjeta. No pide sesión
+    ni deja huella (lo llama el despertador; es dónde quedó un mensaje, no un cambio de la factura)."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_MARCAR_LA_TARJETA, (mensaje_id, visto_cambiado_en, envio_id))
+        return await cur.fetchone() is not None
+
+
+RESULTADO_ENVIO_APROBADO = "aprobada"
+RESULTADO_ENVIO_RECHAZADO = "rechazada"
+RESULTADO_ENVIO_NO_SE_PUDO = "no_se_pudo"
+RESULTADO_ENVIO_NO_EXISTE = "no_existe"
+RESULTADO_ENVIO_NO_ES_TUYO = "no_es_tuyo"
+RESULTADO_ENVIO_TODAVIA = "todavia"
+RESULTADO_ENVIO_YA_CONTESTADO = "ya_contestado"
+
+
+def _nombre_de_quien_toco(chat_id) -> str:
+    return _config.NOMBRES_POR_CHAT.get(chat_id, "alguien de la casa")
+
+
+@_con_el_aviso_de_la_tabla
+async def contestar_envio_de_factura(envio_id: int, chat_id: int, acepta: bool) -> dict:
+    """La respuesta de quien REVISA (los botones Aprobar / Rechazar de la tarjeta) a un envío `pendiente`. Devuelve
+    `{"resultado": ..., ...}` y NUNCA dice «aprobada» si no quedó aprobada:
+      · `no_es_tuyo`: el chat no es el de quien revisa (`config.chat_de_quien_revisa_las_facturas`); no cambia nada.
+      · `no_existe`, `todavia` (su tarjeta aún no está anotada), `ya_contestado` (con su `estado`).
+      · `rechazada`: el envío pasa a `rechazado` con su motivo; la factura NO se emite ni cambia.
+      · `aprobada`: en UNA transacción, el borrador se EMITE (con el candado `visto_cambiado_en`: el `cambiado_en` que
+        tenía cuando se armó el PDF de la tarjeta; la misma `_emitir_dentro` de la pantalla, mismo número, misma huella
+        `emitir`) y el envío pasa a `aprobado` con quién y cuándo. Una emitida solo cambia el envío. Trae `codigo`,
+        `emitida_ahora`, `canal`, `factura_id`.
+      · `no_se_pudo`: la factura cambió después de la tarjeta, se anuló o ya no se puede emitir; el envío pasa a
+        `no_se_pudo` con la razón, no se emite nada y Natalia tiene que pedirla de nuevo. Trae `motivo`.
+    Pide sesión de la casa (la revisora entra al panel) antes de abrir la conexión."""
+    _pedir_sesion_de_la_casa(chat_id)
+    if not isinstance(acepta, bool):
+        raise FacturaNoVale("acepta", "acepta es verdadero o falso")
+    revisora = _config.chat_de_quien_revisa_las_facturas()
+    if revisora is None or chat_id != revisora:
+        return {"resultado": RESULTADO_ENVIO_NO_ES_TUYO, "revisa": _config.NOMBRE_DE_QUIEN_REVISA_LAS_FACTURAS}
+    quien = _nombre_de_quien_toco(chat_id)
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_LEER_ENVIO_PARA_CONTESTAR, (envio_id,))
+        previo = await cur.fetchone()
+        if previo is None or previo["canal"] == "mano":
+            return {"resultado": RESULTADO_ENVIO_NO_EXISTE}
+        factura_id = previo["factura_id"]
+        estado_factura = await _tomar_factura(cur, factura_id)               # bloquea la fila: el primero gana
+        await cur.execute(SENTENCIA_DE_LEER_ENVIO_PARA_CONTESTAR, (envio_id,))
+        envio = await cur.fetchone()
+        if envio["estado"] != "pendiente":
+            return {"resultado": RESULTADO_ENVIO_YA_CONTESTADO, "estado": envio["estado"], "factura_id": factura_id}
+        if envio["tarjeta_msg_id"] is None:
+            return {"resultado": RESULTADO_ENVIO_TODAVIA, "factura_id": factura_id}
+        antes = await _factura_completa(cur, factura_id)
+        if not acepta:
+            motivo = f"Rechazada por {quien}"
+            await cur.execute(SENTENCIA_DE_RECHAZAR_ENVIO, (motivo, envio_id))
+            await cur.fetchone()
+            await _huella_de_factura(conn, "rechazar_envio", factura_id, {"envio_id": envio_id, "estado": "pendiente"},
+                                     {"envio_id": envio_id, "estado": "rechazado"}, motivo)
+            return {"resultado": RESULTADO_ENVIO_RECHAZADO, "factura_id": factura_id, "canal": envio["canal"]}
+
+        async def no_se_pudo(razon: str) -> dict:
+            await cur.execute(SENTENCIA_DE_ENVIO_QUE_NO_SE_PUDO_APROBAR, (razon, envio_id))
+            await cur.fetchone()
+            await _huella_de_factura(conn, "no_se_pudo_aprobar_envio", factura_id,
+                                     {"envio_id": envio_id, "estado": "pendiente"},
+                                     {"envio_id": envio_id, "estado": "no_se_pudo"}, razon)
+            return {"resultado": RESULTADO_ENVIO_NO_SE_PUDO, "factura_id": factura_id, "motivo": razon}
+
+        if estado_factura == "anulada":
+            return await no_se_pudo("la factura se anuló")
+        emitida_ahora = False
+        if estado_factura == "borrador":
+            visto = envio["visto_cambiado_en"]
+            try:
+                candado = _como_factura_no_vale(_instante_de_cotizacion, visto)
+                if _instante_de_cotizacion(antes["cambiado_en"]) != candado:
+                    raise FacturaCambio("la factura cambió después de mandar la tarjeta")
+                await _emitir_dentro(conn, cur, factura_id, chat_id, candado,
+                                     f"factura emitida al aprobarla {quien} desde Telegram (se numera aquí)")
+            except FacturaCambio:
+                return await no_se_pudo("La factura cambió después de enviarte la tarjeta: hay que pedirla otra vez")
+            except FacturaNoVale as e:
+                if e.clave == "candado":
+                    return await no_se_pudo("La factura cambió después de enviarte la tarjeta: hay que pedirla otra vez")
+                return await no_se_pudo(f"No se pudo emitir: {e}")
+            emitida_ahora = True
+        await cur.execute(SENTENCIA_DE_APROBAR_ENVIO, (chat_id, envio_id))
+        await cur.fetchone()
+        despues = await _factura_completa(cur, factura_id)
+        await _huella_de_factura(conn, "aprobar_envio", factura_id, {"envio_id": envio_id, "estado": "pendiente"},
+                                 {"envio_id": envio_id, "estado": "aprobado", "canal": envio["canal"]},
+                                 f"envío aprobado por {quien} desde Telegram")
+        return {"resultado": RESULTADO_ENVIO_APROBADO, "factura_id": factura_id, "canal": envio["canal"],
+                "codigo": despues["codigo"], "emitida_ahora": emitida_ahora}
 
 
 # ── GUARDAR Y LEER LAS COTIZACIONES (pieza 3 del diseño «Cotizaciones en Proyectos», 14-oct-2026) ─────

@@ -370,7 +370,7 @@ TEXTO_POR_CLAVE = {
     "cotizacion_de_otro_proyecto": "Esa cotización es de otro proyecto.",
     "opcion_no_esta": "Esa opción no está en la cotización.",
     "opcion_sin_cotizacion": "La opción de una cotización necesita la cotización.",
-    "tiene_envios": "Un borrador que ya tiene envíos no se descarta.",
+    "tiene_envios": "Un borrador con un envío esperando respuesta no se descarta.",
     "candado": "Falta saber qué versión de la factura estabas viendo: ábrela otra vez.",
     "sin_cambios": "No hay nada que cambiar.",
 }
@@ -418,3 +418,46 @@ def texto_del_error(e: Exception) -> dict:
     razon = "La base de datos falló y no se pudo confirmar si se guardó."
     return {"clave": "base", "casilla": None, "razon": razon,
             "texto": f"{razon} Mira cómo quedó antes de volver a intentarlo."}
+
+
+# ── Quién la hizo y cómo van sus envíos (pieza 9, 21-oct-2026) ───────────────────────────────────────
+
+def quien_hizo_la_factura(f: dict, nombres: dict) -> str:
+    """«Natalia», el nombre de la persona de la casa que la hizo, o «Alguien de la casa» si ese chat no tiene nombre
+    (nunca el número de chat). Sale de lo que la base guarda (`hecha_por`, `hecha_por_chat_id`)."""
+    if f["hecha_por"] == "natalia":
+        return "Natalia"
+    return nombres.get(f["hecha_por_chat_id"]) or "Alguien de la casa"
+
+
+_CANAL_EN_PALABRAS = {"whatsapp": "WhatsApp", "correo": "correo", "mano": "a mano"}
+
+
+def _dia_del_envio(valor) -> str:
+    dia = db.dia_rd(valor)
+    return cz.fecha_corta(dia) if dia is not None else ""
+
+
+def frase_del_envio(e: dict, revisa: str) -> dict:
+    """`{"estado", "etiqueta", "frase"}` de UN envío de `db.envios_de_factura`: lo que la base tiene, en palabras, y nada
+    más. «Enviada» solo se dice de un envío `enviado`, que solo lo pone Natalia (cuando lo anota) o la casa (a mano);
+    uno pendiente o aprobado nunca se dice mandado. `revisa` es el nombre de quien revisa (para «esperando a …»)."""
+    canal = _CANAL_EN_PALABRAS.get(e["canal"], str(e["canal"]))
+    estado = e["estado"]
+    motivo = f": {e['motivo']}" if e.get("motivo") else ""
+    if estado == "pendiente":
+        return {"estado": estado, "etiqueta": "Esperando revisión",
+                "frase": f"Natalia pidió mandarla por {canal}. Está esperando que {revisa} la revise en Telegram."}
+    if estado == "aprobado":
+        return {"estado": estado, "etiqueta": "Aprobada",
+                "frase": f"Aprobada para mandarla por {canal}. Natalia todavía no anotó que salió."}
+    if estado == "rechazado":
+        return {"estado": estado, "etiqueta": "Rechazada", "frase": f"Rechazada{motivo}. No se mandó."}
+    if estado == "enviado" and e["canal"] == "mano":
+        return {"estado": estado, "etiqueta": "Mandada a mano",
+                "frase": f"Marcada como mandada a mano el {_dia_del_envio(e['enviado_en'])}."}
+    if estado == "enviado":
+        return {"estado": estado, "etiqueta": "Enviada",
+                "frase": f"Natalia anotó que la mandó por {canal} el {_dia_del_envio(e['enviado_en'])}."}
+    return {"estado": estado, "etiqueta": "No salió", "frase": f"No salió por {canal}{motivo}."}
+

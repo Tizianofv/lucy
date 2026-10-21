@@ -77,6 +77,18 @@ def _texto_migracion_de_drive() -> str:
     return _migracion_de_drive().read_text(encoding="utf-8")
 
 
+def _migracion_de_natalia():
+    """La migración de la pieza 9 (las dos columnas de la tarjeta de `factura_envios`), buscada por lo que hace."""
+    suyas = [a for a in g._migraciones()
+             if "ALTER TABLE factura_envios ADD COLUMN IF NOT EXISTS tarjeta_msg_id" in a.read_text(encoding="utf-8")]
+    assert len(suyas) == 1, suyas
+    return suyas[0]
+
+
+def _texto_migracion_de_natalia() -> str:
+    return _migracion_de_natalia().read_text(encoding="utf-8")
+
+
 def _guion():
     spec = importlib.util.spec_from_file_location("ensayo_facturas", _ROOT / "tools" / "ensayo_facturas.py")
     modulo = importlib.util.module_from_spec(spec)

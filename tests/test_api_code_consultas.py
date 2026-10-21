@@ -578,7 +578,10 @@ def test_G2_los_hermanos_las_rutas_con_ficha_son_estas_y_las_dos_de_consultas_fi
     """HERMANOS, SACADOS DE LO REAL: toda ruta de `/api/code` con `{noco_id}`. El día que haya otra, esta prueba
     se rompe hasta que se le escriba su «otro cliente no la ve». Y cada función de `db` que la usa lleva
     `cliente_noco_id = %s` en su propio SQL."""
-    con_ficha = sorted((m, p, perm) for m, p, perm in api_code.rutas_registradas(panel.app) if "{noco_id}" in p)
+    # Las rutas de las facturas de Natalia (pieza 9, 21-oct-2026) también llevan la ficha; su «otro cliente no la ve» y
+    # su censo viven en `tests/test_facturas_natalia.py`. Aquí quedan las tres de siempre.
+    con_ficha = sorted((m, p, perm) for m, p, perm in api_code.rutas_registradas(panel.app)
+                       if "{noco_id}" in p and "/facturas" not in p)
     assert [(m, p) for m, p, _ in con_ficha] == [
         ("GET", "/api/code/clientes/{noco_id}/consultas"), ("GET", "/api/code/clientes/{noco_id}/proyectos"),
         ("POST", "/api/code/clientes/{noco_id}/consultas")]
@@ -1227,7 +1230,7 @@ def test_ni_abrir_ni_leer_ni_pasar_mandan_nada_a_telegram(natalia, monkeypatch):
     assert llamadas == []
     # y el código de esta pieza no nombra a Telegram ni al despertador
     fuente = (_ROOT / "web" / "api_code.py").read_text(encoding="utf-8")
-    seccion = fuente[fuente.index("# ── Las consultas al responsable"):fuente.index("def avisar_si_alertas_mal_nombradas")]
+    seccion = fuente[fuente.index("# ── Las consultas al responsable"):fuente.index("# ── Las facturas de Natalia")]
     arbol = ast.parse((_ROOT / "db" / "db.py").read_text(encoding="utf-8"))
     nombres = {n.name for n in ast.walk(arbol) if isinstance(n, ast.AsyncFunctionDef)
                and n.name in ("abrir_consulta_de_natalia", "consultas_de_natalia_de_cliente", "pasar_consulta_de_natalia")}
