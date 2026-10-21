@@ -13,7 +13,7 @@
 {% if sin_tabla %}<p class="aviso">Las facturas todavía no están disponibles: falta actualizar la base de datos.</p>
 {% elif filas %}
 <div class="scroll"><table data-lista-de-facturas>
-<tr><th>Número</th><th>Cliente</th><th>Fecha</th><th class="num">Total</th><th>Estado</th><th>Proyecto</th></tr>
+<tr><th>Número</th><th>Cliente</th><th>Fecha</th><th class="num">Total</th><th>Estado</th><th>Pago</th><th>Proyecto</th></tr>
 {% for f in filas %}
 <tr>
   <td><a href="/facturas/{{ f.id }}"><b>{{ f.numero }}</b></a></td>
@@ -21,6 +21,7 @@
   <td class="suave">{{ f.fecha }}</td>
   <td class="num">{{ f.total }}</td>
   <td><span class="pild {{ f.estado }}">{{ f.estado_texto }}</span></td>
+  <td data-pago="{{ f.pago.estado }}">{{ f.pago.texto }}</td>
   <td class="suave">{% if f.proyecto %}<a href="/proyectos?p={{ f.proyecto_id }}">{{ f.proyecto }}</a>{% else %}—{% endif %}</td>
 </tr>
 {% endfor %}

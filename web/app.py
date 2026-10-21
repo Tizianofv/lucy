@@ -2640,11 +2640,30 @@ async def _contexto_de_factura_nueva(*, cliente, proyecto, cotizacion, opcion, r
     return ctx
 
 
+async def _pago_de_las_facturas(filas: list[dict]) -> dict[int, dict]:
+    """Cuánto se ha pagado de cada factura de la lista, leído de la App AHORA y sin guardar nada (pieza 7): UNA lectura
+    para todas, con las sesiones y trabajos ligados vivos pedidos una por una y sin ficha, y cada factura medida contra
+    su propio subtotal (`facturas_panel.el_pago_de_la_factura`). Si la App no contesta (o una de sus sesiones ya no está),
+    esa factura dice que no se pudo leer lo pagado: no se inventa. Una anulada no tiene estado de pago. Solo LEE."""
+    if not filas:
+        return {}
+    try:
+        ligas = await db.ligas_vivas_de_las_facturas()
+    except Exception as e:
+        log_f.warning("Facturas: no se pudieron leer las ligas de la lista (%s).", type(e).__name__)
+        return {f["id"]: fp.el_pago_de_la_factura(f, None) for f in filas}
+    refs = sorted({l["ref"] for f in filas for l in ligas.get(f["id"], []) if isinstance(l["ref"], str)})
+    lectura = (await registro_lectura.sesiones_por_refs(refs) if refs else
+               {"estado": "sin_cliente", "sesiones": [], "trabajos": [], "canceladas": [], "no_halladas": []})
+    return {f["id"]: fp.el_pago_de_la_factura(f, fp.ligas_con_lo_leido(ligas.get(f["id"], []), lectura))
+            for f in filas}
+
+
 @app.get("/facturas", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_SIEMPRE)
 async def lista_de_facturas(request: Request, estado: Navegacion[str] = ""):
-    """La lista de facturas, la más nueva primero: número (o «Borrador»), cliente, fecha, total, estado y el proyecto
-    si lo tiene. `?estado=` filtra por borrador, emitida o anulada (lo que no se conoce es «todas»). SOLO LEE."""
+    """La lista de facturas, la más nueva primero: número (o «Borrador»), cliente, fecha, total, estado, pago y el
+    proyecto si lo tiene. `?estado=` filtra por borrador, emitida o anulada (lo que no se conoce es «todas»). SOLO LEE."""
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     filtro = fp.estado_pedido(estado)
@@ -2654,9 +2673,10 @@ async def lista_de_facturas(request: Request, estado: Navegacion[str] = ""):
     except db.FacturasSinTabla:
         filas, sin_tabla = [], True
     nombres = await _nombres_de_proyecto()
+    pagos = await _pago_de_las_facturas(filas)
     return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "facturas.html", {
-        "filas": [fp.fila_de_la_lista(f, nombres) for f in filas], "filtro": filtro, "sin_tabla": sin_tabla,
-        "estados": fp.ETIQUETA_DEL_FILTRO}))
+        "filas": [fp.fila_de_la_lista(f, nombres, pagos.get(f["id"])) for f in filas], "filtro": filtro,
+        "sin_tabla": sin_tabla, "estados": fp.ETIQUETA_DEL_FILTRO}))
 
 
 @app.get("/facturas/nueva", response_class=HTMLResponse)
@@ -2809,7 +2829,9 @@ async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", 
         "campos_marcados": {c["casilla"] for c in errores if c.get("casilla")},
         "candidatas": candidatas, "hay_mas": hay_mas, "registro_ok": registro_ok, "busqueda": busqueda, "sq": sq,
         "etiquetas_de_liga": fp.ETIQUETA_DE_LIGA, "drive": drive_de_la_factura,
-        "hecha_por_texto": fp.quien_hizo_la_factura(f, config.NOMBRES_POR_CHAT), "envios": envios_de_la_factura},
+        "hecha_por_texto": fp.quien_hizo_la_factura(f, config.NOMBRES_POR_CHAT), "envios": envios_de_la_factura,
+        # El pago, leído de la App en este momento y cruzado con el subtotal de la factura (pieza 7): nada se guarda.
+        "pago": fp.el_pago_de_la_factura(f, ligas_leidas)},
         status_code=status))
 
 

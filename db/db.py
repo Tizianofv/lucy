@@ -2919,6 +2919,10 @@ SENTENCIA_DE_LOS_RENGLONES = (
 SENTENCIA_DE_LAS_LIGAS = (
     "SELECT id, tipo, ref, codigo, creado_en, creado_por_chat_id, desligada_en FROM factura_ligas "
     "WHERE factura_id = %s ORDER BY id")
+# Todas las ligas vivas, de todas las facturas, de una lectura: la lista de facturas la usa para saber cuánto se ha
+# pagado de cada una (pieza 7) sin abrir una conexión por factura. `factura_ligas` tiene una fila por sesión ligada.
+SENTENCIA_DE_LAS_LIGAS_VIVAS = (
+    "SELECT factura_id, tipo, ref, codigo FROM factura_ligas WHERE desligada_en IS NULL ORDER BY factura_id, id")
 SENTENCIA_DE_LA_LISTA_DE_FACTURAS = (
     "SELECT f.id, f.anio, f.numero, f.estado, f.cliente_noco_id, f.para_nombre, f.fecha, f.proyecto_id, "
     "f.itbis_pct, f.ncf, f.hecha_por, f.creado_en, f.cambiado_en, f.emitida_en, "
@@ -3432,6 +3436,23 @@ async def facturas_para_la_lista(*, estado: str | None = None, proyecto_id: int 
         f.update(totales_de_factura([_dinero_leido(f.pop("subtotal"))], f["itbis_pct"]))
         lista.append(f)
     return lista
+
+
+@_con_el_aviso_de_la_tabla
+async def ligas_vivas_de_las_facturas() -> dict[int, list[dict]]:
+    """Las ligas vivas de TODAS las facturas, por factura (`{factura_id: [{"tipo", "ref", "codigo"}, …]}`, en el orden
+    en que se ligaron). La usa la lista de facturas para saber cuánto se ha pagado de cada una (pieza 7) con una sola
+    lectura, sin abrir una conexión por factura. No pide sesión (la ruta que la use decide quién entra), no escribe nada
+    y no deja huella. Sin la tabla: `FacturasSinTabla`."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_LAS_LIGAS_VIVAS)
+        filas = await cur.fetchall()
+    por_factura: dict[int, list[dict]] = {}
+    for fila in filas:
+        por_factura.setdefault(fila["factura_id"], []).append(
+            {"tipo": fila["tipo"], "ref": fila["ref"], "codigo": fila["codigo"]})
+    return por_factura
 
 
 # ── LA PUERTA DE NATALIA PARA LAS FACTURAS (pieza 9 del diseño «Facturas», 21-oct-2026) ─────────────────────

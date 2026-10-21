@@ -74,6 +74,16 @@
     <div class="acciones"><a class="boton-linea" href="/facturas/{{ f.id }}?confirmar=anular">Anular</a></div>
     {% endif %}
 
+    {% if pago.estado != 'no_aplica' %}
+    <div class="tarjeta" data-pago="{{ pago.estado }}">
+      <b>Pago</b>
+      <p data-pago-texto>{{ pago.texto }}</p>
+      {% if pago.detalle %}<p class="suave" data-pago-detalle>{{ pago.detalle }}</p>{% endif %}
+      {% if pago.itbis %}<p class="suave" data-pago-itbis>{{ pago.itbis }}</p>{% endif %}
+      <p class="suave">Lo pagado se anota en la App, en cada sesión, y esta factura lo lee de ahí cada vez que se abre: aquí no se guarda ningún pago.</p>
+    </div>
+    {% endif %}
+
     <div class="tarjeta">
       <b>Datos</b>
       <dl class="datos">

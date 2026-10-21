@@ -42,9 +42,11 @@ def etiqueta_del_estado(estado) -> str:
     return ETIQUETA_DE_ESTADO.get(estado, str(estado))
 
 
-def fila_de_la_lista(f: dict, nombres_de_proyecto: dict[int, str]) -> dict:
+def fila_de_la_lista(f: dict, nombres_de_proyecto: dict[int, str], pago: dict | None = None) -> dict:
     """Una fila de la lista: lo que la plantilla pinta, ya escrito. `f` es una fila de
-    `db.facturas_para_la_lista`. El dinero lo escribe `cotizaciones.dinero_en_pesos` (el mismo de la hoja)."""
+    `db.facturas_para_la_lista`. El dinero lo escribe `cotizaciones.dinero_en_pesos` (el mismo de la hoja). `pago` es
+    lo que `el_pago_de_la_factura` dijo de esa factura (pieza 7); sin él (la lista del proyecto no lo lee) no se pinta
+    ningún estado de pago."""
     return {
         "id": f["id"],
         "numero": f["codigo"] or "Borrador",
@@ -58,6 +60,7 @@ def fila_de_la_lista(f: dict, nombres_de_proyecto: dict[int, str]) -> dict:
         "proyecto": (None if f["proyecto_id"] is None
                      else nombres_de_proyecto.get(f["proyecto_id"]) or f"Proyecto {f['proyecto_id']}"),
         "sesiones": f["ligas_vivas"],
+        "pago": dict(PAGO_QUE_NO_SE_PINTA) if pago is None else pago,
     }
 
 
@@ -326,6 +329,127 @@ def ligas_con_lo_leido(ligas: list[dict], lectura: dict) -> list[dict]:
 def _dinero_de_la_fila(fila: dict) -> dict:
     """Total, abonado y saldo de una sesión, escritos con el dinero de la hoja; «—» donde la App no trajo la cifra."""
     return {k: ("—" if fila.get(k) is None else cz.dinero_en_pesos(fila[k])) for k in ("total", "abonado", "saldo")}
+
+
+# ── El pago, leído de la App (pieza 7, 21-oct-2026) ─────────────────────────────────────────────────
+#
+# EL PAGO SE ANOTA EN UN SOLO SITIO: LA APP, EN CADA SESIÓN (diseño §7, y Tiziano el 20-oct-2026: «Claro, si alguien paga,
+# en la sesión tiene que aparecer eso»). La factura NO guarda ningún pago ni tiene botón de pago: cada vez que se pinta
+# lee de la App lo que se ha pagado de sus sesiones y trabajos ligados vivos. Nada de esto se guarda.
+#
+# CUÁNDO ESTÁ PAGADA (la regla aprobada, corregida tres veces el 21-oct-2026 por los NO PASA del testigo): cuando TODAS
+# sus sesiones y trabajos ligados vivos —sin contar los cancelados— tienen el `saldo` que da la App en cero o menos. Se
+# mira SESIÓN POR SESIÓN, SIN COMPENSAR: lo que una sesión pagó de más no tapa lo que debe otra (el testigo midió una de
+# RD$1,000 que debía y otra que había pagado RD$1,000 de más; la suma daba cero y la factura decía «Pagada»). Lo que se
+# muestra como pagado es la suma del `abonado`. Si TODAS las sesiones contadas tienen total cero **y no hay nada
+# abonado**, la factura dice «Sin cargos en el registro» (no hay nada que cobrar ni nada pagado); si algo se abonó, manda
+# la regla de siempre y el detalle dice cuánto se pagó (el testigo midió una sesión de total cero con RD$100 abonados que
+# salía «Sin cargos» y no decía el pago). Mientras alguna sesión deba, el texto dice cuánto FALTA, que es la suma de los
+# saldos POSITIVOS sin restarle lo que otra pagó de más: «Pagado RD$X · falta RD$Y» (o «Sin pagos · falta RD$Y»), para
+# que nunca se lea «Pagado RD$1,500 de RD$1,500» con una sesión debiendo. (La primera versión medía «pagada» contra el
+# subtotal de la factura; también fue un NO PASA del testigo.)
+#
+# EL AVISO DE «NO CUADRA» ES OTRA COSA Y NO CAMBIA EL ESTADO: cuando el subtotal de la factura (sin ITBIS) no es igual a
+# la suma de los `total` de las sesiones —porque se cambió un renglón a mano o porque la factura lleva un renglón que no
+# es de una sesión—, la factura muestra las dos cifras y dice «no cuadra con la App: revísala» (diseño §7). Quien decide
+# si está pagada son las sesiones, no la factura.
+#
+# EL ITBIS NO CUENTA para nada de esto: por la respuesta A de Tiziano (21-oct-2026) no pasa por la App —se cobra
+# aparte— y la pantalla lo dice con sus palabras.
+
+TEXTO_SIN_LEER_EL_PAGO = "No se pudo leer lo pagado."
+
+PAGO_QUE_NO_SE_PINTA = {"estado": "no_aplica", "texto": "", "detalle": "", "itbis": ""}
+
+
+def _pago_sin_leer(itbis: str, motivo: str) -> dict:
+    """El pago cuando no se puede decir cuánto se ha pagado: se dice, nunca se disfraza de «sin pagos»."""
+    return {"estado": "no_se_pudo", "texto": TEXTO_SIN_LEER_EL_PAGO, "detalle": motivo, "itbis": itbis}
+
+
+def _aviso_de_lo_que_no_cuadra(f: dict, ligas_leidas: list[dict], total_de_las_sesiones) -> str:
+    """La frase de cuando la factura y la App no dicen lo mismo del dinero de las sesiones, o `""`.
+
+    Compara el subtotal de la factura (sin ITBIS) con la suma de los `total` que la App tiene de sus sesiones ligadas. Solo
+    se afirma cuando se leyeron TODAS las ligas (con una cancelada o una que ya no está, la comparación no está completa y
+    no se dice nada: la página ya nombra cada una). Es un aviso: NO cambia el estado del pago.
+    """
+    if not all(l["leida"] == "ok" for l in ligas_leidas) or total_de_las_sesiones == f["subtotal"]:
+        return ""
+    return (f"No cuadra con la App: revísala (la factura suma {cz.dinero_en_pesos(f['subtotal'])} y el registro dice "
+            f"{cz.dinero_en_pesos(total_de_las_sesiones)} de sus sesiones).")
+
+
+def el_pago_de_la_factura(f: dict, ligas_leidas: list[dict] | None) -> dict:
+    """Lo que la factura dice de su pago, leído de lo que la App contestó AHORA (`ligas_leidas`, lo que devuelve
+    `ligas_con_lo_leido`): `{"estado", "texto", "detalle", "itbis"}`.
+
+    `estado` es `pagada` (TODAS las sesiones y trabajos ligados vivos tienen `saldo` cero o menos: se mira una por una,
+    sin compensar), `sin_cargos` («Sin cargos en el registro»: todas las contadas tienen total cero y no hay nada
+    abonado), `con_abono` («Pagado RD$X · falta RD$Y»: algo pagado y alguna todavía debe), `sin_pagos` («Sin pagos ·
+    falta RD$Y»: nada pagado y alguna debe), `no_se_pudo` (no se puede decir cuánto se ha pagado: la App no contestó, ya
+    no devuelve una de sus sesiones o no trajo una cifra: se dice y no se adivina) o `no_aplica` (la factura está
+    anulada: una anulada no tiene estado de pago). «Falta» es la suma de los saldos POSITIVOS, sin restarle lo que otra
+    sesión pagó de más. `detalle` es lo que hay que decir además (el porqué de un `no_se_pudo`, cuánto se pagó cuando
+    quedó pagada, las dos cifras cuando la App y la factura no cuadran, o que una sesión pagó de más y eso no tapa lo que
+    debe otra) e `itbis`, la frase del ITBIS cuando la factura lo lleva.
+
+    `ligas_leidas` en `None` quiere decir que no se pudo leer ni de qué sesiones es la factura. Nada de esto se guarda.
+    """
+    if f["estado"] == "anulada":
+        return dict(PAGO_QUE_NO_SE_PINTA)
+    itbis = (f"El ITBIS ({cz.dinero_en_pesos(f['itbis'])}) se cobra aparte; no se lleva en la App."
+             if f["itbis_pct"] is not None else "")
+    if ligas_leidas is None:
+        return _pago_sin_leer(itbis, "No se pudieron leer las sesiones de la factura.")
+    if any(l["leida"] == "no_se_pudo" for l in ligas_leidas):
+        return _pago_sin_leer(itbis, "El registro no contestó.")
+    if any(l["leida"] == "no_esta" for l in ligas_leidas):
+        return _pago_sin_leer(itbis, "El registro ya no devuelve una de sus sesiones o trabajos.")
+    pagado, total_de_las_sesiones, falta, contadas = Decimal("0"), Decimal("0"), Decimal("0"), 0
+    todas_saldadas, todas_sin_cargo, alguna_pago_de_mas = True, True, False
+    for l in ligas_leidas:
+        if l["leida"] == "cancelada":
+            # Una cancelada no se cobra ni se paga: no entra en ninguna de las cifras (la página la nombra aparte).
+            continue
+        fila = l["fila"] or {}
+        abonado, total, saldo = fila.get("abonado"), fila.get("total"), fila.get("saldo")
+        if abonado is None or total is None or saldo is None:
+            return _pago_sin_leer(itbis, "El registro no dijo cuánto cuesta, cuánto se ha pagado o cuánto debe una de "
+                                         "sus sesiones.")
+        if abonado < 0 or total < 0:
+            # Un `saldo` negativo NO es un error: es lo que debe menos quien pagó de más.
+            return _pago_sin_leer(itbis, "El registro trajo una cifra de dinero que no se entiende.")
+        pagado += abonado
+        total_de_las_sesiones += total
+        contadas += 1
+        todas_saldadas = todas_saldadas and saldo <= 0
+        todas_sin_cargo = todas_sin_cargo and total == 0
+        alguna_pago_de_mas = alguna_pago_de_mas or saldo < 0
+        if saldo > 0:
+            # LO QUE FALTA ES LA SUMA DE LOS SALDOS POSITIVOS, sin restarle lo que otra sesión pagó de más.
+            falta += saldo
+    if not contadas:
+        estado, texto = "sin_pagos", "Sin pagos"
+    elif todas_sin_cargo and pagado == 0:
+        # Sin precio en el registro y sin un peso abonado: no hay nada que cobrar. Si algo se abonó, manda la regla de
+        # abajo (una sesión con total cero y algo pagado tiene el saldo en negativo y cuenta como pagada).
+        estado, texto = "sin_cargos", "Sin cargos en el registro."
+    elif todas_saldadas:
+        estado, texto = "pagada", "Pagada"
+    elif pagado > 0:
+        estado, texto = "con_abono", (f"Pagado {cz.dinero_en_pesos(pagado)} · falta "
+                                      f"{cz.dinero_en_pesos(falta)}")
+    else:
+        estado, texto = "sin_pagos", f"Sin pagos · falta {cz.dinero_en_pesos(falta)}"
+    aviso = _aviso_de_lo_que_no_cuadra(f, ligas_leidas, total_de_las_sesiones)
+    dichos = [f"Se pagaron {cz.dinero_en_pesos(pagado)}."] if estado == "pagada" and pagado > 0 else []
+    if aviso:
+        dichos.append(aviso)
+    if alguna_pago_de_mas and estado == "con_abono":
+        # El que pagó de más no tapa la deuda de otra sesión: la factura no está pagada, y se dice por qué.
+        dichos.append("Una de sus sesiones pagó de más: eso no tapa lo que debe otra.")
+    return {"estado": estado, "texto": texto, "detalle": " ".join(dichos), "itbis": itbis}
 
 
 # ── Lo que la puerta rechazó, en palabras ───────────────────────────────────────────────────────
