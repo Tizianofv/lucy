@@ -74,6 +74,14 @@ CANCELADA = {"ref": 31, "codigo": "c031", "es_trabajo": False, "fecha": HOY, "sa
              "total": 1000.0, "abonado": 0.0, "saldo": 1000.0}
 
 RENGLON = {"r-1-descripcion": "Grabación de voces", "r-1-detalle": "dos horas", "r-1-monto": "62,500"}
+# Otras dos de la ficha del cliente: una sesión más (para facturar varias) y una cancelada (de ELLA, no de otra persona).
+SESION_B = {"ref": 13, "codigo": "s013", "es_trabajo": False, "fecha": HOY, "sala": "Sala P", "sala_mostrar": "Sala P",
+            "horas": 1.5, "servicio": "Ensayo", "estado": "CONFIRMADA", "cancelada": False,
+            "total": 4500.0, "abonado": 1000.0, "saldo": 3500.0}
+SU_CANCELADA = {"ref": 32, "codigo": "c032", "es_trabajo": False, "fecha": HOY, "sala": "Sala P", "sala_mostrar": "Sala P",
+                "horas": 1, "servicio": "Ensayo", "estado": "CANCELADA", "cancelada": True,
+                "total": 1000.0, "abonado": 0.0, "saldo": 1000.0}
+
 NOMBRE = "Cliente de Prueba"
 
 
@@ -81,12 +89,13 @@ NOMBRE = "Cliente de Prueba"
 
 @pytest.fixture
 def registro(monkeypatch):
-    """La App de mentira, con su llave, y Lucy apuntada a ella. De la ficha del cliente salen la sesión y el trabajo."""
+    """La App de mentira, con su llave, y Lucy apuntada a ella. De la ficha del cliente salen dos sesiones, un trabajo y una
+    cancelada; `otras` (21, 23, 31) son de OTRAS personas: la App las tiene y las devuelve si se le piden una por una."""
     doble = AppDeRegistro()
     doble.llave = LLAVE
-    doble.sesiones = {"puede_ligar": True, "motivo_sin_ligar": "", "sesiones": [dict(SESION), dict(TRABAJO)]}
+    doble.sesiones = {"puede_ligar": True, "motivo_sin_ligar": "", "sesiones": [dict(SESION), dict(TRABAJO), dict(SESION_B), dict(SU_CANCELADA)]}
     doble.otras = [dict(OTRA), dict(OTRO_TRABAJO), dict(CANCELADA)]
-    doble.busqueda = {"sesiones": [dict(OTRA), dict(CANCELADA)], "hay_mas": False}
+    doble.busqueda = {"sesiones": [dict(OTRA), dict(CANCELADA), dict(SU_CANCELADA, nombre="Cliente de Prueba")], "hay_mas": False}
     monkeypatch.setattr(config, "REGISTRO_URL", doble.url)
     monkeypatch.setattr(config, "LUCY_LLAVE_SERVICIO", LLAVE)
     # `test_guardar_factura` importa una guarda que deja un `httpx` falso en `sys.modules`: el de verdad es el que usa
@@ -273,15 +282,19 @@ def test_paso_1_sin_cliente_se_busca_en_noco_y_cada_ficha_es_un_enlace(pantalla)
 def test_paso_2_con_cliente_enseña_sus_sesiones_y_trabajos_y_una_cancelada_no_se_puede_escoger(pantalla):
     html = cliente().get("/facturas/nueva", params={"cliente": 7, "sq": "pe"}).text
     cajas = re.findall(r'<input type="checkbox" name="ref" value="(\d+)"( checked)?( disabled)?>', html)
-    assert [c[0] for c in cajas] == ["11", "12", "21", "31"]       # de la ficha, y de la búsqueda
-    assert [c[0] for c in cajas if c[2]] == ["31"]                   # la cancelada, deshabilitada y dicho por qué
+    assert [c[0] for c in cajas] == ["11", "13", "12", "21", "31", "32"]  # de la ficha (sesiones, luego trabajos), y de la búsqueda
+    assert [c[0] for c in cajas if c[2]] == ["21", "31", "32"]      # ninguna de la búsqueda se puede marcar
+    assert html.count("No está entre las sesiones de este cliente en el registro: no se puede escoger") == 2      # 21 y 31 no están en la ficha; la 32 es cancelada SUYA
     assert "Cancelada: no se factura" in html and ">Trabajo<" in html
 
 
-def test_paso_2_las_ya_escogidas_vienen_marcadas_aunque_no_sean_de_la_ficha(pantalla):
-    html = cliente().get("/facturas/nueva", params={"cliente": 7, "ref": ["11", "21"]}).text
+def test_paso_2_las_ya_escogidas_vienen_marcadas_y_una_ajena_escogida_a_mano_no(pantalla):
+    html = cliente().get("/facturas/nueva", params={"cliente": 7, "ref": ["11", "13"]}).text
     cajas = re.findall(r'<input type="checkbox" name="ref" value="(\d+)"( checked)?', html)
-    assert [(c[0], bool(c[1])) for c in cajas] == [("11", True), ("21", True), ("12", False)]      # primero las sesiones, luego los trabajos
+    assert [(c[0], bool(c[1])) for c in cajas] == [("11", True), ("13", True), ("12", False)]      # primero las sesiones, luego los trabajos
+    # una referencia de otra persona puesta a mano en la dirección no aparece ni marcada (la App la devolvería si se le pide una por una)
+    html = cliente().get("/facturas/nueva", params={"cliente": 7, "ref": ["11", "21"]}).text
+    assert re.findall(r'<input type="checkbox" name="ref" value="(\d+)"( checked)?', html) == [("11", " checked"), ("13", ""), ("12", "")]
 
 
 def test_paso_3_con_sesiones_buenas_sale_el_formulario_con_el_cliente_y_las_sesiones_escondidas(pantalla):
@@ -291,8 +304,11 @@ def test_paso_3_con_sesiones_buenas_sale_el_formulario_con_el_cliente_y_las_sesi
     assert f'name="para_nombre" value="{NOMBRE}"' in html and 'name="fecha" value="2026-10-21"' in html
 
 
-@pytest.mark.parametrize("refs,frase", [(["31"], "cancelado o pospuesto"), (["11", "31"], "cancelado o pospuesto"),
-                                        (["99"], "ya no está en el registro"), ([], "al menos una")])
+@pytest.mark.parametrize("refs,frase", [(["32"], "cancelado o pospuesto"), (["11", "32"], "cancelado o pospuesto"),
+                                        (["99"], "no aparece entre las sesiones y trabajos de este cliente"),
+                                        (["21"], "no aparece entre las sesiones y trabajos de este cliente"),
+                                        (["11", "23"], "no aparece entre las sesiones y trabajos de este cliente"),
+                                        ([], "al menos una")])
 def test_paso_3_con_una_cancelada_o_desconocida_o_ninguna_no_pasa_a_escribir(pantalla, refs, frase):
     html = cliente().get("/facturas/nueva", params={"cliente": 7, "ref": refs, "paso": "escribir"}).text
     assert 'action="/facturas/nueva"' not in html or 'name="paso" value="escribir"' in html
@@ -360,10 +376,10 @@ def test_sin_itbis_ni_ncf_ni_rnc_se_guardan_vacios_y_la_casilla_marcada_es_el_di
 
 
 def test_varias_sesiones_y_trabajos_en_una_factura_cada_liga_con_su_tipo(pantalla):
-    r = crear_por_la_pantalla(refs=("11", "12", "21"))
+    r = crear_por_la_pantalla(refs=("11", "12", "13"))
     assert r.status_code == 303
-    assert ligas(pantalla) == [("sesion", "11", True), ("trabajo", "12", True), ("sesion", "21", True)]
-    assert [l["codigo"] for l in tgf.filas(pantalla, "factura_ligas")] == ["s011", "t012", "x021"]
+    assert ligas(pantalla) == [("sesion", "11", True), ("trabajo", "12", True), ("sesion", "13", True)]
+    assert [l["codigo"] for l in tgf.filas(pantalla, "factura_ligas")] == ["s011", "t012", "s013"]
     assert tgf.huellas(pantalla) == [("crear", "facturas", 1), ("ligar", "facturas", 1), ("ligar", "facturas", 1)]
 
 
@@ -377,14 +393,14 @@ def test_el_tipo_de_la_liga_sale_de_es_trabajo_de_la_app_y_no_de_lo_que_trae_el_
 
 def test_una_cancelada_no_se_factura_y_no_se_escribe_nada(pantalla):
     antes = tgf.foto(pantalla)
-    r = crear_por_la_pantalla(refs=("11", "31"))
+    r = crear_por_la_pantalla(refs=("11", "32"))
     assert r.status_code == 400 and "cancelado o pospuesto" in r.text and "NO se guardó nada" in r.text
     assert tgf.foto(pantalla) == antes
 
 
 def test_una_que_la_app_no_conoce_o_sin_ninguna_no_se_guarda(pantalla):
     antes = tgf.foto(pantalla)
-    assert "ya no está en el registro" in crear_por_la_pantalla(refs=("99",)).text
+    assert "no aparece entre las sesiones y trabajos de este cliente" in crear_por_la_pantalla(refs=("99",)).text
     sin = crear_por_la_pantalla(refs=())
     assert sin.status_code == 400 and "escoge al menos uno" in sin.text
     assert tgf.foto(pantalla) == antes
@@ -456,12 +472,12 @@ def test_si_la_app_no_contesta_no_se_guarda_y_se_dice(pantalla, registro):
 
 
 def test_si_una_de_varias_no_se_deja_ligar_el_borrador_queda_y_la_pagina_dice_cual(pantalla):
-    ocupante = tgf.crear(liga={"tipo": "sesion", "ref": "21"}, para_nombre="Otra")
+    ocupante = tgf.crear(liga={"tipo": "sesion", "ref": "13"}, para_nombre="Otra")
     assert ocupante["id"] == 1
-    r = crear_por_la_pantalla(refs=("11", "21", "12"))
+    r = crear_por_la_pantalla(refs=("11", "13", "12"))
     assert r.status_code == 200                                      # la página de la factura, con el aviso
     avisos = " ".join(textos_de_avisos(r.text))
-    assert "No se pudo ligar «x021» a la factura" in avisos and "ya está en otra factura" in avisos
+    assert "No se pudo ligar «s013» a la factura" in avisos and "ya está en otra factura" in avisos
     assert ligas(pantalla, 2) == [("sesion", "11", True), ("trabajo", "12", True)]
     assert len(tgf.filas(pantalla, "facturas")) == 2
 
@@ -477,7 +493,7 @@ def test_desde_una_cotizacion_la_factura_queda_ligada_al_proyecto_a_la_cotizacio
 
 
 def test_el_guardado_rechazado_vuelve_con_el_proyecto_la_cotizacion_y_los_renglones_escritos(pantalla):
-    r = crear_por_la_pantalla(proyecto="1", cotizacion="1", opcion="2", refs=("11", "31"))
+    r = crear_por_la_pantalla(proyecto="1", cotizacion="1", opcion="2", refs=("11", "32"))
     assert r.status_code == 400
     assert 'name="proyecto" value="1"' in r.text or "cancelado o pospuesto" in r.text
     r2 = crear_por_la_pantalla(proyecto="1", cotizacion="1", opcion="2", ncf="B0100000001", ncf_tipo="")
@@ -603,7 +619,7 @@ def test_una_emitida_y_una_anulada_no_se_corrigen_ni_se_ligan(pantalla):
     antes = tgf.foto(pantalla)
     r = cliente().post(f"/facturas/{e['id']}/corregir", data=datos, follow_redirects=False)
     assert r.status_code == 400 and "Una factura emitida no se corrige: si está mal, se anula y se hace otra" in r.text
-    r = cliente().post(f"/facturas/{e['id']}/ligar", data={"ref": "21"}, follow_redirects=False)
+    r = cliente().post(f"/facturas/{e['id']}/ligar", data={"ref": "13"}, follow_redirects=False)
     assert r.status_code == 400 and "no se corrige" in r.text
     assert tgf.foto(pantalla) == antes
     tgf.correr(db.anular_factura(e["id"], CASA, "Motivo"))
@@ -662,12 +678,12 @@ def test_ligar_y_quitar_sesiones_de_un_borrador_con_su_tipo_y_la_ultima_no_se_su
 
 
 def test_ligar_una_cancelada_o_una_que_ya_esta_en_otra_factura_se_dice(pantalla):
-    otra = tgf.crear(liga={"tipo": "sesion", "ref": "21"}, para_nombre="Otra")
+    otra = tgf.crear(liga={"tipo": "sesion", "ref": "13"}, para_nombre="Otra")
     b = tgf.crear(liga={"tipo": "sesion", "ref": "11"})
     antes = tgf.foto(pantalla)
-    r = cliente().post(f"/facturas/{b['id']}/ligar", data={"ref": "31"}, follow_redirects=False)
+    r = cliente().post(f"/facturas/{b['id']}/ligar", data={"ref": "32"}, follow_redirects=False)
     assert r.status_code == 400 and "cancelado o pospuesto" in r.text
-    r = cliente().post(f"/facturas/{b['id']}/ligar", data={"ref": "21"}, follow_redirects=False)
+    r = cliente().post(f"/facturas/{b['id']}/ligar", data={"ref": "13"}, follow_redirects=False)
     assert r.status_code == 400 and "ya está en otra factura" in r.text
     r = cliente().post(f"/facturas/{b['id']}/ligar", data={"ref": "11"}, follow_redirects=False)
     assert r.status_code == 400 and "ya está en esta factura" in r.text
@@ -680,7 +696,8 @@ def test_la_pagina_ofrece_ligar_las_del_cliente_y_la_busqueda_sin_las_que_ya_tie
     b = tgf.crear(liga={"tipo": "sesion", "ref": "11"})
     html = _pagina(b["id"], sq="pe")
     ofrecidas = re.findall(r'action="/facturas/\d+/ligar"[^>]*><input type="hidden" name="ref" value="(\d+)">', html)
-    assert ofrecidas == ["12", "21"]                  # la 11 ya está; la 31 está cancelada y no tiene botón
+    assert ofrecidas == ["13", "12"]                  # la 11 ya está; la 21 y la 31 no están en la ficha y no tienen botón
+    assert html.count("No está entre las sesiones de este cliente en el registro: no se puede escoger") == 2
     assert "Cancelada: no se factura" in html
 
 
@@ -871,13 +888,14 @@ def test_las_casillas_de_renglones_ponen_los_que_hay_mas_los_en_blanco():
 
 
 def test_las_ligas_de_las_refs_sacan_el_tipo_de_es_trabajo_y_sacan_las_canceladas_y_las_que_no_estan():
-    resp = {"sesiones": [{"ref": "1", "es_trabajo": False, "codigo": "a"}], "trabajos": [{"ref": "2", "es_trabajo": True, "codigo": "b"}],
-            "canceladas": ["3"], "no_halladas": ["4"]}
+    resp = {"estado": "ok", "sesiones": [{"ref": "1", "es_trabajo": False, "codigo": "a"}],
+            "trabajos": [{"ref": "2", "es_trabajo": True, "codigo": "b"}], "canceladas": ["3"], "no_halladas": ["4"]}
     ligas_, problemas = fp.ligas_de_las_refs(["2", "1", "3", "4", "1", "5"], resp)
     assert ligas_ == [{"tipo": "trabajo", "ref": "2", "codigo": "b"}, {"tipo": "sesion", "ref": "1", "codigo": "a"}]
-    assert problemas == [{"ref": "3", "motivo": "cancelada"}, {"ref": "4", "motivo": "no_esta"}, {"ref": "5", "motivo": "no_esta"}]
+    # lo que la ficha no lista es de otra persona (o no existe): `ajena`, nunca se liga
+    assert problemas == [{"ref": "3", "motivo": "cancelada"}, {"ref": "4", "motivo": "ajena"}, {"ref": "5", "motivo": "ajena"}]
     # `es_trabajo` que no es un True de verdad no vuelve trabajo una sesión
-    raro = {"sesiones": [{"ref": "9", "es_trabajo": "true", "codigo": None}], "trabajos": [], "canceladas": []}
+    raro = {"estado": "ok", "sesiones": [{"ref": "9", "es_trabajo": "true", "codigo": None}], "trabajos": [], "canceladas": []}
     assert fp.ligas_de_las_refs(["9"], raro)[0][0]["tipo"] == "sesion"
 
 

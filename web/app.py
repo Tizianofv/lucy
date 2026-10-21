@@ -2530,12 +2530,13 @@ async def _nombre_del_cliente(noco_id: int) -> tuple[str, bool]:
     return (ficha["nombre"], True) if ficha else ("", True)
 
 
-async def _lo_que_dice_el_registro_de(refs: list[str]) -> dict | None:
-    """Lo que la App contesta para ESAS referencias (y nada más), o `None` si no contestó. De aquí sale el tipo de
-    cada liga (`es_trabajo`) y si está cancelada: la persona no escribe ni el uno ni lo otro."""
-    if not refs:
-        return {"estado": "ok", "sesiones": [], "trabajos": [], "canceladas": [], "no_halladas": []}
-    lectura = await registro_lectura.sesiones_de_cliente(None, sesiones=refs)
+async def _lo_que_dice_el_registro_del_cliente(cliente_noco_id) -> dict | None:
+    """Lo que la App contesta por la FICHA de ese cliente (sus sesiones y trabajos, SIN pedirle sesiones sueltas), o
+    `None` si no contestó. Es la ÚNICA lectura con la que se decide si una sesión se puede ligar a una factura: la
+    App devuelve cualquier sesión que se le pida con `&sesion=` aunque sea de otra persona y la mezcla con las de la
+    ficha, así que solo lo que ella lista para la ficha prueba que la sesión es del cliente. De aquí sale también el tipo
+    de cada liga (`es_trabajo`) y si está cancelada: la persona no escribe ni lo uno ni lo otro."""
+    lectura = await registro_lectura.sesiones_de_cliente(cliente_noco_id)
     return None if lectura["estado"] == "no_se_pudo" else lectura
 
 
@@ -2591,20 +2592,26 @@ async def _contexto_de_factura_nueva(*, cliente, proyecto, cotizacion, opcion, r
     ctx["cliente_nombre"], ctx["noco_ok"] = await _nombre_del_cliente(cliente_id)
     ctx["enlace_con_cliente"] = _enlace_de_nueva(pid, cot["id"] if cot else None, opcion_n, cliente_id)
     # Las sesiones y trabajos de esa ficha, más las que ya se escogieron (vengan de la búsqueda o de la ficha).
-    lectura = await registro_lectura.sesiones_de_cliente(cliente_id, sesiones=refs)
-    ctx["registro_ok"] = lectura["estado"] != "no_se_pudo"
+    # Solo la ficha: las sesiones pedidas una por una vuelven mezcladas con las del cliente, sean de quien sean.
+    lectura = await _lo_que_dice_el_registro_del_cliente(cliente_id)
+    ctx["registro_ok"] = lectura is not None
     pedidas = set(refs)
-    ctx["candidatas"] = [dict(r, elegida=r["ref"] in pedidas, cancelada=False, nombre=None)
-                         for r in lectura["sesiones"] + lectura["trabajos"]]
+    candidatas = [dict(r, elegida=r["ref"] in pedidas, cancelada=False, nombre=None, no_se_puede="")
+                  for r in (lectura["sesiones"] + lectura["trabajos"] if lectura else [])]
+    ctx["candidatas"] = candidatas
     busqueda = await _buscar_sesiones_para_la_pagina(sq)
     if busqueda and busqueda["estado"] == "ok":
-        ya = {c["ref"] for c in ctx["candidatas"]}
-        ctx["candidatas"] += [dict(c, elegida=c["ref"] in pedidas) for c in busqueda["sesiones"] if c["ref"] not in ya]
+        ya = {c["ref"] for c in candidatas}
+        # La búsqueda trae sesiones de cualquier persona: las que no están entre las de la ficha salen marcadas y no se
+        # pueden escoger (el servidor tampoco las deja pasar: `fp.ligas_de_las_refs`).
+        ctx["candidatas"] = candidatas + [
+            dict(fp.candidata_de_la_busqueda(c, lectura), elegida=False) for c in busqueda["sesiones"] if c["ref"] not in ya]
         ctx["hay_mas"] = busqueda["hay_mas"]
     ctx["busqueda"] = busqueda
-    # ¿Se puede pasar a escribir? Solo con sesiones escogidas que la App reconoce y no están canceladas.
-    ligas, problemas = fp.ligas_de_las_refs(refs, lectura) if ctx["registro_ok"] else ([], [])
-    ctx["elegidas"] = [dict(c) for c in ctx["candidatas"] if c["elegida"]]
+    # ¿Se puede pasar a escribir? Solo con sesiones escogidas que son de la ficha del cliente y no están canceladas.
+    ligas, problemas = fp.ligas_de_las_refs(refs, lectura) if lectura is not None else ([], [])
+    por_ref = {c["ref"]: c for c in ctx["candidatas"] if c["elegida"]}
+    ctx["elegidas"] = [dict(por_ref[r]) for r in dict.fromkeys(refs) if r in por_ref]
     if quiere_escribir or escrito is not None:
         if not refs:
             ctx["errores"].append({"texto": "Escoge al menos una sesión o un trabajo para la factura.", "casilla": None})
@@ -2624,8 +2631,14 @@ async def _contexto_de_factura_nueva(*, cliente, proyecto, cotizacion, opcion, r
         ctx["paso"] = "escoger"
         return ctx
     desde_la_opcion = fp.renglones_de_una_opcion(cot, opcion_n) if cot else []
+    # Sin cotización de la que partir, un renglón por cada sesión o trabajo con el total que la App tiene (la persona lo cambia).
+    desde_las_sesiones = fp.renglones_de_las_sesiones(ctx["elegidas"])
+    ctx["sin_total"] = [] if (desde_la_opcion or escrito is not None) else [
+        r["codigo"] or r["ref"] for r in desde_las_sesiones if r["sin_total"]]
+    ctx["renglones_de_sesiones"] = not desde_la_opcion and escrito is None
     ctx["valores"] = fp.valores_del_formulario(
-        escrito=escrito, nombre_del_cliente=ctx["cliente_nombre"], desde_la_opcion=desde_la_opcion, hoy=ctx["hoy"])
+        escrito=escrito, nombre_del_cliente=ctx["cliente_nombre"], desde_la_opcion=desde_la_opcion,
+        desde_las_sesiones=desde_las_sesiones, hoy=ctx["hoy"])
     return ctx
 
 
@@ -2692,11 +2705,11 @@ async def guardar_factura_nueva(request: Request):
         return _fuera(request)
     campos = fp.campos_del_formulario(await request.form())
     errores = []
-    lectura = await _lo_que_dice_el_registro_de(campos["refs"]) if campos["refs"] else None
+    lectura = await _lo_que_dice_el_registro_del_cliente(campos["cliente"]) if campos["refs"] else None
     if not campos["refs"]:
         errores.append({"texto": "La factura nace ligada a una sesión o a un trabajo: escoge al menos uno. NO se guardó nada.", "casilla": None})
     elif lectura is None:
-        errores.append({"texto": "No se pudo consultar el registro: NO se guardó nada. Vuelve a intentarlo en un momento.", "casilla": None})
+        errores.append({"texto": "No se pudo consultar el registro para comprobar que esas sesiones son de este cliente: NO se guardó nada. Vuelve a intentarlo en un momento.", "casilla": None})
     ligas = []
     if lectura is not None:
         ligas, problemas = fp.ligas_de_las_refs(campos["refs"], lectura)
@@ -2739,6 +2752,7 @@ CONFIRMACIONES_DE_FACTURA = {"borrador": ("emitir", "descartar"), "emitida": ("a
 
 
 async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", corregir: int = 0, sq: str = "",
+                             ofrecer: str = "", agregar: str = "",
                              errores=(), escrito: dict | None = None, status: int = 200,
                              motivo_escrito: str = "", proyecto_escrito: tuple | None = None):
     """La pantalla de la factura `f` (lo que devuelve `db.factura_por_id`): su hoja (la misma del PDF), sus datos,
@@ -2751,28 +2765,44 @@ async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", 
     if f["cotizacion_id"] is not None:
         todas = await db.cotizaciones_de_proyectos()
         cotizacion = next((c for lista in (todas or {}).values() for c in lista if c["id"] == f["cotizacion_id"]), None)
-    candidatas, hay_mas, registro_ok, busqueda = [], False, True, None
-    if borrador:
-        ligadas = {l["ref"] for l in f["ligas"] if l["viva"]}
+    vivas = [l for l in f["ligas"] if l["viva"]]
+    ligadas = {l["ref"] for l in vivas}
+    candidatas, hay_mas, registro_ok, busqueda, lectura = [], False, True, None, None
+    if borrador or ligadas:
+        # Una sola lectura: la ficha del cliente y, por si alguna ligada no es de la ficha, las ligadas pedidas una por
+        # una (para poder decir lo que la App sabe de cada una). Lo que se OFRECE ligar sale solo de las de la ficha.
         lectura = await registro_lectura.sesiones_de_cliente(f["cliente_noco_id"], sesiones=sorted(ligadas))
         registro_ok = lectura["estado"] != "no_se_pudo"
-        candidatas = [dict(r, cancelada=False, nombre=None, ligada=r["ref"] in ligadas)
+    if borrador:
+        candidatas = [dict(r, cancelada=False, nombre=None, ligada=r["ref"] in ligadas, no_se_puede="")
                       for r in lectura["sesiones"] + lectura["trabajos"]]
         busqueda = await _buscar_sesiones_para_la_pagina(sq)
         if busqueda and busqueda["estado"] == "ok":
             ya = {c["ref"] for c in candidatas}
-            candidatas += [dict(c, ligada=c["ref"] in ligadas) for c in busqueda["sesiones"] if c["ref"] not in ya]
+            # Lo que la búsqueda trae y no está entre las sesiones del cliente sale marcado y sin botón de ligar.
+            candidatas += [dict(fp.candidata_de_la_busqueda(c, lectura), ligada=c["ref"] in ligadas)
+                           for c in busqueda["sesiones"] if c["ref"] not in ya]
             hay_mas = busqueda["hay_mas"]
         candidatas = [c for c in candidatas if not c["ligada"]]
-    se_corrige = borrador and (bool(corregir) or escrito is not None)
+    # Cada sesión ligada con lo que la App dice de ella AHORA (fecha, servicio, sala, total, abonado y saldo).
+    ligas_leidas = fp.ligas_con_lo_leido(vivas, lectura if lectura is not None else {"estado": "no_se_pudo"})
+    por_ref = {l["ref"]: l["fila"] for l in ligas_leidas if l["leida"] == "ok"}
+    # El renglón que se ofrece agregar (`ofrecer`: recién ligada) o que se agrega al formulario (`agregar`): solo de una
+    # liga viva de ESTE borrador y solo con lo que la App contestó ahora.
+    oferta = None
+    if borrador and ofrecer in por_ref:
+        oferta = fp.renglon_de_una_sesion(por_ref[ofrecer])
+        oferta["monto_texto"] = None if oferta["sin_total"] else cotizaciones.dinero_en_pesos(oferta["monto"])
+    de_mas = [fp.renglon_de_una_sesion(por_ref[agregar])] if borrador and agregar in por_ref else []
+    se_corrige = borrador and (bool(corregir) or escrito is not None or bool(de_mas))
     return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "factura.html", {
         "f": f, "hoja": facturas.hoja_de_factura(f), "estado_texto": fp.etiqueta_del_estado(estado),
         "proyecto_nombre": None if f["proyecto_id"] is None else nombres.get(f["proyecto_id"]) or f"Proyecto {f['proyecto_id']}",
         "proyectos": sorted(nombres.items(), key=lambda x: x[1].lower()) if estado in ("borrador", "emitida") else [],
-        "cotizacion": cotizacion, "ligas": [l for l in f["ligas"] if l["viva"]],
+        "cotizacion": cotizacion, "ligas": ligas_leidas, "oferta": oferta, "agregado": bool(de_mas),
         "confirmar": confirmar if confirmar in CONFIRMACIONES_DE_FACTURA.get(estado, ()) else "",
         "se_corrige": se_corrige,
-        "valores": fp.valores_del_formulario(factura=f, escrito=escrito) if se_corrige else None,
+        "valores": fp.valores_del_formulario(factura=f, escrito=escrito, renglones_de_mas=de_mas) if se_corrige else None,
         "candado": fp.candado(f["cambiado_en"]), "errores": list(errores), "motivo_escrito": motivo_escrito,
         # el proyecto que la persona escogió y se rechazó (`(valor,)`), o el que la factura tiene
         "proyecto_marcado": f["proyecto_id"] if proyecto_escrito is None else proyecto_escrito[0],
@@ -2796,15 +2826,19 @@ def _no_existe_la_factura():
 @app.get("/facturas/{fid}", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_SIEMPRE)
 async def pagina_de_una_factura(request: Request, fid: int, confirmar: Navegacion[str] = "",
-                                corregir: Navegacion[int] = 0, sq: Navegacion[str] = ""):
+                                corregir: Navegacion[int] = 0, sq: Navegacion[str] = "",
+                                ofrecer: Navegacion[str] = "", agregar: Navegacion[str] = ""):
     """La página de UNA factura. `?confirmar=emitir|descartar|anular` dibuja la confirmación (solo las del estado en
-    que está), `?corregir=1` el formulario de un borrador y `?sq=` busca una sesión o trabajo para ligarle. SOLO LEE."""
+    que está), `?corregir=1` el formulario de un borrador, `?sq=` busca una sesión o trabajo para ligarle, `?ofrecer=<ref>`
+    ofrece agregar el renglón de una sesión recién ligada y `?agregar=<ref>` abre el formulario con ese renglón puesto
+    (solo vale una `ref` ligada a ESTA factura). SOLO LEE."""
     if not auth.puede_entrar(_sesion(request)):
         return _fuera(request)
     f = await _factura_o_404(fid)
     if f is None:
         return _no_existe_la_factura()
-    return await _pagina_de_factura(request, f, confirmar=confirmar, corregir=corregir, sq=sq.strip())
+    return await _pagina_de_factura(request, f, confirmar=confirmar, corregir=corregir, sq=sq.strip(),
+                                    ofrecer=ofrecer.strip(), agregar=agregar.strip())
 
 
 async def _rechazo_de_una_factura(request: Request, fid: int, e: Exception, *, confirmar: str = "", corregir: int = 0,
@@ -2906,18 +2940,18 @@ async def ligar_a_una_factura(request: Request, fid: int):
     if not auth.puede_entrar(chat):
         return _fuera(request)
     campos = fp.campos_del_formulario(await request.form())
-    lectura = await _lo_que_dice_el_registro_de(campos["refs"][:1]) if campos["refs"] else None
+    f = await _factura_o_404(fid)
+    if f is None:
+        return _no_existe_la_factura()
+    # Del cliente DE LA FACTURA (la que la base tiene, no la que diga el formulario).
+    lectura = await _lo_que_dice_el_registro_del_cliente(f["cliente_noco_id"]) if campos["refs"] else None
     if lectura is None or not campos["refs"]:
         texto = {"clave": "registro", "casilla": None,
-                 "texto": "No se pudo consultar el registro: NO se ligó nada." if campos["refs"]
+                 "texto": "No se pudo consultar el registro para comprobar que esa sesión es de este cliente: NO se ligó nada." if campos["refs"]
                  else "Escoge la sesión o el trabajo que quieres ligar."}
-        f = await _factura_o_404(fid)
-        return _no_existe_la_factura() if f is None else await _pagina_de_factura(request, f, errores=[texto], status=400)
+        return await _pagina_de_factura(request, f, errores=[texto], status=400)
     ligas, problemas = fp.ligas_de_las_refs(campos["refs"][:1], lectura)
     if problemas:
-        f = await _factura_o_404(fid)
-        if f is None:
-            return _no_existe_la_factura()
         return await _pagina_de_factura(request, f, status=400, errores=[
             {"texto": fp.frase_del_problema_de_liga(p) + " NO se ligó nada.", "casilla": None} for p in problemas])
     liga = ligas[0]
@@ -2927,7 +2961,8 @@ async def ligar_a_una_factura(request: Request, fid: int):
         return _fuera(request)
     except Exception as e:
         return await _rechazo_de_una_factura(request, fid, e)
-    return RedirectResponse(f"/facturas/{fid}", status_code=303)
+    # Se ofrece el renglón de la sesión recién ligada: la dirección lleva solo su referencia del registro.
+    return RedirectResponse(f"/facturas/{fid}?ofrecer={quote(liga['ref'], safe='')}", status_code=303)
 
 
 @app.post("/facturas/{fid}/desligar")

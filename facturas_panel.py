@@ -143,10 +143,12 @@ def casillas_de_renglones(renglones: list[dict], *, con_sobra: bool = True) -> l
 
 
 def valores_del_formulario(*, factura: dict | None = None, escrito: dict | None = None, nombre_del_cliente: str = "",
-                           desde_la_opcion: list[dict] | None = None, hoy: date | None = None) -> dict:
+                           desde_la_opcion: list[dict] | None = None, desde_las_sesiones: list[dict] | None = None,
+                           renglones_de_mas: list[dict] | None = None, hoy: date | None = None) -> dict:
     """Con qué se llenan las casillas. Manda lo ESCRITO (un guardado rechazado vuelve con lo que la persona puso),
-    después la factura que se corrige, después la opción de la cotización de la que nace, y si no hay nada, en
-    blanco con la fecha de hoy y el nombre del cliente."""
+    después la factura que se corrige (más `renglones_de_mas`, los que se ofrecieron agregar de una sesión recién
+    ligada), después la opción de la cotización de la que nace, después un renglón por cada sesión o trabajo escogido
+    (`desde_las_sesiones`), y si no hay nada, en blanco con la fecha de hoy y el nombre del cliente."""
     if escrito is not None:
         return {"para_nombre": escrito["para_nombre"], "fecha": escrito["fecha"],
                 "itbis": escrito["itbis_pct"] is not None, "ncf": escrito["ncf"], "ncf_tipo": escrito["ncf_tipo"],
@@ -156,9 +158,10 @@ def valores_del_formulario(*, factura: dict | None = None, escrito: dict | None 
         return {"para_nombre": factura["para_nombre"], "fecha": _iso(factura["fecha"]),
                 "itbis": factura["itbis_pct"] is not None, "ncf": factura["ncf"] or "",
                 "ncf_tipo": factura["ncf_tipo"] or "", "rnc_cedula": factura["rnc_cedula"] or "",
-                "renglones": casillas_de_renglones(factura["renglones"])}
+                "renglones": casillas_de_renglones(list(factura["renglones"]) + list(renglones_de_mas or []))}
     return {"para_nombre": nombre_del_cliente, "fecha": _iso(hoy) if hoy else "", "itbis": False, "ncf": "",
-            "ncf_tipo": "", "rnc_cedula": "", "renglones": casillas_de_renglones(desde_la_opcion or [])}
+            "ncf_tipo": "", "rnc_cedula": "",
+            "renglones": casillas_de_renglones(desde_la_opcion or desde_las_sesiones or [])}
 
 
 def _iso(fecha) -> str:
@@ -181,26 +184,61 @@ def renglones_de_una_opcion(cotizacion: dict | None, opcion) -> list[dict]:
 
 # ── Las sesiones o trabajos que se ligan ─────────────────────────────────────────────────────────
 
+# Por qué una sesión que la búsqueda trae no se puede escoger (se pinta en su lugar de la casilla).
+POR_QUE_NO_SE_PUEDE_ESCOGER = {
+    "ajena": "No está entre las sesiones de este cliente en el registro: no se puede escoger",
+    "sin_comprobar": "No se pudo comprobar de quién es: no se puede escoger",
+}
+
+def candidata_de_la_busqueda(c: dict, lectura: dict | None) -> dict:
+    """Una sesión que la BÚSQUEDA trajo y no está entre las de la ficha, con su marca. ES LA ÚNICA REGLA (la usan «Nueva
+    factura» y la página de una factura). `lectura` es la de la ficha (`registro_lectura.sesiones_de_cliente`) o `None`.
+    Si la ficha se leyó bien: la que la App marcó cancelada PARA ESA FICHA es del cliente y sale como cancelada (la ficha no
+    la lista, pero sí la nombra en `canceladas`); cualquier otra NO ESTÁ entre las de la ficha (`ajena`): puede ser de otra persona o de este cliente y la ficha no la lista (por ejemplo un trabajo sin su teléfono), el código solo sabe que no está. Si la ficha no se leyó no se sabe
+    de quién es ninguna (`sin_comprobar`). Con `no_se_puede` no hay casilla ni botón."""
+    if lectura is not None and lectura.get("estado") == "ok":
+        if c["ref"] in set(lectura.get("canceladas") or []):
+            return dict(c, cancelada=True, no_se_puede="")
+        return dict(c, no_se_puede=POR_QUE_NO_SE_PUEDE_ESCOGER["ajena"])
+    return dict(c, no_se_puede=POR_QUE_NO_SE_PUEDE_ESCOGER["sin_comprobar"])
+
+
+MOTIVOS_DE_FICHA = {
+    "sin_telefono": "la ficha no tiene teléfono",
+    "ficha_inexistente": "la ficha no existe en el registro",
+    "sin_persona": "no se le dijo al registro de quién",
+}
+
+
 def ligas_de_las_refs(refs: list[str], respuesta: dict) -> tuple[list[dict], list[dict]]:
-    """`(ligas, problemas)` de las referencias escogidas, a partir de lo que la App CONTESTÓ para esas referencias
-    (`registro_lectura.sesiones_de_cliente(None, refs)`).
+    """`(ligas, problemas)` de las referencias escogidas, a partir de lo que la App CONTESTÓ por la FICHA DEL CLIENTE
+    DE LA FACTURA (`registro_lectura.sesiones_de_cliente(cliente)`, SIN pedir sesiones sueltas).
+
+    ESA ES LA COMPROBACIÓN DE QUE LA SESIÓN ES DEL CLIENTE: la App, cuando se le pide `&sesion=<ref>`, devuelve esa
+    sesión sea de quien sea y la mezcla con las de la ficha (no hay forma de separarlas en la respuesta), y `no_halladas`
+    solo dice que la fila no existe. Por eso aquí solo vale lo que la App listó para la ficha: una referencia que no está
+    en esa lista es `ajena` y NO se liga. Si la ficha no se pudo leer o la App no la liga (`estado` distinto de `ok`),
+    ninguna referencia se puede comprobar y ninguna se liga (`sin_ficha`, con el motivo que dio la App).
 
     EL TIPO NO LO PONE QUIEN LLENA EL FORMULARIO: es `trabajo` si la App dice `es_trabajo` y `sesion` si no. Cada
     liga es `{"tipo", "ref", "codigo"}`, en el orden en que se escogieron y sin repetir. Un problema es
-    `{"ref", "motivo"}` con motivo `cancelada` (la App la devolvió cancelada o pospuesta: no se factura) o
-    `no_esta` (la App no la devolvió): esa referencia NO se liga. `respuesta` sin la lectura (`no_se_pudo`) la
-    trata quien llama; aquí una referencia que no vino es `no_esta`."""
+    `{"ref", "motivo"}`: `cancelada` (la App la devolvió cancelada o pospuesta: no se factura), `ajena` (no está entre las
+    del cliente) o `sin_ficha` (con `porque`). `respuesta` sin la lectura (`no_se_pudo`) la trata quien llama."""
     por_ref = {r["ref"]: r for r in respuesta.get("sesiones", []) + respuesta.get("trabajos", [])}
     canceladas = set(respuesta.get("canceladas") or [])
+    estado = respuesta.get("estado")
+    porque = MOTIVOS_DE_FICHA.get(respuesta.get("motivo") or "", "") if estado == "sin_ligar" else ""
     ligas, problemas, vistas = [], [], set()
     for ref in refs:
         if ref in vistas:
             continue
         vistas.add(ref)
-        if ref in canceladas:
+        if estado != "ok":
+            problemas.append({"ref": ref, "motivo": "sin_ficha", "estado": estado, "porque": porque})
+        elif ref in canceladas:
             problemas.append({"ref": ref, "motivo": "cancelada"})
         elif ref not in por_ref:
-            problemas.append({"ref": ref, "motivo": "no_esta"})
+            problemas.append({"ref": ref, "motivo": "ajena"})
         else:
             r = por_ref[ref]
             ligas.append({"tipo": "trabajo" if r["es_trabajo"] is True else "sesion", "ref": ref,
@@ -215,10 +253,79 @@ def frase_de_una_liga_que_no_se_pudo(liga: dict, error: dict) -> str:
 
 def frase_del_problema_de_liga(p: dict) -> str:
     """Lo que se le dice a la persona de una sesión o trabajo que NO se pudo ligar."""
-    quien = f"«{p['codigo']}»" if p.get("codigo") else "Una sesión o trabajo"
+    quien = f"«{p['codigo']}»" if p.get("codigo") else f"La sesión o trabajo ref. {p['ref']}"
     if p["motivo"] == "cancelada":
         return f"{quien} está cancelado o pospuesto: no se factura."
+    if p["motivo"] == "ajena":
+        return (f"{quien} no aparece entre las sesiones y trabajos de este cliente en el registro: no se ligó. "
+                "Una factura solo se liga a lo que es de su cliente.")
+    if p["motivo"] == "sin_ficha":
+        if p.get("estado") == "sin_cliente":
+            return (f"{quien} no se pudo comprobar: la factura no tiene un cliente con ficha en el registro, y sin eso no se "
+                    "sabe de quién es. No se ligó.")
+        razon = f" ({p['porque']})" if p.get("porque") else ""
+        return (f"{quien} no se pudo comprobar: el registro no dio las sesiones de la ficha de este cliente{razon}, y sin "
+                "eso no se sabe de quién es. No se ligó.")
     return f"{quien} ya no está en el registro: no se ligó."
+
+
+# ── Los renglones que salen de las sesiones, y lo que la página dice de cada una ───────────────────
+
+def _dinero_que_cabe(total) -> Decimal | None:
+    """El total de la sesión como monto de renglón, o None si la App no lo trae, es cero o lleva más de dos decimales
+    (la puerta lo rechazaría: no se redondea, la persona lo escribe)."""
+    if not isinstance(total, Decimal) or not total.is_finite() or total <= 0:
+        return None
+    return total if total == total.quantize(Decimal("0.01")) else None
+
+
+def renglon_de_una_sesion(r: dict) -> dict:
+    """El renglón de UNA sesión o trabajo (`r` es un renglón de `registro_lectura`): la descripción es el servicio, el
+    detalle junta sala, fecha y horas, y el monto es el `total` que la App tiene (sin ITBIS: el ITBIS lo suma la
+    factura). Sin total que sirva el monto queda vacío y `sin_total` verdadero: la persona lo escribe. Es solo un punto
+    de partida; la puerta vuelve a validar todo al guardar."""
+    partes = []
+    if r.get("sala"):
+        partes.append(r["sala"])
+    if r.get("fecha"):
+        partes.append(cz.fecha_corta(r["fecha"]))
+    if r.get("horas"):
+        partes.append(f"{r['horas']} h")
+    monto = _dinero_que_cabe(r.get("total"))
+    return {"descripcion": (r.get("concepto") or ("Trabajo" if r.get("es_trabajo") else "Sesión"))[:db.LARGOS_DE_FACTURA["descripcion"]],
+            "detalle": " · ".join(partes)[:db.LARGOS_DE_FACTURA["detalle"]],
+            "monto": "" if monto is None else monto, "sin_total": monto is None, "codigo": r.get("codigo"), "ref": r.get("ref")}
+
+
+def renglones_de_las_sesiones(filas: list[dict]) -> list[dict]:
+    """Un renglón por sesión o trabajo, en el orden que traen `filas`."""
+    return [renglon_de_una_sesion(r) for r in filas]
+
+
+def ligas_con_lo_leido(ligas: list[dict], lectura: dict) -> list[dict]:
+    """Cada liga viva con lo que la App dice de ella AHORA (la página lo lee en el momento; nada de esto se guarda):
+    `leida` es `ok` (con `fila`, el renglón de `registro_lectura`), `cancelada`, `no_esta` (la App ya no la devuelve) o
+    `no_se_pudo` (la App no contestó: se dice, no se disfraza de otra cosa). `lectura` es la respuesta de
+    `registro_lectura.sesiones_de_cliente` pidiendo esas referencias."""
+    if lectura.get("estado") == "no_se_pudo":
+        return [dict(l, leida="no_se_pudo", fila=None) for l in ligas]
+    por_ref = {r["ref"]: r for r in lectura.get("sesiones", []) + lectura.get("trabajos", [])}
+    canceladas = set(lectura.get("canceladas") or [])
+    salida = []
+    for l in ligas:
+        if l["ref"] in por_ref:
+            fila = por_ref[l["ref"]]
+            salida.append(dict(l, leida="ok", fila=dict(fila, dinero_texto=_dinero_de_la_fila(fila))))
+        elif l["ref"] in canceladas:
+            salida.append(dict(l, leida="cancelada", fila=None))
+        else:
+            salida.append(dict(l, leida="no_esta", fila=None))
+    return salida
+
+
+def _dinero_de_la_fila(fila: dict) -> dict:
+    """Total, abonado y saldo de una sesión, escritos con el dinero de la hoja; «—» donde la App no trajo la cifra."""
+    return {k: ("—" if fila.get(k) is None else cz.dinero_en_pesos(fila[k])) for k in ("total", "abonado", "saldo")}
 
 
 # ── Lo que la puerta rechazó, en palabras ───────────────────────────────────────────────────────

@@ -70,6 +70,15 @@ class AppDeRegistro:
         # que se piden una por una (`&sesion=`). Una pedida que no esté ni acá ni en `sesiones` va
         # a `no_halladas`.
         self.otras: list[dict] = []
+        # Opcional: las sesiones de OTRAS fichas, por el `Id` de la persona (texto). Con `persona=<Id>` la App devuelve las de
+        # ESA ficha (así lo dice el contrato de arriba: «las sesiones de una ficha»); una `persona` que no está aquí cae en
+        # `sesiones`, como hasta ahora. Lo agregó la pieza 6 de Facturas para poder probar «la sesión es de ESTE cliente».
+        self.por_persona: dict[str, list[dict]] = {}
+        # Opcional: las fichas que EXISTEN (texto). Con esto puesto, una `persona` que no está aquí ni en `por_persona` la App
+        # la contesta `ficha_inexistente` con `puede_ligar` falso y sin las sesiones de ninguna ficha (solo las pedidas una por
+        # una), como dice su mapa (`registro/lo-que-lucy-lee-de-la-app.md`, «Cómo funciona» 1: motivos `sin_persona`,
+        # `ficha_inexistente`, `sin_telefono`). `None` (lo de siempre) = toda ficha existe.
+        self.fichas_que_existen: set[str] | None = None
         # La puerta de la búsqueda (parte 12): lo que contesta `hay_mas` y las candidatas.
         self.busqueda: dict = {"sesiones": [], "hay_mas": False}
         self._lock = threading.Lock()
@@ -112,6 +121,8 @@ class AppDeRegistro:
                     llave = doble.llave
                     cuerpo_sesiones = dict(doble.sesiones)
                     otras = list(doble.otras)
+                    por_persona = {k: list(v) for k, v in doble.por_persona.items()}
+                    existen = None if doble.fichas_que_existen is None else set(doble.fichas_que_existen)
                     busqueda = dict(doble.busqueda)
                 if forzada is not None:
                     estado, cuerpo, tipo, demora, *resto = forzada
@@ -131,15 +142,19 @@ class AppDeRegistro:
                             {"sesiones": [], "hay_mas": False}).encode())
                     return self._responder(200, json.dumps(busqueda).encode())
                 return self._responder(200, json.dumps(
-                    self._de_una_ficha(consulta, cuerpo_sesiones, otras)).encode())
+                    self._de_una_ficha(consulta, cuerpo_sesiones, otras, por_persona, existen)).encode())
 
-            def _de_una_ficha(self, consulta, cuerpo_sesiones, otras):
+            def _de_una_ficha(self, consulta, cuerpo_sesiones, otras, por_persona, existen=None):
                 """Lo que la App contesta en `/api/lucy/sesiones`: las de la ficha (si se puede ligar)
                 y las pedidas una por una (`&sesion=`), sin repetir, con las que no tiene en
                 `no_halladas`. Sin `persona` no puede ligar ninguna: `sin_persona` (pero las pedidas
                 las devuelve igual)."""
                 persona = next((v for k, v in consulta if k == "persona"), None)
-                filas = list(cuerpo_sesiones.get("sesiones") or [])
+                inexistente = persona is not None and existen is not None and persona not in existen and persona not in por_persona
+                if inexistente:
+                    cuerpo_sesiones = {"puede_ligar": False, "motivo_sin_ligar": "ficha_inexistente", "sesiones": []}
+                    por_persona = {}
+                filas = list(por_persona.get(persona) if persona in por_persona else (cuerpo_sesiones.get("sesiones") or []))
                 refs = {str(f.get("ref")) for f in filas if isinstance(f, dict)}
                 no_halladas = []
                 for k, ref in consulta:
@@ -154,7 +169,7 @@ class AppDeRegistro:
                 if persona is None:
                     return {"puede_ligar": False, "motivo_sin_ligar": "sin_persona",
                             "sesiones": filas, "no_halladas": no_halladas}
-                return {"puede_ligar": cuerpo_sesiones.get("puede_ligar"),
+                return {"puede_ligar": False if inexistente else cuerpo_sesiones.get("puede_ligar"),
                         "motivo_sin_ligar": cuerpo_sesiones.get("motivo_sin_ligar", ""),
                         "sesiones": filas, "no_halladas": no_halladas}
 
