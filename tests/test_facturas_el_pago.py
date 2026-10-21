@@ -5,11 +5,13 @@ registro doblada EN LA RED (`tests/_app_de_registro.py`, que afirma el contrato 
 
   1. LO PAGADO SALE DE LA APP, EN EL MOMENTO: es la suma del `abonado` de las sesiones y trabajos ligados vivos; la
      factura no guarda ningún pago y lo que cambia en la App cambia lo que la factura dice, sin tocar la base de Lucy.
-  2. «PAGADA» ES QUE LAS SESIONES NO DEBAN NADA: la suma del `saldo` que da la App por sesión (sin contar las
-     canceladas) es cero o menos. Lo que se muestra como pagado es la suma del `abonado`, y el «de RD$Y» es la suma de
-     los `total` de esas sesiones. El «no cuadra con la App: revísala» —el subtotal de la factura contra la suma de los
-     `total` de las sesiones— es un aviso y NO cambia el estado. El ITBIS no cuenta y la pantalla dice que se cobra
-     aparte.
+  2. «PAGADA» ES QUE LAS SESIONES NO DEBAN NADA, SESIÓN POR SESIÓN: cada sesión y trabajo ligado vivo (sin contar los
+     cancelados) tiene el `saldo` que da la App en cero o menos, y lo que una pagó de más no tapa lo que debe otra. Si
+     alguna debe, el texto dice cuánto falta («Pagado RD$X · falta RD$Y», o «Sin pagos · falta RD$Y»), y «falta» es la
+     suma de los saldos POSITIVOS. «Sin cargos en el registro» solo cuando todas las contadas tienen total cero y no hay
+     nada abonado; si algo se abonó, manda la regla de siempre y el detalle dice cuánto se pagó. El «no cuadra con la
+     App: revísala» —el subtotal de la factura contra la suma de los `total` de las sesiones— es un aviso y NO cambia el
+     estado. El ITBIS no cuenta y la pantalla dice que se cobra aparte.
   3. CON LA APP CAÍDA NO SE INVENTA: dice «No se pudo leer lo pagado» y nunca «Sin pagos» ni «Pagada».
   4. UNA ANULADA NO MUESTRA ESTADO DE PAGO, ni en la página ni en la lista, aunque la App diga que está todo pagado.
   5. UNA SESIÓN CANCELADA (o que el registro ya no devuelve) SE DICE, y una cancelada no cuenta como pagada.
@@ -76,9 +78,9 @@ def pedidas_a_la_app(registro):
 def test_la_pagina_dice_lo_pagado_segun_lo_que_la_app_tiene_ahora(pantalla):
     """El mismo renglón de 4,500 y la misma factura: lo que cambia es lo que la App dice que se ha pagado."""
     f = una_factura()
-    casos = [(1000.0, 3500.0, "con_abono", "Pagado RD$1,000 de RD$4,500"),
+    casos = [(1000.0, 3500.0, "con_abono", "Pagado RD$1,000 · falta RD$3,500"),
              (4500.0, 0.0, "pagada", "Pagada"),
-             (0.0, 4500.0, "sin_pagos", "Sin pagos")]
+             (0.0, 4500.0, "sin_pagos", "Sin pagos · falta RD$4,500")]
     for abonado, saldo, estado, frase in casos:
         pantalla.registro.sesiones = {"puede_ligar": True, "motivo_sin_ligar": "", "sesiones": [
             dict(SESION_B, total=4500.0, abonado=abonado, saldo=saldo)]}
@@ -106,7 +108,7 @@ def test_el_itbis_no_cuenta_para_pagada_y_la_pantalla_dice_que_se_cobra_aparte(p
     pantalla.registro.sesiones = {"puede_ligar": True, "motivo_sin_ligar": "", "sesiones": [
         dict(SESION_B, total=4500.0, abonado=4500.0, saldo=0.0)]}
     estado, texto, detalle = tarjeta_de_pago(cliente().get(f"/facturas/{f['id']}").text)
-    assert (estado, texto, detalle) == ("pagada", "Pagada", "")
+    assert (estado, texto, detalle) == ("pagada", "Pagada", "Se pagaron RD$4,500.")
     html = cliente().get(f"/facturas/{f['id']}").text
     assert "El ITBIS (RD$810) se cobra aparte; no se lleva en la App." in html
     # y la lista dice lo mismo de esa factura
@@ -120,12 +122,12 @@ def test_sin_itbis_no_hay_frase_de_itbis(pantalla):
 
 def test_una_sesion_que_debe_no_se_dice_pagada_aunque_la_factura_cobre_solo_lo_abonado(pantalla):
     """EL CASO 1 DEL TESTIGO: la sesión cuesta 1,000, se han abonado 500 y la factura se escribió por 500. La sesión debe
-    500 en el Registro, así que la factura NO está pagada: dice «Pagado RD$500 de RD$1,000» y avisa que no cuadra."""
+    500 en el Registro, así que la factura NO está pagada: dice «Pagado RD$500 · falta RD$500» y avisa que no cuadra."""
     pantalla.registro.sesiones = {"puede_ligar": True, "motivo_sin_ligar": "", "sesiones": [
         dict(SESION_B, ref=14, codigo="s014", total=1000.0, abonado=500.0, saldo=500.0)]}
     f = una_factura(ref="14", monto="500.00")
     estado, texto, detalle = tarjeta_de_pago(cliente().get(f"/facturas/{f['id']}").text)
-    assert (estado, texto) == ("con_abono", "Pagado RD$500 de RD$1,000")
+    assert (estado, texto) == ("con_abono", "Pagado RD$500 · falta RD$500")
     assert detalle == ("No cuadra con la App: revísala (la factura suma RD$500 y el registro dice RD$1,000 de sus "
                        "sesiones).")
 
@@ -138,8 +140,8 @@ def test_una_factura_que_cobra_mas_no_deja_de_estar_pagada_si_la_sesion_no_debe_
     f = una_factura(ref=str(SESION["ref"]), monto="10000.00")
     estado, texto, detalle = tarjeta_de_pago(cliente().get(f"/facturas/{f['id']}").text)
     assert (estado, texto) == ("pagada", "Pagada")
-    assert detalle == ("No cuadra con la App: revísala (la factura suma RD$10,000 y el registro dice RD$9,000 de sus "
-                       "sesiones).")
+    assert detalle == ("Se pagaron RD$9,000. No cuadra con la App: revísala (la factura suma RD$10,000 y el registro "
+                       "dice RD$9,000 de sus sesiones).")
 
 
 def test_una_sesion_que_debe_no_se_compensa_con_otra_que_pago_de_mas(pantalla):
@@ -152,7 +154,7 @@ def test_una_sesion_que_debe_no_se_compensa_con_otra_que_pago_de_mas(pantalla):
     f = una_factura(ref="14", monto="1500.00")
     tgf.correr(db.ligar_factura_a_registro(f["id"], CASA, "sesion", "15", "s015"))
     estado, texto, detalle = tarjeta_de_pago(cliente().get(f"/facturas/{f['id']}").text)
-    assert (estado, texto) == ("con_abono", "Pagado RD$1,500 de RD$1,500")
+    assert (estado, texto) == ("con_abono", "Pagado RD$1,500 · falta RD$1,000")
     assert detalle == "Una de sus sesiones pagó de más: eso no tapa lo que debe otra."
 
 
@@ -162,7 +164,19 @@ def test_una_sesion_que_pago_de_mas_sola_esta_pagada(pantalla):
         dict(SESION_B, total=500.0, abonado=1500.0, saldo=-1000.0)]}
     f = una_factura(monto="500.00")
     estado, texto, detalle = tarjeta_de_pago(cliente().get(f"/facturas/{f['id']}").text)
-    assert (estado, texto, detalle) == ("pagada", "Pagada", "")
+    assert (estado, texto, detalle) == ("pagada", "Pagada", "Se pagaron RD$1,500.")
+
+
+def test_una_sesion_sin_cargo_con_algo_abonado_esta_pagada_y_dice_cuanto_se_pago(pantalla):
+    """SONDA P8 DEL TESTIGO: la sesión no tiene precio en el registro (total 0) pero se abonaron 100 (saldo −100). No es
+    «Sin cargos»: está pagada, y el detalle dice cuánto se pagó. La factura, que cobra 1,000, avisa que no cuadra."""
+    pantalla.registro.sesiones = {"puede_ligar": True, "motivo_sin_ligar": "", "sesiones": [
+        dict(SESION_B, total=0.0, abonado=100.0, saldo=-100.0)]}
+    f = una_factura(monto="1000.00")
+    estado, texto, detalle = tarjeta_de_pago(cliente().get(f"/facturas/{f['id']}").text)
+    assert (estado, texto) == ("pagada", "Pagada")
+    assert detalle == ("Se pagaron RD$100. No cuadra con la App: revísala (la factura suma RD$1,000 y el registro dice "
+                       "RD$0 de sus sesiones).")
 
 
 def test_todas_las_sesiones_sin_cargo_no_dicen_pagada(pantalla):
@@ -179,8 +193,8 @@ def test_todas_las_sesiones_sin_cargo_no_dicen_pagada(pantalla):
 
 def test_cuando_la_app_y_la_factura_cuadran_no_se_avisa_de_nada(pantalla):
     f = una_factura()
-    estado, _, detalle = tarjeta_de_pago(cliente().get(f"/facturas/{f['id']}").text)
-    assert estado == "con_abono" and detalle == ""
+    estado, texto, detalle = tarjeta_de_pago(cliente().get(f"/facturas/{f['id']}").text)
+    assert (estado, texto, detalle) == ("con_abono", "Pagado RD$1,000 · falta RD$3,500", "")
 
 
 # ── 3. Con la App caída no se inventa ──────────────────────────────────────────────────────────────
@@ -255,7 +269,7 @@ def test_la_lista_lee_el_pago_de_cada_factura_y_pide_todas_las_referencias_sin_f
         dict(SESION_B, total=4500.0, abonado=1000.0, saldo=3500.0)]}
     registro.pedidos.clear()
     html = cliente().get("/facturas").text
-    assert pago_en_la_lista(html) == [("con_abono", "Pagado RD$1,000 de RD$4,500"), ("pagada", "Pagada")]
+    assert pago_en_la_lista(html) == [("con_abono", "Pagado RD$1,000 · falta RD$3,500"), ("pagada", "Pagada")]
     consultas = pedidas_a_la_app(registro)
     assert len(consultas) == 1, consultas
     assert [v for k, v in consultas[0] if k == "sesion"] == sorted([str(SESION["ref"]), str(SESION_B["ref"])])
@@ -297,27 +311,31 @@ def _leida(ref, total=None, abonado=None, saldo=None, leida="ok"):
 
 def test_la_cuenta_del_pago_es_pura_y_cae_del_lado_estricto():
     de, algo, cero = Decimal("4500.00"), Decimal("500.00"), Decimal("0")
-    # las sesiones no deben nada (saldo cero o menos): pagada, aunque la factura cobre otra cosa
-    assert fp.el_pago_de_la_factura(_factura(), [_leida("1", de, de, cero)])["estado"] == "pagada"
+    # las sesiones no deben nada (saldo cero o menos): pagada, y se dice lo que se pagó
+    pago = fp.el_pago_de_la_factura(_factura(), [_leida("1", de, de, cero)])
+    assert (pago["estado"], pago["texto"], pago["detalle"]) == ("pagada", "Pagada", "Se pagaron RD$4,500.")
     assert fp.el_pago_de_la_factura(_factura(), [_leida("1", de, de + algo, -algo)])["estado"] == "pagada"
-    # deben: «Pagado X de Y» con lo abonado y el total de las sesiones
+    # deben: «Pagado X · falta Y», con Y = la suma de los saldos POSITIVOS
     pago = fp.el_pago_de_la_factura(_factura(), [_leida("1", de, algo, de - algo)])
-    assert (pago["estado"], pago["texto"]) == ("con_abono", "Pagado RD$500 de RD$4,500")
-    assert pago["detalle"] == ""
-    assert fp.el_pago_de_la_factura(_factura(), [_leida("1", de, cero, de)])["texto"] == "Sin pagos"
+    assert (pago["estado"], pago["texto"], pago["detalle"]) == ("con_abono", "Pagado RD$500 · falta RD$4,000", "")
+    assert fp.el_pago_de_la_factura(_factura(), [_leida("1", de, cero, de)])["texto"] == \
+        "Sin pagos · falta RD$4,500"
     # la que decide es CADA sesión, sin compensar: una saldada y otra que debe → todavía debe
     dos = [_leida("1", de, de, cero), _leida("2", de, cero, de)]
     assert fp.el_pago_de_la_factura(_factura(subtotal="9000.00"), dos)["estado"] == "con_abono"
-    # la P3 del testigo: una debe 1,000 y otra pagó 1,000 de más; la suma de los saldos da cero y NO está pagada
+    # la P3 del testigo: una debe 1,000 y otra pagó 1,000 de más; falta lo que debe la primera, no la resta
     p3 = [_leida("1", Decimal("1000"), Decimal("0"), Decimal("1000")),
           _leida("2", Decimal("500"), Decimal("1500"), Decimal("-1000"))]
     pago = fp.el_pago_de_la_factura(_factura(subtotal="1500.00"), p3)
-    assert (pago["estado"], pago["texto"]) == ("con_abono", "Pagado RD$1,500 de RD$1,500")
+    assert (pago["estado"], pago["texto"]) == ("con_abono", "Pagado RD$1,500 · falta RD$1,000")
     assert pago["detalle"] == "Una de sus sesiones pagó de más: eso no tapa lo que debe otra."
-    # sin cargos: todas las contadas con total cero (la P4 del testigo)
+    # sin cargos: todas las contadas con total cero y NADA abonado (la P4 del testigo)
     sin_cargo = [_leida("1", cero, cero, cero)]
     assert fp.el_pago_de_la_factura(_factura(), sin_cargo)["estado"] == "sin_cargos"
     assert fp.el_pago_de_la_factura(_factura(), sin_cargo)["texto"] == "Sin cargos en el registro."
+    # con algo abonado no es «sin cargos»: manda la regla de siempre y el detalle dice cuánto se pagó (la P8 del testigo)
+    p8 = fp.el_pago_de_la_factura(_factura(subtotal="0.00"), [_leida("1", cero, Decimal("100"), Decimal("-100"))])
+    assert (p8["estado"], p8["texto"], p8["detalle"]) == ("pagada", "Pagada", "Se pagaron RD$100.")
     # una con cargo y saldada junto a otra sin cargo: pagada, no «sin cargos»
     assert fp.el_pago_de_la_factura(_factura(), [_leida("1", de, de, cero), _leida("2", cero, cero, cero)])["estado"] == "pagada"
     # lo que no se sabe, se dice: nunca «sin pagos»
@@ -346,12 +364,12 @@ def test_el_aviso_de_no_cuadra_es_un_aviso_y_no_cambia_el_estado():
     de = Decimal("4500.00")
     pago = fp.el_pago_de_la_factura(_factura(subtotal="4000.00"), [_leida("1", de, de, Decimal("0"))])
     assert pago["estado"] == "pagada"
-    assert pago["detalle"] == ("No cuadra con la App: revísala (la factura suma RD$4,000 y el registro dice RD$4,500 "
-                               "de sus sesiones).")
+    assert pago["detalle"] == ("Se pagaron RD$4,500. No cuadra con la App: revísala (la factura suma RD$4,000 y el "
+                               "registro dice RD$4,500 de sus sesiones).")
     # con una cancelada la comparación no está completa: no se afirma que no cuadre
     pago = fp.el_pago_de_la_factura(_factura(subtotal="4000.00"),
                                     [_leida("1", de, de, Decimal("0")), _leida("2", None, None, None, leida="cancelada")])
-    assert (pago["estado"], pago["detalle"]) == ("pagada", "")
+    assert (pago["estado"], pago["detalle"]) == ("pagada", "Se pagaron RD$4,500.")
 
 
 def test_una_cifra_que_la_app_no_trae_es_no_se_pudo_y_no_un_estado_inventado():
