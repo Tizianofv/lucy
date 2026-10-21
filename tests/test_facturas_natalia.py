@@ -446,6 +446,36 @@ def test_el_canal_es_whatsapp_o_correo_y_nada_mas(api, canal):
     assert tgf.foto(api) == antes
 
 
+def test_el_canal_tambien_se_comprueba_en_la_puerta_de_db_sin_pasar_por_la_ruta(api):
+    """Segunda llave: la ruta ya frena el canal con su `Literal`, pero la puerta de `db` no confía en quien la llame."""
+    f = de_natalia(api, 7, "r-canal")
+    antes = tgf.foto(api)
+    for canal in ("mano", "sms", None, 5):
+        with pytest.raises(db.FacturaNoVale) as e:
+            correr(db.pedir_envio_de_factura_de_natalia(7, f["id"], canal))
+        assert e.value.clave == "canal"
+    assert tgf.foto(api) == antes
+
+
+def test_la_lista_de_envios_sin_tarjeta_solo_trae_los_pendientes_por_whatsapp_o_correo(api):
+    f = de_natalia(api, 7, "r-sin-tarjeta")
+    e1 = correr(db.pedir_envio_de_factura_de_natalia(7, f["id"], "whatsapp"))["envio"]["id"]
+    e2 = correr(db.pedir_envio_de_factura_de_natalia(7, f["id"], "correo"))["envio"]["id"]
+    assert [x["id"] for x in correr(db.envios_de_factura_sin_tarjeta())] == [e1, e2]
+    api.con.execute("UPDATE factura_envios SET estado = 'no_se_pudo', motivo = 'la factura se anuló' WHERE id = ?", (e1,))
+    api.con.execute("UPDATE factura_envios SET estado = 'rechazado', motivo = 'x' WHERE id = ?", (e2,))
+    api.con.execute("INSERT INTO factura_envios (factura_id, canal) VALUES (?, 'mano')", (f["id"],))
+    api.con.commit()
+    assert correr(db.envios_de_factura_sin_tarjeta()) == []
+
+
+def test_anular_una_emitida_con_un_envio_esperando_tarjeta_no_deja_salir_la_tarjeta(api, tg):
+    fid, eid = aprobada(tg)
+    pedir(fid, "correo")
+    correr(db.anular_factura(fid, DUENO, "se hizo por error"))
+    assert vuelta(tg) == 0 and len(tg.documentos) == 1               # solo la del primer envío; la del segundo no sale
+
+
 def test_si_no_hay_a_quien_pedirle_la_aprobacion_es_503_y_no_se_pide_nada(api, monkeypatch):
     fid = crear_api(("11",)).json()["factura"]["factura_id"]
     antes = tgf.foto(api)
