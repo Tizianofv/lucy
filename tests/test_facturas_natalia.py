@@ -570,13 +570,15 @@ def test_el_envio_que_sigue_a_uno_aprobado_que_no_fallo_nace_pendiente(api, tg):
 
 
 def test_un_envio_rechazado_no_abre_aprobado(api, tg):
-    fid, eid = aprobada(tg)
-    e2 = pedir(fid, "correo").json()["envio"]["envio_id"]
+    fid, eid = aprobada(tg)                                                      # whatsapp aprobado
+    e2 = pedir(fid, "correo").json()["envio"]["envio_id"]                         # correo pendiente, con tarjeta
     assert vuelta(tg) == 1
-    tocar(f"fan:{e2}", ROSI)
-    r = pedir(fid, "correo")
-    assert (r.json()["envio"]["estado"], r.json()["reusada"]) == ("pendiente", False)
-    assert r.json()["envio"]["envio_id"] != e2
+    tocar(f"fan:{e2}", ROSI)                                                     # correo: rechazado
+    anotar(fid, eid, False, "no salió")                                          # whatsapp: aprobado y no salió
+    r = pedir(fid, "whatsapp")                                                   # el otro canal es el rechazado
+    assert (r.json()["envio"]["canal"], r.json()["envio"]["estado"], r.json()["reusada"]) == (
+        "whatsapp", "pendiente", False)
+    assert r.json()["envio"]["envio_id"] not in (eid, e2)
 
 
 def test_un_borrador_nace_pendiente_aunque_haya_un_no_se_pudo_que_no_fue_una_aprobacion(api, tg):
