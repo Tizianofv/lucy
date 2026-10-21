@@ -316,9 +316,11 @@ def test_natalia_crea_un_borrador_con_las_sesiones_del_cliente_y_la_respuesta_sa
     f = r.json()["factura"]
     assert (f["estado"], f["codigo"], f["para_nombre"], f["envios"]) == ("borrador", None, NOMBRE, [])
     assert r.json()["reusada"] is False
-    # un renglón por sesión con el total que el registro tiene; el trabajo se liga como trabajo
-    assert [(x["descripcion"], x["monto"]) for x in f["renglones"]] == [
-        ("Grabación", "9000.00"), ("Mezcla", "6000.00"), ("Ensayo", "4500.00")]
+    # un renglón por sesión con el total que el registro tiene (la App de este doble no manda `renglones`: 1 × total);
+    # el trabajo se liga como trabajo
+    assert [(x["descripcion"], x["cantidad"], x["unidad"], x["precio_unitario"], x["monto"]) for x in f["renglones"]] == [
+        ("Grabación", "1", "", "9000.00", "9000.00"), ("Mezcla", "1", "", "6000.00", "6000.00"),
+        ("Ensayo", "1", "", "4500.00", "4500.00")]
     assert [(l["tipo"], l["ref"]) for l in f["ligas"]] == [("sesion", "11"), ("trabajo", "12"), ("sesion", "13")]
     assert (f["subtotal"], f["itbis"], f["total"]) == ("19500.00", "0.00", "19500.00")
     fila = factura_de(api, f["factura_id"])
@@ -336,7 +338,8 @@ def test_con_itbis_con_renglones_propios_con_rnc_y_con_fecha(api):
     assert r.status_code == 200, r.text
     f = r.json()["factura"]
     assert (f["subtotal"], f["itbis"], f["total"], f["fecha"]) == ("62500.00", "11250.00", "73750.00", "2026-10-20")
-    assert f["renglones"] == [{"descripcion": "Grabación de voces", "detalle": "dos horas", "monto": "62500.00"}]
+    assert f["renglones"] == [{"descripcion": "Grabación de voces", "detalle": "dos horas", "cantidad": "1",
+                               "unidad": "", "precio_unitario": "62500.00", "monto": "62500.00"}]
     fila = factura_de(api, f["factura_id"])
     assert (Decimal(str(fila["itbis_pct"])), fila["rnc_cedula"]) == (Decimal("18"), "123456789")
 

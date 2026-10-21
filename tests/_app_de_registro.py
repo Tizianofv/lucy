@@ -31,6 +31,18 @@ contrato es el que la sala le pasó a Lucy en el encargo de la parte 9):
     `cancelada` y el dinero (`total`, `abonado`, `saldo`);
   · 502 `{"error": "no_se_pudo_leer"}` si la App no pudo leer su base.
 
+Y de la pieza D1 de la App (`GET /api/lucy/sesiones`, la de la ficha; el mapa
+`Levantamientos INFO/registro/lo-que-lucy-lee-de-la-app.md`, sección del detalle
+de la cuenta, y `server.py::_renglon_para_lucy`):
+  · cada sesión trae ADEMÁS `descuento` y `renglones`: la lista de la cuenta
+    (`[{titulo, cantidad, horas, precio_unitario, subtotal, nota, producto_id,
+    tipo_cobro}]`), `[]` si la cuenta está vacía y `null` si no se pudo leer, con
+    `renglones_motivo` (`""` o `"cuenta_no_se_pudo_leer"`);
+  · `subtotal` es el de NocoDB (fórmula `cantidad × horas × precio_unitario`), no
+    se recalcula; `tipo_cobro` sale del Catálogo y es `null` en un ítem libre o un
+    trabajo;
+  · la búsqueda (`/buscar`) NO trae ni `renglones` ni `descuento`.
+
 Y de la puerta de la búsqueda (parte 12 de la App; el contrato es el que la sala le pasó a Lucy
 en el encargo de la parte 13):
 

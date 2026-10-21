@@ -101,6 +101,18 @@ def _texto_migracion_del_canal() -> str:
     return _migracion_del_canal().read_text(encoding="utf-8")
 
 
+def _migracion_del_detalle():
+    """La migración de la pieza D2 (el detalle: cantidad, unidad y precio unitario de un renglón), buscada por lo que hace."""
+    suyas = [a for a in g._migraciones()
+             if "ALTER TABLE factura_renglones ADD COLUMN IF NOT EXISTS cantidad" in a.read_text(encoding="utf-8")]
+    assert len(suyas) == 1, suyas
+    return suyas[0]
+
+
+def _texto_migracion_del_detalle() -> str:
+    return _migracion_del_detalle().read_text(encoding="utf-8")
+
+
 def _guion():
     spec = importlib.util.spec_from_file_location("ensayo_facturas", _ROOT / "tools" / "ensayo_facturas.py")
     modulo = importlib.util.module_from_spec(spec)
@@ -126,6 +138,8 @@ def _base() -> sqlite3.Connection:
     con = ct._base_con_migracion()
     ct._insertar(con)
     for s in _sentencias_que_corren(_texto_migracion()):
+        con.execute(_a_sqlite(s))
+    for s in _sentencias_que_corren(_texto_migracion_del_detalle()):     # pieza D2: el detalle de los renglones
         con.execute(_a_sqlite(s))
     return con
 

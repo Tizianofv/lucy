@@ -287,6 +287,26 @@ def horas_de_estudio(respuesta) -> dict | None:
     return {"horas": f"{float(total):g}", "sesiones": len(respuesta["sesiones"])}
 
 
+def _cuenta(valor) -> list | None:
+    """Los renglones de la cuenta de una sesión (`renglones`, pieza D1 de la App) con sus números como `Decimal`, o
+    `None` si lo que vino no es una lista. Una entrada que no sea un objeto se deja como `None`: quien arma la
+    factura cae al total de la sesión en vez de perder un renglón en silencio. `[]` es una cuenta vacía de verdad."""
+    if not isinstance(valor, list):
+        return None
+    salida = []
+    for x in valor:
+        if not isinstance(x, dict):
+            salida.append(None)
+            continue
+        salida.append({"titulo": _texto(x.get("titulo")),
+                       "cantidad": _dinero(x.get("cantidad")), "horas": _dinero(x.get("horas")),
+                       "precio_unitario": _dinero(x.get("precio_unitario")), "subtotal": _dinero(x.get("subtotal")),
+                       "nota": _texto(x.get("nota")),
+                       "producto_id": x.get("producto_id") if not isinstance(x.get("producto_id"), bool) else None,
+                       "tipo_cobro": _texto(x.get("tipo_cobro"))})
+    return salida
+
+
 def _renglon(fila) -> dict | None:
     """Un renglón con SOLO lo que la página pinta, o None si no sirve.
 
@@ -294,12 +314,23 @@ def _renglon(fila) -> dict | None:
     quitarla del proyecto, y viaja al formulario de quitar. Lo que no entra acá
     no puede pintarse por descuido desde la plantilla: un renglón sin `ref` se
     pinta igual, solo que no se puede quitar. Una sesión cancelada no sale.
+
+    Desde la pieza D2 (21-oct-2026) trae también `descuento`, `renglones` y `renglones_motivo`, tal como los manda
+    la App (pieza D1): `renglones` es la cuenta de la sesión (una lista, `[]` si está vacía) o `None` si no se pudo
+    leer (con su motivo). Si la App de antes de D1 no manda la clave, `renglones` queda `None` y el motivo vacío: no
+    se avisa de una cuenta que nadie intentó leer.
     """
     if not isinstance(fila, dict) or fila.get("cancelada"):
         return None
     total = _dinero(fila.get("total"))
     abonado = _dinero(fila.get("abonado"))
     saldo = _dinero(fila.get("saldo"))
+    if "renglones" not in fila:
+        renglones, motivo = None, ""
+    elif isinstance(fila["renglones"], list):
+        renglones, motivo = _cuenta(fila["renglones"]), ""
+    else:
+        renglones, motivo = None, _texto(fila.get("renglones_motivo")) or "cuenta_no_se_pudo_leer"
     return {
         "ref": _ref(fila.get("ref")),
         "fecha": _dia(fila.get("fecha")),
@@ -312,6 +343,8 @@ def _renglon(fila) -> dict | None:
         "estado": _texto(fila.get("estado")),
         "es_trabajo": fila.get("es_trabajo") is True,
         "total": total, "abonado": abonado, "saldo": saldo,
+        "descuento": _dinero(fila.get("descuento")),
+        "renglones": renglones, "renglones_motivo": motivo,
         "dinero": dinero_de_sesion(total, abonado, saldo),
     }
 

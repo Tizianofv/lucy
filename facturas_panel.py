@@ -13,6 +13,7 @@ QUÉ NO HACE, a propósito:
 """
 from __future__ import annotations
 
+import math
 import re
 from datetime import date, datetime
 from decimal import Decimal
@@ -25,7 +26,7 @@ import db.db as db
 RENGLONES_EN_BLANCO = 3
 RENGLONES_DE_SOBRA = 2
 
-_RE_RENGLON = re.compile(r"^r-([0-9]{1,3})-(descripcion|detalle|monto)$")
+_RE_RENGLON = re.compile(r"^r-([0-9]{1,3})-(descripcion|detalle|cantidad|unidad|precio)$")
 
 ETIQUETA_DE_ESTADO = {"borrador": "Borrador", "emitida": "Emitida", "anulada": "Anulada"}
 ETIQUETA_DEL_FILTRO = {"borrador": "Borradores", "emitida": "Emitidas", "anulada": "Anuladas"}
@@ -81,20 +82,26 @@ def _entero_o_el_texto(valor):
 
 
 def renglones_del_formulario(formulario) -> list[dict]:
-    """Los renglones que el formulario trae (`r-<n>-descripcion|detalle|monto`), en el orden de `n`. Un renglón
-    sin nada escrito en ninguna de sus tres casillas es de sobra y se descarta; uno con algo escrito va a la
-    puerta tal cual (si le falta el monto o la descripción, ella lo rechaza). El detalle vacío no se manda."""
+    """Los renglones que el formulario trae (`r-<n>-descripcion|detalle|cantidad|unidad|precio`), en el orden de
+    `n`. Un renglón sin nada escrito en ninguna de sus cinco casillas es de sobra y se descarta; uno con algo
+    escrito va a la puerta tal cual (si le falta la cantidad, el precio o la descripción, ella lo rechaza). El
+    detalle y la unidad vacíos no se mandan; la cantidad y el precio SÍ van siempre (vacíos, si lo están) para que
+    la puerta diga cuál falta. El total del renglón no se manda: lo calcula la puerta."""
     indices = sorted({int(m.group(1)) for m in map(_RE_RENGLON.match, list(formulario.keys())) if m})
     hechos = []
     for n in indices:
         descripcion = texto_de(formulario.get(f"r-{n}-descripcion"))
         detalle = texto_de(formulario.get(f"r-{n}-detalle"))
-        monto = texto_de(formulario.get(f"r-{n}-monto"))
-        if not (descripcion.strip() or detalle.strip() or monto.strip()):
+        cantidad = texto_de(formulario.get(f"r-{n}-cantidad"))
+        unidad = texto_de(formulario.get(f"r-{n}-unidad"))
+        precio = texto_de(formulario.get(f"r-{n}-precio"))
+        if not any(x.strip() for x in (descripcion, detalle, cantidad, unidad, precio)):
             continue
-        renglon = {"descripcion": descripcion, "monto": monto}
+        renglon = {"descripcion": descripcion, "cantidad": cantidad, "precio_unitario": precio}
         if detalle.strip():
             renglon["detalle"] = detalle
+        if unidad.strip():
+            renglon["unidad"] = unidad
         hechos.append(renglon)
     return hechos
 
@@ -127,20 +134,56 @@ def candado(cambiado_en) -> str:
 
 
 def _sin_rd(total) -> str:
-    """«62500.00» → «62,500» (lo que se escribe en la casilla del monto)."""
+    """«62500.00» → «62,500» (lo que se escribe en la casilla del precio)."""
     return cz.dinero_en_pesos(total)[len("RD$"):]
 
 
+def _cantidad_escrita(valor) -> str:
+    """Una cantidad como se escribe en su casilla: `Decimal("2.000")` → «2», `Decimal("1.500")` → «1.5». Un texto
+    que la persona escribió se devuelve tal cual (un rechazo no pierde lo escrito)."""
+    if valor in (None, ""):
+        return ""
+    if not isinstance(valor, Decimal):
+        return str(valor)
+    return f"{valor.normalize():f}"
+
+
+def _precio_escrito(valor) -> str:
+    """Un precio como se escribe en su casilla: `Decimal("62500.00")` → «62,500»; un texto, tal cual."""
+    if valor in (None, ""):
+        return ""
+    return _sin_rd(valor) if isinstance(valor, Decimal) else str(valor)
+
+
+def _total_escrito(cantidad, precio) -> str:
+    """El total que se ve en el formulario, calculado con lo que hay escrito (solo para mirarlo: la puerta lo vuelve
+    a calcular al guardar). Vacío si las dos casillas no son números que sirvan."""
+    try:
+        c = Decimal(str(cantidad).replace(",", ""))
+        p = Decimal(str(precio).replace(",", ""))
+    except (ArithmeticError, ValueError):
+        return ""
+    if not c.is_finite() or not p.is_finite() or c <= 0 or p <= 0:
+        return ""
+    return _sin_rd(db.total_del_renglon(c.quantize(Decimal("0.001")), p.quantize(Decimal("0.01"))))
+
+
 def casillas_de_renglones(renglones: list[dict], *, con_sobra: bool = True) -> list[dict]:
-    """Los renglones como casillas: los que hay, con su monto como se escribe, y los en blanco que faltan para
-    llegar a `RENGLONES_EN_BLANCO` (más `RENGLONES_DE_SOBRA` si `con_sobra`, que sin JavaScript hacen de «otro
-    renglón»). `renglones` es `[{"descripcion", "detalle", "monto"}]` con el monto como texto o `Decimal`."""
+    """Los renglones como casillas: los que hay, con su cantidad, su unidad y su precio como se escriben, el total
+    calculado para mirarlo, y los en blanco que faltan para llegar a `RENGLONES_EN_BLANCO` (más
+    `RENGLONES_DE_SOBRA` si `con_sobra`, que sin JavaScript hacen de «otro renglón»). `renglones` es
+    `[{"descripcion", "detalle", "cantidad", "unidad", "precio_unitario", "monto"}]`, con los números como texto o
+    `Decimal`; un renglón de antes del detalle (solo `monto`) se muestra como 1 × su monto."""
     hechos = []
     for r in renglones:
-        monto = r.get("monto")
+        cantidad, precio, monto = r.get("cantidad"), r.get("precio_unitario"), r.get("monto")
+        if precio in (None, "") and monto not in (None, ""):
+            cantidad, precio = 1, monto
         hechos.append({"descripcion": r.get("descripcion") or "", "detalle": r.get("detalle") or "",
-                       "monto": "" if monto in (None, "") else (_sin_rd(monto) if isinstance(monto, Decimal) else str(monto))})
-    en_blanco = {"descripcion": "", "detalle": "", "monto": ""}
+                       "cantidad": _cantidad_escrita(cantidad), "unidad": r.get("unidad") or "",
+                       "precio": _precio_escrito(precio),
+                       "total": _total_escrito(cantidad, precio)})
+    en_blanco = {"descripcion": "", "detalle": "", "cantidad": "", "unidad": "", "precio": "", "total": ""}
     faltan = max(RENGLONES_EN_BLANCO - len(hechos), 0) + (RENGLONES_DE_SOBRA if con_sobra else 0)
     return hechos + [dict(en_blanco) for _ in range(faltan)]
 
@@ -283,10 +326,10 @@ def _dinero_que_cabe(total) -> Decimal | None:
 
 
 def renglon_de_una_sesion(r: dict) -> dict:
-    """El renglón de UNA sesión o trabajo (`r` es un renglón de `registro_lectura`): la descripción es el servicio, el
-    detalle junta sala, fecha y horas, y el monto es el `total` que la App tiene (sin ITBIS: el ITBIS lo suma la
-    factura). Sin total que sirva el monto queda vacío y `sin_total` verdadero: la persona lo escribe. Es solo un punto
-    de partida; la puerta vuelve a validar todo al guardar."""
+    """El renglón de RESPALDO de UNA sesión o trabajo (`r` es un renglón de `registro_lectura`): un solo renglón con
+    el `total` que la App tiene (sin ITBIS: el ITBIS lo suma la factura), cantidad 1 y sin unidad. Se usa cuando la
+    cuenta de la sesión no se pudo leer, no trae renglones o no cuadra. Sin total que sirva el precio queda vacío y
+    `sin_total` verdadero: la persona lo escribe. Es solo un punto de partida; la puerta vuelve a validar al guardar."""
     partes = []
     if r.get("sala"):
         partes.append(r["sala"])
@@ -297,12 +340,93 @@ def renglon_de_una_sesion(r: dict) -> dict:
     monto = _dinero_que_cabe(r.get("total"))
     return {"descripcion": (r.get("concepto") or ("Trabajo" if r.get("es_trabajo") else "Sesión"))[:db.LARGOS_DE_FACTURA["descripcion"]],
             "detalle": " · ".join(partes)[:db.LARGOS_DE_FACTURA["detalle"]],
-            "monto": "" if monto is None else monto, "sin_total": monto is None, "codigo": r.get("codigo"), "ref": r.get("ref")}
+            "cantidad": 1, "unidad": "",
+            "precio_unitario": "" if monto is None else monto, "monto": "" if monto is None else monto,
+            "sin_total": monto is None, "sin_detalle": "", "aviso_del_detalle": "",
+            "codigo": r.get("codigo"), "ref": r.get("ref")}
+
+
+def _numero(valor) -> Decimal | None:
+    """Un número de la cuenta (`cantidad`, `horas`, `precio_unitario`, `subtotal`) como `Decimal`, o None si no vino
+    o no es un número finito. La App los manda como número de JSON; `registro_lectura` ya los pasa a `Decimal`."""
+    if isinstance(valor, bool) or not isinstance(valor, (int, float, Decimal)):
+        return None
+    if isinstance(valor, float) and not math.isfinite(valor):
+        return None
+    numero = Decimal(str(valor))
+    return numero if numero.is_finite() else None
+
+
+def _detalle_de_la_cuenta(r: dict) -> str:
+    """La descripción de un renglón que sale de la cuenta: la sala y la fecha de la sesión (las horas del renglón
+    ya van en su cantidad)."""
+    partes = [p for p in (r.get("sala"), cz.fecha_corta(r["fecha"]) if r.get("fecha") else None) if p]
+    return " · ".join(partes)[:db.LARGOS_DE_FACTURA["detalle"]]
+
+
+def _renglon_de_una_cuenta(r: dict, x: dict) -> dict | None:
+    """Un renglón de la factura a partir de UN renglón de la cuenta de la sesión (`x`, tal como lo manda la App), o
+    None si ese renglón no se puede cobrar (sin subtotal, sin cantidad o sin precio).
+
+    El total del renglón TIENE que dar el `subtotal` de NocoDB, que es lo que suma el total de la sesión. Con
+    `tipo_cobro` `hora` la cantidad es `cantidad × horas` y la unidad «horas»; si no, la cantidad del renglón y sin
+    unidad (la App no guarda el nombre de la unidad: no se inventa «canciones»). Si la cuenta no da (por el
+    redondeo o por horas raras) se usa 1 × el subtotal y se avisa en `aviso_del_detalle`."""
+    subtotal = _dinero_que_cabe(_numero(x.get("subtotal")))
+    cantidad, horas = _numero(x.get("cantidad")), _numero(x.get("horas"))
+    precio = _numero(x.get("precio_unitario"))
+    if subtotal is None or cantidad is None or cantidad <= 0 or precio is None or precio <= 0:
+        return None
+    titulo = (x.get("titulo") or "").strip() or (r.get("concepto") or "")
+    titulo = (titulo or ("Trabajo" if r.get("es_trabajo") else "Sesión"))[:db.LARGOS_DE_FACTURA["descripcion"]]
+    if x.get("tipo_cobro") == "hora":
+        unidades, unidad = (cantidad * horas if horas is not None and horas > 0 else None), "horas"
+    else:
+        unidades, unidad = cantidad, ""
+    if unidades is not None and db.producto_exacto_del_renglon(unidades, precio) == subtotal:
+        return {"descripcion": titulo, "detalle": _detalle_de_la_cuenta(r), "cantidad": unidades,
+                "unidad": unidad, "precio_unitario": precio, "monto": subtotal, "sin_total": False,
+                "sin_detalle": "", "aviso_del_detalle": "", "codigo": r.get("codigo"), "ref": r.get("ref")}
+    return {"descripcion": titulo, "detalle": _detalle_de_la_cuenta(r), "cantidad": 1, "unidad": "",
+            "precio_unitario": subtotal, "monto": subtotal, "sin_total": False, "sin_detalle": "",
+            "codigo": r.get("codigo"), "ref": r.get("ref"),
+            "aviso_del_detalle": (f"«{titulo}»: la cantidad y el precio del registro no dan su subtotal; "
+                                  f"se puso 1 × {cz.dinero_en_pesos(subtotal)}.")}
+
+
+def renglones_de_una_sesion(r: dict) -> list[dict]:
+    """Los renglones de la factura que salen de UNA sesión o trabajo: uno por cada renglón de su cuenta (`renglones`,
+    pieza D1 de la App), en su orden. Si la cuenta no se pudo leer (`renglones` null), está vacía, o alguno de sus
+    renglones no se puede cobrar, cae a UN renglón con el total de la sesión (`renglon_de_una_sesion`) y lo dice:
+    `sin_detalle` lleva el motivo que dio la App (`cuenta_no_se_pudo_leer`) y `aviso_del_detalle`, lo que pasó."""
+    cuenta = r.get("renglones")
+    if isinstance(cuenta, list) and cuenta:
+        hechos = []
+        for x in cuenta:
+            hecho = _renglon_de_una_cuenta(r, x) if isinstance(x, dict) else None
+            if hecho is None:
+                hechos = []
+                break
+            hechos.append(hecho)
+        if hechos:
+            return hechos
+        aviso = ("Un renglón de la cuenta no se puede cobrar (sin cantidad, sin precio o sin subtotal): va un solo "
+                 "renglón con el total de la sesión.")
+    elif isinstance(cuenta, list):
+        aviso = ""                                    # la cuenta está vacía: manda el total de la sesión
+    else:
+        aviso = ""                                    # sin detalle: la App de antes de D1, o la cuenta que no se leyó
+    unico = renglon_de_una_sesion(r)
+    if cuenta is None:
+        unico["sin_detalle"] = r.get("renglones_motivo") or ""
+    unico["aviso_del_detalle"] = aviso
+    return [unico]
 
 
 def renglones_de_las_sesiones(filas: list[dict]) -> list[dict]:
-    """Un renglón por sesión o trabajo, en el orden que traen `filas`."""
-    return [renglon_de_una_sesion(r) for r in filas]
+    """Los renglones de todas las sesiones o trabajos, en el orden en que se escogieron (y dentro de cada uno, el de
+    su cuenta)."""
+    return [renglon for r in filas for renglon in renglones_de_una_sesion(r)]
 
 
 def ligas_con_lo_leido(ligas: list[dict], lectura: dict) -> list[dict]:
@@ -472,11 +596,19 @@ TEXTO_POR_CLAVE = {
     "itbis": "El ITBIS es el 18 % o ninguno.",
     "sin_renglones": "La factura necesita al menos un renglón con su descripción y su monto.",
     "renglones_muchos": "La factura lleva demasiados renglones.",
-    "renglon_forma": "Cada renglón lleva descripción y monto, y a lo sumo un detalle.",
+    "renglon_forma": "Cada renglón lleva descripción y monto, o su cantidad con su precio unitario.",
+    "cantidad_vacio": "A un renglón le falta la cantidad.",
+    "cantidad_tipo": "La cantidad de un renglón tiene que ser un número.",
+    "cantidad_formato": "Una cantidad no se entiende; escríbela como 2 o 1.5.",
+    "cantidad_decimales": "Una cantidad lleva más de tres decimales.",
+    "cantidad_cero": "Cada cantidad tiene que ser mayor que cero.",
+    "cantidad_alta": "Una cantidad es demasiado grande.",
+    "unidad_largo": "La unidad de un renglón es demasiado larga (hasta 20 caracteres).",
     "monto_vacio": "A un renglón le falta el monto.",
     "monto_cero": "Cada monto tiene que ser mayor que cero.",
     "monto_alto": "Un monto es demasiado grande.",
     "monto_decimales": "Un monto lleva más de dos decimales.",
+    "monto_redondeo": "El total de un renglón no da en centavos exactos: cambia la cantidad o el precio unitario.",
     "monto_formato": "Un monto no se entiende; escríbelo como 62,500 o 62500.50.",
     "monto_tipo": "Un monto no se entiende; escríbelo como 62,500 o 62500.50.",
     "descripcion_vacio": "A un renglón le falta la descripción.",

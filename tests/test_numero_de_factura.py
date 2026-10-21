@@ -112,7 +112,7 @@ def _crear_tablas_en_archivo(ruta: str) -> None:
     con = _conexion_a_archivo(ruta)
     con.execute("CREATE TABLE IF NOT EXISTS proyectos (id INTEGER PRIMARY KEY)")
     con.execute("INSERT OR IGNORE INTO proyectos (id) VALUES (1)")
-    for texto in (ct._texto_migracion(), tf._texto_migracion()):
+    for texto in (ct._texto_migracion(), tf._texto_migracion(), tf._texto_migracion_del_detalle()):
         for s in tf._sentencias_que_corren(texto):
             con.execute(tf._a_sqlite(s))
     con.close()

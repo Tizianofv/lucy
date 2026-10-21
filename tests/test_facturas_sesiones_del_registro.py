@@ -325,7 +325,7 @@ def test_la_comprobacion_no_pide_sesiones_sueltas_a_la_app():
 # ── 3. Los renglones salen de las sesiones ───────────────────────────────────────────────────────
 
 def _casillas(html):
-    return re.findall(r'name="r-(\d+)-(descripcion|detalle|monto)"[^>]*?(?:value="([^"]*)"|>([^<]*)</textarea)', html)
+    return re.findall(r'name="r-(\d+)-(descripcion|detalle|cantidad|unidad|precio)"[^>]*?(?:value="([^"]*)"|>([^<]*)</textarea)', html)
 
 
 def _renglones_de(html):
@@ -338,19 +338,26 @@ def _renglones_de(html):
 def test_el_paso_de_escribir_trae_un_renglon_por_sesion_con_el_total_de_la_app(pantalla):
     html = cliente().get("/facturas/nueva", params={"cliente": 7, "ref": ["11", "12", "13"], "paso": "escribir"}).text
     llenos = [r for r in _renglones_de(html) if r["descripcion"]]
+    # La App de este doble no manda `renglones` (es la de antes de D1): un renglón por sesión, 1 × su total.
     assert llenos == [
-        {"descripcion": "Grabación", "detalle": "Sala P · 21 oct 2026 · 3 h", "monto": "9,000"},
-        {"descripcion": "Mezcla", "detalle": "Sala P · 21 oct 2026 · 2 h", "monto": "6,000"},
-        {"descripcion": "Ensayo", "detalle": "Sala P · 21 oct 2026 · 1.5 h", "monto": "4,500"}]
-    assert "data-renglones-de-sesiones" in html and "data-sin-total" not in html
+        {"descripcion": "Grabación", "detalle": "Sala P · 21 oct 2026 · 3 h", "cantidad": "1", "unidad": "",
+         "precio": "9,000"},
+        {"descripcion": "Mezcla", "detalle": "Sala P · 21 oct 2026 · 2 h", "cantidad": "1", "unidad": "",
+         "precio": "6,000"},
+        {"descripcion": "Ensayo", "detalle": "Sala P · 21 oct 2026 · 1.5 h", "cantidad": "1", "unidad": "",
+         "precio": "4,500"}]
+    # el total de cada renglón se ve calculado (no es una casilla: no viaja en el POST)
+    assert re.findall(r'<td class="total-renglon">([^<]*)</td>', html)[:3] == ["9,000", "6,000", "4,500"]
+    assert "data-renglones-de-sesiones" in html and "data-sin-total" not in html and "data-sin-detalle" not in html
 
 
 def test_lo_que_sale_de_las_sesiones_se_guarda_y_se_puede_cambiar_antes(pantalla):
     html = cliente().get("/facturas/nueva", params={"cliente": 7, "ref": ["11", "13"], "paso": "escribir"}).text
     datos = {"cliente": "7", "para_nombre": NOMBRE, "fecha": "2026-10-21", "ref": ["11", "13"]}
     for i, r in enumerate([x for x in _renglones_de(html) if x["descripcion"]], start=1):
-        datos.update({f"r-{i}-descripcion": r["descripcion"], f"r-{i}-detalle": r["detalle"], f"r-{i}-monto": r["monto"]})
-    datos["r-2-monto"] = "4,000"          # la persona cambia un monto
+        datos.update({f"r-{i}-descripcion": r["descripcion"], f"r-{i}-detalle": r["detalle"],
+                      f"r-{i}-cantidad": r["cantidad"], f"r-{i}-unidad": r["unidad"], f"r-{i}-precio": r["precio"]})
+    datos["r-2-precio"] = "4,000"          # la persona cambia un precio
     assert cliente().post("/facturas/nueva", data=datos, follow_redirects=False).status_code == 303
     assert [(x["descripcion"], float(x["monto"])) for x in tgf.filas(pantalla, "factura_renglones")] == [
         ("Grabación", 9000.0), ("Ensayo", 4000.0)]
@@ -373,16 +380,18 @@ def test_una_sesion_sin_total_deja_el_monto_vacio_y_lo_dice(pantalla, registro):
         dict(SESION, total=0.0, abonado=0.0, saldo=0.0), dict(SESION_B, total=None), dict(TRABAJO, total=12.345)]}
     html = cliente().get("/facturas/nueva", params={"cliente": 7, "ref": ["11", "12", "13"], "paso": "escribir"}).text
     llenos = [r for r in _renglones_de(html) if r["descripcion"]]
-    assert [r["monto"] for r in llenos] == ["", "", ""]          # sin total, o con más de dos decimales: lo escribe la persona
+    assert [r["precio"] for r in llenos] == ["", "", ""]          # sin total, o con más de dos decimales: lo escribe la persona
     assert "data-sin-total" in html and "«s011»" in html and "«s013»" in html and "«t012»" in html
 
 
 def test_un_guardado_rechazado_devuelve_lo_escrito_y_no_vuelve_a_poner_los_de_las_sesiones(pantalla):
     r = crear_por_la_pantalla(refs=("11", "13"), ncf="B0100000009", ncf_tipo="", **{"r-1-descripcion": "Lo mío",
-                                                                                  "r-1-monto": "1,234.50"})
+                                                                                  "r-1-cantidad": "1",
+                                                                                  "r-1-precio": "1,234.50"})
     assert r.status_code == 400
     llenos = [x for x in _renglones_de(r.text) if x["descripcion"]]
-    assert llenos == [{"descripcion": "Lo mío", "detalle": "dos horas", "monto": "1,234.50"}]
+    assert llenos == [{"descripcion": "Lo mío", "detalle": "dos horas", "cantidad": "1", "unidad": "",
+                       "precio": "1,234.50"}]
     assert "data-renglones-de-sesiones" not in r.text
 
 
@@ -391,6 +400,8 @@ def test_el_renglon_de_una_sesion_es_una_cuenta_pura_sobre_lo_que_la_app_dijo():
             "horas": "2", "total": Decimal("1500.50"), "es_trabajo": False}
     r = fp.renglon_de_una_sesion(base)
     assert (r["descripcion"], r["detalle"], r["monto"], r["sin_total"]) == ("Voces", "Sala A · 3 oct 2026 · 2 h", Decimal("1500.50"), False)
+    # el renglón de respaldo es 1 × el total, sin unidad
+    assert (r["cantidad"], r["unidad"], r["precio_unitario"]) == (1, "", Decimal("1500.50"))
     sin = fp.renglon_de_una_sesion(dict(base, concepto=None, sala=None, fecha=None, horas=None, total=None, es_trabajo=True))
     assert (sin["descripcion"], sin["detalle"], sin["monto"], sin["sin_total"]) == ("Trabajo", "", "", True)
     for malo in (Decimal("0"), Decimal("-3"), Decimal("1.234"), Decimal("NaN"), 100.0, None):
@@ -412,7 +423,8 @@ def test_al_ligar_otra_se_ofrece_su_renglon_y_aceptar_lo_pone_en_el_formulario(p
     assert tgf.foto(pantalla) == antes
     assert "data-corregir" in form and "data-renglon-agregado" in form
     llenos = [x for x in _renglones_de(form) if x["descripcion"]]
-    assert llenos[-1] == {"descripcion": "Ensayo", "detalle": "Sala P · 21 oct 2026 · 1.5 h", "monto": "4,500"}
+    assert llenos[-1] == {"descripcion": "Ensayo", "detalle": "Sala P · 21 oct 2026 · 1.5 h", "cantidad": "1",
+                          "unidad": "", "precio": "4,500"}
     assert [x["descripcion"] for x in llenos[:-1]] == ["Ensayo 1", "Ensayo 2"]          # los que ya tenía, intactos
 
 
@@ -433,9 +445,9 @@ def test_agregar_el_renglon_de_una_ligada_sin_total_lo_deja_vacio_para_que_la_pe
     b = tgf.crear(liga={"tipo": "sesion", "ref": "11"}, cliente_noco_id=7)
     tgf.correr(__import__("db.db", fromlist=["x"]).ligar_factura_a_registro(b["id"], CASA, "sesion", "13", "s013"))
     oferta = cliente().get(f"/facturas/{b['id']}", params={"ofrecer": "13"}).text
-    assert "el registro no trae su total" in oferta
+    assert "El registro no trae su total: lo escribes tú." in oferta
     form = cliente().get(f"/facturas/{b['id']}", params={"agregar": "13"}).text
-    assert [x for x in _renglones_de(form) if x["descripcion"]][-1]["monto"] == ""
+    assert [x for x in _renglones_de(form) if x["descripcion"]][-1]["precio"] == ""
 
 
 # ── 4. La página de la factura dice lo que la App dice de cada sesión ──────────────────────────────

@@ -2725,10 +2725,15 @@ LIMITE_DE_RENGLONES_DE_FACTURA = 100
 # con el texto de `db/schema.sql`.
 TIPOS_DE_LIGA_DE_FACTURA = ("sesion", "trabajo")
 LARGOS_DE_FACTURA = {"para_nombre": 200, "descripcion": 300, "detalle": 2000, "ncf": 20, "ncf_tipo": 20,
-                     "motivo": 500, "ref": 100, "codigo": 100}
+                     "motivo": 500, "ref": 100, "codigo": 100, "unidad": 20}
 CAMPOS_QUE_CORRIGE_UN_BORRADOR = ("cliente_noco_id", "para_nombre", "fecha", "itbis_pct", "ncf", "ncf_tipo",
                                   "rnc_cedula", "renglones")
+# Lo que puede traer UN renglón. La forma vieja es `{descripcion, detalle?, monto}` (cantidad 1, precio = monto); la
+# del detalle (pieza D2) es `{descripcion, detalle?, cantidad, unidad?, precio_unitario}` y el `monto` lo calcula la
+# puerta. Las dos formas NO se mezclan (ver `_renglones_de_factura`): una sola cuenta del total.
+CAMPOS_DE_UN_RENGLON = ("descripcion", "detalle", "cantidad", "unidad", "precio_unitario", "monto")
 _CENTAVOS = Decimal("0.01")
+_MILESIMAS = Decimal("0.001")
 
 
 class FacturaSinSesion(Exception):
@@ -2786,6 +2791,53 @@ def _dinero_de_factura(crudo) -> Decimal:
 def _dinero_leido(valor) -> Decimal:
     """Lo que devuelve la base (`Decimal` en Postgres) como `Decimal` con dos decimales."""
     return Decimal(str(valor)).quantize(_CENTAVOS)
+
+
+def _cantidad_de_factura(crudo) -> Decimal:
+    """La cantidad de un renglón: mayor que cero, a lo sumo tres decimales (`NUMERIC(14,3)`), sin `float` ni `bool`.
+    Acepta lo que se escribe en la pantalla («2», «1.5», «1,250») y un `Decimal`/`int` que venga de la App."""
+    if crudo is None or (isinstance(crudo, str) and not crudo.strip()):
+        raise FacturaNoVale("cantidad_vacio", "un renglón no dice cuánto se cobra")
+    if isinstance(crudo, bool) or not isinstance(crudo, (str, int, Decimal)):
+        raise FacturaNoVale("cantidad_tipo", "la cantidad tiene que ser un número")
+    if isinstance(crudo, str):
+        escrito = crudo.strip()
+        m = _RE_DINERO_DE_COTIZACION.match(escrito)
+        if not m:
+            raise FacturaNoVale("cantidad_formato", "la cantidad no se entiende")
+        # Se mira el TEXTO, como el dinero: «1.2345» no es «1.235».
+        if m.group(1) is not None and len(m.group(1)) > 3:
+            raise FacturaNoVale("cantidad_decimales", "la cantidad no puede llevar más de tres decimales")
+        valor = Decimal(escrito.replace(",", ""))
+    else:
+        valor = Decimal(crudo)
+    if not valor.is_finite():
+        raise FacturaNoVale("cantidad_formato", "la cantidad no se entiende")
+    if valor != valor.quantize(_MILESIMAS):
+        raise FacturaNoVale("cantidad_decimales", "la cantidad no puede llevar más de tres decimales")
+    if valor <= 0:
+        raise FacturaNoVale("cantidad_cero", "la cantidad tiene que ser mayor que cero")
+    if valor > TOPE_TOTAL_DE_RENGLON:
+        raise FacturaNoVale("cantidad_alta", "la cantidad es demasiado grande")
+    return valor.quantize(_MILESIMAS)
+
+
+def _cantidad_leida(valor) -> Decimal:
+    """La cantidad que devuelve la base, como `Decimal` con tres decimales."""
+    return Decimal(str(valor)).quantize(_MILESIMAS)
+
+
+def total_del_renglon(cantidad, precio_unitario) -> Decimal:
+    """`cantidad × precio unitario`, redondeado a centavos con la mitad hacia arriba. La puerta solo lo usa después de
+    comprobar que el producto YA da en centavos (`_renglones_de_factura`): no se redondea dinero. Lo comparten la
+    pantalla (para mostrar el total) y el CHECK de `factura_renglones.precio_unitario`."""
+    return (Decimal(cantidad) * Decimal(precio_unitario)).quantize(_CENTAVOS, rounding=ROUND_HALF_UP)
+
+
+def producto_exacto_del_renglon(cantidad, precio_unitario) -> Decimal:
+    """El producto sin redondear (`Decimal`, con todos sus decimales): lo que decide si el total da en centavos y si
+    cuadra con el `subtotal` de NocoDB."""
+    return Decimal(cantidad) * Decimal(precio_unitario)
 
 
 def _entero_de_factura(crudo, campo: str) -> int:
@@ -2849,6 +2901,13 @@ def _ncf_de_factura(ncf, ncf_tipo) -> tuple[str | None, str | None]:
 
 
 def _renglones_de_factura(crudo) -> list[dict]:
+    """Los renglones, con su total ya calculado. Dos formas CERRADAS, una sola cuenta del total:
+    · la vieja, `{descripcion, detalle?, monto}`: cantidad 1 y precio unitario = monto (es lo que mandan la puerta de
+      Natalia y las pruebas de antes del detalle);
+    · la del detalle (pieza D2), `{descripcion, detalle?, cantidad, unidad?, precio_unitario}`: el `monto` lo calcula
+      la puerta (`total_del_renglon`) y no se acepta mandado.
+    `unidad` vacía es «sin unidad». Un `monto` que no dé `cantidad × precio` no puede existir: se calcula aquí y la
+    base lo vuelve a exigir con un CHECK."""
     if isinstance(crudo, (str, bytes, dict)) or not isinstance(crudo, (list, tuple)):
         raise FacturaNoVale("renglones_tipo", "los renglones tienen que ser una lista")
     if not crudo:
@@ -2857,14 +2916,37 @@ def _renglones_de_factura(crudo) -> list[dict]:
         raise FacturaNoVale("renglones_muchos", "la factura lleva demasiados renglones")
     hechos = []
     for i, r in enumerate(crudo, start=1):
-        if not isinstance(r, dict) or not {"descripcion", "monto"} <= set(r) <= {"descripcion", "detalle", "monto"}:
-            raise FacturaNoVale("renglon_forma", "cada renglón lleva descripción y monto, y a lo sumo un detalle")
+        if not isinstance(r, dict) or "descripcion" not in r or not set(r) <= set(CAMPOS_DE_UN_RENGLON):
+            raise FacturaNoVale("renglon_forma", "cada renglón lleva descripción y su monto, o su cantidad con su precio")
         detalle = _texto_de_factura(r.get("detalle"), "detalle", LARGOS_DE_FACTURA["detalle"],
                                     minimo=0, varias_lineas=True)
+        if "precio_unitario" in r:
+            if "monto" in r:
+                raise FacturaNoVale("renglon_forma", "el total del renglón sale de la cantidad y el precio: no se manda aparte")
+            cantidad = _cantidad_de_factura(r.get("cantidad"))
+            precio = _dinero_de_factura(r["precio_unitario"])
+        else:
+            if "cantidad" in r or "unidad" in r:
+                raise FacturaNoVale("renglon_forma", "la cantidad y la unidad van con el precio unitario")
+            if "monto" not in r:
+                raise FacturaNoVale("renglon_forma", "cada renglón lleva descripción y su monto, o su cantidad con su precio")
+            cantidad, precio = Decimal("1.000"), _dinero_de_factura(r["monto"])
+        unidad = None
+        if "unidad" in r and not (isinstance(r["unidad"], str) and not r["unidad"].strip()):
+            unidad = _texto_de_factura(r["unidad"], "unidad", LARGOS_DE_FACTURA["unidad"])
+        monto = total_del_renglon(cantidad, precio)
+        if monto != producto_exacto_del_renglon(cantidad, precio):
+            # Como el dinero de las cotizaciones: se RECHAZA, no se redondea (y el CHECK de la base exige el producto
+            # exacto, que en Postgres y en SQLite se calcula igual sin las mitades del `round`).
+            raise FacturaNoVale("monto_redondeo", "el total del renglón no da en centavos: cambia la cantidad o el precio")
+        if monto <= 0:
+            raise FacturaNoVale("monto_cero", "el total de un renglón tiene que ser mayor que cero")
+        if monto > TOPE_TOTAL_DE_RENGLON:
+            raise FacturaNoVale("monto_alto", "el total de un renglón es demasiado grande")
         hechos.append({"orden": i,
                        "descripcion": _texto_de_factura(r["descripcion"], "descripcion", LARGOS_DE_FACTURA["descripcion"]),
-                       "detalle": detalle or None,
-                       "monto": _dinero_de_factura(r["monto"])})
+                       "detalle": detalle or None, "cantidad": cantidad, "unidad": unidad,
+                       "precio_unitario": precio, "monto": monto})
     return hechos
 
 
@@ -2915,7 +2997,8 @@ SENTENCIA_DE_LEER_FACTURA = (
     "cotizacion_opcion, itbis_pct, ncf, ncf_tipo, rnc_cedula, hecha_por, hecha_por_chat_id, creado_en, "
     "cambiado_en, emitida_en, anulada_en, anulada_por_chat_id, motivo_anulacion FROM facturas WHERE id = %s")
 SENTENCIA_DE_LOS_RENGLONES = (
-    "SELECT orden, descripcion, detalle, monto FROM factura_renglones WHERE factura_id = %s ORDER BY orden")
+    "SELECT orden, descripcion, detalle, monto, cantidad, unidad, precio_unitario FROM factura_renglones "
+    "WHERE factura_id = %s ORDER BY orden")
 SENTENCIA_DE_LAS_LIGAS = (
     "SELECT id, tipo, ref, codigo, creado_en, creado_por_chat_id, desligada_en FROM factura_ligas "
     "WHERE factura_id = %s ORDER BY id")
@@ -2945,7 +3028,8 @@ SENTENCIA_DE_LA_COTIZACION_VIVA = "SELECT id, proyecto_id, contenido FROM cotiza
 SENTENCIA_DE_CREAR_FACTURA = (
     "INSERT INTO facturas (cliente_noco_id, para_nombre, fecha, proyecto_id, cotizacion_id, cotizacion_opcion, itbis_pct, ncf, ncf_tipo, rnc_cedula, hecha_por, hecha_por_chat_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id")
 SENTENCIA_DE_CREAR_RENGLON = (
-    "INSERT INTO factura_renglones (factura_id, orden, descripcion, detalle, monto) VALUES (%s, %s, %s, %s, %s)")
+    "INSERT INTO factura_renglones (factura_id, orden, descripcion, detalle, cantidad, unidad, precio_unitario, monto) "
+    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)")
 SENTENCIA_DE_BORRAR_RENGLONES = "DELETE FROM factura_renglones WHERE factura_id = %s"
 SENTENCIA_DE_CREAR_LIGA = (
     "INSERT INTO factura_ligas (factura_id, tipo, ref, codigo, creado_por_chat_id) VALUES (%s, %s, %s, %s, %s)")
@@ -3042,7 +3126,18 @@ async def _factura_completa(cur, factura_id: int) -> dict | None:
         return None
     f = dict(fila)
     await cur.execute(SENTENCIA_DE_LOS_RENGLONES, (factura_id,))
-    renglones = [{**dict(r), "monto": _dinero_leido(r["monto"])} for r in await cur.fetchall()]
+    renglones = []
+    for r in await cur.fetchall():
+        monto = _dinero_leido(r["monto"])
+        # Un renglón de antes del detalle (pieza D2) tiene las dos columnas del dinero en NULL: vale 1 × su monto y no
+        # tiene unidad. Así se sigue viendo igual y su total no cambia.
+        viejo = r.get("cantidad") is None or r.get("precio_unitario") is None
+        renglones.append({
+            "orden": r["orden"], "descripcion": r["descripcion"], "detalle": r["detalle"], "monto": monto,
+            "cantidad": Decimal("1.000") if viejo else _cantidad_leida(r["cantidad"]),
+            "unidad": (r.get("unidad") or None) if not viejo else None,
+            "precio_unitario": monto if viejo else _dinero_leido(r["precio_unitario"]),
+        })
     await cur.execute(SENTENCIA_DE_LAS_LIGAS, (factura_id,))
     ligas = [{**dict(l), "viva": l["desligada_en"] is None} for l in await cur.fetchall()]
     f["itbis_pct"] = None if f["itbis_pct"] is None else _dinero_leido(f["itbis_pct"])
@@ -3124,7 +3219,8 @@ async def _liga_libre(cur, tipo: str, ref: str, factura_id: int | None) -> None:
 async def _escribir_renglones(cur, factura_id: int, renglones: list[dict]) -> None:
     for r in renglones:
         await cur.execute(SENTENCIA_DE_CREAR_RENGLON,
-                          (factura_id, r["orden"], r["descripcion"], r["detalle"], r["monto"]))
+                          (factura_id, r["orden"], r["descripcion"], r["detalle"], r["cantidad"], r["unidad"],
+                           r["precio_unitario"], r["monto"]))
 
 
 def _ncf_ya_estaba(e: Exception) -> bool:

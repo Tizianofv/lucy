@@ -539,7 +539,9 @@ async def test_lo_que_devuelve_el_lector_es_lo_que_la_pagina_pinta(registro):
     for renglon in respuesta["sesiones"] + respuesta["trabajos"]:
         assert set(renglon) == {"ref", "fecha", "sala", "horas", "concepto", "codigo",
                                 "atendio", "asignado", "estado", "es_trabajo",
-                                "total", "abonado", "saldo", "dinero"}
+                                "total", "abonado", "saldo", "dinero",
+                                # pieza D2: el descuento de la sesión y su cuenta (o `None` si no vino)
+                                "descuento", "renglones", "renglones_motivo"}
         assert renglon["fecha"].isoformat() == HOY
     assert respuesta["sesiones"][0]["ref"] == "11", "el ref de la App no sale en texto"
 

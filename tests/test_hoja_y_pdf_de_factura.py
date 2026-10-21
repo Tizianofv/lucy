@@ -105,10 +105,11 @@ def test_la_emitida_con_ncf_e_itbis_trae_todo_y_ninguna_marca():
     assert (h["titulo"], h["codigo"], h["marca"]) == ("FACTURA", "FAC-2026-001", None)
     assert h["para"] == [("PARA", "Cliente de prueba"), ("RNC / CÉDULA", "131234567"), ("FECHA", "14 de octubre de 2026"),
                          ("NCF", "B0100000001"), ("TIPO DE NCF", "Crédito fiscal")]
-    assert h["encabezados"] == ("DESCRIPCIÓN", "MONTO")
-    assert [(r["descripcion"], r["detalle"], r["monto"]) for r in h["renglones"]] == [
-        ("Grabación de bajo y güira", "Incluye mezcla.", "RD$62,500"),
-        ("Video musical", "Una toma.\nSegunda línea.", "RD$15,250.50")]
+    assert h["encabezados"] == ("SERVICIO", "CANTIDAD", "PRECIO UNITARIO", "TOTAL")
+    # Un renglón sin cantidad ni precio unitario (de antes del detalle, pieza D2) se escribe 1 × su monto.
+    assert [(r["descripcion"], r["detalle"], r["cantidad"], r["precio_unitario"], r["monto"]) for r in h["renglones"]] == [
+        ("Grabación de bajo y güira", "Incluye mezcla.", "1", "RD$62,500", "RD$62,500"),
+        ("Video musical", "Una toma.\nSegunda línea.", "1", "RD$15,250.50", "RD$15,250.50")]
     assert [(t["etiqueta"], t["total"]) for t in h["totales"]] == [
         ("Subtotal", "RD$77,750.50"), ("ITBIS 18%", "RD$13,995.09"), ("TOTAL", "RD$91,745.59")]
     assert h["pie"] == cz.PIE_DEL_ESTUDIO

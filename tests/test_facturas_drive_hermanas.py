@@ -47,6 +47,8 @@ def _con_facturas(m_):
     migraciones. (`drive_de_proyectos` ya trae `carpeta_facturas_id`: ese mundo se arma del esquema.)"""
     for s in ft._sentencias_que_corren(ft._texto_migracion()):
         m_.con.execute(ft._a_sqlite(s))
+    for s in ft._sentencias_que_corren(ft._texto_migracion_del_detalle()):     # pieza D2: el detalle del renglón
+        m_.con.execute(ft._a_sqlite(s))
     for s in ft._sentencias_que_corren(ft._texto_migracion_de_drive()):
         if re.match(r"ALTER\s+TABLE\s+facturas\b|CREATE\s+TABLE", s, re.I):
             m_.con.execute(ft._a_sqlite(s))
