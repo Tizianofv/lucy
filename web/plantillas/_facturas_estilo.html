@@ -2,7 +2,7 @@
     `factura.html`. Solo estilo: ningún texto sale de acá. Las variables son las de `base.html`. -#}
 {% macro estilo_de_facturas() -%}
 <style>
-main a:not(.boton):not(.boton-linea):not([class*=cz]){color:var(--acento)}
+main a:not([class]){color:var(--acento)}
 textarea{font:inherit;padding:.45rem .6rem;border-radius:7px;border:1px solid var(--linea);background:var(--fondo);color:var(--texto)}
 .enc{display:flex;gap:.8rem;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-bottom:1rem}
 .enc h1{margin:0}
@@ -14,6 +14,7 @@ button.peligro{background:var(--gasto)}
 .chips{display:flex;gap:.4rem;flex-wrap:wrap;margin:0 0 1rem}
 .chips a{border:1px solid var(--linea);border-radius:99px;padding:.2rem .75rem;color:var(--suave);text-decoration:none;font-size:.88rem}
 .chips a.on{background:var(--acento);color:#fff;border-color:var(--acento)}
+main .chips a:not(.on){color:var(--suave)}
 .pild{display:inline-block;border-radius:99px;padding:.1rem .6rem;font-size:.78rem;border:1px solid var(--linea)}
 .pild.emitida{background:var(--ingreso);color:#fff;border-color:var(--ingreso)}
 .pild.anulada{background:var(--gasto);color:#fff;border-color:var(--gasto)}
