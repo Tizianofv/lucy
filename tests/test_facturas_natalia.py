@@ -538,6 +538,11 @@ def test_la_tarjeta_va_al_chat_de_quien_revisa_con_el_pdf_y_los_botones_y_a_nadi
     assert vuelta(tg) == 0 and len(tg.documentos) == 1                          # no se repite
 
 
+def test_la_tarjeta_dice_el_itbis_y_el_total_de_la_base(api, tg):
+    hasta_la_tarjeta(tg, refs=("11",), itbis=True)
+    assert "total RD$10,620" in tg.documentos[0]["caption"] and "(con ITBIS 18%)" in tg.documentos[0]["caption"]
+
+
 def test_si_cambia_quien_revisa_la_tarjeta_va_a_la_nueva_persona(api, tg, monkeypatch):
     monkeypatch.setattr(config, "NOMBRE_DE_QUIEN_REVISA_LAS_FACTURAS", "Beto Inventado")
     hasta_la_tarjeta(tg)
