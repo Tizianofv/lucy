@@ -1,8 +1,11 @@
 {% extends "base.html" %}{% set activo='facturas' %}
 {% from "_facturas_estilo.html" import estilo_de_facturas %}
+{% from "_hoja_de_cotizacion.html" import estilo_de_la_hoja %}
+{% from "_hoja_de_factura.html" import estilo_de_la_factura %}
+{% from "_vista_previa_de_factura.html" import la_hoja, guion_de_la_vista_previa %}
 {% block titulo %}Nueva factura{% endblock %}
 {% block cuerpo %}
-{{ estilo_de_facturas() }}
+{{ estilo_de_facturas() }}{{ estilo_de_la_hoja() }}{{ estilo_de_la_factura() }}
 {#- NUEVA FACTURA (pieza 4 del diseño «Facturas», 21-oct-2026), en tres pasos que dibuja el SERVIDOR (sin JavaScript):
     `cliente` (a quién), `escoger` (qué sesiones o trabajos) y `escribir` (renglones y datos). Cada paso es una
     dirección con enteros y referencias del registro; lo escrito en el último viaja solo en el POST. El tipo de cada
@@ -76,6 +79,8 @@
 <div class="tarjeta" data-ligadas><b>Sesiones y trabajos de esta factura</b>
   {% for c in elegidas %}<div class="sesion"><span class="que">{% if c.fecha %}<b>{{ c.fecha|dia_corto }}</b> {% endif %}{{ c.concepto or c.sala or '' }}{% if c.codigo %}<span class="cod">{{ c.codigo }}</span>{% endif %}{% if c.es_trabajo %}<span class="etiq">Trabajo</span>{% endif %}</span></div>{% endfor %}
 </div>
+<div class="dos">
+<div>
 <form method="post" action="/facturas/nueva" data-factura-nueva>
   <input type="hidden" name="cliente" value="{{ cliente_id }}">
   {% if proyecto %}<input type="hidden" name="proyecto" value="{{ proyecto.id }}">{% endif %}
@@ -114,5 +119,9 @@
     <button>Guardar como borrador</button><a class="boton-linea" href="/facturas">Cancelar</a>
   </div>
 </form>
+</div>
+<div class="hoja-caja" data-hoja>{% if vista %}{{ la_hoja(vista) }}{% endif %}</div>
+</div>
 {% endif %}
 {% endblock %}
+{% block guion %}{% if paso == 'escribir' %}{{ guion_de_la_vista_previa() }}{% endif %}{% endblock %}

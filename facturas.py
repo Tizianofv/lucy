@@ -76,35 +76,42 @@ def marca_de_la_factura(estado: str) -> str | None:
     return MARCA_DE_ANULADA if estado == "anulada" else cz.MARCA_DE_BORRADOR
 
 
-def hoja_de_factura(f: dict) -> dict:
-    """Los textos de la hoja de una factura. `f` es lo que devuelve `db.factura_por_id`: `estado`, `codigo`,
-    `para_nombre`, `rnc_cedula`, `fecha`, `ncf`, `ncf_tipo`, `itbis_pct`, `descuento`, `motivo_anulacion`,
-    `renglones` (con `descripcion`, `detalle`, `monto`) y los totales (`subtotal`/`itbis`/`total` y, con NCF,
-    `retencion_isr`/`itbis_retenido`/`total_a_pagar`). Función pura."""
-    etiquetas = ETIQUETAS_DEL_PARA_DE_LA_FACTURA
-    estado = f["estado"]
-    tiene_numero = estado in ("emitida", "anulada") and bool(f.get("codigo"))
-    para = [(etiquetas["para"], f["para_nombre"])]
-    if f.get("rnc_cedula"):
-        para.append((etiquetas["rnc_cedula"], f["rnc_cedula"]))
-    para.append((etiquetas["fecha"], cz.fecha_en_palabras(f["fecha"])))
-    if f.get("ncf"):
-        para.append((etiquetas["ncf"], f["ncf"]))
-        if f.get("ncf_tipo"):
-            para.append((etiquetas["ncf_tipo"], f["ncf_tipo"]))
-    if estado == "anulada":
-        para.append((etiquetas["estado"], MARCA_DE_ANULADA))
-        para.append((etiquetas["motivo"], f["motivo_anulacion"]))
-    renglones = []
-    for r in f["renglones"]:
-        # Un renglón de antes del detalle (pieza D2) no trae cantidad ni precio unitario: se lee 1 × su monto, sin
-        # unidad, igual que lo lee la puerta (`db._factura_completa`).
-        viejo = r.get("cantidad") is None or r.get("precio_unitario") is None
-        renglones.append({
-            "descripcion": r["descripcion"], "detalle": r.get("detalle") or "",
-            "cantidad": cantidad_en_texto(1 if viejo else r["cantidad"], None if viejo else r.get("unidad")),
-            "precio_unitario": cz.dinero_en_pesos(r["monto"] if viejo else r["precio_unitario"]),
-            "monto": cz.dinero_en_pesos(r["monto"])})
+def _armar_la_hoja(*, estado: str, codigo, para: list, renglones: list, totales: list) -> dict:
+    """Las piezas fijas de la hoja (título, número o BORRADOR, marca, encabezados y pie) con lo que le den ya
+    escrito. La usan la hoja de una factura guardada (`hoja_de_factura`) y la de lo que se está escribiendo
+    (`hoja_de_lo_escrito`), para que las dos digan lo mismo."""
+    tiene_numero = estado in ("emitida", "anulada") and bool(codigo)
+    return {
+        "titulo": TITULO_DE_LA_FACTURA,
+        "codigo": codigo if tiene_numero else CODIGO_DEL_BORRADOR,
+        "marca": marca_de_la_factura(estado),
+        "para": para,
+        "encabezados": ENCABEZADOS_DE_LA_FACTURA,
+        "renglones": renglones,
+        "totales": totales,
+        "pie": cz.PIE_DEL_ESTUDIO,
+    }
+
+
+def renglon_de_la_hoja(r: dict) -> dict:
+    """Un renglón de la hoja, ya escrito: servicio, su descripción, la cantidad con su unidad, el precio de una
+    unidad y su total. `r` es un renglón de los que devuelve `db.factura_por_id` o la puerta al validar (con
+    `cantidad`, `unidad`, `precio_unitario` y `monto`)."""
+    # Un renglón de antes del detalle (pieza D2) no trae cantidad ni precio unitario: se lee 1 × su monto, sin
+    # unidad, igual que lo lee la puerta (`db._factura_completa`).
+    viejo = r.get("cantidad") is None or r.get("precio_unitario") is None
+    return {
+        "descripcion": r["descripcion"], "detalle": r.get("detalle") or "",
+        "cantidad": cantidad_en_texto(1 if viejo else r["cantidad"], None if viejo else r.get("unidad")),
+        "precio_unitario": cz.dinero_en_pesos(r["monto"] if viejo else r["precio_unitario"]),
+        "monto": cz.dinero_en_pesos(r["monto"])}
+
+
+def totales_de_la_hoja(f: dict) -> list[dict]:
+    """Las líneas del total de la hoja, en su orden: subtotal y descuento si los hay, el ITBIS si lleva, el TOTAL
+    y —solo con comprobante (NCF)— la retención del ISR, el ITBIS retenido y el total a pagar. Las cifras llegan
+    calculadas (`db.totales_de_factura`); esto solo las escribe. La usan la hoja de una factura guardada y la de lo
+    que se está escribiendo, para que las dos digan lo mismo."""
     totales = []
     descuento = Decimal(f.get("descuento") or 0)
     if f.get("itbis_pct") is not None or descuento > 0:
@@ -125,16 +132,38 @@ def hoja_de_factura(f: dict) -> dict:
             {"etiqueta": ETIQUETA_DE_LA_RETENCION_DEL_ISR, "total": cz.dinero_en_pesos(f["retencion_isr"])},
             {"etiqueta": ETIQUETA_DEL_ITBIS_RETENIDO, "total": cz.dinero_en_pesos(f["itbis_retenido"])},
             {"etiqueta": ETIQUETA_DEL_TOTAL_A_PAGAR, "total": cz.dinero_en_pesos(f["total_a_pagar"])}]
-    return {
-        "titulo": TITULO_DE_LA_FACTURA,
-        "codigo": f["codigo"] if tiene_numero else CODIGO_DEL_BORRADOR,
-        "marca": marca_de_la_factura(estado),
-        "para": para,
-        "encabezados": ENCABEZADOS_DE_LA_FACTURA,
-        "renglones": renglones,
-        "totales": totales,
-        "pie": cz.PIE_DEL_ESTUDIO,
-    }
+    return totales
+
+
+def hoja_de_factura(f: dict) -> dict:
+    """Los textos de la hoja de una factura. `f` es lo que devuelve `db.factura_por_id`: `estado`, `codigo`,
+    `para_nombre`, `rnc_cedula`, `fecha`, `ncf`, `ncf_tipo`, `itbis_pct`, `descuento`, `motivo_anulacion`,
+    `renglones` (con `descripcion`, `detalle`, `monto`) y los totales (`subtotal`/`itbis`/`total` y, con NCF,
+    `retencion_isr`/`itbis_retenido`/`total_a_pagar`). Función pura."""
+    etiquetas = ETIQUETAS_DEL_PARA_DE_LA_FACTURA
+    estado = f["estado"]
+    para = [(etiquetas["para"], f["para_nombre"])]
+    if f.get("rnc_cedula"):
+        para.append((etiquetas["rnc_cedula"], f["rnc_cedula"]))
+    para.append((etiquetas["fecha"], cz.fecha_en_palabras(f["fecha"])))
+    if f.get("ncf"):
+        para.append((etiquetas["ncf"], f["ncf"]))
+        if f.get("ncf_tipo"):
+            para.append((etiquetas["ncf_tipo"], f["ncf_tipo"]))
+    if estado == "anulada":
+        para.append((etiquetas["estado"], MARCA_DE_ANULADA))
+        para.append((etiquetas["motivo"], f["motivo_anulacion"]))
+    renglones = [renglon_de_la_hoja(r) for r in f["renglones"]]
+    return _armar_la_hoja(estado=estado, codigo=f.get("codigo"), para=para, renglones=renglones,
+                          totales=totales_de_la_hoja(f))
+
+
+def hoja_de_lo_escrito(*, para: list, renglones: list, totales: list) -> dict:
+    """La hoja de lo que se está escribiendo en el formulario (pieza 4b): SIEMPRE un borrador —«BORRADOR» en el
+    lugar del número y su marca—, con lo que ya vale de lo escrito. `para`, `renglones` y `totales` llegan ya
+    escritos; esto solo les pone las piezas fijas, las MISMAS de la hoja de una factura guardada. Función pura:
+    no calcula dinero y no guarda nada."""
+    return _armar_la_hoja(estado="borrador", codigo=None, para=para, renglones=renglones, totales=totales)
 
 
 def textos_de_la_factura(hoja: dict) -> list[str]:

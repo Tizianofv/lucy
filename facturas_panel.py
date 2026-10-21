@@ -20,6 +20,7 @@ from decimal import Decimal
 
 import cotizaciones as cz
 import db.db as db
+import facturas as fa
 
 # Cuántos renglones en blanco se dibujan (sin JavaScript no hay botón de «otro renglón»). Es una decisión de la
 # pantalla, no una medición.
@@ -236,6 +237,135 @@ def valores_del_formulario(*, factura: dict | None = None, escrito: dict | None 
 
 def _iso(fecha) -> str:
     return fecha.isoformat() if isinstance(fecha, date) else str(fecha or "")
+
+
+# ── La vista previa de lo que se está escribiendo (pieza 4b) ─────────────────────────────────────
+
+_CASILLAS_DE_UN_RENGLON_ESCRITO = ("descripcion", "detalle", "cantidad", "unidad", "precio_unitario")
+
+
+def campos_de_la_vista_previa(valores: dict) -> dict:
+    """De las casillas del formulario (`valores_del_formulario`) a la forma que lee la vista previa, que es la misma
+    que lee la puerta al guardar."""
+    return {
+        "para_nombre": valores["para_nombre"], "fecha": valores["fecha"],
+        "itbis_pct": str(db.ITBIS_DE_FACTURA) if valores["itbis"] else None,
+        "ncf": valores["ncf"], "ncf_tipo": valores["ncf_tipo"], "rnc_cedula": valores["rnc_cedula"],
+        "descuento": valores["descuento"],
+        "renglones": [{"descripcion": r["descripcion"], "detalle": r["detalle"], "cantidad": r["cantidad"],
+                       "unidad": r["unidad"], "precio_unitario": r["precio"]} for r in valores["renglones"]]}
+
+
+def _renglon_escrito(r: dict) -> dict:
+    """Un renglón del formulario como se manda a la puerta: la cantidad y el precio SIEMPRE (vacíos, si lo están),
+    el detalle y la unidad solo si tienen algo —igual que `renglones_del_formulario`—."""
+    limpio = {"descripcion": texto_de(r.get("descripcion")), "cantidad": texto_de(r.get("cantidad")),
+              "precio_unitario": texto_de(r.get("precio_unitario"))}
+    if texto_de(r.get("detalle")).strip():
+        limpio["detalle"] = texto_de(r.get("detalle"))
+    if texto_de(r.get("unidad")).strip():
+        limpio["unidad"] = texto_de(r.get("unidad"))
+    return limpio
+
+
+def _renglon_sin_poder_leerlo(r: dict) -> dict:
+    """El renglón como se escribió, para pintarlo cuando todavía no vale: sin cifras inventadas."""
+    cantidad = texto_de(r.get("cantidad")).strip()
+    unidad = texto_de(r.get("unidad")).strip()
+    return {"descripcion": texto_de(r.get("descripcion")), "detalle": texto_de(r.get("detalle")),
+            "cantidad": f"{cantidad} {unidad}".strip(), "precio_unitario": texto_de(r.get("precio_unitario")).strip(),
+            "monto": ""}
+
+
+def vista_previa_de_factura(campos: dict, *, hoy: date | None = None) -> dict:
+    """La hoja de lo que se está escribiendo, para verla al lado del formulario: `{"hoja", "notas"}`, donde `hoja` es
+    lo que dibuja la misma macro que la hoja de verdad y `notas` son las cosas que todavía no valen, en palabras.
+
+    NO guarda nada y NO tiene cuenta propia: cada renglón pasa por `db._renglones_de_factura` (la misma puerta y el
+    mismo `total_del_renglon` que al guardar) y los totales salen de `db.totales_de_factura`, la única cuenta; con
+    todo lo escrito válido, la hoja es `facturas.hoja_de_factura` sobre los mismos datos que guardaría la puerta.
+    Lo que todavía no vale (una cantidad vacía, un precio que no se entiende, el NCF sin su tipo…) no se inventa:
+    la nota dice qué pasa y no se pintan los totales."""
+    etiquetas = fa.ETIQUETAS_DEL_PARA_DE_LA_FACTURA
+    notas = []
+    escritos = [r for r in campos["renglones"]
+                if any(texto_de(r.get(c)).strip() for c in _CASILLAS_DE_UN_RENGLON_ESCRITO)]
+    if len(escritos) > db.LIMITE_DE_RENGLONES_DE_FACTURA:
+        notas.append(f"La factura lleva demasiados renglones: el tope es {db.LIMITE_DE_RENGLONES_DE_FACTURA}.")
+    if not escritos:
+        notas.append("Todavía no hay ningún renglón.")
+    renglones, parseados = [], []
+    for n, r in enumerate(escritos, start=1):
+        try:
+            unico, = db._renglones_de_factura([_renglon_escrito(r)])
+        except db.FacturaNoVale as e:
+            notas.append(f"Renglón {n}: {e}.")
+            renglones.append(_renglon_sin_poder_leerlo(r))
+        else:
+            parseados.append(unico)
+            renglones.append(fa.renglon_de_la_hoja(unico))
+    el_nombre = texto_de(campos.get("para_nombre")).strip()
+    if el_nombre:
+        try:                                  # el mismo texto que guardaría la puerta (rayas y comillas, largos)
+            el_nombre = db._texto_de_factura(el_nombre, "para_nombre", db.LARGOS_DE_FACTURA["para_nombre"])
+        except db.FacturaNoVale as e:
+            notas.append(f"A nombre de: {e}.")
+    else:
+        notas.append("Falta a nombre de quién va la factura.")
+    para = [(etiquetas["para"], el_nombre)]
+    rnc = texto_de(campos.get("rnc_cedula")).strip()
+    rnc_que_vale = None
+    if rnc:
+        try:
+            rnc_que_vale = db.rnc_o_cedula_que_vale(rnc)
+        except db.FacturaNoVale as e:
+            notas.append(f"El RNC o la cédula: {e}.")
+        else:
+            para.append((etiquetas["rnc_cedula"], rnc_que_vale))
+    escrito_la_fecha = texto_de(campos.get("fecha")).strip()
+    la_fecha = hoy or db.hoy_rd()
+    if escrito_la_fecha:
+        try:
+            la_fecha = db._fecha_de_factura(escrito_la_fecha)
+        except db.FacturaNoVale as e:
+            notas.append(f"La fecha: {e}.")
+            para.append((etiquetas["fecha"], escrito_la_fecha))
+        else:
+            para.append((etiquetas["fecha"], cz.fecha_en_palabras(la_fecha)))
+    else:
+        para.append((etiquetas["fecha"], cz.fecha_en_palabras(la_fecha)))
+    ncf = ncf_tipo = None
+    try:
+        ncf, ncf_tipo = db._ncf_de_factura(campos.get("ncf"), campos.get("ncf_tipo"))
+    except db.FacturaNoVale as e:
+        notas.append(f"El NCF: {e}.")
+    if ncf:
+        para.append((etiquetas["ncf"], ncf))
+        if ncf_tipo:
+            para.append((etiquetas["ncf_tipo"], ncf_tipo))
+    try:
+        itbis_pct = db._itbis_de_factura(campos.get("itbis_pct"))
+    except db.FacturaNoVale as e:
+        itbis_pct = None
+        notas.append(f"El ITBIS: {e}.")
+    try:
+        descuento = db._descuento_de_factura(campos.get("descuento"))
+    except db.FacturaNoVale as e:
+        descuento = None
+        notas.append(f"El descuento: {e}.")
+    if notas:
+        return {"hoja": fa.hoja_de_lo_escrito(para=para, renglones=renglones, totales=[]), "notas": notas}
+    montos = [r["monto"] for r in parseados]
+    try:
+        db._revisar_el_descuento(descuento, montos)
+    except db.FacturaNoVale as e:
+        return {"hoja": fa.hoja_de_lo_escrito(para=para, renglones=renglones, totales=[]),
+                "notas": [f"El descuento: {e}."]}
+    f = {"estado": "borrador", "codigo": None, "para_nombre": para[0][1], "rnc_cedula": rnc_que_vale,
+         "fecha": la_fecha, "ncf": ncf, "ncf_tipo": ncf_tipo, "itbis_pct": itbis_pct, "descuento": descuento,
+         "motivo_anulacion": None, "renglones": parseados}
+    f.update(db.totales_de_factura(montos, itbis_pct, descuento, con_ncf=ncf is not None))
+    return {"hoja": fa.hoja_de_factura(f), "notas": []}
 
 
 def renglones_de_una_opcion(cotizacion: dict | None, opcion) -> list[dict]:

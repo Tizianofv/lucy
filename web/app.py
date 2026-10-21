@@ -2648,6 +2648,9 @@ async def _contexto_de_factura_nueva(*, cliente, proyecto, cotizacion, opcion, r
         escrito=escrito, nombre_del_cliente=ctx["cliente_nombre"], desde_la_opcion=desde_la_opcion,
         desde_las_sesiones=desde_las_sesiones, descuento_de_las_sesiones=ctx["descuento_de_las_sesiones"],
         hoy=ctx["hoy"])
+    # La hoja de lo que hay escrito, para verla al lado (pieza 4b). El guion la refresca al escribir pidiéndosela a
+    # la misma cuenta; sin JavaScript se ve esta.
+    ctx["vista"] = fp.vista_previa_de_factura(fp.campos_de_la_vista_previa(ctx["valores"]), hoy=ctx["hoy"])
     return ctx
 
 
@@ -2688,6 +2691,21 @@ async def lista_de_facturas(request: Request, estado: Navegacion[str] = ""):
     return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "facturas.html", {
         "filas": [fp.fila_de_la_lista(f, nombres, pagos.get(f["id"])) for f in filas], "filtro": filtro,
         "sin_tabla": sin_tabla, "estados": fp.ETIQUETA_DEL_FILTRO}))
+
+
+@app.post("/facturas/vista-previa", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def vista_previa_de_una_factura(request: Request):
+    """La hoja de lo que se está escribiendo en el formulario de una factura («Nueva factura», el paso de escribir, o
+    «Corregir el borrador»), para verla al lado mientras se escribe (pieza 4b). SOLO LEE: no escribe en la base ni le
+    pide nada a la App; las cifras salen de `db.totales_de_factura` —la cuenta única— por la misma puerta que al
+    guardar, y lo que todavía no vale se dice suave, sin inventar cifras."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    campos = fp.campos_del_formulario(await request.form())
+    html = plantillas.env.get_template("_vista_previa_de_factura.html").module.la_hoja(
+        fp.vista_previa_de_factura(campos))
+    return Response(html, media_type="text/html; charset=utf-8", headers={"Cache-Control": "private, no-store"})
 
 
 @app.get("/facturas/nueva", response_class=HTMLResponse)
@@ -2835,6 +2853,10 @@ async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", 
             "sin_detalle": any(f.get("sin_detalle") for f in filas)}
     de_mas = fp.renglones_de_una_sesion(por_ref[agregar]) if borrador and agregar in por_ref else []
     se_corrige = borrador and (bool(corregir) or escrito is not None or bool(de_mas))
+    valores = fp.valores_del_formulario(factura=f, escrito=escrito, renglones_de_mas=de_mas) if se_corrige else None
+    # La hoja de lo que hay en el formulario de corregir, al lado (pieza 4b): la refresca el guion al escribir, por la
+    # misma ruta y la misma cuenta.
+    vista = fp.vista_previa_de_factura(fp.campos_de_la_vista_previa(valores)) if se_corrige else None
     drive_de_la_factura = await _estado_del_drive_de_la_factura(f["id"])
     envios_de_la_factura = await _envios_de_la_factura(f["id"])
     return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "factura.html", {
@@ -2844,7 +2866,7 @@ async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", 
         "cotizacion": cotizacion, "ligas": ligas_leidas, "oferta": oferta, "agregado": bool(de_mas),
         "confirmar": confirmar if confirmar in CONFIRMACIONES_DE_FACTURA.get(estado, ()) else "",
         "se_corrige": se_corrige,
-        "valores": fp.valores_del_formulario(factura=f, escrito=escrito, renglones_de_mas=de_mas) if se_corrige else None,
+        "valores": valores, "vista": vista,
         "candado": fp.candado(f["cambiado_en"]), "errores": list(errores), "motivo_escrito": motivo_escrito,
         # el proyecto que la persona escogió y se rechazó (`(valor,)`), o el que la factura tiene
         "proyecto_marcado": f["proyecto_id"] if proyecto_escrito is None else proyecto_escrito[0],
