@@ -298,6 +298,7 @@ def test_quien_la_hizo_es_la_casa_con_su_persona_o_natalia_sin_ella():
     _rechaza(con, "facturas", **_borrador(hecha_por="casa", hecha_por_chat_id=None))
     _rechaza(con, "facturas", **_borrador(hecha_por="natalia", hecha_por_chat_id=7))
     _rechaza(con, "facturas", **_borrador(hecha_por="rosi", hecha_por_chat_id=7))
+    _rechaza(con, "facturas", **_borrador(hecha_por="rosi", hecha_por_chat_id=None))   # solo el vocabulario la frena
 
 
 # Ligas opcionales a proyecto y cotización --------------------------------------------------------

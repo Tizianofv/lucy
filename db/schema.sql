@@ -630,8 +630,7 @@ CREATE TABLE facturas (
   CONSTRAINT facturas_ncf_completo
     CHECK ((ncf IS NULL) = (ncf_tipo IS NULL)),
   CONSTRAINT facturas_ncf_normalizado
-    CHECK (ncf IS NULL OR (ncf = upper(ncf) AND ncf = trim(ncf) AND ncf NOT LIKE '% %' AND
-                           length(ncf) BETWEEN 1 AND 20)),
+    CHECK (ncf IS NULL OR (ncf = upper(ncf) AND ncf NOT LIKE '% %' AND length(ncf) BETWEEN 1 AND 20)),
   CONSTRAINT facturas_ncf_tipo_valido
     CHECK (ncf_tipo IS NULL OR length(trim(ncf_tipo)) BETWEEN 1 AND 20),
   CONSTRAINT facturas_rnc_cedula_valido
