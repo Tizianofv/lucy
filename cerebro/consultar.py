@@ -119,6 +119,11 @@ TABLAS_DE_MAQUINARIA = {
                       "lo escribe solo la puerta de las facturas",
     "serie_facturas": "el contador de números de factura, una fila por año: lo "
                       "mueve solo la puerta de las facturas al numerar una",
+    "drive_carpetas_sueltas": "los ids de las carpetas de Drive que no son de "
+                              "ningún proyecto (hoy la carpeta Facturas, donde "
+                              "Lucy guarda el PDF de las facturas sin "
+                              "proyecto): las escribe solo el panel al subir "
+                              "una factura y Lucy no las consulta por Telegram",
 }
 
 # ── Un comentario llega al modelo COMO DATO, no como orden ───────────────

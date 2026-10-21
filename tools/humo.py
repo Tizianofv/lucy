@@ -146,6 +146,26 @@ async def _tablas_de_facturas():
         return filas
 
 
+async def _drive_de_las_facturas():
+    """Los SELECT de lo que la pieza 8 de las facturas agregó (21-oct-2026), SIN tolerancia: las cuatro columnas de Drive de
+    `facturas` (`drive_archivo_id`, `drive_anulada_archivo_id`, `drive_proyecto_id`, `drive_error`), `carpeta_facturas_id` de
+    `drive_de_proyectos` y la tabla `drive_carpetas_sueltas`. La lectura de una factura (`factura_por_id`) NO las nombra, y la
+    del estado de Drive (`db.drive_de_factura`) TOLERA que falten (devuelve `None` y la página sale sin el bloque), así que esta
+    es la línea que dice si la migración `db/migrations/2026-10-21_facturas_drive.sql` no se aplicó. Son LECTURAS; la subida a
+    Drive no se ejerce acá."""
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=db.dict_row)
+        filas = {}
+        await cur.execute("SELECT count(drive_archivo_id) AS emitidas, count(drive_anulada_archivo_id) AS anuladas, "
+                          "count(drive_proyecto_id) AS con_proyecto, count(drive_error) AS con_error FROM facturas")
+        filas["facturas con Drive"] = dict(await cur.fetchone())
+        await cur.execute("SELECT count(carpeta_facturas_id) AS n FROM drive_de_proyectos")
+        filas["drive_de_proyectos con carpeta de facturas"] = (await cur.fetchone())["n"]
+        await cur.execute("SELECT count(*) AS n FROM drive_carpetas_sueltas")
+        filas["drive_carpetas_sueltas"] = (await cur.fetchone())["n"]
+        return filas
+
+
 async def main() -> int:
     if not os.environ.get("DATABASE_URL", "").strip():
         print("Falta DATABASE_URL.", file=sys.stderr)
@@ -270,6 +290,10 @@ async def main() -> int:
         # y las demás) no se ejercen acá.
         ("factura_por_id", lambda: db.factura_por_id(0)),
         ("facturas_para_la_lista", lambda: db.facturas_para_la_lista()),
+        # El Drive de las facturas (pieza 8): ver `_drive_de_las_facturas`, y la lectura de su estado con un id que no
+        # existe. LECTURAS: subir y marcar no se ejercen acá (humo.py no escribe en producción).
+        ("columnas y tablas de Drive de las facturas (sin tolerancia)", _drive_de_las_facturas),
+        ("drive_de_factura", lambda: db.drive_de_factura(0)),
     ]
 
     rojas = []

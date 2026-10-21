@@ -510,7 +510,20 @@ CREATE TABLE drive_de_proyectos (
   carpeta_proyecto_id    TEXT NOT NULL,
   carpeta_cotizaciones_id TEXT NOT NULL,
   nombre_puesto          TEXT NOT NULL,
+  carpeta_facturas_id    TEXT,
   creado_en              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- EL DRIVE DE LAS FACTURAS (pieza 8 del diseño «Facturas», 21-oct-2026; migración 2026-10-21_facturas_drive.sql, cuya
+-- cabecera explica cada columna). `drive_de_proyectos.carpeta_facturas_id` es la subcarpeta `facturas` de cada proyecto;
+-- `facturas.drive_archivo_id` y `drive_anulada_archivo_id` son los PDF de la emitida y de la anulada;
+-- `drive_proyecto_id` es el proyecto que la factura tenía cuando se subió (NULL = la carpeta «Facturas»);
+-- `drive_error` es la causa, en frase fija, del último intento que falló. `drive_carpetas_sueltas` guarda por clave las
+-- carpetas de Drive que no son de ningún proyecto (hoy solo `facturas`).
+CREATE TABLE drive_carpetas_sueltas (
+  clave      TEXT PRIMARY KEY,
+  carpeta_id TEXT NOT NULL,
+  creado_en  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- LAS CONSULTAS DE NATALIA (pieza L3 del diseño «Natalia y los Proyectos», 18-oct-2026; migración
@@ -602,6 +615,10 @@ CREATE TABLE facturas (
   anulada_en           TIMESTAMPTZ,
   anulada_por_chat_id  BIGINT,
   motivo_anulacion     TEXT,
+  drive_archivo_id         TEXT,
+  drive_anulada_archivo_id TEXT,
+  drive_proyecto_id        BIGINT,
+  drive_error              TEXT,
   CONSTRAINT facturas_numero_unico
     UNIQUE (anio, numero),
   CONSTRAINT facturas_ncf_unico

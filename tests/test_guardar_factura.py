@@ -160,6 +160,8 @@ class _Mundo:
                     con.execute(ct._a_sqlite(s))
         for s in ft._sentencias_que_corren(ft._texto_migracion()):
             con.execute(ft._a_sqlite(s))
+        for s in ft._sentencias_que_corren(ft._texto_migracion_de_drive()):       # pieza 8: el Drive de las facturas
+            con.execute(ft._a_sqlite(s))
         dos_opciones = json.dumps({"opciones": [{"nombre": "A", "renglones": []}, {"nombre": "B", "renglones": []}]})
         una_opcion = json.dumps({"opciones": [{"nombre": "A", "renglones": []}]})
         for cid, proyecto, contenido in ((1, 1, dos_opciones), (2, 2, una_opcion), (3, 1, una_opcion)):
@@ -900,7 +902,11 @@ def test_las_sentencias_que_escriben_facturas_son_las_de_la_puerta_y_cumplen_las
         db.SENTENCIA_DE_DESLIGAR, db.SENTENCIA_DE_CORREGIR_BORRADOR, db.SENTENCIA_DE_PONER_PROYECTO,
         db.SENTENCIA_DE_PONER_COTIZACION, db.SENTENCIA_DE_TOCAR_BORRADOR, db.SENTENCIA_DE_EMITIR,
         db.SENTENCIA_DE_ANULAR, db.SENTENCIA_DE_SOLTAR_ENVIOS, db.SENTENCIA_DE_DESCARTAR_LIGAS,
-        db.SENTENCIA_DE_DESCARTAR_RENGLONES, db.SENTENCIA_DE_DESCARTAR_FACTURA))
+        db.SENTENCIA_DE_DESCARTAR_RENGLONES, db.SENTENCIA_DE_DESCARTAR_FACTURA,
+        # pieza 8 (Drive): anotar dónde quedó el PDF y el error del intento; no piden sesión ni dejan huella (como los de
+        # las cotizaciones: los llama una ruta que ya la pidió) y todas dicen el estado en su WHERE
+        db.SENTENCIA_DE_MARCAR_FACTURA_EN_DRIVE, db.SENTENCIA_DE_MARCAR_ANULADA_EN_DRIVE,
+        db.SENTENCIA_DE_ERROR_DE_DRIVE_DE_FACTURA))
     assert textos == esperadas, [h[:2] for h in hallados]
     assert _lo_que_viola(hallados) == []
 
@@ -1004,7 +1010,12 @@ def _columnas_reales(mundo) -> list[str]:
 
 def test_el_select_de_la_factura_lee_todas_las_columnas_de_la_tabla_y_ninguna_mas(mundo):
     pedidas = re.search(r"SELECT (.*) FROM facturas", db.SENTENCIA_DE_LEER_FACTURA).group(1).split(", ")
-    assert sorted(pedidas) == sorted(_columnas_reales(mundo))
+    # Las columnas de Drive (pieza 8) las lee APARTE `db.drive_de_factura`, que tolera que falten: la factura entera se lee
+    # igual con la migración de Drive sin aplicar. Tiene que pedir TODAS las que hay de Drive.
+    drive = [c for c in _columnas_reales(mundo) if c.startswith("drive_")]
+    leidas_por_drive = re.search(r"SELECT (.*) FROM facturas", db.SENTENCIA_DE_LEER_EL_DRIVE_DE_FACTURA).group(1).split(", ")
+    assert drive and set(drive) <= set(leidas_por_drive) and not set(drive) & set(pedidas)
+    assert sorted(pedidas) == sorted(c for c in _columnas_reales(mundo) if c not in drive)
 
 
 def test_cada_columna_de_facturas_esta_decidida_corregible_o_manejada_por_otra_funcion(mundo):
@@ -1014,7 +1025,8 @@ def test_cada_columna_de_facturas_esta_decidida_corregible_o_manejada_por_otra_f
         "id", "anio", "numero", "estado", "emitida_en",                                   # emitir
         "anulada_en", "anulada_por_chat_id", "motivo_anulacion",                           # anular
         "proyecto_id", "cotizacion_id", "cotizacion_opcion",                               # poner_proyecto / poner_cotizacion
-        "hecha_por", "hecha_por_chat_id", "creado_en", "cambiado_en"}                      # crear / todas
+        "hecha_por", "hecha_por_chat_id", "creado_en", "cambiado_en",                      # crear / todas
+        "drive_archivo_id", "drive_anulada_archivo_id", "drive_proyecto_id", "drive_error"}   # Drive (pieza 8)
     assert corregibles <= set(_columnas_reales(mundo))
     assert set(_columnas_reales(mundo)) == corregibles | de_otra_funcion
     assert not corregibles & de_otra_funcion

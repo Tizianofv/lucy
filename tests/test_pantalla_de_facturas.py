@@ -188,7 +188,8 @@ def test_las_rutas_de_facturas_salen_de_lo_registrado_y_son_las_que_hay():
     assert ("GET", "/facturas/{fid}") in vistas and ("GET", "/facturas/{fid}/pdf") in vistas
     assert {p for m, p in vistas if m == "POST"} == {
         "/facturas/nueva", "/facturas/{fid}/corregir", "/facturas/{fid}/emitir", "/facturas/{fid}/anular",
-        "/facturas/{fid}/descartar", "/facturas/{fid}/ligar", "/facturas/{fid}/desligar", "/facturas/{fid}/proyecto"}
+        "/facturas/{fid}/descartar", "/facturas/{fid}/ligar", "/facturas/{fid}/desligar", "/facturas/{fid}/proyecto",
+        "/facturas/{fid}/drive"}
 
 
 def test_toda_ruta_de_facturas_esta_declarada_solo_para_la_casa():
@@ -808,7 +809,7 @@ def test_cada_ruta_que_escribe_llama_a_un_escritor_de_la_puerta_de_db():
     assert {"crear_borrador_de_factura", "emitir_factura", "anular_factura"} <= escritores
     ruta, todas = _funciones_de_facturas_en_app()
     posts = [r.endpoint.__name__ for r in rutas_de_facturas() if "POST" in r.methods]
-    assert len(posts) == 8, posts
+    assert len(posts) == 9, posts
     def llama_a(nombre_de_ruta):
         vistas, pendientes, llamadas = set(), [nombre_de_ruta], set()
         while pendientes:
@@ -823,7 +824,10 @@ def test_cada_ruta_que_escribe_llama_a_un_escritor_de_la_puerta_de_db():
                 if isinstance(c, ast.Call) and isinstance(c.func, ast.Name):
                     pendientes.append(c.func.id)
         return llamadas
-    for nombre in posts:
+    # «Subir a Drive» (pieza 8) es la única POST que no escribe una factura: sube un PDF y anota dónde quedó por
+    # `facturas_drive.subir`, cuyos escritores (`db.marcar_*_de_drive*`) no piden sesión (los llama una ruta que ya la pidió).
+    # Su prueba propia está en `tests/test_facturas_drive.py`.
+    for nombre in (p for p in posts if p != "volver_a_subir_una_factura_a_drive"):
         assert llama_a(nombre) & escritores, f"{nombre} no llama a ningún escritor de la puerta"
     # y ninguna ruta de lectura (GET) llama a un escritor
     for r in rutas_de_facturas():
@@ -1148,7 +1152,7 @@ def test_todo_post_de_facturas_da_401_sin_la_casa_y_no_escribe(pantalla):
     e = tgf.emitir(tgf.crear())
     b = tgf.crear(liga={"tipo": "sesion", "ref": "ses-b"})
     posts = [r for r in rutas_de_facturas() if "POST" in r.methods]
-    assert len(posts) == 8
+    assert len(posts) == 9
     antes = tgf.foto(pantalla)
     for sesion in (None, "ver", "ajena", "falsa"):
         for r in posts:

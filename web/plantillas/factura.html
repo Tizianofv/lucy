@@ -91,6 +91,15 @@
       {% endif %}
     </div>
 
+    {% if drive %}
+    <div class="tarjeta" data-drive="{{ drive.estado }}">
+      <b>Drive</b> <span class="etiq" data-drive-etiqueta>{{ drive.etiqueta }}</span>
+      <p data-drive-frase>{{ drive.frase }}</p>
+      {% for e in drive.enlaces %}<p><a href="{{ e.url }}" target="_blank" rel="noopener" data-drive-enlace>{{ e.etiqueta }}</a></p>{% endfor %}
+      {% if drive.boton %}<form method="post" action="/facturas/{{ f.id }}/drive" class="barra"><button class="linea" data-drive-boton>{{ drive.boton }}</button></form>{% endif %}
+    </div>
+    {% endif %}
+
     <div class="tarjeta" data-ligas>
       <b>Sesiones y trabajos</b>
       {% if ligas and ligas[0].leida == 'no_se_pudo' %}<p class="aviso" data-registro-no-contesta>No se pudo leer el registro ahora: no se muestran la fecha, el servicio ni el dinero de estas sesiones. Lo guardado en la factura es solo su código.</p>{% endif %}
