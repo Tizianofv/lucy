@@ -82,6 +82,10 @@ def api(pantalla, monkeypatch):  # noqa: F811
     monkeypatch.setattr(config, "NOMBRES_POR_CHAT", {DUENO: "Dueno Inventado", ROSI: "Rosi Inventada", BETO: "Beto Inventado"})
     monkeypatch.setattr(config, "CHAT_IDS_PERMITIDOS", (DUENO, ROSI, BETO))
     monkeypatch.setattr(config, "NOMBRE_DE_QUIEN_REVISA_LAS_FACTURAS", "Rosi Inventada")
+
+    async def persona(noco_id):                       # tres fichas existen en Noco (7 es la de siempre); la 99 no
+        return {"id": noco_id, "nombre": NOMBRE if noco_id == 7 else "Otro Cliente"} if noco_id in (7, 8, 9) else None
+    monkeypatch.setattr(noco_lectura, "persona", persona)
     return pantalla
 
 
