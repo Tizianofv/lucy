@@ -5,7 +5,7 @@ La regla la decidió Tiziano (`regla-de-tiziano.md`, 21-oct-2026, textual). Para
     bruto            = subtotal − descuento
     retención ISR    = redondeo a centavos de (bruto ÷ 0.85 − bruto)
     base del ITBIS   = bruto + retención
-    ITBIS            = 18 % de la base (solo si la factura lleva ITBIS)
+    ITBIS            = 18 % de la base (con NCF el ITBIS es obligatorio, pieza D4b)
     total            = base + ITBIS
     se retienen la retención y TODO el ITBIS
     total a pagar    = bruto
@@ -27,11 +27,13 @@ EN LA RED:
   5. EL PAGO (pieza 7) sigue midiendo «pagada» con las sesiones del Registro y no se rompe; con NCF la frase del ITBIS
      dice que se retiene completo (no que se cobra aparte, que mandaría a cobrarlo).
   6. LAS CIFRAS NO SE GUARDAN: no hay columnas de retención en `facturas`; salen de los renglones cada vez.
+  7. CON NCF SIN ITBIS NO EXISTE (D4b): la puerta la rechaza al crear y al corregir, también por el cuerpo que
+     comparte Natalia, y no escribe nada.
 
 FRONTERA, dicha una vez: SQLite y no Postgres (la pieza no trae migración: no hay nada nuevo que guardar); la App es un
-doble; se miran el texto del PDF y el HTML, no el aspecto. La pregunta abierta —una factura con NCF pero SIN ITBIS
-lleva la retención y paga el bruto— está construida como dice el encargo y probada aquí; la sala se la confirma a
-Tiziano.
+doble; se miran el texto del PDF y el HTML, no el aspecto. La pregunta que quedó abierta en D4 —una factura con NCF pero
+SIN ITBIS— la cerró Tiziano el 21-oct-2026: «Esa factura no existe». La puerta no la deja crear ni corregir (pieza D4b);
+lo que se prueba aquí es el rechazo.
 
 Correr:  python3 -m pytest tests/test_facturas_las_retenciones.py -q
 """
@@ -83,7 +85,7 @@ def test_el_ejemplo_aprobado_por_tiziano_da_exactamente_esas_cifras():
     ("0.01", "0.00"),            # 0.0117… → 0.01 − 0.01
 ])
 def test_la_retencion_es_el_bruto_entre_cero_ochenta_y_cinco_menos_el_bruto(bruto, retencion):
-    t = db.totales_de_factura([_centavos(bruto)], None, con_ncf=True)
+    t = db.totales_de_factura([_centavos(bruto)], db.ITBIS_DE_FACTURA, con_ncf=True)
     assert t["retencion_isr"] == _centavos(retencion), t
 
 
@@ -96,11 +98,10 @@ def test_el_itbis_va_sobre_el_bruto_mas_la_retencion_y_no_sobre_el_bruto():
 @pytest.mark.parametrize("montos,descuento", [
     (["10000.00"], None), (["10000.00"], "2000.00"), (["1234.56", "0.44"], None),
     (["0.01"], None), (["99999999.99", "99999999.99"], "1.00")])
-@pytest.mark.parametrize("pct", [None, "18"])
-def test_lo_que_se_retiene_es_la_retencion_mas_todo_el_itbis_y_asi_queda_el_bruto(montos, descuento, pct):
+def test_lo_que_se_retiene_es_la_retencion_mas_todo_el_itbis_y_asi_queda_el_bruto(montos, descuento):
     """La resta que la hoja promete: total − retención − ITBIS retenido = total a pagar = bruto. Se comprueba en las
-    cifras de la cuenta, no en una frase."""
-    t = db.totales_de_factura([_centavos(m) for m in montos], None if pct is None else _centavos(pct),
+    cifras de la cuenta, no en una frase. Siempre con el ITBIS que toda factura con NCF lleva (pieza D4b)."""
+    t = db.totales_de_factura([_centavos(m) for m in montos], _centavos("18"),
                               None if descuento is None else _centavos(descuento), con_ncf=True)
     assert t["itbis_retenido"] == t["itbis"]
     assert t["total"] - t["retencion_isr"] - t["itbis_retenido"] == t["total_a_pagar"] == t["neto"]
@@ -122,13 +123,32 @@ def test_sin_ncf_la_cuenta_es_la_de_la_d3_y_las_tres_cifras_nuevas_son_cero():
                 assert ahora["total_a_pagar"] == ahora["total"]
 
 
-def test_con_ncf_y_sin_itbis_lleva_la_retencion_del_isr_y_paga_el_bruto():
-    """LA PREGUNTA ABIERTA del encargo: con NCF y sin ITBIS, la retención entra igual, no hay ITBIS que retener y el
-    total a pagar es el bruto. Construido así; la sala se lo confirma a Tiziano."""
-    t = db.totales_de_factura([Decimal("10000.00")], None, con_ncf=True)
-    assert (t["itbis"], t["itbis_retenido"]) == (Decimal("0"), Decimal("0"))
-    assert (t["retencion_isr"], t["total"], t["total_a_pagar"]) == (
-        Decimal("1764.71"), Decimal("11764.71"), Decimal("10000.00"))
+def test_con_ncf_y_sin_itbis_la_puerta_no_la_deja_nacer(mundo):  # noqa: F811
+    """La pregunta de D4, cerrada por Tiziano (21-oct-2026): «Esa factura no existe». La puerta la rechaza al crear y
+    al corregir, en los dos sentidos (poner el NCF a una sin ITBIS, quitarle el ITBIS a una con NCF), y no escribe
+    nada. También por el cuerpo que comparte Natalia (`_crear_el_borrador`, `hecha_por='natalia'`)."""
+    antes = tgf.foto(mundo)
+    tgf.no_vale("ncf_sin_itbis", lambda: tgf.crear(ncf="B0100000001", ncf_tipo="Crédito fiscal"))
+    assert tgf.foto(mundo) == antes
+    con = tgf.crear(itbis_pct=18, ncf="B0100000002", ncf_tipo="Crédito fiscal")
+    sin = tgf.otra()
+    antes = tgf.foto(mundo)
+    tgf.no_vale("ncf_sin_itbis", lambda: tgf.correr(
+        db.corregir_borrador_de_factura(con["id"], tgf.CASA, con["cambiado_en"], {"itbis_pct": None})))
+    tgf.no_vale("ncf_sin_itbis", lambda: tgf.correr(
+        db.corregir_borrador_de_factura(sin["id"], tgf.CASA, sin["cambiado_en"],
+                                        {"ncf": "B0100000003", "ncf_tipo": "Consumo"})))
+    assert tgf.foto(mundo) == antes
+    with pytest.raises(db.FacturaNoVale) as e:
+        tgf.correr(db._crear_el_borrador(
+            hecha_por="natalia", chat_id=None, actor="natalia", motivo_de_la_huella="prueba",
+            cliente_noco_id=1001, para_nombre="Cliente de prueba",
+            renglones=[{"descripcion": "Ensayo", "monto": "1000.00"}], fecha="2026-10-21",
+            ligas=[{"tipo": "sesion", "ref": "ses-natalia"}], proyecto_id=None, cotizacion_id=None,
+            cotizacion_opcion=None, itbis_pct=None, descuento=None, ncf="B0100000004",
+            ncf_tipo="Crédito fiscal", rnc_cedula=None))
+    assert e.value.clave == "ncf_sin_itbis"
+    assert tgf.foto(mundo) == antes
 
 
 # ── 2. La hoja y el PDF ────────────────────────────────────────────────────────────────────────────

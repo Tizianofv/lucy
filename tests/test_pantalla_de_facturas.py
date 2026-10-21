@@ -413,6 +413,7 @@ def test_una_sesion_ya_facturada_se_dice_y_lo_escrito_no_se_pierde(pantalla):
     antes = tgf.foto(pantalla)
     r = crear_por_la_pantalla(refs=("11",), para_nombre="Otra Persona", **{"r-1-descripcion": "Lo que escribí",
                                                                           "r-1-precio": "1,234.50", "r-1-cantidad": "1",
+                                                                          "itbis": "18",
                                                                           "ncf": "B0100000009",
                                                                           "ncf_tipo": "Consumo"})
     assert r.status_code == 400
@@ -426,6 +427,7 @@ def test_una_sesion_ya_facturada_se_dice_y_lo_escrito_no_se_pierde(pantalla):
 
 @pytest.mark.parametrize("cambios,frase,casilla", [
     ({"ncf": "B0100000001", "ncf_tipo": ""}, "van juntos", "ncf"),
+    ({"ncf": "B0100000001", "ncf_tipo": "Crédito fiscal"}, "comprobante (NCF) lleva ITBIS", "itbis"),
     ({"ncf": "B01 ÉÉ", "ncf_tipo": "Consumo"}, "solo lleva letras y cifras", "ncf"),
     ({"rnc_cedula": "123"}, "9 cifras", "rnc_cedula"),
     ({"para_nombre": "   "}, "nombre de la persona", "para_nombre"),
@@ -436,6 +438,7 @@ def test_una_sesion_ya_facturada_se_dice_y_lo_escrito_no_se_pierde(pantalla):
     ({"r-1-precio": ""}, "falta el monto", None),
     ({"r-1-cantidad": "0"}, "mayor que cero", None),
     ({"r-1-cantidad": "1.2345"}, "más de tres decimales", None),
+    ({"r-1-cantidad": "1" * 30}, "demasiado grande", None),
     ({"r-1-cantidad": ""}, "falta la cantidad", None),
     ({"r-1-unidad": "x" * 21}, "demasiado larga", None),
     ({"r-1-descripcion": ""}, "falta la descripción", None),
@@ -456,9 +459,9 @@ def test_cada_razon_de_la_puerta_llega_a_la_persona_sin_guardar_nada_y_marcando_
 
 
 def test_un_ncf_repetido_se_dice_aunque_la_otra_este_anulada(pantalla):
-    crear_por_la_pantalla(refs=("11",), ncf="B0100000001", ncf_tipo="Crédito fiscal")
+    crear_por_la_pantalla(refs=("11",), itbis="18", ncf="B0100000001", ncf_tipo="Crédito fiscal")
     antes = tgf.foto(pantalla)
-    r = crear_por_la_pantalla(refs=("12",), ncf="B0100000001", ncf_tipo="Crédito fiscal")
+    r = crear_por_la_pantalla(refs=("12",), itbis="18", ncf="B0100000001", ncf_tipo="Crédito fiscal")
     assert r.status_code == 400 and "Ese NCF ya lo tiene otra factura" in r.text
     assert tgf.foto(pantalla) == antes
 
@@ -641,7 +644,7 @@ def test_una_emitida_y_una_anulada_no_se_corrigen_ni_se_ligan(pantalla):
 
 
 def test_anular_pide_motivo_y_la_deja_anulada_con_su_numero_y_sus_sesiones_libres(pantalla):
-    e = tgf.emitir(tgf.crear(liga={"tipo": "sesion", "ref": "11"}, ncf="B0100000001", ncf_tipo="Consumo"))
+    e = tgf.emitir(tgf.crear(liga={"tipo": "sesion", "ref": "11"}, itbis_pct=18, ncf="B0100000001", ncf_tipo="Consumo"))
     confirmar = _pagina(e["id"], confirmar="anular")
     assert "¿Anular FAC-2026-001?" in confirmar and 'name="motivo"' in confirmar
     sin = cliente().post(f"/facturas/{e['id']}/anular", data={"motivo": "  "}, follow_redirects=False)

@@ -343,11 +343,17 @@ def vista_previa_de_factura(campos: dict, *, hoy: date | None = None) -> dict:
         para.append((etiquetas["ncf"], ncf))
         if ncf_tipo:
             para.append((etiquetas["ncf_tipo"], ncf_tipo))
+    el_itbis_no_se_entendio = False
     try:
         itbis_pct = db._itbis_de_factura(campos.get("itbis_pct"))
     except db.FacturaNoVale as e:
         itbis_pct = None
+        el_itbis_no_se_entendio = True
         notas.append(f"El ITBIS: {e}.")
+    if ncf and itbis_pct is None and not el_itbis_no_se_entendio:
+        # La regla de Tiziano (21-oct-2026): una factura con comprobante lleva ITBIS; sin él no existe. Aquí se dice
+        # suave, como las demás cosas que todavía no valen, y la hoja no pinta totales (una factura así no se guarda).
+        notas.append("Una factura con comprobante (NCF) lleva ITBIS.")
     try:
         descuento = db._descuento_de_factura(campos.get("descuento"))
     except db.FacturaNoVale as e:
@@ -752,6 +758,7 @@ TEXTO_POR_CLAVE = {
     "sin_liga": "La factura necesita al menos una sesión o un trabajo.",
     "liga_forma": "La factura nace ligada a una sesión o a un trabajo: escoge al menos uno.",
     "ncf_repetido": "Ese NCF ya lo tiene otra factura (una anulada también cuenta: su NCF no se vuelve a usar).",
+    "ncf_sin_itbis": "Una factura con comprobante (NCF) lleva ITBIS.",
     "ncf_incompleto": "El NCF y su tipo van juntos: escribe los dos o deja los dos vacíos.",
     "ncf_formato": "El NCF solo lleva letras y cifras, de 1 a 20.",
     "rnc_formato": "El RNC lleva 9 cifras y la cédula 11.",
@@ -800,8 +807,9 @@ TEXTO_POR_CLAVE = {
 }
 
 # Qué casilla marca cada razón (las que son de UNA casilla). Se busca por el comienzo de la clave.
-CASILLA_POR_COMIENZO = (("ncf", "ncf"), ("rnc", "rnc_cedula"), ("para_nombre", "para_nombre"), ("fecha", "fecha"),
-                        ("itbis", "itbis"), ("descuento", "descuento"))
+CASILLA_POR_COMIENZO = (("ncf_sin_itbis", "itbis"), ("ncf", "ncf"), ("rnc", "rnc_cedula"),
+                        ("para_nombre", "para_nombre"), ("fecha", "fecha"), ("itbis", "itbis"),
+                        ("descuento", "descuento"))
 
 
 def casilla_del_error(clave: str | None) -> str | None:

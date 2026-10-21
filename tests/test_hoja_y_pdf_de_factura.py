@@ -129,9 +129,12 @@ def test_sin_ncf_sin_itbis_y_sin_rnc_no_queda_ningun_hueco_ni_texto():
 
 
 def test_el_ncf_y_el_itbis_son_cosas_distintas():
-    solo_ncf = fa.textos_de_la_factura(fa.hoja_de_factura(_f(itbis=None)))
-    # Con comprobante y sin ITBIS no hay línea de ITBIS; la de «ITBIS retenido» sí va, en cero (pieza D4).
-    assert "NCF" in solo_ncf and "ITBIS 18%" not in solo_ncf
+    """La factura con comprobante lleva ITBIS (D4b): el NCF trae sus tres líneas de retención y el ITBIS la suya. Sin
+    NCF, el ITBIS sigue y no hay una sola línea de retención. (La factura con NCF y SIN ITBIS no existe: la puerta no
+    la deja guardar.)"""
+    con_ncf = fa.textos_de_la_factura(fa.hoja_de_factura(_f()))
+    assert "NCF" in con_ncf and "ITBIS 18%" in con_ncf
+    assert any("retenido" in t or "retenerse" in t for t in con_ncf)
     solo_itbis = fa.textos_de_la_factura(fa.hoja_de_factura(_f(ncf=False)))
     assert "ITBIS 18%" in solo_itbis and "NCF" not in solo_itbis
     assert not any("retenido" in t or "retenerse" in t for t in solo_itbis)
@@ -447,7 +450,7 @@ def test_el_borrador_se_baja_con_su_marca_sin_numero_y_con_otro_nombre(mundo):
 
 
 def test_la_anulada_se_baja_con_su_marca_y_su_motivo(mundo):
-    f = tgf.emitir(tgf.crear(ncf="B0100000009", ncf_tipo="Consumo"))
+    f = tgf.emitir(tgf.crear(ncf="B0100000009", ncf_tipo="Consumo", itbis_pct=18))
     tgf.correr(db.anular_factura(f["id"], tgf.CASA, "Se facturó dos veces"))
     resp = _cliente("casa").get(_url(f["id"]))
     assert resp.status_code == 200 and 'filename="FAC-2026-001.pdf"' in resp.headers["content-disposition"]

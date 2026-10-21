@@ -185,8 +185,11 @@ def test_sin_sesion_de_la_casa_la_vista_previa_es_401_y_no_devuelve_la_hoja(pant
 # ── 3. Dice BORRADOR ──────────────────────────────────────────────────────────────────────────────
 
 def test_la_vista_previa_dice_borrador_y_no_tiene_numero(pantalla):
+    """El número no está: en su lugar va la palabra. Se afirma el texto de ESA casilla, no solo que falte «FAC-» (la
+    marca en diagonal también dice BORRADOR y no probaría nada del número)."""
     html = _fragmento(_campos())
-    assert "BORRADOR" in html and 'class="marca-f"' in html and "FAC-" not in html
+    assert '<div class="cod">BORRADOR</div>' in html
+    assert 'class="marca-f"' in html and "FAC-" not in html
 
 
 # ── 4. Con datos a medias ─────────────────────────────────────────────────────────────────────────
@@ -203,6 +206,11 @@ MEDIOS = {
     "fecha que no se entiende": ({"fecha": "2026-13-45"}, "La fecha"),
     "RNC con ocho cifras": ({"rnc_cedula": "10101010"}, "El RNC o la cédula"),
     "sin nombre": ({"para_nombre": ""}, "Falta a nombre"),
+    # D4b: una factura con comprobante lleva ITBIS (Tiziano: «Esa factura no existe»), y una cantidad de 30 dígitos
+    # es «demasiado grande», no un reventón de `decimal.InvalidOperation`.
+    "NCF sin ITBIS": ({"ncf": "B0100000099", "ncf_tipo": "Crédito fiscal"},
+                      "Una factura con comprobante (NCF) lleva ITBIS"),
+    "cantidad de 30 dígitos": ({"r-1-cantidad": "1" * 30}, "Renglón 1"),
 }
 
 

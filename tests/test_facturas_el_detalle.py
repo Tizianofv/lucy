@@ -95,6 +95,8 @@ def test_la_cantidad_y_la_unidad_se_leen_de_vuelta_y_la_unidad_vacia_es_sin_unid
     (_renglon(precio_unitario="10.123"), "monto_decimales"), (_renglon(precio_unitario="0"), "monto_cero"),
     (_renglon(unidad="x" * 21), "unidad_largo"),
     (_renglon(cantidad="0.333", precio_unitario="30.01"), "monto_redondeo"),
+    # 30 dígitos: antes reventaba con `decimal.InvalidOperation` al redondear; ahora es una cantidad demasiado grande
+    (_renglon(cantidad="1" * 30), "cantidad_alta"),
 ])
 def test_lo_que_no_vale_como_cantidad_precio_o_unidad_no_toca_la_base(mundo, renglon, clave):
     antes = tgf.foto(mundo)

@@ -43,7 +43,7 @@
     <label{% if 'rnc_cedula' in campos_marcados %} class="marcada"{% endif %}>RNC o cédula (si lleva) <input type="text" name="rnc_cedula" value="{{ v.rnc_cedula }}" maxlength="20"{% if 'rnc_cedula' in campos_marcados %} aria-invalid="true"{% endif %}></label>
     <label{% if 'ncf' in campos_marcados %} class="marcada"{% endif %}>NCF (si lleva) <input type="text" name="ncf" value="{{ v.ncf }}" maxlength="30"{% if 'ncf' in campos_marcados %} aria-invalid="true"{% endif %}></label>
     <label{% if 'ncf' in campos_marcados %} class="marcada"{% endif %}>Tipo de NCF (si lleva NCF) <input type="text" name="ncf_tipo" value="{{ v.ncf_tipo }}" maxlength="30"{% if 'ncf' in campos_marcados %} aria-invalid="true"{% endif %}></label>
-    <label class="casilla"><input type="checkbox" name="itbis" value="18"{% if v.itbis %} checked{% endif %}> Suma ITBIS (18 %)</label>
+    <label class="casilla{% if 'itbis' in campos_marcados %} marcada{% endif %}"><input type="checkbox" name="itbis" value="18"{% if v.itbis %} checked{% endif %}{% if 'itbis' in campos_marcados %} aria-invalid="true"{% endif %}> Suma ITBIS (18 %)</label>
     <label{% if 'descuento' in campos_marcados %} class="marcada"{% endif %}>Descuento (si lleva) <input type="text" name="descuento" value="{{ v.descuento }}" inputmode="decimal" placeholder="0" aria-label="Descuento de la factura"{% if 'descuento' in campos_marcados %} aria-invalid="true"{% endif %}></label>
   </div>
   <p class="suave">El descuento se resta del subtotal antes del ITBIS: no puede pasar del subtotal.</p>
