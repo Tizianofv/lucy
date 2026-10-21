@@ -4268,10 +4268,13 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 21-oct-2026, rama `trabajo/facturas-4` (la pantalla «Facturas», pieza 4), sobre `a97a67c`: +2 en disco, +1 EXENTO por
     # `tests/test_pantalla_de_facturas.py` (nuevo, exento por rol) y +1 VIGILADO por `facturas_panel.py` (nuevo; solo traduce el
     # formulario y los rechazos de la puerta, no lee la lista cruda de buzones de `config`). Medida corriendo la prueba: 213, 153, 60.
-    assert medido == {"en disco": 213, "exentos": 153, "vigilados": 60}, (
+    # 21-oct-2026, rama `trabajo/facturas-6` (ligar sesiones del Registro, pieza 6), sobre `9d3879d`: +1 en disco y +1 EXENTO por
+    # `tests/test_facturas_sesiones_del_registro.py` (nuevo, exento por rol); VIGILADOS sin cambio (se tocaron `facturas_panel.py` y
+    # `web/app.py`, ya vigilados). Medida corriendo la prueba: 214, 154, 60.
+    assert medido == {"en disco": 214, "exentos": 154, "vigilados": 60}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "21-oct-2026 (facturas-4) era {'en disco': 213, "
-        "'exentos': 153, 'vigilados': 60}. La aserción de fondo —cero "
+        "21-oct-2026 (facturas-6) era {'en disco': 214, "
+        "'exentos': 154, 'vigilados': 60}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

@@ -54,12 +54,12 @@
   <div class="tarjeta">
   {% for c in candidatas %}
     <label class="sesion">
-      <input type="checkbox" name="ref" value="{{ c.ref }}"{% if c.elegida %} checked{% endif %}{% if c.cancelada %} disabled{% endif %}>
+      <input type="checkbox" name="ref" value="{{ c.ref }}"{% if c.elegida %} checked{% endif %}{% if c.cancelada or c.no_se_puede %} disabled{% endif %}>
       <span class="que">
         {% if c.fecha %}<b>{{ c.fecha|dia_corto }}</b>{% endif %}
         {% set partes = [] %}{% if c.sala %}{% set _ = partes.append(c.sala) %}{% endif %}{% if c.horas %}{% set _ = partes.append(c.horas ~ ' h') %}{% endif %}{% if c.concepto %}{% set _ = partes.append(c.concepto) %}{% endif %}
         {{ partes|join(' · ') }}{% if c.codigo %}<span class="cod">{{ c.codigo }}</span>{% endif %}
-        {% if c.es_trabajo %}<span class="etiq">Trabajo</span>{% endif %}{% if c.cancelada %}<span class="etiq">Cancelada: no se factura</span>{% endif %}
+        {% if c.es_trabajo %}<span class="etiq">Trabajo</span>{% endif %}{% if c.cancelada %}<span class="etiq">Cancelada: no se factura</span>{% endif %}{% if c.no_se_puede %}<span class="etiq" data-no-se-puede>{{ c.no_se_puede }}</span>{% endif %}
         {% if c.nombre %}<span class="cod">{{ c.nombre }}</span>{% endif %}
       </span>
     </label>
@@ -92,6 +92,8 @@
   </div>
   <h3 class="suave">Renglones</h3>
   <p class="suave">Cada renglón lleva su descripción y su monto; el detalle es opcional. Los renglones en blanco se ignoran.</p>
+  {% if renglones_de_sesiones %}<p class="suave" data-renglones-de-sesiones>Hay un renglón por cada sesión o trabajo escogido; el monto sale del total que el registro tiene (antes de ITBIS). Cámbialos como haga falta.</p>{% endif %}
+  {% if sin_total %}<p class="aviso" data-sin-total>El registro no trae el total de {% for c in sin_total %}«{{ c }}»{% if not loop.last %}, {% endif %}{% endfor %}: escribe su monto.</p>{% endif %}
   <div class="scroll"><table class="reng">
     <tr><th>Descripción</th><th>Detalle</th><th>Monto</th></tr>
     {% for r in v.renglones %}{% set n = loop.index %}

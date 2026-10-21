@@ -70,6 +70,10 @@ class AppDeRegistro:
         # que se piden una por una (`&sesion=`). Una pedida que no esté ni acá ni en `sesiones` va
         # a `no_halladas`.
         self.otras: list[dict] = []
+        # Opcional: las sesiones de OTRAS fichas, por el `Id` de la persona (texto). Con `persona=<Id>` la App devuelve las de
+        # ESA ficha (así lo dice el contrato de arriba: «las sesiones de una ficha»); una `persona` que no está aquí cae en
+        # `sesiones`, como hasta ahora. Lo agregó la pieza 6 de Facturas para poder probar «la sesión es de ESTE cliente».
+        self.por_persona: dict[str, list[dict]] = {}
         # La puerta de la búsqueda (parte 12): lo que contesta `hay_mas` y las candidatas.
         self.busqueda: dict = {"sesiones": [], "hay_mas": False}
         self._lock = threading.Lock()
@@ -112,6 +116,7 @@ class AppDeRegistro:
                     llave = doble.llave
                     cuerpo_sesiones = dict(doble.sesiones)
                     otras = list(doble.otras)
+                    por_persona = {k: list(v) for k, v in doble.por_persona.items()}
                     busqueda = dict(doble.busqueda)
                 if forzada is not None:
                     estado, cuerpo, tipo, demora, *resto = forzada
@@ -131,15 +136,15 @@ class AppDeRegistro:
                             {"sesiones": [], "hay_mas": False}).encode())
                     return self._responder(200, json.dumps(busqueda).encode())
                 return self._responder(200, json.dumps(
-                    self._de_una_ficha(consulta, cuerpo_sesiones, otras)).encode())
+                    self._de_una_ficha(consulta, cuerpo_sesiones, otras, por_persona)).encode())
 
-            def _de_una_ficha(self, consulta, cuerpo_sesiones, otras):
+            def _de_una_ficha(self, consulta, cuerpo_sesiones, otras, por_persona):
                 """Lo que la App contesta en `/api/lucy/sesiones`: las de la ficha (si se puede ligar)
                 y las pedidas una por una (`&sesion=`), sin repetir, con las que no tiene en
                 `no_halladas`. Sin `persona` no puede ligar ninguna: `sin_persona` (pero las pedidas
                 las devuelve igual)."""
                 persona = next((v for k, v in consulta if k == "persona"), None)
-                filas = list(cuerpo_sesiones.get("sesiones") or [])
+                filas = list(por_persona.get(persona) if persona in por_persona else (cuerpo_sesiones.get("sesiones") or []))
                 refs = {str(f.get("ref")) for f in filas if isinstance(f, dict)}
                 no_halladas = []
                 for k, ref in consulta:
