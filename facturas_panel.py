@@ -163,15 +163,16 @@ def _precio_escrito(valor) -> str:
 
 def _total_escrito(cantidad, precio) -> str:
     """El total que se ve en el formulario, calculado con lo que hay escrito (solo para mirarlo: la puerta lo vuelve
-    a calcular al guardar). Vacío si las dos casillas no son números que sirvan."""
+    a calcular al guardar). Vacío si las dos casillas no son números que la puerta acepte. La cantidad y el precio
+    pasan por la MISMA puerta del guardado (`db._cantidad_de_factura`, `db._dinero_de_factura`), no por una cuenta
+    propia: una cantidad absurda (30 dígitos) o un precio con tres decimales no muestran una cifra que no se va a
+    guardar, y ninguna cuenta de la pantalla revienta con `decimal.InvalidOperation`."""
     try:
-        c = Decimal(str(cantidad).replace(",", ""))
-        p = Decimal(str(precio).replace(",", ""))
-    except (ArithmeticError, ValueError):
+        c = db._cantidad_de_factura(cantidad)
+        p = db._dinero_de_factura(precio)
+    except db.FacturaNoVale:
         return ""
-    if not c.is_finite() or not p.is_finite() or c <= 0 or p <= 0:
-        return ""
-    return _sin_rd(db.total_del_renglon(c.quantize(Decimal("0.001")), p.quantize(Decimal("0.01"))))
+    return _sin_rd(db.total_del_renglon(c, p))
 
 
 def _descuento_escrito(valor) -> str:

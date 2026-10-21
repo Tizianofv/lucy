@@ -913,6 +913,13 @@ def test_las_casillas_de_renglones_ponen_los_que_hay_mas_los_en_blanco():
                             "precio": "2,000", "total": "3,000"}
     assert len(hechas) == fp.RENGLONES_EN_BLANCO + fp.RENGLONES_DE_SOBRA - 0 and all(not any(r.values()) for r in hechas[1:])
     assert len(fp.casillas_de_renglones([])) == fp.RENGLONES_EN_BLANCO + fp.RENGLONES_DE_SOBRA
+    # D4b: el total que se ve lo calcula la misma puerta del guardado. Una cantidad absurda (30 dígitos) se conserva
+    # escrita y NO revienta: el total queda vacío (antes lanzaba `decimal.InvalidOperation` al repintar el rechazo).
+    absurda = fp.casillas_de_renglones([{"descripcion": "C", "cantidad": "1" * 30, "precio_unitario": "10"}])
+    assert (absurda[0]["cantidad"], absurda[0]["precio"], absurda[0]["total"]) == ("1" * 30, "10", "")
+    # y un precio con tres decimales tampoco muestra una cifra que la puerta no va a guardar
+    tres = fp.casillas_de_renglones([{"descripcion": "D", "cantidad": "1", "precio_unitario": "10.123"}])
+    assert (tres[0]["precio"], tres[0]["total"]) == ("10.123", "")
 
 
 def test_las_ligas_de_las_refs_sacan_el_tipo_de_es_trabajo_y_sacan_las_canceladas_y_las_que_no_estan():
