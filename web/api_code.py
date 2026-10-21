@@ -867,11 +867,14 @@ async def pedir_envio_de_factura(
 
     PEDIDO `{canal}`. 200 `{"envio": {envio_id, canal, estado, aprobada, pdf_listo, motivo}, "reusada": bool}`. El
     `estado` es SIEMPRE el de la base, y hay tres desenlaces:
-      · `pendiente` — hay que esperar a que quien revisa conteste (`reusada`: ya había uno vivo de ese canal).
+      · `pendiente` — hay que esperar a que quien revisa conteste (`reusada`: la factura ya tenía un envío vivo y se
+        devuelve ese).
       · `aprobado` — el envío ya se puede mandar (`pdf_listo` verdadero). Pasa cuando la factura está EMITIDA y ya tuvo
         una aprobación en el OTRO canal que no salió: no se le pide a la revisora que apruebe dos veces la misma
         factura.
       · `enviado` — la factura YA salió al cliente: no hay nada que mandar (`reusada` verdadero; es el envío que salió).
+    UNA FACTURA TIENE UN SOLO ENVÍO VIVO A LA VEZ (`pendiente`, `aprobado` o `enviado`): mientras tenga uno, pedir por
+    cualquier canal devuelve ESE (`reusada` verdadero) y no crea otro.
     404: la factura no es suya / no existe. 409: la factura está anulada. 422: la factura está incompleta. 503: no hay a
     quién pedirle la aprobación (el nombre de quien revisa no resuelve a un chat al que Lucy le pueda escribir) o falta
     una migración: NO SE PIDIÓ NADA. «pendiente» quiere decir que la persona todavía no contestó, no que la tarjeta ya

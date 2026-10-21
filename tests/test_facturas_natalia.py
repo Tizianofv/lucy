@@ -439,15 +439,25 @@ def test_pedir_el_envio_deja_un_pendiente_sin_numero_sin_tarjeta_y_no_dice_aprob
     assert acciones_de_la_huella(api) == [("natalia", "crear"), ("natalia", "pedir_envio")]
 
 
-def test_pedir_dos_veces_lo_mismo_devuelve_el_vivo_y_otro_canal_es_otro_envio(api):
+def test_pedir_dos_veces_o_por_otro_canal_devuelve_el_unico_envio_vivo(api):
+    """UNA FACTURA TIENE UN SOLO ENVÍO VIVO A LA VEZ (decisión de la sala, 21-oct-2026): pedir otra vez, por el mismo
+    canal o por el otro, devuelve el vivo y no crea un segundo."""
     fid = crear_api(("11",)).json()["factura"]["factura_id"]
     primero = pedir(fid, "whatsapp").json()
     segundo = pedir(fid, "whatsapp").json()
     assert segundo["reusada"] is True and segundo["envio"]["envio_id"] == primero["envio"]["envio_id"]
-    assert len(envios(api, fid)) == 1
     otro = pedir(fid, "correo").json()
-    assert otro["reusada"] is False and otro["envio"]["envio_id"] != primero["envio"]["envio_id"]
-    assert len(envios(api, fid)) == 2
+    assert (otro["reusada"], otro["envio"]["envio_id"], otro["envio"]["canal"], otro["envio"]["estado"]) == (
+        True, primero["envio"]["envio_id"], "whatsapp", "pendiente")
+    assert len(envios(api, fid)) == 1
+
+
+def test_pedir_otro_canal_con_un_enviado_devuelve_ese(api, tg):
+    """La sonda 3 del testigo ya no se puede armar: con un solo vivo, el segundo pedido devuelve el primero."""
+    fid, eid = aprobada(tg)
+    r = pedir(fid, "correo")
+    assert (r.json()["reusada"], r.json()["envio"]["envio_id"], r.json()["envio"]["estado"]) == (True, eid, "aprobado")
+    assert len(envios(api, fid)) == 1
 
 
 @pytest.mark.parametrize("canal", ["mano", "sms", "", "WhatsApp"])
@@ -472,7 +482,10 @@ def test_el_canal_tambien_se_comprueba_en_la_puerta_de_db_sin_pasar_por_la_ruta(
 def test_la_lista_de_envios_sin_tarjeta_solo_trae_los_pendientes_por_whatsapp_o_correo(api):
     f = de_natalia(api, 7, "r-sin-tarjeta")
     e1 = correr(db.pedir_envio_de_factura_de_natalia(7, f["id"], "whatsapp"))["envio"]["id"]
-    e2 = correr(db.pedir_envio_de_factura_de_natalia(7, f["id"], "correo"))["envio"]["id"]
+    # el segundo se siembra: la puerta ya no crea dos vivos (y menos dos pendientes)
+    api.con.execute("INSERT INTO factura_envios (factura_id, canal) VALUES (?, 'correo')", (f["id"],))
+    api.con.commit()
+    e2 = tgf.filas(api, "factura_envios")[-1]["id"]
     assert [x["id"] for x in correr(db.envios_de_factura_sin_tarjeta())] == [e1, e2]
     api.con.execute("UPDATE factura_envios SET estado = 'no_se_pudo', motivo = 'la factura se anuló' WHERE id = ?", (e1,))
     api.con.execute("UPDATE factura_envios SET estado = 'rechazado', motivo = 'x' WHERE id = ?", (e2,))
@@ -523,9 +536,9 @@ def test_sin_las_columnas_de_la_tarjeta_es_503_y_no_se_escribe_nada(api, monkeyp
 
 def test_una_anulada_no_se_manda_y_una_emitida_si(api, tg):
     fid, eid = aprobada(tg)
-    assert pedir(fid, "correo").status_code == 200                       # emitida: otro canal
+    assert pedir(fid, "correo").json()["envio"]["envio_id"] == eid          # emitida: devuelve el vivo
     correr(db.anular_factura(fid, DUENO, "se hizo por error"))
-    assert [e["estado"] for e in envios(api, fid)] == ["no_se_pudo", "no_se_pudo"]       # los vivos se soltaron al anular
+    assert [e["estado"] for e in envios(api, fid)] == ["no_se_pudo"]        # el vivo se soltó al anular
     antes = tgf.foto(api)
     r = pedir(fid, "whatsapp")
     assert r.status_code == 409 and tgf.foto(api) == antes
@@ -564,21 +577,29 @@ def test_el_primer_envio_de_una_emitida_nace_pendiente(api):
     assert (r.json()["envio"]["estado"], r.json()["reusada"]) == ("pendiente", False)
 
 
-def test_el_envio_que_sigue_a_uno_aprobado_que_no_fallo_nace_pendiente(api, tg):
+def test_el_envio_que_sigue_a_uno_aprobado_que_no_fallo_devuelve_ese_aprobado(api, tg):
     fid, eid = aprobada(tg)                                                      # su envío sigue aprobado: ni salió ni falló
-    assert pedir(fid, "correo").json()["envio"]["estado"] == "pendiente"
+    r = pedir(fid, "correo")
+    assert (r.json()["envio"]["envio_id"], r.json()["envio"]["estado"], r.json()["reusada"]) == (eid, "aprobado", True)
+    assert len(envios(api, fid)) == 1
 
 
 def test_un_envio_rechazado_no_abre_aprobado(api, tg):
-    fid, eid = aprobada(tg)                                                      # whatsapp aprobado
-    e2 = pedir(fid, "correo").json()["envio"]["envio_id"]                         # correo pendiente, con tarjeta
+    """Un rechazado en el OTRO canal no cuenta como «aprobado que no salió». El camino: borrador que Rosi rechaza por
+    correo, se emite aprobando el de WhatsApp, y ese después no sale."""
+    fid = crear_api(("11",)).json()["factura"]["factura_id"]
+    correo = pedir(fid, "correo").json()["envio"]["envio_id"]
     assert vuelta(tg) == 1
-    tocar(f"fan:{e2}", ROSI)                                                     # correo: rechazado
-    anotar(fid, eid, False, "no salió")                                          # whatsapp: aprobado y no salió
+    tocar(f"fan:{correo}", ROSI)                                                 # correo: rechazado
+    whatsapp = pedir(fid, "whatsapp").json()["envio"]["envio_id"]                 # ya no hay vivo: nace pendiente
+    assert vuelta(tg) == 1
+    tocar(f"fas:{whatsapp}", ROSI)                                               # emite
+    anotar(fid, whatsapp, False, "no salió")                                     # whatsapp: aprobado y no salió
+    assert [e["estado"] for e in envios(api, fid)] == ["rechazado", "no_se_pudo"]
     r = pedir(fid, "whatsapp")                                                   # el otro canal es el rechazado
     assert (r.json()["envio"]["canal"], r.json()["envio"]["estado"], r.json()["reusada"]) == (
         "whatsapp", "pendiente", False)
-    assert r.json()["envio"]["envio_id"] not in (eid, e2)
+    assert r.json()["envio"]["envio_id"] not in (correo, whatsapp)
 
 
 def test_un_borrador_nace_pendiente_aunque_haya_un_no_se_pudo_que_no_fue_una_aprobacion(api, tg):
@@ -616,9 +637,11 @@ def test_un_envio_que_salio_no_abre_otro_y_devuelve_el_que_salio(api, tg):
 
 def test_no_se_aprueba_un_segundo_envio_si_la_factura_ya_salio(api, tg):
     """La otra puerta de «nunca dos documentos al cliente»: una tarjeta que ya había salido no se aprueba después de que
-    la factura salió por otro canal."""
+    la factura salió por otro canal. El segundo pendiente se siembra: la puerta ya no crea dos vivos."""
     fid, eid = aprobada(tg)
-    e2 = pedir(fid, "correo").json()["envio"]["envio_id"]
+    api.con.execute("INSERT INTO factura_envios (factura_id, canal) VALUES (?, 'correo')", (fid,))
+    api.con.commit()
+    e2 = tgf.filas(api, "factura_envios")[-1]["id"]
     assert vuelta(tg) == 1
     anotar(fid, eid, True)                                                       # ya salió por WhatsApp
     q = tocar(f"fas:{e2}", ROSI)
@@ -647,12 +670,30 @@ def test_la_aprobacion_que_la_puerta_hereda_tiene_que_ser_una_de_verdad_aprobada
 # decidió: anotar no se niega (negar lo que pasó lo escondería y se avisa al equipo), y el que de verdad evita mandar dos
 # veces es el PDF — Natalia no puede mandar lo que no puede bajar.
 
-def test_el_pdf_no_se_baja_si_la_factura_ya_salio_por_otro_envio(api, tg):
-    """Sonda del testigo, camino de la pieza 9: WhatsApp aprobado y correo aprobado; uno sale y el PDF del otro se niega."""
+def test_aprobar_con_otro_envio_aprobado_termina_en_no_se_pudo(api, tg):
+    """La segunda llave de «un solo envío vivo»: con la factura ya aprobada por otro envío, aprobar esta tarjeta no la
+    deja aprobada. El segundo pendiente se siembra: la puerta ya no crea dos vivos."""
     fid, eid = aprobada(tg)
-    e2 = pedir(fid, "correo").json()["envio"]["envio_id"]
+    api.con.execute("INSERT INTO factura_envios (factura_id, canal) VALUES (?, 'correo')", (fid,))
+    api.con.commit()
+    e2 = tgf.filas(api, "factura_envios")[-1]["id"]
     assert vuelta(tg) == 1
-    tocar(f"fas:{e2}", ROSI)                                                    # los dos aprobados
+    q = tocar(f"fas:{e2}", ROSI)
+    segundo = next(x for x in envios(api, fid) if x["id"] == e2)
+    assert segundo["estado"] == "no_se_pudo" and "otro envío aprobado" in segundo["motivo"]
+    assert "No se pudo aprobar" in q.pie_final and "otro envío aprobado" in q.pie_final
+    assert pdf(fid, e2).status_code == 409
+    assert next(x for x in envios(api, fid) if x["id"] == eid)["estado"] == "aprobado"
+
+
+def test_el_pdf_no_se_baja_si_la_factura_ya_salio_por_otro_envio(api, tg):
+    """Segunda llave del PDF. La sonda 3 del testigo (dos aprobados por las rutas) ya no se puede armar —con un solo
+    envío vivo, el segundo pedido devuelve el primero—, así que el estado viejo se siembra en la base."""
+    fid, eid = aprobada(tg)
+    api.con.execute("INSERT INTO factura_envios (factura_id, canal, estado, aprobado_por_chat_id, aprobado_en) "
+                    "VALUES (?, 'correo', 'aprobado', ?, '2026-10-21T12:00:00+00:00')", (fid, ROSI))
+    api.con.commit()
+    e2 = tgf.filas(api, "factura_envios")[-1]["id"]
     assert pdf(fid, e2).status_code == 200                                      # todavía se puede
     anotar(fid, eid, True)                                                      # sale por WhatsApp
     antes = tgf.foto(api)
@@ -662,35 +703,50 @@ def test_el_pdf_no_se_baja_si_la_factura_ya_salio_por_otro_envio(api, tg):
 
 
 def test_el_pdf_no_se_baja_por_el_camino_del_cambio_de_canal(api, tg):
-    """Sonda del testigo, camino de la 9b: WhatsApp no salió, correo nace aprobado, WhatsApp se pide otra vez y se aprueba."""
+    """El camino de la 9b: WhatsApp no salió, correo nace aprobado, y la casa marca la factura como mandada a mano."""
     fid, eid = aprobada(tg)
     anotar(fid, eid, False, "la ventana de 24 h está cerrada")
     correo = pedir(fid, "correo").json()["envio"]                               # nace aprobado, sin tarjeta
     assert correo["estado"] == "aprobado"
-    whatsapp2 = pedir(fid, "whatsapp").json()["envio"]["envio_id"]              # el mismo canal: otra vez pendiente
-    assert vuelta(tg) == 1
-    tocar(f"fas:{whatsapp2}", ROSI)
-    assert pdf(fid, correo["envio_id"]).status_code == 200
-    anotar(fid, correo["envio_id"], True)                                       # sale por correo
-    r = pdf(fid, whatsapp2)
+    assert pedir(fid, "whatsapp").json()["envio"]["envio_id"] == correo["envio_id"]     # un solo vivo
+    assert cliente().post(f"/facturas/{fid}/mandada-a-mano", follow_redirects=False).status_code == 303
+    r = pdf(fid, correo["envio_id"])
     assert r.status_code == 409 and "ya salió" in r.text and not r.content.startswith(b"%PDF")
 
 
-def test_anotar_que_salio_un_segundo_envio_se_anota_y_avisa_al_equipo(api, tg):
+def test_el_aviso_del_segundo_salio_dice_los_dos_canales_en_orden(api, tg):
+    """n05: el aviso nombra el canal que se anota y el que ya había salido, EN ESE ORDEN. Dos aprobados sembrados (el
+    estado viejo que la puerta ya no produce)."""
     fid, eid = aprobada(tg)
-    e2 = pedir(fid, "correo").json()["envio"]["envio_id"]
-    assert vuelta(tg) == 1
-    tocar(f"fas:{e2}", ROSI)
-    anotar(fid, eid, True)
+    api.con.execute("INSERT INTO factura_envios (factura_id, canal, estado, aprobado_por_chat_id, aprobado_en) "
+                    "VALUES (?, 'correo', 'aprobado', ?, '2026-10-21T12:00:00+00:00')", (fid, ROSI))
+    api.con.commit()
+    e2 = tgf.filas(api, "factura_envios")[-1]["id"]
+    anotar(fid, e2, True)                                                       # sale por correo primero
     antes = len(tg.avisos)
-    r = anotar(fid, e2, True)                                                   # se anota la verdad, no se niega
+    r = anotar(fid, eid, True)                                                  # y después el de WhatsApp
     assert r.status_code == 200 and r.json()["envio"]["estado"] == "enviado"
     assert [x["estado"] for x in envios(api, fid)].count("enviado") == 2
     nuevos = tg.avisos[antes:]
     assert len(nuevos) == 1, nuevos
     chat, texto = nuevos[0]
-    assert chat == ROSI and f"La factura #{fid} salió dos veces" in texto and "correo" in texto
+    assert chat == ROSI
+    assert f"La factura #{fid} salió dos veces: se anotó que salió por whatsapp y ya había salido por correo." in texto
     assert acciones_de_la_huella(api)[-1] == ("natalia", "anotar_envio")
+
+
+def test_un_envio_a_mano_y_luego_el_aprobado_anotado_como_salido_avisa(api, tg):
+    """n06: el segundo «salió» después de un `mano` (el único camino que queda por las rutas: la casa marca la factura
+    como mandada a mano con un envío aprobado todavía vivo)."""
+    fid, eid = aprobada(tg)
+    assert cliente().post(f"/facturas/{fid}/mandada-a-mano", follow_redirects=False).status_code == 303
+    antes = len(tg.avisos)
+    r = anotar(fid, eid, True)
+    assert r.status_code == 200 and r.json()["envio"]["estado"] == "enviado"
+    assert [x["estado"] for x in envios(api, fid)].count("enviado") == 2
+    nuevos = tg.avisos[antes:]
+    assert len(nuevos) == 1, nuevos
+    assert f"se anotó que salió por whatsapp y ya había salido por mano" in nuevos[0][1]
 
 
 def test_un_envio_a_mano_tambien_cierra_la_puerta_al_otro_canal_y_al_pdf(api, tg):
@@ -961,12 +1017,13 @@ def test_si_la_factura_cambio_despues_de_la_tarjeta_no_se_emite_otra_distinta(ap
 
 def test_una_emitida_se_aprueba_sin_numerar_de_nuevo(api, tg):
     fid, eid = aprobada(tg)                                              # FAC-2026-001
-    eid2 = pedir(fid, "correo").json()["envio"]["envio_id"]
-    assert vuelta(tg) == 1
+    anotar(fid, eid, False, "no salió")                                   # se suelta el vivo
+    eid2 = pedir(fid, "whatsapp").json()["envio"]["envio_id"]             # mismo canal y sin otro envío: pendiente
+    assert eid2 != eid and vuelta(tg) == 1
     assert botones_de(tg.documentos[-1]) == [f"fas:{eid2}", f"fan:{eid2}"]
     assert "Ya está emitida como FAC-2026-001" in tg.documentos[-1]["caption"]
     q = tocar(f"fas:{eid2}", ROSI)
-    assert "Ya estaba emitida" in q.pie_final and "correo" in q.pie_final
+    assert "Ya estaba emitida" in q.pie_final and "WhatsApp" in q.pie_final
     assert [r["ultimo"] for r in tgf.filas(api, "serie_facturas")] == [1]
     assert tg.subidas == [fid]                                           # no vuelve a subir: no se emitió ahora
 
@@ -974,8 +1031,10 @@ def test_una_emitida_se_aprueba_sin_numerar_de_nuevo(api, tg):
 def test_si_la_factura_se_anulo_antes_de_aprobar_no_se_aprueba(api, tg):
     """Defensa: aunque un envío quedara pendiente sobre una anulada (anular los suelta), aprobar no lo aprueba."""
     fid, eid = aprobada(tg)
-    eid2 = pedir(fid, "correo").json()["envio"]["envio_id"]
-    vuelta(tg)
+    api.con.execute("INSERT INTO factura_envios (factura_id, canal) VALUES (?, 'correo')", (fid,))
+    api.con.commit()
+    eid2 = tgf.filas(api, "factura_envios")[-1]["id"]
+    assert vuelta(tg) == 1
     api.con.execute("UPDATE factura_envios SET estado = 'pendiente', motivo = NULL WHERE id = ?", (eid2,))
     api.con.execute("UPDATE facturas SET estado = 'anulada', anulada_en = '2026-10-21', motivo_anulacion = 'x', "
                     "anulada_por_chat_id = 1 WHERE id = ?", (fid,))
