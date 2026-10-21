@@ -68,7 +68,7 @@ def texto_de(valor) -> str:
     return valor if isinstance(valor, str) else ""
 
 
-def _entero_o_eltexto_de(valor):
+def _entero_o_el_texto(valor):
     """Vacío es «ninguno» (`None`); dígitos, el entero; cualquier otra cosa se deja como texto para que la puerta
     la rechace con su razón (nunca se adivina)."""
     texto = texto_de(valor).strip()
@@ -102,10 +102,10 @@ def campos_del_formulario(formulario) -> dict:
     porcentaje que usa la casa (`db.ITBIS_DE_FACTURA`), sin marcar es «sin ITBIS»."""
     refs = [r.strip() for r in formulario.getlist("ref") if isinstance(r, str) and r.strip()]
     return {
-        "cliente": _entero_o_eltexto_de(formulario.get("cliente")),
-        "proyecto": _entero_o_eltexto_de(formulario.get("proyecto")),
-        "cotizacion": _entero_o_eltexto_de(formulario.get("cotizacion")),
-        "opcion": _entero_o_eltexto_de(formulario.get("opcion")),
+        "cliente": _entero_o_el_texto(formulario.get("cliente")),
+        "proyecto": _entero_o_el_texto(formulario.get("proyecto")),
+        "cotizacion": _entero_o_el_texto(formulario.get("cotizacion")),
+        "opcion": _entero_o_el_texto(formulario.get("opcion")),
         "para_nombre": texto_de(formulario.get("para_nombre")),
         "fecha": texto_de(formulario.get("fecha")).strip(),
         "itbis_pct": str(db.ITBIS_DE_FACTURA) if "itbis" in formulario else None,
