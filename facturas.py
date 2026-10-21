@@ -156,7 +156,7 @@ def _anchos_de_las_columnas(pdf, hoja: dict) -> tuple[float, float, float, float
     montos = [r["monto"] for r in hoja["renglones"]] + [t["total"] for t in hoja["totales"]]
     ancho_total = max([cz._ANCHO_DEL_TOTAL] + [pdf.get_string_width(m) + 6 for m in montos])
     ancho_cantidad = min(
-        max([_ANCHO_DE_LA_CANTIDAD] + [pdf.get_string_width(r["cantidad"]) + 4 for r in hoja["renglones"]]),
+        max([_ANCHO_DE_LA_CANTIDAD] + [pdf.get_string_width(r["cantidad"]) + 8 for r in hoja["renglones"]]),
         _TOPE_DE_LA_CANTIDAD)
     return pdf.epw - ancho_cantidad - ancho_precio - ancho_total, ancho_cantidad, ancho_precio, ancho_total
 
