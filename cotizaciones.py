@@ -506,27 +506,26 @@ def _fila(pdf: FPDF, hoja: dict, ancho_desc: float, ancho_total: float, descripc
     pdf.set_y(y + alto)
 
 
-def _marcar_de_borrador(pdf: FPDF) -> None:
+def _marcar_de_borrador(pdf: FPDF, marca: str = MARCA_DE_BORRADOR) -> None:
     """«BORRADOR» en diagonal y en grande, transparente, ENCIMA de lo demás en cada página (debajo lo taparía
     el fondo gris del bloque Para). Es lo que distingue el PDF de un borrador del de una enviada (decisión de
-    Tiziano, 14-oct-2026: «B»). El tamaño sale de medir la palabra: 190 mm de largo en diagonal."""
+    Tiziano, 14-oct-2026: «B»). El tamaño sale de medir la palabra: 190 mm de largo en diagonal. `marca` es la
+    palabra: «BORRADOR» por omisión; la hoja de la factura (`facturas.py`) pone también «ANULADA»."""
     pdf.set_font("Helvetica", "B", 100)
-    tamano = 100 * 190 / pdf.get_string_width(MARCA_DE_BORRADOR)
+    tamano = 100 * 190 / pdf.get_string_width(marca)
     for n in range(1, pdf.pages_count + 1):
         pdf.page = n
         pdf.set_font("Helvetica", "B", tamano)
-        ancho = pdf.get_string_width(MARCA_DE_BORRADOR)
+        ancho = pdf.get_string_width(marca)
         cx, cy = pdf.w / 2, pdf.h / 2
         with pdf.local_context(fill_opacity=0.16, text_color=ROJO):
             with pdf.rotation(45, x=cx, y=cy):
-                pdf.text(cx - ancho / 2, cy + 0.36 * tamano / 2.835, MARCA_DE_BORRADOR)   # media altura de la mayúscula, en mm
+                pdf.text(cx - ancho / 2, cy + 0.36 * tamano / 2.835, marca)   # media altura de la mayúscula, en mm
 
 
-def pdf_de_cotizacion(hoja: dict, logo: Path = LOGO_DE_LA_HOJA, *, borrador: bool = False) -> bytes:
-    """El PDF de una hoja (`hoja_de_cotizacion`): carta, logo, raya y título en rojo, bloque Para con raya
-    roja, una tabla por opción con cabecera roja, condiciones con viñeta y el pie del estudio; salta de página
-    cuando no cabe. Dibuja SOLO lo que trae `hoja`; con `borrador=True` además la marca «BORRADOR» en cada
-    página (el de una enviada va sin marca)."""
+def _abrir_la_hoja(hoja: dict, logo: Path) -> tuple[FPDF, float]:
+    """La primera página de TODA hoja (cotización o factura): carta, logo, raya roja, título y código al centro, y
+    el bloque Para (`hoja["titulo"]`, `hoja["codigo"]`, `hoja["para"]`). Devuelve el PDF y el margen izquierdo."""
     pdf = FPDF(unit="mm", format="Letter")
     pdf.set_margins(_MARGEN, 18, _MARGEN)
     pdf.set_auto_page_break(True, margin=20)
@@ -573,6 +572,32 @@ def pdf_de_cotizacion(hoja: dict, logo: Path = LOGO_DE_LA_HOJA, *, borrador: boo
         pdf.multi_cell(ancho_valor, 5.2, valor, new_x="LMARGIN", new_y="NEXT")
         pdf.ln(0.8)
     pdf.set_y(y0 + alto + 7)
+    return pdf, x
+
+
+def _pie_de_la_hoja(pdf: FPDF, hoja: dict, x: float) -> None:
+    """El pie del estudio (`hoja["pie"]`), con su raya gris; salta de página si no cabe. Es el de toda hoja."""
+    if pdf.will_page_break(16):
+        pdf.add_page()
+    pdf.ln(5)
+    y2 = pdf.get_y()
+    pdf.set_draw_color(230, 230, 230)
+    pdf.set_line_width(0.2)
+    pdf.line(x, y2, x + pdf.epw, y2)
+    pdf.set_y(y2 + 2)
+    pdf.set_font("Helvetica", "", 8)
+    pdf.set_text_color(136, 136, 136)
+    for linea in hoja["pie"]:
+        pdf.set_x(x)
+        pdf.cell(0, 4, linea, new_x="LMARGIN", new_y="NEXT")
+
+
+def pdf_de_cotizacion(hoja: dict, logo: Path = LOGO_DE_LA_HOJA, *, borrador: bool = False) -> bytes:
+    """El PDF de una hoja (`hoja_de_cotizacion`): carta, logo, raya y título en rojo, bloque Para con raya
+    roja, una tabla por opción con cabecera roja, condiciones con viñeta y el pie del estudio; salta de página
+    cuando no cabe. Dibuja SOLO lo que trae `hoja`; con `borrador=True` además la marca «BORRADOR» en cada
+    página (el de una enviada va sin marca)."""
+    pdf, x = _abrir_la_hoja(hoja, logo)
 
     # La columna del total crece si algún total no cabe en el mínimo (hasta RD$999,999,999.90 con 10 renglones).
     pdf.set_font("Helvetica", "B", 10)
@@ -618,19 +643,7 @@ def pdf_de_cotizacion(hoja: dict, logo: Path = LOGO_DE_LA_HOJA, *, borrador: boo
             pdf.multi_cell(ancho_texto, 4.8, texto, new_x="LEFT", new_y="NEXT")
             pdf.ln(1.5)
 
-    if pdf.will_page_break(16):
-        pdf.add_page()
-    pdf.ln(5)
-    y2 = pdf.get_y()
-    pdf.set_draw_color(230, 230, 230)
-    pdf.set_line_width(0.2)
-    pdf.line(x, y2, x + pdf.epw, y2)
-    pdf.set_y(y2 + 2)
-    pdf.set_font("Helvetica", "", 8)
-    pdf.set_text_color(136, 136, 136)
-    for linea in hoja["pie"]:
-        pdf.set_x(x)
-        pdf.cell(0, 4, linea, new_x="LMARGIN", new_y="NEXT")
+    _pie_de_la_hoja(pdf, hoja, x)
     if borrador:
         _marcar_de_borrador(pdf)
     return bytes(pdf.output())
