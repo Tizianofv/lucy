@@ -4280,10 +4280,13 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # lectura de la lista cruda). Se tocaron además `config.py`, `db/db.py`, `web/api_code.py`, `web/app.py`, `registro_lectura.py`,
     # `facturas_panel.py`, `cerebro/despertador.py`, `cerebro/interpretar.py`, `acciones/botones.py` y `tools/humo.py`, ya vigilados.
     # Medida corriendo la prueba: 220, 157, 63.
-    assert medido == {"en disco": 220, "exentos": 157, "vigilados": 63}, (
+    # 21-oct-2026, rama `trabajo/facturas-9b` (el cambio de canal de una factura ya aprobada, pieza 9b), sobre `a66c67d`:
+    # +1 en disco y +1 VIGILADO (`tools/ensayo_facturas_canal.py`, nuevo; sin ninguna lectura de la lista cruda). Se
+    # tocaron además `db/db.py`, `web/api_code.py` y `tools/humo.py`, ya vigilados. Medida corriendo la prueba: 221, 157, 64.
+    assert medido == {"en disco": 221, "exentos": 157, "vigilados": 64}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "21-oct-2026 (facturas-9) era {'en disco': 220, "
-        "'exentos': 157, 'vigilados': 63}. La aserción de fondo —cero "
+        "21-oct-2026 (facturas-9b) era {'en disco': 221, "
+        "'exentos': 157, 'vigilados': 64}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

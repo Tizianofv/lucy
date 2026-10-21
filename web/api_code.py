@@ -865,12 +865,20 @@ async def pedir_envio_de_factura(
     PDF y los botones Aprobar / Rechazar) a quien revisa las facturas (`config.chat_de_quien_revisa_las_facturas`) y
     NADA sale al cliente hasta que esa persona apruebe. Al aprobar, Lucy EMITE la factura (se numera ahí).
 
-    PEDIDO `{canal}`. 200 `{"envio": {envio_id, canal, estado: "pendiente", aprobada: false, pdf_listo: false, motivo:
-    null}, "reusada": bool}` (`reusada`: ya había un envío vivo —pendiente o aprobado— de esa factura por ese canal y
-    se devuelve ese). 404: la factura no es suya / no existe. 409: la factura está anulada. 422: la factura está
-    incompleta. 503: no hay a quién pedirle la aprobación (el nombre de quien revisa no resuelve a un chat al que Lucy
-    le pueda escribir) o falta una migración: NO SE PIDIÓ NADA. «pendiente» quiere decir que la persona todavía no
-    contestó, no que la tarjeta ya llegó."""
+    PEDIDO `{canal}`. 200 `{"envio": {envio_id, canal, estado, aprobada, pdf_listo, motivo}, "reusada": bool}`. El
+    `estado` es SIEMPRE el de la base, y hay tres desenlaces:
+      · `pendiente` — hay que esperar a que quien revisa conteste (`reusada`: la factura ya tenía un envío vivo y se
+        devuelve ese).
+      · `aprobado` — el envío ya se puede mandar (`pdf_listo` verdadero). Pasa cuando la factura está EMITIDA y ya tuvo
+        una aprobación en el OTRO canal que no salió: no se le pide a la revisora que apruebe dos veces la misma
+        factura.
+      · `enviado` — la factura YA salió al cliente: no hay nada que mandar (`reusada` verdadero; es el envío que salió).
+    UNA FACTURA TIENE UN SOLO ENVÍO VIVO A LA VEZ (`pendiente`, `aprobado` o `enviado`): mientras tenga uno, pedir por
+    cualquier canal devuelve ESE (`reusada` verdadero) y no crea otro.
+    404: la factura no es suya / no existe. 409: la factura está anulada. 422: la factura está incompleta. 503: no hay a
+    quién pedirle la aprobación (el nombre de quien revisa no resuelve a un chat al que Lucy le pueda escribir) o falta
+    una migración: NO SE PIDIÓ NADA. «pendiente» quiere decir que la persona todavía no contestó, no que la tarjeta ya
+    llegó."""
     if config.chat_de_quien_revisa_las_facturas() is None:
         log.error("puerta de Code: no hay a quién mandarle la tarjeta de las facturas (REVISA_FACTURAS no resuelve)")
         raise HTTPException(
@@ -893,7 +901,8 @@ async def pdf_de_factura_aprobada(
     """El PDF de la factura, SOLO si ese envío está APROBADO: la factura es de Natalia y de esa ficha, está emitida y
     alguien aprobó mandarla por ese envío (y Natalia todavía no anotó cómo terminó). 200 `application/pdf` (el nombre es
     el número: `FAC-2026-001.pdf`). 404: no es suya / no existe / ese envío no es de esa factura. 409: el envío todavía
-    no se aprobó, se rechazó, ya terminó, o la factura no está emitida (el detalle dice cuál). 503: falta una migración.
+    no se aprobó, se rechazó, ya terminó, la factura no está emitida, o **la factura ya salió al cliente por otro envío
+    (por el canal que sea, `mano` incluido)** — es la puerta que evita el segundo documento. 503: falta una migración.
     Un borrador NUNCA se baja por aquí."""
     try:
         f = await db.factura_y_envio_para_el_pdf_de_natalia(noco_id, factura_id, envio_id)

@@ -164,6 +164,8 @@ class _Mundo:
             con.execute(ft._a_sqlite(s))
         for s in ft._sentencias_que_corren(ft._texto_migracion_de_natalia()):     # pieza 9: la tarjeta de los envíos
             con.execute(ft._a_sqlite(s))
+        for s in ft._sentencias_que_corren(ft._texto_migracion_del_canal()):      # pieza 9b: el cambio de canal
+            con.execute(ft._a_sqlite(s))
         dos_opciones = json.dumps({"opciones": [{"nombre": "A", "renglones": []}, {"nombre": "B", "renglones": []}]})
         una_opcion = json.dumps({"opciones": [{"nombre": "A", "renglones": []}]})
         for cid, proyecto, contenido in ((1, 1, dos_opciones), (2, 2, una_opcion), (3, 1, una_opcion)):
@@ -849,8 +851,9 @@ def _sentencias_sobre_facturas(archivos, raiz) -> list[tuple[str, int, str]]:
 
 def _lo_que_viola(hallados):
     """Reglas: solo `db/db.py` escribe; nadie borra salvo los renglones de un borrador (y, con él, sus envíos que ya
-    terminaron mal); las ligas solo se marcan `desligada_en`; un envío solo nace de dos formas (Natalia lo pide `pendiente`,
-    la casa lo marca `mano` ya enviado), solo cambia las columnas de su vida, TODO UPDATE suyo dice el estado en su WHERE y
+    terminaron mal); las ligas solo se marcan `desligada_en`; un envío solo nace de tres formas (Natalia lo pide `pendiente`,
+    la casa lo marca `mano` ya enviado, y el cambio de canal de una factura ya aprobada nace `aprobado` con la aprobación
+    que había; pieza 9b), solo cambia las columnas de su vida, TODO UPDATE suyo dice el estado en su WHERE y
     solo dos sentencias pueden ponerlo `enviado` (la que anota Natalia y la de «a mano»: nada dice «enviado» sin que alguien
     lo anote; pieza 9); todo UPDATE de `facturas`
     (menos el que solo toma la fila) dice en su WHERE en qué estado vale y nunca toca `hecha_por*`, `creado_en`
@@ -868,8 +871,8 @@ def _lo_que_viola(hallados):
         if tabla == "factura_renglones" and re.search(r"\bUPDATE\b", v, re.I):
             malos.append((rel, linea, "cambia un renglón en su sitio"))
         if tabla == "factura_envios" and re.search(r"\bINSERT\b", v, re.I) and v not in (
-                db.SENTENCIA_DE_PEDIR_ENVIO, db.SENTENCIA_DE_MANDADA_A_MANO):
-            malos.append((rel, linea, "crea un envío de una forma que no es de las dos"))
+                db.SENTENCIA_DE_PEDIR_ENVIO, db.SENTENCIA_DE_MANDADA_A_MANO, db.SENTENCIA_DE_PEDIR_ENVIO_YA_APROBADO):
+            malos.append((rel, linea, "crea un envío de una forma que no es de las tres"))
         if tabla == "factura_envios" and re.search(r"'enviado'", v) and v not in (
                 db.SENTENCIA_DE_ANOTAR_QUE_SALIO, db.SENTENCIA_DE_MANDADA_A_MANO):
             malos.append((rel, linea, "pone enviado fuera de las dos que lo anotan"))
@@ -922,7 +925,9 @@ def test_las_sentencias_que_escriben_facturas_son_las_de_la_puerta_y_cumplen_las
         db.SENTENCIA_DE_PEDIR_ENVIO, db.SENTENCIA_DE_APROBAR_ENVIO, db.SENTENCIA_DE_RECHAZAR_ENVIO,
         db.SENTENCIA_DE_ENVIO_QUE_NO_SE_PUDO_APROBAR, db.SENTENCIA_DE_ANOTAR_QUE_SALIO,
         db.SENTENCIA_DE_ANOTAR_QUE_NO_SALIO, db.SENTENCIA_DE_MANDADA_A_MANO, db.SENTENCIA_DE_MARCAR_LA_TARJETA,
-        db.SENTENCIA_DE_DESCARTAR_ENVIOS, db.SENTENCIA_DE_RECLAMAR_EL_RECORDATORIO, db.SENTENCIA_DE_SOLTAR_EL_RECORDATORIO))
+        db.SENTENCIA_DE_DESCARTAR_ENVIOS, db.SENTENCIA_DE_RECLAMAR_EL_RECORDATORIO, db.SENTENCIA_DE_SOLTAR_EL_RECORDATORIO,
+        # pieza 9b (el cambio de canal): el único envío que nace `aprobado` sin tarjeta, con la aprobación que ya había
+        db.SENTENCIA_DE_PEDIR_ENVIO_YA_APROBADO))
     assert textos == esperadas, [h[:2] for h in hallados]
     assert _lo_que_viola(hallados) == []
 
@@ -953,7 +958,7 @@ def test_la_guarda_ve_lo_inventado(tmp_path):
         "pone el número fuera de emitir", "toca el NCF fuera de un borrador", "UPDATE de facturas sin el estado en el WHERE",
         "borra de facturas sin decir borrador", "cambia hecha_por", "cambia en una liga algo que no es desligada_en",
         "borra de factura_ligas sin decir borrador",
-        "cambia un renglón en su sitio", "crea un envío de una forma que no es de las dos",
+        "cambia un renglón en su sitio", "crea un envío de una forma que no es de las tres",
         "cambia en un envío una columna que no es de su vida", "UPDATE de envíos sin el estado en el WHERE",
         "pone enviado fuera de las dos que lo anotan", "borra de factura_envios sin decir borrador",
         "UPDATE sin WHERE", "reemplaza", "escribe fuera de db/db.py"])

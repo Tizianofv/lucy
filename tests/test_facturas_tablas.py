@@ -89,6 +89,18 @@ def _texto_migracion_de_natalia() -> str:
     return _migracion_de_natalia().read_text(encoding="utf-8")
 
 
+def _migracion_del_canal():
+    """La migración de la pieza 9b (el cambio de canal: de qué envío viene uno que nace aprobado), buscada por lo que hace."""
+    suyas = [a for a in g._migraciones()
+             if "ALTER TABLE factura_envios ADD COLUMN IF NOT EXISTS viene_de_envio_id" in a.read_text(encoding="utf-8")]
+    assert len(suyas) == 1, suyas
+    return suyas[0]
+
+
+def _texto_migracion_del_canal() -> str:
+    return _migracion_del_canal().read_text(encoding="utf-8")
+
+
 def _guion():
     spec = importlib.util.spec_from_file_location("ensayo_facturas", _ROOT / "tools" / "ensayo_facturas.py")
     modulo = importlib.util.module_from_spec(spec)

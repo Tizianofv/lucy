@@ -168,15 +168,17 @@ async def _drive_de_las_facturas():
 
 async def _envios_de_las_facturas():
     """Los SELECT de lo que la pieza 9 de las facturas (la puerta de Natalia, 21-oct-2026) agregó, SIN tolerancia: las dos
-    columnas de la tarjeta de `factura_envios` (`tarjeta_msg_id`, `visto_cambiado_en`). `db.envios_de_factura` (la página de
-    una factura) NO las nombra a propósito y carga igual sin la migración; ésta es la línea que dice que
-    `db/migrations/2026-10-21_facturas_natalia.sql` no se aplicó. Son LECTURAS; pedir un envío, aprobarlo y anotarlo no se
-    ejercen acá (humo.py no escribe en producción)."""
+    columnas de la tarjeta de `factura_envios` (`tarjeta_msg_id`, `visto_cambiado_en`) y, de la pieza 9b, la de la
+    procedencia (el cambio de canal: `viene_de_envio_id`). `db.envios_de_factura` (la página de una factura) NO las
+    nombra a propósito y carga igual sin las migraciones; ésta es la línea que dice que
+    `db/migrations/2026-10-21_facturas_natalia.sql` o `db/migrations/2026-10-21_facturas_canal.sql` no se aplicaron. Son
+    LECTURAS; pedir un envío, aprobarlo y anotarlo no se ejercen acá (humo.py no escribe en producción)."""
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=db.dict_row)
         await cur.execute("SELECT count(*) AS envios, count(tarjeta_msg_id) AS con_tarjeta, "
                           "count(visto_cambiado_en) AS con_candado, count(tarjeta_enviada_en) AS con_hora, "
-                          "count(recordada_en) AS recordados FROM factura_envios")
+                          "count(recordada_en) AS recordados, count(viene_de_envio_id) AS con_origen "
+                          "FROM factura_envios")
         return {"factura_envios": dict(await cur.fetchone())}
 
 
