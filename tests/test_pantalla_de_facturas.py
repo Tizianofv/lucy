@@ -95,7 +95,7 @@ def registro(monkeypatch):
     doble.llave = LLAVE
     doble.sesiones = {"puede_ligar": True, "motivo_sin_ligar": "", "sesiones": [dict(SESION), dict(TRABAJO), dict(SESION_B), dict(SU_CANCELADA)]}
     doble.otras = [dict(OTRA), dict(OTRO_TRABAJO), dict(CANCELADA)]
-    doble.busqueda = {"sesiones": [dict(OTRA), dict(CANCELADA)], "hay_mas": False}
+    doble.busqueda = {"sesiones": [dict(OTRA), dict(CANCELADA), dict(SU_CANCELADA, nombre="Cliente de Prueba")], "hay_mas": False}
     monkeypatch.setattr(config, "REGISTRO_URL", doble.url)
     monkeypatch.setattr(config, "LUCY_LLAVE_SERVICIO", LLAVE)
     # `test_guardar_factura` importa una guarda que deja un `httpx` falso en `sys.modules`: el de verdad es el que usa
@@ -282,9 +282,9 @@ def test_paso_1_sin_cliente_se_busca_en_noco_y_cada_ficha_es_un_enlace(pantalla)
 def test_paso_2_con_cliente_enseña_sus_sesiones_y_trabajos_y_una_cancelada_no_se_puede_escoger(pantalla):
     html = cliente().get("/facturas/nueva", params={"cliente": 7, "sq": "pe"}).text
     cajas = re.findall(r'<input type="checkbox" name="ref" value="(\d+)"( checked)?( disabled)?>', html)
-    assert [c[0] for c in cajas] == ["11", "13", "12", "21", "31"]  # de la ficha (sesiones, luego trabajos), y de la búsqueda
-    assert [c[0] for c in cajas if c[2]] == ["21", "31"]            # las de la búsqueda son de otras personas: sin casilla que se pueda marcar
-    assert html.count("No es de este cliente: no se puede escoger") == 2
+    assert [c[0] for c in cajas] == ["11", "13", "12", "21", "31", "32"]  # de la ficha (sesiones, luego trabajos), y de la búsqueda
+    assert [c[0] for c in cajas if c[2]] == ["21", "31", "32"]      # ninguna de la búsqueda se puede marcar
+    assert html.count("No es de este cliente: no se puede escoger") == 2      # 21 y 31 son de otras personas; la 32 es cancelada SUYA
     assert "Cancelada: no se factura" in html and ">Trabajo<" in html
 
 

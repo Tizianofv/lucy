@@ -2605,8 +2605,7 @@ async def _contexto_de_factura_nueva(*, cliente, proyecto, cotizacion, opcion, r
         # La búsqueda trae sesiones de cualquier persona: las que no están entre las de la ficha salen marcadas y no se
         # pueden escoger (el servidor tampoco las deja pasar: `fp.ligas_de_las_refs`).
         ctx["candidatas"] = candidatas + [
-            dict(c, elegida=False, no_se_puede=fp.POR_QUE_NO_SE_PUEDE_ESCOGER["ajena" if lectura and lectura["estado"] == "ok" else "sin_comprobar"])
-            for c in busqueda["sesiones"] if c["ref"] not in ya]
+            dict(fp.candidata_de_la_busqueda(c, lectura), elegida=False) for c in busqueda["sesiones"] if c["ref"] not in ya]
         ctx["hay_mas"] = busqueda["hay_mas"]
     ctx["busqueda"] = busqueda
     # ¿Se puede pasar a escribir? Solo con sesiones escogidas que son de la ficha del cliente y no están canceladas.
@@ -2781,8 +2780,7 @@ async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", 
         if busqueda and busqueda["estado"] == "ok":
             ya = {c["ref"] for c in candidatas}
             # Lo que la búsqueda trae y no está entre las sesiones del cliente sale marcado y sin botón de ligar.
-            motivo = fp.POR_QUE_NO_SE_PUEDE_ESCOGER["ajena" if lectura["estado"] == "ok" else "sin_comprobar"]
-            candidatas += [dict(c, ligada=c["ref"] in ligadas, no_se_puede="" if c["ref"] in ligadas else motivo)
+            candidatas += [dict(fp.candidata_de_la_busqueda(c, lectura), ligada=c["ref"] in ligadas)
                            for c in busqueda["sesiones"] if c["ref"] not in ya]
             hay_mas = busqueda["hay_mas"]
         candidatas = [c for c in candidatas if not c["ligada"]]

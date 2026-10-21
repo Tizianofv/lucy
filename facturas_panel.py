@@ -190,6 +190,19 @@ POR_QUE_NO_SE_PUEDE_ESCOGER = {
     "sin_comprobar": "No se pudo comprobar de quién es: no se puede escoger",
 }
 
+def candidata_de_la_busqueda(c: dict, lectura: dict | None) -> dict:
+    """Una sesión que la BÚSQUEDA trajo y no está entre las de la ficha, con su marca. ES LA ÚNICA REGLA (la usan «Nueva
+    factura» y la página de una factura). `lectura` es la de la ficha (`registro_lectura.sesiones_de_cliente`) o `None`.
+    Si la ficha se leyó bien: la que la App marcó cancelada PARA ESA FICHA es del cliente y sale como cancelada (la ficha no
+    la lista, pero sí la nombra en `canceladas`); cualquier otra es de otra persona (`ajena`). Si la ficha no se leyó no se sabe
+    de quién es ninguna (`sin_comprobar`). Con `no_se_puede` no hay casilla ni botón."""
+    if lectura is not None and lectura.get("estado") == "ok":
+        if c["ref"] in set(lectura.get("canceladas") or []):
+            return dict(c, cancelada=True, no_se_puede="")
+        return dict(c, no_se_puede=POR_QUE_NO_SE_PUEDE_ESCOGER["ajena"])
+    return dict(c, no_se_puede=POR_QUE_NO_SE_PUEDE_ESCOGER["sin_comprobar"])
+
+
 MOTIVOS_DE_FICHA = {
     "sin_telefono": "la ficha no tiene teléfono",
     "ficha_inexistente": "la ficha no existe en el registro",

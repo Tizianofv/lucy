@@ -157,7 +157,7 @@ def test_un_cliente_que_no_es_una_ficha_no_se_pregunta_ni_se_liga(pantalla, regi
 def test_en_la_busqueda_las_ajenas_salen_marcadas_y_sin_casilla_ni_boton(pantalla):
     html = cliente().get("/facturas/nueva", params={"cliente": 7, "sq": "pe"}).text
     cajas = re.findall(r'<input type="checkbox" name="ref" value="(\d+)"( checked)?( disabled)?>', html)
-    assert [c[0] for c in cajas if c[2]] == ["21", "31"] and html.count("data-no-se-puede") == 2
+    assert [c[0] for c in cajas if c[2]] == ["21", "31", "32"] and html.count("data-no-se-puede") == 2
     b = tgf.crear(liga={"tipo": "sesion", "ref": "11"}, cliente_noco_id=7)
     html = cliente().get(f"/facturas/{b['id']}", params={"sq": "pe"}).text
     botones = re.findall(r'action="/facturas/\d+/ligar"[^>]*><input type="hidden" name="ref" value="(\d+)">', html)
@@ -169,8 +169,56 @@ def test_en_la_busqueda_con_la_app_sin_comprobar_ninguna_se_puede_escoger(pantal
     b = tgf.crear(liga={"tipo": "sesion", "ref": "11"}, cliente_noco_id=7)
     registro.sesiones = {"puede_ligar": False, "motivo_sin_ligar": "sin_telefono", "sesiones": []}
     html = cliente().get(f"/facturas/{b['id']}", params={"sq": "pe"}).text
-    assert "No se pudo comprobar de quién es" in html and html.count("data-no-se-puede") == 2
+    assert "No se pudo comprobar de quién es" in html and html.count("data-no-se-puede") == 3
     assert not re.findall(r'action="/facturas/\d+/ligar"[^>]*><input type="hidden" name="ref"', html)
+
+
+def _etiquetas_de(html, ref):
+    """El texto de la fila de la búsqueda que lleva esa `ref` (en «Nueva» la casilla, en la página el botón o su ausencia)."""
+    filas = re.findall(r'<(?:label|div) class="sesion">(.*?)</(?:label|div)>', html, re.S)
+    return [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", f)) for f in filas if "s0" in f or "c0" in f or "x0" in f]
+
+
+def test_la_cancelada_propia_sale_como_cancelada_y_no_como_de_otra_persona_en_las_dos_pantallas(pantalla):
+    """La 32 es del cliente (la ficha la nombra en `canceladas`) pero la ficha no la lista; la 31 es de otra persona y también
+    viene cancelada. Una sola regla (`fp.candidata_de_la_busqueda`) decide en «Nueva factura» y en la página de la factura."""
+    b = tgf.crear(liga={"tipo": "sesion", "ref": "11"}, cliente_noco_id=7)
+    for html in (cliente().get("/facturas/nueva", params={"cliente": 7, "sq": "pe"}).text,
+                 cliente().get(f"/facturas/{b['id']}", params={"sq": "pe"}).text):
+        filas = {re.search(r"c0(\d\d)", f).group(1): f for f in _etiquetas_de(html, "")
+                 if re.search(r"c0\d\d", f)}
+        assert "Cancelada: no se factura" in filas["32"] and "No es de este cliente" not in filas["32"]
+        assert "No es de este cliente" in filas["31"]                      # la de otra persona sigue siendo ajena
+    # y no se puede facturar: ni casilla marcable ni se guarda
+    antes = tgf.foto(pantalla)
+    r = crear_por_la_pantalla(refs=("32",))
+    assert r.status_code == 400 and "cancelado o pospuesto" in r.text and tgf.foto(pantalla) == antes
+
+
+def test_la_regla_de_la_busqueda_es_pura_y_cae_del_lado_estricto():
+    c = {"ref": "9", "cancelada": False}
+    ok = {"estado": "ok", "canceladas": ["9"]}
+    assert fp.candidata_de_la_busqueda(c, ok) == {"ref": "9", "cancelada": True, "no_se_puede": ""}
+    assert fp.candidata_de_la_busqueda(c, {"estado": "ok", "canceladas": []})["no_se_puede"] == fp.POR_QUE_NO_SE_PUEDE_ESCOGER["ajena"]
+    for malo in (None, {"estado": "sin_ligar", "canceladas": ["9"]}, {"estado": "sin_cliente"}, {}):
+        assert fp.candidata_de_la_busqueda(c, malo)["no_se_puede"] == fp.POR_QUE_NO_SE_PUEDE_ESCOGER["sin_comprobar"], malo
+
+
+def test_una_ficha_inexistente_no_liga_nada_como_contesta_la_app_real(pantalla, registro):
+    """La App real contesta `ficha_inexistente` con `puede_ligar` falso (mapa de la App); el doble ya no inventa las sesiones de otra ficha."""
+    registro.fichas_que_existen = {"7"}
+    s = registro_lectura  # noqa: F841
+    import asyncio
+    lectura = asyncio.run(registro_lectura.sesiones_de_cliente(99))
+    assert (lectura["estado"], lectura["motivo"], lectura["sesiones"], lectura["trabajos"]) == ("sin_ligar", "ficha_inexistente", [], [])
+    assert asyncio.run(registro_lectura.sesiones_de_cliente(7))["estado"] == "ok"
+    antes = tgf.foto(pantalla)
+    r = crear_por_la_pantalla(cliente="99", refs=("11",))
+    assert r.status_code == 400 and "la ficha no existe en el registro" in r.text and tgf.foto(pantalla) == antes
+    b = tgf.crear(liga={"tipo": "sesion", "ref": "11"}, cliente_noco_id=99, para_nombre="Fantasma")
+    antes = tgf.foto(pantalla)
+    r = cliente().post(f"/facturas/{b['id']}/ligar", data={"ref": "12"}, follow_redirects=False)
+    assert r.status_code == 400 and "la ficha no existe en el registro" in r.text and tgf.foto(pantalla) == antes
 
 
 @pytest.mark.parametrize("entrada", ["crear", "desde-la-cotizacion", "desde-el-proyecto", "ligar"])
