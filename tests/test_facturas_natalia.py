@@ -531,6 +531,114 @@ def test_una_anulada_no_se_manda_y_una_emitida_si(api, tg):
     assert r.status_code == 409 and tgf.foto(api) == antes
 
 
+# ── El cambio de canal de una factura ya aprobada (pieza 9b, 21-oct-2026) ────────────────────────────
+#
+# Tiziano: «Si no se puede por Whatsapp que la envié por correo». El envío por el otro canal de una factura EMITIDA que
+# ya tuvo una aprobación de quien revisa que no salió nace `aprobado` (la misma persona, la misma hora, de qué envío
+# viene) y sin tarjeta; todo lo demás sigue naciendo `pendiente`; y una factura que ya salió no abre otro envío.
+
+def test_si_el_envio_aprobado_por_el_otro_canal_no_salio_el_nuevo_nace_aprobado_sin_tarjeta(api, tg):
+    fid, eid = aprobada(tg)
+    assert anotar(fid, eid, False, "la ventana de 24 h está cerrada").json()["envio"]["estado"] == "no_se_pudo"
+    documentos = len(tg.documentos)
+    r = pedir(fid, "correo")
+    assert r.status_code == 200, r.text
+    e = r.json()["envio"]
+    assert (e["canal"], e["estado"], e["aprobada"], e["pdf_listo"], e["motivo"], r.json()["reusada"]) == (
+        "correo", "aprobado", True, True, None, False)
+    nuevo = next(x for x in envios(api, fid) if x["id"] == e["envio_id"])
+    anterior = next(x for x in envios(api, fid) if x["id"] == eid)
+    assert (nuevo["aprobado_por_chat_id"], nuevo["aprobado_en"]) == (ROSI, anterior["aprobado_en"])
+    assert (nuevo["viene_de_envio_id"], nuevo["tarjeta_msg_id"], nuevo["enviado_en"]) == (eid, None, None)
+    assert correr(db.envios_de_factura_sin_tarjeta()) == []                      # no hay tarjeta que mandar
+    assert vuelta(tg) == 0 and len(tg.documentos) == documentos                  # el despertador no manda ninguna
+    assert pdf(fid, e["envio_id"]).status_code == 200                            # ya se puede mandar: el PDF baja
+    assert acciones_de_la_huella(api)[-1] == ("natalia", "pedir_envio_aprobado")
+    assert anotar(fid, e["envio_id"], True).json()["envio"]["estado"] == "enviado"
+
+
+def test_el_primer_envio_de_una_emitida_nace_pendiente(api):
+    f = de_natalia(api, 7, "r-primero")
+    correr(db.emitir_factura(f["id"], DUENO, correr(db.factura_por_id(f["id"]))["cambiado_en"]))
+    r = pedir(f["id"], "correo")                                                 # emitida y sin ningún envío: el primero
+    assert (r.json()["envio"]["estado"], r.json()["reusada"]) == ("pendiente", False)
+
+
+def test_el_envio_que_sigue_a_uno_aprobado_que_no_fallo_nace_pendiente(api, tg):
+    fid, eid = aprobada(tg)                                                      # su envío sigue aprobado: ni salió ni falló
+    assert pedir(fid, "correo").json()["envio"]["estado"] == "pendiente"
+
+
+def test_un_envio_rechazado_no_abre_aprobado(api, tg):
+    fid, eid = aprobada(tg)
+    e2 = pedir(fid, "correo").json()["envio"]["envio_id"]
+    assert vuelta(tg) == 1
+    tocar(f"fan:{e2}", ROSI)
+    r = pedir(fid, "correo")
+    assert (r.json()["envio"]["estado"], r.json()["reusada"]) == ("pendiente", False)
+    assert r.json()["envio"]["envio_id"] != e2
+
+
+def test_un_borrador_nace_pendiente_aunque_haya_un_no_se_pudo_que_no_fue_una_aprobacion(api, tg):
+    fid, eid = hasta_la_tarjeta(tg)
+    f = correr(db.factura_por_id(fid))
+    correr(db.corregir_borrador_de_factura(fid, DUENO, f["cambiado_en"], {"para_nombre": "Nombre Cambiado"}))
+    tocar(f"fas:{eid}", ROSI)                                                    # no se pudo aprobar: la factura cambió
+    no_se_pudo = envios(api, fid)[0]
+    assert (no_se_pudo["estado"], no_se_pudo["aprobado_en"], no_se_pudo["aprobado_por_chat_id"]) == (
+        "no_se_pudo", None, None)
+    r = pedir(fid, "correo")
+    assert r.json()["envio"]["estado"] == "pendiente"                             # un borrador siempre pide aprobación
+
+
+def test_el_cambio_de_canal_solo_vale_para_el_otro_canal(api, tg):
+    fid, eid = aprobada(tg)
+    anotar(fid, eid, False, "no salió")
+    r = pedir(fid, "whatsapp")                                                   # el mismo canal se vuelve a pedir
+    assert (r.json()["envio"]["canal"], r.json()["envio"]["estado"]) == ("whatsapp", "pendiente")
+    assert r.json()["envio"]["envio_id"] != eid
+
+
+def test_un_envio_que_salio_no_abre_otro_y_devuelve_el_que_salio(api, tg):
+    fid, eid = aprobada(tg)
+    anotar(fid, eid, True)
+    antes = tgf.foto(api)
+    r = pedir(fid, "correo")
+    assert r.status_code == 200, r.text
+    assert (r.json()["envio"]["envio_id"], r.json()["envio"]["canal"], r.json()["envio"]["estado"],
+            r.json()["envio"]["pdf_listo"], r.json()["reusada"]) == (eid, "whatsapp", "enviado", False, True)
+    assert tgf.foto(api) == antes and len(envios(api, fid)) == 1                   # no se escribió nada
+    assert vuelta(tg) == 0
+    assert pedir(fid, "whatsapp").json()["envio"]["envio_id"] == eid               # ni por el mismo canal
+
+
+def test_no_se_aprueba_un_segundo_envio_si_la_factura_ya_salio(api, tg):
+    """La otra puerta de «nunca dos documentos al cliente»: una tarjeta que ya había salido no se aprueba después de que
+    la factura salió por otro canal."""
+    fid, eid = aprobada(tg)
+    e2 = pedir(fid, "correo").json()["envio"]["envio_id"]
+    assert vuelta(tg) == 1
+    anotar(fid, eid, True)                                                       # ya salió por WhatsApp
+    q = tocar(f"fas:{e2}", ROSI)
+    segundo = next(x for x in envios(api, fid) if x["id"] == e2)
+    assert segundo["estado"] == "no_se_pudo" and "ya salió" in segundo["motivo"]
+    assert "No se pudo aprobar" in q.pie_final and "ya salió" in q.pie_final
+    assert pdf(fid, e2).status_code == 409
+
+
+def test_la_aprobacion_que_la_puerta_hereda_tiene_que_ser_una_de_verdad_aprobada_por_quien_revisa(api):
+    """La llave dice «aprobado por quien revisa» (`aprobado_por_chat_id`), no «cualquier envío que no salió»: un
+    `no_se_pudo` sin aprobación no abre el canal nuevo. Se siembra la fila directo porque por la puerta ese estado hoy solo
+    se alcanza en un borrador, y el cambio de canal pide una emitida."""
+    f = de_natalia(api, 7, "r-sin-aprobar")
+    correr(db.emitir_factura(f["id"], DUENO, correr(db.factura_por_id(f["id"]))["cambiado_en"]))
+    api.con.execute("INSERT INTO factura_envios (factura_id, canal, estado, motivo) "
+                    "VALUES (?, 'correo', 'no_se_pudo', 'sin aprobación')", (f["id"],))
+    api.con.commit()
+    r = pedir(f["id"], "whatsapp")
+    assert r.json()["envio"]["estado"] == "pendiente"
+
+
 # ── La tarjeta ──────────────────────────────────────────────────────────────────────────────────────
 
 def test_la_tarjeta_va_al_chat_de_quien_revisa_con_el_pdf_y_los_botones_y_a_nadie_mas(api, tg):
@@ -1140,11 +1248,12 @@ def test_la_migracion_agrega_dos_columnas_nulas_y_el_esquema_dice_lo_mismo():
 
 def test_la_migracion_corre_sobre_las_anteriores_y_una_segunda_vez_no_hace_nada(mundo):  # noqa: F811
     antes = [c[1] for c in mundo.con.execute("PRAGMA table_info(factura_envios)")]
-    assert antes[-4:] == ["tarjeta_msg_id", "visto_cambiado_en", "tarjeta_enviada_en", "recordada_en"]
+    assert antes[-5:] == ["tarjeta_msg_id", "visto_cambiado_en", "tarjeta_enviada_en", "recordada_en", "viene_de_envio_id"]
     f = tgf.crear()
     mundo.con.execute("INSERT INTO factura_envios (factura_id, canal) VALUES (?, 'mano')", (f["id"],))
     e = mundo.con.execute("SELECT tarjeta_msg_id, visto_cambiado_en FROM factura_envios").fetchone()
     assert e == (None, None) and mundo.con.execute("SELECT tarjeta_enviada_en, recordada_en FROM factura_envios").fetchone() == (None, None)                                               # lo de hoy queda sin tarjeta
+    assert mundo.con.execute("SELECT viene_de_envio_id FROM factura_envios").fetchone() == (None,)                     # y sin procedencia
 
 
 def test_el_guion_de_ensayo_saca_el_commit_cierra_con_rollback_y_solo_lee_con_cuenta(capsys):
@@ -1162,11 +1271,39 @@ def test_el_guion_de_ensayo_saca_el_commit_cierra_con_rollback_y_solo_lee_con_cu
     assert g.main(["--otra-cosa"]) == 2
 
 
+def test_la_migracion_del_canal_agrega_una_columna_nula_y_el_esquema_dice_lo_mismo():
+    """Pieza 9b: una sola columna aditiva (`viene_de_envio_id`), sin valor por omisión y sin CHECK, y el esquema repite."""
+    texto = ft._texto_migracion_del_canal()
+    sin_comentarios = db._sin_comentarios(texto)
+    assert re.findall(r"ALTER\s+TABLE\s+factura_envios\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+(\w+)\s+(\w+)\s*;",
+                      sin_comentarios, re.I) == [("viene_de_envio_id", "BIGINT")]
+    esquema = (RAIZ / "db" / "schema.sql").read_text(encoding="utf-8")
+    bloque = esquema[esquema.index("CREATE TABLE factura_envios"):esquema.index("CREATE INDEX idx_factura_envios_factura")]
+    assert re.search(r"viene_de_envio_id\s+BIGINT,", bloque)
+    assert not re.search(r"\b(INSERT|UPDATE|DELETE|DROP|CREATE)\b", re.sub(r"--.*", "", texto), re.I)
+
+
+def test_el_guion_de_ensayo_del_canal_saca_el_commit_cierra_con_rollback_y_solo_lee_con_cuenta(capsys):
+    from tools import ensayo_facturas_canal as g
+    assert g.main(["--cuenta"]) == 0
+    cuenta = capsys.readouterr().out
+    assert cuenta.startswith("BEGIN READ ONLY;") and cuenta.rstrip().endswith("ROLLBACK;")
+    assert not re.search(r"\b(ALTER|INSERT|UPDATE|DELETE|CREATE|DROP)\b", cuenta)
+    assert g.main(["--ensayo"]) == 0
+    ensayo = capsys.readouterr().out
+    assert "ALTER TABLE factura_envios ADD COLUMN IF NOT EXISTS viene_de_envio_id BIGINT" in ensayo
+    sin_comentarios = re.sub(r"--[^\n]*", "", ensayo)
+    assert "COMMIT" not in sin_comentarios and ensayo.count("ROLLBACK;") >= 2
+    assert "bigint" in ensayo
+    assert g.main(["--otra-cosa"]) == 2
+
+
 def test_el_humo_lee_las_columnas_de_la_tarjeta_sin_tolerancia_y_las_lecturas_nuevas():
     humo = (RAIZ / "tools" / "humo.py").read_text(encoding="utf-8")
     i = humo.index("async def _envios_de_las_facturas")
     cuerpo = humo[i:humo.index("\nasync def ", i + 10)]
     assert "tarjeta_msg_id" in cuerpo and "visto_cambiado_en" in cuerpo
+    assert "viene_de_envio_id" in cuerpo                                  # pieza 9b: la procedencia, sin tolerancia
     assert not re.search(r"\b(INSERT|UPDATE|DELETE|ALTER|CREATE|DROP)\b", cuerpo)
     pruebas = humo[humo.index("pruebas = ["):]
     for nombre in ("_envios_de_las_facturas", "db.envios_de_factura(0)", "db.facturas_de_natalia(0)",
