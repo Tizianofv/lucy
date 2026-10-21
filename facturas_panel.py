@@ -335,15 +335,22 @@ def _dinero_de_la_fila(fila: dict) -> dict:
 #
 # EL PAGO SE ANOTA EN UN SOLO SITIO: LA APP, EN CADA SESIÓN (diseño §7, y Tiziano el 20-oct-2026: «Claro, si alguien paga,
 # en la sesión tiene que aparecer eso»). La factura NO guarda ningún pago ni tiene botón de pago: cada vez que se pinta
-# lee de la App lo que se ha pagado de sus sesiones y trabajos ligados vivos y lo compara con lo que ella cobra por esa
-# parte. Nada de esto se guarda.
+# lee de la App lo que se ha pagado de sus sesiones y trabajos ligados vivos. Nada de esto se guarda.
 #
-# CONTRA QUÉ SE COMPARA (la base, escogida el 21-oct-2026): el SUBTOTAL DE LA FACTURA, sin ITBIS. La App solo dice cuánto
-# se ha pagado; lo que el cliente debe es lo que la factura le cobra, y si alguien cambió un renglón a mano manda el
-# renglón escrito: es lo que se le facturó y lo que va a pagar. La suma de los `total` de la App queda como segunda
-# opinión: cuando no da lo mismo, la factura dice «no cuadra con la App: revísala» con las dos cifras y NO cambia el
-# estado (diseño §7). El ITBIS no cuenta: por la respuesta A de Tiziano (21-oct-2026) no pasa por la App — se cobra
-# aparte—, y la factura lo dice con sus palabras.
+# CUÁNDO ESTÁ PAGADA (la regla aprobada, dicha por la sala el 21-oct-2026 tras el NO PASA del testigo): cuando sus
+# sesiones y trabajos ligados vivos —sin contar los cancelados— NO DEBEN NADA en el Registro, o sea cuando la suma del
+# `saldo` que da la App por sesión (que ya descuenta lo que el Registro descuenta) es cero o menos. Lo que se muestra
+# como pagado es la suma del `abonado`, y el «de RD$Y» es la suma de los `total` de esas sesiones. (La primera versión
+# medía «pagada» contra el subtotal de la factura; el testigo midió que así una sesión que debe RD$500 salía «Pagada»
+# cuando la factura se había escrito por RD$500, y el diseño dice «pagada (las sesiones no deben nada)».)
+#
+# EL AVISO DE «NO CUADRA» ES OTRA COSA Y NO CAMBIA EL ESTADO: cuando el subtotal de la factura (sin ITBIS) no es igual a
+# la suma de los `total` de las sesiones —porque se cambió un renglón a mano o porque la factura lleva un renglón que no
+# es de una sesión—, la factura muestra las dos cifras y dice «no cuadra con la App: revísala» (diseño §7). Quien decide
+# si está pagada son las sesiones, no la factura.
+#
+# EL ITBIS NO CUENTA para nada de esto: por la respuesta A de Tiziano (21-oct-2026) no pasa por la App —se cobra
+# aparte— y la pantalla lo dice con sus palabras.
 
 TEXTO_SIN_LEER_EL_PAGO = "No se pudo leer lo pagado."
 
@@ -355,15 +362,29 @@ def _pago_sin_leer(itbis: str, motivo: str) -> dict:
     return {"estado": "no_se_pudo", "texto": TEXTO_SIN_LEER_EL_PAGO, "detalle": motivo, "itbis": itbis}
 
 
+def _aviso_de_lo_que_no_cuadra(f: dict, ligas_leidas: list[dict], total_de_las_sesiones) -> str:
+    """La frase de cuando la factura y la App no dicen lo mismo del dinero de las sesiones, o `""`.
+
+    Compara el subtotal de la factura (sin ITBIS) con la suma de los `total` que la App tiene de sus sesiones ligadas. Solo
+    se afirma cuando se leyeron TODAS las ligas (con una cancelada o una que ya no está, la comparación no está completa y
+    no se dice nada: la página ya nombra cada una). Es un aviso: NO cambia el estado del pago.
+    """
+    if not all(l["leida"] == "ok" for l in ligas_leidas) or total_de_las_sesiones == f["subtotal"]:
+        return ""
+    return (f"No cuadra con la App: revísala (la factura suma {cz.dinero_en_pesos(f['subtotal'])} y el registro dice "
+            f"{cz.dinero_en_pesos(total_de_las_sesiones)} de sus sesiones).")
+
+
 def el_pago_de_la_factura(f: dict, ligas_leidas: list[dict] | None) -> dict:
     """Lo que la factura dice de su pago, leído de lo que la App contestó AHORA (`ligas_leidas`, lo que devuelve
     `ligas_con_lo_leido`): `{"estado", "texto", "detalle", "itbis"}`.
 
-    `estado` es `pagada` (lo pagado cubre el subtotal de la factura), `con_abono` (algo pagado, no todo), `sin_pagos`,
-    `no_se_pudo` (no se puede decir cuánto se ha pagado: la App no contestó, ya no devuelve una de sus sesiones o no trajo
-    una cifra: se dice y no se adivina) o `no_aplica` (la factura está anulada: una anulada no tiene estado de pago).
-    `detalle` es lo que hay que decir además (el porqué de un `no_se_pudo`, o las dos cifras cuando la App y la factura no
-    cuadran) e `itbis`, la frase del ITBIS cuando la factura lo lleva.
+    `estado` es `pagada` (las sesiones y trabajos ligados vivos no deben nada en el Registro: la suma de su `saldo` es
+    cero o menos), `con_abono` («Pagado RD$X de RD$Y»: algo pagado y todavía deben), `sin_pagos`, `no_se_pudo` (no se
+    puede decir cuánto se ha pagado: la App no contestó, ya no devuelve una de sus sesiones o no trajo una cifra: se dice
+    y no se adivina) o `no_aplica` (la factura está anulada: una anulada no tiene estado de pago). `detalle` es lo que hay
+    que decir además (el porqué de un `no_se_pudo`, o las dos cifras cuando la App y la factura no cuadran) e `itbis`, la
+    frase del ITBIS cuando la factura lo lleva.
 
     `ligas_leidas` en `None` quiere decir que no se pudo leer ni de qué sesiones es la factura. Nada de esto se guarda.
     """
@@ -377,33 +398,31 @@ def el_pago_de_la_factura(f: dict, ligas_leidas: list[dict] | None) -> dict:
         return _pago_sin_leer(itbis, "El registro no contestó.")
     if any(l["leida"] == "no_esta" for l in ligas_leidas):
         return _pago_sin_leer(itbis, "El registro ya no devuelve una de sus sesiones o trabajos.")
-    pagado, en_la_app, comparables = Decimal("0"), Decimal("0"), True
+    pagado, total_de_las_sesiones, saldo_de_las_sesiones, contadas = Decimal("0"), Decimal("0"), Decimal("0"), 0
     for l in ligas_leidas:
         if l["leida"] == "cancelada":
-            # Una cancelada no se cobra ni se paga: no entra en ninguna de las dos cifras (la página la nombra aparte).
+            # Una cancelada no se cobra ni se paga: no entra en ninguna de las cifras (la página la nombra aparte).
             continue
         fila = l["fila"] or {}
-        abonado, total = fila.get("abonado"), fila.get("total")
-        if abonado is None:
-            return _pago_sin_leer(itbis, "El registro no dijo cuánto se ha pagado de una de sus sesiones.")
-        if abonado < 0 or (total is not None and total < 0):
+        abonado, total, saldo = fila.get("abonado"), fila.get("total"), fila.get("saldo")
+        if abonado is None or total is None or saldo is None:
+            return _pago_sin_leer(itbis, "El registro no dijo cuánto cuesta, cuánto se ha pagado o cuánto debe una de "
+                                         "sus sesiones.")
+        if abonado < 0 or total < 0:
+            # Un `saldo` negativo NO es un error: es lo que debe menos quien pagó de más, y cuenta como pagada.
             return _pago_sin_leer(itbis, "El registro trajo una cifra de dinero que no se entiende.")
         pagado += abonado
-        if total is None:
-            comparables = False
-        else:
-            en_la_app += total
-    debido = f["subtotal"]
-    if debido > 0 and pagado >= debido:
+        total_de_las_sesiones += total
+        saldo_de_las_sesiones += saldo
+        contadas += 1
+    if contadas and saldo_de_las_sesiones <= 0:
         estado, texto = "pagada", "Pagada"
     elif pagado > 0:
-        estado, texto = "con_abono", f"Pagado {cz.dinero_en_pesos(pagado)} de {cz.dinero_en_pesos(debido)}"
+        estado, texto = "con_abono", (f"Pagado {cz.dinero_en_pesos(pagado)} de "
+                                      f"{cz.dinero_en_pesos(total_de_las_sesiones)}")
     else:
         estado, texto = "sin_pagos", "Sin pagos"
-    detalle = ""
-    if comparables and all(l["leida"] == "ok" for l in ligas_leidas) and en_la_app != debido:
-        detalle = (f"No cuadra con la App: revísala (la factura suma {cz.dinero_en_pesos(debido)} y el registro dice "
-                   f"{cz.dinero_en_pesos(en_la_app)} de sus sesiones).")
+    detalle = _aviso_de_lo_que_no_cuadra(f, ligas_leidas, total_de_las_sesiones)
     return {"estado": estado, "texto": texto, "detalle": detalle, "itbis": itbis}
 
 
