@@ -147,6 +147,14 @@ def test_la_anulada_dice_anulada_con_el_motivo_y_conserva_su_numero():
     assert ("ESTADO", "ANULADA") in h["para"] and ("MOTIVO DE LA ANULACIÓN", "Se facturó dos veces") in h["para"]
 
 
+def test_el_nombre_del_archivo_de_un_borrador_no_lleva_numero_aunque_el_diccionario_lo_traiga():
+    assert fa.nombre_del_archivo(_f()) == "FAC-2026-001.pdf"
+    assert fa.nombre_del_archivo(_f("anulada", motivo="x")) == "FAC-2026-001.pdf"
+    assert fa.nombre_del_archivo(_f("borrador")) == "Factura-borrador-7.pdf"
+    assert fa.nombre_del_archivo(_f("borrador", codigo="FAC-2026-099")) == "Factura-borrador-7.pdf"
+    assert fa.nombre_del_archivo(_f("quien-sabe", codigo="FAC-2026-099")) == "Factura-borrador-7.pdf"
+
+
 def test_la_emitida_no_dice_ni_borrador_ni_anulada():
     textos = " ".join(fa.textos_de_la_factura(fa.hoja_de_factura(_f())))
     assert "BORRADOR" not in textos and "ANULADA" not in textos and "MOTIVO" not in textos
