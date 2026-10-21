@@ -2654,6 +2654,41 @@ def codigo_de_cotizacion(anio: int, numero: int) -> str:
     return f"COT-{anio}-{numero:03d}"
 
 
+# ── EL NÚMERO DE UNA FACTURA (pieza 1 del diseño «Facturas», 20-oct-2026) ──────────────────────────────
+#
+# UNA SOLA PUERTA para sacar un número de factura: `siguiente_numero_de_factura`, por el mismo camino que
+# el de las cotizaciones (`siguiente_numero_de_cotizacion`): un contador por año (`serie_facturas`) que se
+# sube en la MISMA sentencia que lo lee, así que dos a la vez salen seguidos, y `UNIQUE (anio, numero)` de
+# `facturas` es la última puerta. La serie nace vacía: la primera de 2026 es la FAC-2026-001. Quien la llame
+# (pieza 2) lo hace en la misma transacción que escribe la factura: si esa transacción se deshace, el
+# contador vuelve atrás con ella y el número no se pierde. CUÁNDO se llama (al crear o al emitir) lo decide la
+# pieza 2: la tabla `facturas` admite las dos cosas (un borrador puede no tener número todavía).
+SENTENCIA_DEL_NUMERO_DE_FACTURA = (
+    "INSERT INTO serie_facturas (anio, ultimo) VALUES (%s, 1) "
+    "ON CONFLICT (anio) DO UPDATE SET ultimo = serie_facturas.ultimo + 1 "
+    "RETURNING ultimo")
+
+
+async def siguiente_numero_de_factura(cur, anio: int) -> int:
+    """El número que sigue en la serie de facturas de `anio` (1 si es la primera del año). Escribe en
+    `serie_facturas`: llámala dentro de la transacción que guarda la factura. `cur` es un cursor con
+    `row_factory=dict_row`. El año es el del día en que se numera, no el de `fecha`."""
+    if not _anio_de_cotizacion_que_vale(anio):
+        raise ValueError("el año de la serie no es un año")
+    await cur.execute(SENTENCIA_DEL_NUMERO_DE_FACTURA, (anio,))
+    fila = await cur.fetchone()
+    return int(fila["ultimo"])
+
+
+def codigo_de_factura(anio: int, numero: int) -> str:
+    """`FAC-AAAA-NNN` (tres cifras como mínimo: la 1000 es `FAC-2026-1000`)."""
+    if isinstance(numero, bool) or not isinstance(numero, int) or numero < 1:
+        raise ValueError("el número de la factura no es un entero positivo")
+    if not _anio_de_cotizacion_que_vale(anio):
+        raise ValueError("el año de la factura no es un año")
+    return f"FAC-{anio}-{numero:03d}"
+
+
 # ── GUARDAR Y LEER LAS COTIZACIONES (pieza 3 del diseño «Cotizaciones en Proyectos», 14-oct-2026) ─────
 #
 # UNA SOLA PUERTA para escribir `cotizaciones`: `guardar_cotizacion` (crear, editar un borrador, enviar,

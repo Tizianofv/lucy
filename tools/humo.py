@@ -116,6 +116,36 @@ async def _consultas_de_natalia_sin_tolerancia():
         return dict(await cur.fetchone())
 
 
+# Las facturas que no tienen ninguna liga viva a una sesión o a un trabajo del Registro. Toda factura nace ligada
+# (Tiziano, 20-oct-2026), pero la base no puede exigirlo (es una regla entre dos tablas), así que esta cuenta es la
+# que lo vigila contra la base real: tiene que dar 0. Es el texto que corre `_tablas_de_facturas` y el que corre,
+# sobre SQLite, `tests/test_facturas_tablas.py`.
+SENTENCIA_DE_FACTURAS_SIN_LIGA = (
+    "SELECT count(*) AS n FROM facturas f WHERE NOT EXISTS "
+    "(SELECT 1 FROM factura_ligas l WHERE l.factura_id = f.id AND l.desligada_en IS NULL)")
+
+
+async def _tablas_de_facturas():
+    """Los SELECT de las tablas de las facturas (pieza 1, 20-oct-2026), SIN tolerancia: las cinco tablas de
+    `db/migrations/2026-10-20_facturas.sql` y, contra la base real, que ninguna factura se quede sin liga viva
+    (ver `SENTENCIA_DE_FACTURAS_SIN_LIGA`). El contador (`db.siguiente_numero_de_factura`) escribe en
+    `serie_facturas` con un `INSERT ... ON CONFLICT (anio)`: sin la tabla, o sin su llave, la primera factura no
+    numeraría nada y la suite (hermética, SQLite) no lo vería. Contra una base sin la migración esta línea
+    revienta con «relation ... does not exist». Son LECTURAS (`count(*)`); el contador no se ejecuta acá, porque
+    humo.py no escribe en producción."""
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=db.dict_row)
+        filas = {}
+        for tabla in ("serie_facturas", "facturas", "factura_renglones", "factura_ligas", "factura_envios"):
+            await cur.execute(f"SELECT count(*) AS n FROM {tabla}")
+            filas[tabla] = (await cur.fetchone())["n"]
+        await cur.execute(SENTENCIA_DE_FACTURAS_SIN_LIGA)
+        sin_liga = (await cur.fetchone())["n"]
+        if sin_liga:
+            raise RuntimeError(f"{sin_liga} factura(s) sin ninguna liga viva a una sesión o a un trabajo")
+        return filas
+
+
 async def main() -> int:
     if not os.environ.get("DATABASE_URL", "").strip():
         print("Falta DATABASE_URL.", file=sys.stderr)
@@ -233,6 +263,8 @@ async def main() -> int:
         ("cotizaciones_de_proyectos", lambda: db.cotizaciones_de_proyectos()),
         # El número que la ventana de «Nueva cotización» enseña (pieza 5): un SELECT de la serie. LECTURA.
         ("numero_que_sigue_de_cotizacion", lambda: db.numero_que_sigue_de_cotizacion()),
+        # Las tablas de las facturas (pieza 1) y que ninguna factura quede sin liga: ver `_tablas_de_facturas`. LECTURA.
+        ("tablas de facturas (sin tolerancia)", _tablas_de_facturas),
     ]
 
     rojas = []

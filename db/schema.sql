@@ -571,6 +571,160 @@ CREATE INDEX IF NOT EXISTS idx_consultas_de_natalia_estado
 CREATE INDEX IF NOT EXISTS idx_consultas_de_natalia_cliente
   ON consultas_de_natalia (cliente_noco_id);
 
+-- LAS FACTURAS (pieza 1 del diseño «Facturas», 20-oct-2026; migración 2026-10-20_facturas.sql, cuya cabecera
+-- explica cada columna y cada restricción). Una fila por factura en `facturas`, con sus `factura_renglones`, sus
+-- `factura_ligas` (a qué sesiones o trabajos del Registro pertenece: la base NO puede exigir que tenga una viva,
+-- eso lo exige el código y lo vigila `tools/humo.py`) y sus `factura_envios` (por dónde salió y la aprobación del
+-- equipo). El código que se ve es `FAC-<anio>-<numero con 3 cifras>` y se calcula; `UNIQUE (anio, numero)` es la
+-- última puerta contra un número repetido y `UNIQUE (ncf)` cuenta también las anuladas. No hay columnas de pago
+-- (se lee de la App) ni totales (salen de los renglones y de `itbis_pct`). `serie_facturas` es el contador por año
+-- y nace vacía.
+CREATE TABLE facturas (
+  id                   BIGSERIAL PRIMARY KEY,
+  anio                 SMALLINT,
+  numero               INT,
+  estado               TEXT NOT NULL DEFAULT 'borrador',
+  cliente_noco_id      BIGINT NOT NULL,
+  para_nombre          TEXT NOT NULL,
+  fecha                DATE NOT NULL,
+  proyecto_id          BIGINT REFERENCES proyectos(id),
+  cotizacion_id        BIGINT REFERENCES cotizaciones(id),
+  cotizacion_opcion    SMALLINT,
+  itbis_pct            NUMERIC(5,2),
+  ncf                  TEXT,
+  ncf_tipo             TEXT,
+  rnc_cedula           TEXT,
+  hecha_por            TEXT NOT NULL,
+  hecha_por_chat_id    BIGINT,
+  creado_en            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  cambiado_en          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  emitida_en           TIMESTAMPTZ,
+  anulada_en           TIMESTAMPTZ,
+  anulada_por_chat_id  BIGINT,
+  motivo_anulacion     TEXT,
+  CONSTRAINT facturas_numero_unico
+    UNIQUE (anio, numero),
+  CONSTRAINT facturas_ncf_unico
+    UNIQUE (ncf),
+  CONSTRAINT facturas_numero_positivo
+    CHECK (numero IS NULL OR numero >= 1),
+  CONSTRAINT facturas_anio_y_numero_juntos
+    CHECK ((anio IS NULL) = (numero IS NULL)),
+  CONSTRAINT facturas_estado_valido
+    CHECK (estado IN ('borrador', 'emitida', 'anulada')),
+  CONSTRAINT facturas_emitida_con_numero
+    CHECK (estado = 'borrador' OR numero IS NOT NULL),
+  CONSTRAINT facturas_emitida_con_fecha
+    CHECK ((estado = 'borrador') = (emitida_en IS NULL)),
+  CONSTRAINT facturas_anulada_con_motivo
+    CHECK ((estado = 'anulada' AND anulada_en IS NOT NULL AND motivo_anulacion IS NOT NULL AND
+            length(trim(motivo_anulacion)) BETWEEN 1 AND 500) OR
+           (estado <> 'anulada' AND anulada_en IS NULL AND anulada_por_chat_id IS NULL AND
+            motivo_anulacion IS NULL)),
+  CONSTRAINT facturas_nombre_valido
+    CHECK (length(trim(para_nombre)) BETWEEN 1 AND 200),
+  CONSTRAINT facturas_opcion_de_cotizacion
+    CHECK (cotizacion_opcion IS NULL OR (cotizacion_id IS NOT NULL AND cotizacion_opcion >= 1)),
+  CONSTRAINT facturas_itbis_valido
+    CHECK (itbis_pct IS NULL OR (itbis_pct > 0 AND itbis_pct <= 100)),
+  CONSTRAINT facturas_ncf_completo
+    CHECK ((ncf IS NULL) = (ncf_tipo IS NULL)),
+  CONSTRAINT facturas_ncf_normalizado
+    CHECK (ncf IS NULL OR (ncf ~ '^[A-Z0-9]+$' AND length(ncf) BETWEEN 1 AND 20)),
+  CONSTRAINT facturas_ncf_tipo_valido
+    CHECK (ncf_tipo IS NULL OR length(trim(ncf_tipo)) BETWEEN 1 AND 20),
+  CONSTRAINT facturas_rnc_cedula_valido
+    CHECK (rnc_cedula IS NULL OR length(trim(rnc_cedula)) BETWEEN 1 AND 20),
+  CONSTRAINT facturas_hecha_por_valida
+    CHECK (hecha_por IN ('casa', 'natalia')),
+  CONSTRAINT facturas_hecha_por_con_persona
+    CHECK ((hecha_por = 'casa') = (hecha_por_chat_id IS NOT NULL))
+);
+
+CREATE INDEX idx_facturas_cliente
+  ON facturas (cliente_noco_id);
+CREATE INDEX idx_facturas_proyecto
+  ON facturas (proyecto_id)
+  WHERE proyecto_id IS NOT NULL;
+
+CREATE TABLE factura_renglones (
+  id          BIGSERIAL PRIMARY KEY,
+  factura_id  BIGINT NOT NULL REFERENCES facturas(id),
+  orden       SMALLINT NOT NULL,
+  descripcion TEXT NOT NULL,
+  detalle     TEXT,
+  monto       NUMERIC(14,2) NOT NULL,
+  CONSTRAINT factura_renglones_orden_unico
+    UNIQUE (factura_id, orden),
+  CONSTRAINT factura_renglones_orden_positivo
+    CHECK (orden >= 1),
+  CONSTRAINT factura_renglones_descripcion_valida
+    CHECK (length(trim(descripcion)) BETWEEN 1 AND 300),
+  CONSTRAINT factura_renglones_detalle_valido
+    CHECK (detalle IS NULL OR length(detalle) <= 2000),
+  CONSTRAINT factura_renglones_monto_positivo
+    CHECK (monto > 0)
+);
+
+CREATE TABLE factura_ligas (
+  id                 BIGSERIAL PRIMARY KEY,
+  factura_id         BIGINT NOT NULL REFERENCES facturas(id),
+  tipo               TEXT NOT NULL,
+  ref                TEXT NOT NULL,
+  codigo             TEXT,
+  creado_en          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  creado_por_chat_id BIGINT,
+  desligada_en       TIMESTAMPTZ,
+  CONSTRAINT factura_ligas_tipo_valido
+    CHECK (tipo IN ('sesion', 'trabajo')),
+  CONSTRAINT factura_ligas_ref_valida
+    CHECK (length(ref) BETWEEN 1 AND 100 AND ref = trim(ref)),
+  CONSTRAINT factura_ligas_codigo_valido
+    CHECK (codigo IS NULL OR length(codigo) <= 100)
+);
+
+CREATE UNIQUE INDEX factura_ligas_una_viva
+  ON factura_ligas (factura_id, tipo, ref)
+  WHERE desligada_en IS NULL;
+CREATE INDEX idx_factura_ligas_de_la_sesion
+  ON factura_ligas (tipo, ref)
+  WHERE desligada_en IS NULL;
+
+CREATE TABLE factura_envios (
+  id                   BIGSERIAL PRIMARY KEY,
+  factura_id           BIGINT NOT NULL REFERENCES facturas(id),
+  canal                TEXT NOT NULL,
+  estado               TEXT NOT NULL DEFAULT 'pendiente',
+  creado_en            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  aprobado_por_chat_id BIGINT,
+  aprobado_en          TIMESTAMPTZ,
+  enviado_en           TIMESTAMPTZ,
+  motivo               TEXT,
+  CONSTRAINT factura_envios_canal_valido
+    CHECK (canal IN ('whatsapp', 'correo', 'mano')),
+  CONSTRAINT factura_envios_estado_valido
+    CHECK (estado IN ('pendiente', 'aprobado', 'rechazado', 'enviado', 'no_se_pudo')),
+  CONSTRAINT factura_envios_aprobacion_completa
+    CHECK ((aprobado_por_chat_id IS NULL) = (aprobado_en IS NULL)),
+  CONSTRAINT factura_envios_no_sale_sin_aprobar
+    CHECK (canal = 'mano' OR estado NOT IN ('aprobado', 'enviado') OR aprobado_en IS NOT NULL),
+  CONSTRAINT factura_envios_enviado_con_fecha
+    CHECK ((estado = 'enviado') = (enviado_en IS NOT NULL)),
+  CONSTRAINT factura_envios_motivo_si_falla
+    CHECK (estado NOT IN ('rechazado', 'no_se_pudo') OR
+           (motivo IS NOT NULL AND length(trim(motivo)) BETWEEN 1 AND 500))
+);
+
+CREATE INDEX idx_factura_envios_factura
+  ON factura_envios (factura_id);
+
+CREATE TABLE serie_facturas (
+  anio   SMALLINT PRIMARY KEY,
+  ultimo INT NOT NULL,
+  CONSTRAINT serie_facturas_ultimo_valido
+    CHECK (ultimo >= 0)
+);
+
 -- LOS MICRO-PASOS (encargo 7, 22-sep-2026): una lista de chequeo DENTRO de
 -- una tarea, para cuando sigue siendo grande. Decisión de Tiziano, textual:
 -- «No, es una lista de chequeo» — así que NO es una tarea: sin fecha, sin

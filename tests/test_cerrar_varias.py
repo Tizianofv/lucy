@@ -2356,7 +2356,14 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
     # `POST /api/code/clientes/{noco_id}/consultas`) y `db.pasar_consulta_de_natalia` (la única que cambia su estado),
     # y Lucy no tiene herramienta para tocarla por Telegram (`cerebro/consultar.py` la declara maquinaria). Lo que eso
     # deja sin juzgar acá: una herramienta del agente que escribiera en ella saldría verde en ESTA guarda. Hoy ninguna.
-    assert len(declaradas) == 25 and len(vigiladas) == 10, (
+    # 20-oct-2026 (pieza 1 de «Facturas»): 25 → 30 por `facturas`, `factura_renglones`, `factura_ligas`,
+    # `factura_envios` y `serie_facturas`. Quedan FUERA de `crud.TABLAS`, como las de las cotizaciones: las
+    # escribirá SOLA la puerta de las facturas (pieza 2 del diseño) y el diseño no le da a Lucy ninguna herramienta
+    # para tocarlas por Telegram (`cerebro/consultar.py` las declara maquinaria). Lo que eso deja sin juzgar acá: una
+    # herramienta del agente que escribiera en ellas saldría verde en ESTA guarda. Hoy ninguna lo hace: ni siquiera
+    # existe todavía código que las escriba (el contador, `db.siguiente_numero_de_factura`, es la única excepción
+    # y solo toca `serie_facturas`).
+    assert len(declaradas) == 30 and len(vigiladas) == 10, (
         f"el reparto de tablas cambió: el esquema declara {len(declaradas)} y "
         f"`crud.TABLAS` vigila {len(vigiladas)} (el 1-oct-2026, E7, eran 20 y 10). "
         f"Las que quedan sin juzgar serían {sorted(sin_juzgar)}. No se afloja "
@@ -2375,6 +2382,7 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
         "correo_reportado", "cuentas_propias", "log_acciones",
         "sesiones_de_proyecto", "cotizaciones", "serie_cotizaciones", "drive_de_proyectos",
         "consultas_de_natalia",
+        "facturas", "factura_renglones", "factura_ligas", "factura_envios", "serie_facturas",
     }, (f"cambió qué tablas quedan fuera del juicio de esta guarda: "
         f"{sorted(sin_juzgar)}. Una escritura a cualquiera de ellas se VE pero "
         f"no se exige que deje huella ni que salga en el parte.")
