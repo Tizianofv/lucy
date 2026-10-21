@@ -78,7 +78,8 @@
       <a class="cz-codigo" href="/proyectos?p={{ m.id }}&amp;cotizacion={{ c.id }}{{ sufijo_filtro }}#cotizaciones"><b>{{ c.codigo }}</b></a>
       <span class="sub">{{ c.fecha }} · {{ c.opciones }} · {{ c.precio }}</span>
       {% if c.drive %}<span class="sub cz-drive cz-drive-{{ c.drive.estado }}">{{ c.drive.etiqueta }}</span>{% endif %}
-      <a class="cz-pdf" href="/proyectos/{{ m.id }}/cotizaciones/{{ c.id }}/pdf" download>PDF</a></li>
+      <a class="cz-pdf" href="/proyectos/{{ m.id }}/cotizaciones/{{ c.id }}/pdf" download>PDF</a>
+      {% if not solo_ver %}<a class="cz-pdf cz-factura" style="margin-left:.6rem" href="/facturas/nueva?proyecto={{ m.id }}&amp;cotizacion={{ c.id }}" title="Hacer una factura de esta cotización">Hacer factura</a>{% endif %}</li>
     {% endfor %}
   </ul>
   {% else %}<p class="vacio">Todavía no hay cotizaciones.</p>{% endif %}

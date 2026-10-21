@@ -1,0 +1,40 @@
+{#- LAS FACTURAS DE UN PROYECTO (pieza 4 del diseño «Facturas», 21-oct-2026). Se incluye desde `proyectos.html` SOLO para la
+    sesión de la casa (`not solo_ver` y `fz` no vacío): una factura lleva RNC o cédula y NCF, y la sesión de solo ver no
+    las ve ni las pide. `fz` lo arma `web/app.py::_facturas_del_proyecto` desde `db.facturas_para_la_lista`; el dinero y
+    las fechas salen de `facturas_panel.fila_de_la_lista`. «Quitar» y «Ligar» son POST a la misma ruta de la página
+    de la factura (`/facturas/N/proyecto`), que habla con la puerta de `db`; `volver=proyecto` hace que la persona regrese
+    a esta página. -#}
+<section class="bloque" id="facturas-del-proyecto" data-ancla>
+ <div class="cotiz" id="facturas" data-ancla>
+  <div class="cotiz-enc"><h3>Facturas</h3>
+    <a class="cotiz-mas" href="/facturas/nueva?proyecto={{ m.id }}" title="Hacer una factura de este proyecto" aria-label="Hacer una factura de este proyecto">+</a></div>
+  {% if fz.lista %}
+  <ul data-facturas-del-proyecto>
+    {% for f in fz.lista %}
+    <li><span class="pild{{ '' if f.estado == 'emitida' else ' borr' }}">{{ f.estado_texto }}</span>
+      <a class="cz-codigo" href="/facturas/{{ f.id }}"><b>{{ f.numero }}</b></a>
+      <span class="sub">{{ f.fecha }} · {{ f.cliente }} · {{ f.total }}</span>
+      <a class="cz-pdf" href="/facturas/{{ f.id }}/pdf" download>PDF</a>
+      {% if f.estado != 'anulada' %}
+      <form method="post" action="/facturas/{{ f.id }}/proyecto" style="display:inline;margin:0 0 0 .6rem">
+        <input type="hidden" name="proyecto" value=""><input type="hidden" name="volver" value="proyecto"><input type="hidden" name="p" value="{{ m.id }}">
+        <button class="btn-linea">Quitar del proyecto</button></form>
+      {% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="vacio">Todavía no hay facturas de este proyecto.</p>{% endif %}
+  {% if fz.ligables %}
+  <p class="nota">Facturas de este cliente que no tienen proyecto:</p>
+  <ul data-facturas-ligables>
+    {% for f in fz.ligables %}
+    <li><span class="pild borr">{{ f.estado_texto }}</span>
+      <a class="cz-codigo" href="/facturas/{{ f.id }}"><b>{{ f.numero }}</b></a>
+      <span class="sub">{{ f.fecha }} · {{ f.total }}</span>
+      <form method="post" action="/facturas/{{ f.id }}/proyecto" style="display:inline;margin:0">
+        <input type="hidden" name="proyecto" value="{{ m.id }}"><input type="hidden" name="volver" value="proyecto"><input type="hidden" name="p" value="{{ m.id }}">
+        <button class="btn-linea">Ligar a este proyecto</button></form></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+ </div>
+</section>

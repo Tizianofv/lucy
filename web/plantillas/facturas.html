@@ -1,0 +1,29 @@
+{% extends "base.html" %}{% set activo='facturas' %}
+{% from "_facturas_estilo.html" import estilo_de_facturas %}
+{% block titulo %}Facturas{% endblock %}
+{% block cuerpo %}
+{{ estilo_de_facturas() }}
+{#- LA LISTA DE FACTURAS (pieza 4 del diseño «Facturas», 21-oct-2026). Solo la casa. Solo LEE: cada texto sale de
+    `facturas_panel.fila_de_la_lista` (el dinero lo escribe la misma función de la hoja). -#}
+<div class="enc"><h1>Facturas</h1><a class="boton" href="/facturas/nueva">Nueva factura</a></div>
+<nav class="chips" aria-label="Filtrar por estado" data-filtros>
+  <a href="/facturas"{% if not filtro %} class="on" aria-current="page"{% endif %}>Todas</a>
+  {% for clave, texto in estados.items() %}<a href="/facturas?estado={{ clave }}"{% if filtro == clave %} class="on" aria-current="page"{% endif %}>{{ texto }}</a>{% endfor %}
+</nav>
+{% if sin_tabla %}<p class="aviso">Las facturas todavía no están disponibles: falta actualizar la base de datos.</p>
+{% elif filas %}
+<div class="scroll"><table data-lista-de-facturas>
+<tr><th>Número</th><th>Cliente</th><th>Fecha</th><th class="num">Total</th><th>Estado</th><th>Proyecto</th></tr>
+{% for f in filas %}
+<tr>
+  <td><a href="/facturas/{{ f.id }}"><b>{{ f.numero }}</b></a></td>
+  <td>{{ f.cliente }}</td>
+  <td class="suave">{{ f.fecha }}</td>
+  <td class="num">{{ f.total }}</td>
+  <td><span class="pild {{ f.estado }}">{{ f.estado_texto }}</span></td>
+  <td class="suave">{% if f.proyecto %}<a href="/proyectos?p={{ f.proyecto_id }}">{{ f.proyecto }}</a>{% else %}—{% endif %}</td>
+</tr>
+{% endfor %}
+</table></div>
+{% else %}<p class="vacio">{% if filtro %}No hay facturas en este estado.{% else %}Todavía no hay facturas.{% endif %}</p>{% endif %}
+{% endblock %}

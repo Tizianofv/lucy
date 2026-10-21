@@ -165,6 +165,18 @@ def lo_que_sale_a_proposito() -> list[tuple[str, str, str]]:
     # (`pp.BaseQueNoSeToca`, `carpetas_de_drive`), no de un texto tecleado aquí.
     declarados += [("a", "https://drive.google.com/drive/folders/" + pp.CARPETA_DE_COTIZACIONES_DEL_MODELO,
                     "«Abrir en Drive» (la carpeta de las cotizaciones): abre otra pestaña")]
+    # LAS FACTURAS DEL PROYECTO (21-oct-2026, pieza 4 de «Facturas»): la página de un proyecto de la casa enseña sus
+    # facturas y «Hacer factura» en cada cotización. Todo lo que apunta a `/facturas…` es OTRA pantalla (la de las
+    # facturas): enlaces que se van, y los dos formularios «Quitar del proyecto» / «Ligar a este proyecto», que hacen
+    # su POST a la ruta de la factura y vuelven a esta página con el redirect. Se declaran como CLASE (lo que empieza por
+    # `/facturas`), pero la lista sale de las páginas que el servidor dibuja y se exige que estén las del modelo
+    # (`pp.FACTURAS_DEL_MODELO`) y que la casa tenga «Hacer factura» por cada cotización del modelo.
+    de_facturas = [(f["tag"], f["href"]) for f in lo_que_se_toca("casa") if f["href"].startswith("/facturas")]
+    esperadas = {("a", f"/facturas/{f['id']}") for f in pp.FACTURAS_DEL_MODELO}
+    esperadas |= {("a", f"/facturas/nueva?proyecto={pid}&cotizacion={c['id']}")
+                  for pid, cs in pp.COTIZACIONES_DEL_MODELO.items() for c in cs}
+    assert esperadas <= set(de_facturas), esperadas - set(de_facturas)
+    declarados += [(t, h, "lleva a la pantalla de las facturas (otra pantalla): se va de la página") for t, h in de_facturas]
     return declarados
 
 
