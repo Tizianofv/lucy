@@ -450,7 +450,7 @@ DESTINO_POR_DEFECTO_DEL_PASE = "/proyectos"
 
 
 def enlace_al_inicio_de_la_app() -> str:
-    """La dirección del INICIO de la App de registro (`REGISTRO_URL + "/#inicio"`), o `""` si
+    """La dirección del INICIO de la App de registro (`REGISTRO_URL` + `/#inicio`), o vacía si
     `REGISTRO_URL` no es una dirección http(s). La usan la página de Proyectos y las de Facturas:
     es la ÚNICA función que arma esta dirección, para que las dos pantallas vuelvan al mismo
     sitio. `#inicio` es el contrato de la App (exacto, en el hash, misma pestaña):
