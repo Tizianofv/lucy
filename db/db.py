@@ -2965,6 +2965,16 @@ SENTENCIA_DE_EMITIR = (
 SENTENCIA_DE_ANULAR = (
     "UPDATE facturas SET estado = 'anulada', anulada_en = now(), anulada_por_chat_id = %s, "
     "motivo_anulacion = %s, cambiado_en = now() WHERE id = %s AND estado = 'emitida' RETURNING id")
+SENTENCIA_DE_ENVIOS_DE_LA_FACTURA = "SELECT id FROM factura_envios WHERE factura_id = %s"
+# Descartar un borrador: se borra de verdad (nunca tuvo número) y las tres sentencias dicen en su WHERE que vale solo
+# para un borrador. La huella `descartar` de `log_acciones` guarda cómo era.
+SENTENCIA_DE_DESCARTAR_LIGAS = (
+    "DELETE FROM factura_ligas WHERE factura_id = %s AND factura_id IN "
+    "(SELECT id FROM facturas WHERE id = %s AND estado = 'borrador')")
+SENTENCIA_DE_DESCARTAR_RENGLONES = (
+    "DELETE FROM factura_renglones WHERE factura_id = %s AND factura_id IN "
+    "(SELECT id FROM facturas WHERE id = %s AND estado = 'borrador')")
+SENTENCIA_DE_DESCARTAR_FACTURA = "DELETE FROM facturas WHERE id = %s AND estado = 'borrador' RETURNING id"
 SENTENCIA_DE_SOLTAR_ENVIOS = (
     "UPDATE factura_envios SET estado = 'no_se_pudo', motivo = %s "
     "WHERE factura_id = %s AND estado IN ('pendiente', 'aprobado') RETURNING id")
@@ -3329,6 +3339,27 @@ async def anular_factura(factura_id: int, chat_id: int, motivo) -> dict:
         despues = await _factura_completa(cur, factura_id)
         await _huella_de_factura(conn, "anular", factura_id, antes, despues, "factura anulada desde el panel")
         return despues
+
+
+@_con_el_aviso_de_la_tabla
+async def descartar_borrador_de_factura(factura_id: int, chat_id: int) -> dict:
+    """Borra de verdad UN borrador (sin número ni NCF gastado: no deja hueco) con sus renglones y sus ligas; la
+    sesión o el trabajo quedan libres para otra factura. Una emitida o anulada: `FacturaYaNoSeCorrige` (se anula).
+    Un borrador con envíos no se descarta (`tiene_envios`). Deja la huella `descartar` con cómo era. Devuelve
+    `{"id", "descartada": True}`."""
+    _pedir_sesion_de_la_casa(chat_id)
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        _que_sea(await _tomar_factura(cur, factura_id), ("borrador",), "descartarse (se anula)")
+        await cur.execute(SENTENCIA_DE_ENVIOS_DE_LA_FACTURA, (factura_id,))
+        if await cur.fetchone() is not None:
+            raise FacturaNoVale("tiene_envios", "un borrador con envíos no se descarta")
+        antes = await _factura_completa(cur, factura_id)
+        await cur.execute(SENTENCIA_DE_DESCARTAR_LIGAS, (factura_id, factura_id))
+        await cur.execute(SENTENCIA_DE_DESCARTAR_RENGLONES, (factura_id, factura_id))
+        await cur.execute(SENTENCIA_DE_DESCARTAR_FACTURA, (factura_id,))
+        await _huella_de_factura(conn, "descartar", factura_id, antes, None, "borrador de factura descartado desde el panel")
+        return {"id": factura_id, "descartada": True}
 
 
 @_con_el_aviso_de_la_tabla

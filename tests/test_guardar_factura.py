@@ -769,6 +769,49 @@ def test_el_choque_del_ncf_en_postgres_se_traduce(mundo, monkeypatch):
     assert filas(mundo, "facturas") == []
 
 
+# ── Descartar un borrador ───────────────────────────────────────────────────────────────────────────
+
+def test_descartar_un_borrador_lo_borra_con_sus_renglones_y_ligas_y_libera_la_sesion(mundo):
+    f = crear(ncf="B09", ncf_tipo="B01", liga={"tipo": "sesion", "ref": "ses-d"})
+    f = correr(db.ligar_factura_a_registro(f["id"], CASA, "trabajo", "tr-d"))
+    r = correr(db.descartar_borrador_de_factura(f["id"], CASA))
+    assert r == {"id": f["id"], "descartada": True}
+    for t in TABLAS_QUE_ESCRIBE_LA_PUERTA:
+        assert filas(mundo, t) == [], t
+    assert leer(f) is None and correr(db.facturas_para_la_lista()) == []
+    assert filas(mundo, "serie_facturas") == []                       # sin hueco: nunca tuvo número
+    h = filas(mundo, "log_acciones")[-1]
+    assert (h["accion"], h["tabla"], h["registro_id"], h["despues"]) == ("descartar", "facturas", f["id"], None)
+    assert json.loads(h["antes"])["ncf"] == "B09" and len(json.loads(h["antes"])["ligas"]) == 2
+    nueva = crear(ncf="B09", ncf_tipo="B01", liga={"tipo": "sesion", "ref": "ses-d"})      # sesión y NCF libres
+    assert nueva["estado"] == "borrador"
+
+
+def test_solo_un_borrador_sin_envios_se_descarta(mundo):
+    b = crear()
+    mundo.con.execute("INSERT INTO factura_envios (factura_id, canal) VALUES (?, 'mano')", (b["id"],))
+    mundo.con.commit()
+    antes = foto(mundo)
+    no_vale("tiene_envios", lambda: correr(db.descartar_borrador_de_factura(b["id"], CASA)))
+    assert foto(mundo) == antes
+    e = emitir(otra())
+    with pytest.raises(db.FacturaYaNoSeCorrige) as err:
+        correr(db.descartar_borrador_de_factura(e["id"], CASA))
+    assert err.value.estado == "emitida"
+    a = correr(db.anular_factura(e["id"], CASA, "motivo"))
+    with pytest.raises(db.FacturaYaNoSeCorrige):
+        correr(db.descartar_borrador_de_factura(a["id"], CASA))
+    with pytest.raises(db.FacturaNoEsta):
+        correr(db.descartar_borrador_de_factura(999, CASA))
+    assert leer(e)["estado"] == "anulada" and len(filas(mundo, "factura_ligas")) >= 1
+
+
+def test_descartar_borra_solo_la_suya(mundo):
+    a, b = otra(), otra()
+    correr(db.descartar_borrador_de_factura(a["id"], CASA))
+    assert leer(b)["renglones"] and leer(b)["ligas"] and len(filas(mundo, "facturas")) == 1
+
+
 # ── 8. Una sola puerta ──────────────────────────────────────────────────────────────────────────────
 
 _ESCRIBE = re.compile(r"\b(INSERT\s+INTO|UPDATE|DELETE\s+FROM|REPLACE\s+INTO)\s+(facturas|factura_renglones|factura_ligas|factura_envios)\b", re.I)
@@ -812,8 +855,11 @@ def _lo_que_viola(hallados):
         tabla = _ESCRIBE.search(v).group(2).lower()
         if re.search(r"\bREPLACE\s+INTO\b", v, re.I):
             malos.append((rel, linea, "reemplaza"))
-        if re.search(r"\bDELETE\s+FROM\b", v, re.I) and tabla != "factura_renglones":
-            malos.append((rel, linea, f"borra de {tabla}"))
+        if re.search(r"\bDELETE\s+FROM\b", v, re.I):
+            if tabla in ("factura_envios",):
+                malos.append((rel, linea, f"borra de {tabla}"))
+            elif "'borrador'" not in v and not (tabla == "factura_renglones" and v == db.SENTENCIA_DE_BORRAR_RENGLONES):
+                malos.append((rel, linea, f"borra de {tabla} sin decir borrador"))
         if tabla == "factura_renglones" and re.search(r"\bUPDATE\b", v, re.I):
             malos.append((rel, linea, "cambia un renglón en su sitio"))
         if tabla == "factura_envios" and re.search(r"\bINSERT\b", v, re.I):
@@ -853,7 +899,8 @@ def test_las_sentencias_que_escriben_facturas_son_las_de_la_puerta_y_cumplen_las
         db.SENTENCIA_DE_CREAR_RENGLON, db.SENTENCIA_DE_BORRAR_RENGLONES, db.SENTENCIA_DE_CREAR_LIGA,
         db.SENTENCIA_DE_DESLIGAR, db.SENTENCIA_DE_CORREGIR_BORRADOR, db.SENTENCIA_DE_PONER_PROYECTO,
         db.SENTENCIA_DE_PONER_COTIZACION, db.SENTENCIA_DE_TOCAR_BORRADOR, db.SENTENCIA_DE_EMITIR,
-        db.SENTENCIA_DE_ANULAR, db.SENTENCIA_DE_SOLTAR_ENVIOS))
+        db.SENTENCIA_DE_ANULAR, db.SENTENCIA_DE_SOLTAR_ENVIOS, db.SENTENCIA_DE_DESCARTAR_LIGAS,
+        db.SENTENCIA_DE_DESCARTAR_RENGLONES, db.SENTENCIA_DE_DESCARTAR_FACTURA))
     assert textos == esperadas, [h[:2] for h in hallados]
     assert _lo_que_viola(hallados) == []
 
@@ -879,7 +926,8 @@ def test_la_guarda_ve_lo_inventado(tmp_path):
     razones = sorted(set(r for _, _, r in _lo_que_viola(hallados)))
     assert razones == sorted([
         "pone el número fuera de emitir", "toca el NCF fuera de un borrador", "UPDATE de facturas sin el estado en el WHERE",
-        "borra de facturas", "cambia hecha_por", "cambia en una liga algo que no es desligada_en", "borra de factura_ligas",
+        "borra de facturas sin decir borrador", "cambia hecha_por", "cambia en una liga algo que no es desligada_en",
+        "borra de factura_ligas sin decir borrador",
         "cambia un renglón en su sitio", "crea un envío", "cambia en un envío algo que no es estado y motivo",
         "UPDATE sin WHERE", "reemplaza", "escribe fuera de db/db.py"])
 
@@ -911,6 +959,7 @@ def _llamadas(f, chat):
         "poner_cotizacion_de_factura": lambda: db.poner_cotizacion_de_factura(f["id"], chat, 1),
         "emitir_factura": lambda: db.emitir_factura(f["id"], chat, f["cambiado_en"]),
         "anular_factura": lambda: db.anular_factura(f["id"], chat, "motivo"),
+        "descartar_borrador_de_factura": lambda: db.descartar_borrador_de_factura(f["id"], chat),
     }
 
 
@@ -933,10 +982,14 @@ def test_cada_escritor_deja_una_huella_y_ninguna_mas(mundo):
     mundo.con.execute("DELETE FROM log_acciones")
     # el orden de una vida: se corrige, se liga, se emite, se anula (la emitida congela lo anterior)
     orden = ["corregir_borrador_de_factura", "ligar_factura_a_registro", "desligar_factura_de_registro",
-             "poner_cotizacion_de_factura", "poner_proyecto_de_factura", "emitir_factura", "anular_factura"]
+             "poner_cotizacion_de_factura", "poner_proyecto_de_factura", "emitir_factura", "anular_factura",
+             "descartar_borrador_de_factura"]
     assert sorted(orden + ["crear_borrador_de_factura"]) == sorted(_escritores_publicos())
     for nombre in ["crear_borrador_de_factura"] + orden:
-        sujeto = e if nombre == "anular_factura" else leer(base)           # el candado se vuelve a leer en cada intento
+        sujeto = e if nombre == "anular_factura" else leer(base)
+        if nombre == "descartar_borrador_de_factura":
+            sujeto = crear(liga={"tipo": "sesion", "ref": "hermano-d"})
+            mundo.con.execute("DELETE FROM log_acciones WHERE registro_id = ?", (sujeto["id"],))           # el candado se vuelve a leer en cada intento
         antes = len(filas(mundo, "log_acciones"))
         correr(_llamadas(sujeto, CASA)[nombre]())
         nuevas = filas(mundo, "log_acciones")[antes:]
