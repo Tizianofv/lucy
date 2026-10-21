@@ -14,7 +14,7 @@ RETURNING`) sobre las tablas que crea la migración real. Qué se vigila:
   6. un año que no es año no llega a la base;
   7. una sola puerta, hasta donde llega una guarda de TEXTO: ningún `.py` fuera de `tests/` trae una constante de
      texto con `serie_facturas` e INSERT/UPDATE/DELETE/REPLACE salvo la sentencia de `db`. NO ve el nombre de la
-     tabla en una variable, ni f-strings, ni SQL armado en ejecución (frontera declarada en
+     tabla en una variable, ni f-strings con el nombre interpolado, ni SQL armado en ejecución (frontera declarada en
      `tests/test_numero_de_cotizacion.py::test_la_frontera_de_la_guarda_no_lo_ve_a_proposito`).
 
 FRONTERA, dicha una vez:

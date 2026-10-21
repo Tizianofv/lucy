@@ -232,7 +232,7 @@ def _textos_que_escriben_la_serie(archivos, raiz, tabla: str = "serie_cotizacion
     """(archivo, línea, texto) de toda constante de texto de un `.py` fuera de `tests/` que nombra
     `tabla` (por omisión `serie_cotizaciones`; `tests/test_numero_de_factura.py` la usa con `serie_facturas`) y trae INSERT, UPDATE, DELETE o REPLACE. Se juntan los pedazos que el parser
     pega solo (paréntesis) y los que `_texto_fijo` pega (constantes unidas con `+`).
-    FRONTERA (no se persigue): el nombre de la tabla en una variable, f-strings y SQL armado en ejecución."""
+    FRONTERA (no se persigue): el nombre de la tabla en una variable, f-strings con el nombre interpolado y SQL armado en ejecución."""
     hallados = []
     for ruta in archivos:
         rel = ruta.relative_to(raiz).as_posix()
@@ -278,7 +278,7 @@ def test_la_guarda_ve_el_texto_partido_con_mas(tmp_path):
 
 
 def test_la_frontera_de_la_guarda_no_lo_ve_a_proposito(tmp_path):
-    """Casos que la guarda NO ve, a propósito (no se persiguen variables ni f-strings): si un día los
+    """Casos que la guarda NO ve, a propósito (no se persiguen variables ni f-strings con el nombre interpolado): si un día los
     ve, esta prueba avisa para que se cambie la frase de la frontera."""
     (tmp_path / "frontera.py").write_text(
         'T = "serie_cotizaciones"\nA = "UPDATE " + T + " SET ultimo = 0"\nB = f"UPDATE {T} SET ultimo = 0"\n',

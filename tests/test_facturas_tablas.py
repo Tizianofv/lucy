@@ -75,7 +75,8 @@ def _guion():
 def _a_sqlite(s: str) -> str:
     """El cambio de dialecto de siempre (`ct._a_sqlite`) y uno más: el `~` de Postgres no existe en SQLite, y
     `ncf ~ '^[A-Z0-9]+$'` se corre como `ncf NOT GLOB '*[^A-Z0-9]*'` (GLOB distingue mayúsculas y [^...] incluye
-    el tabulador y el salto de línea). Lo que NO se ejerce aquí es el motor de expresiones regulares de Postgres."""
+    el tabulador y el salto de línea). Lo que NO se ejerce aquí es el motor de expresiones regulares de Postgres.
+    La traducción a `GLOB` acepta la cadena vacía, que la regex de Postgres rechaza; hoy la frena la regla de largo."""
     return ct._a_sqlite(s).replace("ncf ~ '^[A-Z0-9]+$'", "ncf NOT GLOB '*[^A-Z0-9]*'")
 
 
