@@ -181,19 +181,19 @@ def test_los_totales_son_la_suma_de_lo_que_aporta_cada_renglon():
                  _renglon(9000.0, 3000.0, 6000.0),      # pagó una parte
                  _renglon(5000.0, 4000.0, 4000.0)]      # no cuadra
     assert registro_lectura.totales_de_sesiones(renglones) == {
-        "facturado": D("29000"), "cobrado": D("16000"), "por_cobrar": D("16000")}
+        "costo": D("29000"), "cobrado": D("16000"), "por_cobrar": D("16000")}
 
 
 def test_un_renglon_sin_total_no_aporta_nada_a_los_totales():
     """El que pinta «—» no suma, y no se le inventa un cero."""
     renglones = [_renglon(9000.0, 9000.0, 0.0), _renglon(None, None, None)]
     assert registro_lectura.totales_de_sesiones(renglones) == {
-        "facturado": D("9000"), "cobrado": D("9000"), "por_cobrar": D("0")}
+        "costo": D("9000"), "cobrado": D("9000"), "por_cobrar": D("0")}
 
 
 def test_sin_renglones_los_totales_son_cero():
     assert registro_lectura.totales_de_sesiones([]) == {
-        "facturado": D("0"), "cobrado": D("0"), "por_cobrar": D("0")}
+        "costo": D("0"), "cobrado": D("0"), "por_cobrar": D("0")}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -259,7 +259,7 @@ def test_los_totales_son_la_suma_de_los_renglones_pintados(registro, monkeypatch
     registro.sesiones = _respuesta(sesiones=DE_CADA_CLASE)
     bloque = _bloque(_abrir(monkeypatch))
     de_los_que_vinieron = {
-        "facturado": sum(r["total"] for r in DE_CADA_CLASE if r.get("total")),
+        "costo de las sesiones": sum(r["total"] for r in DE_CADA_CLASE if r.get("total")),
         "cobrado": sum(r["abonado"] for r in DE_CADA_CLASE if r.get("abonado") is not None),
         "por cobrar": sum(r["saldo"] for r in DE_CADA_CLASE if r.get("saldo") is not None),
     }
@@ -301,4 +301,13 @@ def test_sin_renglones_no_hay_totales(registro, monkeypatch):
     registro.sesiones = _respuesta(sesiones=())
     bloque = _bloque(_abrir(monkeypatch))
     assert "El registro no tiene sesiones ni trabajos de este cliente." in bloque
-    assert "facturado" not in bloque and "RD$ 0.00" not in bloque, bloque
+    assert "costo de las sesiones" not in bloque and "RD$ 0.00" not in bloque, bloque
+
+
+def test_el_bloque_dice_costo_de_las_sesiones_y_no_facturado(registro, monkeypatch):
+    """Ninguna de las tres cifras es una factura: la primera es lo que costaron las sesiones."""
+    registro.sesiones = _respuesta(sesiones=DE_CADA_CLASE)
+    bloque = _bloque(_abrir(monkeypatch))
+    assert "<span>costo de las sesiones</span>" in bloque, bloque
+    assert "<span>cobrado</span>" in bloque and "<span>por cobrar</span>" in bloque, bloque
+    assert "facturado" not in bloque.lower(), bloque

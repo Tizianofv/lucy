@@ -231,7 +231,7 @@ def dinero_de_sesion(total, abonado, saldo) -> dict:
 
 def _lo_que_se_pinta(caso, total=None, abonado=None, saldo=None) -> dict:
     """La forma que la página pinta para un caso, con lo que el renglón aporta a
-    los totales (`aporta`: facturado, cobrado y por cobrar, en ese orden).
+    los totales (`aporta`: costo, cobrado y por cobrar, en ese orden).
 
     Un renglón sin total no aporta nada: no pintó ninguna cifra.
     """
@@ -250,16 +250,16 @@ def _lo_que_se_pinta(caso, total=None, abonado=None, saldo=None) -> dict:
 
 
 def totales_de_sesiones(renglones) -> dict:
-    """Los tres totales del bloque (facturado, cobrado, por cobrar): la suma de
+    """Los tres totales del bloque (costo de las sesiones, cobrado, por cobrar): la suma de
     lo que aporta cada renglón pintado. Las quitadas y las canceladas no llegan
     hasta acá, así que no cuentan."""
-    facturado, cobrado, por_cobrar = Decimal(0), Decimal(0), Decimal(0)
+    costo, cobrado, por_cobrar = Decimal(0), Decimal(0), Decimal(0)
     for renglon in renglones:
         aporta = renglon["dinero"]["aporta"]
-        facturado += aporta[0] or 0
+        costo += aporta[0] or 0
         cobrado += aporta[1] or 0
         por_cobrar += aporta[2] or 0
-    return {"facturado": facturado, "cobrado": cobrado, "por_cobrar": por_cobrar}
+    return {"costo": costo, "cobrado": cobrado, "por_cobrar": por_cobrar}
 
 
 def horas_de_estudio(respuesta) -> dict | None:

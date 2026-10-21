@@ -1275,7 +1275,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
       {#- Los tres totales: la suma de lo que aportan los renglones pintados (`registro.totales`),
           ya sin las quitadas y con las agregadas. -#}
       <div class="cifras">
-        <div class="cifra"><b>RD$ {{ registro.totales.facturado|pesos }}</b><span>facturado</span></div>
+        <div class="cifra"><b>RD$ {{ registro.totales.costo|pesos }}</b><span>costo de las sesiones</span></div>
         <div class="cifra"><b>RD$ {{ registro.totales.cobrado|pesos }}</b><span>cobrado</span></div>
         <div class="cifra roja"><b>RD$ {{ registro.totales.por_cobrar|pesos }}</b><span>por cobrar</span></div>
       </div>
