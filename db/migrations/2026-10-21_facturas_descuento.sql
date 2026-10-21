@@ -31,8 +31,11 @@
 --
 -- QUÉ TIENE QUE DAR EL ENSAYO (dentro de una transacción con ROLLBACK): después de la migración,
 -- `SELECT count(*) FROM facturas` igual que antes, `information_schema.columns` con UNA fila de `facturas.descuento`
--- (`numeric`, `is_nullable = NO`, `column_default = 0`), todas las filas de hoy con 0, un `INSERT` de un descuento
--- negativo rechazado por el CHECK, y con el ROLLBACK no queda ninguna columna.
+-- (`numeric`, `is_nullable = NO`, `column_default = 0`), todas las filas de hoy con 0, y la restricción del CHECK
+-- puesta: el ensayo lee del catálogo (`pg_get_constraintdef`) la definición de la restricción de `facturas` que
+-- nombra `descuento`, la imprime tal cual y comprueba que dice que el descuento no es negativo (aguanta el cero
+-- escrito con o sin el cast `(0)::numeric`). NO escribe ninguna fila: que la base haga cumplir el CHECK se ejerce
+-- contra SQLite en `tests/test_facturas_el_descuento.py`, no en este ensayo. Con el ROLLBACK no queda la columna.
 --
 -- CÓMO SE DESHACE (solo si el código que la usa ya no está desplegado):
 --   ALTER TABLE facturas DROP COLUMN IF EXISTS descuento;

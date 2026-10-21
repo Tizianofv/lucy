@@ -41,13 +41,20 @@ MIGRACION = (pathlib.Path(__file__).resolve().parent.parent / "db" / "migrations
 
 # El CHECK se mira en el catálogo, sin escribir ninguna fila: la restricción de `facturas` que nombra `descuento` tiene
 # que decir que no es negativo. (Que la base lo haga cumplir se ejerce en `tests/test_facturas_el_descuento.py` contra
-# SQLite; aquí solo se comprueba que la migración la dejó puesta con esa condición.)
+# SQLite; aquí solo se comprueba que la migración la dejó puesta con esa condición.) La comparación es una expresión
+# regular y no un `LIKE '%descuento >= 0%'`: Postgres puede escribir el cero con su cast —`(descuento >= (0)::numeric)`,
+# como salió en otros CHECK de este repo— y el LIKE daría `f` con la base bien. La fila imprime la definición tal cual
+# para que la sala la vea.
 _LA_RESTRICCION = (
-    "SELECT 'la restriccion del descuento dice que no es negativo' AS que, count(*) AS dio, 1 AS esperado, "
-    "count(*) = 1 AS ok FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid "
-    "JOIN pg_namespace n ON n.oid = t.relnamespace "
+    "WITH cheques AS ("
+    "SELECT pg_get_constraintdef(c.oid) AS definicion FROM pg_constraint c "
+    "JOIN pg_class t ON t.oid = c.conrelid JOIN pg_namespace n ON n.oid = t.relnamespace "
     "WHERE n.nspname = 'public' AND t.relname = 'facturas' AND c.contype = 'c' "
-    "AND pg_get_constraintdef(c.oid) LIKE '%descuento >= 0%';\n")
+    "AND pg_get_constraintdef(c.oid) LIKE '%descuento%') "
+    "SELECT 'la restriccion del descuento dice que no es negativo' AS que, "
+    "coalesce((SELECT string_agg(definicion, ' | ') FROM cheques), 'NO HAY NINGUNA') AS dio, "
+    "'descuento >= 0 (con o sin el cast del cero)' AS esperado, "
+    "coalesce((SELECT bool_or(definicion ~ 'descuento[[:space:]]*>=[[:space:]]*\\(?0') FROM cheques), false) AS ok;\n")
 
 
 def sql_del_ensayo(texto: str) -> str:

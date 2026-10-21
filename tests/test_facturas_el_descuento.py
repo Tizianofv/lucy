@@ -374,6 +374,11 @@ def test_el_ensayo_arma_el_sql_sin_conectarse_y_cierra_con_rollback():
     ensayo = guion.sql_del_ensayo(texto)
     assert "ROLLBACK;" in ensayo and ensayo.count("COMMIT") == 0
     assert "facturas.descuento" in ensayo and "descuento >= 0" in ensayo
+    # la comparación del CHECK aguanta el cero con su cast —`(0)::numeric`, como lo escribe Postgres—: una expresión
+    # regular que admite el paréntesis, no un `LIKE '%descuento >= 0%'` (que daría falso con la base bien), y el
+    # ensayo imprime la definición tal cual para que la sala la vea
+    assert "descuento[[:space:]]*>=" in ensayo and "LIKE '%descuento >= 0%'" not in ensayo
+    assert "string_agg(definicion" in ensayo
     assert "todas las facturas de hoy quedan en 0" in ensayo
     cuenta = guion.sql_de_la_cuenta(texto)
     assert cuenta.strip().startswith("BEGIN READ ONLY;") and "count(*)" in cuenta
