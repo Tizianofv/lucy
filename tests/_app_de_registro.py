@@ -29,9 +29,10 @@ contrato es el que la sala le pasó a Lucy en el encargo de la parte 9):
   · cada sesión trae `ref`, `codigo`, `es_trabajo`, `fecha` («AAAA-MM-DD»), `sala`,
     `sala_mostrar`, `horas`, `servicio`, `atendio`, `asignado_a`, `estado`,
     `cancelada` y el dinero (`total`, `abonado`, `saldo`);
+  · 502 `{"error": "no_se_pudo_leer"}` si la App no pudo leer su base.
 
 Y de la pieza D1 de la App (`GET /api/lucy/sesiones`, la de la ficha; el mapa
-`Levantamientos INFO/registro/lucy-lo-que-lee-de-la-app.md`, sección del detalle
+`Levantamientos INFO/registro/lo-que-lucy-lee-de-la-app.md`, sección del detalle
 de la cuenta, y `server.py::_renglon_para_lucy`):
   · cada sesión trae ADEMÁS `descuento` y `renglones`: la lista de la cuenta
     (`[{titulo, cantidad, horas, precio_unitario, subtotal, nota, producto_id,
@@ -41,7 +42,6 @@ de la cuenta, y `server.py::_renglon_para_lucy`):
     se recalcula; `tipo_cobro` sale del Catálogo y es `null` en un ítem libre o un
     trabajo;
   · la búsqueda (`/buscar`) NO trae ni `renglones` ni `descuento`.
-  · 502 `{"error": "no_se_pudo_leer"}` si la App no pudo leer su base.
 
 Y de la puerta de la búsqueda (parte 12 de la App; el contrato es el que la sala le pasó a Lucy
 en el encargo de la parte 13):
