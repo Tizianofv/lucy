@@ -1124,7 +1124,9 @@ def test_el_motivo_de_anular_vuelve_en_su_casilla(pantalla):
 
 def test_todo_post_de_facturas_da_401_sin_la_casa_y_no_escribe(pantalla):
     """La lista de rutas POST sale de las rutas registradas en la aplicación. Con solo ver, sin sesión, cookie falsa y la sesión de
-    alguien que no entra: 401 en CADA una (la comprobación de la ruta, no solo la de la puerta de `db`) y la base no cambia."""
+    alguien que no entra: el resultado es 401 en CADA una y la base no cambia. NO distingue de dónde viene el 401: si la ruta no
+    comprueba la casa, `db._pedir_sesion_de_la_casa` da el mismo 401 (esas rutas de escritura tienen dos llaves y esta prueba
+    vigila el resultado, no cuál de las dos cerró)."""
     e = tgf.emitir(tgf.crear())
     b = tgf.crear(liga={"tipo": "sesion", "ref": "ses-b"})
     posts = [r for r in rutas_de_facturas() if "POST" in r.methods]
