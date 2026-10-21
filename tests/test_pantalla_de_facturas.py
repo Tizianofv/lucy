@@ -284,7 +284,7 @@ def test_paso_2_con_cliente_enseña_sus_sesiones_y_trabajos_y_una_cancelada_no_s
     cajas = re.findall(r'<input type="checkbox" name="ref" value="(\d+)"( checked)?( disabled)?>', html)
     assert [c[0] for c in cajas] == ["11", "13", "12", "21", "31", "32"]  # de la ficha (sesiones, luego trabajos), y de la búsqueda
     assert [c[0] for c in cajas if c[2]] == ["21", "31", "32"]      # ninguna de la búsqueda se puede marcar
-    assert html.count("No es de este cliente: no se puede escoger") == 2      # 21 y 31 son de otras personas; la 32 es cancelada SUYA
+    assert html.count("No está entre las sesiones de este cliente en el registro: no se puede escoger") == 2      # 21 y 31 no están en la ficha; la 32 es cancelada SUYA
     assert "Cancelada: no se factura" in html and ">Trabajo<" in html
 
 
@@ -696,8 +696,8 @@ def test_la_pagina_ofrece_ligar_las_del_cliente_y_la_busqueda_sin_las_que_ya_tie
     b = tgf.crear(liga={"tipo": "sesion", "ref": "11"})
     html = _pagina(b["id"], sq="pe")
     ofrecidas = re.findall(r'action="/facturas/\d+/ligar"[^>]*><input type="hidden" name="ref" value="(\d+)">', html)
-    assert ofrecidas == ["13", "12"]                  # la 11 ya está; la 21 y la 31 son de otras personas y no tienen botón
-    assert html.count("No es de este cliente: no se puede escoger") == 2
+    assert ofrecidas == ["13", "12"]                  # la 11 ya está; la 21 y la 31 no están en la ficha y no tienen botón
+    assert html.count("No está entre las sesiones de este cliente en el registro: no se puede escoger") == 2
     assert "Cancelada: no se factura" in html
 
 

@@ -186,7 +186,7 @@ def renglones_de_una_opcion(cotizacion: dict | None, opcion) -> list[dict]:
 
 # Por qué una sesión que la búsqueda trae no se puede escoger (se pinta en su lugar de la casilla).
 POR_QUE_NO_SE_PUEDE_ESCOGER = {
-    "ajena": "No es de este cliente: no se puede escoger",
+    "ajena": "No está entre las sesiones de este cliente en el registro: no se puede escoger",
     "sin_comprobar": "No se pudo comprobar de quién es: no se puede escoger",
 }
 
@@ -194,7 +194,7 @@ def candidata_de_la_busqueda(c: dict, lectura: dict | None) -> dict:
     """Una sesión que la BÚSQUEDA trajo y no está entre las de la ficha, con su marca. ES LA ÚNICA REGLA (la usan «Nueva
     factura» y la página de una factura). `lectura` es la de la ficha (`registro_lectura.sesiones_de_cliente`) o `None`.
     Si la ficha se leyó bien: la que la App marcó cancelada PARA ESA FICHA es del cliente y sale como cancelada (la ficha no
-    la lista, pero sí la nombra en `canceladas`); cualquier otra es de otra persona (`ajena`). Si la ficha no se leyó no se sabe
+    la lista, pero sí la nombra en `canceladas`); cualquier otra NO ESTÁ entre las de la ficha (`ajena`): puede ser de otra persona o de este cliente y la ficha no la lista (por ejemplo un trabajo sin su teléfono), el código solo sabe que no está. Si la ficha no se leyó no se sabe
     de quién es ninguna (`sin_comprobar`). Con `no_se_puede` no hay casilla ni botón."""
     if lectura is not None and lectura.get("estado") == "ok":
         if c["ref"] in set(lectura.get("canceladas") or []):

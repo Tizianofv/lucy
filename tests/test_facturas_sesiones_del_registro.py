@@ -187,8 +187,8 @@ def test_la_cancelada_propia_sale_como_cancelada_y_no_como_de_otra_persona_en_la
                  cliente().get(f"/facturas/{b['id']}", params={"sq": "pe"}).text):
         filas = {re.search(r"c0(\d\d)", f).group(1): f for f in _etiquetas_de(html, "")
                  if re.search(r"c0\d\d", f)}
-        assert "Cancelada: no se factura" in filas["32"] and "No es de este cliente" not in filas["32"]
-        assert "No es de este cliente" in filas["31"]                      # la de otra persona sigue siendo ajena
+        assert "Cancelada: no se factura" in filas["32"] and "No está entre las sesiones de este cliente" not in filas["32"]
+        assert "No está entre las sesiones de este cliente" in filas["31"]                      # la de otra persona sigue siendo ajena
     # y no se puede facturar: ni casilla marcable ni se guarda
     antes = tgf.foto(pantalla)
     r = crear_por_la_pantalla(refs=("32",))
