@@ -2718,6 +2718,10 @@ def codigo_de_factura(anio: int, numero: int) -> str:
 # decide después (estado, última liga viva) se decide sin que otro escriba en medio. Lo que la fila no puede
 # bloquear (que una sesión no esté ya en otra factura) lo serializa un candado de asesoría por (tipo, ref).
 ITBIS_DE_FACTURA = Decimal("18")
+# La retención del ISR de una factura CON comprobante (NCF), decidida por Tiziano el 21-oct-2026 (pieza D4): al bruto
+# se le divide entre 0.85 y a eso se le resta el bruto. Es una división y no un 15 % del bruto porque el 15 % se saca
+# de la base (bruto ÷ 0.85), no del bruto: con 10,000 da 1,764.71 —el 15 % de 11,764.71—, no 1,500.
+DIVISOR_DE_LA_RETENCION_DEL_ISR = Decimal("0.85")
 # Tope de renglones por factura: decisión de la puerta, no una medición. Con el tope por renglón de las
 # cotizaciones el subtotal más el ITBIS cabe de sobra en NUMERIC(14,2) (lo vigila una prueba).
 LIMITE_DE_RENGLONES_DE_FACTURA = 100
@@ -3010,17 +3014,37 @@ def _revisar_el_descuento(descuento: Decimal, montos) -> None:
         raise FacturaNoVale("descuento_mayor", "el descuento no puede pasar del subtotal de la factura")
 
 
-def totales_de_factura(montos, itbis_pct, descuento=None) -> dict:
-    """`{"subtotal", "descuento", "neto", "itbis", "total"}` (`Decimal`, dos decimales). El descuento (0 si no viene)
-    se resta del subtotal —el NETO—, el ITBIS es `itbis_pct` por ciento del neto, redondeado a centavos hacia arriba
-    en la mitad, y el total es el neto más el ITBIS. Sin descuento todo sale igual que antes, céntimo por céntimo. Sin
-    `itbis_pct` el ITBIS es 0. ÚNICO sitio donde se hace esta cuenta: ni la base ni la lista la guardan."""
+def totales_de_factura(montos, itbis_pct, descuento=None, con_ncf=False) -> dict:
+    """`{"subtotal", "descuento", "neto", "itbis", "total", "retencion_isr", "itbis_retenido", "total_a_pagar"}`
+    (`Decimal`, dos decimales). El descuento (0 si no viene) se resta del subtotal —el NETO, que es el bruto— y de ahí
+    salen dos cuentas, según la factura lleve comprobante (NCF) o no:
+
+      · SIN NCF (lo de la pieza D3, céntimo por céntimo): el ITBIS es `itbis_pct` por ciento del neto, redondeado a
+        centavos con la mitad hacia arriba; el total es el neto más el ITBIS; no hay retención (`retencion_isr` e
+        `itbis_retenido` en 0) y el total a pagar es el total.
+      · CON NCF (pieza D4, regla de Tiziano del 21-oct-2026): la retención del ISR es el bruto dividido entre 0.85 menos
+        el bruto (redondeada a centavos, mitad hacia arriba); el ITBIS va sobre el bruto MÁS la retención; el total es
+        esa base más su ITBIS; se retienen la retención y TODO el ITBIS (`itbis_retenido`), y el total a pagar es el
+        BRUTO (el total menos las dos retenciones da el bruto exacto, porque el ITBIS se suma y se resta entero).
+
+    Sin `itbis_pct` no hay ITBIS (ni retenido). ÚNICO sitio donde se hace esta cuenta: ni la base ni la lista la
+    guardan."""
     subtotal = sum((Decimal(m) for m in montos), Decimal("0")).quantize(_CENTAVOS)
     rebaja = Decimal("0.00") if descuento is None else Decimal(descuento).quantize(_CENTAVOS)
     neto = subtotal - rebaja
+    if not con_ncf:
+        itbis = (Decimal("0") if itbis_pct is None
+                 else (neto * Decimal(itbis_pct) / 100).quantize(_CENTAVOS, rounding=ROUND_HALF_UP))
+        total = neto + itbis
+        return {"subtotal": subtotal, "descuento": rebaja, "neto": neto, "itbis": itbis, "total": total,
+                "retencion_isr": Decimal("0.00"), "itbis_retenido": Decimal("0.00"), "total_a_pagar": total}
+    retencion = ((neto / DIVISOR_DE_LA_RETENCION_DEL_ISR).quantize(_CENTAVOS, rounding=ROUND_HALF_UP)
+                 - neto)
+    base = neto + retencion
     itbis = (Decimal("0") if itbis_pct is None
-             else (neto * Decimal(itbis_pct) / 100).quantize(_CENTAVOS, rounding=ROUND_HALF_UP))
-    return {"subtotal": subtotal, "descuento": rebaja, "neto": neto, "itbis": itbis, "total": neto + itbis}
+             else (base * Decimal(itbis_pct) / 100).quantize(_CENTAVOS, rounding=ROUND_HALF_UP))
+    return {"subtotal": subtotal, "descuento": rebaja, "neto": neto, "itbis": itbis, "total": base + itbis,
+            "retencion_isr": retencion, "itbis_retenido": itbis, "total_a_pagar": neto}
 
 
 def _llave_de_asesoria_de_liga(tipo: str, ref: str) -> int:
@@ -3164,7 +3188,8 @@ def _con_el_aviso_de_la_tabla(funcion):
 
 async def _factura_completa(cur, factura_id: int) -> dict | None:
     """La factura con `codigo` (`None` mientras es borrador), `renglones`, `ligas` (todas; `viva` dice cuáles
-    siguen) y `subtotal`/`itbis`/`total` (`totales_de_factura`). Lee con el cursor que le dan."""
+    siguen) y los totales (`totales_de_factura`: `subtotal`, `itbis`, `total` y, con NCF, `retencion_isr`,
+    `itbis_retenido` y `total_a_pagar`). Lee con el cursor que le dan."""
     await cur.execute(SENTENCIA_DE_LEER_FACTURA, (factura_id,))
     fila = await cur.fetchone()
     if fila is None:
@@ -3188,7 +3213,8 @@ async def _factura_completa(cur, factura_id: int) -> dict | None:
     f["itbis_pct"] = None if f["itbis_pct"] is None else _dinero_leido(f["itbis_pct"])
     f["descuento"] = _dinero_leido(f["descuento"])
     f["codigo"] = None if f["numero"] is None else codigo_de_factura(f["anio"], f["numero"])
-    f.update(totales_de_factura([r["monto"] for r in renglones], f["itbis_pct"], f["descuento"]))
+    f.update(totales_de_factura([r["monto"] for r in renglones], f["itbis_pct"], f["descuento"],
+                                con_ncf=f["ncf"] is not None))
     f["renglones"], f["ligas"] = renglones, ligas
     return f
 
@@ -3573,8 +3599,9 @@ async def factura_por_id(factura_id: int) -> dict | None:
 async def facturas_para_la_lista(*, estado: str | None = None, proyecto_id: int | None = None,
                                  cliente_noco_id: int | None = None) -> list[dict]:
     """La lista para la pantalla, la más nueva primero, sin paginar: una fila por factura con `codigo`
-    (`None` en borrador), `ligas_vivas` y `subtotal`/`itbis`/`total` por `totales_de_factura`. Filtra por
-    estado, proyecto y cliente (`None` = todos). Sin la tabla: `FacturasSinTabla`."""
+    (`None` en borrador), `ligas_vivas` y los totales de `totales_de_factura` (con NCF, también `retencion_isr`,
+    `itbis_retenido` y `total_a_pagar`). Filtra por estado, proyecto y cliente (`None` = todos). Sin la tabla:
+    `FacturasSinTabla`."""
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         await cur.execute(SENTENCIA_DE_LA_LISTA_DE_FACTURAS,
@@ -3586,7 +3613,8 @@ async def facturas_para_la_lista(*, estado: str | None = None, proyecto_id: int 
         f["itbis_pct"] = None if f["itbis_pct"] is None else _dinero_leido(f["itbis_pct"])
         f["descuento"] = _dinero_leido(f["descuento"])
         f["codigo"] = None if f["numero"] is None else codigo_de_factura(f["anio"], f["numero"])
-        f.update(totales_de_factura([_dinero_leido(f.pop("subtotal"))], f["itbis_pct"], f["descuento"]))
+        f.update(totales_de_factura([_dinero_leido(f.pop("subtotal"))], f["itbis_pct"], f["descuento"],
+                                    con_ncf=f["ncf"] is not None))
         lista.append(f)
     return lista
 

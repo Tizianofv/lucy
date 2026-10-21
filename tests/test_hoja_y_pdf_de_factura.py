@@ -66,7 +66,7 @@ def _f(estado="emitida", *, itbis="18", ncf=True, rnc="131234567", renglones=Non
         "itbis_pct": pct, "motivo_anulacion": motivo, "renglones": renglones,
     }
     base.update(cambios)
-    base.update(db.totales_de_factura([r["monto"] for r in renglones], pct))
+    base.update(db.totales_de_factura([r["monto"] for r in renglones], pct, con_ncf=bool(ncf)))
     return base
 
 
@@ -111,7 +111,11 @@ def test_la_emitida_con_ncf_e_itbis_trae_todo_y_ninguna_marca():
         ("Grabación de bajo y güira", "Incluye mezcla.", "1", "RD$62,500", "RD$62,500"),
         ("Video musical", "Una toma.\nSegunda línea.", "1", "RD$15,250.50", "RD$15,250.50")]
     assert [(t["etiqueta"], t["total"]) for t in h["totales"]] == [
-        ("Subtotal", "RD$77,750.50"), ("ITBIS 18%", "RD$13,995.09"), ("TOTAL", "RD$91,745.59")]
+        ("Subtotal", "RD$77,750.50"), ("ITBIS 18%", "RD$16,464.81"), ("TOTAL", "RD$107,935.99"),
+        # Pieza D4: la factura lleva comprobante, así que debajo del total van la retención del ISR, el ITBIS
+        # retenido (todo) y lo que el cliente paga de verdad —el bruto—.
+        ("Impuesto a retener (ISR 15%)", "RD$13,720.68"), ("ITBIS retenido", "RD$16,464.81"),
+        ("Total a pagar", "RD$77,750.50")]
     assert h["pie"] == cz.PIE_DEL_ESTUDIO
 
 
@@ -126,9 +130,11 @@ def test_sin_ncf_sin_itbis_y_sin_rnc_no_queda_ningun_hueco_ni_texto():
 
 def test_el_ncf_y_el_itbis_son_cosas_distintas():
     solo_ncf = fa.textos_de_la_factura(fa.hoja_de_factura(_f(itbis=None)))
-    assert "NCF" in solo_ncf and not any("ITBIS" in t for t in solo_ncf)
+    # Con comprobante y sin ITBIS no hay línea de ITBIS; la de «ITBIS retenido» sí va, en cero (pieza D4).
+    assert "NCF" in solo_ncf and "ITBIS 18%" not in solo_ncf
     solo_itbis = fa.textos_de_la_factura(fa.hoja_de_factura(_f(ncf=False)))
     assert "ITBIS 18%" in solo_itbis and "NCF" not in solo_itbis
+    assert not any("retenido" in t or "retenerse" in t for t in solo_itbis)
 
 
 def test_el_borrador_dice_borrador_y_no_tiene_numero():
@@ -181,7 +187,7 @@ def test_la_hoja_es_pura_no_toca_lo_que_recibe():
     (["100"], None), (["0.01", "0.01", "0.01"], "18"), (["1234.56"], "18")])
 def test_subtotal_itbis_y_total_de_la_hoja_son_los_de_totales_de_factura(montos, pct):
     renglones = [{"orden": i, "descripcion": f"R{i}", "detalle": "", "monto": Decimal(m)} for i, m in enumerate(montos, 1)]
-    h = fa.hoja_de_factura(_f(renglones=renglones, itbis=pct))
+    h = fa.hoja_de_factura(_f(renglones=renglones, itbis=pct, ncf=False))
     esperado = db.totales_de_factura([Decimal(m) for m in montos], None if pct is None else Decimal(pct))
     por_etiqueta = {t["etiqueta"]: t["total"] for t in h["totales"]}
     assert por_etiqueta["TOTAL"] == cz.dinero_en_pesos(esperado["total"])
@@ -193,7 +199,7 @@ def test_subtotal_itbis_y_total_de_la_hoja_son_los_de_totales_de_factura(montos,
 
 
 def test_la_hoja_no_recalcula_escribe_lo_que_trae_la_lectura():
-    f = _f()
+    f = _f(ncf=False)
     f.update(subtotal=Decimal("1.00"), itbis=Decimal("2.00"), total=Decimal("3.00"))
     h = fa.hoja_de_factura(f)
     assert [(t["etiqueta"], t["total"]) for t in h["totales"]] == [("Subtotal", "RD$1"), ("ITBIS 18%", "RD$2"), ("TOTAL", "RD$3")]
@@ -287,7 +293,10 @@ def test_el_nombre_largo_sale_entero_y_la_columna_crece_para_el_total_mas_grande
     f = _factura_al_tope_de_la_puerta("W")
     leido = _sin_blancos(_texto_del_pdf(_pdf(f)))
     assert "W" * 200 in leido and "W" * 300 in leido
-    assert "RD$199,999,999.98" in leido and "RD$36,000,000" in leido        # el subtotal y el ITBIS (18 %, redondeado) de dos montos tope
+    # Dos montos tope con comprobante (pieza D4): subtotal, ITBIS sobre el bruto más la retención, total y lo que
+    # paga el cliente. El total de la factura es el más grande que acepta la puerta.
+    assert "RD$199,999,999.98" in leido and "RD$42,352,941.17" in leido
+    assert "RD$277,647,058.79" in leido and "RD$35,294,117.64" in leido
 
 
 def test_la_letra_de_fabrica_no_dibuja_la_raya_larga():

@@ -347,7 +347,8 @@ def test_el_itbis_es_el_18_o_ninguno_y_los_totales_se_calculan(mundo):
 def test_el_itbis_redondea_a_centavos_con_la_mitad_hacia_arriba():
     assert db.totales_de_factura([Decimal("10.25")], Decimal("18")) == \
         {"subtotal": Decimal("10.25"), "descuento": Decimal("0.00"), "neto": Decimal("10.25"),
-         "itbis": Decimal("1.85"), "total": Decimal("12.10")}                                      # 1.845
+         "itbis": Decimal("1.85"), "total": Decimal("12.10"),                                      # 1.845
+         "retencion_isr": Decimal("0.00"), "itbis_retenido": Decimal("0.00"), "total_a_pagar": Decimal("12.10")}
     assert db.totales_de_factura([Decimal("0.03"), Decimal("0.02")], Decimal("18"))["itbis"] == Decimal("0.01")   # 0.009
     assert db.totales_de_factura([Decimal("1.00")], None)["itbis"] == Decimal("0.00")
 
@@ -442,7 +443,9 @@ def test_corregir_cambia_lo_pedido_deja_lo_demas_y_sube_el_candado(mundo):
         ("Otro nombre", 2002, "2026-10-01", Decimal("18.00"))
     assert (r["ncf"], r["rnc_cedula"], r["creada"]) == ("B01", "101000001", False)
     assert [(x["orden"], x["monto"]) for x in r["renglones"]] == [(1, Decimal("50.00"))]
-    assert r["cambiado_en"] != f["cambiado_en"] and r["total"] == Decimal("59.00")
+    # La factura lleva NCF, así que la corrección se cuenta con la retención (pieza D4): 50 → retención 8.82,
+    # base 58.82, ITBIS 10.59, total 69.41.
+    assert r["cambiado_en"] != f["cambiado_en"] and r["total"] == Decimal("69.41")
     assert [h[0] for h in huellas(mundo)] == ["crear", "corregir"]
     h = filas(mundo, "log_acciones")[1]
     assert json.loads(h["antes"])["para_nombre"] == "Cliente de prueba" and json.loads(h["despues"])["para_nombre"] == "Otro nombre"

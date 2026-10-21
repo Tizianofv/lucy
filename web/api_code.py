@@ -723,13 +723,19 @@ def _envio_para_natalia(e: dict) -> dict:
 
 def _factura_para_natalia(f: dict) -> dict:
     """Una factura releída (`db.facturas_de_natalia`) → lo que sale, campo por campo. `codigo` es `None` mientras
-    sea borrador (no tiene número hasta que se aprueba). Sin chats, sin NCF, sin Drive."""
+    sea borrador (no tiene número hasta que se aprueba). Sin chats, sin NCF, sin Drive. `retencion_isr`,
+    `itbis_retenido` y `total_a_pagar` salen de `db.totales_de_factura`: las facturas que hace Natalia nacen sin NCF,
+    así que van en 0 y el total a pagar es el total, pero si la casa le pone un NCF al borrador, lo que Natalia lee ya
+    viene con la retención y con lo que el cliente paga de verdad."""
     return {
         "factura_id": f["id"], "codigo": f["codigo"], "estado": f["estado"], "para_nombre": f["para_nombre"],
         "fecha": f["fecha"].isoformat() if isinstance(f["fecha"], date) else str(f["fecha"]),
         "subtotal": _dinero_para_natalia(f["subtotal"]), "descuento": _dinero_para_natalia(f["descuento"]),
         "itbis": _dinero_para_natalia(f["itbis"]),
         "total": _dinero_para_natalia(f["total"]),
+        "retencion_isr": _dinero_para_natalia(f["retencion_isr"]),
+        "itbis_retenido": _dinero_para_natalia(f["itbis_retenido"]),
+        "total_a_pagar": _dinero_para_natalia(f["total_a_pagar"]),
         "renglones": [{"descripcion": r["descripcion"], "detalle": r["detalle"],
                        "cantidad": _cantidad_para_natalia(r.get("cantidad")), "unidad": r.get("unidad") or "",
                        "precio_unitario": _dinero_para_natalia(r.get("precio_unitario", r["monto"])),
@@ -838,8 +844,12 @@ async def crear_factura_de_natalia(
     la ficha en NocoDB. NCF, proyecto y cotización no se piden: son de la casa.
 
     RESPUESTAS: 200 `{"factura": {factura_id, codigo (null), estado: "borrador", para_nombre, fecha, subtotal, descuento,
-    itbis, total, renglones: [{descripcion, detalle, cantidad, unidad, precio_unitario, monto}], ligas, envios: []},
-    "reusada": false}`, releído de la base. 404: la ficha no existe. 409: alguna sesión ya está en otra factura viva.
+    itbis, total, retencion_isr, itbis_retenido, total_a_pagar, renglones: [{descripcion, detalle, cantidad, unidad,
+    precio_unitario, monto}], ligas, envios: []},
+    "reusada": false}`, releído de la base. `retencion_isr`, `itbis_retenido` y `total_a_pagar` son las cuentas de la
+    factura CON comprobante (NCF): una factura que hace Natalia nace sin NCF, así que vienen en «0.00» y el total a
+    pagar es el total; si la casa le pone el NCF al borrador, lo que Natalia lee ya trae la retención y el total a
+    pagar. 404: la ficha no existe. 409: alguna sesión ya está en otra factura viva.
     422: pedido que no vale (sesión de otro cliente, cancelada, ficha sin teléfono en el registro, monto mal escrito,
     cantidad sin precio, las dos formas de renglón a la vez, descuento que no es un dinero o que pasa del subtotal…):
     el detalle dice cuál. 503: Noco, el registro o la base no contestaron, o falta una migración. EN TODOS LOS ERRORES

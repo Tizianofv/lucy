@@ -19,7 +19,7 @@
   <td><a href="/facturas/{{ f.id }}"><b>{{ f.numero }}</b></a></td>
   <td>{{ f.cliente }}</td>
   <td class="suave">{{ f.fecha }}</td>
-  <td class="num">{{ f.total }}</td>
+  <td class="num">{{ f.total }}{% if f.total_a_pagar %}<br><span class="suave" data-total-a-pagar>a pagar {{ f.total_a_pagar }}</span>{% endif %}</td>
   <td><span class="pild {{ f.estado }}">{{ f.estado_texto }}</span></td>
   <td data-pago="{{ f.pago.estado }}">{{ f.pago.texto }}</td>
   <td class="suave">{% if f.proyecto %}<a href="/proyectos?p={{ f.proyecto_id }}">{{ f.proyecto }}</a>{% else %}—{% endif %}</td>
