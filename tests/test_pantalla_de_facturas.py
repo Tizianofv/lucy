@@ -1016,3 +1016,124 @@ def test_si_las_facturas_no_se_pueden_leer_la_pagina_del_proyecto_carga_sin_el_b
         raise db.FacturasSinTabla("falta")
     monkeypatch.setattr(db, "facturas_para_la_lista", sin_tabla)
     assert "facturas-del-proyecto" not in _proyecto_pagina(con_proyecto)
+
+
+# ── 9. Un guardado rechazado devuelve lo escrito en TODO formulario (y 401 en todo POST) ────────────
+
+def _formularios_que_piden_algo() -> dict[str, list[str]]:
+    """`{ruta: [casillas que la persona llena]}` de todo `<form method="post" action="/facturas…">` de las plantillas (sacado
+    del texto de los archivos, no tecleado): las casillas visibles, sin las escondidas. `{{ … }}` en una dirección o en un
+    nombre es el número de la factura o del renglón (`/facturas/{fid}/…`, `r-1-…`)."""
+    import pathlib
+    carpeta = pathlib.Path(panel.__file__).parent / "plantillas"
+    salida: dict[str, list[str]] = {}
+    for archivo in sorted(carpeta.glob("*.html")):
+        for formulario in archivo.read_text(encoding="utf-8").split("<form")[1:]:
+            cabeza = formulario.split(">", 1)[0]
+            accion = re.search(r'action="(/facturas[^"]*)"', cabeza)
+            if not accion or 'method="post"' not in cabeza:
+                continue
+            ruta = re.sub(r"\{\{[^}]*\}\}", "{fid}", accion.group(1))
+            cuerpo = formulario.split("</form>", 1)[0]
+            nombres = []
+            for etiqueta in re.findall(r"<(?:input|textarea|select)\b[^>]*>", cuerpo):
+                nombre = re.search(r'name="([^"]+)"', etiqueta)
+                if nombre and 'type="hidden"' not in etiqueta:
+                    nombres.append(re.sub(r"\{\{[^}]*\}\}", "1", nombre.group(1)))
+            if nombres:
+                salida.setdefault(ruta, [])
+                salida[ruta] += [n for n in nombres if n not in salida[ruta]]
+    return salida
+
+
+def _rechazo_de_anular(m, datos):
+    e = tgf.emitir(tgf.crear())
+    return cliente().post(f"/facturas/{e['id']}/anular", data=datos, follow_redirects=False)
+
+
+def _rechazo_de_proyecto(m, datos):
+    ct._insertar(m.con, proyecto_id=1, numero=7, contenido=CONTENIDO)
+    cot = m.con.execute("SELECT max(id) FROM cotizaciones").fetchone()[0]
+    e = tgf.emitir(tgf.crear(cotizacion_id=cot))
+    return cliente().post(f"/facturas/{e['id']}/proyecto", data={"proyecto": "2"}, follow_redirects=False)
+
+
+def _rechazo_de_nueva(m, datos):
+    return cliente().post("/facturas/nueva", data={"cliente": "7", "ref": ["11"], **datos}, follow_redirects=False)
+
+
+def _rechazo_de_corregir(m, datos):
+    b = tgf.crear()
+    return cliente().post(f"/facturas/{b['id']}/corregir", data={"cambiado_en": fp.candado(b["cambiado_en"]), **datos},
+                          follow_redirects=False)
+
+
+# Cómo se provoca el rechazo en cada formulario. La LISTA de formularios que hay que cubrir sale de las plantillas
+# (`_formularios_que_piden_algo`): uno nuevo sin escenario aquí pone roja la prueba.
+ESCENARIOS_DE_RECHAZO = {"/facturas/nueva": _rechazo_de_nueva, "/facturas/{fid}/corregir": _rechazo_de_corregir,
+                         "/facturas/{fid}/anular": _rechazo_de_anular}
+
+
+def test_todo_formulario_de_facturas_que_pide_algo_tiene_su_escenario_de_rechazo():
+    asked = _formularios_que_piden_algo()
+    assert {"/facturas/nueva", "/facturas/{fid}/corregir", "/facturas/{fid}/anular", "/facturas/{fid}/proyecto"} <= set(asked), asked
+    sin_escenario = sorted(set(asked) - set(ESCENARIOS_DE_RECHAZO) - {"/facturas/{fid}/proyecto"})
+    assert sin_escenario == [], sin_escenario
+
+
+@pytest.mark.parametrize("ruta", sorted(ESCENARIOS_DE_RECHAZO))
+def test_un_guardado_rechazado_devuelve_cada_casilla_que_la_persona_lleno(pantalla, ruta):
+    casillas = _formularios_que_piden_algo()[ruta]
+    datos = {}
+    for c in casillas:
+        if c == "motivo":
+            datos[c] = "ZZmotivo" + "x" * 500          # pasa de 500: la puerta lo rechaza
+        elif c == "itbis":
+            datos[c] = "18"
+        elif c == "ref":
+            continue
+        else:
+            datos[c] = f"ZZ{c}"                         # nada de esto vale como monto, fecha, RNC…: se rechaza
+    r = ESCENARIOS_DE_RECHAZO[ruta](pantalla, datos)
+    assert r.status_code == 400, (ruta, r.status_code)
+    for c, v in datos.items():
+        if c == "itbis":
+            assert re.search(r'name="itbis"[^>]*checked', r.text), (ruta, c)
+        elif c == "motivo":
+            assert datos[c] in r.text, (ruta, c)
+        else:
+            assert f'value="{v}"' in r.text or f">{v}</textarea>" in r.text, (ruta, c)
+
+
+def test_el_proyecto_escogido_y_rechazado_sigue_escogido_y_no_el_de_la_factura(pantalla):
+    r = _rechazo_de_proyecto(pantalla, {})
+    assert r.status_code == 400 and "Esa cotización es de otro proyecto" in r.text
+    assert re.search(r'<option value="2" selected>', r.text) and not re.search(r'<option value="" selected>', r.text)
+    antes = unica(pantalla)["proyecto_id"]
+    assert antes is None
+
+
+def test_el_motivo_de_anular_vuelve_en_su_casilla(pantalla):
+    e = tgf.emitir(tgf.crear())
+    largo = "Motivo que escribí " + "x" * 500
+    r = cliente().post(f"/facturas/{e['id']}/anular", data={"motivo": largo}, follow_redirects=False)
+    assert r.status_code == 400 and "demasiado largo" in r.text
+    assert re.search(r"<textarea[^>]*name=\"motivo\"[^>]*>" + re.escape(largo) + "</textarea>", r.text)
+    assert unica(pantalla)["estado"] == "emitida"
+
+
+def test_todo_post_de_facturas_da_401_sin_la_casa_y_no_escribe(pantalla):
+    """La lista de rutas POST sale de las rutas registradas en la aplicación. Con solo ver, sin sesión, cookie falsa y la sesión de
+    alguien que no entra: 401 en CADA una (la comprobación de la ruta, no solo la de la puerta de `db`) y la base no cambia."""
+    e = tgf.emitir(tgf.crear())
+    b = tgf.crear(liga={"tipo": "sesion", "ref": "ses-b"})
+    posts = [r for r in rutas_de_facturas() if "POST" in r.methods]
+    assert len(posts) == 8
+    antes = tgf.foto(pantalla)
+    for sesion in (None, "ver", "ajena", "falsa"):
+        for r in posts:
+            resp = cliente(sesion).post(_url(r, b["id"]), data={**cuerpo(), "motivo": "x", "proyecto": "1", "tipo": "sesion",
+                                                                 "cambiado_en": fp.candado(b["cambiado_en"])},
+                                        follow_redirects=False)
+            assert resp.status_code == 401, (sesion, r.path, resp.status_code)
+    assert tgf.foto(pantalla) == antes and e["id"]

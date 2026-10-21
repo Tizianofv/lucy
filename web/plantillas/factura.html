@@ -27,7 +27,7 @@
 {% elif confirmar == 'anular' %}
 <div class="confirma" data-confirmar="anular"><b>¿Anular {{ f.codigo }}?</b>
   <p>Queda anulada con su número y su NCF (el NCF no se vuelve a usar) y sus sesiones o trabajos quedan libres para otra factura. Escribe por qué.</p>
-  <form method="post" action="/facturas/{{ f.id }}/anular"><textarea name="motivo" maxlength="500" required aria-label="Motivo de la anulación" placeholder="Motivo de la anulación"></textarea><button class="peligro">Sí, anular</button><a class="boton-linea" href="/facturas/{{ f.id }}">Cancelar</a></form></div>
+  <form method="post" action="/facturas/{{ f.id }}/anular"><textarea name="motivo" maxlength="500" required aria-label="Motivo de la anulación" placeholder="Motivo de la anulación">{{ motivo_escrito }}</textarea><button class="peligro">Sí, anular</button><a class="boton-linea" href="/facturas/{{ f.id }}">Cancelar</a></form></div>
 {% endif %}
 
 {% if se_corrige %}
@@ -79,7 +79,7 @@
       {% if f.estado != 'anulada' %}
       <form method="post" action="/facturas/{{ f.id }}/proyecto" class="barra" data-proyecto>
         <select name="proyecto" aria-label="Proyecto de la factura"><option value="">Sin proyecto</option>
-          {% for pid, nombre in proyectos %}<option value="{{ pid }}"{% if pid == f.proyecto_id %} selected{% endif %}>{{ nombre }}</option>{% endfor %}</select>
+          {% for pid, nombre in proyectos %}<option value="{{ pid }}"{% if pid == proyecto_marcado %} selected{% endif %}>{{ nombre }}</option>{% endfor %}</select>
         <button class="linea">Guardar el proyecto</button>
       </form>
       {% endif %}

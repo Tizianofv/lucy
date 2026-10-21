@@ -2739,7 +2739,8 @@ CONFIRMACIONES_DE_FACTURA = {"borrador": ("emitir", "descartar"), "emitida": ("a
 
 
 async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", corregir: int = 0, sq: str = "",
-                             errores=(), escrito: dict | None = None, status: int = 200):
+                             errores=(), escrito: dict | None = None, status: int = 200,
+                             motivo_escrito: str = "", proyecto_escrito: tuple | None = None):
     """La pantalla de la factura `f` (lo que devuelve `db.factura_por_id`): su hoja (la misma del PDF), sus datos,
     sus sesiones o trabajos, el proyecto y lo que se puede hacer según su estado. Solo LEE (la App, Noco, la base).
     `errores` y `escrito` son lo que un guardado rechazado deja para que la persona no pierda lo suyo."""
@@ -2772,7 +2773,9 @@ async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", 
         "confirmar": confirmar if confirmar in CONFIRMACIONES_DE_FACTURA.get(estado, ()) else "",
         "se_corrige": se_corrige,
         "valores": fp.valores_del_formulario(factura=f, escrito=escrito) if se_corrige else None,
-        "candado": fp.candado(f["cambiado_en"]), "errores": list(errores),
+        "candado": fp.candado(f["cambiado_en"]), "errores": list(errores), "motivo_escrito": motivo_escrito,
+        # el proyecto que la persona escogió y se rechazó (`(valor,)`), o el que la factura tiene
+        "proyecto_marcado": f["proyecto_id"] if proyecto_escrito is None else proyecto_escrito[0],
         "campos_marcados": {c["casilla"] for c in errores if c.get("casilla")},
         "candidatas": candidatas, "hay_mas": hay_mas, "registro_ok": registro_ok, "busqueda": busqueda, "sq": sq,
         "etiquetas_de_liga": fp.ETIQUETA_DE_LIGA}, status_code=status))
@@ -2805,7 +2808,8 @@ async def pagina_de_una_factura(request: Request, fid: int, confirmar: Navegacio
 
 
 async def _rechazo_de_una_factura(request: Request, fid: int, e: Exception, *, confirmar: str = "", corregir: int = 0,
-                                  escrito: dict | None = None):
+                                  escrito: dict | None = None, motivo_escrito: str = "",
+                                  proyecto_escrito: tuple | None = None):
     """Algo que la puerta no dejó: la página de la factura TAL COMO QUEDÓ, con la razón arriba. Una excepción que no
     es de las de `db` es un fallo de la base: no se sabe si llegó a confirmar, y se dice así."""
     texto = fp.texto_del_error(e)
@@ -2817,7 +2821,8 @@ async def _rechazo_de_una_factura(request: Request, fid: int, e: Exception, *, c
     if f is None:
         return _no_existe_la_factura()
     return await _pagina_de_factura(request, f, confirmar=confirmar, corregir=corregir, errores=[texto],
-                                    escrito=escrito, status=400)
+                                    escrito=escrito, status=400, motivo_escrito=motivo_escrito,
+                                    proyecto_escrito=proyecto_escrito)
 
 
 @app.post("/facturas/{fid}/corregir")
@@ -2865,12 +2870,13 @@ async def anular_una_factura(request: Request, fid: int):
     if not auth.puede_entrar(chat):
         return _fuera(request)
     formulario = await request.form()
+    motivo = fp.texto_de(formulario.get("motivo"))
     try:
-        await db.anular_factura(fid, chat, fp.texto_de(formulario.get("motivo")))
+        await db.anular_factura(fid, chat, motivo)
     except db.FacturaSinSesion:
         return _fuera(request)
     except Exception as e:
-        return await _rechazo_de_una_factura(request, fid, e, confirmar="anular")
+        return await _rechazo_de_una_factura(request, fid, e, confirmar="anular", motivo_escrito=motivo)
     return RedirectResponse(f"/facturas/{fid}", status_code=303)
 
 
@@ -2959,7 +2965,7 @@ async def poner_proyecto_a_una_factura(request: Request, fid: int):
     except db.FacturaSinSesion:
         return _fuera(request)
     except Exception as e:
-        return await _rechazo_de_una_factura(request, fid, e)
+        return await _rechazo_de_una_factura(request, fid, e, proyecto_escrito=(campos["proyecto"],))
     if fp.texto_de(formulario.get("volver")) == "proyecto":
         volver = _entero_positivo(formulario.get("p")) or campos["proyecto"] or (antes or {}).get("proyecto_id")
         if isinstance(volver, int) and not isinstance(volver, bool):
