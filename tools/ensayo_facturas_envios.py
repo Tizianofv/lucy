@@ -4,7 +4,7 @@ NO se conecta a ninguna base: solo imprime SQL (por eso no hay credenciales ni d
 
 Es el hermano de `tools/ensayo_facturas_drive.py` (que AGREGA columnas también) y reusa de él lo que sirve (sacar las
 columnas del texto de la migración, la cuenta de solo lectura). Lo que cambia es la comprobación de los tipos: aquí una
-columna es `bigint` y la otra `timestamp with time zone`. Dos modos:
+columna es `bigint` y las otras tres `timestamp with time zone`. Dos modos:
 
   --cuenta  (por omisión) SQL de SOLO LECTURA: dice cuáles de las dos columnas existen hoy y cuántas filas tiene
             `factura_envios` (la migración dice que hoy tiene que estar vacía).

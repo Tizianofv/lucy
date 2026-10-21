@@ -175,7 +175,8 @@ async def _envios_de_las_facturas():
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=db.dict_row)
         await cur.execute("SELECT count(*) AS envios, count(tarjeta_msg_id) AS con_tarjeta, "
-                          "count(visto_cambiado_en) AS con_candado FROM factura_envios")
+                          "count(visto_cambiado_en) AS con_candado, count(tarjeta_enviada_en) AS con_hora, "
+                          "count(recordada_en) AS recordados FROM factura_envios")
         return {"factura_envios": dict(await cur.fetchone())}
 
 
@@ -313,6 +314,7 @@ async def main() -> int:
         ("envios_de_factura", lambda: db.envios_de_factura(0)),
         ("facturas_de_natalia", lambda: db.facturas_de_natalia(0)),
         ("envios_de_factura_sin_tarjeta", lambda: db.envios_de_factura_sin_tarjeta()),
+        ("envios_de_factura_para_recordar", lambda: db.envios_de_factura_para_recordar(db.datetime.now(db.timezone.utc))),
     ]
 
     rojas = []

@@ -885,7 +885,7 @@ def _lo_que_viola(hallados):
             malos.append((rel, linea, "cambia en una liga algo que no es desligada_en"))
         if tabla == "factura_envios":
             if not columnas <= {"estado", "motivo", "aprobado_por_chat_id", "aprobado_en", "enviado_en", "tarjeta_msg_id",
-                                "visto_cambiado_en"}:
+                                "visto_cambiado_en", "tarjeta_enviada_en", "recordada_en"}:
                 malos.append((rel, linea, "cambia en un envío una columna que no es de su vida"))
             if not re.search(r"\bestado\b", donde):
                 malos.append((rel, linea, "UPDATE de envíos sin el estado en el WHERE"))
@@ -922,7 +922,7 @@ def test_las_sentencias_que_escriben_facturas_son_las_de_la_puerta_y_cumplen_las
         db.SENTENCIA_DE_PEDIR_ENVIO, db.SENTENCIA_DE_APROBAR_ENVIO, db.SENTENCIA_DE_RECHAZAR_ENVIO,
         db.SENTENCIA_DE_ENVIO_QUE_NO_SE_PUDO_APROBAR, db.SENTENCIA_DE_ANOTAR_QUE_SALIO,
         db.SENTENCIA_DE_ANOTAR_QUE_NO_SALIO, db.SENTENCIA_DE_MANDADA_A_MANO, db.SENTENCIA_DE_MARCAR_LA_TARJETA,
-        db.SENTENCIA_DE_DESCARTAR_ENVIOS))
+        db.SENTENCIA_DE_DESCARTAR_ENVIOS, db.SENTENCIA_DE_RECLAMAR_EL_RECORDATORIO, db.SENTENCIA_DE_SOLTAR_EL_RECORDATORIO))
     assert textos == esperadas, [h[:2] for h in hallados]
     assert _lo_que_viola(hallados) == []
 

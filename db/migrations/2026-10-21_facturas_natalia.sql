@@ -8,8 +8,11 @@
 --   · `factura_envios.visto_cambiado_en` (TIMESTAMPTZ): el `cambiado_en` de la factura que tenía el PDF de la tarjeta.
 --     Aprobar emite el borrador con ESE candado: si alguien lo corrigió después de mandar la tarjeta, la aprobación
 --     no emite una factura distinta de la que se vio. NULL mientras no salió la tarjeta.
+--   · `factura_envios.tarjeta_enviada_en` (TIMESTAMPTZ): cuándo salió la tarjeta (de ahí se cuentan los 30 minutos del recordatorio).
+--   · `factura_envios.recordada_en` (TIMESTAMPTZ): cuándo se le recordó a quien revisa. NULL = todavía no. El recordatorio se
+--     RECLAMA con un `UPDATE … WHERE recordada_en IS NULL` ANTES de enviarlo, así que dos contenedores no lo mandan dos veces.
 --
--- Todo es ADITIVO: dos columnas que aceptan NULL, sin valor por omisión y sin CHECK. No se reescribe ninguna fila. Hasta
+-- Todo es ADITIVO: cuatro columnas que aceptan NULL, sin valor por omisión y sin CHECK. No se reescribe ninguna fila. Hasta
 -- esta pieza ningún código crea envíos, así que la tabla está vacía en producción (según el diseño de la pieza 1; la
 -- sala lo cuenta con `python3 tools/ensayo_facturas_envios.py --cuenta` antes de aplicar).
 -- REQUIERE `2026-10-20_facturas.sql` (la tabla `factura_envios`).
@@ -26,18 +29,22 @@
 -- IDEMPOTENTE: `ADD COLUMN IF NOT EXISTS` no hace nada la segunda vez.
 --
 -- QUÉ TIENE QUE DAR EL ENSAYO (dentro de una transacción con ROLLBACK): después de la migración,
--- `SELECT count(*) FROM factura_envios` igual que antes, `information_schema.columns` con DOS filas de
--- `factura_envios` (`tarjeta_msg_id` bigint, `visto_cambiado_en` timestamp with time zone), las dos con
+-- `SELECT count(*) FROM factura_envios` igual que antes, `information_schema.columns` con CUATRO filas de
+-- `factura_envios` (`tarjeta_msg_id` bigint; `visto_cambiado_en`, `tarjeta_enviada_en` y `recordada_en` timestamp with time zone), las cuatro con
 -- `is_nullable = YES` y sin valor por omisión, y con el ROLLBACK ninguna queda.
 --
 -- CÓMO SE DESHACE (solo si el código que las usa ya no está desplegado):
 --   ALTER TABLE factura_envios DROP COLUMN IF EXISTS tarjeta_msg_id;
 --   ALTER TABLE factura_envios DROP COLUMN IF EXISTS visto_cambiado_en;
+--   ALTER TABLE factura_envios DROP COLUMN IF EXISTS tarjeta_enviada_en;
+--   ALTER TABLE factura_envios DROP COLUMN IF EXISTS recordada_en;
 
 BEGIN;
 
 ALTER TABLE factura_envios ADD COLUMN IF NOT EXISTS tarjeta_msg_id BIGINT;
 ALTER TABLE factura_envios ADD COLUMN IF NOT EXISTS visto_cambiado_en TIMESTAMPTZ;
+ALTER TABLE factura_envios ADD COLUMN IF NOT EXISTS tarjeta_enviada_en TIMESTAMPTZ;
+ALTER TABLE factura_envios ADD COLUMN IF NOT EXISTS recordada_en TIMESTAMPTZ;
 
 COMMENT ON COLUMN factura_envios.tarjeta_msg_id IS
   'El mensaje de Telegram con la tarjeta de aprobacion. NULL = la tarjeta no ha salido.';

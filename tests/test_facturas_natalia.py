@@ -36,6 +36,7 @@ import inspect
 import io
 import re
 import types
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -168,6 +169,17 @@ def tg(api, monkeypatch):  # noqa: F811
             return types.SimpleNamespace()
         return types.SimpleNamespace(message_id=9000 + len(red.documentos))
 
+    red.mensajes = []
+
+    async def _mensaje(self, chat_id, text, **kw):
+        if red.modo_mensaje == "excepcion":
+            raise RuntimeError("Telegram caído")
+        if red.modo_mensaje == "sin_mensaje":
+            return None                                  # Telegram no devolvió mensaje: no salió
+        red.mensajes.append({"chat_id": chat_id, "text": text, **kw})
+        return types.SimpleNamespace(message_id=7000 + len(red.mensajes))
+    red.modo_mensaje = "bien"
+    monkeypatch.setattr(telegram.Bot, "send_message", _mensaje, raising=False)
     monkeypatch.setattr(telegram.Bot, "send_document", _documento, raising=False)
     red.bot = telegram.Bot(token="123456:token-de-prueba-facturas")
     red.subidas = []
@@ -185,8 +197,8 @@ def tg(api, monkeypatch):  # noqa: F811
     return red
 
 
-def vuelta(red):
-    return correr(despertador.revisar_envios_de_facturas(red.bot))
+def vuelta(red, ahora=None):
+    return correr(despertador.revisar_envios_de_facturas(red.bot, ahora))
 
 
 def botones_de(documento):
@@ -536,6 +548,86 @@ def test_la_tarjeta_va_al_chat_de_quien_revisa_con_el_pdf_y_los_botones_y_a_nadi
     assert tgf.filas(api, "factura_envios")[0]["visto_cambiado_en"] == factura_de(api, fid)["cambiado_en"]
     assert [c for c, _ in tg.avisos] == [ROSI] and "Natalia hizo una factura" in tg.avisos[0][1]     # y queda en su bandeja
     assert vuelta(tg) == 0 and len(tg.documentos) == 1                          # no se repite
+
+
+# ── El recordatorio: UNO, a los 30 minutos, solo si sigue pendiente ───────────────────────────────
+
+T0 = datetime(2026, 10, 21, 15, 0, tzinfo=timezone.utc)
+
+
+def con_tarjeta_en_t0(tg_, **kw):
+    r = crear_api(("11",), **kw)
+    fid = r.json()["factura"]["factura_id"]
+    eid = pedir(fid).json()["envio"]["envio_id"]
+    assert vuelta(tg_, T0) == 1
+    return fid, eid
+
+
+def test_a_los_30_minutos_sale_un_solo_recordatorio_a_quien_revisa_respondiendo_a_la_tarjeta(api, tg):
+    fid, eid = con_tarjeta_en_t0(tg)
+    assert envios(api, fid)[0]["recordada_en"] is None
+    assert despertador.RECORDAR_CONSULTA_MIN == 30
+    assert vuelta(tg, T0 + timedelta(minutes=29)) == 0 and tg.mensajes == []
+    assert vuelta(tg, T0 + timedelta(minutes=31)) == 1
+    m = tg.mensajes[0]
+    assert m["chat_id"] == ROSI and "Sigue pendiente" in m["text"] and NOMBRE in m["text"] and "WhatsApp" in m["text"]
+    assert m["reply_parameters"].message_id == 9001                      # responde a la tarjeta
+    assert envios(api, fid)[0]["recordada_en"] is not None and envios(api, fid)[0]["estado"] == "pendiente"
+    assert [c for c, t in tg.avisos if "Sigue pendiente" in t] == [ROSI]
+    for minutos in (32, 90, 600):                                        # ni una vez más
+        assert vuelta(tg, T0 + timedelta(minutes=minutos)) == 0
+    assert len(tg.mensajes) == 1
+
+
+@pytest.mark.parametrize("como", ["aprobado", "rechazado", "no_se_pudo", "anulada"])
+def test_un_envio_que_ya_no_esta_pendiente_no_se_recuerda(api, tg, como):
+    fid, eid = con_tarjeta_en_t0(tg)
+    if como == "aprobado":
+        tocar(f"fas:{eid}", ROSI)
+    elif como == "rechazado":
+        tocar(f"fan:{eid}", ROSI)
+    elif como == "no_se_pudo":
+        f = correr(db.factura_por_id(fid))
+        correr(db.corregir_borrador_de_factura(fid, DUENO, f["cambiado_en"], {"para_nombre": "Otro Nombre"}))
+        tocar(f"fas:{eid}", ROSI)
+    else:                                                                # emitida y anulada con el envío colgado
+        api.con.execute("UPDATE facturas SET estado = 'anulada', anulada_en = '2026-10-21', motivo_anulacion = 'x', "
+                        "anulada_por_chat_id = 1, anio = 2026, numero = 1, emitida_en = '2026-10-21' WHERE id = ?", (fid,))
+        api.con.commit()
+    assert envios(api, fid)[0]["estado"] != "pendiente" or como == "anulada"
+    assert vuelta(tg, T0 + timedelta(minutes=45)) == 0 and tg.mensajes == []
+    assert envios(api, fid)[0]["recordada_en"] is None
+
+
+def test_dos_contenedores_no_mandan_dos_recordatorios_porque_el_primero_reclama_la_marca(api, tg):
+    fid, eid = con_tarjeta_en_t0(tg)
+    ahora = T0 + timedelta(minutes=31)
+    assert correr(db.reclamar_recordatorio_de_envio(eid, ahora)) is True       # el otro contenedor llegó primero
+    assert vuelta(tg, ahora) == 0 and tg.mensajes == []                        # este ya no lo ve
+    assert correr(db.reclamar_recordatorio_de_envio(eid, ahora)) is False
+    assert correr(db.envios_de_factura_para_recordar(ahora)) == []
+
+
+@pytest.mark.parametrize("modo", ["excepcion", "sin_mensaje"])
+def test_un_recordatorio_que_no_salio_se_devuelve_y_se_reintenta_pero_sale_una_sola_vez(api, tg, modo):
+    fid, eid = con_tarjeta_en_t0(tg)
+    ahora = T0 + timedelta(minutes=31)
+    tg.modo_mensaje = modo
+    assert vuelta(tg, ahora) == 0 and envios(api, fid)[0]["recordada_en"] is None
+    tg.modo_mensaje = "bien"
+    assert vuelta(tg, ahora) == 1 and vuelta(tg, ahora) == 0 and len(tg.mensajes) == 1
+
+
+def test_sin_a_quien_recordarle_no_se_marca_nada(api, tg, monkeypatch):
+    fid, eid = con_tarjeta_en_t0(tg)
+    monkeypatch.setattr(config, "NOMBRE_DE_QUIEN_REVISA_LAS_FACTURAS", "Nadie Conocido")
+    assert vuelta(tg, T0 + timedelta(minutes=31)) == 0 and envios(api, fid)[0]["recordada_en"] is None
+
+
+def test_la_tarjeta_guarda_cuando_salio_y_de_ahi_se_cuentan_los_30_minutos(api, tg):
+    fid, eid = con_tarjeta_en_t0(tg)
+    assert tgf.filas(api, "factura_envios")[0]["tarjeta_enviada_en"] is not None
+    assert correr(db.envios_de_factura_para_recordar(T0 - timedelta(minutes=1))) == []
 
 
 def test_la_tarjeta_dice_el_itbis_y_el_total_de_la_base(api, tg):
@@ -1037,20 +1129,22 @@ def test_quien_revisa_sale_del_nombre_y_de_quien_entra_al_panel_y_nunca_de_un_ch
 def test_la_migracion_agrega_dos_columnas_nulas_y_el_esquema_dice_lo_mismo():
     texto = ft._texto_migracion_de_natalia()
     cols = re.findall(r"ALTER\s+TABLE\s+factura_envios\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+(\w+)\s+(\w+)\s*;", texto, re.I)
-    assert cols == [("tarjeta_msg_id", "BIGINT"), ("visto_cambiado_en", "TIMESTAMPTZ")]
+    assert cols == [("tarjeta_msg_id", "BIGINT"), ("visto_cambiado_en", "TIMESTAMPTZ"), ("tarjeta_enviada_en", "TIMESTAMPTZ"),
+                    ("recordada_en", "TIMESTAMPTZ")]
     esquema = (RAIZ / "db" / "schema.sql").read_text(encoding="utf-8")
     bloque = esquema[esquema.index("CREATE TABLE factura_envios"):esquema.index("CREATE INDEX idx_factura_envios_factura")]
     assert re.search(r"tarjeta_msg_id\s+BIGINT,", bloque) and re.search(r"visto_cambiado_en\s+TIMESTAMPTZ,", bloque)
+    assert re.search(r"tarjeta_enviada_en\s+TIMESTAMPTZ,", bloque) and re.search(r"recordada_en\s+TIMESTAMPTZ,", bloque)
     assert not re.search(r"\b(INSERT|UPDATE|DELETE|DROP|CREATE)\b", re.sub(r"--.*", "", texto), re.I)
 
 
 def test_la_migracion_corre_sobre_las_anteriores_y_una_segunda_vez_no_hace_nada(mundo):  # noqa: F811
     antes = [c[1] for c in mundo.con.execute("PRAGMA table_info(factura_envios)")]
-    assert antes[-2:] == ["tarjeta_msg_id", "visto_cambiado_en"]
+    assert antes[-4:] == ["tarjeta_msg_id", "visto_cambiado_en", "tarjeta_enviada_en", "recordada_en"]
     f = tgf.crear()
     mundo.con.execute("INSERT INTO factura_envios (factura_id, canal) VALUES (?, 'mano')", (f["id"],))
     e = mundo.con.execute("SELECT tarjeta_msg_id, visto_cambiado_en FROM factura_envios").fetchone()
-    assert e == (None, None)                                               # lo de hoy queda sin tarjeta
+    assert e == (None, None) and mundo.con.execute("SELECT tarjeta_enviada_en, recordada_en FROM factura_envios").fetchone() == (None, None)                                               # lo de hoy queda sin tarjeta
 
 
 def test_el_guion_de_ensayo_saca_el_commit_cierra_con_rollback_y_solo_lee_con_cuenta(capsys):

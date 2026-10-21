@@ -3492,8 +3492,18 @@ SENTENCIA_DE_LOS_ENVIOS_SIN_TARJETA = (
     "SELECT e.id, e.factura_id, e.canal FROM factura_envios e "
     "WHERE e.estado = 'pendiente' AND e.tarjeta_msg_id IS NULL AND e.canal IN ('whatsapp', 'correo') ORDER BY e.id")
 SENTENCIA_DE_MARCAR_LA_TARJETA = (
-    "UPDATE factura_envios SET tarjeta_msg_id = %s, visto_cambiado_en = %s "
+    "UPDATE factura_envios SET tarjeta_msg_id = %s, visto_cambiado_en = %s, tarjeta_enviada_en = %s "
     "WHERE id = %s AND estado = 'pendiente' AND tarjeta_msg_id IS NULL RETURNING id")
+# El recordatorio (una vez, a quien revisa): solo un envío PENDIENTE, con tarjeta, sin recordar. Se RECLAMA antes de enviar.
+SENTENCIA_DE_LOS_ENVIOS_PARA_RECORDAR = (
+    "SELECT e.id, e.factura_id, e.canal, e.tarjeta_msg_id FROM factura_envios e "
+    "WHERE e.estado = 'pendiente' AND e.tarjeta_msg_id IS NOT NULL AND e.recordada_en IS NULL "
+    "AND e.tarjeta_enviada_en <= %s AND e.canal IN ('whatsapp', 'correo') ORDER BY e.id")
+SENTENCIA_DE_RECLAMAR_EL_RECORDATORIO = (
+    "UPDATE factura_envios SET recordada_en = %s WHERE id = %s AND estado = 'pendiente' AND recordada_en IS NULL "
+    "RETURNING id")
+SENTENCIA_DE_SOLTAR_EL_RECORDATORIO = (
+    "UPDATE factura_envios SET recordada_en = NULL WHERE id = %s AND estado = 'pendiente' RETURNING id")
 
 
 class EnviosSinMigrar(Exception):
@@ -3720,13 +3730,47 @@ async def envios_de_factura_sin_tarjeta() -> list[dict]:
 
 
 @_con_el_aviso_de_la_tabla
-async def marcar_tarjeta_de_envio(envio_id: int, mensaje_id: int, visto_cambiado_en) -> bool:
+async def marcar_tarjeta_de_envio(envio_id: int, mensaje_id: int, visto_cambiado_en, enviada_en) -> bool:
     """Anota que la tarjeta del envío SALIÓ (el `message_id` que Telegram devolvió) y con qué `cambiado_en` de la
     factura se armó su PDF. `True` si escribió; `False` si el envío ya no estaba pendiente sin tarjeta. No pide sesión
     ni deja huella (lo llama el despertador; es dónde quedó un mensaje, no un cambio de la factura)."""
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
-        await cur.execute(SENTENCIA_DE_MARCAR_LA_TARJETA, (mensaje_id, visto_cambiado_en, envio_id))
+        await cur.execute(SENTENCIA_DE_MARCAR_LA_TARJETA, (mensaje_id, visto_cambiado_en, enviada_en, envio_id))
+        return await cur.fetchone() is not None
+
+
+@_con_el_aviso_de_la_tabla
+async def envios_de_factura_para_recordar(enviada_antes_de) -> list[dict]:
+    """Los envíos pendientes, con tarjeta enviada a `enviada_antes_de` o antes y sin recordar (`{id, factura_id, canal,
+    tarjeta_msg_id}`). Un envío aprobado, rechazado o caído no sale. Sin las columnas: `EnviosSinMigrar`. Una lectura."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(SENTENCIA_DE_LOS_ENVIOS_PARA_RECORDAR, (enviada_antes_de,))
+        except Exception as e:
+            if _columna_ausente(e):
+                raise EnviosSinMigrar("faltan las columnas de la tarjeta") from e
+            raise
+        return [dict(r) for r in await cur.fetchall()]
+
+
+@_con_el_aviso_de_la_tabla
+async def reclamar_recordatorio_de_envio(envio_id: int, cuando) -> bool:
+    """Se queda con el recordatorio de ese envío: `True` solo para quien lo marca primero (el `UPDATE` dice `recordada_en
+    IS NULL` y `estado = 'pendiente'`), así que dos contenedores no lo mandan dos veces. No pide sesión ni deja huella."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_RECLAMAR_EL_RECORDATORIO, (cuando, envio_id))
+        return await cur.fetchone() is not None
+
+
+@_con_el_aviso_de_la_tabla
+async def soltar_recordatorio_de_envio(envio_id: int) -> bool:
+    """Devuelve el recordatorio reclamado cuando el mensaje NO salió, para que se reintente en la vuelta siguiente."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_SOLTAR_EL_RECORDATORIO, (envio_id,))
         return await cur.fetchone() is not None
 
 
