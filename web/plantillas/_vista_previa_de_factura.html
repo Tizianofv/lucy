@@ -1,0 +1,43 @@
+{#- La vista previa de una factura mientras se escribe (pieza 4b, 21-oct-2026): la hoja al lado del formulario, en
+    «Nueva factura» (el paso de escribir) y en «Corregir el borrador».
+
+    `la_hoja(vista)` dibuja el diccionario que arma `facturas_panel.vista_previa_de_factura`: la MISMA macro de la
+    hoja de verdad (`_hoja_de_factura.html`) y, arriba, lo que todavía no vale (`vista.notas`), en suave. Las cifras
+    no se calculan acá ni en el navegador: salen de `db.totales_de_factura`, la cuenta única.
+
+    `guion_de_la_vista_previa()` es el guion que la pinta al escribir: le pide la hoja al SERVIDOR por
+    `POST /facturas/vista-previa` (una ruta que solo lee) y la pone en `[data-hoja]`. Sin JavaScript queda la que el
+    servidor dejó pintada al abrir la pantalla. -#}
+{% from "_hoja_de_factura.html" import hoja_de_factura %}
+
+{% macro la_hoja(vista) -%}
+{% for n in vista.notas %}<p class="suave" data-vista-previa-nota>{{ n }}</p>{% endfor %}
+{{ hoja_de_factura(vista.hoja) }}
+{%- endmacro %}
+
+{% macro guion_de_la_vista_previa() -%}
+<script id="guion-vista-previa">
+/* La vista previa de una factura (pieza 4b). Mientras se escribe, le pide al servidor la hoja de lo escrito por
+   `POST /facturas/vista-previa` y la pinta en `[data-hoja]`. No calcula dinero —las cifras son las de
+   `db.totales_de_factura`, la cuenta única— y no guarda nada: esa ruta solo lee. Si el servidor no contesta, se
+   queda la última hoja buena: nunca se borra ni se pinta un error encima. */
+(function () {
+  var form = document.querySelector("form[data-factura-nueva], form[data-corregir]");
+  var caja = document.querySelector("[data-hoja]");
+  if (!form || !caja || typeof fetch !== "function" || typeof FormData !== "function") return;
+  var espera = null, ultima = 0;
+  function pintar() {
+    var cuerpo = new FormData(form);
+    var marca = ++ultima;
+    fetch("/facturas/vista-previa", {method: "POST", body: cuerpo, headers: {"Accept": "text/html"},
+                                     credentials: "same-origin"})
+      .then(function (r) { return r.ok ? r.text() : null; })
+      .then(function (t) { if (t !== null && marca === ultima) caja.innerHTML = t; })
+      .catch(function () {});
+  }
+  function pedir() { clearTimeout(espera); espera = setTimeout(pintar, 250); }
+  form.addEventListener("input", pedir);
+  form.addEventListener("change", pedir);
+})();
+</script>
+{%- endmacro %}

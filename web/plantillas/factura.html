@@ -2,6 +2,7 @@
 {% from "_facturas_estilo.html" import estilo_de_facturas %}
 {% from "_hoja_de_cotizacion.html" import estilo_de_la_hoja %}
 {% from "_hoja_de_factura.html" import estilo_de_la_factura, hoja_de_factura %}
+{% from "_vista_previa_de_factura.html" import la_hoja, guion_de_la_vista_previa %}
 {% block titulo %}{{ f.codigo or 'Factura en borrador' }}{% endblock %}
 {% block cuerpo %}
 {{ estilo_de_facturas() }}{{ estilo_de_la_hoja() }}{{ estilo_de_la_factura() }}
@@ -33,6 +34,7 @@
 {% if se_corrige %}
 <h2>Corregir el borrador</h2>
 {% set v = valores %}
+<div class="dos">
 <form method="post" action="/facturas/{{ f.id }}/corregir" data-corregir>
   <input type="hidden" name="cambiado_en" value="{{ candado }}">
   <div class="campos">
@@ -60,6 +62,8 @@
   {% if agregado %}<p class="suave" data-renglon-agregado>Los últimos renglones con datos son los de la sesión que pediste agregar; la cantidad, la unidad y el precio salen del registro (antes de ITBIS). Cámbialos si hace falta; no se guarda nada hasta que guardes.</p>{% endif %}
   <div class="pie-guardar"><button>Guardar los cambios</button><a class="boton-linea" href="/facturas/{{ f.id }}">Cancelar</a></div>
 </form>
+<div class="hoja-caja" data-hoja>{% if vista %}{{ la_hoja(vista) }}{% else %}{{ hoja_de_factura(hoja) }}{% endif %}</div>
+</div>
 {% endif %}
 
 {% if oferta %}
@@ -68,8 +72,8 @@
   {% if oferta.sin_total %}<p>El registro no trae su total: lo escribes tú.</p>{% else %}<p>Suman {{ oferta.total_texto }}.{% if oferta.sin_detalle %} No se pudo leer el detalle de su cuenta: va un renglón con su total.{% endif %}</p>{% endif %}
   <a class="boton" href="/facturas/{{ f.id }}?agregar={{ oferta.ref|urlencode }}">Sí, agregar</a><a class="boton-linea" href="/facturas/{{ f.id }}">No</a></div>
 {% endif %}
-<div class="dos">
-  <div class="hoja-caja" data-hoja>{{ hoja_de_factura(hoja) }}</div>
+{% if se_corrige %}<div>{% else %}<div class="dos">{% endif %}
+  {% if not se_corrige %}<div class="hoja-caja" data-hoja>{{ hoja_de_factura(hoja) }}</div>{% endif %}
   <div>
     {% if f.estado == 'borrador' %}
     <div class="acciones">
@@ -156,3 +160,4 @@
   </div>
 </div>
 {% endblock %}
+{% block guion %}{% if se_corrige %}{{ guion_de_la_vista_previa() }}{% endif %}{% endblock %}
