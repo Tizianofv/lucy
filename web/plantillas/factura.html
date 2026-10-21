@@ -44,22 +44,27 @@
     <label class="casilla"><input type="checkbox" name="itbis" value="18"{% if v.itbis %} checked{% endif %}> Suma ITBIS (18 %)</label>
   </div>
   <div class="scroll"><table class="reng">
-    <tr><th>Descripción</th><th>Detalle</th><th>Monto</th></tr>
+    <tr><th>Servicio</th><th>Descripción</th><th>Cantidad</th><th>Unidad</th><th>Precio unitario</th><th>Total</th></tr>
     {% for r in v.renglones %}{% set n = loop.index %}
-    <tr><td><input type="text" name="r-{{ n }}-descripcion" value="{{ r.descripcion }}" maxlength="300" aria-label="Descripción del renglón {{ n }}"></td>
-      <td><textarea name="r-{{ n }}-detalle" maxlength="2000" aria-label="Detalle del renglón {{ n }}">{{ r.detalle }}</textarea></td>
-      <td><input type="text" name="r-{{ n }}-monto" value="{{ r.monto }}" inputmode="decimal" placeholder="62,500" aria-label="Monto del renglón {{ n }}"></td></tr>
+    <tr><td><input type="text" name="r-{{ n }}-descripcion" value="{{ r.descripcion }}" maxlength="300" aria-label="Servicio del renglón {{ n }}"></td>
+      <td><textarea name="r-{{ n }}-detalle" maxlength="2000" aria-label="Descripción del renglón {{ n }}">{{ r.detalle }}</textarea></td>
+      <td><input type="text" name="r-{{ n }}-cantidad" value="{{ r.cantidad }}" inputmode="decimal" placeholder="2" aria-label="Cantidad del renglón {{ n }}"></td>
+      <td><input type="text" name="r-{{ n }}-unidad" value="{{ r.unidad }}" maxlength="20" placeholder="horas" aria-label="Unidad del renglón {{ n }}"></td>
+      <td><input type="text" name="r-{{ n }}-precio" value="{{ r.precio }}" inputmode="decimal" placeholder="62,500" aria-label="Precio unitario del renglón {{ n }}"></td>
+      <td class="total-renglon">{{ r.total }}</td></tr>
     {% endfor %}
   </table></div>
-  {% if agregado %}<p class="suave" data-renglon-agregado>El último renglón con datos es el de la sesión que pediste agregar; el monto sale del total que el registro tiene (antes de ITBIS). Cámbialo si hace falta; no se guarda nada hasta que guardes.</p>{% endif %}
+  <p class="suave">El total de cada renglón es la cantidad por el precio unitario: se calcula al guardar.</p>
+  {% if agregado %}<p class="suave" data-renglon-agregado>Los últimos renglones con datos son los de la sesión que pediste agregar; la cantidad, la unidad y el precio salen del registro (antes de ITBIS). Cámbialos si hace falta; no se guarda nada hasta que guardes.</p>{% endif %}
   <div class="pie-guardar"><button>Guardar los cambios</button><a class="boton-linea" href="/facturas/{{ f.id }}">Cancelar</a></div>
 </form>
 {% endif %}
 
 {% if oferta %}
-<div class="confirma" data-ofrecer="{{ oferta.ref }}"><b>¿Agregar el renglón de «{{ oferta.codigo or oferta.ref }}»?</b>
-  <p>{{ oferta.descripcion }}{% if oferta.detalle %} · {{ oferta.detalle }}{% endif %}{% if oferta.monto_texto %} · {{ oferta.monto_texto }}{% else %} · el registro no trae su total: lo escribes tú{% endif %}</p>
-  <a class="boton" href="/facturas/{{ f.id }}?agregar={{ oferta.ref|urlencode }}">Sí, agregar el renglón</a><a class="boton-linea" href="/facturas/{{ f.id }}">No</a></div>
+<div class="confirma" data-ofrecer="{{ oferta.ref }}"><b>¿Agregar {% if oferta.cuantos == 1 %}el renglón{% else %}los {{ oferta.cuantos }} renglones{% endif %} de «{{ oferta.codigo or oferta.ref }}»?</b>
+  <ul>{% for r in oferta.renglones %}<li>{{ r.descripcion }}{% if r.cantidad %} · {{ r.cantidad }}{% endif %}{% if r.unidad %} {{ r.unidad }}{% endif %}{% if r.precio %} · {{ r.precio }}{% endif %}</li>{% endfor %}</ul>
+  {% if oferta.sin_total %}<p>El registro no trae su total: lo escribes tú.</p>{% else %}<p>Suman {{ oferta.total_texto }}.{% if oferta.sin_detalle %} No se pudo leer el detalle de su cuenta: va un renglón con su total.{% endif %}</p>{% endif %}
+  <a class="boton" href="/facturas/{{ f.id }}?agregar={{ oferta.ref|urlencode }}">Sí, agregar</a><a class="boton-linea" href="/facturas/{{ f.id }}">No</a></div>
 {% endif %}
 <div class="dos">
   <div class="hoja-caja" data-hoja>{{ hoja_de_factura(hoja) }}</div>

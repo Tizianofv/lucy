@@ -91,15 +91,21 @@
     <label class="casilla"><input type="checkbox" name="itbis" value="18"{% if v.itbis %} checked{% endif %}> Suma ITBIS (18 %)</label>
   </div>
   <h3 class="suave">Renglones</h3>
-  <p class="suave">Cada renglón lleva su descripción y su monto; el detalle es opcional. Los renglones en blanco se ignoran.</p>
-  {% if renglones_de_sesiones %}<p class="suave" data-renglones-de-sesiones>Hay un renglón por cada sesión o trabajo escogido; el monto sale del total que el registro tiene (antes de ITBIS). Cámbialos como haga falta.</p>{% endif %}
-  {% if sin_total %}<p class="aviso" data-sin-total>El registro no trae el total de {% for c in sin_total %}«{{ c }}»{% if not loop.last %}, {% endif %}{% endfor %}: escribe su monto.</p>{% endif %}
+  <p class="suave">Cada renglón lleva su servicio y su descripción, la cantidad con su unidad y el precio de una unidad. El total de cada renglón es la cantidad por el precio unitario: se calcula al guardar. Los renglones en blanco se ignoran.</p>
+  {% if renglones_de_sesiones %}<p class="suave" data-renglones-de-sesiones>Hay un renglón por cada renglón de la cuenta de las sesiones o trabajos escogidos; la cantidad, la unidad y el precio salen del registro (antes de ITBIS). Cámbialos como haga falta.</p>{% endif %}
+  {% if sesiones_sin_detalle %}<p class="aviso" data-sin-detalle>No se pudo leer el detalle de la cuenta de {% for c in sesiones_sin_detalle %}«{{ c }}»{% if not loop.last %}, {% endif %}{% endfor %}: va un renglón con su total.</p>{% endif %}
+  {% for a in avisos_del_detalle %}<p class="aviso" data-aviso-del-detalle>{{ a }}</p>{% endfor %}
+  {% for s in sesiones_con_descuento %}<p class="aviso" data-descuento>El registro tiene un descuento de {{ s.descuento }} en «{{ s.codigo }}»; esta factura todavía no lo resta (no se aceptan montos negativos).</p>{% endfor %}
+  {% if sin_total %}<p class="aviso" data-sin-total>El registro no trae el total de {% for c in sin_total %}«{{ c }}»{% if not loop.last %}, {% endif %}{% endfor %}: escribe su precio.</p>{% endif %}
   <div class="scroll"><table class="reng">
-    <tr><th>Descripción</th><th>Detalle</th><th>Monto</th></tr>
+    <tr><th>Servicio</th><th>Descripción</th><th>Cantidad</th><th>Unidad</th><th>Precio unitario</th><th>Total</th></tr>
     {% for r in v.renglones %}{% set n = loop.index %}
-    <tr><td><input type="text" name="r-{{ n }}-descripcion" value="{{ r.descripcion }}" maxlength="300" aria-label="Descripción del renglón {{ n }}"></td>
-      <td><textarea name="r-{{ n }}-detalle" maxlength="2000" aria-label="Detalle del renglón {{ n }}">{{ r.detalle }}</textarea></td>
-      <td><input type="text" name="r-{{ n }}-monto" value="{{ r.monto }}" inputmode="decimal" placeholder="62,500" aria-label="Monto del renglón {{ n }}"></td></tr>
+    <tr><td><input type="text" name="r-{{ n }}-descripcion" value="{{ r.descripcion }}" maxlength="300" aria-label="Servicio del renglón {{ n }}"></td>
+      <td><textarea name="r-{{ n }}-detalle" maxlength="2000" aria-label="Descripción del renglón {{ n }}">{{ r.detalle }}</textarea></td>
+      <td><input type="text" name="r-{{ n }}-cantidad" value="{{ r.cantidad }}" inputmode="decimal" placeholder="2" aria-label="Cantidad del renglón {{ n }}"></td>
+      <td><input type="text" name="r-{{ n }}-unidad" value="{{ r.unidad }}" maxlength="20" placeholder="horas" aria-label="Unidad del renglón {{ n }}"></td>
+      <td><input type="text" name="r-{{ n }}-precio" value="{{ r.precio }}" inputmode="decimal" placeholder="62,500" aria-label="Precio unitario del renglón {{ n }}"></td>
+      <td class="total-renglon">{{ r.total }}</td></tr>
     {% endfor %}
   </table></div>
   <div class="pie-guardar">

@@ -671,6 +671,9 @@ CREATE TABLE factura_renglones (
   descripcion TEXT NOT NULL,
   detalle     TEXT,
   monto       NUMERIC(14,2) NOT NULL,
+  cantidad        NUMERIC(14,3) CHECK (cantidad IS NULL OR cantidad > 0),
+  precio_unitario NUMERIC(14,2) CHECK (precio_unitario IS NULL OR (precio_unitario > 0 AND cantidad IS NOT NULL AND monto = round(cantidad * precio_unitario, 2))),
+  unidad          TEXT CHECK (((cantidad IS NULL) = (precio_unitario IS NULL)) AND (unidad IS NULL OR (cantidad IS NOT NULL AND length(trim(unidad)) BETWEEN 1 AND 20))),
   CONSTRAINT factura_renglones_orden_unico
     UNIQUE (factura_id, orden),
   CONSTRAINT factura_renglones_orden_positivo

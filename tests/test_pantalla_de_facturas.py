@@ -73,7 +73,7 @@ CANCELADA = {"ref": 31, "codigo": "c031", "es_trabajo": False, "fecha": HOY, "sa
              "horas": 1, "servicio": "Ensayo", "nombre": "Pedro Cancelado", "estado": "CANCELADA", "cancelada": True,
              "total": 1000.0, "abonado": 0.0, "saldo": 1000.0}
 
-RENGLON = {"r-1-descripcion": "Grabación de voces", "r-1-detalle": "dos horas", "r-1-monto": "62,500"}
+RENGLON = {"r-1-descripcion": "Grabación de voces", "r-1-detalle": "dos horas", "r-1-cantidad": "1", "r-1-precio": "62,500"}
 # Otras dos de la ficha del cliente: una sesión más (para facturar varias) y una cancelada (de ELLA, no de otra persona).
 SESION_B = {"ref": 13, "codigo": "s013", "es_trabajo": False, "fecha": HOY, "sala": "Sala P", "sala_mostrar": "Sala P",
             "horas": 1.5, "servicio": "Ensayo", "estado": "CONFIRMADA", "cancelada": False,
@@ -337,7 +337,7 @@ def test_el_cliente_sale_del_proyecto_y_viene_la_cotizacion_con_su_opcion(pantal
     sin_opcion = c.get("/facturas/nueva", params={"proyecto": 1, "cotizacion": cid, "ref": ["11"], "paso": "escribir"}).text
     assert "Escribe la factura" not in sin_opcion and "Escoge de cuál opción" in sin_opcion
     html = c.get("/facturas/nueva", params={"proyecto": 1, "cotizacion": cid, "opcion": 2, "ref": ["11"], "paso": "escribir"}).text
-    assert 'name="r-1-descripcion" value="Mezcla y master"' in html and 'name="r-1-monto" value="2,500.50"' in html
+    assert 'name="r-1-descripcion" value="Mezcla y master"' in html and 'name="r-1-precio" value="2,500.50"' in html
     assert 'name="r-2-descripcion" value="Voces"' in html
     assert 'name="proyecto" value="1"' in html and f'name="cotizacion" value="{cid}"' in html and 'name="opcion" value="2"' in html
     assert re.findall(r'name="cliente" value="(\d+)"', html) == ["7"]        # la ficha del proyecto
@@ -411,13 +411,14 @@ def test_una_sesion_ya_facturada_se_dice_y_lo_escrito_no_se_pierde(pantalla):
     crear_por_la_pantalla(refs=("11",))
     antes = tgf.foto(pantalla)
     r = crear_por_la_pantalla(refs=("11",), para_nombre="Otra Persona", **{"r-1-descripcion": "Lo que escribí",
-                                                                          "r-1-monto": "1,234.50", "ncf": "B0100000009",
+                                                                          "r-1-precio": "1,234.50", "r-1-cantidad": "1",
+                                                                          "ncf": "B0100000009",
                                                                           "ncf_tipo": "Consumo"})
     assert r.status_code == 400
     assert "ya está en otra factura" in " ".join(textos_de_avisos(r.text)) and "NO se guardó nada" in r.text
     # lo escrito vuelve en las casillas
     assert 'name="para_nombre" value="Otra Persona"' in r.text and 'value="Lo que escribí"' in r.text
-    assert 'name="r-1-monto" value="1,234.50"' in r.text and 'name="ncf" value="B0100000009"' in r.text
+    assert 'name="r-1-precio" value="1,234.50"' in r.text and 'name="ncf" value="B0100000009"' in r.text
     assert re.findall(r'<input type="hidden" name="ref" value="(\d+)">', r.text) == ["11"]
     assert tgf.foto(pantalla) == antes
 
@@ -428,10 +429,14 @@ def test_una_sesion_ya_facturada_se_dice_y_lo_escrito_no_se_pierde(pantalla):
     ({"rnc_cedula": "123"}, "9 cifras", "rnc_cedula"),
     ({"para_nombre": "   "}, "nombre de la persona", "para_nombre"),
     ({"fecha": "ayer"}, "fecha no se entiende", "fecha"),
-    ({"r-1-monto": "62.500,0"}, "no se entiende", None),
-    ({"r-1-monto": "10.123"}, "más de dos decimales", None),
-    ({"r-1-monto": "0"}, "mayor que cero", None),
-    ({"r-1-monto": ""}, "falta el monto", None),
+    ({"r-1-precio": "62.500,0"}, "no se entiende", None),
+    ({"r-1-precio": "10.123"}, "más de dos decimales", None),
+    ({"r-1-precio": "0"}, "mayor que cero", None),
+    ({"r-1-precio": ""}, "falta el monto", None),
+    ({"r-1-cantidad": "0"}, "mayor que cero", None),
+    ({"r-1-cantidad": "1.2345"}, "más de tres decimales", None),
+    ({"r-1-cantidad": ""}, "falta la cantidad", None),
+    ({"r-1-unidad": "x" * 21}, "demasiado larga", None),
     ({"r-1-descripcion": ""}, "falta la descripción", None),
     ({"r-1-descripcion": "x" * 301}, "demasiado larga", None),
 ])
@@ -446,7 +451,7 @@ def test_cada_razon_de_la_puerta_llega_a_la_persona_sin_guardar_nada_y_marcando_
         assert re.search(rf'name="{casilla}"[^>]*aria-invalid="true"', r.text), r.text[:200]
     for k, v in cambios.items():          # y lo que escribió vuelve a su casilla (menos lo vacío, que no tiene valor que ver)
         if v.strip() and len(v) < 50:
-            assert f'name="{k}" value="{v}"' in r.text or k.startswith("r-1-monto"), k
+            assert f'name="{k}" value="{v}"' in r.text, k
 
 
 def test_un_ncf_repetido_se_dice_aunque_la_otra_este_anulada(pantalla):
@@ -458,10 +463,11 @@ def test_un_ncf_repetido_se_dice_aunque_la_otra_este_anulada(pantalla):
 
 
 def test_sin_renglones_no_se_guarda_y_los_en_blanco_se_ignoran(pantalla):
-    r = crear_por_la_pantalla(**{"r-1-descripcion": "", "r-1-detalle": "", "r-1-monto": "",
-                                 "r-2-descripcion": "", "r-2-monto": ""})
+    r = crear_por_la_pantalla(**{"r-1-descripcion": "", "r-1-detalle": "", "r-1-cantidad": "", "r-1-precio": "",
+                                 "r-2-descripcion": "", "r-2-cantidad": "", "r-2-precio": ""})
     assert r.status_code == 400 and "al menos un renglón" in r.text and not tgf.filas(pantalla, "facturas")
-    ok = crear_por_la_pantalla(**{"r-2-descripcion": "", "r-2-monto": "", "r-3-descripcion": "Otro", "r-3-monto": "10"})
+    ok = crear_por_la_pantalla(**{"r-2-descripcion": "", "r-2-cantidad": "", "r-2-precio": "",
+                                  "r-3-descripcion": "Otro", "r-3-cantidad": "1", "r-3-precio": "10"})
     assert ok.status_code == 303 and [x["descripcion"] for x in tgf.filas(pantalla, "factura_renglones")] == ["Grabación de voces", "Otro"]
 
 
@@ -592,7 +598,8 @@ def test_corregir_cambia_el_borrador_con_sus_renglones(pantalla):
     assert f'action="/facturas/{b["id"]}/corregir"' in form and 'name="r-1-descripcion" value="Ensayo 1"' in form
     datos = {"cambiado_en": re.search(r'name="cambiado_en" value="([^"]+)"', form).group(1), "para_nombre": "Nombre Nuevo",
              "fecha": "2026-10-20", "itbis": "18", "ncf": "B0100000007", "ncf_tipo": "Consumo", "rnc_cedula": "",
-             "r-1-descripcion": "Solo uno", "r-1-detalle": "", "r-1-monto": "99.50", "r-2-descripcion": "", "r-2-monto": ""}
+             "r-1-descripcion": "Solo uno", "r-1-detalle": "", "r-1-cantidad": "1", "r-1-precio": "99.50",
+             "r-2-descripcion": "", "r-2-cantidad": "", "r-2-precio": ""}
     r = cliente().post(f"/facturas/{b['id']}/corregir", data=datos, follow_redirects=False)
     assert r.status_code == 303
     f = unica(pantalla)
@@ -605,7 +612,8 @@ def test_corregir_rechazado_deja_el_formulario_abierto_con_lo_escrito_y_nada_cam
     b = tgf.crear()
     antes = tgf.foto(pantalla)
     datos = {"cambiado_en": fp.candado(b["cambiado_en"]), "para_nombre": "Lo que escribí", "fecha": "2026-10-20",
-             "ncf": "B0100000007", "ncf_tipo": "", "rnc_cedula": "", "r-1-descripcion": "Renglón mío", "r-1-monto": "10.5"}
+             "ncf": "B0100000007", "ncf_tipo": "", "rnc_cedula": "", "r-1-descripcion": "Renglón mío",
+             "r-1-cantidad": "1", "r-1-precio": "10.5"}
     r = cliente().post(f"/facturas/{b['id']}/corregir", data=datos, follow_redirects=False)
     assert r.status_code == 400 and "van juntos" in " ".join(textos_de_avisos(r.text))
     assert 'data-corregir' in r.text and 'name="para_nombre" value="Lo que escribí"' in r.text
@@ -616,7 +624,7 @@ def test_corregir_rechazado_deja_el_formulario_abierto_con_lo_escrito_y_nada_cam
 def test_una_emitida_y_una_anulada_no_se_corrigen_ni_se_ligan(pantalla):
     e = tgf.emitir(tgf.crear())
     datos = {"cambiado_en": fp.candado(e["cambiado_en"]), "para_nombre": "Otro", "fecha": "2026-10-20",
-             "r-1-descripcion": "x", "r-1-monto": "1"}
+             "r-1-descripcion": "x", "r-1-cantidad": "1", "r-1-precio": "1"}
     antes = tgf.foto(pantalla)
     r = cliente().post(f"/facturas/{e['id']}/corregir", data=datos, follow_redirects=False)
     assert r.status_code == 400 and "Una factura emitida no se corrige: si está mal, se anula y se hace otra" in r.text
@@ -867,7 +875,7 @@ def test_toda_clave_con_frase_propia_es_una_que_la_puerta_puede_dar():
                 and isinstance(n.args[0], ast.Constant)}
     # los `monto_*` salen de los `total_*` de la cotización; los `*_vacio/_largo` de `_texto_de_cotizacion`
     traducidas = {c.replace("total_", "monto_") for c in lanzadas} | {f"{campo}{fin}" for campo in (
-        "descripcion", "detalle", "para_nombre", "ncf_tipo", "motivo", "codigo") for fin in ("_vacio", "_largo")}
+        "descripcion", "detalle", "para_nombre", "ncf_tipo", "motivo", "codigo", "unidad") for fin in ("_vacio", "_largo")}
     sueltas = sorted(c for c in fp.TEXTO_POR_CLAVE if c not in lanzadas | traducidas)
     assert sueltas == [], sueltas
 
@@ -875,18 +883,27 @@ def test_toda_clave_con_frase_propia_es_una_que_la_puerta_puede_dar():
 def test_las_casillas_del_formulario_se_leen_como_la_pantalla_las_escribe():
     f = FormData([("cliente", "7"), ("proyecto", ""), ("cotizacion", "3"), ("opcion", "x"), ("para_nombre", " Ana "),
                   ("fecha", "2026-10-21"), ("itbis", "18"), ("ncf", "B01"), ("ncf_tipo", "Consumo"), ("rnc_cedula", ""),
-                  ("ref", "11"), ("ref", " 12 "), ("ref", ""), ("r-2-descripcion", "B"), ("r-2-monto", "5"),
-                  ("r-1-descripcion", "A"), ("r-1-detalle", "d"), ("r-1-monto", "10"), ("r-3-monto", ""), ("r-10-descripcion", " ")])
+                  ("ref", "11"), ("ref", " 12 "), ("ref", ""), ("r-2-descripcion", "B"), ("r-2-cantidad", "2"), ("r-2-precio", "5"),
+                  ("r-1-descripcion", "A"), ("r-1-detalle", "d"), ("r-1-cantidad", "1.5"), ("r-1-unidad", "horas"),
+                  ("r-1-precio", "10"), ("r-3-precio", ""), ("r-10-descripcion", " ")])
     c = fp.campos_del_formulario(f)
     assert (c["cliente"], c["proyecto"], c["cotizacion"], c["opcion"]) == (7, None, 3, "x")     # lo que no es entero se queda texto
     assert c["itbis_pct"] == "18" and c["refs"] == ["11", "12"] and c["fecha"] == "2026-10-21"
-    assert c["renglones"] == [{"descripcion": "A", "monto": "10", "detalle": "d"}, {"descripcion": "B", "monto": "5"}]
+    assert c["renglones"] == [
+        {"descripcion": "A", "detalle": "d", "cantidad": "1.5", "precio_unitario": "10", "unidad": "horas"},
+        {"descripcion": "B", "cantidad": "2", "precio_unitario": "5"}]
     assert fp.campos_del_formulario(FormData([("ref", "1")]))["itbis_pct"] is None
 
 
 def test_las_casillas_de_renglones_ponen_los_que_hay_mas_los_en_blanco():
     hechas = fp.casillas_de_renglones([{"descripcion": "A", "detalle": "", "monto": Decimal("62500.00")}])
-    assert hechas[0] == {"descripcion": "A", "detalle": "", "monto": "62,500"}
+    # un renglón de antes del detalle se muestra 1 × su monto, y el total se ve calculado
+    assert hechas[0] == {"descripcion": "A", "detalle": "", "cantidad": "1", "unidad": "", "precio": "62,500",
+                         "total": "62,500"}
+    detallado = fp.casillas_de_renglones([{"descripcion": "B", "detalle": "d", "cantidad": Decimal("1.500"),
+                                           "unidad": "horas", "precio_unitario": Decimal("2000.00")}])
+    assert detallado[0] == {"descripcion": "B", "detalle": "d", "cantidad": "1.5", "unidad": "horas",
+                            "precio": "2,000", "total": "3,000"}
     assert len(hechas) == fp.RENGLONES_EN_BLANCO + fp.RENGLONES_DE_SOBRA - 0 and all(not any(r.values()) for r in hechas[1:])
     assert len(fp.casillas_de_renglones([])) == fp.RENGLONES_EN_BLANCO + fp.RENGLONES_DE_SOBRA
 
@@ -923,6 +940,8 @@ def con_proyecto(monkeypatch):
         mp.setattr(db, "hoy_rd", lambda: tpp.HOY)
         m.con.create_function("pg_advisory_xact_lock", 1, lambda k: None)
         for s in ft._sentencias_que_corren(ft._texto_migracion()):
+            m.con.execute(ft._a_sqlite(s))
+        for s in ft._sentencias_que_corren(ft._texto_migracion_del_detalle()):
             m.con.execute(ft._a_sqlite(s))
         m.proyecto(1, "Disco Uno", area="CDS", cliente="Cliente X", responsable=CASA)
         m.proyecto(2, "Disco Dos", area="CDS", cliente="Cliente X", responsable=CASA)

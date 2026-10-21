@@ -166,6 +166,8 @@ class _Mundo:
             con.execute(ft._a_sqlite(s))
         for s in ft._sentencias_que_corren(ft._texto_migracion_del_canal()):      # pieza 9b: el cambio de canal
             con.execute(ft._a_sqlite(s))
+        for s in ft._sentencias_que_corren(ft._texto_migracion_del_detalle()):    # pieza D2: el detalle de los renglones
+            con.execute(ft._a_sqlite(s))
         dos_opciones = json.dumps({"opciones": [{"nombre": "A", "renglones": []}, {"nombre": "B", "renglones": []}]})
         una_opcion = json.dumps({"opciones": [{"nombre": "A", "renglones": []}]})
         for cid, proyecto, contenido in ((1, 1, dos_opciones), (2, 2, una_opcion), (3, 1, una_opcion)):

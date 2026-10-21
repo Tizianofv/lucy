@@ -259,6 +259,14 @@ os.environ.setdefault("DATABASE_URL", "postgresql://t/t")
 os.environ.setdefault("CHAT_ID_DUENO", "777")
 os.environ.setdefault("DEEPSEEK_API_KEY", "x")
 
+# El `httpx` falso de abajo se queda en `sys.modules`, y `starlette.testclient` hereda de `httpx.Response` al
+# importarse: si un módulo de pruebas importa este ANTES que `fastapi.testclient`, ese import revienta
+# (`__mro_entries__ must return a tuple`) y se lleva por delante a todos los que vienen después en el mismo proceso.
+# Se carga el cliente de pruebas primero, con el `httpx` de verdad; después el falso no le hace daño a nadie.
+try:                                                                    # pragma: no cover - depende del entorno
+    import fastapi.testclient  # noqa: F401
+except ImportError:
+    pass
 
 class _Cualquiera:
     def __init__(self, *a, **k):
@@ -285,6 +293,11 @@ import captura.consumos as consumos  # noqa: E402
 import captura.correo as correo  # noqa: E402
 import config  # noqa: E402
 import db.db as db  # noqa: E402
+
+# El `httpx` de verdad vuelve a su sitio: el falso solo hacía falta para importar lo de arriba (y se queda en los
+# módulos que ya lo tomaron). Si no, `registro_lectura` —que lo importa a nivel de módulo— se quedaría con el falso
+# en un proceso donde este archivo se importe primero, y sus llamadas al registro reventarían con un `TypeError`.
+sys.modules["httpx"] = __import__("starlette.testclient", fromlist=["httpx"]).httpx
 
 RAIZ = Path(__file__).resolve().parents[1]
 
@@ -4286,10 +4299,15 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 21-oct-2026, rama `trabajo/facturas-7` (el pago leído de la App, pieza 7), sobre `b2e421d`: +1 en disco y +1 EXENTO por
     # `tests/test_facturas_el_pago.py` (nuevo, exento por rol); VIGILADOS sin cambio (se tocaron `facturas_panel.py`,
     # `registro_lectura.py`, `db/db.py`, `web/app.py` y `tools/humo.py`, ya vigilados). Medida corriendo la prueba: 222, 158, 64.
-    assert medido == {"en disco": 222, "exentos": 158, "vigilados": 64}, (
+    # 21-oct-2026, rama `trabajo/facturas-d2` (el detalle de la factura, pieza D2), sobre `1d4a805`: +2 en disco, +1 EXENTO
+    # (`tests/test_facturas_el_detalle.py`, nuevo, exento por rol) y +1 VIGILADO (`tools/ensayo_facturas_detalle.py`, nuevo;
+    # solo imprime SQL, sin ninguna lectura de la lista cruda). Se tocaron además `db/db.py`, `facturas.py`, `facturas_panel.py`,
+    # `registro_lectura.py`, `web/app.py`, `web/api_code.py`, `tools/humo.py` y las plantillas, ya vigilados. Medida corriendo
+    # la prueba: 224, 159, 65.
+    assert medido == {"en disco": 224, "exentos": 159, "vigilados": 65}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "21-oct-2026 (facturas-7) era {'en disco': 222, "
-        "'exentos': 158, 'vigilados': 64}. La aserción de fondo —cero "
+        "21-oct-2026 (facturas-d2) era {'en disco': 224, "
+        "'exentos': 159, 'vigilados': 65}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

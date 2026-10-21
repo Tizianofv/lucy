@@ -671,7 +671,12 @@ class _RenglonDeNatalia(BaseModel):
     model_config = ConfigDict(extra="forbid")
     descripcion: StrictStr
     detalle: StrictStr = ""
-    monto: StrictStr           # texto ("62500.00"): un número JSON se leería como float, que la puerta rechaza
+    # La forma vieja: un monto y nada más (cantidad 1, precio = ese monto). La del detalle (pieza D2): cantidad con
+    # su unidad y precio unitario, y la puerta calcula el total. Las dos NO se mezclan (la puerta lo rechaza).
+    monto: StrictStr | None = None
+    cantidad: StrictStr | None = None
+    unidad: StrictStr | None = None
+    precio_unitario: StrictStr | None = None
 
 
 class _FacturaNueva(BaseModel):
@@ -698,6 +703,13 @@ def _dinero_para_natalia(valor) -> str:
     return str(Decimal(valor).quantize(Decimal("0.01")))
 
 
+def _cantidad_para_natalia(valor) -> str:
+    """La cantidad como texto, sin ceros de cola («2», «1.5»); un renglón viejo (sin cantidad) vale 1."""
+    if valor is None:
+        return "1"
+    return f"{Decimal(valor).normalize():f}"
+
+
 def _envio_para_natalia(e: dict) -> dict:
     """Un envío releído → lo que sale: `estado` es el de la base (`pendiente` = esperando que la revisen, `aprobado` =
     aprobado y todavía sin anotar cómo terminó, `rechazado`, `enviado`, `no_se_pudo`); `pdf_listo` solo es verdadero con
@@ -715,6 +727,8 @@ def _factura_para_natalia(f: dict) -> dict:
         "subtotal": _dinero_para_natalia(f["subtotal"]), "itbis": _dinero_para_natalia(f["itbis"]),
         "total": _dinero_para_natalia(f["total"]),
         "renglones": [{"descripcion": r["descripcion"], "detalle": r["detalle"],
+                       "cantidad": _cantidad_para_natalia(r.get("cantidad")), "unidad": r.get("unidad") or "",
+                       "precio_unitario": _dinero_para_natalia(r.get("precio_unitario", r["monto"])),
                        "monto": _dinero_para_natalia(r["monto"])} for r in f["renglones"]],
         "ligas": [{"tipo": l["tipo"], "ref": l["ref"], "codigo": l["codigo"]} for l in f["ligas"] if l["viva"]],
         "envios": [_envio_para_natalia(e) for e in f["envios"]],
@@ -745,18 +759,42 @@ def _por_que_la_puerta_dijo_que_no(e: Exception) -> HTTPException:
     raise e
 
 
+def _renglon_pedido_de_natalia(r: _RenglonDeNatalia) -> dict:
+    """Un renglón que manda Natalia tal como se le pasa a la puerta: con `monto` (la forma vieja: cantidad 1,
+    precio = monto) o con `cantidad`/`unidad`/`precio_unitario` (la del detalle, sin `monto`: la puerta lo calcula).
+    Lo que no trae ni una ni otra va con el monto vacío y la puerta dice qué falta."""
+    renglon = {"descripcion": r.descripcion}
+    if r.detalle:
+        renglon["detalle"] = r.detalle
+    if r.precio_unitario is not None:
+        renglon["cantidad"] = "" if r.cantidad is None else r.cantidad
+        renglon["precio_unitario"] = r.precio_unitario
+        if r.unidad is not None:
+            renglon["unidad"] = r.unidad
+        if r.monto is not None:
+            renglon["monto"] = r.monto      # las dos formas a la vez: la puerta lo rechaza, no se elige una callada
+    elif r.monto is not None:
+        renglon["monto"] = r.monto
+    else:
+        renglon["monto"] = ""
+    return renglon
+
+
 def _renglones_de_las_sesiones_de_natalia(ligas: list[dict], lectura: dict) -> tuple[list[dict], list[str]]:
-    """Los renglones que salen de las sesiones o trabajos escogidos (el mismo `facturas_panel.renglon_de_una_sesion`
-    de la pantalla: el total que la App tiene, sin multiplicar nada), y los códigos de los que la App no trae total."""
+    """Los renglones que salen de las sesiones o trabajos escogidos (las mismas `facturas_panel.renglones_de_una_sesion`
+    de la pantalla: uno por renglón de la cuenta de la sesión, con su cantidad, su unidad y su precio unitario; si la
+    cuenta no se pudo leer, uno con el total), y los códigos de los que la App no trae total."""
     por_ref = {r["ref"]: r for r in lectura.get("sesiones", []) + lectura.get("trabajos", [])}
     renglones, sin_total = [], []
     for liga in ligas:
-        r = fp.renglon_de_una_sesion(por_ref[liga["ref"]])
-        if r["sin_total"]:
-            sin_total.append(r["codigo"] or r["ref"])
-            continue
-        renglones.append({"descripcion": r["descripcion"], "detalle": r["detalle"], "monto": r["monto"]})
-    return renglones, sin_total
+        for r in fp.renglones_de_una_sesion(por_ref[liga["ref"]]):
+            if r["sin_total"]:
+                sin_total.append(r["codigo"] or r["ref"])
+                continue
+            renglones.append({"descripcion": r["descripcion"], "detalle": r["detalle"],
+                              "cantidad": r["cantidad"], "unidad": r["unidad"],
+                              "precio_unitario": r["precio_unitario"]})
+    return renglones, list(dict.fromkeys(sin_total))
 
 
 @router.post("/clientes/{noco_id}/facturas")
@@ -768,19 +806,26 @@ async def crear_factura_de_natalia(
     """Natalia HACE una factura (borrador, sin número, `hecha_por = natalia`) para la ficha `noco_id` con las sesiones o
     trabajos `refs` de esa ficha en el registro.
 
-    PEDIDO: `{refs: ["<ref>", …] (1 a 50), renglones?: [{descripcion, detalle?, monto: "62500.00"}], itbis?: bool
-    (18 %; falso por omisión), rnc_cedula?: "9 u 11 cifras", fecha?: "AAAA-MM-DD" (hoy por omisión)}`. Sin `renglones`
-    sale un renglón por sesión con el total que el registro tiene (si alguna no trae total, 422 y nada se guarda).
-    El nombre lo pone Lucy: es el de la ficha en NocoDB. NCF, proyecto y cotización no se piden: son de la casa.
+    PEDIDO: `{refs: ["<ref>", …] (1 a 50), renglones?: [{descripcion, detalle?, monto: "62500.00"} |
+    {descripcion, detalle?, cantidad: "2", unidad?: "horas", precio_unitario: "18000.00"}], itbis?: bool (18 %;
+    falso por omisión), rnc_cedula?: "9 u 11 cifras", fecha?: "AAAA-MM-DD" (hoy por omisión)}`. Cada renglón va en UNA
+    de las dos formas: `monto` (cantidad 1) o `cantidad` + `precio_unitario` (con `unidad` si la lleva), y entonces el
+    total del renglón es cantidad × precio (lo calcula Lucy; no se manda `monto`). Sin `renglones` sale un renglón por
+    cada renglón de la cuenta de cada sesión, con su cantidad, su unidad y su precio (si alguna sesión no trae total,
+    422 y nada se guarda). El nombre lo pone Lucy: es el de la ficha en NocoDB. NCF, proyecto y cotización no se
+    piden: son de la casa.
 
     RESPUESTAS: 200 `{"factura": {factura_id, codigo (null), estado: "borrador", para_nombre, fecha, subtotal, itbis, total,
-    renglones, ligas, envios: []}, "reusada": false}`, releído de la base. 404: la ficha no existe. 409: alguna sesión ya
-    está en otra factura viva. 422: pedido que no vale (sesión de otro cliente, cancelada, ficha sin teléfono en el
-    registro, monto mal escrito…): el detalle dice cuál. 503: Noco, el registro o la base no contestaron, o falta una
-    migración. EN TODOS LOS ERRORES NO SE GUARDÓ NADA. 401/403/429: la puerta de siempre."""
+    renglones: [{descripcion, detalle, cantidad, unidad, precio_unitario, monto}], ligas, envios: []}, "reusada": false}`,
+    releído de la base. 404: la ficha no existe. 409: alguna sesión ya está en otra factura viva. 422: pedido que no
+    vale (sesión de otro cliente, cancelada, ficha sin teléfono en el registro, monto mal escrito, cantidad sin precio,
+    las dos formas de renglón a la vez…): el detalle dice cuál. 503: Noco, el registro o la base no contestaron, o falta
+    una migración. EN TODOS LOS ERRORES NO SE GUARDÓ NADA. 401/403/429: la puerta de siempre."""
     textos = [cuerpo.rnc_cedula, cuerpo.fecha, *cuerpo.refs]
     if cuerpo.renglones:
-        textos += [x for r in cuerpo.renglones for x in (r.descripcion, r.detalle, r.monto)]
+        textos += [x for r in cuerpo.renglones
+                   for x in (r.descripcion, r.detalle, r.monto, r.cantidad, r.unidad, r.precio_unitario)
+                   if isinstance(x, str)]
     if any("\x00" in x for x in textos):
         raise HTTPException(status_code=422, detail="el texto no puede llevar caracteres nulos")
     try:
@@ -807,8 +852,7 @@ async def crear_factura_de_natalia(
                 detail="el registro no trae el total de: " + ", ".join(sin_total)
                        + ". Manda los renglones. No se guardó nada.")
     else:
-        renglones = [{"descripcion": r.descripcion, "detalle": r.detalle or None, "monto": r.monto}
-                     for r in cuerpo.renglones]
+        renglones = [_renglon_pedido_de_natalia(r) for r in cuerpo.renglones]
     try:
         creada = await db.crear_borrador_de_factura_de_natalia(
             noco_id, para_nombre=ficha["nombre"], renglones=renglones, ligas=ligas, fecha=cuerpo.fecha or None,

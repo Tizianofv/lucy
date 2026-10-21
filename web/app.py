@@ -2629,11 +2629,22 @@ async def _contexto_de_factura_nueva(*, cliente, proyecto, cotizacion, opcion, r
         ctx["paso"] = "escoger"
         return ctx
     desde_la_opcion = fp.renglones_de_una_opcion(cot, opcion_n) if cot else []
-    # Sin cotización de la que partir, un renglón por cada sesión o trabajo con el total que la App tiene (la persona lo cambia).
+    # Sin cotización de la que partir, los renglones salen de la cuenta de cada sesión o trabajo (uno por renglón de
+    # su cuenta; si la cuenta no se pudo leer, uno con el total que la App tiene). La persona los cambia.
     desde_las_sesiones = fp.renglones_de_las_sesiones(ctx["elegidas"])
+    de_las_sesiones = not desde_la_opcion and escrito is None
     ctx["sin_total"] = [] if (desde_la_opcion or escrito is not None) else [
         r["codigo"] or r["ref"] for r in desde_las_sesiones if r["sin_total"]]
-    ctx["renglones_de_sesiones"] = not desde_la_opcion and escrito is None
+    ctx["renglones_de_sesiones"] = de_las_sesiones
+    # Lo que hay que decir del detalle de las sesiones: la cuenta que no se pudo leer, el renglón que no cuadró y el
+    # descuento que la factura no resta (la puerta no acepta montos negativos: no se inventa).
+    ctx["sesiones_sin_detalle"] = [] if not de_las_sesiones else list(dict.fromkeys(
+        r["codigo"] or r["ref"] for r in desde_las_sesiones if r.get("sin_detalle")))
+    ctx["avisos_del_detalle"] = [] if not de_las_sesiones else list(dict.fromkeys(
+        r["aviso_del_detalle"] for r in desde_las_sesiones if r.get("aviso_del_detalle")))
+    ctx["sesiones_con_descuento"] = [] if not de_las_sesiones else [
+        {"codigo": r["codigo"] or r["ref"], "descuento": cotizaciones.dinero_en_pesos(r["descuento"])}
+        for r in ctx["elegidas"] if r.get("descuento") and r["descuento"] > 0]
     ctx["valores"] = fp.valores_del_formulario(
         escrito=escrito, nombre_del_cliente=ctx["cliente_nombre"], desde_la_opcion=desde_la_opcion,
         desde_las_sesiones=desde_las_sesiones, hoy=ctx["hoy"])
@@ -2805,13 +2816,23 @@ async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", 
     # Cada sesión ligada con lo que la App dice de ella AHORA (fecha, servicio, sala, total, abonado y saldo).
     ligas_leidas = fp.ligas_con_lo_leido(vivas, lectura if lectura is not None else {"estado": "no_se_pudo"})
     por_ref = {l["ref"]: l["fila"] for l in ligas_leidas if l["leida"] == "ok"}
-    # El renglón que se ofrece agregar (`ofrecer`: recién ligada) o que se agrega al formulario (`agregar`): solo de una
-    # liga viva de ESTE borrador y solo con lo que la App contestó ahora.
+    # El renglón (o los renglones) que se ofrece agregar (`ofrecer`: recién ligada) o que se agregan al formulario
+    # (`agregar`): solo de una liga viva de ESTE borrador y solo con lo que la App contestó ahora. Desde la pieza D2
+    # una sesión puede traer varios renglones (los de su cuenta).
     oferta = None
     if borrador and ofrecer in por_ref:
-        oferta = fp.renglon_de_una_sesion(por_ref[ofrecer])
-        oferta["monto_texto"] = None if oferta["sin_total"] else cotizaciones.dinero_en_pesos(oferta["monto"])
-    de_mas = [fp.renglon_de_una_sesion(por_ref[agregar])] if borrador and agregar in por_ref else []
+        filas = fp.renglones_de_una_sesion(por_ref[ofrecer])
+        sin_total = any(f["sin_total"] for f in filas)
+        oferta = {
+            "ref": ofrecer, "codigo": por_ref[ofrecer].get("codigo"), "cuantos": len(filas),
+            "renglones": [{"descripcion": f["descripcion"],
+                           "precio": None if f["sin_total"] else cotizaciones.dinero_en_pesos(f["monto"]),
+                           "cantidad": fp.casillas_de_renglones([f], con_sobra=False)[0]["cantidad"],
+                           "unidad": f.get("unidad") or ""} for f in filas],
+            "sin_total": sin_total,
+            "total_texto": None if sin_total else cotizaciones.dinero_en_pesos(sum(f["monto"] for f in filas)),
+            "sin_detalle": any(f.get("sin_detalle") for f in filas)}
+    de_mas = fp.renglones_de_una_sesion(por_ref[agregar]) if borrador and agregar in por_ref else []
     se_corrige = borrador and (bool(corregir) or escrito is not None or bool(de_mas))
     drive_de_la_factura = await _estado_del_drive_de_la_factura(f["id"])
     envios_de_la_factura = await _envios_de_la_factura(f["id"])

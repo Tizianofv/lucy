@@ -8,6 +8,9 @@
 <style>
 .hoja .marca-f{text-align:center;color:#c0272d;border:2px solid #c0272d;font:800 1rem system-ui;letter-spacing:.2em;padding:.3rem;margin:0 0 1.2rem;opacity:.85}
 .hoja .tot-f td{border-bottom:0;padding-top:.3rem;padding-bottom:.3rem}
+.hoja .tabla-f th.f-num,.hoja .tabla-f td.f-num{text-align:right;white-space:nowrap}
+.hoja .tabla-f th.f-cant,.hoja .tabla-f td.f-cant{width:5.5rem}
+.hoja .tabla-f th.f-precio,.hoja .tabla-f td.f-precio{width:7rem}
 </style>
 {%- endmacro %}
 
@@ -19,12 +22,12 @@
   <div class="cod">{{ h.codigo }}</div>
   {% if h.marca %}<div class="marca-f">{{ h.marca }}</div>{% endif %}
   <div class="para">{% for etiqueta, valor in h.para %}<small>{{ etiqueta }}</small><b>{{ valor }}</b>{% endfor %}</div>
-  <table><tr><th>{{ h.encabezados[0] }}</th><th>{{ h.encabezados[1] }}</th></tr>
+  <table class="tabla-f"><tr><th>{{ h.encabezados[0] }}</th><th class="f-num f-cant">{{ h.encabezados[1] }}</th><th class="f-num f-precio">{{ h.encabezados[2] }}</th><th class="f-num">{{ h.encabezados[3] }}</th></tr>
   {% for r in h.renglones -%}
-  <tr><td><b>{{ r.descripcion }}</b>{% if r.detalle %}<span>{{ r.detalle }}</span>{% endif %}</td><td><b>{{ r.monto }}</b></td></tr>
+  <tr><td><b>{{ r.descripcion }}</b>{% if r.detalle %}<span>{{ r.detalle }}</span>{% endif %}</td><td class="f-num f-cant">{{ r.cantidad }}</td><td class="f-num f-precio">{{ r.precio_unitario }}</td><td class="f-num"><b>{{ r.monto }}</b></td></tr>
   {% endfor -%}
   {% for t in h.totales -%}
-  <tr class="tot-f"><td><b>{{ t.etiqueta }}</b></td><td><b>{{ t.total }}</b></td></tr>
+  <tr class="tot-f"><td colspan="3"><b>{{ t.etiqueta }}</b></td><td class="f-num"><b>{{ t.total }}</b></td></tr>
   {% endfor -%}
   </table>
   <div class="pie">{{ h.pie[0] }}<br>{{ h.pie[1] }}</div>

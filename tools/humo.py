@@ -166,6 +166,31 @@ async def _drive_de_las_facturas():
         return filas
 
 
+async def _renglones_de_la_factura():
+    """Los SELECT de lo que la pieza D2 (el detalle de la factura, 21-oct-2026) agregó, SIN tolerancia: las tres
+    columnas del detalle de `factura_renglones` y, contra la base real, que ningún renglón tenga su total fuera de
+    cuenta (`monto` tiene que ser `cantidad × precio unitario` redondeado a centavos, como lo exige su CHECK) ni las
+    dos columnas del dinero a medias. `db.factura_por_id` ya nombra las columnas (así que sin la migración también
+    revienta), pero esta línea lo dice con su nombre y cuenta lo que la puerta no deja escribir. Son LECTURAS
+    (`count(*)`); nada se escribe (humo.py no escribe en producción)."""
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=db.dict_row)
+        await cur.execute("SELECT count(*) AS renglones, count(cantidad) AS con_cantidad, count(unidad) AS con_unidad, "
+                          "count(precio_unitario) AS con_precio FROM factura_renglones")
+        filas = {"factura_renglones": dict(await cur.fetchone())}
+        await cur.execute("SELECT count(*) AS n FROM factura_renglones "
+                          "WHERE (cantidad IS NULL) <> (precio_unitario IS NULL)")
+        a_medias = (await cur.fetchone())["n"]
+        if a_medias:
+            raise RuntimeError(f"{a_medias} renglón(es) con la cantidad y el precio unitario a medias")
+        await cur.execute("SELECT count(*) AS n FROM factura_renglones WHERE cantidad IS NOT NULL "
+                          "AND monto <> round(cantidad * precio_unitario, 2)")
+        descuadrados = (await cur.fetchone())["n"]
+        if descuadrados:
+            raise RuntimeError(f"{descuadrados} renglón(es) cuyo total no es cantidad x precio unitario")
+        return filas
+
+
 async def _envios_de_las_facturas():
     """Los SELECT de lo que la pieza 9 de las facturas (la puerta de Natalia, 21-oct-2026) agregó, SIN tolerancia: las dos
     columnas de la tarjeta de `factura_envios` (`tarjeta_msg_id`, `visto_cambiado_en`) y, de la pieza 9b, la de la
@@ -306,6 +331,9 @@ async def main() -> int:
         # y las demás) no se ejercen acá.
         ("factura_por_id", lambda: db.factura_por_id(0)),
         ("facturas_para_la_lista", lambda: db.facturas_para_la_lista()),
+        # El detalle de la factura (pieza D2): las tres columnas de `factura_renglones` y la cuenta de que ningún
+        # renglón tenga el total fuera de cantidad × precio. LECTURA.
+        ("columnas y cuentas del detalle de los renglones (sin tolerancia)", _renglones_de_la_factura),
         # Las ligas vivas de todas las facturas (pieza 7), la lectura con la que la lista sabe cuánto se ha pagado de
         # cada una. LECTURA: la App no se consulta desde acá (el humo no tiene su llave de servicio).
         ("ligas_vivas_de_las_facturas", lambda: db.ligas_vivas_de_las_facturas()),
