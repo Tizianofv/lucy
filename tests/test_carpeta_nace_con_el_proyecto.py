@@ -535,7 +535,9 @@ def test_preparar_no_habla_con_drive_por_su_cuenta_y_crea_por_la_unica_funcion_d
     assert [ast.unparse(n.func) for n in llamadas].count("_crear_las_carpetas") == 1
     creadoras = sorted(f.name for f in _funciones(arbol)
                        if any(isinstance(n, ast.Call) and ast.unparse(n.func) == "_crear_las_carpetas" for n in ast.walk(f)))
-    assert creadoras == ["_llevar_a_drive", "preparar_la_carpeta"]
+    # (`la_carpeta_de_facturas_del_proyecto`, pieza 8 de «Facturas»: la subcarpeta `facturas` de un proyecto que todavía no
+    # tenía carpetas las crea por la MISMA función, no por otra)
+    assert creadoras == ["_llevar_a_drive", "la_carpeta_de_facturas_del_proyecto", "preparar_la_carpeta"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════════

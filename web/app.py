@@ -60,6 +60,7 @@ import cotizaciones_drive
 import cotizaciones_ia
 import db.db as db
 import facturas
+import facturas_drive
 import facturas_panel as fp
 import noco_lectura
 import registro_lectura
@@ -2795,6 +2796,7 @@ async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", 
         oferta["monto_texto"] = None if oferta["sin_total"] else cotizaciones.dinero_en_pesos(oferta["monto"])
     de_mas = [fp.renglon_de_una_sesion(por_ref[agregar])] if borrador and agregar in por_ref else []
     se_corrige = borrador and (bool(corregir) or escrito is not None or bool(de_mas))
+    drive_de_la_factura = await _estado_del_drive_de_la_factura(f["id"])
     return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "factura.html", {
         "f": f, "hoja": facturas.hoja_de_factura(f), "estado_texto": fp.etiqueta_del_estado(estado),
         "proyecto_nombre": None if f["proyecto_id"] is None else nombres.get(f["proyecto_id"]) or f"Proyecto {f['proyecto_id']}",
@@ -2808,7 +2810,28 @@ async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", 
         "proyecto_marcado": f["proyecto_id"] if proyecto_escrito is None else proyecto_escrito[0],
         "campos_marcados": {c["casilla"] for c in errores if c.get("casilla")},
         "candidatas": candidatas, "hay_mas": hay_mas, "registro_ok": registro_ok, "busqueda": busqueda, "sq": sq,
-        "etiquetas_de_liga": fp.ETIQUETA_DE_LIGA}, status_code=status))
+        "etiquetas_de_liga": fp.ETIQUETA_DE_LIGA, "drive": drive_de_la_factura}, status_code=status))
+
+
+async def _estado_del_drive_de_la_factura(fid: int) -> dict | None:
+    """Lo que la página dice del Drive de una factura (`facturas_drive.estado_de_drive`), de una lectura que no tumba la
+    página: si no se puede leer (la migración sin aplicar, la base), `None` y el bloque no sale; no se afirma nada."""
+    try:
+        return facturas_drive.estado_de_drive(await db.drive_de_factura(fid))
+    except Exception as e:
+        log_f.warning("Facturas: no se pudo leer el Drive de la factura #%s (%s)", fid, type(e).__name__)
+        return None
+
+
+async def _subir_factura_a_drive(fid: int) -> str:
+    """El intento de subir a Drive el PDF de una factura EMITIDA o ANULADA, DESPUÉS de que quedó así en la base. Lo que
+    falle aquí no deshace nada: la factura sigue emitida o anulada y la pantalla, que lee la base, dice si llegó o no. Solo
+    la base puede hacer subir una excepción, y aquí se atrapa: el cambio ya está hecho y la redirección tiene que salir."""
+    try:
+        return await facturas_drive.subir(fid)
+    except Exception as e:
+        log_f.warning("Facturas: la subida a Drive de la factura #%s falló (%s)", fid, type(e).__name__)
+        return "fallo"
 
 
 async def _factura_o_404(fid: int):
@@ -2893,6 +2916,7 @@ async def emitir_una_factura(request: Request, fid: int):
         return _fuera(request)
     except Exception as e:
         return await _rechazo_de_una_factura(request, fid, e, confirmar="emitir")
+    await _subir_factura_a_drive(fid)
     return RedirectResponse(f"/facturas/{fid}", status_code=303)
 
 
@@ -2911,6 +2935,23 @@ async def anular_una_factura(request: Request, fid: int):
         return _fuera(request)
     except Exception as e:
         return await _rechazo_de_una_factura(request, fid, e, confirmar="anular", motivo_escrito=motivo)
+    await _subir_factura_a_drive(fid)
+    return RedirectResponse(f"/facturas/{fid}", status_code=303)
+
+
+@app.post("/facturas/{fid}/drive")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def volver_a_subir_una_factura_a_drive(request: Request, fid: int):
+    """«Subir a Drive» / «Volver a subir a Drive»: el MISMO intento de la subida (`facturas_drive.subir`), nada más. Solo la
+    casa (solo ver y sin sesión: 401, y a Drive no le llega nada). Un borrador no se sube; una que no existe, 404. Lo que se
+    dice después sale de la base (`facturas_drive.estado_de_drive`), no de lo que esta ruta crea que pasó."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    f = await _factura_o_404(fid)
+    if f is None:
+        return _no_existe_la_factura()
+    if f["estado"] in ("emitida", "anulada"):
+        await _subir_factura_a_drive(fid)
     return RedirectResponse(f"/facturas/{fid}", status_code=303)
 
 

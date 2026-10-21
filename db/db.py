@@ -3818,6 +3818,131 @@ async def poner_nombre_de_carpeta_de_drive(proyecto_id: int, nombre_puesto: str)
                           (nombre_puesto, proyecto_id))
 
 
+# ── EL DRIVE DE LAS FACTURAS (pieza 8 del diseño «Facturas», 21-oct-2026) ───────────────────────────────────────
+#
+# Aquí solo hay SQL. Quién sube, a qué carpeta y con qué frases lo decide `facturas_drive.py`. Ninguna de estas
+# funciones pide sesión (igual que `marcar_cotizacion_en_drive`): las llama el camino de la subida DESPUÉS de que la
+# ruta, que sí la pidió, emitió o anuló. NO tocan `cambiado_en` (es el candado de corregir un borrador) ni dejan huella:
+# lo que anotan es dónde quedó un archivo, no un cambio de la factura.
+#
+# `drive_proyecto_id` es el proyecto que la factura tenía cuando se subió el PDF (NULL = la carpeta «Facturas»).
+# `coalesce(..., 0)` hace que NULL se compare con NULL (los ids de proyecto son positivos) y vale igual en Postgres y
+# en SQLite. Los dos archivos de una factura (el de la emitida y el de la anulada) comparten ese sitio: al subir uno a
+# un sitio distinto del anotado, el otro deja de contarse (se queda donde estaba, que Lucy no mueve ni borra) y NO se
+# dice que está en Drive.
+SENTENCIA_DE_LEER_EL_DRIVE_DE_FACTURA = (
+    "SELECT id, estado, proyecto_id, drive_archivo_id, drive_anulada_archivo_id, drive_proyecto_id, drive_error "
+    "FROM facturas WHERE id = %s")
+SENTENCIA_DE_MARCAR_FACTURA_EN_DRIVE = (
+    "UPDATE facturas SET drive_archivo_id = %s, "
+    "drive_anulada_archivo_id = CASE WHEN coalesce(drive_proyecto_id, 0) = coalesce(%s, 0) "
+    "THEN drive_anulada_archivo_id ELSE NULL END, "
+    "drive_proyecto_id = %s, drive_error = NULL "
+    "WHERE id = %s AND estado IN ('emitida', 'anulada') AND coalesce(proyecto_id, 0) = coalesce(%s, 0) "
+    "RETURNING id")
+SENTENCIA_DE_MARCAR_ANULADA_EN_DRIVE = (
+    "UPDATE facturas SET drive_anulada_archivo_id = %s, "
+    "drive_archivo_id = CASE WHEN coalesce(drive_proyecto_id, 0) = coalesce(%s, 0) "
+    "THEN drive_archivo_id ELSE NULL END, "
+    "drive_proyecto_id = %s, drive_error = NULL "
+    "WHERE id = %s AND estado = 'anulada' AND coalesce(proyecto_id, 0) = coalesce(%s, 0) "
+    "RETURNING id")
+SENTENCIA_DE_ERROR_DE_DRIVE_DE_FACTURA = (
+    "UPDATE facturas SET drive_error = %s WHERE id = %s AND estado IN ('emitida', 'anulada') RETURNING id")
+SENTENCIA_DE_LA_CARPETA_DE_FACTURAS_DEL_PROYECTO = (
+    "SELECT carpeta_facturas_id FROM drive_de_proyectos WHERE proyecto_id = %s")
+SENTENCIA_DE_PONER_LA_CARPETA_DE_FACTURAS_DEL_PROYECTO = (
+    "UPDATE drive_de_proyectos SET carpeta_facturas_id = coalesce(carpeta_facturas_id, %s) "
+    "WHERE proyecto_id = %s RETURNING carpeta_facturas_id")
+SENTENCIA_DE_LA_CARPETA_SUELTA = "SELECT carpeta_id FROM drive_carpetas_sueltas WHERE clave = %s"
+SENTENCIA_DE_PONER_LA_CARPETA_SUELTA = (
+    "INSERT INTO drive_carpetas_sueltas (clave, carpeta_id) VALUES (%s, %s) ON CONFLICT (clave) DO NOTHING")
+
+
+async def drive_de_factura(factura_id: int) -> dict | None:
+    """Lo que la base sabe del Drive de UNA factura (`estado`, `proyecto_id`, `drive_archivo_id`,
+    `drive_anulada_archivo_id`, `drive_proyecto_id`, `drive_error`), o `None` si no existe o si falta la tabla o alguna
+    de las columnas (la migración `2026-10-21_facturas_drive.sql` sin aplicar: la página sale sin el bloque de Drive y
+    `tools/humo.py` dice cuál falta). Una lectura: no pide sesión."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(SENTENCIA_DE_LEER_EL_DRIVE_DE_FACTURA, (factura_id,))
+            fila = await cur.fetchone()
+        except Exception as e:
+            if _cotizaciones_sin_migrar(e):          # 42P01 o 42703: las mismas dos que la lectura de las cotizaciones
+                return None
+            raise
+    return None if fila is None else dict(fila)
+
+
+async def marcar_factura_en_drive(factura_id: int, cual: str, archivo_id: str, proyecto_id: int | None) -> bool:
+    """Anota que el PDF `cual` (`emitida` o `anulada`) quedó en Drive con ese `archivo_id`, subido para la factura
+    cuando ESTABA en `proyecto_id`, y borra `drive_error`. SOLO si la factura sigue en ese proyecto y en un estado que
+    admite ese PDF (el de la emitida vale para una emitida y para una anulada; el de la anulada, solo para una
+    anulada). `True` si escribió; `False` si cambió mientras se subía: entonces no se marca nada."""
+    if cual not in ("emitida", "anulada"):
+        raise ValueError(f"cual tiene que ser emitida o anulada, no {cual!r}")
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        if cual == "emitida":
+            await cur.execute(SENTENCIA_DE_MARCAR_FACTURA_EN_DRIVE,
+                              (archivo_id, proyecto_id, proyecto_id, factura_id, proyecto_id))
+        else:
+            await cur.execute(SENTENCIA_DE_MARCAR_ANULADA_EN_DRIVE,
+                              (archivo_id, proyecto_id, proyecto_id, factura_id, proyecto_id))
+        return await cur.fetchone() is not None
+
+
+async def marcar_error_de_drive_de_factura(factura_id: int, causa: str) -> bool:
+    """Deja la `causa` (una frase fija) del intento que falló. No toca los ids de los archivos."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_ERROR_DE_DRIVE_DE_FACTURA, (causa, factura_id))
+        return await cur.fetchone() is not None
+
+
+async def carpeta_de_facturas_de_drive(proyecto_id: int) -> str | None:
+    """El id de la subcarpeta `facturas` del proyecto, o `None` si todavía no se creó (o el proyecto no tiene fila en
+    `drive_de_proyectos`). Si falta la columna SUBE la excepción: quien sube no puede crear la carpeta sin poder
+    anotarla. Una lectura."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_LA_CARPETA_DE_FACTURAS_DEL_PROYECTO, (proyecto_id,))
+        fila = await cur.fetchone()
+    return None if fila is None else fila["carpeta_facturas_id"]
+
+
+async def guardar_carpeta_de_facturas_de_drive(proyecto_id: int, carpeta_id: str) -> str | None:
+    """Anota la subcarpeta `facturas` que se acaba de crear y devuelve la que QUEDÓ: si otro intento se adelantó gana
+    el primero (la anotada no se pisa). `None` si el proyecto no tiene fila en `drive_de_proyectos`."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_PONER_LA_CARPETA_DE_FACTURAS_DEL_PROYECTO, (carpeta_id, proyecto_id))
+        fila = await cur.fetchone()
+    return None if fila is None else fila["carpeta_facturas_id"]
+
+
+async def carpeta_suelta_de_drive(clave: str) -> str | None:
+    """El id de la carpeta de Drive que no es de ningún proyecto, por clave, o `None` si todavía no se creó. Si falta la
+    tabla SUBE la excepción (por lo mismo que `carpeta_de_facturas_de_drive`). Una lectura."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_LA_CARPETA_SUELTA, (clave,))
+        fila = await cur.fetchone()
+    return None if fila is None else fila["carpeta_id"]
+
+
+async def guardar_carpeta_suelta_de_drive(clave: str, carpeta_id: str) -> str:
+    """Anota la carpeta suelta que se acaba de crear y devuelve la que QUEDÓ: si otro intento se adelantó, gana el primero
+    (`ON CONFLICT DO NOTHING`)."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_PONER_LA_CARPETA_SUELTA, (clave, carpeta_id))
+        await cur.execute(SENTENCIA_DE_LA_CARPETA_SUELTA, (clave,))
+        return (await cur.fetchone())["carpeta_id"]
+
+
 SENTENCIA_DE_LA_QUE_TOCA_DE_COTIZACION = "SELECT ultimo FROM serie_cotizaciones WHERE anio = %s"
 
 

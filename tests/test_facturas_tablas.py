@@ -65,6 +65,18 @@ def _texto_migracion() -> str:
     return _migracion().read_text(encoding="utf-8")
 
 
+def _migracion_de_drive():
+    """La migración de la pieza 8 (las columnas de Drive de `facturas` y `drive_carpetas_sueltas`), buscada por lo que hace."""
+    suyas = [a for a in g._migraciones()
+             if "CREATE TABLE IF NOT EXISTS drive_carpetas_sueltas" in a.read_text(encoding="utf-8")]
+    assert len(suyas) == 1, suyas
+    return suyas[0]
+
+
+def _texto_migracion_de_drive() -> str:
+    return _migracion_de_drive().read_text(encoding="utf-8")
+
+
 def _guion():
     spec = importlib.util.spec_from_file_location("ensayo_facturas", _ROOT / "tools" / "ensayo_facturas.py")
     modulo = importlib.util.module_from_spec(spec)
@@ -135,7 +147,10 @@ def _rechaza(con, tabla, **campos):
 @pytest.mark.parametrize("tabla", TABLAS)
 def test_la_migracion_y_el_esquema_dicen_lo_mismo(tabla):
     de_la_migracion = [b2._normal(s).replace("if not exists ", "") for s in b2._ddl(_texto_migracion(), tabla)]
-    del_esquema = [b2._normal(s) for s in b2._ddl(_ESQUEMA, tabla)]
+    # lo que otra migración agrega después (pieza 8: las columnas de Drive de `facturas`) se compara en
+    # `tests/test_facturas_drive.py`; aquí el esquema se mira sin esas columnas
+    quitar = ct._columnas_que_agregan_otras_migraciones_a(tabla, _migracion())
+    del_esquema = [b2._normal(ct._sin_columnas(s, quitar)) for s in b2._ddl(_ESQUEMA, tabla)]
     assert del_esquema, f"{tabla} no está en db/schema.sql"
     assert de_la_migracion == del_esquema
 

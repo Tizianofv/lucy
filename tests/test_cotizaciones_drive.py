@@ -958,8 +958,12 @@ def test_la_migracion_de_drive_agrega_las_tres_columnas_y_la_tabla_y_el_esquema_
     esquema = tt._ESQUEMA
     for c in _COLUMNAS_DE_DRIVE:
         assert re.search(rf"^\s+{c}\s", b2._ddl(esquema, "cotizaciones")[0], re.M), c
+    # (`carpeta_facturas_id` la agrega otra migración, la 2026-10-21 de las facturas: el esquema la declara dentro del
+    # `CREATE TABLE` y la migración que crea la tabla, no; ver `tests/test_facturas_drive.py`)
+    otras = tt._columnas_que_agregan_otras_migraciones_a("drive_de_proyectos", tt._migracion_de_drive())
+    assert otras == {"carpeta_facturas_id"}
     assert [b2._normal(s).replace("if not exists ", "") for s in b2._ddl(texto, "drive_de_proyectos")] == \
-        [b2._normal(s) for s in b2._ddl(esquema, "drive_de_proyectos")] != []
+        [b2._normal(tt._sin_columnas(s, otras)) for s in b2._ddl(esquema, "drive_de_proyectos")] != []
     # idempotente: toda sentencia que crea dice IF NOT EXISTS; y no escribe ni una fila ni borra nada
     for s in g._sentencias(texto):
         if re.match(r"ALTER\s+TABLE", s, re.I):
@@ -1225,7 +1229,10 @@ def test_drive_version_y_drive_archivo_id_se_escriben_en_un_solo_sitio_y_con_el_
             continue
         arbol = ast.parse(ruta.read_text(encoding="utf-8"))
         for n in _textos(arbol):
-            if re.search(r"\bSET\b[^;]*\bdrive_(version|archivo_id)\s*=", n.value, re.I | re.S):
+            # (las facturas tienen su propio `drive_archivo_id`, pieza 8 de «Facturas»: su guarda es
+            # `tests/test_guardar_factura.py` y `tests/test_facturas_drive.py`; aquí se mira SOLO `cotizaciones`)
+            if re.search(r"\bSET\b[^;]*\bdrive_(version|archivo_id)\s*=", n.value, re.I | re.S) \
+                    and not re.match(r"\s*UPDATE\s+facturas\b", n.value, re.I):
                 escritores.append((rel, n.value))
         for n in ast.walk(arbol):
             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "marcar_cotizacion_en_drive":

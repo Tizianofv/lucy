@@ -127,6 +127,19 @@ def _columnas_que_agregan_otras_migraciones(tabla: str) -> set[str]:
     return agregadas
 
 
+def _columnas_que_agregan_otras_migraciones_a(tabla: str, la_que_la_crea) -> set[str]:
+    """Como `_columnas_que_agregan_otras_migraciones`, pero para una tabla que crea OTRA migración (`la_que_la_crea`):
+    las columnas que agregan las demás."""
+    agregadas = set()
+    for archivo in g._migraciones():
+        if archivo == la_que_la_crea:
+            continue
+        agregadas |= {c.lower() for c in re.findall(
+            rf"ALTER\s+TABLE\s+{tabla}\s+ADD\s+COLUMN(?:\s+IF\s+NOT\s+EXISTS)?\s+(\w+)",
+            archivo.read_text(encoding="utf-8"), re.I)}
+    return agregadas
+
+
 def _sin_columnas(sentencia: str, columnas: set[str]) -> str:
     """El `CREATE TABLE` sin las líneas de esas columnas (una columna por línea, como lo escribe el esquema)."""
     return "\n".join(l for l in sentencia.splitlines()

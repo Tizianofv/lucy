@@ -27,6 +27,10 @@ carpetas SIN cotización, por la misma `_crear_las_carpetas`; la llaman, DESPUÉ
 lo crean (el panel, Telegram y «convertir en proyecto»). Nunca sube una excepción: si Drive falla el proyecto ya existe y
 `frase_de_la_carpeta` (la única fuente de lo que se dice) cuenta que la carpeta NO se creó. Lucy no borra ni mueve nada en Drive.
 
+LAS CARPETAS DE LAS FACTURAS (pieza 8 de «Facturas») se crean también aquí: `la_carpeta_de_facturas_del_proyecto` (la
+`facturas` de cada proyecto, hermana de `cotizaciones`) y `la_carpeta_suelta` («Facturas», sin proyecto). Qué se sube y con qué
+frases lo decide `facturas_drive.py`.
+
 EL TIEMPO. `TIEMPO_DEL_INTENTO` (15 s, de diseño, no medido) es el tope de TODAS las llamadas a Drive de un intento
 juntas, no de cada una (cada una además tiene el suyo en `drive.py`). Las escrituras a la base no se cortan.
 
@@ -52,6 +56,16 @@ log = logging.getLogger("lucy.cotizaciones_drive")
 TIEMPO_DEL_INTENTO = 15.0
 
 NOMBRE_DE_LA_CARPETA_DE_COTIZACIONES = "cotizaciones"
+
+# Las carpetas de las FACTURAS (pieza 8 de «Facturas», 21-oct-2026) se crean AQUÍ, en la misma casa que las del proyecto y
+# las de las cotizaciones: `drive.crear_carpeta` solo se llama desde `cotizaciones_drive.py` (y el guion de una vez que crea
+# la raíz). `facturas_drive.py` decide qué se sube y llama a estas dos.
+NOMBRE_DE_LA_SUBCARPETA_DE_FACTURAS = "facturas"
+NOMBRE_DE_LA_CARPETA_SUELTA = "Facturas"
+CLAVE_DE_LA_CARPETA_SUELTA = "facturas"
+RAIZ_DE_LA_CARPETA_SUELTA = "root"
+SIN_LA_CARPETA_DE_FACTURAS = "la carpeta de las facturas ya no está en Drive"
+SIN_EL_PROYECTO = "el proyecto de la factura ya no está"
 
 # Las causas que se guardan en `drive_error` y se enseñan. Las que vienen de Drive son las de `drive.py` (no se
 # repiten aquí: se leen de sus clases); `DriveNoEsta` no se guarda tal cual, porque según el paso significa otra cosa.
@@ -331,6 +345,52 @@ async def preparar_la_carpeta(proyecto_id: int, *, motivo: str = MOTIVO_AL_CREAR
     except Exception as e:
         log.warning("cotizaciones: no se pudo crear la carpeta del proyecto #%s (%s)", proyecto_id, type(e).__name__)
         return {"resultado": "fallo", "causa": drive.DriveError.causa, "carpeta": None}
+
+
+async def la_carpeta_suelta(intento: _Intento) -> str:
+    """El id de la carpeta «Facturas» de las facturas SIN proyecto: la anotada (`drive_carpetas_sueltas`) o, la primera vez, la
+    que ya haya en la raíz de Mi unidad con ese nombre (de un intento que se cayó antes de anotarla; con `drive.file` Lucy solo
+    ve lo que ella creó) o una nueva. Siempre devuelve la que QUEDÓ anotada. Una anotada que ya no está en Drive (404) NO se
+    rehace: el que sube dice la causa."""
+    anotada = await db.carpeta_suelta_de_drive(CLAVE_DE_LA_CARPETA_SUELTA)
+    if anotada:
+        return anotada
+    hay = await intento.drive(lambda: drive.buscar_en(RAIZ_DE_LA_CARPETA_SUELTA, NOMBRE_DE_LA_CARPETA_SUELTA),
+                              no_esta=SIN_LA_CARPETA_DE_FACTURAS)
+    if hay:
+        nueva = hay[0]["id"]
+    else:
+        nueva = await intento.drive(
+            lambda: drive.crear_carpeta(NOMBRE_DE_LA_CARPETA_SUELTA, RAIZ_DE_LA_CARPETA_SUELTA),
+            no_esta=SIN_LA_CARPETA_DE_FACTURAS)
+    return await db.guardar_carpeta_suelta_de_drive(CLAVE_DE_LA_CARPETA_SUELTA, nueva)
+
+
+async def la_carpeta_de_facturas_del_proyecto(intento: _Intento, proyecto_id: int, motivo: str) -> str:
+    """El id de `<Proyectos>/<proyecto>/facturas`, hermana de `cotizaciones`: la anotada (`drive_de_proyectos.
+    carpeta_facturas_id`) o, la primera vez, una nueva dentro de la carpeta del proyecto. Si el proyecto no tenía carpetas se
+    crean primero, por `_crear_las_carpetas` (con `motivo` para la huella del enlace); si cambió de nombre se le pone al día.
+    Un proyecto que ya no está: `_Falla(SIN_EL_PROYECTO)`. Una `facturas` anotada que ya no está en Drive NO se rehace."""
+    proyecto = await db.proyecto_para_la_carpeta(proyecto_id)
+    if proyecto is None:
+        raise _Falla(SIN_EL_PROYECTO)
+    carpetas = await db.carpetas_de_drive(proyecto_id)
+    if carpetas is None:
+        carpetas = (await _crear_las_carpetas(intento, proyecto_id, proyecto["nombre"], motivo))["carpetas"]
+    else:
+        await _poner_al_dia_el_nombre(intento, {"proyecto_id": proyecto_id, "proyecto_nombre": proyecto["nombre"]}, carpetas)
+    anotada = await db.carpeta_de_facturas_de_drive(proyecto_id)
+    if anotada:
+        return anotada
+    nueva = await intento.drive(
+        lambda: drive.crear_carpeta(NOMBRE_DE_LA_SUBCARPETA_DE_FACTURAS, carpetas["carpeta_proyecto_id"]),
+        no_esta=SIN_LA_CARPETA_DEL_PROYECTO)
+    quedo = await db.guardar_carpeta_de_facturas_de_drive(proyecto_id, nueva)
+    if quedo is None:
+        raise _Falla(SIN_EL_PROYECTO)
+    if quedo != nueva:
+        log.warning("cotizaciones: otra subida se adelantó con la carpeta de facturas del proyecto #%s", proyecto_id)
+    return quedo
 
 
 async def _poner_al_dia_el_nombre(intento: _Intento, cot: dict, carpetas: dict) -> None:
