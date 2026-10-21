@@ -55,6 +55,9 @@ def fila_de_la_lista(f: dict, nombres_de_proyecto: dict[int, str], pago: dict | 
         "cliente": f["para_nombre"],
         "fecha": cz.fecha_corta(f["fecha"]),
         "total": cz.dinero_en_pesos(f["total"]),
+        # Con comprobante (NCF) la lista dice además lo que el cliente paga de verdad (`db.totales_de_factura`). Sin
+        # NCF es `None` y no se pinta: el total ya es lo que paga.
+        "total_a_pagar": cz.dinero_en_pesos(f["total_a_pagar"]) if f.get("ncf") else None,
         "estado": f["estado"],
         "estado_texto": etiqueta_del_estado(f["estado"]),
         "proyecto_id": f["proyecto_id"],
@@ -537,14 +540,22 @@ def el_pago_de_la_factura(f: dict, ligas_leidas: list[dict] | None) -> dict:
     anulada: una anulada no tiene estado de pago). «Falta» es la suma de los saldos POSITIVOS, sin restarle lo que otra
     sesión pagó de más. `detalle` es lo que hay que decir además (el porqué de un `no_se_pudo`, cuánto se pagó cuando
     quedó pagada, las dos cifras cuando la App y la factura no cuadran, o que una sesión pagó de más y eso no tapa lo que
-    debe otra) e `itbis`, la frase del ITBIS cuando la factura lo lleva.
+    debe otra) e `itbis`, la frase del ITBIS cuando la factura lo lleva (con comprobante dice que se retiene completo,
+    no que se cobra aparte: pieza D4).
 
     `ligas_leidas` en `None` quiere decir que no se pudo leer ni de qué sesiones es la factura. Nada de esto se guarda.
     """
     if f["estado"] == "anulada":
         return dict(PAGO_QUE_NO_SE_PINTA)
-    itbis = (f"El ITBIS ({cz.dinero_en_pesos(f['itbis'])}) se cobra aparte; no se lleva en la App."
-             if f["itbis_pct"] is not None else "")
+    if f["itbis_pct"] is None:
+        itbis = ""
+    elif f.get("ncf"):
+        # Con comprobante el ITBIS no se le cobra al cliente: se retiene completo (pieza D4). Decir «se cobra
+        # aparte» mandaría a cobrarle un ITBIS que él retiene.
+        itbis = (f"Con comprobante, el ITBIS ({cz.dinero_en_pesos(f['itbis'])}) se retiene completo y no se le cobra "
+                 f"al cliente: paga {cz.dinero_en_pesos(f['total_a_pagar'])}.")
+    else:
+        itbis = f"El ITBIS ({cz.dinero_en_pesos(f['itbis'])}) se cobra aparte; no se lleva en la App."
     if ligas_leidas is None:
         return _pago_sin_leer(itbis, "No se pudieron leer las sesiones de la factura.")
     if any(l["leida"] == "no_se_pudo" for l in ligas_leidas):

@@ -23,6 +23,10 @@ propia línea debajo del subtotal («Descuento», «- RD$X») y solo si hay desc
 calculado sobre el neto (subtotal menos descuento) y el total es el neto más el ITBIS. Sin descuento y sin ITBIS la
 hoja dice solo el total, como siempre.
 
+Desde la pieza D4 (21-oct-2026, regla de Tiziano) una factura CON comprobante (NCF) lleva debajo del TOTAL tres
+líneas más: «Impuesto a retener (ISR 15%)», «ITBIS retenido» y «Total a pagar» (el bruto: lo que el cliente paga de
+verdad). Las tres cifras las calcula `db.totales_de_factura`; sin NCF no aparece ninguna.
+
 Desde la pieza D2 (21-oct-2026, Tiziano: «Si, las facturas deben salir con los detalles.») la tabla lleva las cuatro
 columnas de la cotización con detalle: SERVICIO (con su descripción debajo), CANTIDAD con su unidad, PRECIO
 UNITARIO y TOTAL. Cada renglón trae ya escritos `cantidad` («2 horas») y `precio_unitario`; un renglón de antes del
@@ -44,6 +48,10 @@ ETIQUETA_DEL_SUBTOTAL = "Subtotal"
 ETIQUETA_DEL_DESCUENTO = "Descuento"
 ETIQUETA_DEL_ITBIS = "ITBIS {pct}%"
 ETIQUETA_DEL_TOTAL = "TOTAL"
+# Las tres de una factura CON comprobante (NCF), pieza D4: debajo del TOTAL, en el orden del ejemplo de Tiziano.
+ETIQUETA_DE_LA_RETENCION_DEL_ISR = "Impuesto a retener (ISR 15%)"
+ETIQUETA_DEL_ITBIS_RETENIDO = "ITBIS retenido"
+ETIQUETA_DEL_TOTAL_A_PAGAR = "Total a pagar"
 ETIQUETAS_DEL_PARA_DE_LA_FACTURA = {
     "para": "PARA", "rnc_cedula": "RNC / CÉDULA", "fecha": "FECHA", "ncf": "NCF", "ncf_tipo": "TIPO DE NCF",
     "estado": "ESTADO", "motivo": "MOTIVO DE LA ANULACIÓN"}
@@ -71,7 +79,8 @@ def marca_de_la_factura(estado: str) -> str | None:
 def hoja_de_factura(f: dict) -> dict:
     """Los textos de la hoja de una factura. `f` es lo que devuelve `db.factura_por_id`: `estado`, `codigo`,
     `para_nombre`, `rnc_cedula`, `fecha`, `ncf`, `ncf_tipo`, `itbis_pct`, `descuento`, `motivo_anulacion`,
-    `renglones` (con `descripcion`, `detalle`, `monto`) y `subtotal`/`itbis`/`total`. Función pura."""
+    `renglones` (con `descripcion`, `detalle`, `monto`) y los totales (`subtotal`/`itbis`/`total` y, con NCF,
+    `retencion_isr`/`itbis_retenido`/`total_a_pagar`). Función pura."""
     etiquetas = ETIQUETAS_DEL_PARA_DE_LA_FACTURA
     estado = f["estado"]
     tiene_numero = estado in ("emitida", "anulada") and bool(f.get("codigo"))
@@ -108,6 +117,14 @@ def hoja_de_factura(f: dict) -> dict:
         totales.append({"etiqueta": ETIQUETA_DEL_ITBIS.format(pct=_porcentaje(f["itbis_pct"])),
                         "total": cz.dinero_en_pesos(f["itbis"])})
     totales.append({"etiqueta": ETIQUETA_DEL_TOTAL, "total": cz.dinero_en_pesos(f["total"])})
+    if f.get("ncf"):
+        # Una factura CON comprobante: lo que el cliente retiene y lo que de verdad paga. Las cifras salen de
+        # `db.totales_de_factura`; la hoja no las calcula. Con NCF y sin ITBIS, `itbis_retenido` es cero y la línea
+        # va igual, para que la resta que lleva al total a pagar se lea entera.
+        totales += [
+            {"etiqueta": ETIQUETA_DE_LA_RETENCION_DEL_ISR, "total": cz.dinero_en_pesos(f["retencion_isr"])},
+            {"etiqueta": ETIQUETA_DEL_ITBIS_RETENIDO, "total": cz.dinero_en_pesos(f["itbis_retenido"])},
+            {"etiqueta": ETIQUETA_DEL_TOTAL_A_PAGAR, "total": cz.dinero_en_pesos(f["total_a_pagar"])}]
     return {
         "titulo": TITULO_DE_LA_FACTURA,
         "codigo": f["codigo"] if tiene_numero else CODIGO_DEL_BORRADOR,
