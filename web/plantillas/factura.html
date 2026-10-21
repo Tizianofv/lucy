@@ -1,0 +1,110 @@
+{% extends "base.html" %}{% set activo='facturas' %}
+{% from "_facturas_estilo.html" import estilo_de_facturas %}
+{% from "_hoja_de_cotizacion.html" import estilo_de_la_hoja %}
+{% from "_hoja_de_factura.html" import estilo_de_la_factura, hoja_de_factura %}
+{% block titulo %}{{ f.codigo or 'Factura en borrador' }}{% endblock %}
+{% block cuerpo %}
+{{ estilo_de_facturas() }}{{ estilo_de_la_hoja() }}{{ estilo_de_la_factura() }}
+{#- LA PÁGINA DE UNA FACTURA (pieza 4 del diseño «Facturas», 21-oct-2026). Solo la casa. La hoja es la MISMA que el PDF
+    (`facturas.hoja_de_factura`); aquí nada calcula dinero ni escribe un texto de la hoja. Lo que se puede hacer
+    depende del estado que la base tiene: borrador (corregir, ligar, emitir, descartar), emitida (anular, proyecto),
+    anulada (nada). Cada botón es un POST a su ruta, que habla con la puerta de `db`; las confirmaciones
+    (`?confirmar=`) las dibuja el servidor. -#}
+<div class="enc">
+  <h1>{{ f.codigo or 'Borrador' }} <span class="pild {{ f.estado }}">{{ estado_texto }}</span></h1>
+  <div class="acciones"><a class="boton-linea" href="/facturas">← Facturas</a><a class="boton" href="/facturas/{{ f.id }}/pdf" download>Bajar el PDF</a></div>
+</div>
+{% for e in errores %}<p class="aviso" role="alert" data-error-de-factura>{{ e.texto if e.texto is defined else e }}</p>{% endfor %}
+
+{% if confirmar == 'emitir' %}
+<div class="confirma" data-confirmar="emitir"><b>¿Emitir esta factura?</b>
+  <p>Al emitirla toma su número y ya no se corrige: si queda mal, se anula y se hace otra.</p>
+  <form method="post" action="/facturas/{{ f.id }}/emitir"><input type="hidden" name="cambiado_en" value="{{ candado }}"><button>Sí, emitir</button><a class="boton-linea" href="/facturas/{{ f.id }}">Cancelar</a></form></div>
+{% elif confirmar == 'descartar' %}
+<div class="confirma" data-confirmar="descartar"><b>¿Descartar este borrador?</b>
+  <p>Se borra de verdad, con sus renglones. No tiene número, así que no deja hueco; sus sesiones o trabajos quedan libres.</p>
+  <form method="post" action="/facturas/{{ f.id }}/descartar"><button class="peligro">Sí, descartar</button><a class="boton-linea" href="/facturas/{{ f.id }}">Cancelar</a></form></div>
+{% elif confirmar == 'anular' %}
+<div class="confirma" data-confirmar="anular"><b>¿Anular {{ f.codigo }}?</b>
+  <p>Queda anulada con su número y su NCF (el NCF no se vuelve a usar) y sus sesiones o trabajos quedan libres para otra factura. Escribe por qué.</p>
+  <form method="post" action="/facturas/{{ f.id }}/anular"><textarea name="motivo" maxlength="500" required aria-label="Motivo de la anulación" placeholder="Motivo de la anulación"></textarea><button class="peligro">Sí, anular</button><a class="boton-linea" href="/facturas/{{ f.id }}">Cancelar</a></form></div>
+{% endif %}
+
+{% if se_corrige %}
+<h2>Corregir el borrador</h2>
+{% set v = valores %}
+<form method="post" action="/facturas/{{ f.id }}/corregir" data-corregir>
+  <input type="hidden" name="cambiado_en" value="{{ candado }}">
+  <div class="campos">
+    <label{% if 'para_nombre' in campos_marcados %} class="marcada"{% endif %}>A nombre de <input type="text" name="para_nombre" value="{{ v.para_nombre }}" maxlength="200" required{% if 'para_nombre' in campos_marcados %} aria-invalid="true"{% endif %}></label>
+    <label{% if 'fecha' in campos_marcados %} class="marcada"{% endif %}>Fecha <input type="date" name="fecha" value="{{ v.fecha }}"{% if 'fecha' in campos_marcados %} aria-invalid="true"{% endif %}></label>
+    <label{% if 'rnc_cedula' in campos_marcados %} class="marcada"{% endif %}>RNC o cédula (si lleva) <input type="text" name="rnc_cedula" value="{{ v.rnc_cedula }}" maxlength="20"{% if 'rnc_cedula' in campos_marcados %} aria-invalid="true"{% endif %}></label>
+    <label{% if 'ncf' in campos_marcados %} class="marcada"{% endif %}>NCF (si lleva) <input type="text" name="ncf" value="{{ v.ncf }}" maxlength="30"{% if 'ncf' in campos_marcados %} aria-invalid="true"{% endif %}></label>
+    <label{% if 'ncf' in campos_marcados %} class="marcada"{% endif %}>Tipo de NCF (si lleva NCF) <input type="text" name="ncf_tipo" value="{{ v.ncf_tipo }}" maxlength="30"{% if 'ncf' in campos_marcados %} aria-invalid="true"{% endif %}></label>
+    <label class="casilla"><input type="checkbox" name="itbis" value="18"{% if v.itbis %} checked{% endif %}> Suma ITBIS (18 %)</label>
+  </div>
+  <div class="scroll"><table class="reng">
+    <tr><th>Descripción</th><th>Detalle</th><th>Monto</th></tr>
+    {% for r in v.renglones %}{% set n = loop.index %}
+    <tr><td><input type="text" name="r-{{ n }}-descripcion" value="{{ r.descripcion }}" maxlength="300" aria-label="Descripción del renglón {{ n }}"></td>
+      <td><textarea name="r-{{ n }}-detalle" maxlength="2000" aria-label="Detalle del renglón {{ n }}">{{ r.detalle }}</textarea></td>
+      <td><input type="text" name="r-{{ n }}-monto" value="{{ r.monto }}" inputmode="decimal" placeholder="62,500" aria-label="Monto del renglón {{ n }}"></td></tr>
+    {% endfor %}
+  </table></div>
+  <div class="pie-guardar"><button>Guardar los cambios</button><a class="boton-linea" href="/facturas/{{ f.id }}">Cancelar</a></div>
+</form>
+{% endif %}
+
+<div class="dos">
+  <div class="hoja-caja" data-hoja>{{ hoja_de_factura(hoja) }}</div>
+  <div>
+    {% if f.estado == 'borrador' %}
+    <div class="acciones">
+      <a class="boton-linea" href="/facturas/{{ f.id }}?corregir=1">Corregir</a>
+      <a class="boton" href="/facturas/{{ f.id }}?confirmar=emitir">Emitir</a>
+      <a class="boton-linea" href="/facturas/{{ f.id }}?confirmar=descartar">Descartar</a>
+    </div>
+    {% elif f.estado == 'emitida' %}
+    <div class="acciones"><a class="boton-linea" href="/facturas/{{ f.id }}?confirmar=anular">Anular</a></div>
+    {% endif %}
+
+    <div class="tarjeta">
+      <b>Datos</b>
+      <dl class="datos">
+        <dt>Cliente</dt><dd>{{ f.para_nombre }}</dd>
+        {% if f.estado == 'anulada' %}<dt>Anulada</dt><dd>{{ f.motivo_anulacion }}</dd>{% endif %}
+        {% if cotizacion %}<dt>Cotización</dt><dd>{{ cotizacion.codigo }}{% if f.cotizacion_opcion %} · opción {{ f.cotizacion_opcion }}{% endif %}</dd>{% endif %}
+        <dt>Proyecto</dt><dd>{% if proyecto_nombre %}<a href="/proyectos?p={{ f.proyecto_id }}">{{ proyecto_nombre }}</a>{% else %}Sin proyecto{% endif %}</dd>
+      </dl>
+      {% if f.estado != 'anulada' %}
+      <form method="post" action="/facturas/{{ f.id }}/proyecto" class="barra" data-proyecto>
+        <select name="proyecto" aria-label="Proyecto de la factura"><option value="">Sin proyecto</option>
+          {% for pid, nombre in proyectos %}<option value="{{ pid }}"{% if pid == f.proyecto_id %} selected{% endif %}>{{ nombre }}</option>{% endfor %}</select>
+        <button class="linea">Guardar el proyecto</button>
+      </form>
+      {% endif %}
+    </div>
+
+    <div class="tarjeta" data-ligas>
+      <b>Sesiones y trabajos</b>
+      {% for l in ligas %}
+      <div class="sesion"><span class="que">{{ etiquetas_de_liga.get(l.tipo, l.tipo) }}{% if l.codigo %}<span class="cod">{{ l.codigo }}</span>{% else %}<span class="cod">ref. {{ l.ref }}</span>{% endif %}</span>
+        {% if f.estado == 'borrador' %}<form method="post" action="/facturas/{{ f.id }}/desligar" style="margin:0"><input type="hidden" name="tipo" value="{{ l.tipo }}"><input type="hidden" name="ref" value="{{ l.ref }}"><button class="linea">Quitar</button></form>{% endif %}</div>
+      {% endfor %}
+      {% if f.estado == 'borrador' %}
+      <h3 class="suave">Ligar otra</h3>
+      {% if not registro_ok %}<p class="aviso">No se pudo consultar el registro: no se puede ofrecer más sesiones ahora.</p>{% endif %}
+      <form method="get" action="/facturas/{{ f.id }}" role="search" class="barra">
+        <input type="text" name="sq" value="{{ sq }}" placeholder="Buscar por código o por quien reservó…" aria-label="Buscar una sesión del registro"><button class="linea">Buscar</button></form>
+      {% if busqueda and busqueda.estado == 'no_se_pudo' %}<p class="vacio">No se pudo consultar el registro para buscar.</p>
+      {% elif busqueda and busqueda.estado == 'ok' and not busqueda.sesiones %}<p class="vacio">Ninguna sesión con «{{ busqueda.q }}».</p>{% endif %}
+      {% for c in candidatas %}
+      <div class="sesion"><span class="que">{% if c.fecha %}<b>{{ c.fecha|dia_corto }}</b> {% endif %}{{ c.concepto or c.sala or '' }}{% if c.codigo %}<span class="cod">{{ c.codigo }}</span>{% endif %}{% if c.es_trabajo %}<span class="etiq">Trabajo</span>{% endif %}{% if c.cancelada %}<span class="etiq">Cancelada: no se factura</span>{% endif %}{% if c.nombre %}<span class="cod">{{ c.nombre }}</span>{% endif %}</span>
+        {% if not c.cancelada %}<form method="post" action="/facturas/{{ f.id }}/ligar" style="margin:0"><input type="hidden" name="ref" value="{{ c.ref }}"><button class="linea">Ligar</button></form>{% endif %}</div>
+      {% endfor %}
+      {% if hay_mas %}<p class="suave">Hay más de 20: escribe más para acotar la búsqueda.</p>{% endif %}
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

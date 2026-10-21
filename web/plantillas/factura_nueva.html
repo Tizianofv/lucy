@@ -1,0 +1,109 @@
+{% extends "base.html" %}{% set activo='facturas' %}
+{% from "_facturas_estilo.html" import estilo_de_facturas %}
+{% block titulo %}Nueva factura{% endblock %}
+{% block cuerpo %}
+{{ estilo_de_facturas() }}
+{#- NUEVA FACTURA (pieza 4 del diseño «Facturas», 21-oct-2026), en tres pasos que dibuja el SERVIDOR (sin JavaScript):
+    `cliente` (a quién), `escoger` (qué sesiones o trabajos) y `escribir` (renglones y datos). Cada paso es una
+    dirección con enteros y referencias del registro; lo escrito en el último viaja solo en el POST. El tipo de cada
+    liga (sesión o trabajo) NO se escribe aquí: lo decide la App. Un guardado rechazado vuelve a este mismo paso
+    con las casillas como se dejaron. -#}
+<div class="enc"><h1>Nueva factura</h1><a class="boton-linea" href="/facturas">← Facturas</a></div>
+{% for a in avisos %}<p class="aviso">{{ a }}</p>{% endfor %}
+{% if proyecto or cotizacion %}
+<p class="suave">{% if proyecto %}Proyecto: <b>{{ proyecto.nombre }}</b>.{% endif %}{% if cotizacion %} Sale de la cotización <b>{{ cotizacion.codigo }}</b>{% if opcion %} (opción {{ opcion }}){% endif %}.{% endif %}</p>
+{% endif %}
+{% if paso != 'escribir' %}{% for e in errores %}<p class="aviso" role="alert">{{ e.texto }}</p>{% endfor %}{% endif %}
+
+{% if paso == 'cliente' %}
+<h2>1. ¿De quién es la factura?</h2>
+<form method="get" action="/facturas/nueva" role="search" class="barra">
+  {% if proyecto %}<input type="hidden" name="proyecto" value="{{ proyecto.id }}">{% endif %}
+  {% if cotizacion %}<input type="hidden" name="cotizacion" value="{{ cotizacion.id }}">{% endif %}
+  {% if opcion %}<input type="hidden" name="opcion" value="{{ opcion }}">{% endif %}
+  <input type="text" name="pq" value="{{ pq }}" placeholder="Buscar al cliente en Noco…" aria-label="Buscar al cliente en Noco" autocomplete="off">
+  <button class="linea">Buscar</button>
+</form>
+{% if busqueda_cliente %}
+  {% if busqueda_cliente.error %}<p class="vacio">{{ busqueda_cliente.error }}</p>
+  {% elif busqueda_cliente.personas %}
+  <div class="tarjeta">{% for x in busqueda_cliente.personas %}
+    <div class="sesion"><span class="que"><b>{{ x.nombre }}</b></span><a class="boton-linea" href="/facturas/nueva?cliente={{ x.id }}{{ enlace }}">Escoger</a></div>{% endfor %}</div>
+  {% else %}<p class="vacio">Nadie con «{{ busqueda_cliente.q }}» en Noco.</p>{% endif %}
+{% endif %}
+
+{% elif paso == 'escoger' %}
+<h2>2. ¿De cuáles sesiones o trabajos?</h2>
+<p>Cliente: <b>{{ cliente_nombre or 'ficha ' ~ cliente_id }}</b> {% if not cliente_fijo %}· <a href="/facturas/nueva?{{ enlace[1:] }}">Cambiar</a>{% else %}<span class="suave">(el cliente del proyecto)</span>{% endif %}{% if not noco_ok %} <span class="suave">(Noco no contestó: el nombre se escribe en el paso siguiente)</span>{% endif %}</p>
+<p class="suave">La factura sale de lo que ya pasó o está agendado en el Registro: una sesión o un trabajo, o varios. Una cancelada no se puede facturar; una que ya está en otra factura tampoco (el sistema lo dice al guardar).</p>
+{% if not registro_ok %}<p class="aviso">No se pudo consultar el registro: espera un momento y vuelve a intentarlo.</p>{% endif %}
+<form method="get" action="/facturas/nueva" data-escoger>
+  <input type="hidden" name="cliente" value="{{ cliente_id }}">
+  {% if proyecto %}<input type="hidden" name="proyecto" value="{{ proyecto.id }}">{% endif %}
+  {% if cotizacion %}<input type="hidden" name="cotizacion" value="{{ cotizacion.id }}">{% endif %}
+  {% if pide_opcion %}
+  <div class="campos"><label>¿De cuál opción de la cotización?
+    <select name="opcion" aria-label="Opción de la cotización"><option value="">Escoge una…</option>
+    {% for o in opciones %}<option value="{{ o.n }}"{% if opcion == o.n %} selected{% endif %}>Opción {{ o.n }} · {{ o.nombre }} · {{ o.total }}</option>{% endfor %}</select></label></div>
+  {% elif opcion %}<input type="hidden" name="opcion" value="{{ opcion }}">{% endif %}
+  <div class="barra"><input type="text" name="sq" value="{{ sq }}" placeholder="Buscar otra sesión por su código o por quien reservó…" aria-label="Buscar una sesión del registro">
+    <button class="linea" name="paso" value="buscar">Buscar</button></div>
+  {% if busqueda and busqueda.estado == 'no_se_pudo' %}<p class="vacio">No se pudo consultar el registro para buscar.</p>
+  {% elif busqueda and busqueda.estado == 'ok' and not busqueda.sesiones %}<p class="vacio">Ninguna sesión con «{{ busqueda.q }}».</p>{% endif %}
+  {% if candidatas %}
+  <div class="tarjeta">
+  {% for c in candidatas %}
+    <label class="sesion">
+      <input type="checkbox" name="ref" value="{{ c.ref }}"{% if c.elegida %} checked{% endif %}{% if c.cancelada %} disabled{% endif %}>
+      <span class="que">
+        {% if c.fecha %}<b>{{ c.fecha|dia_corto }}</b>{% endif %}
+        {% set partes = [] %}{% if c.sala %}{% set _ = partes.append(c.sala) %}{% endif %}{% if c.horas %}{% set _ = partes.append(c.horas ~ ' h') %}{% endif %}{% if c.concepto %}{% set _ = partes.append(c.concepto) %}{% endif %}
+        {{ partes|join(' · ') }}{% if c.codigo %}<span class="cod">{{ c.codigo }}</span>{% endif %}
+        {% if c.es_trabajo %}<span class="etiq">Trabajo</span>{% endif %}{% if c.cancelada %}<span class="etiq">Cancelada: no se factura</span>{% endif %}
+        {% if c.nombre %}<span class="cod">{{ c.nombre }}</span>{% endif %}
+      </span>
+    </label>
+  {% endfor %}
+  </div>
+  {% if hay_mas %}<p class="suave">Hay más de 20: escribe más para acotar la búsqueda.</p>{% endif %}
+  {% elif registro_ok %}<p class="vacio">No hay sesiones ni trabajos de este cliente a la vista. Búscalos por su código o por quien reservó.</p>{% endif %}
+  <div class="pie-guardar"><button name="paso" value="escribir">Continuar con las sesiones marcadas</button></div>
+</form>
+
+{% else %}
+<h2>3. Escribe la factura</h2>
+<p>Cliente: <b>{{ cliente_nombre or 'ficha ' ~ cliente_id }}</b> · <a href="/facturas/nueva?cliente={{ cliente_id }}{{ enlace }}{% for r in refs %}&amp;ref={{ r|urlencode }}{% endfor %}">Cambiar las sesiones</a></p>
+<div class="tarjeta" data-ligadas><b>Sesiones y trabajos de esta factura</b>
+  {% for c in elegidas %}<div class="sesion"><span class="que">{% if c.fecha %}<b>{{ c.fecha|dia_corto }}</b> {% endif %}{{ c.concepto or c.sala or '' }}{% if c.codigo %}<span class="cod">{{ c.codigo }}</span>{% endif %}{% if c.es_trabajo %}<span class="etiq">Trabajo</span>{% endif %}</span></div>{% endfor %}
+</div>
+<form method="post" action="/facturas/nueva" data-factura-nueva>
+  <input type="hidden" name="cliente" value="{{ cliente_id }}">
+  {% if proyecto %}<input type="hidden" name="proyecto" value="{{ proyecto.id }}">{% endif %}
+  {% if cotizacion %}<input type="hidden" name="cotizacion" value="{{ cotizacion.id }}"><input type="hidden" name="opcion" value="{{ opcion }}">{% endif %}
+  {% for r in refs %}<input type="hidden" name="ref" value="{{ r }}">{% endfor %}
+  {% set v = valores %}
+  <div class="campos">
+    <label{% if 'para_nombre' in campos_marcados %} class="marcada"{% endif %}>A nombre de <input type="text" name="para_nombre" value="{{ v.para_nombre }}" maxlength="200" required{% if 'para_nombre' in campos_marcados %} aria-invalid="true"{% endif %}></label>
+    <label{% if 'fecha' in campos_marcados %} class="marcada"{% endif %}>Fecha <input type="date" name="fecha" value="{{ v.fecha }}"{% if 'fecha' in campos_marcados %} aria-invalid="true"{% endif %}></label>
+    <label{% if 'rnc_cedula' in campos_marcados %} class="marcada"{% endif %}>RNC o cédula (si lleva) <input type="text" name="rnc_cedula" value="{{ v.rnc_cedula }}" maxlength="20"{% if 'rnc_cedula' in campos_marcados %} aria-invalid="true"{% endif %}></label>
+    <label{% if 'ncf' in campos_marcados %} class="marcada"{% endif %}>NCF (si lleva) <input type="text" name="ncf" value="{{ v.ncf }}" maxlength="30"{% if 'ncf' in campos_marcados %} aria-invalid="true"{% endif %}></label>
+    <label{% if 'ncf' in campos_marcados %} class="marcada"{% endif %}>Tipo de NCF (si lleva NCF) <input type="text" name="ncf_tipo" value="{{ v.ncf_tipo }}" maxlength="30"{% if 'ncf' in campos_marcados %} aria-invalid="true"{% endif %}></label>
+    <label class="casilla"><input type="checkbox" name="itbis" value="18"{% if v.itbis %} checked{% endif %}> Suma ITBIS (18 %)</label>
+  </div>
+  <h3 class="suave">Renglones</h3>
+  <p class="suave">Cada renglón lleva su descripción y su monto; el detalle es opcional. Los renglones en blanco se ignoran.</p>
+  <div class="scroll"><table class="reng">
+    <tr><th>Descripción</th><th>Detalle</th><th>Monto</th></tr>
+    {% for r in v.renglones %}{% set n = loop.index %}
+    <tr><td><input type="text" name="r-{{ n }}-descripcion" value="{{ r.descripcion }}" maxlength="300" aria-label="Descripción del renglón {{ n }}"></td>
+      <td><textarea name="r-{{ n }}-detalle" maxlength="2000" aria-label="Detalle del renglón {{ n }}">{{ r.detalle }}</textarea></td>
+      <td><input type="text" name="r-{{ n }}-monto" value="{{ r.monto }}" inputmode="decimal" placeholder="62,500" aria-label="Monto del renglón {{ n }}"></td></tr>
+    {% endfor %}
+  </table></div>
+  <div class="pie-guardar">
+    {% for e in errores %}<p class="aviso" role="alert" data-error-de-guardado>{{ e.texto }}</p>{% endfor %}
+    <button>Guardar como borrador</button><a class="boton-linea" href="/facturas">Cancelar</a>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

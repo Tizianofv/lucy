@@ -103,6 +103,21 @@ QUITADAS_DEL_MODELO: dict = {}
 AGREGADAS_DEL_MODELO: dict = {}
 
 
+# Las facturas que el bloque «Facturas» del proyecto leería (filas con la forma de `db.facturas_para_la_lista`): una
+# EMITIDA del proyecto 1 y un BORRADOR sin proyecto (el que se puede ligar desde la página). Así los censos de controles
+# ven el bloque entero (enlaces, «Quitar del proyecto» y «Ligar a este proyecto»).
+def _una_factura_del_modelo(id, estado, numero, proyecto_id):
+    from decimal import Decimal
+    return dict(id=id, anio=2026, numero=numero, estado=estado, cliente_noco_id=101, para_nombre="Cliente de prueba",
+                fecha="2026-10-14", proyecto_id=proyecto_id, itbis_pct=None, ncf=None, hecha_por="casa",
+                creado_en="2026-10-14 12:00:00", cambiado_en="2026-10-14 12:00:00", emitida_en=None, ligas_vivas=1,
+                codigo=None if numero is None else f"FAC-2026-{numero:03d}", subtotal=Decimal("1000.00"),
+                itbis=Decimal("0.00"), total=Decimal("1000.00"))
+
+
+FACTURAS_DEL_MODELO: list = [_una_factura_del_modelo(71, "emitida", 1, 1), _una_factura_del_modelo(72, "borrador", None, None)]
+
+
 # La carpeta de Drive donde el modelo de prueba dice que están las cotizaciones del proyecto 1 («Abrir en Drive»).
 CARPETA_DE_COTIZACIONES_DEL_MODELO = "CARPETA-C1"
 
@@ -174,6 +189,18 @@ class BaseQueNoSeToca:
             async def _cotizaciones():
                 return COTIZACIONES_DEL_MODELO
             return _cotizaciones
+        if nombre == "facturas_para_la_lista":
+            # FINGIDO, declarado (pieza 4 de «Facturas»): lo que `db.facturas_para_la_lista` leería para el bloque
+            # «Facturas» del proyecto: por omisión ninguna (`FACTURAS_DEL_MODELO`). El SQL real corre en SQLite en
+            # `tests/test_guardar_factura.py`, y la pantalla con la lectura real en `tests/test_pantalla_de_facturas.py`.
+            async def _facturas(*, estado=None, proyecto_id=None, cliente_noco_id=None):
+                return [f for f in FACTURAS_DEL_MODELO
+                        if (estado is None or f["estado"] == estado)
+                        and (proyecto_id is None or f["proyecto_id"] == proyecto_id)
+                        and (cliente_noco_id is None or f["cliente_noco_id"] == cliente_noco_id)]
+            return _facturas
+        if nombre == "FacturasSinTabla":
+            return db.FacturasSinTabla        # la clase REAL: la ruta la nombra en su `except`
         if nombre == "carpetas_de_drive":
             # FINGIDO, declarado: el proyecto 1 tiene sus carpetas de Drive (sale «Abrir en Drive»); los demás,
             # no. El SQL real corre en SQLite en `tests/test_cotizaciones_drive.py`.

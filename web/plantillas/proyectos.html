@@ -1504,6 +1504,8 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
       {% if ver_cotizaciones %}{% include "_cotizaciones_del_proyecto.html" %}{% endif %}
     </section>
     {% endif %}
+    {#- LAS FACTURAS DEL PROYECTO (pieza 4 de «Facturas», 21-oct-2026): solo la casa (una factura lleva RNC o cédula y NCF). -#}
+    {% if fz and not solo_ver %}{% include "_facturas_del_proyecto.html" %}{% endif %}
     {#- CERRAR EL PROYECTO. La confirmación la dibuja el servidor (`?confirmar=cerrar`).
         En solo ver no hay controles: el bloque solo sale si el proyecto está cerrado (para decirlo). -#}
     {% if not solo_ver or m.cerrado %}

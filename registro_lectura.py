@@ -410,6 +410,9 @@ def _candidato(fila) -> dict | None:
         "codigo": _texto(fila.get("codigo")),
         "nombre": _texto(fila.get("nombre")),
         "es_trabajo": fila.get("es_trabajo") is True,
+        # La App la manda marcada si está cancelada o pospuesta (`cancelada`); la búsqueda la trae igual. Solo
+        # el `True` de verdad cuenta: la pantalla de Facturas no deja facturar una cancelada.
+        "cancelada": fila.get("cancelada") is True,
     }
 
 

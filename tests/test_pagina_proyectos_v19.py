@@ -45,8 +45,9 @@ def _regla(html: str, selector: str) -> dict:
     return junto
 
 
-# Las siete pantallas del menú de la maqueta, en su orden (maqueta-v19.html:180).
-MENU_DE_LA_MAQUETA = ["Resumen", "Tareas", "Proyectos", "Sin clasificar", "Movimientos", "Papelera", "Salud"]
+# Las pantallas del menú de la maqueta, en su orden (maqueta-v19.html:180), más «Facturas» (21-oct-2026, pieza 4 del
+# diseño «Facturas», aprobado por Tiziano el 20-oct-2026: «junto a Proyectos y Cotizaciones»).
+MENU_DE_LA_MAQUETA = ["Resumen", "Tareas", "Proyectos", "Facturas", "Sin clasificar", "Movimientos", "Papelera", "Salud"]
 
 
 def _con_de_todo(mundo):

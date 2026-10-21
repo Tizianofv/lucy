@@ -60,6 +60,7 @@ import cotizaciones_drive
 import cotizaciones_ia
 import db.db as db
 import facturas
+import facturas_panel as fp
 import noco_lectura
 import registro_lectura
 import web.auth as auth
@@ -1382,9 +1383,14 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
     busqueda_sesiones = None
     if de_la_casa and vista["tipo"] == "proyecto":
         busqueda_sesiones = await _buscar_sesiones_para_la_pagina(sq)
+    # LAS FACTURAS DEL PROYECTO (pieza 4 de «Facturas»): solo la sesión de la casa y solo en un proyecto. Solo ver
+    # no las lee siquiera (`fz` queda en `None`).
+    fz = None
+    if de_la_casa and vista["tipo"] == "proyecto":
+        fz = await _facturas_del_proyecto(vista["proyecto"]["id"], vista["proyecto"].get("cliente_noco_id"))
     return plantillas.TemplateResponse(
         request, "proyectos.html",
-        {"solo_ver": solo_ver, "cz": cz,
+        {"solo_ver": solo_ver, "cz": cz, "fz": fz,
          "cz_activas": de_la_casa,
          "cz_datos_de_la_hoja": (cotizaciones.datos_de_la_vista_previa()
                                  if cz and cz["ventana"] and "valores" in cz["ventana"] else None),
@@ -1479,7 +1485,7 @@ async def _el_proyecto_que_ocupa_al_cliente(pid: int) -> dict | None:
 
 # Los sitios de la página donde se puede buscar una persona de Noco sin JavaScript (`pdonde`). `cotizacion-cliente` es
 # el buscador de la ventana de «Nueva cotización». Las pruebas que doblan la búsqueda usan ESTE patrón, no una copia.
-DONDE_DE_LA_BUSQUEDA = r"cliente|cliente-nuevo|cliente-convertir|cotizacion-cliente|proyecto|tarea-\d+"
+DONDE_DE_LA_BUSQUEDA = r"cliente|cliente-nuevo|cliente-convertir|cotizacion-cliente|factura-cliente|proyecto|tarea-\d+"
 
 
 async def _buscar_personas_para_la_pagina(pq: str, pdonde: str) -> dict | None:
@@ -2475,6 +2481,517 @@ async def pdf_de_una_cotizacion(request: Request, pid: int, cid: int):
     return Response(pdf, media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="{cot["codigo"]}.pdf"',
         "Cache-Control": "private, no-store"})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+# LA PANTALLA «FACTURAS» (pieza 4 del diseño «Facturas», 21-oct-2026)
+#
+# SOLO LA CASA (`auth.puede_entrar`): todas las rutas de aquí son `PUERTA_SIEMPRE`, así que la cookie de solo ver
+# recibe 401 en cada una (una factura lleva el RNC o la cédula del cliente y el NCF). NINGUNA ruta de aquí escribe
+# SQL ni toca las tablas de las facturas: cada escritura es UNA llamada a la puerta de `db/db.py`
+# (`crear_borrador_de_factura`, `corregir_borrador_de_factura`, `ligar_factura_a_registro`,
+# `desligar_factura_de_registro`, `poner_proyecto_de_factura`, `emitir_factura`, `anular_factura`,
+# `descartar_borrador_de_factura`). Las pantallas no inventan nada: lo que se ve sale de `db.factura_por_id` /
+# `db.facturas_para_la_lista`, y los textos del PDF y de la hoja de `facturas.hoja_de_factura`.
+#
+# UN GUARDADO RECHAZADO NO PIERDE LO ESCRITO: la ruta que escribe contesta con la MISMA pantalla, con las casillas
+# como la persona las dejó y la razón en palabras (`facturas_panel.texto_del_error`), y estado 400. No redirige:
+# lo escrito (precios y datos de un cliente) no viaja en ninguna dirección ni se guarda en ninguna memoria.
+# Cuando algo se guardó, la ruta redirige (303) a la pantalla de la factura SIN ningún aviso en la dirección: la
+# pantalla dice lo que la base tiene (número, estado), no lo que una dirección escrita a mano diga que pasó.
+# ═══════════════════════════════════════════════════════════════════════════════════════════════════
+
+log_f = logging.getLogger("lucy.facturas")
+
+
+def _sin_guardar_en_cache(respuesta):
+    """Una pantalla de facturas lleva RNC o cédula y NCF: el botón «atrás» no la resucita del caché."""
+    respuesta.headers["Cache-Control"] = "private, no-store"
+    return respuesta
+
+
+async def _nombres_de_proyecto() -> dict[int, str]:
+    """`{id: nombre}` de los proyectos vivos. Si no se puede leer queda vacío: la pantalla dice «Proyecto N» en vez de
+    el nombre, nunca inventa uno."""
+    try:
+        return {p["id"]: p["nombre"] for p in await db.proyectos_vivos()}
+    except Exception:
+        log_f.warning("Facturas: no se pudo leer la lista de proyectos.")
+        return {}
+
+
+async def _nombre_del_cliente(noco_id: int) -> tuple[str, bool]:
+    """`(nombre, se_pudo_leer)` de la ficha de Noco. Sin Noco el nombre queda vacío para que la persona lo escriba."""
+    try:
+        ficha = await noco_lectura.persona(noco_id)
+    except (noco_lectura.NocoNoContesta, ValueError):
+        log_f.warning("Facturas: Noco no contestó al pedir la ficha del cliente.")
+        return "", False
+    return (ficha["nombre"], True) if ficha else ("", True)
+
+
+async def _lo_que_dice_el_registro_de(refs: list[str]) -> dict | None:
+    """Lo que la App contesta para ESAS referencias (y nada más), o `None` si no contestó. De aquí sale el tipo de
+    cada liga (`es_trabajo`) y si está cancelada: la persona no escribe ni el uno ni lo otro."""
+    if not refs:
+        return {"estado": "ok", "sesiones": [], "trabajos": [], "canceladas": [], "no_halladas": []}
+    lectura = await registro_lectura.sesiones_de_cliente(None, sesiones=refs)
+    return None if lectura["estado"] == "no_se_pudo" else lectura
+
+
+def _enlace_de_nueva(proyecto=None, cotizacion=None, opcion=None, cliente=None) -> str:
+    """`&proyecto=3&cotizacion=2…`: solo enteros, así que nada escrito por la persona viaja en la dirección."""
+    partes = [f"&{k}={v}" for k, v in (("cliente", cliente), ("proyecto", proyecto), ("cotizacion", cotizacion),
+                                        ("opcion", opcion)) if isinstance(v, int) and not isinstance(v, bool)]
+    return "".join(partes)
+
+
+async def _contexto_de_factura_nueva(*, cliente, proyecto, cotizacion, opcion, refs: list[str], sq: str, pq: str,
+                                     quiere_escribir: bool, escrito: dict | None = None, errores=()) -> dict:
+    """Todo lo que la pantalla de «Nueva factura» necesita, en tres pasos que se ven según lo que ya se escogió:
+    `cliente` (quién), `escoger` (qué sesiones o trabajos) y `escribir` (los renglones y los datos). Solo LEE:
+    la App, Noco y la base. El cliente sale del proyecto si el proyecto lo tiene, o de la ficha que se escoge
+    en Noco; las sesiones, de esa ficha y de la búsqueda de sesiones que Lucy ya tiene."""
+    avisos = []
+    nombres = await _nombres_de_proyecto()
+    pid = proyecto if isinstance(proyecto, int) and proyecto in nombres else None
+    if proyecto is not None and pid is None:
+        avisos.append("Ese proyecto no existe o ya no está: la factura no se liga a ninguno.")
+    # La cotización de la que nace, y con cuál de sus opciones.
+    cot, opciones, opcion_n = None, [], None
+    if cotizacion is not None:
+        todas = await db.cotizaciones_de_proyectos()
+        cot = next((c for c in (todas or {}).get(pid, []) if c["id"] == cotizacion), None) if pid else None
+        if cot is None:
+            avisos.append("Esa cotización no es de este proyecto o ya no está: la factura no nace de ninguna.")
+        else:
+            opciones = [{"n": n, "nombre": op["nombre"], "total": cotizaciones.dinero_en_pesos(cot["totales_por_opcion"][n - 1])}
+                        for n, op in enumerate(cot["contenido"]["opciones"], start=1)]
+            opcion_n = 1 if len(opciones) == 1 else (opcion if isinstance(opcion, int) and 1 <= opcion <= len(opciones) else None)
+    # El cliente: el de la ficha que se escogió, o el del proyecto.
+    cliente_id = cliente if isinstance(cliente, int) and not isinstance(cliente, bool) and cliente > 0 else None
+    cliente_fijo = False
+    if cliente_id is None and pid is not None:
+        try:
+            cliente_id = await db.ficha_de_cliente_de_proyecto(pid)
+        except db.SesionNoEsta:
+            cliente_id = None
+        cliente_fijo = cliente_id is not None          # el cliente es el del proyecto: ahí no se cambia
+    ctx = {"avisos": avisos, "errores": list(errores), "proyecto": ({"id": pid, "nombre": nombres[pid]} if pid else None),
+           "cotizacion": ({"id": cot["id"], "codigo": cot["codigo"]} if cot else None), "opciones": opciones,
+           "opcion": opcion_n, "cliente_id": cliente_id, "cliente_fijo": cliente_fijo, "cliente_nombre": "", "noco_ok": True, "refs": refs,
+           "sq": sq, "pq": pq, "paso": "cliente", "busqueda_cliente": None, "candidatas": [], "hay_mas": False,
+           "registro_ok": True, "elegidas": [], "valores": None, "busqueda": None, "hoy": db.hoy_rd(),
+           "enlace": _enlace_de_nueva(pid, cot["id"] if cot else None, opcion_n, None),
+           "enlace_con_cliente": "", "campos_marcados": {c["casilla"] for c in errores if c.get("casilla")},
+           "pide_opcion": len(opciones) > 1}
+    if cliente_id is None:
+        ctx["busqueda_cliente"] = await _buscar_personas_para_la_pagina(pq, "factura-cliente")
+        return ctx
+    ctx["cliente_nombre"], ctx["noco_ok"] = await _nombre_del_cliente(cliente_id)
+    ctx["enlace_con_cliente"] = _enlace_de_nueva(pid, cot["id"] if cot else None, opcion_n, cliente_id)
+    # Las sesiones y trabajos de esa ficha, más las que ya se escogieron (vengan de la búsqueda o de la ficha).
+    lectura = await registro_lectura.sesiones_de_cliente(cliente_id, sesiones=refs)
+    ctx["registro_ok"] = lectura["estado"] != "no_se_pudo"
+    pedidas = set(refs)
+    ctx["candidatas"] = [dict(r, elegida=r["ref"] in pedidas, cancelada=False, nombre=None)
+                         for r in lectura["sesiones"] + lectura["trabajos"]]
+    busqueda = await _buscar_sesiones_para_la_pagina(sq)
+    if busqueda and busqueda["estado"] == "ok":
+        ya = {c["ref"] for c in ctx["candidatas"]}
+        ctx["candidatas"] += [dict(c, elegida=c["ref"] in pedidas) for c in busqueda["sesiones"] if c["ref"] not in ya]
+        ctx["hay_mas"] = busqueda["hay_mas"]
+    ctx["busqueda"] = busqueda
+    # ¿Se puede pasar a escribir? Solo con sesiones escogidas que la App reconoce y no están canceladas.
+    ligas, problemas = fp.ligas_de_las_refs(refs, lectura) if ctx["registro_ok"] else ([], [])
+    ctx["elegidas"] = [dict(c) for c in ctx["candidatas"] if c["elegida"]]
+    if quiere_escribir or escrito is not None:
+        if not refs:
+            ctx["errores"].append({"texto": "Escoge al menos una sesión o un trabajo para la factura.", "casilla": None})
+        elif not ctx["registro_ok"]:
+            ctx["errores"].append({"texto": "No se pudo consultar el registro: espera un momento y vuelve a intentarlo.", "casilla": None})
+        elif problemas:
+            ctx["errores"] += [{"texto": fp.frase_del_problema_de_liga(
+                dict(p, codigo=next((c.get("codigo") for c in ctx["candidatas"] if c["ref"] == p["ref"]), None))), "casilla": None}
+                for p in problemas]
+        elif ctx["pide_opcion"] and opcion_n is None:
+            ctx["errores"].append({"texto": "Escoge de cuál opción de la cotización sale la factura.", "casilla": None})
+        else:
+            ctx["paso"] = "escribir"
+    else:
+        ctx["paso"] = "escoger"
+    if ctx["paso"] != "escribir":
+        ctx["paso"] = "escoger"
+        return ctx
+    desde_la_opcion = fp.renglones_de_una_opcion(cot, opcion_n) if cot else []
+    ctx["valores"] = fp.valores_del_formulario(
+        escrito=escrito, nombre_del_cliente=ctx["cliente_nombre"], desde_la_opcion=desde_la_opcion, hoy=ctx["hoy"])
+    return ctx
+
+
+@app.get("/facturas", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def lista_de_facturas(request: Request, estado: Navegacion[str] = ""):
+    """La lista de facturas, la más nueva primero: número (o «Borrador»), cliente, fecha, total, estado y el proyecto
+    si lo tiene. `?estado=` filtra por borrador, emitida o anulada (lo que no se conoce es «todas»). SOLO LEE."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    filtro = fp.estado_pedido(estado)
+    sin_tabla = False
+    try:
+        filas = await db.facturas_para_la_lista(estado=filtro)
+    except db.FacturasSinTabla:
+        filas, sin_tabla = [], True
+    nombres = await _nombres_de_proyecto()
+    return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "facturas.html", {
+        "filas": [fp.fila_de_la_lista(f, nombres) for f in filas], "filtro": filtro, "sin_tabla": sin_tabla,
+        "estados": fp.ETIQUETA_DEL_FILTRO}))
+
+
+@app.get("/facturas/nueva", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def factura_nueva(request: Request, cliente: Navegacion[int] = 0, proyecto: Navegacion[int] = 0,
+                        cotizacion: Navegacion[int] = 0, opcion: Navegacion[int] = 0,
+                        ref: Navegacion[list[str]] = [], sq: Navegacion[str] = "", pq: Navegacion[str] = "",
+                        paso: Navegacion[str] = ""):
+    """«Nueva factura», en tres pasos que se dibujan según lo que ya viene en la dirección: sin `cliente` (y sin un
+    proyecto que lo tenga), se busca al cliente en Noco; con `cliente`, se escogen sus sesiones o trabajos (`ref`,
+    repetido) y se pueden buscar más con `sq`; con `paso=escribir` y al menos una `ref` buena, se escriben los
+    renglones y los datos. `proyecto`, `cotizacion` y `opcion` vienen de «Hacer factura» en una cotización. SOLO LEE:
+    guardar es el POST de esta misma dirección."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    refs = [r.strip() for r in ref if isinstance(r, str) and r.strip()]
+    ctx = await _contexto_de_factura_nueva(
+        cliente=cliente or None, proyecto=proyecto or None, cotizacion=cotizacion or None, opcion=opcion or None,
+        refs=refs, sq=sq.strip(), pq=pq.strip(), quiere_escribir=paso == "escribir")
+    return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "factura_nueva.html", ctx))
+
+
+async def _factura_nueva_rechazada(request: Request, campos: dict, errores: list[dict]):
+    """El guardado NO se hizo: la misma pantalla de «escribir», con lo que la persona puso y la razón."""
+    ctx = await _contexto_de_factura_nueva(
+        cliente=campos["cliente"] if isinstance(campos["cliente"], int) else None,
+        proyecto=campos["proyecto"] if isinstance(campos["proyecto"], int) else None,
+        cotizacion=campos["cotizacion"] if isinstance(campos["cotizacion"], int) else None,
+        opcion=campos["opcion"] if isinstance(campos["opcion"], int) else None,
+        refs=campos["refs"], sq="", pq="", quiere_escribir=True, escrito=campos, errores=errores)
+    return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "factura_nueva.html", ctx, status_code=400))
+
+
+@app.post("/facturas/nueva")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def guardar_factura_nueva(request: Request):
+    """Crea el BORRADOR: la factura con sus renglones y su primera sesión o trabajo, por
+    `db.crear_borrador_de_factura`; las demás se ligan una por una con `db.ligar_factura_a_registro`. EL TIPO DE
+    CADA LIGA (sesión o trabajo) lo decide la App (`es_trabajo`), no el formulario: se le pregunta de nuevo por
+    esas referencias, y una cancelada o desconocida no se liga. Rechazado: la misma pantalla con lo escrito y la
+    razón (400). Guardado: a la pantalla de la factura."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    campos = fp.campos_del_formulario(await request.form())
+    errores = []
+    lectura = await _lo_que_dice_el_registro_de(campos["refs"]) if campos["refs"] else None
+    if not campos["refs"]:
+        errores.append({"texto": "La factura nace ligada a una sesión o a un trabajo: escoge al menos uno. NO se guardó nada.", "casilla": None})
+    elif lectura is None:
+        errores.append({"texto": "No se pudo consultar el registro: NO se guardó nada. Vuelve a intentarlo en un momento.", "casilla": None})
+    ligas = []
+    if lectura is not None:
+        ligas, problemas = fp.ligas_de_las_refs(campos["refs"], lectura)
+        errores += [{"texto": fp.frase_del_problema_de_liga(p) + " NO se guardó nada.", "casilla": None} for p in problemas]
+    if errores:
+        return await _factura_nueva_rechazada(request, campos, errores)
+    try:
+        f = await db.crear_borrador_de_factura(
+            chat, cliente_noco_id=campos["cliente"], para_nombre=campos["para_nombre"], renglones=campos["renglones"],
+            liga=ligas[0], fecha=campos["fecha"] or None, proyecto_id=campos["proyecto"],
+            cotizacion_id=campos["cotizacion"], cotizacion_opcion=campos["opcion"], itbis_pct=campos["itbis_pct"],
+            ncf=campos["ncf"], ncf_tipo=campos["ncf_tipo"], rnc_cedula=campos["rnc_cedula"])
+    except db.FacturaSinSesion:
+        return _fuera(request)
+    except Exception as e:
+        texto = fp.texto_del_error(e)
+        if texto["clave"] == "base":
+            log_f.exception("Facturas: falló la base al crear un borrador.")
+        else:
+            log_f.warning("Facturas: borrador rechazado (%s)", texto["clave"])
+        return await _factura_nueva_rechazada(request, campos, [texto])
+    # Las demás sesiones o trabajos, una por una. Si alguna no se deja, el borrador YA existe: se dice cuál no y por qué.
+    sin_ligar = []
+    for liga in ligas[1:]:
+        try:
+            await db.ligar_factura_a_registro(f["id"], chat, liga["tipo"], liga["ref"], liga["codigo"])
+        except db.FacturaSinSesion:
+            return _fuera(request)
+        except Exception as e:
+            sin_ligar.append(fp.frase_de_una_liga_que_no_se_pudo(liga, fp.texto_del_error(e)))
+    if not sin_ligar:
+        return RedirectResponse(f"/facturas/{f['id']}", status_code=303)
+    actual = await db.factura_por_id(f["id"])
+    return await _pagina_de_factura(request, actual, errores=[{"texto": t, "casilla": None} for t in sin_ligar], status=200)
+
+
+# ── La pantalla de UNA factura ────────────────────────────────────────────────────────────────
+
+CONFIRMACIONES_DE_FACTURA = {"borrador": ("emitir", "descartar"), "emitida": ("anular",), "anulada": ()}
+
+
+async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", corregir: int = 0, sq: str = "",
+                             errores=(), escrito: dict | None = None, status: int = 200):
+    """La pantalla de la factura `f` (lo que devuelve `db.factura_por_id`): su hoja (la misma del PDF), sus datos,
+    sus sesiones o trabajos, el proyecto y lo que se puede hacer según su estado. Solo LEE (la App, Noco, la base).
+    `errores` y `escrito` son lo que un guardado rechazado deja para que la persona no pierda lo suyo."""
+    estado = f["estado"]
+    borrador = estado == "borrador"
+    nombres = await _nombres_de_proyecto()
+    cotizacion = None
+    if f["cotizacion_id"] is not None:
+        todas = await db.cotizaciones_de_proyectos()
+        cotizacion = next((c for lista in (todas or {}).values() for c in lista if c["id"] == f["cotizacion_id"]), None)
+    candidatas, hay_mas, registro_ok, busqueda = [], False, True, None
+    if borrador:
+        ligadas = {l["ref"] for l in f["ligas"] if l["viva"]}
+        lectura = await registro_lectura.sesiones_de_cliente(f["cliente_noco_id"], sesiones=sorted(ligadas))
+        registro_ok = lectura["estado"] != "no_se_pudo"
+        candidatas = [dict(r, cancelada=False, nombre=None, ligada=r["ref"] in ligadas)
+                      for r in lectura["sesiones"] + lectura["trabajos"]]
+        busqueda = await _buscar_sesiones_para_la_pagina(sq)
+        if busqueda and busqueda["estado"] == "ok":
+            ya = {c["ref"] for c in candidatas}
+            candidatas += [dict(c, ligada=c["ref"] in ligadas) for c in busqueda["sesiones"] if c["ref"] not in ya]
+            hay_mas = busqueda["hay_mas"]
+        candidatas = [c for c in candidatas if not c["ligada"]]
+    se_corrige = borrador and (bool(corregir) or escrito is not None)
+    return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "factura.html", {
+        "f": f, "hoja": facturas.hoja_de_factura(f), "estado_texto": fp.etiqueta_del_estado(estado),
+        "proyecto_nombre": None if f["proyecto_id"] is None else nombres.get(f["proyecto_id"]) or f"Proyecto {f['proyecto_id']}",
+        "proyectos": sorted(nombres.items(), key=lambda x: x[1].lower()) if estado in ("borrador", "emitida") else [],
+        "cotizacion": cotizacion, "ligas": [l for l in f["ligas"] if l["viva"]],
+        "confirmar": confirmar if confirmar in CONFIRMACIONES_DE_FACTURA.get(estado, ()) else "",
+        "se_corrige": se_corrige,
+        "valores": fp.valores_del_formulario(factura=f, escrito=escrito) if se_corrige else None,
+        "candado": fp.candado(f["cambiado_en"]), "errores": list(errores),
+        "campos_marcados": {c["casilla"] for c in errores if c.get("casilla")},
+        "candidatas": candidatas, "hay_mas": hay_mas, "registro_ok": registro_ok, "busqueda": busqueda, "sq": sq,
+        "etiquetas_de_liga": fp.ETIQUETA_DE_LIGA}, status_code=status))
+
+
+async def _factura_o_404(fid: int):
+    """La factura, o `None` si no existe o falta la tabla."""
+    try:
+        return await db.factura_por_id(fid)
+    except db.FacturasSinTabla:
+        return None
+
+
+def _no_existe_la_factura():
+    return Response("No existe esa factura.", status_code=404, media_type="text/plain; charset=utf-8")
+
+
+@app.get("/facturas/{fid}", response_class=HTMLResponse)
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def pagina_de_una_factura(request: Request, fid: int, confirmar: Navegacion[str] = "",
+                                corregir: Navegacion[int] = 0, sq: Navegacion[str] = ""):
+    """La página de UNA factura. `?confirmar=emitir|descartar|anular` dibuja la confirmación (solo las del estado en
+    que está), `?corregir=1` el formulario de un borrador y `?sq=` busca una sesión o trabajo para ligarle. SOLO LEE."""
+    if not auth.puede_entrar(_sesion(request)):
+        return _fuera(request)
+    f = await _factura_o_404(fid)
+    if f is None:
+        return _no_existe_la_factura()
+    return await _pagina_de_factura(request, f, confirmar=confirmar, corregir=corregir, sq=sq.strip())
+
+
+async def _rechazo_de_una_factura(request: Request, fid: int, e: Exception, *, confirmar: str = "", corregir: int = 0,
+                                  escrito: dict | None = None):
+    """Algo que la puerta no dejó: la página de la factura TAL COMO QUEDÓ, con la razón arriba. Una excepción que no
+    es de las de `db` es un fallo de la base: no se sabe si llegó a confirmar, y se dice así."""
+    texto = fp.texto_del_error(e)
+    if texto["clave"] == "base":
+        log_f.exception("Facturas: falló la base en la factura #%s.", fid)
+    else:
+        log_f.warning("Facturas: la factura #%s rechazó un cambio (%s)", fid, texto["clave"])
+    f = await _factura_o_404(fid)
+    if f is None:
+        return _no_existe_la_factura()
+    return await _pagina_de_factura(request, f, confirmar=confirmar, corregir=corregir, errores=[texto],
+                                    escrito=escrito, status=400)
+
+
+@app.post("/facturas/{fid}/corregir")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def corregir_una_factura(request: Request, fid: int):
+    """Corrige un BORRADOR por `db.corregir_borrador_de_factura` (con el candado `cambiado_en` que la página leyó).
+    Rechazado: la misma página con el formulario abierto y lo escrito."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    campos = fp.campos_del_formulario(await request.form())
+    cambios = {k: campos[k] for k in ("para_nombre", "itbis_pct", "ncf", "ncf_tipo", "rnc_cedula", "renglones")}
+    cambios["fecha"] = campos["fecha"]
+    try:
+        await db.corregir_borrador_de_factura(fid, chat, campos["cambiado_en"], cambios)
+    except db.FacturaSinSesion:
+        return _fuera(request)
+    except Exception as e:
+        return await _rechazo_de_una_factura(request, fid, e, corregir=1, escrito=campos)
+    return RedirectResponse(f"/facturas/{fid}", status_code=303)
+
+
+@app.post("/facturas/{fid}/emitir")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def emitir_una_factura(request: Request, fid: int):
+    """Emite un BORRADOR por `db.emitir_factura`: ahí se le da el número. Con el candado de la página."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    campos = fp.campos_del_formulario(await request.form())
+    try:
+        await db.emitir_factura(fid, chat, campos["cambiado_en"])
+    except db.FacturaSinSesion:
+        return _fuera(request)
+    except Exception as e:
+        return await _rechazo_de_una_factura(request, fid, e, confirmar="emitir")
+    return RedirectResponse(f"/facturas/{fid}", status_code=303)
+
+
+@app.post("/facturas/{fid}/anular")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def anular_una_factura(request: Request, fid: int):
+    """Anula una EMITIDA por `db.anular_factura`, que exige el motivo."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    formulario = await request.form()
+    try:
+        await db.anular_factura(fid, chat, fp.texto_de(formulario.get("motivo")))
+    except db.FacturaSinSesion:
+        return _fuera(request)
+    except Exception as e:
+        return await _rechazo_de_una_factura(request, fid, e, confirmar="anular")
+    return RedirectResponse(f"/facturas/{fid}", status_code=303)
+
+
+@app.post("/facturas/{fid}/descartar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def descartar_una_factura(request: Request, fid: int):
+    """Borra de verdad un BORRADOR por `db.descartar_borrador_de_factura` (no tiene número: no deja hueco)."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    try:
+        await db.descartar_borrador_de_factura(fid, chat)
+    except db.FacturaSinSesion:
+        return _fuera(request)
+    except Exception as e:
+        return await _rechazo_de_una_factura(request, fid, e, confirmar="descartar")
+    return RedirectResponse("/facturas", status_code=303)
+
+
+@app.post("/facturas/{fid}/ligar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def ligar_a_una_factura(request: Request, fid: int):
+    """Liga una sesión o un trabajo a un BORRADOR. EL TIPO LO DECIDE LA APP: se le pregunta por esa referencia y
+    `es_trabajo` dice si es trabajo; una cancelada o que no está no se liga. Lo demás lo decide
+    `db.ligar_factura_a_registro` (por ejemplo, que ya esté en otra factura viva)."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    campos = fp.campos_del_formulario(await request.form())
+    lectura = await _lo_que_dice_el_registro_de(campos["refs"][:1]) if campos["refs"] else None
+    if lectura is None or not campos["refs"]:
+        texto = {"clave": "registro", "casilla": None,
+                 "texto": "No se pudo consultar el registro: NO se ligó nada." if campos["refs"]
+                 else "Escoge la sesión o el trabajo que quieres ligar."}
+        f = await _factura_o_404(fid)
+        return _no_existe_la_factura() if f is None else await _pagina_de_factura(request, f, errores=[texto], status=400)
+    ligas, problemas = fp.ligas_de_las_refs(campos["refs"][:1], lectura)
+    if problemas:
+        f = await _factura_o_404(fid)
+        if f is None:
+            return _no_existe_la_factura()
+        return await _pagina_de_factura(request, f, status=400, errores=[
+            {"texto": fp.frase_del_problema_de_liga(p) + " NO se ligó nada.", "casilla": None} for p in problemas])
+    liga = ligas[0]
+    try:
+        await db.ligar_factura_a_registro(fid, chat, liga["tipo"], liga["ref"], liga["codigo"])
+    except db.FacturaSinSesion:
+        return _fuera(request)
+    except Exception as e:
+        return await _rechazo_de_una_factura(request, fid, e)
+    return RedirectResponse(f"/facturas/{fid}", status_code=303)
+
+
+@app.post("/facturas/{fid}/desligar")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def desligar_de_una_factura(request: Request, fid: int):
+    """Suelta una sesión o un trabajo de un BORRADOR por `db.desligar_factura_de_registro` (la última no se suelta)."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    formulario = await request.form()
+    try:
+        await db.desligar_factura_de_registro(fid, chat, fp.texto_de(formulario.get("tipo")), fp.texto_de(formulario.get("ref")))
+    except db.FacturaSinSesion:
+        return _fuera(request)
+    except Exception as e:
+        return await _rechazo_de_una_factura(request, fid, e)
+    return RedirectResponse(f"/facturas/{fid}", status_code=303)
+
+
+@app.post("/facturas/{fid}/proyecto")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def poner_proyecto_a_una_factura(request: Request, fid: int):
+    """Liga la factura a un proyecto, o la suelta (`proyecto` vacío), por `db.poner_proyecto_de_factura`: vale en
+    borrador y en emitida, «antes, durante o después». Lo piden la página de la factura y la del proyecto; esta
+    última manda `volver=proyecto` y `p=<proyecto>` para volver a ella (el destino se arma solo con ese entero:
+    ninguna dirección del formulario se sigue)."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    formulario = await request.form()
+    campos = fp.campos_del_formulario(formulario)
+    antes = await _factura_o_404(fid)
+    try:
+        await db.poner_proyecto_de_factura(fid, chat, campos["proyecto"])
+    except db.FacturaSinSesion:
+        return _fuera(request)
+    except Exception as e:
+        return await _rechazo_de_una_factura(request, fid, e)
+    if fp.texto_de(formulario.get("volver")) == "proyecto":
+        volver = _entero_positivo(formulario.get("p")) or campos["proyecto"] or (antes or {}).get("proyecto_id")
+        if isinstance(volver, int) and not isinstance(volver, bool):
+            return RedirectResponse(f"/proyectos?p={volver}#facturas", status_code=303)
+    return RedirectResponse(f"/facturas/{fid}", status_code=303)
+
+
+def _entero_positivo(valor) -> int | None:
+    texto = valor.strip() if isinstance(valor, str) else ""
+    return int(texto) if texto.isascii() and texto.isdigit() and int(texto) > 0 else None
+
+
+async def _facturas_del_proyecto(pid: int, cliente_noco_id: int | None) -> dict | None:
+    """Lo que la página de un proyecto dice de sus facturas (SOLO la casa): `lista` (las del proyecto, ya escritas
+    para pintar) y `ligables` (las borrador o emitidas que no tienen proyecto —del mismo cliente si el proyecto lo
+    tiene—, para ligarlas desde aquí). `None` si falta la tabla: el bloque no sale y la página carga igual. Solo LEE, por la puerta."""
+    try:
+        suyas = await db.facturas_para_la_lista(proyecto_id=pid)
+        # Para ligar desde aquí: las que no tienen proyecto, del cliente de este proyecto; si el proyecto no tiene
+        # cliente, todas las que no tienen proyecto (`None` en el filtro es «todos»).
+        del_cliente = await db.facturas_para_la_lista(cliente_noco_id=cliente_noco_id)
+    except db.FacturasSinTabla:
+        return None
+    except Exception:
+        # Un bloque aparte no tumba la página del proyecto: si las facturas no se pudieron leer, el bloque no sale
+        # (y se anota). Lo que se calla es el bloque, nunca un dato: no se pinta una lista vacía que parezca «no hay».
+        log_f.warning("Facturas: no se pudieron leer las del proyecto #%s; el bloque no sale.", pid)
+        return None
+    nombres = {pid: ""}
+    return {"lista": [fp.fila_de_la_lista(f, nombres) for f in suyas],
+            "ligables": [fp.fila_de_la_lista(f, nombres) for f in del_cliente
+                         if f["proyecto_id"] is None and f["estado"] in ("borrador", "emitida")]}
 
 
 @app.get("/facturas/{fid}/pdf")
