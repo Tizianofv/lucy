@@ -243,7 +243,8 @@ def test_todos_los_caminos_que_ligan_una_sesion_exigen_que_sea_del_cliente(panta
 
 # ── 2. Hermanos: todo sitio que escribe una liga comprueba, con el cliente de la factura ─────────────
 
-ESCRITORES_DE_LIGA = ("crear_borrador_de_factura", "ligar_factura_a_registro")
+# + `crear_borrador_de_factura_de_natalia` (pieza 9, 21-oct-2026): el camino nuevo de Natalia liga sesiones igual que la pantalla.
+ESCRITORES_DE_LIGA = ("crear_borrador_de_factura", "ligar_factura_a_registro", "crear_borrador_de_factura_de_natalia")
 
 
 def _archivos_del_codigo():
@@ -256,7 +257,7 @@ def _archivos_del_codigo():
 
 def _funciones_que_escriben_una_liga():
     """`{(archivo, función): [llamadas a escritores]}` sacado del código del repo (todo `.py` que no es prueba): cada función
-    que llama a `db.crear_borrador_de_factura` o `db.ligar_factura_a_registro`. `db/db.py` se salta: ahí viven los escritores."""
+    que llama a `db.crear_borrador_de_factura`, `db.ligar_factura_a_registro` o `db.crear_borrador_de_factura_de_natalia`. `db/db.py` se salta: ahí viven los escritores."""
     halladas = {}
     for ruta in _archivos_del_codigo():
         if ruta == RAIZ / "db" / "db.py":
@@ -275,13 +276,15 @@ def _funciones_que_escriben_una_liga():
 def test_los_sitios_que_escriben_una_liga_se_sacan_del_codigo_y_son_los_que_hay():
     """Para que lo de abajo no sea verde por no mirar nada."""
     assert sorted(_funciones_que_escriben_una_liga()) == [
-        ("web/app.py", "guardar_factura_nueva"), ("web/app.py", "ligar_a_una_factura")]
+        ("web/api_code.py", "crear_factura_de_natalia"), ("web/app.py", "guardar_factura_nueva"),
+        ("web/app.py", "ligar_a_una_factura")]
 
 
 def test_cada_sitio_que_escribe_una_liga_comprueba_antes_con_el_cliente_de_la_factura():
     for (archivo, nombre), (f, llamadas) in _funciones_que_escriben_una_liga().items():
         comprobaciones = [n for n in ast.walk(f) if isinstance(n, ast.Call)
-                          and getattr(n.func, "id", None) == "_lo_que_dice_el_registro_del_cliente"]
+                          and (getattr(n.func, "id", None) == "_lo_que_dice_el_registro_del_cliente"
+                               or getattr(n.func, "attr", None) == "lo_que_dice_el_registro_del_cliente")]
         decisiones = [n for n in ast.walk(f) if isinstance(n, ast.Call)
                       and getattr(n.func, "attr", None) == "ligas_de_las_refs"]
         assert comprobaciones and decisiones, (archivo, nombre)
@@ -290,7 +293,11 @@ def test_cada_sitio_que_escribe_una_liga_comprueba_antes_con_el_cliente_de_la_fa
             f"{nombre}: la comprobación tiene que ir ANTES de escribir"
         for c in comprobaciones:
             quien = ast.unparse(c.args[0])
-            if nombre == "guardar_factura_nueva":
+            if nombre == "crear_factura_de_natalia":
+                # el cliente que se comprueba es el MISMO con el que se crea la factura (el primer argumento)
+                crea = next(n for n in llamadas if n.func.attr == "crear_borrador_de_factura_de_natalia")
+                assert quien == ast.unparse(crea.args[0]), (quien, ast.unparse(crea.args[0]))
+            elif nombre == "guardar_factura_nueva":
                 # el cliente que se comprueba es el MISMO con el que se crea la factura
                 crea = next(n for n in llamadas if n.func.attr == "crear_borrador_de_factura")
                 con_que_se_crea = next(k.value for k in crea.keywords if k.arg == "cliente_noco_id")
@@ -300,12 +307,19 @@ def test_cada_sitio_que_escribe_una_liga_comprueba_antes_con_el_cliente_de_la_fa
 
 
 def test_la_comprobacion_no_pide_sesiones_sueltas_a_la_app():
-    """`_lo_que_dice_el_registro_del_cliente` llama a `sesiones_de_cliente` con SOLO el cliente (sin `sesiones=`)."""
-    import web.app as panel
-    fuente = ast.parse(Path(panel.__file__).read_text(encoding="utf-8"))
-    f = next(n for n in ast.walk(fuente) if isinstance(n, ast.AsyncFunctionDef) and n.name == "_lo_que_dice_el_registro_del_cliente")
-    llamadas = [n for n in ast.walk(f) if isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "sesiones_de_cliente"]
+    """`registro_lectura.lo_que_dice_el_registro_del_cliente` (la ÚNICA lectura, la de la pantalla y la de Natalia) llama a
+    `sesiones_de_cliente` con SOLO el cliente (sin `sesiones=`), y `web/app.py::_lo_que_dice_el_registro_del_cliente` no hace
+    otra cosa que llamarla."""
+    fuente = ast.parse(Path(registro_lectura.__file__).read_text(encoding="utf-8"))
+    f = next(n for n in ast.walk(fuente) if isinstance(n, ast.AsyncFunctionDef) and n.name == "lo_que_dice_el_registro_del_cliente")
+    llamadas = [n for n in ast.walk(f) if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "sesiones_de_cliente"]
     assert len(llamadas) == 1 and len(llamadas[0].args) == 1 and not llamadas[0].keywords
+    import web.app as panel
+    app_py = ast.parse(Path(panel.__file__).read_text(encoding="utf-8"))
+    g = next(n for n in ast.walk(app_py) if isinstance(n, ast.AsyncFunctionDef) and n.name == "_lo_que_dice_el_registro_del_cliente")
+    delegadas = [n for n in ast.walk(g) if isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "lo_que_dice_el_registro_del_cliente"]
+    assert len(delegadas) == 1 and not any(isinstance(n, ast.Call) and getattr(n.func, "attr", None) == "sesiones_de_cliente"
+                                           for n in ast.walk(g))
 
 
 # ── 3. Los renglones salen de las sesiones ───────────────────────────────────────────────────────

@@ -4275,10 +4275,15 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `tests/test_facturas_drive.py` y `tests/test_facturas_drive_hermanas.py` (nuevos, exentos por rol), y `facturas_drive.py` y
     # `tools/ensayo_facturas_drive.py` (nuevos, vigilados; los dos sin ninguna lectura de la lista cruda). Se tocaron además
     # `cotizaciones_drive.py`, `db/db.py`, `web/app.py` y `tools/humo.py`, ya vigilados. Medida corriendo la prueba: 218, 156, 62.
-    assert medido == {"en disco": 218, "exentos": 156, "vigilados": 62}, (
+    # 21-oct-2026, rama `trabajo/facturas-9` (la puerta de Natalia para las facturas, pieza 9), sobre `4cc3dec`: +2 en disco, +1 EXENTO
+    # (`tests/test_facturas_natalia.py`, nuevo, exento por rol) y +1 VIGILADO (`tools/ensayo_facturas_envios.py`, nuevo; sin ninguna
+    # lectura de la lista cruda). Se tocaron además `config.py`, `db/db.py`, `web/api_code.py`, `web/app.py`, `registro_lectura.py`,
+    # `facturas_panel.py`, `cerebro/despertador.py`, `cerebro/interpretar.py`, `acciones/botones.py` y `tools/humo.py`, ya vigilados.
+    # Medida corriendo la prueba: 220, 157, 63.
+    assert medido == {"en disco": 220, "exentos": 157, "vigilados": 63}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "21-oct-2026 (facturas-8) era {'en disco': 218, "
-        "'exentos': 156, 'vigilados': 62}. La aserción de fondo —cero "
+        "21-oct-2026 (facturas-9) era {'en disco': 220, "
+        "'exentos': 157, 'vigilados': 63}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

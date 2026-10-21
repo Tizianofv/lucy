@@ -497,6 +497,118 @@ async def revisar_consultas_de_natalia(bot, hoy=None, ahora=None) -> int:
     return mandadas + recordadas
 
 
+# ── Las facturas de Natalia: la tarjeta para quien las revisa (21-oct-2026, pieza 9 del diseño «Facturas») ──
+#
+# Natalia hace la factura y pide que se apruebe mandarla (`POST /api/code/clientes/{noco}/facturas/{id}/envios`): eso
+# deja un envío `pendiente` en `factura_envios`. Aquí sale la TARJETA: el PDF de la factura y los botones Aprobar /
+# Rechazar, SOLO para `config.chat_de_quien_revisa_las_facturas()` (Rosi; el nombre sale de `REVISA_FACTURAS`, nunca
+# un chat tecleado) y a nadie más. Quién contesta y qué pasa al aprobar es de `db.contestar_envio_de_factura`.
+# Una vuelta, como la de las consultas: el envío sigue `pendiente` y SIN tarjeta hasta que Telegram devolvió el mensaje,
+# y solo entonces se anota (`tarjeta_msg_id`): una tarjeta que no salió se reintenta en la vuelta siguiente.
+# Recordatorio (diseño §6, paso 4): UNA vez, a los `RECORDAR_CONSULTA_MIN` minutos de la tarjeta (la misma cifra y el mismo camino
+# `_mandar_al_responsable` de las consultas), solo si el envío SIGUE pendiente. Se RECLAMA (`recordada_en`) antes de mandarlo.
+
+def _texto_de_tarjeta_de_factura(f: dict, canal: str) -> str:
+    """El texto (plano, sin `parse_mode`: el nombre del cliente no se interpreta como formato) que acompaña al PDF.
+    Dice lo que va a pasar al aprobar, sin prometer más: un borrador SE EMITE al aprobarlo; una emitida ya tiene número."""
+    import cotizaciones
+    donde = "WhatsApp" if canal == "whatsapp" else "correo"
+    renglones = len(f["renglones"])
+    con_itbis = f" (con ITBIS {f['itbis_pct'].normalize():f}%)" if f.get("itbis_pct") else ""
+    cuerpo = (f"🧾 Natalia hizo una factura para {f['para_nombre']}: {renglones} renglón{'es' if renglones != 1 else ''}, "
+              f"total {cotizaciones.dinero_en_pesos(f['total'])}{con_itbis}. El cliente la pidió por {donde}.")
+    if f["estado"] == "borrador":
+        return (cuerpo + " Es un borrador: si la apruebas, se emite con su número y Natalia puede mandarla. "
+                "Si la rechazas, no sale nada.")
+    return cuerpo + f" Ya está emitida como {f['codigo']}. Si la apruebas, Natalia puede mandarla. Si la rechazas, no sale nada."
+
+
+async def _mandar_tarjetas_de_facturas(bot, revisora: int, ahora) -> int:
+    """Manda la tarjeta de cada envío pendiente sin tarjeta y anota el mensaje SOLO si Telegram devolvió uno con
+    `message_id`. Si falla (la factura, el PDF o el envío), el envío sigue sin tarjeta y se reintenta."""
+    import facturas
+    from acciones.botones import teclado_de_envio_de_factura
+    mandadas = 0
+    for e in await db.envios_de_factura_sin_tarjeta():
+        try:
+            f = await db.factura_por_id(e["factura_id"])
+            if f is None or f["estado"] not in ("borrador", "emitida"):
+                continue                               # anulada: `anular_factura` ya pasó el envío a «no se pudo»
+            pdf = facturas.pdf_de_factura(facturas.hoja_de_factura(f))
+            texto = _texto_de_tarjeta_de_factura(f, e["canal"])
+            with copia_dueno.sin_copiar():
+                mensaje = await bot.send_document(
+                    chat_id=revisora, document=pdf, filename=facturas.nombre_del_archivo(f), caption=texto[:1000],
+                    reply_markup=teclado_de_envio_de_factura(e["id"], emite=f["estado"] == "borrador"))
+        except Exception:
+            log.warning("Envío de factura #%s: la tarjeta no salió; se reintenta.", e["id"], exc_info=True)
+            continue
+        numero = _id_del_mensaje(mensaje)
+        if numero is None:
+            continue
+        if not await db.marcar_tarjeta_de_envio(e["id"], numero, f["cambiado_en"], ahora):
+            log.warning("Envío de factura #%s: la tarjeta salió pero el envío ya no estaba pendiente sin tarjeta.", e["id"])
+            continue
+        mandadas += 1
+        try:
+            await db.registrar_aviso(revisora, texto)
+        except Exception:
+            log.warning("Envío de factura #%s: no pude dejar constancia de la tarjeta; sigo igual.", e["id"], exc_info=True)
+    return mandadas
+
+
+async def _recordar_envios_de_facturas(bot, revisora: int, ahora) -> int:
+    """A los `RECORDAR_CONSULTA_MIN` minutos de la tarjeta, UN recordatorio por envío que sigue pendiente, respondiendo a
+    la tarjeta. Primero RECLAMA la marca (`db.reclamar_recordatorio_de_envio`: el primero que la pone gana, aunque corran
+    dos contenedores) y después manda; si el mensaje no salió, suelta la marca y se reintenta en la vuelta siguiente."""
+    recordados = 0
+    for e in await db.envios_de_factura_para_recordar(ahora - timedelta(minutes=RECORDAR_CONSULTA_MIN)):
+        try:
+            f = await db.factura_por_id(e["factura_id"])
+        except Exception:
+            log.warning("Envío de factura #%s: no pude leer la factura para recordarla.", e["id"], exc_info=True)
+            continue
+        if f is None or f["estado"] not in ("borrador", "emitida"):
+            continue
+        if not await db.reclamar_recordatorio_de_envio(e["id"], ahora):
+            continue                                   # otro (u otra vuelta) lo reclamó, o ya no está pendiente
+        donde = "WhatsApp" if e["canal"] == "whatsapp" else "correo"
+        texto = f"⏰ Sigue pendiente: la factura de {f['para_nombre']} que Natalia pidió mandar por {donde}. ¿La apruebas?"
+        try:
+            mensaje = await _mandar_al_responsable(bot, {"responsable_chat_id": revisora, "id": e["id"]}, texto,
+                                                   responder_a=e["tarjeta_msg_id"])
+        except Exception:
+            log.warning("Envío de factura #%s: el recordatorio no salió; se reintenta.", e["id"], exc_info=True)
+            mensaje = None
+        if _id_del_mensaje(mensaje) is None:
+            await db.soltar_recordatorio_de_envio(e["id"])
+            continue
+        recordados += 1
+        try:
+            await db.registrar_aviso(revisora, texto)
+        except Exception:
+            log.warning("Envío de factura #%s: no pude dejar constancia del recordatorio; sigo igual.", e["id"], exc_info=True)
+    return recordados
+
+
+async def revisar_envios_de_facturas(bot, ahora=None) -> int:
+    """Una vuelta del despertador sobre los envíos de facturas que esperan tarjeta. Devuelve cuántas tarjetas
+    salieron. Sin la migración (`EnviosSinMigrar`) o sin las tablas (`FacturasSinTabla`) no hace nada; sin a quién
+    mandársela (`config.chat_de_quien_revisa_las_facturas()` es `None`) lo dice en el registro y no manda nada."""
+    ahora = ahora or datetime.now(timezone.utc)
+    try:
+        pendientes = await db.envios_de_factura_sin_tarjeta()
+        revisora = config.chat_de_quien_revisa_las_facturas()
+        if revisora is None:
+            log.warning("Envíos de facturas: no hay a quién mandarle tarjetas ni recordatorios (REVISA_FACTURAS).")
+            return 0
+        mandadas = await _mandar_tarjetas_de_facturas(bot, revisora, ahora) if pendientes else 0
+        return mandadas + await _recordar_envios_de_facturas(bot, revisora, ahora)
+    except (db.EnviosSinMigrar, db.FacturasSinTabla):
+        log.debug("Envíos de facturas: todavía falta la migración; nada que hacer.")
+        return 0
+
+
 def _campanadas(anticipos, enviados, faltan: int) -> set[int]:
     """Cuáles de los minutos-antes de una fila deben sonar AHORA.
 

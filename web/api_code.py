@@ -15,7 +15,10 @@ comentarios de una tarea de Code: `GET`/`POST /tareas/{id}/comentarios`, y
 (4-oct-2026) `POST /alertas` (permiso `alertas:crear`) y, desde el 18-oct-2026, la lectura
 `GET /clientes/{noco_id}/proyectos` (permiso `proyectos:leer_de_cliente`) y, de la
 pieza L3, las consultas al responsable: `POST`/`GET /clientes/{noco_id}/consultas` (permisos
-`consultas:abrir` y `consultas:leer`): las rutas de Natalia. Una ruta a medias —que exista pero siempre falle, o que
+`consultas:abrir` y `consultas:leer`) y, de la pieza 9 de las facturas (21-oct-2026), las facturas de Natalia:
+`GET`/`POST /clientes/{noco_id}/facturas`, `GET /clientes/{noco_id}/facturas/{id}`, `POST …/envios`, `GET …/envios/{id}/pdf`
+y `POST …/envios/{id}/resultado` (permisos `facturas:listar`, `facturas:leer`, `facturas:crear`, `facturas:pedir_envio`,
+`facturas:pdf` y `facturas:anotar_envio`): las rutas de Natalia. Una ruta a medias —que exista pero siempre falle, o que
 acepte un permiso que nada usa— es peor que no tenerla: por eso `alertas:
 crear` no tuvo ruta hasta que esta estuvo completa.
 
@@ -38,15 +41,21 @@ import hmac
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 
 from typing import Annotated, Literal, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
 import config
 import db.db as db
+import facturas
+import facturas_panel as fp
+import noco_lectura
+import registro_lectura
 from acciones import crud
 from web.avisos import Navegacion
 
@@ -150,12 +159,18 @@ async def _avisar_abuso(n: int) -> None:
 
 # ── La dependencia: autentica, limita, autoriza ───────────────────────────
 
-def requiere(permiso: str):
+def requiere(permiso: str, solo_de: str | None = None):
     """Fábrica de dependencias de FastAPI: cada ruta declara EL permiso que
     exige, y esta función arma la comprobación completa (clave -> quien ->
     límite -> permiso). Nunca revela POR QUÉ se rechazó un pedido en el
     cuerpo de la respuesta -- ni "esa clave no existe" ni "te falta este
     permiso" -- para no ayudar a alguien a tantear la puerta a ciegas.
+
+    `solo_de` (21-oct-2026, las facturas de Natalia): además del permiso, el
+    `quien` de la clave tiene que ser ESE (hoy `config.QUIEN_DE_NATALIA`). Las
+    rutas de las facturas se escriben pensando en que quien llama es Natalia
+    (solo ve y toca lo que ella hizo): que otra clave con el permiso entre
+    como ella sería un descuido de configuración, no un diseño.
     """
     async def _dependencia(request: Request) -> str:
         clave = _bearer(request.headers.get("authorization"))
@@ -170,6 +185,10 @@ def requiere(permiso: str):
         if permiso not in permisos:
             log.warning(
                 "puerta de Code: %s pidió %s sin tener ese permiso", quien, permiso)
+            raise HTTPException(status_code=403, detail="clave inválida")
+        if solo_de is not None and quien != solo_de:
+            log.warning(
+                "puerta de Code: %s pidió %s y esa ruta es solo de %s", quien, permiso, solo_de)
             raise HTTPException(status_code=403, detail="clave inválida")
         return quien
     # Etiqueta la dependencia con el permiso que exige, en un atributo
@@ -626,6 +645,285 @@ async def leer_consultas(
             status_code=503,
             detail="no se pudo leer: falta una migración de la base de Lucy. Avisale a la sala/Tiziano.") from None
     return {"noco_id": noco_id, "consultas": [_consulta_para_natalia(c) for c in consultas]}
+
+
+# ── Las facturas de Natalia (21-oct-2026, pieza 9 del diseño «Facturas») ──────────────────────────────
+#
+# Diseño aprobado por Tiziano el 20-oct-2026 (disenos/lucy-facturas/DISENO.md). El camino: el cliente le pide la
+# factura a Natalia → NATALIA LA HACE (`POST …/facturas`) → pide que se apruebe mandarla (`POST …/envios`) → ROSI LA
+# REVISA en Telegram (la tarjeta con el PDF y los botones es del despertador y de `acciones/botones.py`) → Natalia lee
+# cómo quedó (`GET …/facturas`) → si quedó aprobada baja el PDF (`GET …/pdf`) y la manda por WhatsApp o por correo →
+# anota si salió (`POST …/resultado`). Lucy NUNCA dice «aprobada», «emitida» ni «enviada» si no pasó: todo lo que
+# responde sale de una RELECTURA de la base.
+#
+# QUÉ FACTURAS VE Y TOCA NATALIA: solo las que ELLA hizo, de la ficha que dice la ruta (la regla está en `db`:
+# `SENTENCIA_DE_LA_FACTURA_DE_NATALIA`). Una de la casa o de otra ficha le da 404, igual que una que no existe. Natalia
+# no anula, no descarta, no corrige, no emite y no escribe el NCF: eso es de la casa. Ningún número de chat sale.
+#
+# LA SESIÓN TIENE QUE SER DEL CLIENTE: se comprueba con LA MISMA lectura y LA MISMA regla que la pantalla
+# (`registro_lectura.lo_que_dice_el_registro_del_cliente` + `facturas_panel.ligas_de_las_refs`), ANTES de escribir.
+#
+# LÍMITE DE SESIONES POR FACTURA: decisión de la puerta, no una medición.
+LIMITE_DE_SESIONES_POR_FACTURA_DE_NATALIA = 50
+
+
+class _RenglonDeNatalia(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    descripcion: StrictStr
+    detalle: StrictStr = ""
+    monto: StrictStr           # texto ("62500.00"): un número JSON se leería como float, que la puerta rechaza
+
+
+class _FacturaNueva(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    refs: list[StrictStr] = Field(min_length=1, max_length=LIMITE_DE_SESIONES_POR_FACTURA_DE_NATALIA)
+    renglones: list[_RenglonDeNatalia] | None = None
+    itbis: StrictBool = False
+    rnc_cedula: StrictStr = ""
+    fecha: StrictStr = ""
+
+
+class _EnvioPedido(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    canal: Literal["whatsapp", "correo"]
+
+
+class _EnvioResultado(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    salio: StrictBool
+    motivo: StrictStr = ""
+
+
+def _dinero_para_natalia(valor) -> str:
+    return str(Decimal(valor).quantize(Decimal("0.01")))
+
+
+def _envio_para_natalia(e: dict) -> dict:
+    """Un envío releído → lo que sale: `estado` es el de la base (`pendiente` = esperando que la revisen, `aprobado` =
+    aprobado y todavía sin anotar cómo terminó, `rechazado`, `enviado`, `no_se_pudo`); `pdf_listo` solo es verdadero con
+    el envío aprobado (la única vez que se puede bajar el PDF)."""
+    return {"envio_id": e["id"], "canal": e["canal"], "estado": e["estado"], "aprobada": bool(e["aprobada"]),
+            "pdf_listo": e["estado"] == "aprobado", "motivo": e["motivo"]}
+
+
+def _factura_para_natalia(f: dict) -> dict:
+    """Una factura releída (`db.facturas_de_natalia`) → lo que sale, campo por campo. `codigo` es `None` mientras
+    sea borrador (no tiene número hasta que se aprueba). Sin chats, sin NCF, sin Drive."""
+    return {
+        "factura_id": f["id"], "codigo": f["codigo"], "estado": f["estado"], "para_nombre": f["para_nombre"],
+        "fecha": f["fecha"].isoformat() if isinstance(f["fecha"], date) else str(f["fecha"]),
+        "subtotal": _dinero_para_natalia(f["subtotal"]), "itbis": _dinero_para_natalia(f["itbis"]),
+        "total": _dinero_para_natalia(f["total"]),
+        "renglones": [{"descripcion": r["descripcion"], "detalle": r["detalle"],
+                       "monto": _dinero_para_natalia(r["monto"])} for r in f["renglones"]],
+        "ligas": [{"tipo": l["tipo"], "ref": l["ref"], "codigo": l["codigo"]} for l in f["ligas"] if l["viva"]],
+        "envios": [_envio_para_natalia(e) for e in f["envios"]],
+    }
+
+
+def _sin_migrar_las_facturas() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail="no se pudo: falta una migración de la base de Lucy. Avisale a la sala/Tiziano.")
+
+
+def _por_que_la_puerta_dijo_que_no(e: Exception) -> HTTPException:
+    """El `HTTPException` de lo que la puerta de `db` rechazó, con su razón en palabras (la misma que lee la persona
+    en la pantalla: `facturas_panel.texto_del_error`). 404: no es de Natalia / no existe. 409: existe pero choca
+    (estado que no deja, o una sesión que ya está en otra factura). 422: el pedido no vale."""
+    if isinstance(e, db.FacturaNoEsta):
+        return HTTPException(status_code=404, detail="esa factura no está")
+    if isinstance(e, db.FacturaYaNoSeCorrige):
+        return HTTPException(status_code=409, detail=str(e))
+    if isinstance(e, db.FacturaCambio):
+        return HTTPException(status_code=409, detail="la factura cambió; vuelve a leerla")
+    if isinstance(e, db.FacturaNoVale):
+        razon = fp.texto_del_error(e)["razon"]
+        return HTTPException(status_code=409 if e.clave == "sesion_ya_facturada" else 422, detail=razon)
+    if isinstance(e, (db.FacturasSinTabla, db.EnviosSinMigrar)):
+        return _sin_migrar_las_facturas()
+    raise e
+
+
+def _renglones_de_las_sesiones_de_natalia(ligas: list[dict], lectura: dict) -> tuple[list[dict], list[str]]:
+    """Los renglones que salen de las sesiones o trabajos escogidos (el mismo `facturas_panel.renglon_de_una_sesion`
+    de la pantalla: el total que la App tiene, sin multiplicar nada), y los códigos de los que la App no trae total."""
+    por_ref = {r["ref"]: r for r in lectura.get("sesiones", []) + lectura.get("trabajos", [])}
+    renglones, sin_total = [], []
+    for liga in ligas:
+        r = fp.renglon_de_una_sesion(por_ref[liga["ref"]])
+        if r["sin_total"]:
+            sin_total.append(r["codigo"] or r["ref"])
+            continue
+        renglones.append({"descripcion": r["descripcion"], "detalle": r["detalle"], "monto": r["monto"]})
+    return renglones, sin_total
+
+
+@router.post("/clientes/{noco_id}/facturas")
+async def crear_factura_de_natalia(
+    cuerpo: _FacturaNueva,
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere("facturas:crear", solo_de=config.QUIEN_DE_NATALIA)),
+) -> dict:
+    """Natalia HACE una factura (borrador, sin número, `hecha_por = natalia`) para la ficha `noco_id` con las sesiones o
+    trabajos `refs` de esa ficha en el registro.
+
+    PEDIDO: `{refs: ["<ref>", …] (1 a 50), renglones?: [{descripcion, detalle?, monto: "62500.00"}], itbis?: bool
+    (18 %; falso por omisión), rnc_cedula?: "9 u 11 cifras", fecha?: "AAAA-MM-DD" (hoy por omisión)}`. Sin `renglones`
+    sale un renglón por sesión con el total que el registro tiene (si alguna no trae total, 422 y nada se guarda).
+    El nombre lo pone Lucy: es el de la ficha en NocoDB. NCF, proyecto y cotización no se piden: son de la casa.
+
+    RESPUESTAS: 200 `{"factura": {factura_id, codigo (null), estado: "borrador", para_nombre, fecha, subtotal, itbis, total,
+    renglones, ligas, envios: []}, "reusada": false}`, releído de la base. 404: la ficha no existe. 409: alguna sesión ya
+    está en otra factura viva. 422: pedido que no vale (sesión de otro cliente, cancelada, ficha sin teléfono en el
+    registro, monto mal escrito…): el detalle dice cuál. 503: Noco, el registro o la base no contestaron, o falta una
+    migración. EN TODOS LOS ERRORES NO SE GUARDÓ NADA. 401/403/429: la puerta de siempre."""
+    textos = [cuerpo.rnc_cedula, cuerpo.fecha, *cuerpo.refs]
+    if cuerpo.renglones:
+        textos += [x for r in cuerpo.renglones for x in (r.descripcion, r.detalle, r.monto)]
+    if any("\x00" in x for x in textos):
+        raise HTTPException(status_code=422, detail="el texto no puede llevar caracteres nulos")
+    try:
+        ficha = await noco_lectura.persona(noco_id)
+    except noco_lectura.NocoNoContesta:
+        raise HTTPException(status_code=503, detail="no se pudo leer la ficha del cliente en NocoDB: no se guardó nada") from None
+    if ficha is None:
+        raise HTTPException(status_code=404, detail="esa ficha de cliente no existe")
+    # LA COMPROBACIÓN DE QUE LAS SESIONES SON DEL CLIENTE: la misma de la pantalla, antes de escribir.
+    lectura = await registro_lectura.lo_que_dice_el_registro_del_cliente(noco_id)
+    if lectura is None:
+        raise HTTPException(
+            status_code=503,
+            detail="no se pudo consultar el registro para comprobar que esas sesiones son del cliente: no se guardó nada")
+    ligas, problemas = fp.ligas_de_las_refs(cuerpo.refs, lectura)
+    if problemas:
+        raise HTTPException(status_code=422, detail=" ".join(fp.frase_del_problema_de_liga(p) for p in problemas)
+                            + " No se guardó nada.")
+    if cuerpo.renglones is None:
+        renglones, sin_total = _renglones_de_las_sesiones_de_natalia(ligas, lectura)
+        if sin_total:
+            raise HTTPException(
+                status_code=422,
+                detail="el registro no trae el total de: " + ", ".join(sin_total)
+                       + ". Manda los renglones. No se guardó nada.")
+    else:
+        renglones = [{"descripcion": r.descripcion, "detalle": r.detalle or None, "monto": r.monto}
+                     for r in cuerpo.renglones]
+    try:
+        creada = await db.crear_borrador_de_factura_de_natalia(
+            noco_id, para_nombre=ficha["nombre"], renglones=renglones, ligas=ligas, fecha=cuerpo.fecha or None,
+            itbis_pct=db.ITBIS_DE_FACTURA if cuerpo.itbis else None, rnc_cedula=cuerpo.rnc_cedula or None)
+        relei = await db.facturas_de_natalia(noco_id, creada["id"])
+    except (db.FacturaNoVale, db.FacturaNoEsta, db.FacturasSinTabla) as e:
+        raise _por_que_la_puerta_dijo_que_no(e) from None
+    if not relei:
+        log.error("puerta de Code: la factura %s se creó y la relectura no la encontró", creada["id"])
+        raise HTTPException(status_code=500, detail="la factura se creó pero no se pudo releer")
+    return {"factura": _factura_para_natalia(relei[0]), "reusada": False}
+
+
+@router.get("/clientes/{noco_id}/facturas")
+async def leer_facturas_de_natalia(
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere("facturas:listar", solo_de=config.QUIEN_DE_NATALIA)),
+) -> dict:
+    """Las facturas que HIZO Natalia para esa ficha (la más nueva primero, hasta `db.TOPE_DE_FACTURAS_DE_NATALIA`), cada
+    una con sus envíos y cómo van. 200 `{"noco_id", "facturas": [ … la forma de `POST …/facturas` … ]}`. Una ficha sin
+    facturas de Natalia da `[]`. 503 si falta la migración. Solo lee."""
+    try:
+        facturas_de_ella = await db.facturas_de_natalia(noco_id)
+    except db.FacturasSinTabla:
+        raise _sin_migrar_las_facturas() from None
+    return {"noco_id": noco_id, "facturas": [_factura_para_natalia(f) for f in facturas_de_ella]}
+
+
+@router.get("/clientes/{noco_id}/facturas/{factura_id}")
+async def leer_una_factura_de_natalia(
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    factura_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere("facturas:leer", solo_de=config.QUIEN_DE_NATALIA)),
+) -> dict:
+    """UNA factura de Natalia, releída de la base: 200 `{"factura": {…}}`, o 404 si no es suya / no es de esa ficha / no
+    existe (no se distingue). Es lo que Natalia lee para saber si Rosi la aprobó (`envios[].estado`)."""
+    try:
+        relei = await db.facturas_de_natalia(noco_id, factura_id)
+    except db.FacturasSinTabla:
+        raise _sin_migrar_las_facturas() from None
+    if not relei:
+        raise HTTPException(status_code=404, detail="esa factura no está")
+    return {"factura": _factura_para_natalia(relei[0])}
+
+
+@router.post("/clientes/{noco_id}/facturas/{factura_id}/envios")
+async def pedir_envio_de_factura(
+    cuerpo: _EnvioPedido,
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    factura_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere("facturas:pedir_envio", solo_de=config.QUIEN_DE_NATALIA)),
+) -> dict:
+    """Natalia pide que se APRUEBE mandar su factura por `canal` (`whatsapp` o `correo`). Lucy le manda la tarjeta (con el
+    PDF y los botones Aprobar / Rechazar) a quien revisa las facturas (`config.chat_de_quien_revisa_las_facturas`) y
+    NADA sale al cliente hasta que esa persona apruebe. Al aprobar, Lucy EMITE la factura (se numera ahí).
+
+    PEDIDO `{canal}`. 200 `{"envio": {envio_id, canal, estado: "pendiente", aprobada: false, pdf_listo: false, motivo:
+    null}, "reusada": bool}` (`reusada`: ya había un envío vivo —pendiente o aprobado— de esa factura por ese canal y
+    se devuelve ese). 404: la factura no es suya / no existe. 409: la factura está anulada. 422: la factura está
+    incompleta. 503: no hay a quién pedirle la aprobación (el nombre de quien revisa no resuelve a un chat al que Lucy
+    le pueda escribir) o falta una migración: NO SE PIDIÓ NADA. «pendiente» quiere decir que la persona todavía no
+    contestó, no que la tarjeta ya llegó."""
+    if config.chat_de_quien_revisa_las_facturas() is None:
+        log.error("puerta de Code: no hay a quién mandarle la tarjeta de las facturas (REVISA_FACTURAS no resuelve)")
+        raise HTTPException(
+            status_code=503,
+            detail="Lucy no sabe a quién pedirle la aprobación de la factura: no se pidió nada. Avisale a la sala/Tiziano.")
+    try:
+        r = await db.pedir_envio_de_factura_de_natalia(noco_id, factura_id, cuerpo.canal)
+    except (db.FacturaNoVale, db.FacturaNoEsta, db.FacturaYaNoSeCorrige, db.FacturasSinTabla, db.EnviosSinMigrar) as e:
+        raise _por_que_la_puerta_dijo_que_no(e) from None
+    return {"envio": _envio_para_natalia(r["envio"]), "reusada": r["reusada"]}
+
+
+@router.get("/clientes/{noco_id}/facturas/{factura_id}/envios/{envio_id}/pdf")
+async def pdf_de_factura_aprobada(
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    factura_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    envio_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere("facturas:pdf", solo_de=config.QUIEN_DE_NATALIA)),
+) -> Response:
+    """El PDF de la factura, SOLO si ese envío está APROBADO: la factura es de Natalia y de esa ficha, está emitida y
+    alguien aprobó mandarla por ese envío (y Natalia todavía no anotó cómo terminó). 200 `application/pdf` (el nombre es
+    el número: `FAC-2026-001.pdf`). 404: no es suya / no existe / ese envío no es de esa factura. 409: el envío todavía
+    no se aprobó, se rechazó, ya terminó, o la factura no está emitida (el detalle dice cuál). 503: falta una migración.
+    Un borrador NUNCA se baja por aquí."""
+    try:
+        f = await db.factura_y_envio_para_el_pdf_de_natalia(noco_id, factura_id, envio_id)
+    except (db.FacturaNoEsta, db.FacturaYaNoSeCorrige, db.FacturasSinTabla) as e:
+        raise _por_que_la_puerta_dijo_que_no(e) from None
+    pdf = facturas.pdf_de_factura(facturas.hoja_de_factura(f))
+    return Response(pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{facturas.nombre_del_archivo(f)}"',
+        "Cache-Control": "private, no-store"})
+
+
+@router.post("/clientes/{noco_id}/facturas/{factura_id}/envios/{envio_id}/resultado")
+async def anotar_resultado_del_envio(
+    cuerpo: _EnvioResultado,
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    factura_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    envio_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere("facturas:anotar_envio", solo_de=config.QUIEN_DE_NATALIA)),
+) -> dict:
+    """Natalia anota cómo terminó un envío APROBADO: `{salio: true}` → `enviado`; `{salio: false, motivo: "…"}` →
+    `no_se_pudo` (el motivo, de 1 a 500 caracteres, es obligatorio). Es lo ÚNICO que hace que una factura figure como
+    enviada: Lucy no lo supone. Anotar dos veces lo mismo es lo mismo. 200 `{"envio": {…}}` releído. 404: no es suya.
+    409: el envío no está aprobado (pendiente, rechazado) o terminó de otra forma. 422: falta el motivo."""
+    if "\x00" in cuerpo.motivo:
+        raise HTTPException(status_code=422, detail="el texto no puede llevar caracteres nulos")
+    try:
+        envio = await db.anotar_envio_de_natalia(noco_id, factura_id, envio_id, cuerpo.salio, cuerpo.motivo)
+    except (db.FacturaNoVale, db.FacturaNoEsta, db.FacturaYaNoSeCorrige, db.FacturasSinTabla) as e:
+        raise _por_que_la_puerta_dijo_que_no(e) from None
+    return {"envio": _envio_para_natalia(envio)}
 
 
 def avisar_si_alertas_mal_nombradas() -> list[str]:

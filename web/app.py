@@ -2532,13 +2532,10 @@ async def _nombre_del_cliente(noco_id: int) -> tuple[str, bool]:
 
 
 async def _lo_que_dice_el_registro_del_cliente(cliente_noco_id) -> dict | None:
-    """Lo que la App contesta por la FICHA de ese cliente (sus sesiones y trabajos, SIN pedirle sesiones sueltas), o
-    `None` si no contestó. Es la ÚNICA lectura con la que se decide si una sesión se puede ligar a una factura: la
-    App devuelve cualquier sesión que se le pida con `&sesion=` aunque sea de otra persona y la mezcla con las de la
-    ficha, así que solo lo que ella lista para la ficha prueba que la sesión es del cliente. De aquí sale también el tipo
-    de cada liga (`es_trabajo`) y si está cancelada: la persona no escribe ni lo uno ni lo otro."""
-    lectura = await registro_lectura.sesiones_de_cliente(cliente_noco_id)
-    return None if lectura["estado"] == "no_se_pudo" else lectura
+    """Lo que la App contesta por la FICHA de ese cliente, o `None` si no contestó: la ÚNICA lectura con la que se
+    decide si una sesión se puede ligar a una factura. Vive en `registro_lectura.lo_que_dice_el_registro_del_cliente`
+    porque la puerta de Natalia (`web/api_code.py`) tiene que usar EXACTAMENTE la misma y no puede importar este módulo."""
+    return await registro_lectura.lo_que_dice_el_registro_del_cliente(cliente_noco_id)
 
 
 def _enlace_de_nueva(proyecto=None, cotizacion=None, opcion=None, cliente=None) -> str:
@@ -2797,6 +2794,7 @@ async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", 
     de_mas = [fp.renglon_de_una_sesion(por_ref[agregar])] if borrador and agregar in por_ref else []
     se_corrige = borrador and (bool(corregir) or escrito is not None or bool(de_mas))
     drive_de_la_factura = await _estado_del_drive_de_la_factura(f["id"])
+    envios_de_la_factura = await _envios_de_la_factura(f["id"])
     return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "factura.html", {
         "f": f, "hoja": facturas.hoja_de_factura(f), "estado_texto": fp.etiqueta_del_estado(estado),
         "proyecto_nombre": None if f["proyecto_id"] is None else nombres.get(f["proyecto_id"]) or f"Proyecto {f['proyecto_id']}",
@@ -2810,7 +2808,21 @@ async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", 
         "proyecto_marcado": f["proyecto_id"] if proyecto_escrito is None else proyecto_escrito[0],
         "campos_marcados": {c["casilla"] for c in errores if c.get("casilla")},
         "candidatas": candidatas, "hay_mas": hay_mas, "registro_ok": registro_ok, "busqueda": busqueda, "sq": sq,
-        "etiquetas_de_liga": fp.ETIQUETA_DE_LIGA, "drive": drive_de_la_factura}, status_code=status))
+        "etiquetas_de_liga": fp.ETIQUETA_DE_LIGA, "drive": drive_de_la_factura,
+        "hecha_por_texto": fp.quien_hizo_la_factura(f, config.NOMBRES_POR_CHAT), "envios": envios_de_la_factura},
+        status_code=status))
+
+
+async def _envios_de_la_factura(fid: int) -> list[dict] | None:
+    """Los envíos de una factura, ya en palabras (`facturas_panel.frase_del_envio`), de una lectura que no tumba la página:
+    si no se puede leer, `None` y el bloque dice que no se pudo (no inventa «sin envíos»)."""
+    try:
+        envios = await db.envios_de_factura(fid)
+    except Exception as e:
+        log_f.warning("Facturas: no se pudieron leer los envíos de la factura #%s (%s)", fid, type(e).__name__)
+        return None
+    revisa = config.NOMBRE_DE_QUIEN_REVISA_LAS_FACTURAS or "quien revisa"
+    return [fp.frase_del_envio(e, revisa) for e in envios]
 
 
 async def _estado_del_drive_de_la_factura(fid: int) -> dict | None:
@@ -2936,6 +2948,23 @@ async def anular_una_factura(request: Request, fid: int):
     except Exception as e:
         return await _rechazo_de_una_factura(request, fid, e, confirmar="anular", motivo_escrito=motivo)
     await _subir_factura_a_drive(fid)
+    return RedirectResponse(f"/facturas/{fid}", status_code=303)
+
+
+@app.post("/facturas/{fid}/mandada-a-mano")
+@auth.puerta(auth.PUERTA_SIEMPRE)
+async def marcar_una_factura_como_mandada_a_mano(request: Request, fid: int):
+    """«Marcar como mandada a mano»: una persona de la casa dice que ella mandó la factura emitida. Es `db.marcar_factura_mandada_a_mano`
+    (un envío `mano` ya `enviado`; no pasa por Natalia ni pide aprobación). Solo la casa; solo una emitida."""
+    chat = _sesion(request)
+    if not auth.puede_entrar(chat):
+        return _fuera(request)
+    try:
+        await db.marcar_factura_mandada_a_mano(fid, chat)
+    except db.FacturaSinSesion:
+        return _fuera(request)
+    except Exception as e:
+        return await _rechazo_de_una_factura(request, fid, e)
     return RedirectResponse(f"/facturas/{fid}", status_code=303)
 
 

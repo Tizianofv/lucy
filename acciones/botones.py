@@ -126,6 +126,17 @@ def teclado_de_consulta(consulta_id: int) -> InlineKeyboardMarkup:
     ]])
 
 
+def teclado_de_envio_de_factura(envio_id: int, emite: bool = True) -> InlineKeyboardMarkup:
+    """Los botones de la tarjeta con que Lucy le pide a quien revisa las facturas que apruebe mandar una que hizo Natalia
+    (pieza 9 del diseño «Facturas»). `fas:<id>` = aprobar, `fan:<id>` = rechazar; el id es el del ENVÍO
+    (`factura_envios.id`). Las ramas que los leen están en `al_pulsar`, detrás de su misma puerta. `emite` dice si
+    aprobar también emite la factura (un borrador) para que el botón no prometa de menos."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Aprobar y emitir" if emite else "✅ Aprobar", callback_data=f"fas:{envio_id}"),
+        InlineKeyboardButton("❌ Rechazar", callback_data=f"fan:{envio_id}"),
+    ]])
+
+
 async def _cerrar_tarjeta(q, remate: str) -> None:
     """Saca los botones y deja escrito en qué terminó la tarjeta.
 
@@ -169,6 +180,71 @@ def _remate_de_consulta(r: dict) -> str:
         return f"{ya}❗ <b>No se pudo anotar:</b> {html.escape(r.get('motivo') or 'sin motivo')}"
     return (f"{ya}❗ <b>No pude confirmar que la tarea quedó anotada.</b> "
             "Revisa el proyecto antes de contestarle al cliente.")
+
+
+async def _cerrar_tarjeta_de_factura(q, remate: str) -> None:
+    """Como `_cerrar_tarjeta`, pero la tarjeta de una factura es un DOCUMENTO con pie (el PDF): se edita el pie, no el
+    texto. Saca los botones y deja escrito en qué terminó. Si no se puede editar no es un problema: lo que importaba (la
+    escritura en la base) ya pasó."""
+    pie = (q.message.caption_html or "")[:700]
+    try:
+        await q.edit_message_caption(caption=f"{pie}\n\n{remate}", parse_mode="HTML", reply_markup=None)
+    except BadRequest as e:
+        log.warning("No pude editar la tarjeta de la factura: %s", e)
+
+
+def _remate_de_envio_de_factura(r: dict) -> str:
+    """Lo que queda escrito en la tarjeta ya contestada. Sale de `r`, lo que `db.contestar_envio_de_factura` RELEYÓ:
+    «aprobada» solo si quedó aprobada, y nunca promete que Natalia ya la mandó."""
+    resultado = r["resultado"]
+    donde = "WhatsApp" if r.get("canal") == "whatsapp" else "correo"
+    if resultado == db.RESULTADO_ENVIO_APROBADO:
+        hecho = (f"Se emitió como <b>{html.escape(r['codigo'])}</b>." if r.get("emitida_ahora")
+                 else f"Ya estaba emitida como <b>{html.escape(r['codigo'])}</b>.")
+        return f"✅ <b>Aprobada.</b> {hecho} Natalia ya puede mandarla por {donde}."
+    if resultado == db.RESULTADO_ENVIO_RECHAZADO:
+        return "❌ <b>Rechazada.</b> No se manda nada."
+    if resultado == db.RESULTADO_ENVIO_NO_SE_PUDO:
+        return (f"❗ <b>No se pudo aprobar:</b> {html.escape(r.get('motivo') or 'sin motivo')}. "
+                "Natalia tiene que pedirla otra vez.")
+    return f"ℹ️ <i>Ya estaba contestada ({html.escape(str(r.get('estado') or ''))}).</i>"
+
+
+async def _contestar_envio_de_factura(q, envio_id: int, acepta: bool) -> None:
+    """Los botones Aprobar / Rechazar de la tarjeta de una factura de Natalia. TODA la decisión está en
+    `db.contestar_envio_de_factura` (quién puede, el primero gana, el borrador que se emite con el candado de lo que se
+    vio, y el envío, en una transacción); esto solo dice el resultado. Si la aprobación emitió la factura, después
+    intenta subir su PDF a Drive como lo hace la pantalla al emitir (lo que falle ahí no deshace nada)."""
+    chat = q.message.chat_id
+    try:
+        r = await db.contestar_envio_de_factura(envio_id, chat, acepta)
+    except (db.FacturasSinTabla, db.EnviosSinMigrar):
+        await q.message.reply_text("Las facturas de Natalia todavía no están disponibles.")
+        return
+    except Exception:
+        # Nada quedó escrito (la transacción se deshizo): la tarjeta y sus botones siguen ahí.
+        log.exception("No pude guardar la respuesta al envío de factura #%s", envio_id)
+        await q.message.reply_text("No pude guardar tu respuesta. La factura sigue esperando: toca de nuevo.")
+        return
+    resultado = r["resultado"]
+    if resultado == db.RESULTADO_ENVIO_NO_ES_TUYO:
+        await q.message.reply_text(f"Esto le toca a {r.get('revisa') or 'otra persona'}.")
+        return
+    if resultado == db.RESULTADO_ENVIO_NO_EXISTE:
+        await q.message.reply_text("Esa factura ya no existe.")
+        return
+    if resultado == db.RESULTADO_ENVIO_TODAVIA:
+        await q.message.reply_text("La tarjeta todavía se está preparando. Toca de nuevo en unos segundos.")
+        return
+    await _cerrar_tarjeta_de_factura(q, _remate_de_envio_de_factura(r))
+    log.info("Envío de factura #%s contestado: %s", envio_id, resultado)
+    if resultado == db.RESULTADO_ENVIO_APROBADO and r.get("emitida_ahora"):
+        import facturas_drive
+        try:
+            await facturas_drive.subir(r["factura_id"])
+        except Exception as e:
+            log.warning("Factura #%s: la subida a Drive falló (%s); la factura sigue emitida.",
+                        r["factura_id"], type(e).__name__)
 
 
 async def _contestar_consulta(q, consulta_id: int, acepta: bool) -> None:
@@ -242,6 +318,11 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Cortar el relojito de Telegram cuanto antes; si no, parece que se colgó.
     await q.answer()
+
+    # ── Las facturas de Natalia: Aprobar / Rechazar (pieza 9 de las facturas). Acá `bandeja_id` es el id del ENVÍO ──
+    if accion == "fas" or accion == "fan":
+        await _contestar_envio_de_factura(q, bandeja_id, acepta=(accion == "fas"))
+        return
 
     # ── Las consultas de Natalia: Sí / No (pieza L5). Acá `bandeja_id` es el id de la CONSULTA ─────────
     if accion == "cns" or accion == "cnn":
