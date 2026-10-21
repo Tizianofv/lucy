@@ -442,6 +442,23 @@ TOPE_CANJE_S = 5.0
 _FORMA_BOLETO = re.compile(r"[A-Za-z0-9_-]{43}")
 _LARGO_MAX_RESPUESTA = 4096
 
+# Adónde puede mandar el pase, por el nombre EXACTO que trae `?a=`. Es una lista cerrada, y lo
+# que no está en ella va a Proyectos: la dirección de la redirección NUNCA sale del texto que
+# llegó en el pedido. Quien entre solo a ver va a Proyectos aunque pida otra cosa.
+DESTINOS_DEL_PASE = {"facturas": "/facturas"}
+DESTINO_POR_DEFECTO_DEL_PASE = "/proyectos"
+
+
+def enlace_al_inicio_de_la_app() -> str:
+    """La dirección del INICIO de la App de registro (`REGISTRO_URL + "/#inicio"`), o `""` si
+    `REGISTRO_URL` no es una dirección http(s). La usan la página de Proyectos y las de Facturas:
+    es la ÚNICA función que arma esta dirección, para que las dos pantallas vuelvan al mismo
+    sitio. `#inicio` es el contrato de la App (exacto, en el hash, misma pestaña):
+    `Levantamientos INFO/registro/la-pagina-de-inicio-y-como-se-llega.md`."""
+    if not config.REGISTRO_URL.startswith(("http://", "https://")):
+        return ""
+    return config.REGISTRO_URL + "/#inicio"
+
 
 def _chat_del_canje(crudo) -> int | None:
     """El número de chat de lo que contestó la App (texto de dígitos), o None."""
@@ -485,9 +502,9 @@ async def _canjear_boleto(codigo: str) -> tuple[str, int | None] | None:
 
 @app.get("/entrar-cds", response_class=HTMLResponse)
 @auth.puerta(auth.PUERTA_ENTRADA)
-async def entrar_cds(request: Request, c: Navegacion[str] = ""):
-    """El boleto de la App se cambia por una cookie y se va a Proyectos. Ver el
-    bloque de arriba."""
+async def entrar_cds(request: Request, c: Navegacion[str] = "", a: Navegacion[str] = ""):
+    """El boleto de la App se cambia por una cookie y se va a Proyectos —o a Facturas, si el pase
+    lo pidió con `?a=facturas` y quien entra es la casa. Ver el bloque de arriba."""
     def _no():
         return plantillas.TemplateResponse(
             request, "entrar.html",
@@ -504,7 +521,10 @@ async def entrar_cds(request: Request, c: Navegacion[str] = ""):
         log.warning("/entrar-cds: la App dio acceso total pero Lucy no conoce a "
                     "esa persona: entra solo a ver")
     log.info("/entrar-cds: entra con la sesión %s", sesion)
-    r = RedirectResponse("/proyectos", status_code=303)
+    # El destino sale de la lista cerrada (`DESTINOS_DEL_PASE`), solo para la casa: Facturas es
+    # solo de la casa y a quien entra a ver no hay que dejarlo en una pantalla que le contesta 401.
+    pedido = DESTINOS_DEL_PASE.get(a) if sesion == auth.SESION_CASA else None
+    r = RedirectResponse(pedido or DESTINO_POR_DEFECTO_DEL_PASE, status_code=303)
     if sesion == auth.SESION_CASA:
         _poner_sesion_de_la_casa(r, chat)         # la misma que da `/entrar`
     else:
@@ -1413,10 +1433,10 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
          "nota_borrada_en_papelera": nota_borrada_en_papelera,
          "largo_grupo": db.LARGO_NOMBRE_GRUPO,
          # `/#inicio` (exacto, en el hash): la App lo lee y abre su página de inicio en vez de
-         # la última sesión; una App que no lo conozca lo ignora. Contrato: Levantamientos
-         # INFO/registro/la-pagina-de-inicio-y-como-se-llega.md
-         "volver_a_la_app": (config.REGISTRO_URL + "/#inicio") if config.REGISTRO_URL.startswith(
-             ("http://", "https://")) else "",
+         # la última sesión; una App que no lo conozca lo ignora. La dirección sale de
+         # `enlace_al_inicio_de_la_app`, la misma que usan las páginas de Facturas. Contrato:
+         # Levantamientos INFO/registro/la-pagina-de-inicio-y-como-se-llega.md
+         "volver_a_la_app": enlace_al_inicio_de_la_app(),
          "busqueda": busqueda, "ocupante": ocupante,
          "largo_rol": db.LARGO_ROL_PARTICIPANTE, "modelo": modelo, "visibles": visibles, "vista": vista, "q": q,
          "pantallas": pantallas, "areas": await db.areas(), "error": error,
@@ -2577,6 +2597,7 @@ async def _contexto_de_factura_nueva(*, cliente, proyecto, cotizacion, opcion, r
             cliente_id = None
         cliente_fijo = cliente_id is not None          # el cliente es el del proyecto: ahí no se cambia
     ctx = {"avisos": avisos, "errores": list(errores), "proyecto": ({"id": pid, "nombre": nombres[pid]} if pid else None),
+           "volver_a_la_app": enlace_al_inicio_de_la_app(),
            "cotizacion": ({"id": cot["id"], "codigo": cot["codigo"]} if cot else None), "opciones": opciones,
            "opcion": opcion_n, "cliente_id": cliente_id, "cliente_fijo": cliente_fijo, "cliente_nombre": "", "noco_ok": True, "refs": refs,
            "sq": sq, "pq": pq, "paso": "cliente", "busqueda_cliente": None, "candidatas": [], "hay_mas": False,
@@ -2690,6 +2711,7 @@ async def lista_de_facturas(request: Request, estado: Navegacion[str] = ""):
     pagos = await _pago_de_las_facturas(filas)
     return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "facturas.html", {
         "filas": [fp.fila_de_la_lista(f, nombres, pagos.get(f["id"])) for f in filas], "filtro": filtro,
+        "volver_a_la_app": enlace_al_inicio_de_la_app(),
         "sin_tabla": sin_tabla, "estados": fp.ETIQUETA_DEL_FILTRO}))
 
 
@@ -2861,6 +2883,7 @@ async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", 
     envios_de_la_factura = await _envios_de_la_factura(f["id"])
     return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "factura.html", {
         "f": f, "hoja": facturas.hoja_de_factura(f), "estado_texto": fp.etiqueta_del_estado(estado),
+        "volver_a_la_app": enlace_al_inicio_de_la_app(),
         "proyecto_nombre": None if f["proyecto_id"] is None else nombres.get(f["proyecto_id"]) or f"Proyecto {f['proyecto_id']}",
         "proyectos": sorted(nombres.items(), key=lambda x: x[1].lower()) if estado in ("borrador", "emitida") else [],
         "cotizacion": cotizacion, "ligas": ligas_leidas, "oferta": oferta, "agregado": bool(de_mas),

@@ -85,6 +85,10 @@
      prometa nada falso. Sin comillas — se comparan una a una contra las frases.
 -->
 <header><nav>
+  {#- «‹ Inicio»: la vuelta al inicio de la App de registro. Lo traen las páginas que pasan
+      `volver_a_la_app` (las de Facturas), y la dirección sale de `enlace_al_inicio_de_la_app`
+      (`web/app.py`), la MISMA función que usa Proyectos; vacía si `REGISTRO_URL` no es http(s). -#}
+  {% if volver_a_la_app %}<a id="btn-inicio" href="{{ volver_a_la_app }}" title="Volver a la página de inicio">‹ Inicio</a>{% endif %}
   <a href="/" class="{{ 'on' if activo=='resumen' }}"
      data-tambien="ver mis gastos, el resumen del mes">Resumen</a>
   <a href="/tareas" class="{{ 'on' if activo=='tareas' }}"

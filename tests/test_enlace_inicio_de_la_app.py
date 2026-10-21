@@ -22,6 +22,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql://test/test")
 os.environ.setdefault("CHAT_ID_DUENO", "424242")
 
 import config  # noqa: E402
+import web.app as panel  # noqa: E402
 from test_proyectos_solo_ver import (  # noqa: E402  # noqa: F401  (el autouse apaga el conteo de claves malas)
     A_MANO, VISTAS, _pintar, _sin_contar_claves_malas_de_code)
 
@@ -93,15 +94,30 @@ def test_la_direccion_de_la_App_es_la_configurada_y_nada_mas(url, monkeypatch):
     assert _enlaces_a_la_app(_pintar("casa", p=1), url)[0][0]["href"] == url + "/#inicio"
 
 
+def test_el_enlace_de_proyectos_sale_de_la_funcion_compartida(monkeypatch):
+    """La dirección la arma `enlace_al_inicio_de_la_app`, la MISMA que usan las páginas de
+    Facturas (pieza M1, `tests/test_facturas_modulo_m1.py`). Se reemplaza la función por una que
+    contesta otra cosa: si la ruta copiara la expresión, el enlace no cambiaría."""
+    monkeypatch.setattr(panel, "enlace_al_inicio_de_la_app", lambda: "https://otro.example/ini")
+    html = _pintar("casa", p=1)
+    assert 'id="btn-inicio"' in html and 'href="https://otro.example/ini"' in html
+
+
 def test_censo_quien_pinta_el_enlace_sale_de_lo_real():
     """Las plantillas y rutas que usan `volver_a_la_app`, sacadas del disco: si aparece otra
-    página que mande «al inicio de la App», esta prueba se pone roja hasta que se le exija lo mismo."""
+    página que mande «al inicio de la App», esta prueba se pone roja hasta que se le exija lo mismo.
+    Desde la pieza M1 de Facturas (21-oct-2026) lo pintan `base.html` (lo que heredan las páginas
+    de Facturas) y `proyectos.html` (que tiene su propia barra)."""
     plantillas = {p.name for p in (RAIZ / "web" / "plantillas").glob("*.html")
                   if "volver_a_la_app" in p.read_text(encoding="utf-8")}
-    assert plantillas == {"proyectos.html"}
-    fuentes = {p.name: p.read_text(encoding="utf-8").count("volver_a_la_app")
-               for p in (RAIZ / "web").glob("*.py") if "volver_a_la_app" in p.read_text(encoding="utf-8")}
-    assert fuentes == {"app.py": 1}, fuentes
+    assert plantillas == {"base.html", "proyectos.html"}, plantillas
+    fuentes = {p.name for p in (RAIZ / "web").glob("*.py") if "volver_a_la_app" in p.read_text(encoding="utf-8")}
+    assert fuentes == {"app.py"}, fuentes
     # y nadie más arma una dirección hacia la App con REGISTRO_URL para un enlace de página
     usos = {p.name for p in (RAIZ / "web").glob("*.py") if "config.REGISTRO_URL" in p.read_text(encoding="utf-8")}
     assert usos == {"app.py"}, usos
+    # La dirección se arma en UNA sola función (`enlace_al_inicio_de_la_app`), que usan Proyectos y
+    # Facturas: el literal `/#inicio` no se copia en ningún otro sitio del código.
+    discos = {p.name: p.read_text(encoding="utf-8").count('"/#inicio"')
+              for p in (RAIZ / "web").glob("*.py")}
+    assert {n: c for n, c in discos.items() if c} == {"app.py": 1}, discos
