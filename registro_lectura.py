@@ -401,6 +401,38 @@ async def lo_que_dice_el_registro_del_cliente(cliente_noco_id) -> dict | None:
     return None if lectura["estado"] == "no_se_pudo" else lectura
 
 
+# Cuántas referencias van en cada llamada al registro. No es una medición de este repo: una dirección tiene un tope
+# corriente de unos 8 KB en los servidores y cada `sesion=<ref>` ocupa alrededor de veinte caracteres, así que con esta
+# tanda la consulta queda muy por debajo. Declarado, no adivinado por la cantidad de facturas que haya hoy.
+REFS_POR_LLAMADA = 100
+
+
+async def sesiones_por_refs(refs) -> dict:
+    """Lo que la App dice de esas sesiones y trabajos, pedidos uno por uno y SIN ficha (`&sesion=<ref>`, sin `persona`).
+
+    Es la lectura de la LISTA de facturas (pieza 7): necesita el `total` y el `abonado` de las sesiones ligadas de cada
+    factura sin preguntar por la ficha entera de cada cliente. Va en tandas (`REFS_POR_LLAMADA`) para no armar una
+    dirección gigante; si una tanda no se puede leer, la lectura entera es `no_se_pudo`, porque con una parte no se puede
+    decir cuánto se ha pagado. Devuelve la misma forma que `sesiones_de_cliente`, con `estado` `sin_cliente` cuando todo
+    salió bien (no hay ficha que ligar: solo se preguntó por esas referencias).
+    """
+    pedidas = _lista_de_refs(refs)
+    if not pedidas:
+        return _vacio("sin_cliente")
+    sesiones, trabajos, canceladas, no_halladas = [], [], [], []
+    for i in range(0, len(pedidas), REFS_POR_LLAMADA):
+        lectura = await sesiones_de_cliente(None, pedidas[i:i + REFS_POR_LLAMADA])
+        if lectura["estado"] == "no_se_pudo":
+            return _vacio("no_se_pudo")
+        sesiones += lectura["sesiones"]
+        trabajos += lectura["trabajos"]
+        canceladas += lectura["canceladas"]
+        no_halladas += lectura["no_halladas"]
+    return {"estado": "sin_cliente", "motivo": "", "sesiones": sesiones, "trabajos": trabajos,
+            "totales": totales_de_sesiones(sesiones + trabajos), "no_halladas": no_halladas,
+            "canceladas": canceladas, "se_le_pregunto": True}
+
+
 def _candidato(fila) -> dict | None:
     """Un renglón de la búsqueda (diseño 3.6) con lo que la página pinta, o None si no sirve.
 

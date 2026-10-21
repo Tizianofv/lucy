@@ -306,6 +306,9 @@ async def main() -> int:
         # y las demás) no se ejercen acá.
         ("factura_por_id", lambda: db.factura_por_id(0)),
         ("facturas_para_la_lista", lambda: db.facturas_para_la_lista()),
+        # Las ligas vivas de todas las facturas (pieza 7), la lectura con la que la lista sabe cuánto se ha pagado de
+        # cada una. LECTURA: la App no se consulta desde acá (el humo no tiene su llave de servicio).
+        ("ligas_vivas_de_las_facturas", lambda: db.ligas_vivas_de_las_facturas()),
         # El Drive de las facturas (pieza 8): ver `_drive_de_las_facturas`, y la lectura de su estado con un id que no
         # existe. LECTURAS: subir y marcar no se ejercen acá (humo.py no escribe en producción).
         ("columnas y tablas de Drive de las facturas (sin tolerancia)", _drive_de_las_facturas),

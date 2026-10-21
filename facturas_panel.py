@@ -42,9 +42,11 @@ def etiqueta_del_estado(estado) -> str:
     return ETIQUETA_DE_ESTADO.get(estado, str(estado))
 
 
-def fila_de_la_lista(f: dict, nombres_de_proyecto: dict[int, str]) -> dict:
+def fila_de_la_lista(f: dict, nombres_de_proyecto: dict[int, str], pago: dict | None = None) -> dict:
     """Una fila de la lista: lo que la plantilla pinta, ya escrito. `f` es una fila de
-    `db.facturas_para_la_lista`. El dinero lo escribe `cotizaciones.dinero_en_pesos` (el mismo de la hoja)."""
+    `db.facturas_para_la_lista`. El dinero lo escribe `cotizaciones.dinero_en_pesos` (el mismo de la hoja). `pago` es
+    lo que `el_pago_de_la_factura` dijo de esa factura (pieza 7); sin él (la lista del proyecto no lo lee) no se pinta
+    ningún estado de pago."""
     return {
         "id": f["id"],
         "numero": f["codigo"] or "Borrador",
@@ -58,6 +60,7 @@ def fila_de_la_lista(f: dict, nombres_de_proyecto: dict[int, str]) -> dict:
         "proyecto": (None if f["proyecto_id"] is None
                      else nombres_de_proyecto.get(f["proyecto_id"]) or f"Proyecto {f['proyecto_id']}"),
         "sesiones": f["ligas_vivas"],
+        "pago": dict(PAGO_QUE_NO_SE_PINTA) if pago is None else pago,
     }
 
 
@@ -326,6 +329,82 @@ def ligas_con_lo_leido(ligas: list[dict], lectura: dict) -> list[dict]:
 def _dinero_de_la_fila(fila: dict) -> dict:
     """Total, abonado y saldo de una sesión, escritos con el dinero de la hoja; «—» donde la App no trajo la cifra."""
     return {k: ("—" if fila.get(k) is None else cz.dinero_en_pesos(fila[k])) for k in ("total", "abonado", "saldo")}
+
+
+# ── El pago, leído de la App (pieza 7, 21-oct-2026) ─────────────────────────────────────────────────
+#
+# EL PAGO SE ANOTA EN UN SOLO SITIO: LA APP, EN CADA SESIÓN (diseño §7, y Tiziano el 20-oct-2026: «Claro, si alguien paga,
+# en la sesión tiene que aparecer eso»). La factura NO guarda ningún pago ni tiene botón de pago: cada vez que se pinta
+# lee de la App lo que se ha pagado de sus sesiones y trabajos ligados vivos y lo compara con lo que ella cobra por esa
+# parte. Nada de esto se guarda.
+#
+# CONTRA QUÉ SE COMPARA (la base, escogida el 21-oct-2026): el SUBTOTAL DE LA FACTURA, sin ITBIS. La App solo dice cuánto
+# se ha pagado; lo que el cliente debe es lo que la factura le cobra, y si alguien cambió un renglón a mano manda el
+# renglón escrito: es lo que se le facturó y lo que va a pagar. La suma de los `total` de la App queda como segunda
+# opinión: cuando no da lo mismo, la factura dice «no cuadra con la App: revísala» con las dos cifras y NO cambia el
+# estado (diseño §7). El ITBIS no cuenta: por la respuesta A de Tiziano (21-oct-2026) no pasa por la App — se cobra
+# aparte—, y la factura lo dice con sus palabras.
+
+TEXTO_SIN_LEER_EL_PAGO = "No se pudo leer lo pagado."
+
+PAGO_QUE_NO_SE_PINTA = {"estado": "no_aplica", "texto": "", "detalle": "", "itbis": ""}
+
+
+def _pago_sin_leer(itbis: str, motivo: str) -> dict:
+    """El pago cuando no se puede decir cuánto se ha pagado: se dice, nunca se disfraza de «sin pagos»."""
+    return {"estado": "no_se_pudo", "texto": TEXTO_SIN_LEER_EL_PAGO, "detalle": motivo, "itbis": itbis}
+
+
+def el_pago_de_la_factura(f: dict, ligas_leidas: list[dict] | None) -> dict:
+    """Lo que la factura dice de su pago, leído de lo que la App contestó AHORA (`ligas_leidas`, lo que devuelve
+    `ligas_con_lo_leido`): `{"estado", "texto", "detalle", "itbis"}`.
+
+    `estado` es `pagada` (lo pagado cubre el subtotal de la factura), `con_abono` (algo pagado, no todo), `sin_pagos`,
+    `no_se_pudo` (no se puede decir cuánto se ha pagado: la App no contestó, ya no devuelve una de sus sesiones o no trajo
+    una cifra: se dice y no se adivina) o `no_aplica` (la factura está anulada: una anulada no tiene estado de pago).
+    `detalle` es lo que hay que decir además (el porqué de un `no_se_pudo`, o las dos cifras cuando la App y la factura no
+    cuadran) e `itbis`, la frase del ITBIS cuando la factura lo lleva.
+
+    `ligas_leidas` en `None` quiere decir que no se pudo leer ni de qué sesiones es la factura. Nada de esto se guarda.
+    """
+    if f["estado"] == "anulada":
+        return dict(PAGO_QUE_NO_SE_PINTA)
+    itbis = (f"El ITBIS ({cz.dinero_en_pesos(f['itbis'])}) se cobra aparte; no se lleva en la App."
+             if f["itbis_pct"] is not None else "")
+    if ligas_leidas is None:
+        return _pago_sin_leer(itbis, "No se pudieron leer las sesiones de la factura.")
+    if any(l["leida"] == "no_se_pudo" for l in ligas_leidas):
+        return _pago_sin_leer(itbis, "El registro no contestó.")
+    if any(l["leida"] == "no_esta" for l in ligas_leidas):
+        return _pago_sin_leer(itbis, "El registro ya no devuelve una de sus sesiones o trabajos.")
+    pagado, en_la_app, comparables = Decimal("0"), Decimal("0"), True
+    for l in ligas_leidas:
+        if l["leida"] == "cancelada":
+            # Una cancelada no se cobra ni se paga: no entra en ninguna de las dos cifras (la página la nombra aparte).
+            continue
+        fila = l["fila"] or {}
+        abonado, total = fila.get("abonado"), fila.get("total")
+        if abonado is None:
+            return _pago_sin_leer(itbis, "El registro no dijo cuánto se ha pagado de una de sus sesiones.")
+        if abonado < 0 or (total is not None and total < 0):
+            return _pago_sin_leer(itbis, "El registro trajo una cifra de dinero que no se entiende.")
+        pagado += abonado
+        if total is None:
+            comparables = False
+        else:
+            en_la_app += total
+    debido = f["subtotal"]
+    if debido > 0 and pagado >= debido:
+        estado, texto = "pagada", "Pagada"
+    elif pagado > 0:
+        estado, texto = "con_abono", f"Pagado {cz.dinero_en_pesos(pagado)} de {cz.dinero_en_pesos(debido)}"
+    else:
+        estado, texto = "sin_pagos", "Sin pagos"
+    detalle = ""
+    if comparables and all(l["leida"] == "ok" for l in ligas_leidas) and en_la_app != debido:
+        detalle = (f"No cuadra con la App: revísala (la factura suma {cz.dinero_en_pesos(debido)} y el registro dice "
+                   f"{cz.dinero_en_pesos(en_la_app)} de sus sesiones).")
+    return {"estado": estado, "texto": texto, "detalle": detalle, "itbis": itbis}
 
 
 # ── Lo que la puerta rechazó, en palabras ───────────────────────────────────────────────────────
