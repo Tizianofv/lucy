@@ -337,12 +337,13 @@ def _dinero_de_la_fila(fila: dict) -> dict:
 # en la sesión tiene que aparecer eso»). La factura NO guarda ningún pago ni tiene botón de pago: cada vez que se pinta
 # lee de la App lo que se ha pagado de sus sesiones y trabajos ligados vivos. Nada de esto se guarda.
 #
-# CUÁNDO ESTÁ PAGADA (la regla aprobada, dicha por la sala el 21-oct-2026 tras el NO PASA del testigo): cuando sus
-# sesiones y trabajos ligados vivos —sin contar los cancelados— NO DEBEN NADA en el Registro, o sea cuando la suma del
-# `saldo` que da la App por sesión (que ya descuenta lo que el Registro descuenta) es cero o menos. Lo que se muestra
-# como pagado es la suma del `abonado`, y el «de RD$Y» es la suma de los `total` de esas sesiones. (La primera versión
-# medía «pagada» contra el subtotal de la factura; el testigo midió que así una sesión que debe RD$500 salía «Pagada»
-# cuando la factura se había escrito por RD$500, y el diseño dice «pagada (las sesiones no deben nada)».)
+# CUÁNDO ESTÁ PAGADA (la regla aprobada, corregida dos veces el 21-oct-2026 por los NO PASA del testigo): cuando TODAS
+# sus sesiones y trabajos ligados vivos —sin contar los cancelados— tienen el `saldo` que da la App en cero o menos. Se
+# mira SESIÓN POR SESIÓN, SIN COMPENSAR: lo que una sesión pagó de más no tapa lo que debe otra (el testigo midió una de
+# RD$1,000 que debía y otra que había pagado RD$1,000 de más; la suma daba cero y la factura decía «Pagada»). Lo que se
+# muestra como pagado es la suma del `abonado`, y el «de RD$Y» es la suma de los `total` de esas sesiones. Si TODAS las
+# sesiones contadas tienen total cero, la factura no dice «Pagada» sino «Sin cargos en el registro» (no hay nada que
+# cobrar). (La primera versión medía «pagada» contra el subtotal de la factura; también fue un NO PASA del testigo.)
 #
 # EL AVISO DE «NO CUADRA» ES OTRA COSA Y NO CAMBIA EL ESTADO: cuando el subtotal de la factura (sin ITBIS) no es igual a
 # la suma de los `total` de las sesiones —porque se cambió un renglón a mano o porque la factura lleva un renglón que no
@@ -379,12 +380,13 @@ def el_pago_de_la_factura(f: dict, ligas_leidas: list[dict] | None) -> dict:
     """Lo que la factura dice de su pago, leído de lo que la App contestó AHORA (`ligas_leidas`, lo que devuelve
     `ligas_con_lo_leido`): `{"estado", "texto", "detalle", "itbis"}`.
 
-    `estado` es `pagada` (las sesiones y trabajos ligados vivos no deben nada en el Registro: la suma de su `saldo` es
-    cero o menos), `con_abono` («Pagado RD$X de RD$Y»: algo pagado y todavía deben), `sin_pagos`, `no_se_pudo` (no se
-    puede decir cuánto se ha pagado: la App no contestó, ya no devuelve una de sus sesiones o no trajo una cifra: se dice
-    y no se adivina) o `no_aplica` (la factura está anulada: una anulada no tiene estado de pago). `detalle` es lo que hay
-    que decir además (el porqué de un `no_se_pudo`, o las dos cifras cuando la App y la factura no cuadran) e `itbis`, la
-    frase del ITBIS cuando la factura lo lleva.
+    `estado` es `pagada` (TODAS las sesiones y trabajos ligados vivos tienen `saldo` cero o menos: se mira una por una,
+    sin compensar), `sin_cargos` («Sin cargos en el registro»: todas las contadas tienen total cero), `con_abono`
+    («Pagado RD$X de RD$Y»: algo pagado y alguna todavía debe), `sin_pagos`, `no_se_pudo` (no se puede decir cuánto se ha
+    pagado: la App no contestó, ya no devuelve una de sus sesiones o no trajo una cifra: se dice y no se adivina) o
+    `no_aplica` (la factura está anulada: una anulada no tiene estado de pago). `detalle` es lo que hay que decir además
+    (el porqué de un `no_se_pudo`, las dos cifras cuando la App y la factura no cuadran, o que una sesión pagó de más y
+    eso no tapa lo que debe otra) e `itbis`, la frase del ITBIS cuando la factura lo lleva.
 
     `ligas_leidas` en `None` quiere decir que no se pudo leer ni de qué sesiones es la factura. Nada de esto se guarda.
     """
@@ -398,7 +400,8 @@ def el_pago_de_la_factura(f: dict, ligas_leidas: list[dict] | None) -> dict:
         return _pago_sin_leer(itbis, "El registro no contestó.")
     if any(l["leida"] == "no_esta" for l in ligas_leidas):
         return _pago_sin_leer(itbis, "El registro ya no devuelve una de sus sesiones o trabajos.")
-    pagado, total_de_las_sesiones, saldo_de_las_sesiones, contadas = Decimal("0"), Decimal("0"), Decimal("0"), 0
+    pagado, total_de_las_sesiones, contadas = Decimal("0"), Decimal("0"), 0
+    todas_saldadas, todas_sin_cargo, alguna_pago_de_mas = True, True, False
     for l in ligas_leidas:
         if l["leida"] == "cancelada":
             # Una cancelada no se cobra ni se paga: no entra en ninguna de las cifras (la página la nombra aparte).
@@ -409,21 +412,30 @@ def el_pago_de_la_factura(f: dict, ligas_leidas: list[dict] | None) -> dict:
             return _pago_sin_leer(itbis, "El registro no dijo cuánto cuesta, cuánto se ha pagado o cuánto debe una de "
                                          "sus sesiones.")
         if abonado < 0 or total < 0:
-            # Un `saldo` negativo NO es un error: es lo que debe menos quien pagó de más, y cuenta como pagada.
+            # Un `saldo` negativo NO es un error: es lo que debe menos quien pagó de más.
             return _pago_sin_leer(itbis, "El registro trajo una cifra de dinero que no se entiende.")
         pagado += abonado
         total_de_las_sesiones += total
-        saldo_de_las_sesiones += saldo
         contadas += 1
-    if contadas and saldo_de_las_sesiones <= 0:
+        todas_saldadas = todas_saldadas and saldo <= 0
+        todas_sin_cargo = todas_sin_cargo and total == 0
+        alguna_pago_de_mas = alguna_pago_de_mas or saldo < 0
+    if not contadas:
+        estado, texto = "sin_pagos", "Sin pagos"
+    elif todas_sin_cargo:
+        estado, texto = "sin_cargos", "Sin cargos en el registro."
+    elif todas_saldadas:
         estado, texto = "pagada", "Pagada"
     elif pagado > 0:
         estado, texto = "con_abono", (f"Pagado {cz.dinero_en_pesos(pagado)} de "
                                       f"{cz.dinero_en_pesos(total_de_las_sesiones)}")
     else:
         estado, texto = "sin_pagos", "Sin pagos"
-    detalle = _aviso_de_lo_que_no_cuadra(f, ligas_leidas, total_de_las_sesiones)
-    return {"estado": estado, "texto": texto, "detalle": detalle, "itbis": itbis}
+    dichos = [d for d in (_aviso_de_lo_que_no_cuadra(f, ligas_leidas, total_de_las_sesiones),) if d]
+    if alguna_pago_de_mas and estado == "con_abono":
+        # El que pagó de más no tapa la deuda de otra sesión: la factura no está pagada, y se dice por qué.
+        dichos.append("Una de sus sesiones pagó de más: eso no tapa lo que debe otra.")
+    return {"estado": estado, "texto": texto, "detalle": " ".join(dichos), "itbis": itbis}
 
 
 # ── Lo que la puerta rechazó, en palabras ───────────────────────────────────────────────────────
