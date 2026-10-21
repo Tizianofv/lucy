@@ -19,9 +19,9 @@
 --         subtotal, el ITBIS y el total NO se guardan: salen de los renglones y de este porcentaje, así no hay
 --         dos sitios que puedan decir cifras distintas.
 --       - `ncf`, `ncf_tipo`, `rnc_cedula`: opcionales. El NCF lo escribe una persona a mano. `UNIQUE (ncf)`
---         cuenta TODAS las filas, anuladas incluidas: el NCF de una anulada no se vuelve a usar. El NCF se
---         guarda sin espacios, en mayúsculas (`facturas_ncf_normalizado`) para que la misma cifra no entre dos
---         veces escrita de dos formas. El NCF y su tipo van juntos o ninguno.
+--         cuenta TODAS las filas, anuladas incluidas: el NCF de una anulada no se vuelve a usar. El NCF solo
+--         puede tener letras mayúsculas y números, de 1 a 20 (`facturas_ncf_normalizado`: ni espacios, ni tabuladores,
+--         ni saltos de línea, ni guiones) para que la misma cifra no entre dos veces escrita de dos formas. El NCF y su tipo van juntos o ninguno.
 --       - `hecha_por`: `casa` (una persona, con su `hecha_por_chat_id`) o `natalia` (sin chat).
 --       - NO hay columnas de pago: el pago se anota en la App de registro y la factura lo lee.
 --   · `factura_renglones`: los renglones de la factura (descripción, detalle y monto de la línea, mayor que 0).
@@ -32,7 +32,7 @@
 --       QUÉ LA BASE NO PUEDE EXIGIR: que toda factura tenga al menos una liga viva (es una regla entre dos
 --       tablas y este repo no usa disparadores). La exige la pieza 2 (crear la factura y su primera liga en la
 --       misma transacción y no dejar desligar la última) y la vigila `tools/humo.py`, que cuenta las
---       emitidas o anuladas sin ninguna liga viva.
+--       facturas (de cualquier estado, borradores incluidos) sin ninguna liga viva.
 --   · `factura_envios`: por dónde salió la factura. Es también el lugar donde queda la APROBACIÓN del equipo
 --     (`aprobado_por_chat_id`, `aprobado_en`) que se pide antes de mandar una factura al cliente. `canal`:
 --     `whatsapp`, `correo` o `mano`. Por `whatsapp` o `correo` no se llega a `aprobado` ni a `enviado` sin
@@ -118,7 +118,7 @@ CREATE TABLE IF NOT EXISTS facturas (
   CONSTRAINT facturas_ncf_completo
     CHECK ((ncf IS NULL) = (ncf_tipo IS NULL)),
   CONSTRAINT facturas_ncf_normalizado
-    CHECK (ncf IS NULL OR (ncf = upper(ncf) AND ncf NOT LIKE '% %' AND length(ncf) BETWEEN 1 AND 20)),
+    CHECK (ncf IS NULL OR (ncf ~ '^[A-Z0-9]+$' AND length(ncf) BETWEEN 1 AND 20)),
   CONSTRAINT facturas_ncf_tipo_valido
     CHECK (ncf_tipo IS NULL OR length(trim(ncf_tipo)) BETWEEN 1 AND 20),
   CONSTRAINT facturas_rnc_cedula_valido

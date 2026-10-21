@@ -12,7 +12,10 @@ RETURNING`) sobre las tablas que crea la migración real. Qué se vigila:
   4. `UNIQUE (anio, numero)` frena un repetido aunque el contador falle;
   5. el formato `FAC-AAAA-NNN`;
   6. un año que no es año no llega a la base;
-  7. una sola puerta: ningún `.py` fuera de `tests/` escribe `serie_facturas` salvo la sentencia de `db`.
+  7. una sola puerta, hasta donde llega una guarda de TEXTO: ningún `.py` fuera de `tests/` trae una constante de
+     texto con `serie_facturas` e INSERT/UPDATE/DELETE/REPLACE salvo la sentencia de `db`. NO ve el nombre de la
+     tabla en una variable, ni f-strings, ni SQL armado en ejecución (frontera declarada en
+     `tests/test_numero_de_cotizacion.py::test_la_frontera_de_la_guarda_no_lo_ve_a_proposito`).
 
 FRONTERA, dicha una vez:
   · NO hay Postgres en esta máquina. SQLite bloquea la base ENTERA mientras una conexión escribe; Postgres
@@ -111,7 +114,7 @@ def _crear_tablas_en_archivo(ruta: str) -> None:
     con.execute("INSERT OR IGNORE INTO proyectos (id) VALUES (1)")
     for texto in (ct._texto_migracion(), tf._texto_migracion()):
         for s in tf._sentencias_que_corren(texto):
-            con.execute(ct._a_sqlite(s))
+            con.execute(tf._a_sqlite(s))
     con.close()
 
 
@@ -253,7 +256,7 @@ def test_un_anio_que_no_es_anio_no_toca_la_base(anio):
 
 # ── 7. Una sola puerta ──────────────────────────────────────────────────────────────────────────────
 
-def test_solo_la_sentencia_del_contador_escribe_la_serie_de_facturas():
+def test_ningun_texto_literal_fuera_de_tests_escribe_la_serie_de_facturas_salvo_el_del_contador():
     hallados = nc._textos_que_escriben_la_serie(buzon._py_en_disco(_ROOT), _ROOT, "serie_facturas")
     assert [(r, v) for r, _, v in hallados] == [("db/db.py", db.SENTENCIA_DEL_NUMERO_DE_FACTURA)], hallados
 

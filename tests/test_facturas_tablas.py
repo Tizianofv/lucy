@@ -72,6 +72,13 @@ def _guion():
     return modulo
 
 
+def _a_sqlite(s: str) -> str:
+    """El cambio de dialecto de siempre (`ct._a_sqlite`) y uno más: el `~` de Postgres no existe en SQLite, y
+    `ncf ~ '^[A-Z0-9]+$'` se corre como `ncf NOT GLOB '*[^A-Z0-9]*'` (GLOB distingue mayúsculas y [^...] incluye
+    el tabulador y el salto de línea). Lo que NO se ejerce aquí es el motor de expresiones regulares de Postgres."""
+    return ct._a_sqlite(s).replace("ncf ~ '^[A-Z0-9]+$'", "ncf NOT GLOB '*[^A-Z0-9]*'")
+
+
 def _sentencias_que_corren(texto: str) -> list[str]:
     return [s for s in g._sentencias(texto) if not re.match(r"(BEGIN|COMMIT|COMMENT\s+ON)\b", s, re.I)]
 
@@ -82,7 +89,7 @@ def _base() -> sqlite3.Connection:
     con = ct._base_con_migracion()
     ct._insertar(con)
     for s in _sentencias_que_corren(_texto_migracion()):
-        con.execute(ct._a_sqlite(s))
+        con.execute(_a_sqlite(s))
     return con
 
 
@@ -144,7 +151,7 @@ def test_la_migracion_corre_las_cinco_tablas_nacen_vacias_y_la_segunda_vez_no_ha
     for t in TABLAS:
         assert con.execute(f"SELECT count(*) FROM {t}").fetchone()[0] == 0, f"{t} no nació vacía"
     for s in _sentencias_que_corren(_texto_migracion()):
-        con.execute(ct._a_sqlite(s))
+        con.execute(_a_sqlite(s))
     assert con.execute("SELECT count(*) FROM serie_facturas").fetchone()[0] == 0
 
 
@@ -251,7 +258,8 @@ def test_las_facturas_sin_ncf_no_chocan_entre_si():
     assert con.execute("SELECT count(*) FROM facturas WHERE ncf IS NULL").fetchone()[0] == 3
 
 
-@pytest.mark.parametrize("ncf", ["b0100000001", "B0100000001 ", " B0100000001", "B01 00000001", "", "B" * 21])
+@pytest.mark.parametrize("ncf", ["b0100000001", "B0100000001 ", " B0100000001", "B01 00000001", "B01\t00000001",
+                                 "B01\n00000001", "B0100000001\n", "B0100000001\t", "B01-00000001", "", "B" * 21])
 def test_el_ncf_entra_solo_en_la_forma_normal(ncf):
     con = _base()
     _poner(con, "facturas", **_emitida(1, ncf="B0100000001", ncf_tipo="B01"))
