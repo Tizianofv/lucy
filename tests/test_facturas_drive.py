@@ -611,7 +611,9 @@ def test_la_migracion_agrega_las_columnas_y_la_tabla_y_el_esquema_dice_lo_mismo(
     assert de_facturas == COLUMNAS_DE_LAS_FACTURAS
     assert re.findall(r"ALTER\s+TABLE\s+drive_de_proyectos\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+(\w+)\s+(\w+)",
                       sin_comentarios, re.I) == [("carpeta_facturas_id", "TEXT")]
-    assert ct._columnas_que_agregan_otras_migraciones_a("facturas", ft._migracion()) == set(COLUMNAS_DE_LAS_FACTURAS)
+    # Las de Drive, más las que agreguen otras piezas (D3: el descuento). Que cada columna de `facturas` esté decidida
+    # lo vigila el cubo estricto de `test_guardar_factura.py`.
+    assert set(COLUMNAS_DE_LAS_FACTURAS) <= ct._columnas_que_agregan_otras_migraciones_a("facturas", ft._migracion())
     esquema = ft._ESQUEMA
     for c in COLUMNAS_DE_LAS_FACTURAS:
         assert re.search(rf"^\s+{c}\s", b2._ddl(esquema, "facturas")[0], re.M), c

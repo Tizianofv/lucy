@@ -89,13 +89,14 @@
     <label{% if 'ncf' in campos_marcados %} class="marcada"{% endif %}>NCF (si lleva) <input type="text" name="ncf" value="{{ v.ncf }}" maxlength="30"{% if 'ncf' in campos_marcados %} aria-invalid="true"{% endif %}></label>
     <label{% if 'ncf' in campos_marcados %} class="marcada"{% endif %}>Tipo de NCF (si lleva NCF) <input type="text" name="ncf_tipo" value="{{ v.ncf_tipo }}" maxlength="30"{% if 'ncf' in campos_marcados %} aria-invalid="true"{% endif %}></label>
     <label class="casilla"><input type="checkbox" name="itbis" value="18"{% if v.itbis %} checked{% endif %}> Suma ITBIS (18 %)</label>
+    <label{% if 'descuento' in campos_marcados %} class="marcada"{% endif %}>Descuento (si lleva) <input type="text" name="descuento" value="{{ v.descuento }}" inputmode="decimal" placeholder="0" aria-label="Descuento de la factura"{% if 'descuento' in campos_marcados %} aria-invalid="true"{% endif %}></label>
   </div>
+  <p class="suave">El descuento se resta del subtotal antes del ITBIS: no puede pasar del subtotal.</p>
   <h3 class="suave">Renglones</h3>
   <p class="suave">Cada renglón lleva su servicio y su descripción, la cantidad con su unidad y el precio de una unidad. El total de cada renglón es la cantidad por el precio unitario: se calcula al guardar. Los renglones en blanco se ignoran.</p>
   {% if renglones_de_sesiones %}<p class="suave" data-renglones-de-sesiones>Hay un renglón por cada renglón de la cuenta de las sesiones o trabajos escogidos; la cantidad, la unidad y el precio salen del registro (antes de ITBIS). Cámbialos como haga falta.</p>{% endif %}
   {% if sesiones_sin_detalle %}<p class="aviso" data-sin-detalle>No se pudo leer el detalle de la cuenta de {% for c in sesiones_sin_detalle %}«{{ c }}»{% if not loop.last %}, {% endif %}{% endfor %}: va un renglón con su total.</p>{% endif %}
   {% for a in avisos_del_detalle %}<p class="aviso" data-aviso-del-detalle>{{ a }}</p>{% endfor %}
-  {% for s in sesiones_con_descuento %}<p class="aviso" data-descuento>El registro tiene un descuento de {{ s.descuento }} en «{{ s.codigo }}»; esta factura todavía no lo resta (no se aceptan montos negativos).</p>{% endfor %}
   {% if sin_total %}<p class="aviso" data-sin-total>El registro no trae el total de {% for c in sin_total %}«{{ c }}»{% if not loop.last %}, {% endif %}{% endfor %}: escribe su precio.</p>{% endif %}
   <div class="scroll"><table class="reng">
     <tr><th>Servicio</th><th>Descripción</th><th>Cantidad</th><th>Unidad</th><th>Precio unitario</th><th>Total</th></tr>

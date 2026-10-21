@@ -684,6 +684,9 @@ class _FacturaNueva(BaseModel):
     refs: list[StrictStr] = Field(min_length=1, max_length=LIMITE_DE_SESIONES_POR_FACTURA_DE_NATALIA)
     renglones: list[_RenglonDeNatalia] | None = None
     itbis: StrictBool = False
+    # Lo que se rebaja del subtotal antes del ITBIS. Vacío (o sin mandarlo) = la suma de los `descuento` de sus
+    # sesiones; 0 = sin descuento a propósito.
+    descuento: StrictStr = ""
     rnc_cedula: StrictStr = ""
     fecha: StrictStr = ""
 
@@ -724,7 +727,8 @@ def _factura_para_natalia(f: dict) -> dict:
     return {
         "factura_id": f["id"], "codigo": f["codigo"], "estado": f["estado"], "para_nombre": f["para_nombre"],
         "fecha": f["fecha"].isoformat() if isinstance(f["fecha"], date) else str(f["fecha"]),
-        "subtotal": _dinero_para_natalia(f["subtotal"]), "itbis": _dinero_para_natalia(f["itbis"]),
+        "subtotal": _dinero_para_natalia(f["subtotal"]), "descuento": _dinero_para_natalia(f["descuento"]),
+        "itbis": _dinero_para_natalia(f["itbis"]),
         "total": _dinero_para_natalia(f["total"]),
         "renglones": [{"descripcion": r["descripcion"], "detalle": r["detalle"],
                        "cantidad": _cantidad_para_natalia(r.get("cantidad")), "unidad": r.get("unidad") or "",
@@ -762,7 +766,14 @@ def _por_que_la_puerta_dijo_que_no(e: Exception) -> HTTPException:
 def _renglon_pedido_de_natalia(r: _RenglonDeNatalia) -> dict:
     """Un renglón que manda Natalia tal como se le pasa a la puerta: con `monto` (la forma vieja: cantidad 1,
     precio = monto) o con `cantidad`/`unidad`/`precio_unitario` (la del detalle, sin `monto`: la puerta lo calcula).
-    Lo que no trae ni una ni otra va con el monto vacío y la puerta dice qué falta."""
+    Las dos formas a la vez se rechazan con 422, no se escoge una callada: `monto` con `precio_unitario` lo rechaza
+    la puerta, y `monto` con `cantidad` o `unidad` (sin precio) se rechaza AQUÍ — si no, esos campos se caían sin
+    decir nada y la factura salía con otro total del que pidió. Lo que no trae ni una ni otra va con el monto vacío
+    y la puerta dice qué falta."""
+    if r.precio_unitario is None and r.monto is not None and (r.cantidad is not None or r.unidad is not None):
+        raise HTTPException(
+            status_code=422,
+            detail="cada renglón va con monto o con cantidad y precio_unitario, no con las dos formas. No se guardó nada.")
     renglon = {"descripcion": r.descripcion}
     if r.detalle:
         renglon["detalle"] = r.detalle
@@ -778,6 +789,15 @@ def _renglon_pedido_de_natalia(r: _RenglonDeNatalia) -> dict:
     else:
         renglon["monto"] = ""
     return renglon
+
+
+def _descuento_de_las_sesiones_de_natalia(ligas: list[dict], lectura: dict) -> str:
+    """La suma de los `descuento` de las sesiones o trabajos escogidos, como dinero de dos decimales («500.00»; «0.00»
+    si ninguno trae). Es con lo que nace la factura cuando el pedido no manda `descuento`."""
+    por_ref = {r["ref"]: r for r in lectura.get("sesiones", []) + lectura.get("trabajos", [])}
+    total = sum((por_ref[l["ref"]]["descuento"] for l in ligas
+                 if isinstance(por_ref.get(l["ref"], {}).get("descuento"), Decimal)), Decimal("0"))
+    return _dinero_para_natalia(total)
 
 
 def _renglones_de_las_sesiones_de_natalia(ligas: list[dict], lectura: dict) -> tuple[list[dict], list[str]]:
@@ -808,20 +828,23 @@ async def crear_factura_de_natalia(
 
     PEDIDO: `{refs: ["<ref>", …] (1 a 50), renglones?: [{descripcion, detalle?, monto: "62500.00"} |
     {descripcion, detalle?, cantidad: "2", unidad?: "horas", precio_unitario: "18000.00"}], itbis?: bool (18 %;
-    falso por omisión), rnc_cedula?: "9 u 11 cifras", fecha?: "AAAA-MM-DD" (hoy por omisión)}`. Cada renglón va en UNA
-    de las dos formas: `monto` (cantidad 1) o `cantidad` + `precio_unitario` (con `unidad` si la lleva), y entonces el
-    total del renglón es cantidad × precio (lo calcula Lucy; no se manda `monto`). Sin `renglones` sale un renglón por
-    cada renglón de la cuenta de cada sesión, con su cantidad, su unidad y su precio (si alguna sesión no trae total,
-    422 y nada se guarda). El nombre lo pone Lucy: es el de la ficha en NocoDB. NCF, proyecto y cotización no se
-    piden: son de la casa.
+    falso por omisión), descuento?: "500.00", rnc_cedula?: "9 u 11 cifras", fecha?: "AAAA-MM-DD" (hoy por omisión)}`.
+    Cada renglón va en UNA de las dos formas: `monto` (cantidad 1) o `cantidad` + `precio_unitario` (con `unidad` si
+    la lleva), y entonces el total del renglón es cantidad × precio (lo calcula Lucy; no se manda `monto`); las dos
+    formas a la vez —`monto` con `precio_unitario`, o `monto` con `cantidad` o `unidad`— son 422. Sin `renglones` sale
+    un renglón por cada renglón de la cuenta de cada sesión, con su cantidad, su unidad y su precio (si alguna sesión
+    no trae total, 422 y nada se guarda). `descuento` se resta del subtotal antes del ITBIS y no puede pasar del
+    subtotal; si no se manda, se arma con la suma de los `descuento` de las sesiones. El nombre lo pone Lucy: es el de
+    la ficha en NocoDB. NCF, proyecto y cotización no se piden: son de la casa.
 
-    RESPUESTAS: 200 `{"factura": {factura_id, codigo (null), estado: "borrador", para_nombre, fecha, subtotal, itbis, total,
-    renglones: [{descripcion, detalle, cantidad, unidad, precio_unitario, monto}], ligas, envios: []}, "reusada": false}`,
-    releído de la base. 404: la ficha no existe. 409: alguna sesión ya está en otra factura viva. 422: pedido que no
-    vale (sesión de otro cliente, cancelada, ficha sin teléfono en el registro, monto mal escrito, cantidad sin precio,
-    las dos formas de renglón a la vez…): el detalle dice cuál. 503: Noco, el registro o la base no contestaron, o falta
-    una migración. EN TODOS LOS ERRORES NO SE GUARDÓ NADA. 401/403/429: la puerta de siempre."""
-    textos = [cuerpo.rnc_cedula, cuerpo.fecha, *cuerpo.refs]
+    RESPUESTAS: 200 `{"factura": {factura_id, codigo (null), estado: "borrador", para_nombre, fecha, subtotal, descuento,
+    itbis, total, renglones: [{descripcion, detalle, cantidad, unidad, precio_unitario, monto}], ligas, envios: []},
+    "reusada": false}`, releído de la base. 404: la ficha no existe. 409: alguna sesión ya está en otra factura viva.
+    422: pedido que no vale (sesión de otro cliente, cancelada, ficha sin teléfono en el registro, monto mal escrito,
+    cantidad sin precio, las dos formas de renglón a la vez, descuento que no es un dinero o que pasa del subtotal…):
+    el detalle dice cuál. 503: Noco, el registro o la base no contestaron, o falta una migración. EN TODOS LOS ERRORES
+    NO SE GUARDÓ NADA. 401/403/429: la puerta de siempre."""
+    textos = [cuerpo.rnc_cedula, cuerpo.fecha, cuerpo.descuento, *cuerpo.refs]
     if cuerpo.renglones:
         textos += [x for r in cuerpo.renglones
                    for x in (r.descripcion, r.detalle, r.monto, r.cantidad, r.unidad, r.precio_unitario)
@@ -853,10 +876,14 @@ async def crear_factura_de_natalia(
                        + ". Manda los renglones. No se guardó nada.")
     else:
         renglones = [_renglon_pedido_de_natalia(r) for r in cuerpo.renglones]
+    # El descuento: el que manda Natalia; si no manda ninguno, la suma de los de las sesiones escogidas (lo mismo que
+    # llena la pantalla al crear desde sesiones). La puerta lo mide contra el subtotal.
+    descuento = cuerpo.descuento.strip() or _descuento_de_las_sesiones_de_natalia(ligas, lectura)
     try:
         creada = await db.crear_borrador_de_factura_de_natalia(
             noco_id, para_nombre=ficha["nombre"], renglones=renglones, ligas=ligas, fecha=cuerpo.fecha or None,
-            itbis_pct=db.ITBIS_DE_FACTURA if cuerpo.itbis else None, rnc_cedula=cuerpo.rnc_cedula or None)
+            itbis_pct=db.ITBIS_DE_FACTURA if cuerpo.itbis else None, descuento=descuento,
+            rnc_cedula=cuerpo.rnc_cedula or None)
         relei = await db.facturas_de_natalia(noco_id, creada["id"])
     except (db.FacturaNoVale, db.FacturaNoEsta, db.FacturasSinTabla) as e:
         raise _por_que_la_puerta_dijo_que_no(e) from None

@@ -42,7 +42,9 @@
     <label{% if 'ncf' in campos_marcados %} class="marcada"{% endif %}>NCF (si lleva) <input type="text" name="ncf" value="{{ v.ncf }}" maxlength="30"{% if 'ncf' in campos_marcados %} aria-invalid="true"{% endif %}></label>
     <label{% if 'ncf' in campos_marcados %} class="marcada"{% endif %}>Tipo de NCF (si lleva NCF) <input type="text" name="ncf_tipo" value="{{ v.ncf_tipo }}" maxlength="30"{% if 'ncf' in campos_marcados %} aria-invalid="true"{% endif %}></label>
     <label class="casilla"><input type="checkbox" name="itbis" value="18"{% if v.itbis %} checked{% endif %}> Suma ITBIS (18 %)</label>
+    <label{% if 'descuento' in campos_marcados %} class="marcada"{% endif %}>Descuento (si lleva) <input type="text" name="descuento" value="{{ v.descuento }}" inputmode="decimal" placeholder="0" aria-label="Descuento de la factura"{% if 'descuento' in campos_marcados %} aria-invalid="true"{% endif %}></label>
   </div>
+  <p class="suave">El descuento se resta del subtotal antes del ITBIS: no puede pasar del subtotal.</p>
   <div class="scroll"><table class="reng">
     <tr><th>Servicio</th><th>Descripción</th><th>Cantidad</th><th>Unidad</th><th>Precio unitario</th><th>Total</th></tr>
     {% for r in v.renglones %}{% set n = loop.index %}

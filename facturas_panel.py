@@ -109,7 +109,8 @@ def renglones_del_formulario(formulario) -> list[dict]:
 def campos_del_formulario(formulario) -> dict:
     """Lo que el POST de una factura trae, ya en la forma que pide la puerta. No decide qué vale. `formulario` es el
     de la petición (se le pregunta con `.get`, `.getlist` y `.keys()`). El ITBIS es una casilla: marcada es el
-    porcentaje que usa la casa (`db.ITBIS_DE_FACTURA`), sin marcar es «sin ITBIS»."""
+    porcentaje que usa la casa (`db.ITBIS_DE_FACTURA`), sin marcar es «sin ITBIS». El descuento es una cifra escrita
+    (vacía = sin descuento)."""
     refs = [r.strip() for r in formulario.getlist("ref") if isinstance(r, str) and r.strip()]
     return {
         "cliente": _entero_o_el_texto(formulario.get("cliente")),
@@ -119,6 +120,7 @@ def campos_del_formulario(formulario) -> dict:
         "para_nombre": texto_de(formulario.get("para_nombre")),
         "fecha": texto_de(formulario.get("fecha")).strip(),
         "itbis_pct": str(db.ITBIS_DE_FACTURA) if "itbis" in formulario else None,
+        "descuento": texto_de(formulario.get("descuento")).strip(),
         "ncf": texto_de(formulario.get("ncf")),
         "ncf_tipo": texto_de(formulario.get("ncf_tipo")),
         "rnc_cedula": texto_de(formulario.get("rnc_cedula")),
@@ -168,6 +170,20 @@ def _total_escrito(cantidad, precio) -> str:
     return _sin_rd(db.total_del_renglon(c.quantize(Decimal("0.001")), p.quantize(Decimal("0.01"))))
 
 
+def _descuento_escrito(valor) -> str:
+    """El descuento como se escribe en su casilla: cero (o nada) se deja en blanco; `Decimal("500.00")` → «500»;
+    un texto que la persona escribió se devuelve tal cual (un rechazo no pierde lo escrito)."""
+    if valor in (None, "") or (isinstance(valor, Decimal) and valor == 0):
+        return ""
+    return _precio_escrito(valor)
+
+
+def descuento_de_las_sesiones(filas: list[dict]) -> Decimal:
+    """La suma de los `descuento` de las sesiones o trabajos escogidos (0 si ninguno trae). Es con lo que la pantalla
+    llena la casilla del descuento al crear una factura desde sesiones; el descuento de cada sesión lo dice la App."""
+    return sum((r["descuento"] for r in filas if isinstance(r.get("descuento"), Decimal)), Decimal("0"))
+
+
 def casillas_de_renglones(renglones: list[dict], *, con_sobra: bool = True) -> list[dict]:
     """Los renglones como casillas: los que hay, con su cantidad, su unidad y su precio como se escriben, el total
     calculado para mirarlo, y los en blanco que faltan para llegar a `RENGLONES_EN_BLANCO` (más
@@ -190,23 +206,28 @@ def casillas_de_renglones(renglones: list[dict], *, con_sobra: bool = True) -> l
 
 def valores_del_formulario(*, factura: dict | None = None, escrito: dict | None = None, nombre_del_cliente: str = "",
                            desde_la_opcion: list[dict] | None = None, desde_las_sesiones: list[dict] | None = None,
-                           renglones_de_mas: list[dict] | None = None, hoy: date | None = None) -> dict:
+                           renglones_de_mas: list[dict] | None = None,
+                           descuento_de_las_sesiones: Decimal | None = None,
+                           hoy: date | None = None) -> dict:
     """Con qué se llenan las casillas. Manda lo ESCRITO (un guardado rechazado vuelve con lo que la persona puso),
     después la factura que se corrige (más `renglones_de_mas`, los que se ofrecieron agregar de una sesión recién
     ligada), después la opción de la cotización de la que nace, después un renglón por cada sesión o trabajo escogido
-    (`desde_las_sesiones`), y si no hay nada, en blanco con la fecha de hoy y el nombre del cliente."""
+    (`desde_las_sesiones`), y si no hay nada, en blanco con la fecha de hoy y el nombre del cliente. El descuento sale
+    de lo escrito, del que tiene la factura, o de la suma de los de las sesiones escogidas (`descuento_de_las_sesiones`,
+    que ya viene sumada): la persona lo puede cambiar."""
     if escrito is not None:
         return {"para_nombre": escrito["para_nombre"], "fecha": escrito["fecha"],
                 "itbis": escrito["itbis_pct"] is not None, "ncf": escrito["ncf"], "ncf_tipo": escrito["ncf_tipo"],
-                "rnc_cedula": escrito["rnc_cedula"],
+                "rnc_cedula": escrito["rnc_cedula"], "descuento": escrito["descuento"],
                 "renglones": casillas_de_renglones(escrito["renglones"])}
     if factura is not None:
         return {"para_nombre": factura["para_nombre"], "fecha": _iso(factura["fecha"]),
                 "itbis": factura["itbis_pct"] is not None, "ncf": factura["ncf"] or "",
                 "ncf_tipo": factura["ncf_tipo"] or "", "rnc_cedula": factura["rnc_cedula"] or "",
+                "descuento": _descuento_escrito(factura.get("descuento")),
                 "renglones": casillas_de_renglones(list(factura["renglones"]) + list(renglones_de_mas or []))}
     return {"para_nombre": nombre_del_cliente, "fecha": _iso(hoy) if hoy else "", "itbis": False, "ncf": "",
-            "ncf_tipo": "", "rnc_cedula": "",
+            "ncf_tipo": "", "rnc_cedula": "", "descuento": _descuento_escrito(descuento_de_las_sesiones),
             "renglones": casillas_de_renglones(desde_la_opcion or desde_las_sesiones or [])}
 
 
@@ -611,6 +632,12 @@ TEXTO_POR_CLAVE = {
     "monto_redondeo": "El total de un renglón no da en centavos exactos: cambia la cantidad o el precio unitario.",
     "monto_formato": "Un monto no se entiende; escríbelo como 62,500 o 62500.50.",
     "monto_tipo": "Un monto no se entiende; escríbelo como 62,500 o 62500.50.",
+    "descuento_mayor": "El descuento no puede pasar del subtotal de la factura.",
+    "descuento_negativo": "El descuento no puede ser negativo.",
+    "descuento_alto": "El descuento es demasiado grande.",
+    "descuento_decimales": "El descuento lleva más de dos decimales.",
+    "descuento_formato": "El descuento no se entiende; escríbelo como 500 o 500.50.",
+    "descuento_tipo": "El descuento no se entiende; escríbelo como 500 o 500.50.",
     "descripcion_vacio": "A un renglón le falta la descripción.",
     "descripcion_largo": "La descripción de un renglón es demasiado larga.",
     "detalle_largo": "El detalle de un renglón es demasiado largo.",
@@ -633,7 +660,7 @@ TEXTO_POR_CLAVE = {
 
 # Qué casilla marca cada razón (las que son de UNA casilla). Se busca por el comienzo de la clave.
 CASILLA_POR_COMIENZO = (("ncf", "ncf"), ("rnc", "rnc_cedula"), ("para_nombre", "para_nombre"), ("fecha", "fecha"),
-                        ("itbis", "itbis"))
+                        ("itbis", "itbis"), ("descuento", "descuento"))
 
 
 def casilla_del_error(clave: str | None) -> str | None:

@@ -943,6 +943,8 @@ def con_proyecto(monkeypatch):
             m.con.execute(ft._a_sqlite(s))
         for s in ft._sentencias_que_corren(ft._texto_migracion_del_detalle()):
             m.con.execute(ft._a_sqlite(s))
+        for s in ft._sentencias_que_corren(ft._texto_migracion_del_descuento()):   # pieza D3: el descuento
+            m.con.execute(ft._a_sqlite(s))
         m.proyecto(1, "Disco Uno", area="CDS", cliente="Cliente X", responsable=CASA)
         m.proyecto(2, "Disco Dos", area="CDS", cliente="Cliente X", responsable=CASA)
         mp.setattr(config, "REGISTRO_URL", "")

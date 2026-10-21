@@ -604,6 +604,7 @@ CREATE TABLE facturas (
   cotizacion_id        BIGINT REFERENCES cotizaciones(id),
   cotizacion_opcion    SMALLINT,
   itbis_pct            NUMERIC(5,2),
+  descuento            NUMERIC(14,2) NOT NULL DEFAULT 0 CHECK (descuento >= 0),
   ncf                  TEXT,
   ncf_tipo             TEXT,
   rnc_cedula           TEXT,
