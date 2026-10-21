@@ -113,6 +113,18 @@ def _texto_migracion_del_detalle() -> str:
     return _migracion_del_detalle().read_text(encoding="utf-8")
 
 
+def _migracion_del_descuento():
+    """La migración de la pieza D3 (el descuento de la factura), buscada por lo que hace."""
+    suyas = [a for a in g._migraciones()
+             if "ALTER TABLE facturas ADD COLUMN IF NOT EXISTS descuento" in a.read_text(encoding="utf-8")]
+    assert len(suyas) == 1, suyas
+    return suyas[0]
+
+
+def _texto_migracion_del_descuento() -> str:
+    return _migracion_del_descuento().read_text(encoding="utf-8")
+
+
 def _guion():
     spec = importlib.util.spec_from_file_location("ensayo_facturas", _ROOT / "tools" / "ensayo_facturas.py")
     modulo = importlib.util.module_from_spec(spec)
@@ -140,6 +152,8 @@ def _base() -> sqlite3.Connection:
     for s in _sentencias_que_corren(_texto_migracion()):
         con.execute(_a_sqlite(s))
     for s in _sentencias_que_corren(_texto_migracion_del_detalle()):     # pieza D2: el detalle de los renglones
+        con.execute(_a_sqlite(s))
+    for s in _sentencias_que_corren(_texto_migracion_del_descuento()):   # pieza D3: el descuento de la factura
         con.execute(_a_sqlite(s))
     return con
 

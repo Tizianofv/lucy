@@ -15,8 +15,8 @@ EN LA RED (`tests/_app_de_registro.py`):
   3. DESDE LAS SESIONES: cada renglón de la cuenta de la sesión (pieza D1 de la App) es un renglón de la factura; su
      total da el `subtotal` de NocoDB. Con `tipo_cobro` `hora` la cantidad es cantidad × horas y la unidad «horas».
      Si no cuadra, 1 × el subtotal y se dice. Si `renglones` viene `null` (o no viene), un renglón con el total de la
-     sesión, y con `null` la pantalla avisa que no se pudo leer el detalle. El descuento de la sesión NO se resta (la
-     puerta no acepta montos negativos) y la pantalla lo dice.
+     sesión, y con `null` la pantalla avisa que no se pudo leer el detalle. El descuento de la sesión no va en los
+     renglones: desde la pieza D3 llena la casilla del descuento de la factura (aquí solo se comprueba la casilla).
   4. LA HOJA Y EL PDF pintan las cuatro columnas; la vista previa, lo mismo.
   5. LA PANTALLA de crear y corregir deja escribir cantidad, unidad y precio; el total del renglón no es una casilla.
   6. LA PUERTA DE NATALIA recibe renglones con detalle y, sin renglones, los arma desde las sesiones como la pantalla.
@@ -243,11 +243,13 @@ def test_si_no_se_pudo_leer_el_detalle_la_pantalla_lo_avisa(pantalla, registro):
     assert [r["precio"] for r in _renglones_de(html) if r["descripcion"]] == ["9,000"]
 
 
-def test_el_descuento_de_la_sesion_no_se_resta_y_la_pantalla_lo_dice(pantalla, registro):
+def test_el_descuento_de_la_sesion_llena_la_casilla_de_la_factura(pantalla, registro):
+    # Desde la pieza D3 la factura ya lo resta: la casilla del descuento viene con la suma de los de las sesiones.
     _con_cuenta(registro, dict(DETALLADA, descuento=500.0))
     html = cliente().get("/facturas/nueva", params={"cliente": 7, "ref": ["11"], "paso": "escribir"}).text
-    assert "data-descuento" in html and "RD$500" in html and "todavía no lo resta" in html
-    # la factura guarda el subtotal de la cuenta, sin el descuento (los totales de los renglones suman 44,000)
+    assert 'name="descuento" value="500"' in html
+    assert "data-descuento" not in html and "todavía no lo resta" not in html
+    # los renglones siguen siendo los de la cuenta, sin descontar nada en ellos (el descuento va aparte)
     assert re.findall(r'<td class="total-renglon">([^<]*)</td>', html)[:2] == ["36,000", "8,000"]
 
 

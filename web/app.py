@@ -2636,18 +2636,18 @@ async def _contexto_de_factura_nueva(*, cliente, proyecto, cotizacion, opcion, r
     ctx["sin_total"] = [] if (desde_la_opcion or escrito is not None) else [
         r["codigo"] or r["ref"] for r in desde_las_sesiones if r["sin_total"]]
     ctx["renglones_de_sesiones"] = de_las_sesiones
-    # Lo que hay que decir del detalle de las sesiones: la cuenta que no se pudo leer, el renglón que no cuadró y el
-    # descuento que la factura no resta (la puerta no acepta montos negativos: no se inventa).
+    # Lo que hay que decir del detalle de las sesiones: la cuenta que no se pudo leer y el renglón que no cuadró.
     ctx["sesiones_sin_detalle"] = [] if not de_las_sesiones else list(dict.fromkeys(
         r["codigo"] or r["ref"] for r in desde_las_sesiones if r.get("sin_detalle")))
     ctx["avisos_del_detalle"] = [] if not de_las_sesiones else list(dict.fromkeys(
         r["aviso_del_detalle"] for r in desde_las_sesiones if r.get("aviso_del_detalle")))
-    ctx["sesiones_con_descuento"] = [] if not de_las_sesiones else [
-        {"codigo": r["codigo"] or r["ref"], "descuento": cotizaciones.dinero_en_pesos(r["descuento"])}
-        for r in ctx["elegidas"] if r.get("descuento") and r["descuento"] > 0]
+    # El descuento de la factura: al crearla desde sesiones se llena solo con la suma de los `descuento` de las
+    # sesiones escogidas (el de cada una lo dice la App); la persona lo puede cambiar en la casilla.
+    ctx["descuento_de_las_sesiones"] = fp.descuento_de_las_sesiones(ctx["elegidas"]) if de_las_sesiones else None
     ctx["valores"] = fp.valores_del_formulario(
         escrito=escrito, nombre_del_cliente=ctx["cliente_nombre"], desde_la_opcion=desde_la_opcion,
-        desde_las_sesiones=desde_las_sesiones, hoy=ctx["hoy"])
+        desde_las_sesiones=desde_las_sesiones, descuento_de_las_sesiones=ctx["descuento_de_las_sesiones"],
+        hoy=ctx["hoy"])
     return ctx
 
 
@@ -2750,7 +2750,8 @@ async def guardar_factura_nueva(request: Request):
             chat, cliente_noco_id=campos["cliente"], para_nombre=campos["para_nombre"], renglones=campos["renglones"],
             liga=ligas[0], fecha=campos["fecha"] or None, proyecto_id=campos["proyecto"],
             cotizacion_id=campos["cotizacion"], cotizacion_opcion=campos["opcion"], itbis_pct=campos["itbis_pct"],
-            ncf=campos["ncf"], ncf_tipo=campos["ncf_tipo"], rnc_cedula=campos["rnc_cedula"])
+            descuento=campos["descuento"], ncf=campos["ncf"], ncf_tipo=campos["ncf_tipo"],
+            rnc_cedula=campos["rnc_cedula"])
     except db.FacturaSinSesion:
         return _fuera(request)
     except Exception as e:
@@ -2945,9 +2946,12 @@ async def corregir_una_factura(request: Request, fid: int):
     chat = _sesion(request)
     if not auth.puede_entrar(chat):
         return _fuera(request)
-    campos = fp.campos_del_formulario(await request.form())
+    formulario = await request.form()
+    campos = fp.campos_del_formulario(formulario)
     cambios = {k: campos[k] for k in ("para_nombre", "itbis_pct", "ncf", "ncf_tipo", "rnc_cedula", "renglones")}
     cambios["fecha"] = campos["fecha"]
+    if "descuento" in formulario:          # lo que no viene no se toca: un formulario sin la casilla no borra el descuento
+        cambios["descuento"] = campos["descuento"]
     try:
         await db.corregir_borrador_de_factura(fid, chat, campos["cambiado_en"], cambios)
     except db.FacturaSinSesion:

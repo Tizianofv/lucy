@@ -17,8 +17,11 @@ Qué dice cada estado:
     diccionario trajera uno no se escribe), con la marca «BORRADOR» en diagonal en cada página;
   · anulada: su número, además «ESTADO: ANULADA» y «MOTIVO DE LA ANULACIÓN», y la marca «ANULADA» en cada página;
   · cualquier otro estado, que no se conoce, sale como borrador (lado estricto: nunca aparenta ser válida).
-El NCF y su tipo salen solo si la factura los lleva; el RNC o cédula, solo si lo lleva; el ITBIS y el subtotal,
-solo si lleva ITBIS (sin ITBIS la hoja dice solo el total).
+El NCF y su tipo salen solo si la factura los lleva; el RNC o cédula, solo si lo lleva; el subtotal y el ITBIS,
+solo si lleva ITBIS, y el subtotal también si lleva descuento. Desde la pieza D3 (21-oct-2026) el descuento va en su
+propia línea debajo del subtotal («Descuento», «- RD$X») y solo si hay descuento; el ITBIS que sigue ya está
+calculado sobre el neto (subtotal menos descuento) y el total es el neto más el ITBIS. Sin descuento y sin ITBIS la
+hoja dice solo el total, como siempre.
 
 Desde la pieza D2 (21-oct-2026, Tiziano: «Si, las facturas deben salir con los detalles.») la tabla lleva las cuatro
 columnas de la cotización con detalle: SERVICIO (con su descripción debajo), CANTIDAD con su unidad, PRECIO
@@ -38,6 +41,7 @@ CODIGO_DEL_BORRADOR = "BORRADOR"
 MARCA_DE_ANULADA = "ANULADA"
 ENCABEZADOS_DE_LA_FACTURA = ("SERVICIO", "CANTIDAD", "PRECIO UNITARIO", "TOTAL")
 ETIQUETA_DEL_SUBTOTAL = "Subtotal"
+ETIQUETA_DEL_DESCUENTO = "Descuento"
 ETIQUETA_DEL_ITBIS = "ITBIS {pct}%"
 ETIQUETA_DEL_TOTAL = "TOTAL"
 ETIQUETAS_DEL_PARA_DE_LA_FACTURA = {
@@ -66,8 +70,8 @@ def marca_de_la_factura(estado: str) -> str | None:
 
 def hoja_de_factura(f: dict) -> dict:
     """Los textos de la hoja de una factura. `f` es lo que devuelve `db.factura_por_id`: `estado`, `codigo`,
-    `para_nombre`, `rnc_cedula`, `fecha`, `ncf`, `ncf_tipo`, `itbis_pct`, `motivo_anulacion`, `renglones` (con
-    `descripcion`, `detalle`, `monto`) y `subtotal`/`itbis`/`total`. Función pura."""
+    `para_nombre`, `rnc_cedula`, `fecha`, `ncf`, `ncf_tipo`, `itbis_pct`, `descuento`, `motivo_anulacion`,
+    `renglones` (con `descripcion`, `detalle`, `monto`) y `subtotal`/`itbis`/`total`. Función pura."""
     etiquetas = ETIQUETAS_DEL_PARA_DE_LA_FACTURA
     estado = f["estado"]
     tiene_numero = estado in ("emitida", "anulada") and bool(f.get("codigo"))
@@ -93,8 +97,14 @@ def hoja_de_factura(f: dict) -> dict:
             "precio_unitario": cz.dinero_en_pesos(r["monto"] if viejo else r["precio_unitario"]),
             "monto": cz.dinero_en_pesos(r["monto"])})
     totales = []
-    if f.get("itbis_pct") is not None:
+    descuento = Decimal(f.get("descuento") or 0)
+    if f.get("itbis_pct") is not None or descuento > 0:
         totales.append({"etiqueta": ETIQUETA_DEL_SUBTOTAL, "total": cz.dinero_en_pesos(f["subtotal"])})
+    if descuento > 0:
+        # El signo es el guion ASCII: la letra de fábrica del PDF (Helvetica) no tiene el menos tipográfico (U+2212) y
+        # `fpdf2` revienta con él. Es la misma línea en la vista previa y en el PDF (una sola hoja para las dos).
+        totales.append({"etiqueta": ETIQUETA_DEL_DESCUENTO, "total": "- " + cz.dinero_en_pesos(descuento)})
+    if f.get("itbis_pct") is not None:
         totales.append({"etiqueta": ETIQUETA_DEL_ITBIS.format(pct=_porcentaje(f["itbis_pct"])),
                         "total": cz.dinero_en_pesos(f["itbis"])})
     totales.append({"etiqueta": ETIQUETA_DEL_TOTAL, "total": cz.dinero_en_pesos(f["total"])})

@@ -168,6 +168,8 @@ class _Mundo:
             con.execute(ft._a_sqlite(s))
         for s in ft._sentencias_que_corren(ft._texto_migracion_del_detalle()):    # pieza D2: el detalle de los renglones
             con.execute(ft._a_sqlite(s))
+        for s in ft._sentencias_que_corren(ft._texto_migracion_del_descuento()):  # pieza D3: el descuento de la factura
+            con.execute(ft._a_sqlite(s))
         dos_opciones = json.dumps({"opciones": [{"nombre": "A", "renglones": []}, {"nombre": "B", "renglones": []}]})
         una_opcion = json.dumps({"opciones": [{"nombre": "A", "renglones": []}]})
         for cid, proyecto, contenido in ((1, 1, dos_opciones), (2, 2, una_opcion), (3, 1, una_opcion)):
@@ -344,7 +346,8 @@ def test_el_itbis_es_el_18_o_ninguno_y_los_totales_se_calculan(mundo):
 
 def test_el_itbis_redondea_a_centavos_con_la_mitad_hacia_arriba():
     assert db.totales_de_factura([Decimal("10.25")], Decimal("18")) == \
-        {"subtotal": Decimal("10.25"), "itbis": Decimal("1.85"), "total": Decimal("12.10")}      # 1.845
+        {"subtotal": Decimal("10.25"), "descuento": Decimal("0.00"), "neto": Decimal("10.25"),
+         "itbis": Decimal("1.85"), "total": Decimal("12.10")}                                      # 1.845
     assert db.totales_de_factura([Decimal("0.03"), Decimal("0.02")], Decimal("18"))["itbis"] == Decimal("0.01")   # 0.009
     assert db.totales_de_factura([Decimal("1.00")], None)["itbis"] == Decimal("0.00")
 

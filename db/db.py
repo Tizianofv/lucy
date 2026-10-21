@@ -2727,7 +2727,7 @@ TIPOS_DE_LIGA_DE_FACTURA = ("sesion", "trabajo")
 LARGOS_DE_FACTURA = {"para_nombre": 200, "descripcion": 300, "detalle": 2000, "ncf": 20, "ncf_tipo": 20,
                      "motivo": 500, "ref": 100, "codigo": 100, "unidad": 20}
 CAMPOS_QUE_CORRIGE_UN_BORRADOR = ("cliente_noco_id", "para_nombre", "fecha", "itbis_pct", "ncf", "ncf_tipo",
-                                  "rnc_cedula", "renglones")
+                                  "rnc_cedula", "descuento", "renglones")
 # Lo que puede traer UN renglón. La forma vieja es `{descripcion, detalle?, monto}` (cantidad 1, precio = monto); la
 # del detalle (pieza D2) es `{descripcion, detalle?, cantidad, unidad?, precio_unitario}` y el `monto` lo calcula la
 # puerta. Las dos formas NO se mezclan (ver `_renglones_de_factura`): una sola cuenta del total.
@@ -2969,14 +2969,58 @@ def _liga_de_factura(tipo, ref, codigo=None) -> tuple[str, str, str | None]:
     return tipo, ref, el_codigo
 
 
-def totales_de_factura(montos, itbis_pct) -> dict:
-    """`{"subtotal", "itbis", "total"}` (`Decimal`, dos decimales): el ITBIS es `itbis_pct` por ciento del
-    subtotal, redondeado a centavos hacia arriba en la mitad. Sin `itbis_pct` el ITBIS es 0. ÚNICO sitio donde
-    se hace esta cuenta: ni la base ni la lista la guardan."""
+def _descuento_de_factura(crudo) -> Decimal:
+    """El descuento de una factura: NINGUNO (`None` o vacío) es 0; si viene, un dinero de 0 para arriba, con dos
+    decimales. Acepta `str`, `int` (no `bool`) y `Decimal`; un `float` no (el repo no pasa dinero por `float`). El
+    tope contra el subtotal lo mira `_revisar_el_descuento`, que es quien lo conoce."""
+    if crudo is None or (isinstance(crudo, str) and not crudo.strip()):
+        return Decimal("0.00")
+    if isinstance(crudo, bool) or not isinstance(crudo, (str, int, Decimal)):
+        raise FacturaNoVale("descuento_tipo", "el descuento tiene que ser un texto o un número exacto")
+    if isinstance(crudo, (int, Decimal)):
+        valor = Decimal(crudo)
+        if not valor.is_finite():
+            raise FacturaNoVale("descuento_formato", "el descuento no se entiende como dinero")
+    else:
+        escrito = str(crudo).strip()
+        m = _RE_DINERO_DE_COTIZACION.match(escrito)
+        if not m:
+            raise FacturaNoVale("descuento_formato", "el descuento no se entiende como dinero")
+        # Se mira el TEXTO, como el dinero de las cotizaciones: «500.505» no es «500.51».
+        if m.group(1) is not None and len(m.group(1)) > 2:
+            raise FacturaNoVale("descuento_decimales", "el descuento no puede llevar más de dos decimales")
+        valor = Decimal(escrito.replace(",", ""))
+    if valor < 0:
+        raise FacturaNoVale("descuento_negativo", "el descuento no puede ser negativo")
+    if valor > TOPE_TOTAL_DE_RENGLON:
+        raise FacturaNoVale("descuento_alto", "el descuento es demasiado grande")
+    if valor.as_tuple().exponent < -2:      # un Decimal ya traído: se mira cómo viene escrito (500.500 no)
+        raise FacturaNoVale("descuento_decimales", "el descuento no puede llevar más de dos decimales")
+    if valor != valor.quantize(_CENTAVOS):
+        raise FacturaNoVale("descuento_decimales", "el descuento no puede llevar más de dos decimales")
+    return valor.quantize(_CENTAVOS)
+
+
+def _revisar_el_descuento(descuento: Decimal, montos) -> None:
+    """El descuento no puede pasar del subtotal (la suma de los `monto` de los renglones). La base no puede exigirlo
+    con un CHECK —el subtotal es la suma de otra tabla—, así que esta es la puerta; el humo lo cuenta contra la base
+    real por si algo entró por fuera."""
     subtotal = sum((Decimal(m) for m in montos), Decimal("0")).quantize(_CENTAVOS)
+    if descuento > subtotal:
+        raise FacturaNoVale("descuento_mayor", "el descuento no puede pasar del subtotal de la factura")
+
+
+def totales_de_factura(montos, itbis_pct, descuento=None) -> dict:
+    """`{"subtotal", "descuento", "neto", "itbis", "total"}` (`Decimal`, dos decimales). El descuento (0 si no viene)
+    se resta del subtotal —el NETO—, el ITBIS es `itbis_pct` por ciento del neto, redondeado a centavos hacia arriba
+    en la mitad, y el total es el neto más el ITBIS. Sin descuento todo sale igual que antes, céntimo por céntimo. Sin
+    `itbis_pct` el ITBIS es 0. ÚNICO sitio donde se hace esta cuenta: ni la base ni la lista la guardan."""
+    subtotal = sum((Decimal(m) for m in montos), Decimal("0")).quantize(_CENTAVOS)
+    rebaja = Decimal("0.00") if descuento is None else Decimal(descuento).quantize(_CENTAVOS)
+    neto = subtotal - rebaja
     itbis = (Decimal("0") if itbis_pct is None
-             else (subtotal * Decimal(itbis_pct) / 100).quantize(_CENTAVOS, rounding=ROUND_HALF_UP))
-    return {"subtotal": subtotal, "itbis": itbis, "total": subtotal + itbis}
+             else (neto * Decimal(itbis_pct) / 100).quantize(_CENTAVOS, rounding=ROUND_HALF_UP))
+    return {"subtotal": subtotal, "descuento": rebaja, "neto": neto, "itbis": itbis, "total": neto + itbis}
 
 
 def _llave_de_asesoria_de_liga(tipo: str, ref: str) -> int:
@@ -2994,7 +3038,7 @@ SENTENCIA_DE_EXISTE_FACTURA = "SELECT id FROM facturas WHERE id = %s"
 SENTENCIA_DEL_CANDADO_DE_LIGA = "SELECT pg_advisory_xact_lock(CAST(%s AS BIGINT))"
 SENTENCIA_DE_LEER_FACTURA = (
     "SELECT id, anio, numero, estado, cliente_noco_id, para_nombre, fecha, proyecto_id, cotizacion_id, "
-    "cotizacion_opcion, itbis_pct, ncf, ncf_tipo, rnc_cedula, hecha_por, hecha_por_chat_id, creado_en, "
+    "cotizacion_opcion, itbis_pct, descuento, ncf, ncf_tipo, rnc_cedula, hecha_por, hecha_por_chat_id, creado_en, "
     "cambiado_en, emitida_en, anulada_en, anulada_por_chat_id, motivo_anulacion FROM facturas WHERE id = %s")
 SENTENCIA_DE_LOS_RENGLONES = (
     "SELECT orden, descripcion, detalle, monto, cantidad, unidad, precio_unitario FROM factura_renglones "
@@ -3008,7 +3052,7 @@ SENTENCIA_DE_LAS_LIGAS_VIVAS = (
     "SELECT factura_id, tipo, ref, codigo FROM factura_ligas WHERE desligada_en IS NULL ORDER BY factura_id, id")
 SENTENCIA_DE_LA_LISTA_DE_FACTURAS = (
     "SELECT f.id, f.anio, f.numero, f.estado, f.cliente_noco_id, f.para_nombre, f.fecha, f.proyecto_id, "
-    "f.itbis_pct, f.ncf, f.hecha_por, f.creado_en, f.cambiado_en, f.emitida_en, "
+    "f.itbis_pct, f.descuento, f.ncf, f.hecha_por, f.creado_en, f.cambiado_en, f.emitida_en, "
     "(SELECT count(*) FROM factura_ligas l WHERE l.factura_id = f.id AND l.desligada_en IS NULL) AS ligas_vivas, "
     "(SELECT coalesce(sum(r.monto), 0) FROM factura_renglones r WHERE r.factura_id = f.id) AS subtotal "
     "FROM facturas f "
@@ -3026,7 +3070,7 @@ SENTENCIA_DE_LA_COTIZACION_VIVA = "SELECT id, proyecto_id, contenido FROM cotiza
 
 # Las que escriben. Cada UPDATE de `facturas` (menos la de tomar la fila) dice en su WHERE en qué estados vale.
 SENTENCIA_DE_CREAR_FACTURA = (
-    "INSERT INTO facturas (cliente_noco_id, para_nombre, fecha, proyecto_id, cotizacion_id, cotizacion_opcion, itbis_pct, ncf, ncf_tipo, rnc_cedula, hecha_por, hecha_por_chat_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id")
+    "INSERT INTO facturas (cliente_noco_id, para_nombre, fecha, proyecto_id, cotizacion_id, cotizacion_opcion, itbis_pct, descuento, ncf, ncf_tipo, rnc_cedula, hecha_por, hecha_por_chat_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id")
 SENTENCIA_DE_CREAR_RENGLON = (
     "INSERT INTO factura_renglones (factura_id, orden, descripcion, detalle, cantidad, unidad, precio_unitario, monto) "
     "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)")
@@ -3037,8 +3081,9 @@ SENTENCIA_DE_DESLIGAR = (
     "UPDATE factura_ligas SET desligada_en = now() "
     "WHERE factura_id = %s AND tipo = %s AND ref = %s AND desligada_en IS NULL RETURNING id")
 SENTENCIA_DE_CORREGIR_BORRADOR = (
-    "UPDATE facturas SET cliente_noco_id = %s, para_nombre = %s, fecha = %s, itbis_pct = %s, ncf = %s, "
-    "ncf_tipo = %s, rnc_cedula = %s, cambiado_en = now() WHERE id = %s AND estado = 'borrador' RETURNING id")
+    "UPDATE facturas SET cliente_noco_id = %s, para_nombre = %s, fecha = %s, itbis_pct = %s, descuento = %s, "
+    "ncf = %s, ncf_tipo = %s, rnc_cedula = %s, cambiado_en = now() "
+    "WHERE id = %s AND estado = 'borrador' RETURNING id")
 SENTENCIA_DE_PONER_PROYECTO = (
     "UPDATE facturas SET proyecto_id = %s, cambiado_en = now() "
     "WHERE id = %s AND estado IN ('borrador', 'emitida') RETURNING id")
@@ -3141,8 +3186,9 @@ async def _factura_completa(cur, factura_id: int) -> dict | None:
     await cur.execute(SENTENCIA_DE_LAS_LIGAS, (factura_id,))
     ligas = [{**dict(l), "viva": l["desligada_en"] is None} for l in await cur.fetchall()]
     f["itbis_pct"] = None if f["itbis_pct"] is None else _dinero_leido(f["itbis_pct"])
+    f["descuento"] = _dinero_leido(f["descuento"])
     f["codigo"] = None if f["numero"] is None else codigo_de_factura(f["anio"], f["numero"])
-    f.update(totales_de_factura([r["monto"] for r in renglones], f["itbis_pct"]))
+    f.update(totales_de_factura([r["monto"] for r in renglones], f["itbis_pct"], f["descuento"]))
     f["renglones"], f["ligas"] = renglones, ligas
     return f
 
@@ -3234,11 +3280,12 @@ def _ncf_ya_estaba(e: Exception) -> bool:
 
 async def _crear_el_borrador(*, hecha_por: str, chat_id, actor: str, motivo_de_la_huella: str, cliente_noco_id,
                              para_nombre, renglones, ligas: list, fecha, proyecto_id, cotizacion_id, cotizacion_opcion,
-                             itbis_pct, ncf, ncf_tipo, rnc_cedula) -> dict:
+                             itbis_pct, descuento, ncf, ncf_tipo, rnc_cedula) -> dict:
     """El cuerpo de crear UN borrador, que comparten el de la casa (`crear_borrador_de_factura`) y el de Natalia
     (`crear_borrador_de_factura_de_natalia`): valida todo ANTES de abrir la base y escribe la factura, sus renglones
     y TODAS sus ligas en una transacción. `hecha_por` es `casa` (con `chat_id`) o `natalia` (sin chat): la base lo
-    exige (`facturas_hecha_por_con_persona`). Lo que no vale no toca la base."""
+    exige (`facturas_hecha_por_con_persona`). `descuento` se resta del subtotal antes del ITBIS y no puede pasarlo.
+    Lo que no vale no toca la base."""
     las_ligas = [_liga_de_factura(l["tipo"], l["ref"], l.get("codigo")) for l in ligas]
     if len({(tipo, ref) for tipo, ref, _ in las_ligas}) != len(las_ligas):
         raise FacturaNoVale("liga_repetida", "la misma sesión o trabajo está dos veces")
@@ -3250,6 +3297,8 @@ async def _crear_el_borrador(*, hecha_por: str, chat_id, actor: str, motivo_de_l
         "rnc_cedula": None if rnc_cedula in (None, "") else rnc_o_cedula_que_vale(rnc_cedula)}
     datos["ncf"], datos["ncf_tipo"] = _ncf_de_factura(ncf, ncf_tipo)
     los_renglones = _renglones_de_factura(renglones)
+    datos["descuento"] = _descuento_de_factura(descuento)
+    _revisar_el_descuento(datos["descuento"], [r["monto"] for r in los_renglones])
     el_proyecto = None if proyecto_id is None else _entero_de_factura(proyecto_id, "proyecto")
     la_cotizacion = None if cotizacion_id is None else _entero_de_factura(cotizacion_id, "cotizacion")
     la_opcion = None if cotizacion_opcion is None else _entero_de_factura(cotizacion_opcion, "opcion")
@@ -3263,8 +3312,8 @@ async def _crear_el_borrador(*, hecha_por: str, chat_id, actor: str, motivo_de_l
         try:
             await cur.execute(SENTENCIA_DE_CREAR_FACTURA, (
                 datos["cliente_noco_id"], datos["para_nombre"], datos["fecha"], el_proyecto, la_cotizacion,
-                la_opcion, datos["itbis_pct"], datos["ncf"], datos["ncf_tipo"], datos["rnc_cedula"], hecha_por,
-                chat_id))
+                la_opcion, datos["itbis_pct"], datos["descuento"], datos["ncf"], datos["ncf_tipo"], datos["rnc_cedula"],
+                hecha_por, chat_id))
         except Exception as e:
             if _ncf_ya_estaba(e):
                 raise FacturaNoVale("ncf_repetido", "ese NCF ya está en otra factura") from None
@@ -3281,11 +3330,12 @@ async def _crear_el_borrador(*, hecha_por: str, chat_id, actor: str, motivo_de_l
 @_con_el_aviso_de_la_tabla
 async def crear_borrador_de_factura(chat_id: int, *, cliente_noco_id, para_nombre, renglones, liga,
                                     fecha=None, proyecto_id=None, cotizacion_id=None, cotizacion_opcion=None,
-                                    itbis_pct=None, ncf=None, ncf_tipo=None, rnc_cedula=None) -> dict:
+                                    itbis_pct=None, descuento=None, ncf=None, ncf_tipo=None, rnc_cedula=None) -> dict:
     """Crea UN borrador (sin número: se numera al emitir) con sus renglones y su primera liga, en una
     transacción, y devuelve la factura completa (`_factura_completa`) más `creada=True`. `liga` es
     `{"tipo": "sesion"|"trabajo", "ref": ..., "codigo": ... (opcional)}`. `renglones` es una lista de
     `{"descripcion", "monto", "detalle" (opcional)}`. `fecha=None` es hoy. `itbis_pct`: `None` o 18.
+    `descuento`: `None` o vacío es 0; si viene, se resta del subtotal antes del ITBIS y no puede pasarlo.
     `ncf`+`ncf_tipo` van juntos o ninguno. Errores: `FacturaSinSesion`, `FacturaNoVale`, `FacturaNoEsta`,
     `FacturasSinTabla`. Lo que no vale no toca la base."""
     _pedir_sesion_de_la_casa(chat_id)
@@ -3295,7 +3345,7 @@ async def crear_borrador_de_factura(chat_id: int, *, cliente_noco_id, para_nombr
         hecha_por="casa", chat_id=chat_id, actor="panel", motivo_de_la_huella="borrador de factura creado desde el panel",
         cliente_noco_id=cliente_noco_id, para_nombre=para_nombre, renglones=renglones, ligas=[liga], fecha=fecha,
         proyecto_id=proyecto_id, cotizacion_id=cotizacion_id, cotizacion_opcion=cotizacion_opcion, itbis_pct=itbis_pct,
-        ncf=ncf, ncf_tipo=ncf_tipo, rnc_cedula=rnc_cedula)
+        descuento=descuento, ncf=ncf, ncf_tipo=ncf_tipo, rnc_cedula=rnc_cedula)
 
 
 @_con_el_aviso_de_la_tabla
@@ -3322,22 +3372,28 @@ async def corregir_borrador_de_factura(factura_id: int, chat_id: int, cambiado_e
     if "rnc_cedula" in cambios:
         crudo = cambios["rnc_cedula"]
         nuevos["rnc_cedula"] = None if crudo in (None, "") else rnc_o_cedula_que_vale(crudo)
+    if "descuento" in cambios:
+        nuevos["descuento"] = _descuento_de_factura(cambios["descuento"])
     los_renglones = _renglones_de_factura(cambios["renglones"]) if "renglones" in cambios else None
 
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         _que_sea(await _tomar_factura(cur, factura_id, candado), ("borrador",), "correcciones")
         antes = await _factura_completa(cur, factura_id)
+        # El descuento se mide contra el subtotal que va a quedar: el de los renglones nuevos si vienen, el de los de
+        # ahora si no. Vale igual para un descuento nuevo que para unos renglones nuevos con el descuento de ahora.
+        _revisar_el_descuento(nuevos.get("descuento", antes["descuento"]),
+                              [r["monto"] for r in (los_renglones if los_renglones is not None else antes["renglones"])])
         if "ncf" in cambios or "ncf_tipo" in cambios:
             nuevos["ncf"], nuevos["ncf_tipo"] = _ncf_de_factura(
                 cambios.get("ncf", antes["ncf"]), cambios.get("ncf_tipo", antes["ncf_tipo"]))
             await _revisar_ncf_libre(cur, nuevos["ncf"], factura_id)
         quedan = {c: nuevos.get(c, antes[c]) for c in ("cliente_noco_id", "para_nombre", "fecha", "itbis_pct",
-                                                       "ncf", "ncf_tipo", "rnc_cedula")}
+                                                       "descuento", "ncf", "ncf_tipo", "rnc_cedula")}
         try:
             await cur.execute(SENTENCIA_DE_CORREGIR_BORRADOR, (
                 quedan["cliente_noco_id"], quedan["para_nombre"], quedan["fecha"], quedan["itbis_pct"],
-                quedan["ncf"], quedan["ncf_tipo"], quedan["rnc_cedula"], factura_id))
+                quedan["descuento"], quedan["ncf"], quedan["ncf_tipo"], quedan["rnc_cedula"], factura_id))
         except Exception as e:
             if _ncf_ya_estaba(e):
                 raise FacturaNoVale("ncf_repetido", "ese NCF ya está en otra factura") from None
@@ -3528,8 +3584,9 @@ async def facturas_para_la_lista(*, estado: str | None = None, proyecto_id: int 
     for fila in filas:
         f = dict(fila)
         f["itbis_pct"] = None if f["itbis_pct"] is None else _dinero_leido(f["itbis_pct"])
+        f["descuento"] = _dinero_leido(f["descuento"])
         f["codigo"] = None if f["numero"] is None else codigo_de_factura(f["anio"], f["numero"])
-        f.update(totales_de_factura([_dinero_leido(f.pop("subtotal"))], f["itbis_pct"]))
+        f.update(totales_de_factura([_dinero_leido(f.pop("subtotal"))], f["itbis_pct"], f["descuento"]))
         lista.append(f)
     return lista
 
@@ -3690,10 +3747,11 @@ async def _factura_de_natalia(cur, noco_id, factura_id) -> None:
 
 @_con_el_aviso_de_la_tabla
 async def crear_borrador_de_factura_de_natalia(noco_id, *, para_nombre, renglones, ligas, fecha=None,
-                                               itbis_pct=None, rnc_cedula=None) -> dict:
+                                               itbis_pct=None, descuento=None, rnc_cedula=None) -> dict:
     """Natalia hace UNA factura (borrador, sin número) para la ficha `noco_id`, con sus renglones y TODAS sus ligas
     (sesiones o trabajos) en una transacción. `hecha_por = 'natalia'`, sin chat. No lleva NCF, proyecto ni cotización:
-    el NCF lo escribe una persona y el proyecto se le pone después desde la pantalla. LA COMPROBACIÓN DE QUE LAS
+    el NCF lo escribe una persona y el proyecto se le pone después desde la pantalla. `descuento` se resta del subtotal
+    antes del ITBIS y no puede pasarlo (quien llama lo arma de las sesiones cuando no viene). LA COMPROBACIÓN DE QUE LAS
     SESIONES SON DEL CLIENTE NO ES DE ESTA FUNCIÓN: es de quien la llama (`registro_lectura` +
     `facturas_panel.ligas_de_las_refs`), igual que en la pantalla; aquí solo se exige que haya al menos una liga y
     que ninguna esté en otra factura viva. Errores: `FacturaNoVale`, `FacturasSinTabla`."""
@@ -3703,8 +3761,8 @@ async def crear_borrador_de_factura_de_natalia(noco_id, *, para_nombre, renglone
     return await _crear_el_borrador(
         hecha_por="natalia", chat_id=None, actor="natalia", motivo_de_la_huella="borrador de factura creado por Natalia",
         cliente_noco_id=noco_id, para_nombre=para_nombre, renglones=renglones, ligas=list(ligas), fecha=fecha,
-        proyecto_id=None, cotizacion_id=None, cotizacion_opcion=None, itbis_pct=itbis_pct, ncf=None, ncf_tipo=None,
-        rnc_cedula=rnc_cedula)
+        proyecto_id=None, cotizacion_id=None, cotizacion_opcion=None, itbis_pct=itbis_pct, descuento=descuento,
+        ncf=None, ncf_tipo=None, rnc_cedula=rnc_cedula)
 
 
 async def _facturas_con_sus_envios(cur, ids: list[int]) -> list[dict]:

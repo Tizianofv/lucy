@@ -166,6 +166,31 @@ async def _drive_de_las_facturas():
         return filas
 
 
+async def _descuento_de_las_facturas():
+    """Los SELECT de lo que la pieza D3 (el descuento de la factura, 21-oct-2026) agregó, SIN tolerancia: la columna
+    `descuento` de `facturas` (`db.factura_por_id` y la lista ya la nombran, así que sin la migración también revienta;
+    esta línea lo dice con su nombre) y, contra la base real, que ninguna factura tenga un descuento negativo ni por
+    encima del subtotal. La base puede exigir lo primero con su CHECK; lo segundo NO (el subtotal es la suma de otra
+    tabla), y lo exige la puerta al crear y al corregir: esta cuenta es la que mira lo que entró por fuera. Son
+    LECTURAS; nada se escribe (humo.py no escribe en producción)."""
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=db.dict_row)
+        await cur.execute("SELECT count(*) AS facturas, count(*) FILTER (WHERE descuento > 0) AS con_descuento, "
+                          "count(*) FILTER (WHERE descuento = 0) AS sin_descuento FROM facturas")
+        filas = {"facturas.descuento": dict(await cur.fetchone())}
+        await cur.execute("SELECT count(*) AS n FROM facturas WHERE descuento < 0")
+        negativos = (await cur.fetchone())["n"]
+        if negativos:
+            raise RuntimeError(f"{negativos} factura(s) con un descuento negativo")
+        await cur.execute(
+            "SELECT count(*) AS n FROM facturas f WHERE f.descuento > "
+            "(SELECT coalesce(sum(r.monto), 0) FROM factura_renglones r WHERE r.factura_id = f.id)")
+        pasados = (await cur.fetchone())["n"]
+        if pasados:
+            raise RuntimeError(f"{pasados} factura(s) con el descuento por encima de su subtotal")
+        return filas
+
+
 async def _renglones_de_la_factura():
     """Los SELECT de lo que la pieza D2 (el detalle de la factura, 21-oct-2026) agregó, SIN tolerancia: las tres
     columnas del detalle de `factura_renglones` y, contra la base real, que ningún renglón tenga su total fuera de
@@ -334,6 +359,9 @@ async def main() -> int:
         # El detalle de la factura (pieza D2): las tres columnas de `factura_renglones` y la cuenta de que ningún
         # renglón tenga el total fuera de cantidad × precio. LECTURA.
         ("columnas y cuentas del detalle de los renglones (sin tolerancia)", _renglones_de_la_factura),
+        # El descuento de la factura (pieza D3): la columna y, contra la base real, que no haya ninguno negativo ni por
+        # encima del subtotal. LECTURA.
+        ("columna y cuentas del descuento de las facturas (sin tolerancia)", _descuento_de_las_facturas),
         # Las ligas vivas de todas las facturas (pieza 7), la lectura con la que la lista sabe cuánto se ha pagado de
         # cada una. LECTURA: la App no se consulta desde acá (el humo no tiene su llave de servicio).
         ("ligas_vivas_de_las_facturas", lambda: db.ligas_vivas_de_las_facturas()),
