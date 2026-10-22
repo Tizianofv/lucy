@@ -2722,6 +2722,8 @@ ITBIS_DE_FACTURA = Decimal("18")
 # se le divide entre 0.85 y a eso se le resta el bruto. Es una división y no un 15 % del bruto porque el 15 % se saca
 # de la base (bruto ÷ 0.85), no del bruto: con 10,000 da 1,764.71 —el 15 % de 11,764.71—, no 1,500.
 DIVISOR_DE_LA_RETENCION_DEL_ISR = Decimal("0.85")
+# Y CON NCF EL ITBIS ES OBLIGATORIO (Tiziano, 21-oct-2026, a la pregunta de si una factura con NCF sin ITBIS lleva la
+# retención del ISR: «Esa factura no existe»). La puerta no la deja crear ni corregir: `_revisar_el_itbis_del_comprobante`.
 # Tope de renglones por factura: decisión de la puerta, no una medición. Con el tope por renglón de las
 # cotizaciones el subtotal más el ITBIS cabe de sobra en NUMERIC(14,2) (lo vigila una prueba).
 LIMITE_DE_RENGLONES_DE_FACTURA = 100
@@ -2817,12 +2819,15 @@ def _cantidad_de_factura(crudo) -> Decimal:
         valor = Decimal(crudo)
     if not valor.is_finite():
         raise FacturaNoVale("cantidad_formato", "la cantidad no se entiende")
-    if valor != valor.quantize(_MILESIMAS):
-        raise FacturaNoVale("cantidad_decimales", "la cantidad no puede llevar más de tres decimales")
+    # El cero y el tope van ANTES de redondear: `quantize` con una cantidad de 30 dígitos pide más precisión de la
+    # que tiene el contexto y revienta con `decimal.InvalidOperation` (el dinero de las cotizaciones ya lo hace en
+    # este orden). Una cantidad absurda es «demasiado grande», no un fallo del programa.
     if valor <= 0:
         raise FacturaNoVale("cantidad_cero", "la cantidad tiene que ser mayor que cero")
     if valor > TOPE_TOTAL_DE_RENGLON:
         raise FacturaNoVale("cantidad_alta", "la cantidad es demasiado grande")
+    if valor != valor.quantize(_MILESIMAS):
+        raise FacturaNoVale("cantidad_decimales", "la cantidad no puede llevar más de tres decimales")
     return valor.quantize(_MILESIMAS)
 
 
@@ -2902,6 +2907,15 @@ def _ncf_de_factura(ncf, ncf_tipo) -> tuple[str | None, str | None]:
     if ncf in (None, "") or ncf_tipo in (None, ""):
         raise FacturaNoVale("ncf_incompleto", "el NCF y su tipo van juntos")
     return ncf_normalizado(ncf), _texto_de_factura(ncf_tipo, "ncf_tipo", LARGOS_DE_FACTURA["ncf_tipo"])
+
+
+def _revisar_el_itbis_del_comprobante(itbis_pct, ncf) -> None:
+    """Una factura CON comprobante (NCF) lleva ITBIS, y sin ITBIS no existe (Tiziano, 21-oct-2026: «Esa factura no
+    existe»). Mira el par que va a QUEDAR, ya validado (`itbis_pct` de `_itbis_de_factura`, `ncf` de
+    `_ncf_de_factura`), no lo que llegó. La llaman crear y corregir, que es el mismo cuerpo para la casa y para
+    Natalia (`_crear_el_borrador`)."""
+    if ncf is not None and itbis_pct is None:
+        raise FacturaNoVale("ncf_sin_itbis", "una factura con comprobante (NCF) lleva ITBIS")
 
 
 def _renglones_de_factura(crudo) -> list[dict]:
@@ -3027,8 +3041,9 @@ def totales_de_factura(montos, itbis_pct, descuento=None, con_ncf=False) -> dict
         esa base más su ITBIS; se retienen la retención y TODO el ITBIS (`itbis_retenido`), y el total a pagar es el
         BRUTO (el total menos las dos retenciones da el bruto exacto, porque el ITBIS se suma y se resta entero).
 
-    Sin `itbis_pct` no hay ITBIS (ni retenido). ÚNICO sitio donde se hace esta cuenta: ni la base ni la lista la
-    guardan."""
+    Sin `itbis_pct` no hay ITBIS (ni retenido). Una factura CON NCF siempre lo lleva: la puerta no la deja guardar sin
+    él (`_revisar_el_itbis_del_comprobante`); esta cuenta lo admite igual porque solo suma lo que le dan. ÚNICO sitio
+    donde se hace esta cuenta: ni la base ni la lista la guardan."""
     subtotal = sum((Decimal(m) for m in montos), Decimal("0")).quantize(_CENTAVOS)
     rebaja = Decimal("0.00") if descuento is None else Decimal(descuento).quantize(_CENTAVOS)
     neto = subtotal - rebaja
@@ -3322,6 +3337,7 @@ async def _crear_el_borrador(*, hecha_por: str, chat_id, actor: str, motivo_de_l
         "itbis_pct": _itbis_de_factura(itbis_pct),
         "rnc_cedula": None if rnc_cedula in (None, "") else rnc_o_cedula_que_vale(rnc_cedula)}
     datos["ncf"], datos["ncf_tipo"] = _ncf_de_factura(ncf, ncf_tipo)
+    _revisar_el_itbis_del_comprobante(datos["itbis_pct"], datos["ncf"])
     los_renglones = _renglones_de_factura(renglones)
     datos["descuento"] = _descuento_de_factura(descuento)
     _revisar_el_descuento(datos["descuento"], [r["monto"] for r in los_renglones])
@@ -3362,8 +3378,8 @@ async def crear_borrador_de_factura(chat_id: int, *, cliente_noco_id, para_nombr
     `{"tipo": "sesion"|"trabajo", "ref": ..., "codigo": ... (opcional)}`. `renglones` es una lista de
     `{"descripcion", "monto", "detalle" (opcional)}`. `fecha=None` es hoy. `itbis_pct`: `None` o 18.
     `descuento`: `None` o vacío es 0; si viene, se resta del subtotal antes del ITBIS y no puede pasarlo.
-    `ncf`+`ncf_tipo` van juntos o ninguno. Errores: `FacturaSinSesion`, `FacturaNoVale`, `FacturaNoEsta`,
-    `FacturasSinTabla`. Lo que no vale no toca la base."""
+    `ncf`+`ncf_tipo` van juntos o ninguno, y con NCF el ITBIS es obligatorio. Errores: `FacturaSinSesion`, `FacturaNoVale`,
+    `FacturaNoEsta`, `FacturasSinTabla`. Lo que no vale no toca la base."""
     _pedir_sesion_de_la_casa(chat_id)
     if not isinstance(liga, dict) or not {"tipo", "ref"} <= set(liga) <= {"tipo", "ref", "codigo"}:
         raise FacturaNoVale("liga_forma", "la factura nace ligada a una sesión o a un trabajo")
@@ -3416,6 +3432,7 @@ async def corregir_borrador_de_factura(factura_id: int, chat_id: int, cambiado_e
             await _revisar_ncf_libre(cur, nuevos["ncf"], factura_id)
         quedan = {c: nuevos.get(c, antes[c]) for c in ("cliente_noco_id", "para_nombre", "fecha", "itbis_pct",
                                                        "descuento", "ncf", "ncf_tipo", "rnc_cedula")}
+        _revisar_el_itbis_del_comprobante(quedan["itbis_pct"], quedan["ncf"])
         try:
             await cur.execute(SENTENCIA_DE_CORREGIR_BORRADOR, (
                 quedan["cliente_noco_id"], quedan["para_nombre"], quedan["fecha"], quedan["itbis_pct"],

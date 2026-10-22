@@ -163,15 +163,16 @@ def _precio_escrito(valor) -> str:
 
 def _total_escrito(cantidad, precio) -> str:
     """El total que se ve en el formulario, calculado con lo que hay escrito (solo para mirarlo: la puerta lo vuelve
-    a calcular al guardar). Vacío si las dos casillas no son números que sirvan."""
+    a calcular al guardar). Vacío si las dos casillas no son números que la puerta acepte. La cantidad y el precio
+    pasan por la MISMA puerta del guardado (`db._cantidad_de_factura`, `db._dinero_de_factura`), no por una cuenta
+    propia: una cantidad absurda (30 dígitos) o un precio con tres decimales no muestran una cifra que no se va a
+    guardar, y ninguna cuenta de la pantalla revienta con `decimal.InvalidOperation`."""
     try:
-        c = Decimal(str(cantidad).replace(",", ""))
-        p = Decimal(str(precio).replace(",", ""))
-    except (ArithmeticError, ValueError):
+        c = db._cantidad_de_factura(cantidad)
+        p = db._dinero_de_factura(precio)
+    except db.FacturaNoVale:
         return ""
-    if not c.is_finite() or not p.is_finite() or c <= 0 or p <= 0:
-        return ""
-    return _sin_rd(db.total_del_renglon(c.quantize(Decimal("0.001")), p.quantize(Decimal("0.01"))))
+    return _sin_rd(db.total_del_renglon(c, p))
 
 
 def _descuento_escrito(valor) -> str:
@@ -343,11 +344,17 @@ def vista_previa_de_factura(campos: dict, *, hoy: date | None = None) -> dict:
         para.append((etiquetas["ncf"], ncf))
         if ncf_tipo:
             para.append((etiquetas["ncf_tipo"], ncf_tipo))
+    el_itbis_no_se_entendio = False
     try:
         itbis_pct = db._itbis_de_factura(campos.get("itbis_pct"))
     except db.FacturaNoVale as e:
         itbis_pct = None
+        el_itbis_no_se_entendio = True
         notas.append(f"El ITBIS: {e}.")
+    if ncf and itbis_pct is None and not el_itbis_no_se_entendio:
+        # La regla de Tiziano (21-oct-2026): una factura con comprobante lleva ITBIS; sin él no existe. Aquí se dice
+        # suave, como las demás cosas que todavía no valen, y la hoja no pinta totales (una factura así no se guarda).
+        notas.append("Una factura con comprobante (NCF) lleva ITBIS.")
     try:
         descuento = db._descuento_de_factura(campos.get("descuento"))
     except db.FacturaNoVale as e:
@@ -752,6 +759,7 @@ TEXTO_POR_CLAVE = {
     "sin_liga": "La factura necesita al menos una sesión o un trabajo.",
     "liga_forma": "La factura nace ligada a una sesión o a un trabajo: escoge al menos uno.",
     "ncf_repetido": "Ese NCF ya lo tiene otra factura (una anulada también cuenta: su NCF no se vuelve a usar).",
+    "ncf_sin_itbis": "Una factura con comprobante (NCF) lleva ITBIS.",
     "ncf_incompleto": "El NCF y su tipo van juntos: escribe los dos o deja los dos vacíos.",
     "ncf_formato": "El NCF solo lleva letras y cifras, de 1 a 20.",
     "rnc_formato": "El RNC lleva 9 cifras y la cédula 11.",
@@ -800,8 +808,9 @@ TEXTO_POR_CLAVE = {
 }
 
 # Qué casilla marca cada razón (las que son de UNA casilla). Se busca por el comienzo de la clave.
-CASILLA_POR_COMIENZO = (("ncf", "ncf"), ("rnc", "rnc_cedula"), ("para_nombre", "para_nombre"), ("fecha", "fecha"),
-                        ("itbis", "itbis"), ("descuento", "descuento"))
+CASILLA_POR_COMIENZO = (("ncf_sin_itbis", "itbis"), ("ncf", "ncf"), ("rnc", "rnc_cedula"),
+                        ("para_nombre", "para_nombre"), ("fecha", "fecha"), ("itbis", "itbis"),
+                        ("descuento", "descuento"))
 
 
 def casilla_del_error(clave: str | None) -> str | None:

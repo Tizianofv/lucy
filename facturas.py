@@ -126,8 +126,8 @@ def totales_de_la_hoja(f: dict) -> list[dict]:
     totales.append({"etiqueta": ETIQUETA_DEL_TOTAL, "total": cz.dinero_en_pesos(f["total"])})
     if f.get("ncf"):
         # Una factura CON comprobante: lo que el cliente retiene y lo que de verdad paga. Las cifras salen de
-        # `db.totales_de_factura`; la hoja no las calcula. Con NCF y sin ITBIS, `itbis_retenido` es cero y la línea
-        # va igual, para que la resta que lleva al total a pagar se lea entera.
+        # `db.totales_de_factura`; la hoja no las calcula. Una factura con NCF siempre lleva ITBIS (la puerta no la deja
+        # guardar sin él, pieza D4b), así que la línea del ITBIS retenido siempre tiene algo que decir.
         totales += [
             {"etiqueta": ETIQUETA_DE_LA_RETENCION_DEL_ISR, "total": cz.dinero_en_pesos(f["retencion_isr"])},
             {"etiqueta": ETIQUETA_DEL_ITBIS_RETENIDO, "total": cz.dinero_en_pesos(f["itbis_retenido"])},

@@ -367,14 +367,14 @@ def test_rnc_o_cedula_se_guarda_solo_con_cifras(mundo):
 
 
 def test_el_ncf_se_guarda_normalizado_y_no_se_repite_ni_con_la_anulada(mundo):
-    f = crear(ncf=" b01-0000 0001 ", ncf_tipo=" B01 ")
+    f = crear(ncf=" b01-0000 0001 ", ncf_tipo=" B01 ", itbis_pct=18)
     assert (f["ncf"], f["ncf_tipo"]) == ("B0100000001", "B01")
     for escrito in ("B0100000001", "b01-0000-0001", " B01 0000 0001"):
-        no_vale("ncf_repetido", lambda e=escrito: otra(ncf=e, ncf_tipo="B01"))
+        no_vale("ncf_repetido", lambda e=escrito: otra(ncf=e, ncf_tipo="B01", itbis_pct=18))
     e = emitir(f)
     correr(db.anular_factura(e["id"], CASA, "se hizo por error"))
-    no_vale("ncf_repetido", lambda: otra(ncf="B0100000001", ncf_tipo="B01"))
-    assert otra(ncf="B0100000002", ncf_tipo="B01")["ncf"] == "B0100000002"
+    no_vale("ncf_repetido", lambda: otra(ncf="B0100000001", ncf_tipo="B01", itbis_pct=18))
+    assert otra(ncf="B0100000002", ncf_tipo="B01", itbis_pct=18)["ncf"] == "B0100000002"
 
 
 def test_la_forma_del_ncf_de_la_puerta_es_la_que_acepta_la_base(mundo):
@@ -435,7 +435,7 @@ def test_las_llaves_de_asesoria_son_estables_distintas_y_caben_en_64_bits():
 # ── 4. Corregir un borrador ─────────────────────────────────────────────────────────────────────────
 
 def test_corregir_cambia_lo_pedido_deja_lo_demas_y_sube_el_candado(mundo):
-    f = crear(ncf="B01", ncf_tipo="B01", rnc_cedula="101000001")
+    f = crear(ncf="B01", ncf_tipo="B01", rnc_cedula="101000001", itbis_pct=18)
     r = correr(db.corregir_borrador_de_factura(f["id"], CASA, f["cambiado_en"], {
         "para_nombre": "Otro nombre", "cliente_noco_id": 2002, "fecha": "2026-10-01", "itbis_pct": 18,
         "renglones": [{"descripcion": "Solo uno", "monto": "50"}]}))
@@ -452,7 +452,7 @@ def test_corregir_cambia_lo_pedido_deja_lo_demas_y_sube_el_candado(mundo):
 
 
 def test_corregir_el_ncf_lo_pone_lo_cambia_y_lo_quita_siempre_en_pareja(mundo):
-    f = crear()
+    f = crear(itbis_pct=18)
     f = correr(db.corregir_borrador_de_factura(f["id"], CASA, f["cambiado_en"], {"ncf": "b01 77", "ncf_tipo": "B01"}))
     assert (f["ncf"], f["ncf_tipo"]) == ("B0177", "B01")
     no_vale("ncf_incompleto", lambda: correr(db.corregir_borrador_de_factura(f["id"], CASA, f["cambiado_en"], {"ncf": None})))
@@ -460,7 +460,7 @@ def test_corregir_el_ncf_lo_pone_lo_cambia_y_lo_quita_siempre_en_pareja(mundo):
     assert (f["ncf"], f["ncf_tipo"]) == ("B0177", "B02")
     f = correr(db.corregir_borrador_de_factura(f["id"], CASA, f["cambiado_en"], {"ncf": None, "ncf_tipo": None}))
     assert (f["ncf"], f["ncf_tipo"]) == (None, None)
-    otro = otra(ncf="B05", ncf_tipo="B01")
+    otro = otra(ncf="B05", ncf_tipo="B01", itbis_pct=18)
     no_vale("ncf_repetido", lambda: correr(db.corregir_borrador_de_factura(f["id"], CASA, f["cambiado_en"], {"ncf": "b05", "ncf_tipo": "B01"})))
     # su propio NCF no choca consigo mismo
     again = correr(db.corregir_borrador_de_factura(otro["id"], CASA, otro["cambiado_en"], {"ncf": "B05", "ncf_tipo": "B01"}))
@@ -662,7 +662,7 @@ def test_si_la_escritura_falla_despues_de_sacar_el_numero_el_numero_se_deshace(m
 
 
 def test_anular_guarda_numero_y_ncf_suelta_las_sesiones_y_cierra_los_envios_colgados(mundo):
-    e = emitir(crear(ncf="B01", ncf_tipo="B01", liga={"tipo": "sesion", "ref": "ses-1"}))
+    e = emitir(crear(ncf="B01", ncf_tipo="B01", itbis_pct=18, liga={"tipo": "sesion", "ref": "ses-1"}))
     for canal, estado, extra in (("whatsapp", "pendiente", ""), ("correo", "aprobado", ", aprobado_por_chat_id = 7, aprobado_en = '2026-10-21'"),
                                  ("mano", "enviado", ", enviado_en = '2026-10-21'"), ("whatsapp", "rechazado", ", motivo = 'no'")):
         mundo.con.execute("INSERT INTO factura_envios (factura_id, canal, estado) VALUES (?, ?, 'pendiente')", (e["id"], canal))
@@ -779,14 +779,14 @@ def test_el_choque_del_ncf_en_postgres_se_traduce(mundo, monkeypatch):
             raise _Choque("duplicado")
         return await original(self, sql, params)
     monkeypatch.setattr(_Cur, "execute", choca)
-    no_vale("ncf_repetido", lambda: crear(ncf="B01", ncf_tipo="B01"))
+    no_vale("ncf_repetido", lambda: crear(ncf="B01", ncf_tipo="B01", itbis_pct=18))
     assert filas(mundo, "facturas") == []
 
 
 # ── Descartar un borrador ───────────────────────────────────────────────────────────────────────────
 
 def test_descartar_un_borrador_lo_borra_con_sus_renglones_y_ligas_y_libera_la_sesion(mundo):
-    f = crear(ncf="B09", ncf_tipo="B01", liga={"tipo": "sesion", "ref": "ses-d"})
+    f = crear(ncf="B09", ncf_tipo="B01", itbis_pct=18, liga={"tipo": "sesion", "ref": "ses-d"})
     f = correr(db.ligar_factura_a_registro(f["id"], CASA, "trabajo", "tr-d"))
     r = correr(db.descartar_borrador_de_factura(f["id"], CASA))
     assert r == {"id": f["id"], "descartada": True}
@@ -797,7 +797,7 @@ def test_descartar_un_borrador_lo_borra_con_sus_renglones_y_ligas_y_libera_la_se
     h = filas(mundo, "log_acciones")[-1]
     assert (h["accion"], h["tabla"], h["registro_id"], h["despues"]) == ("descartar", "facturas", f["id"], None)
     assert json.loads(h["antes"])["ncf"] == "B09" and len(json.loads(h["antes"])["ligas"]) == 2
-    nueva = crear(ncf="B09", ncf_tipo="B01", liga={"tipo": "sesion", "ref": "ses-d"})      # sesión y NCF libres
+    nueva = crear(ncf="B09", ncf_tipo="B01", itbis_pct=18, liga={"tipo": "sesion", "ref": "ses-d"})      # sesión y NCF libres
     assert nueva["estado"] == "borrador"
 
 
@@ -1098,7 +1098,8 @@ def test_los_vocabularios_y_largos_de_la_puerta_son_los_de_la_base():
 
 def test_lo_que_la_puerta_acepta_en_el_limite_lo_acepta_la_base_y_un_caracter_mas_ya_no(mundo):
     f = crear(para_nombre="n" * 200, renglones=[{"descripcion": "d" * 300, "detalle": "t" * 2000, "monto": "99999999.99"}],
-              liga={"tipo": "sesion", "ref": "r" * 100, "codigo": "c" * 100}, ncf="N" * 20, ncf_tipo="T" * 20)
+              liga={"tipo": "sesion", "ref": "r" * 100, "codigo": "c" * 100}, ncf="N" * 20, ncf_tipo="T" * 20,
+              itbis_pct=18)
     e = emitir(f)
     assert len(correr(db.anular_factura(e["id"], CASA, "m" * 500))["motivo_anulacion"]) == 500
     ids = [r["id"] for r in filas(mundo, "facturas")]
