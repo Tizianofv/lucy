@@ -10,3 +10,10 @@ def test_la_pagina_de_proyectos_trae_el_estilo_de_la_ventana(mundo):
     r = tc._casa().get("/proyectos")
     assert r.status_code == 200
     assert ".cz-ventana{" in r.text and ".velo{" in r.text, "la ventana de cotizaciones perdió su estilo"
+
+
+def test_el_estilo_de_la_ventana_va_dentro_de_style_en_proyectos(mundo):
+    from test_estilo_de_la_ventana_dentro_de_style import assert_ventana_con_su_estilo
+    r = tc._casa().get("/proyectos")
+    assert r.status_code == 200
+    assert_ventana_con_su_estilo(r.text, "/proyectos")

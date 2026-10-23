@@ -6,7 +6,7 @@
 {% from "_vista_previa_de_factura.html" import la_hoja, guion_de_la_vista_previa %}
 {% block titulo %}{{ f.codigo or 'Factura en borrador' }}{% endblock %}
 {% block cuerpo %}
-{{ estilo_de_facturas() }}{{ estilo_de_la_hoja() }}{{ estilo_de_la_factura() }}{{ estilo_de_la_ventana() }}
+{{ estilo_de_facturas() }}{{ estilo_de_la_hoja() }}{{ estilo_de_la_factura() }}<style>{{ estilo_de_la_ventana() }}</style>
 {#- LA PÁGINA DE UNA FACTURA (pieza 4 del diseño «Facturas», 21-oct-2026). Solo la casa. La hoja es la MISMA que el PDF
     (`facturas.hoja_de_factura`); aquí nada calcula dinero ni escribe un texto de la hoja. Lo que se puede hacer
     depende del estado que la base tiene: borrador (corregir, ligar, emitir, descartar), emitida (anular, proyecto),
