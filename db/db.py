@@ -4470,6 +4470,29 @@ async def cotizaciones_de_proyectos() -> dict[int, list[dict]] | None:
     return salida
 
 
+async def cotizaciones_para_embudo() -> list[dict] | None:
+    """Las cotizaciones VIVAS de proyectos VIVOS en estado `borrador` o `enviada`, la más nueva primero, cada
+    una con `cliente_noco_id` de su proyecto (o `None`) y `totales_por_opcion`. Devuelve `None` si la tabla
+    o alguna columna no existe (42P01 / 42703): quien llama debe contestar error, nunca lista vacía.
+    Una lectura: no pide sesión. Quien la llama decide qué campos salen."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await cur.execute(
+                "SELECT c.id, c.anio, c.numero, c.estado, c.creado_en, c.enviada_en, c.contenido, "
+                "p.cliente_noco_id "
+                "FROM cotizaciones c JOIN proyectos p ON p.id = c.proyecto_id "
+                "WHERE c.borrado_en IS NULL AND p.borrado_en IS NULL "
+                "AND c.estado IN ('borrador', 'enviada') "
+                "ORDER BY c.creado_en DESC, c.id DESC")
+            filas = await cur.fetchall()
+        except Exception as e:
+            if _cotizaciones_sin_migrar(e):
+                return None
+            raise
+    return [_cotizacion_leida(f) for f in filas]
+
+
 # ── EL DRIVE DE LAS COTIZACIONES (pieza 8 del diseño «Cotizaciones en Proyectos», 16-oct-2026) ─────────────
 #
 # Aquí solo hay SQL. Quién sube, en qué orden y con qué frases lo decide `cotizaciones_drive.py`; quién habla
