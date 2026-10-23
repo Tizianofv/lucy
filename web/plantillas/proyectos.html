@@ -1,4 +1,4 @@
-{% from "_ventana.html" import estilo_de_la_ventana -%}
+{% from "_ventana.html" import estilo_de_la_ventana, variables_de_la_ventana -%}
 <!doctype html>
 <html lang="es"><head>
 <meta charset="utf-8">
@@ -15,22 +15,13 @@
    proyecto en el centro y sus personas a la derecha; en el teléfono se apilan.
    El color de cada grupo lo pone `--color`, que sale de `areas.color`, no de
    esta hoja. Sin JavaScript: todo es enlace, formulario o <details>. */
-:root{
-  --bg:#f3f4f1; --papel:#ffffff; --tinta:#16201c; --suave:#5f6a65; --linea:#dfe3de;
-  --vencida:#b3261e; --vencida-fondo:#fbe9e7; --dormido:#9a6b00; --dormido-fondo:#fff4d6;
-  --ok:#1e6b3a; --color:#0f7c74; --marca:#eb2129;
-  --display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;
-  --texto:"Figtree",ui-sans-serif,system-ui,-apple-system,sans-serif;
-}
+{{ variables_de_la_ventana(":root") }}
 /* El color de un grupo viaja en dos variables que escribe el servidor desde
    `areas.color`: `--claro` (el de la tabla) y `--oscuro` (el mismo tono, aclarado
    por una regla en `db.color_oscuro_de_grupo`). `.gc` escoge una según el modo;
    la regla clara va ANTES de la oscura para que la oscura gane. */
 .gc{--color:var(--claro)}
-@media (prefers-color-scheme: dark){:root{
-  --bg:#101614; --papel:#18201d; --tinta:#e7ece9; --suave:#9aa6a0; --linea:#2a3430;
-  --vencida:#f2867c; --vencida-fondo:#3a1f1c; --dormido:#e6b84f; --dormido-fondo:#3a2f12; --ok:#6cc38b; color-scheme:dark}
-  .gc{--color:var(--oscuro)}}
+@media (prefers-color-scheme: dark){.gc{--color:var(--oscuro)}}
 *{box-sizing:border-box}
 body{background:var(--bg);color:var(--tinta);font:15px/1.5 var(--texto);margin:0}
 a{color:inherit}
@@ -291,7 +282,6 @@ details.plegar > summary::-webkit-details-marker{display:none}
 details.plegar > summary::before{content:"▸ "}
 details.plegar[open] > summary::before{content:"▾ "}
 .acciones{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center;margin-top:.8rem}
-.btn-linea{font:600 .82rem var(--texto);padding:.35rem .75rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta);cursor:pointer;text-decoration:none;display:inline-block}
 .acciones.abajo{justify-content:flex-end;margin-top:0}
 .btn-lleno{font:600 .82rem var(--texto);padding:.35rem .75rem;border-radius:8px;border:0;background:var(--vencida);color:#fff;cursor:pointer}
 .confirmar{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;font-size:.86rem}
