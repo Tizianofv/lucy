@@ -137,7 +137,8 @@ def test_nada_de_la_ia_viaja_en_el_post_de_guardar(m):
 def test_sin_javascript_no_sale_nada_de_la_ia():
     """Todo lo que pinta la IA lleva `cz-ia` (o va dentro de lo que lo lleva) y la regla lo esconde; solo `.con-js` lo muestra."""
     fuente = open(PROYECTOS, encoding="utf-8").read()
-    estilos = fuente.split("<style>", 1)[1].split("</style>", 1)[0]
+    # El marco de la ventana (`.cz-ia`, `.ia-caja`…) vive en `_ventana.html`, no en la página: se lee también.
+    estilos = fuente.split("<style>", 1)[1].split("</style>", 1)[0] + open("web/plantillas/_ventana.html", encoding="utf-8").read()
     assert re.search(r"(?m)^\.cz-ia\{display:none\}", estilos)
     assert re.search(r"\.con-js \.ia-caja\.cz-ia", estilos) and re.search(r"\.con-js \.ia-fila\.cz-ia", estilos)
     plantilla = open(PLANTILLA, encoding="utf-8").read()

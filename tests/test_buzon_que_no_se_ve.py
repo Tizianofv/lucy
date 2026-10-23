@@ -4321,10 +4321,17 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # «‹ Inicio»): +1 en disco y +1 EXENTO (`tests/test_facturas_modulo_m1.py`, nuevo, exento por
     # rol); VIGILADOS sin cambio (se tocaron `web/app.py` y `web/plantillas/base.html`, ya
     # vigilados). Medida corriendo la prueba: 229, 163, 66.
-    assert medido == {"en disco": 229, "exentos": 163, "vigilados": 66}, (
+    # 23-oct-2026, rama `trabajo/facturas-apariencia` (la hoja de la factura en el estilo del modelo y la ventana de
+    # «Nueva factura» y «Corregir»): +1 en disco y +1 EXENTO (`tests/test_factura_modelo_tiziano.py`, nuevo, exento por
+    # rol); VIGILADOS sin cambio (`facturas.py`, `facturas_panel.py` y `web/app.py` ya vigilados). Las plantillas nuevas
+    # (`web/plantillas/_ventana.html`) no son .py: no cuentan. Medida corriendo la prueba: 230, 164, 66.
+    # 23-oct-2026, segunda vuelta (emitir desde la ventana y el estilo de la ventana, hallazgos H3): +2 en disco y +2 EXENTOS
+    # (`tests/test_emitir_desde_la_ventana.py` y `tests/test_estilo_de_la_ventana_en_las_paginas.py`, nuevos, exentos por
+    # rol); VIGILADOS sin cambio (`web/app.py` y `facturas.py` ya vigilados). Medida corriendo la prueba: 232, 166, 66.
+    assert medido == {"en disco": 232, "exentos": 166, "vigilados": 66}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "21-oct-2026 (facturas-m1) era {'en disco': 229, "
-        "'exentos': 163, 'vigilados': 66}. La aserción de fondo —cero "
+        "23-oct-2026 (facturas-apariencia, segunda vuelta) era {'en disco': 232, "
+        "'exentos': 166, 'vigilados': 66}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

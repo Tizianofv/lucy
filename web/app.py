@@ -2566,7 +2566,8 @@ def _enlace_de_nueva(proyecto=None, cotizacion=None, opcion=None, cliente=None) 
 
 
 async def _contexto_de_factura_nueva(*, cliente, proyecto, cotizacion, opcion, refs: list[str], sq: str, pq: str,
-                                     quiere_escribir: bool, escrito: dict | None = None, errores=()) -> dict:
+                                     quiere_escribir: bool, escrito: dict | None = None, errores=(),
+                                     pedir_emision: bool = False) -> dict:
     """Todo lo que la pantalla de «Nueva factura» necesita, en tres pasos que se ven según lo que ya se escogió:
     `cliente` (quién), `escoger` (qué sesiones o trabajos) y `escribir` (los renglones y los datos). Solo LEE:
     la App, Noco y la base. El cliente sale del proyecto si el proyecto lo tiene, o de la ficha que se escoge
@@ -2596,7 +2597,7 @@ async def _contexto_de_factura_nueva(*, cliente, proyecto, cotizacion, opcion, r
         except db.SesionNoEsta:
             cliente_id = None
         cliente_fijo = cliente_id is not None          # el cliente es el del proyecto: ahí no se cambia
-    ctx = {"avisos": avisos, "errores": list(errores), "proyecto": ({"id": pid, "nombre": nombres[pid]} if pid else None),
+    ctx = {"avisos": avisos, "errores": list(errores), "pedir_emision": pedir_emision, "proyecto": ({"id": pid, "nombre": nombres[pid]} if pid else None),
            "volver_a_la_app": enlace_al_inicio_de_la_app(),
            "cotizacion": ({"id": cot["id"], "codigo": cot["codigo"]} if cot else None), "opciones": opciones,
            "opcion": opcion_n, "cliente_id": cliente_id, "cliente_fijo": cliente_fijo, "cliente_nombre": "", "noco_ok": True, "refs": refs,
@@ -2750,15 +2751,48 @@ async def factura_nueva(request: Request, cliente: Navegacion[int] = 0, proyecto
     return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "factura_nueva.html", ctx))
 
 
-async def _factura_nueva_rechazada(request: Request, campos: dict, errores: list[dict]):
-    """El guardado NO se hizo: la misma pantalla de «escribir», con lo que la persona puso y la razón."""
+async def _factura_nueva_en_pantalla(request: Request, campos: dict, *, errores=(), pedir_emision: bool = False,
+                                     status: int = 200):
+    """La pantalla de «escribir» con lo que la persona puso (`campos`), SIN guardar nada. Con `pedir_emision`, la
+    confirmación de emitir va dentro de la ventana."""
     ctx = await _contexto_de_factura_nueva(
         cliente=campos["cliente"] if isinstance(campos["cliente"], int) else None,
         proyecto=campos["proyecto"] if isinstance(campos["proyecto"], int) else None,
         cotizacion=campos["cotizacion"] if isinstance(campos["cotizacion"], int) else None,
         opcion=campos["opcion"] if isinstance(campos["opcion"], int) else None,
-        refs=campos["refs"], sq="", pq="", quiere_escribir=True, escrito=campos, errores=errores)
-    return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "factura_nueva.html", ctx, status_code=400))
+        refs=campos["refs"], sq="", pq="", quiere_escribir=True, escrito=campos, errores=errores,
+        pedir_emision=pedir_emision)
+    return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "factura_nueva.html", ctx, status_code=status))
+
+
+async def _factura_nueva_rechazada(request: Request, campos: dict, errores: list[dict]):
+    """El guardado NO se hizo: la misma pantalla de «escribir», con lo que la persona puso y la razón (400)."""
+    return await _factura_nueva_en_pantalla(request, campos, errores=errores, status=400)
+
+
+async def _emitir_lo_guardado(request: Request, chat: int, fid: int):
+    """Emite lo que acaba de guardarse con LA MISMA puerta de «Emitir» de la página de la factura (`db.emitir_factura`,
+    con el candado que esa página leería) y la misma subida a Drive. Si la puerta no deja, lo escrito queda como
+    borrador y la página lo dice. Nunca dice «emitida» si no lo está: el estado que muestra sale de la base."""
+    actual = await db.factura_por_id(fid)
+    try:
+        await db.emitir_factura(fid, chat, fp.candado(actual["cambiado_en"]))
+    except db.FacturaSinSesion:
+        return _fuera(request)
+    except Exception as e:
+        texto = fp.texto_del_error(e)
+        if texto["clave"] == "base":
+            log_f.exception("Facturas: falló la base al emitir la factura #%s desde la ventana.", fid)
+            aviso = ("Lo escrito quedó guardado. No se sabe si la emisión llegó a la base: "
+                     "mira la factura antes de volver a intentar.")
+        else:
+            log_f.warning("Facturas: la emisión de la factura #%s no dejó (%s)", fid, texto["clave"])
+            razon = texto["razon"].rstrip(".")
+            aviso = f"No se emitió: {razon[:1].lower() + razon[1:]}. Lo escrito SÍ quedó guardado como borrador."
+        actual = await db.factura_por_id(fid)
+        return await _pagina_de_factura(request, actual, errores=[{"texto": aviso, "casilla": None}], status=400)
+    await _subir_factura_a_drive(fid)
+    return RedirectResponse(f"/facturas/{fid}", status_code=303)
 
 
 @app.post("/facturas/nueva")
@@ -2768,23 +2802,31 @@ async def guardar_factura_nueva(request: Request):
     `db.crear_borrador_de_factura`; las demás se ligan una por una con `db.ligar_factura_a_registro`. EL TIPO DE
     CADA LIGA (sesión o trabajo) lo decide la App (`es_trabajo`), no el formulario: se le pregunta de nuevo por
     esas referencias, y una cancelada o desconocida no se liga. Rechazado: la misma pantalla con lo escrito y la
-    razón (400). Guardado: a la pantalla de la factura."""
+    razón (400). Guardado: a la pantalla de la factura.
+    `accion` (el botón de la ventana): sin acción o `borrador` guarda; `pedir_emision` abre la confirmación SIN guardar;
+    `volver` deja la pantalla con lo escrito; `emitir` guarda y EMITE en un paso (`_emitir_lo_guardado`)."""
     chat = _sesion(request)
     if not auth.puede_entrar(chat):
         return _fuera(request)
-    campos = fp.campos_del_formulario(await request.form())
-    errores = []
+    formulario = await request.form()
+    campos = fp.campos_del_formulario(formulario)
+    accion = str(formulario.get("accion") or "")
+    if accion == "volver":
+        return await _factura_nueva_en_pantalla(request, campos)
+    # Lo que se comprueba ANTES de guardar: que haya sesiones o trabajos, que sean de este cliente y que se puedan ligar.
+    ligas, errores = [], []
     lectura = await _lo_que_dice_el_registro_del_cliente(campos["cliente"]) if campos["refs"] else None
     if not campos["refs"]:
         errores.append({"texto": "La factura nace ligada a una sesión o a un trabajo: escoge al menos uno. NO se guardó nada.", "casilla": None})
     elif lectura is None:
         errores.append({"texto": "No se pudo consultar el registro para comprobar que esas sesiones son de este cliente: NO se guardó nada. Vuelve a intentarlo en un momento.", "casilla": None})
-    ligas = []
     if lectura is not None:
         ligas, problemas = fp.ligas_de_las_refs(campos["refs"], lectura)
         errores += [{"texto": fp.frase_del_problema_de_liga(p) + " NO se guardó nada.", "casilla": None} for p in problemas]
     if errores:
         return await _factura_nueva_rechazada(request, campos, errores)
+    if accion == "pedir_emision":
+        return await _factura_nueva_en_pantalla(request, campos, pedir_emision=True)
     try:
         f = await db.crear_borrador_de_factura(
             chat, cliente_noco_id=campos["cliente"], para_nombre=campos["para_nombre"], renglones=campos["renglones"],
@@ -2810,6 +2852,13 @@ async def guardar_factura_nueva(request: Request):
             return _fuera(request)
         except Exception as e:
             sin_ligar.append(fp.frase_de_una_liga_que_no_se_pudo(liga, fp.texto_del_error(e)))
+    if accion == "emitir":
+        if sin_ligar:
+            actual = await db.factura_por_id(f["id"])
+            avisos = [{"texto": t, "casilla": None} for t in sin_ligar] + [
+                {"texto": "Lo escrito quedó guardado como borrador: NO se emitió porque una sesión no se ligó.", "casilla": None}]
+            return await _pagina_de_factura(request, actual, errores=avisos, status=200)
+        return await _emitir_lo_guardado(request, chat, f["id"])
     if not sin_ligar:
         return RedirectResponse(f"/facturas/{f['id']}", status_code=303)
     actual = await db.factura_por_id(f["id"])
@@ -2824,7 +2873,8 @@ CONFIRMACIONES_DE_FACTURA = {"borrador": ("emitir", "descartar"), "emitida": ("a
 async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", corregir: int = 0, sq: str = "",
                              ofrecer: str = "", agregar: str = "",
                              errores=(), escrito: dict | None = None, status: int = 200,
-                             motivo_escrito: str = "", proyecto_escrito: tuple | None = None):
+                             motivo_escrito: str = "", proyecto_escrito: tuple | None = None,
+                             pedir_emision: bool = False):
     """La pantalla de la factura `f` (lo que devuelve `db.factura_por_id`): su hoja (la misma del PDF), sus datos,
     sus sesiones o trabajos, el proyecto y lo que se puede hacer según su estado. Solo LEE (la App, Noco, la base).
     `errores` y `escrito` son lo que un guardado rechazado deja para que la persona no pierda lo suyo."""
@@ -2891,6 +2941,7 @@ async def _pagina_de_factura(request: Request, f: dict, *, confirmar: str = "", 
         "se_corrige": se_corrige,
         "valores": valores, "vista": vista,
         "candado": fp.candado(f["cambiado_en"]), "errores": list(errores), "motivo_escrito": motivo_escrito,
+        "pedir_emision": bool(pedir_emision and se_corrige),
         # el proyecto que la persona escogió y se rechazó (`(valor,)`), o el que la factura tiene
         "proyecto_marcado": f["proyecto_id"] if proyecto_escrito is None else proyecto_escrito[0],
         "campos_marcados": {c["casilla"] for c in errores if c.get("casilla")},
@@ -2987,12 +3038,20 @@ async def _rechazo_de_una_factura(request: Request, fid: int, e: Exception, *, c
 @auth.puerta(auth.PUERTA_SIEMPRE)
 async def corregir_una_factura(request: Request, fid: int):
     """Corrige un BORRADOR por `db.corregir_borrador_de_factura` (con el candado `cambiado_en` que la página leyó).
-    Rechazado: la misma página con el formulario abierto y lo escrito."""
+    Rechazado: la misma página con el formulario abierto y lo escrito. `accion` (el botón de la ventana):
+    `pedir_emision` abre la confirmación dentro de la página SIN tocar nada; `volver` deja la página con lo escrito;
+    `emitir` corrige y EMITE en un paso, con la misma puerta de «Emitir» (`_emitir_lo_guardado`)."""
     chat = _sesion(request)
     if not auth.puede_entrar(chat):
         return _fuera(request)
     formulario = await request.form()
     campos = fp.campos_del_formulario(formulario)
+    accion = str(formulario.get("accion") or "")
+    if accion in ("pedir_emision", "volver"):
+        f = await _factura_o_404(fid)
+        if f is None:
+            return _no_existe_la_factura()
+        return await _pagina_de_factura(request, f, corregir=1, escrito=campos, pedir_emision=accion == "pedir_emision")
     cambios = {k: campos[k] for k in ("para_nombre", "itbis_pct", "ncf", "ncf_tipo", "rnc_cedula", "renglones")}
     cambios["fecha"] = campos["fecha"]
     if "descuento" in formulario:          # lo que no viene no se toca: un formulario sin la casilla no borra el descuento
@@ -3003,6 +3062,8 @@ async def corregir_una_factura(request: Request, fid: int):
         return _fuera(request)
     except Exception as e:
         return await _rechazo_de_una_factura(request, fid, e, corregir=1, escrito=campos)
+    if accion == "emitir":
+        return await _emitir_lo_guardado(request, chat, fid)
     return RedirectResponse(f"/facturas/{fid}", status_code=303)
 
 

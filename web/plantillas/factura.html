@@ -2,10 +2,11 @@
 {% from "_facturas_estilo.html" import estilo_de_facturas %}
 {% from "_hoja_de_cotizacion.html" import estilo_de_la_hoja %}
 {% from "_hoja_de_factura.html" import estilo_de_la_factura, hoja_de_factura %}
+{% from "_ventana.html" import estilo_de_la_ventana %}
 {% from "_vista_previa_de_factura.html" import la_hoja, guion_de_la_vista_previa %}
 {% block titulo %}{{ f.codigo or 'Factura en borrador' }}{% endblock %}
 {% block cuerpo %}
-{{ estilo_de_facturas() }}{{ estilo_de_la_hoja() }}{{ estilo_de_la_factura() }}
+{{ estilo_de_facturas() }}{{ estilo_de_la_hoja() }}{{ estilo_de_la_factura() }}{{ estilo_de_la_ventana() }}
 {#- LA PÁGINA DE UNA FACTURA (pieza 4 del diseño «Facturas», 21-oct-2026). Solo la casa. La hoja es la MISMA que el PDF
     (`facturas.hoja_de_factura`); aquí nada calcula dinero ni escribe un texto de la hoja. Lo que se puede hacer
     depende del estado que la base tiene: borrador (corregir, ligar, emitir, descartar), emitida (anular, proyecto),
@@ -31,12 +32,17 @@
   <form method="post" action="/facturas/{{ f.id }}/anular"><textarea name="motivo" maxlength="500" required aria-label="Motivo de la anulación" placeholder="Motivo de la anulación">{{ motivo_escrito }}</textarea><button class="peligro">Sí, anular</button><a class="boton-linea" href="/facturas/{{ f.id }}">Cancelar</a></form></div>
 {% endif %}
 
+{#- CORREGIR EL BORRADOR (23-oct-2026): la misma ventana flotante de «Nueva factura» y de las cotizaciones: el marco
+    de `_ventana.html`, el formulario a la izquierda y «Así va a salir» (la hoja en vivo) a la derecha. -#}
 {% if se_corrige %}
-<h2>Corregir el borrador</h2>
+<div class="velo" role="dialog" aria-label="Corregir el borrador">
+<div class="cz-ventana">
+<div class="ventana-enc"><h2>Corregir el borrador</h2><span class="num">{{ f.codigo or 'Borrador' }}</span><a class="cerrar" href="/facturas/{{ f.id }}" aria-label="Cerrar">✕</a></div>
 {% set v = valores %}
-<div class="dos">
 <form method="post" action="/facturas/{{ f.id }}/corregir" data-corregir>
   <input type="hidden" name="cambiado_en" value="{{ candado }}">
+  <div class="ventana-cuerpo">
+  <div class="form-c">
   <div class="campos">
     <label{% if 'para_nombre' in campos_marcados %} class="marcada"{% endif %}>A nombre de <input type="text" name="para_nombre" value="{{ v.para_nombre }}" maxlength="200" required{% if 'para_nombre' in campos_marcados %} aria-invalid="true"{% endif %}></label>
     <label{% if 'fecha' in campos_marcados %} class="marcada"{% endif %}>Fecha <input type="date" name="fecha" value="{{ v.fecha }}"{% if 'fecha' in campos_marcados %} aria-invalid="true"{% endif %}></label>
@@ -60,9 +66,21 @@
   </table></div>
   <p class="suave">El total de cada renglón es la cantidad por el precio unitario: se calcula al guardar.</p>
   {% if agregado %}<p class="suave" data-renglon-agregado>Los últimos renglones con datos son los de la sesión que pediste agregar; la cantidad, la unidad y el precio salen del registro (antes de ITBIS). Cámbialos si hace falta; no se guarda nada hasta que guardes.</p>{% endif %}
-  <div class="pie-guardar"><button>Guardar los cambios</button><a class="boton-linea" href="/facturas/{{ f.id }}">Cancelar</a></div>
+  </div>
+  <div class="previa"><p class="rot">Así va a salir</p><div class="hoja-caja" data-hoja>{% if vista %}{{ la_hoja(vista) }}{% else %}{{ hoja_de_factura(hoja) }}{% endif %}</div></div>
+  </div>
+  <div class="ventana-pie">
+    <span class="izq">Se guarda en este mismo borrador.</span>
+    <a class="btn-linea" href="/facturas/{{ f.id }}">Cancelar</a>
+    <button class="btn-prim">Guardar los cambios</button>
+    <button name="accion" value="pedir_emision" class="btn-linea" data-pedir-emision>Guardar y emitir…</button>
+    {% if pedir_emision %}<div class="cz-aviso-pie" style="order:-1" data-confirmar-emision>
+      <p class="aviso">¿Emitir esta factura? Lo escrito se guarda y la factura recibe su número: ya no se puede corregir. Si la emisión no deja, queda guardada como borrador.</p>
+      <button name="accion" value="emitir" class="btn-prim" data-emitir>Sí, guardar y emitir</button>
+      <button name="accion" value="volver" class="btn-linea">Volver a corregir</button></div>{% endif %}
+  </div>
 </form>
-<div class="hoja-caja" data-hoja>{% if vista %}{{ la_hoja(vista) }}{% else %}{{ hoja_de_factura(hoja) }}{% endif %}</div>
+</div>
 </div>
 {% endif %}
 

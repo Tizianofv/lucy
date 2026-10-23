@@ -129,7 +129,7 @@ def test_el_ejemplo_d4_sale_con_sus_cifras_en_la_vista_previa(pantalla):
     html = _fragmento(_campos(itbis="18", ncf="B0100000011", ncf_tipo="Crédito fiscal"))
     for cifra in ("RD$13,882.36", "RD$1,764.71", "RD$2,117.65", "RD$10,000"):
         assert cifra in html, cifra
-    assert "Impuesto a retener (ISR 15%)" in html and "Total a pagar" in html
+    assert "Retención ISR (15%) sobre el servicio" in html and "Neto a pagar" in html
 
 
 def test_con_descuento_y_sin_ncf_la_vista_previa_da_el_neto_mas_el_itbis(pantalla):
@@ -138,7 +138,7 @@ def test_con_descuento_y_sin_ncf_la_vista_previa_da_el_neto_mas_el_itbis(pantall
     # 10,000 − 1,500 de descuento; el ITBIS es el 18 % del neto (8,500 → 1,530) y el total 10,030
     assert "RD$10,000" in html and "- RD$1,500" in html
     assert "RD$1,530" in html and "RD$10,030" in html
-    assert "Total a pagar" not in html                       # sin NCF no hay retenciones
+    assert "Neto a pagar" not in html                       # sin NCF no hay retenciones
     assert fp.vista_previa_de_factura(_campos(itbis="18", descuento="1,500"))["hoja"] == fa.hoja_de_factura(f)
 
 
@@ -246,7 +246,7 @@ def test_la_pantalla_de_escribir_trae_la_vista_previa_al_lado_del_formulario(pan
     html = cliente().get("/facturas/nueva?cliente=7&ref=11&paso=escribir").text
     assert 'data-factura-nueva' in html and 'data-hoja' in html and 'id="guion-vista-previa"' in html
     assert html.index('data-factura-nueva') < html.index('data-hoja')       # la hoja va después del formulario
-    assert 'class="dos"' in html
+    assert 'class="ventana-cuerpo"' in html and 'class="previa"' in html   # la ventana: formulario a la izquierda, la hoja a la derecha
     assert "BORRADOR" in html and "RD$9,000" in html                        # el renglón de la sesión, ya sumado
 
 

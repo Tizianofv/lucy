@@ -341,7 +341,7 @@ def vista_previa_de_factura(campos: dict, *, hoy: date | None = None) -> dict:
     except db.FacturaNoVale as e:
         notas.append(f"El NCF: {e}.")
     if ncf:
-        para.append((etiquetas["ncf"], ncf))
+        # El NCF no va en el bloque Para: va debajo del número, en rojo (`fa.hoja_de_lo_escrito(ncf=…)`).
         if ncf_tipo:
             para.append((etiquetas["ncf_tipo"], ncf_tipo))
     el_itbis_no_se_entendio = False
@@ -361,12 +361,12 @@ def vista_previa_de_factura(campos: dict, *, hoy: date | None = None) -> dict:
         descuento = None
         notas.append(f"El descuento: {e}.")
     if notas:
-        return {"hoja": fa.hoja_de_lo_escrito(para=para, renglones=renglones, totales=[]), "notas": notas}
+        return {"hoja": fa.hoja_de_lo_escrito(para=para, renglones=renglones, totales=[], ncf=ncf), "notas": notas}
     montos = [r["monto"] for r in parseados]
     try:
         db._revisar_el_descuento(descuento, montos)
     except db.FacturaNoVale as e:
-        return {"hoja": fa.hoja_de_lo_escrito(para=para, renglones=renglones, totales=[]),
+        return {"hoja": fa.hoja_de_lo_escrito(para=para, renglones=renglones, totales=[], ncf=ncf),
                 "notas": [f"El descuento: {e}."]}
     f = {"estado": "borrador", "codigo": None, "para_nombre": para[0][1], "rnc_cedula": rnc_que_vale,
          "fecha": la_fecha, "ncf": ncf, "ncf_tipo": ncf_tipo, "itbis_pct": itbis_pct, "descuento": descuento,

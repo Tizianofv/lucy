@@ -254,42 +254,42 @@ def _factura(descuento=Decimal("500.00"), itbis_pct=Decimal("18.00"), **kw):
 def test_la_hoja_pone_el_descuento_debajo_del_subtotal_y_el_itbis_sobre_el_neto():
     h = fa.hoja_de_factura(_factura())
     assert [(t["etiqueta"], t["total"]) for t in h["totales"]] == [
-        ("Subtotal", "RD$2,000"), ("Descuento", "- RD$500"), ("ITBIS 18%", "RD$270"), ("TOTAL", "RD$1,770")]
+        ("Subtotal", "RD$2,000"), ("Descuento", "- RD$500"), ("ITBIS (18%)", "RD$270"), ("Total factura (RD$)", "RD$1,770")]
 
 
 def test_sin_descuento_la_hoja_no_tiene_linea_de_descuento():
     h = fa.hoja_de_factura(_factura(descuento=Decimal("0.00")))
-    assert [t["etiqueta"] for t in h["totales"]] == ["Subtotal", "ITBIS 18%", "TOTAL"]
+    assert [t["etiqueta"] for t in h["totales"]] == ["Subtotal", "ITBIS (18%)", "Total factura (RD$)"]
     assert h["totales"][2]["total"] == "RD$2,360"
 
 
 def test_sin_itbis_pero_con_descuento_la_hoja_dice_el_subtotal_el_descuento_y_el_total():
     h = fa.hoja_de_factura(_factura(itbis_pct=None))
     assert [(t["etiqueta"], t["total"]) for t in h["totales"]] == [
-        ("Subtotal", "RD$2,000"), ("Descuento", "- RD$500"), ("TOTAL", "RD$1,500")]
+        ("Subtotal", "RD$2,000"), ("Descuento", "- RD$500"), ("Total factura (RD$)", "RD$1,500")]
 
 
 def test_sin_descuento_ni_itbis_la_hoja_dice_solo_el_total_como_siempre():
     h = fa.hoja_de_factura(_factura(descuento=Decimal("0"), itbis_pct=None))
-    assert [(t["etiqueta"], t["total"]) for t in h["totales"]] == [("TOTAL", "RD$2,000")]
+    assert [(t["etiqueta"], t["total"]) for t in h["totales"]] == [("Total factura (RD$)", "RD$2,000")]
 
 
 def test_el_pdf_pinta_el_descuento_y_el_itbis_del_neto_en_orden():
     pdf = fa.pdf_de_factura(fa.hoja_de_factura(_factura()))
     leido = re.sub(r"\s+", "", "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(pdf)).pages))
-    for texto in ("Subtotal", "Descuento", "-RD$500", "ITBIS18%", "RD$270", "TOTAL", "RD$1,770"):
+    for texto in ("Subtotal", "Descuento", "-RD$500", "ITBIS(18%)", "RD$270", "Totalfactura(RD$)", "RD$1,770"):
         assert texto in leido, texto
     # «TOTAL» también es el encabezado de la última columna: el de los totales es el ÚLTIMO de la hoja
-    assert leido.index("Subtotal") < leido.index("Descuento") < leido.index("ITBIS18%") < leido.rindex("TOTAL")
+    assert leido.index("Subtotal") < leido.index("Descuento") < leido.index("ITBIS(18%)") < leido.rindex("Totalfactura(RD$)")
 
 
 def test_la_vista_previa_pinta_la_misma_linea_de_descuento():
     h = fa.hoja_de_factura(_factura())
     html = str(__import__("web.app", fromlist=["x"]).plantillas.env.get_template(
         "_hoja_de_factura.html").module.hoja_de_factura(h))
-    assert "Descuento" in html and "- RD$500" in html and "ITBIS 18%" in html and "RD$1,770" in html
+    assert "Descuento" in html and "- RD$500" in html and "ITBIS (18%)" in html and "RD$1,770" in html
     # «TOTAL» también es el encabezado de la tabla: el de los totales es el último
-    assert html.index("Subtotal") < html.index("Descuento") < html.index("ITBIS 18%") < html.rindex("TOTAL")
+    assert html.index("Subtotal") < html.index("Descuento") < html.index("ITBIS (18%)") < html.rindex("Total factura (RD$)")
 
 
 def test_la_cotizacion_no_cambia(monkeypatch):

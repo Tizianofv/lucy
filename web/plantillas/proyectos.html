@@ -1,3 +1,4 @@
+{% from "_ventana.html" import estilo_de_la_ventana -%}
 <!doctype html>
 <html lang="es"><head>
 <meta charset="utf-8">
@@ -149,80 +150,7 @@ h1{font:700 clamp(1.6rem,4vw,2.3rem)/1.1 var(--display);margin:0;text-wrap:balan
 .cotiz .vacio{margin-top:.6rem}
 .cotiz .aviso{margin:.6rem 0 0;font-size:.85rem}
 .cotiz .aviso.ok{border-left-color:var(--ok)}
-.velo{position:fixed;inset:0;background:rgb(16 22 20 / .45);z-index:50;display:flex;align-items:flex-start;justify-content:center;padding:4vh 16px;overflow:auto}
-.cz-ventana{background:var(--papel);border-radius:16px;box-shadow:0 20px 60px rgb(0 0 0 / .25);width:min(1180px,100%);display:flex;flex-direction:column;font-size:15px;color:var(--tinta)}
-.cz-ventana .aviso{margin:.6rem 1.3rem 0}
-.cz-cliente-buscar{margin:.6rem 1.3rem 0}.cz-cliente-buscar .nota{margin:0 0 .3rem}.cz-cliente-buscar .persona-campo{margin-top:0}
-.ventana-enc{display:flex;align-items:center;gap:1rem;padding:1rem 1.3rem;border-bottom:1px solid var(--linea)}
-.ventana-enc h2{font:700 1.2rem var(--display);margin:0}
-.ventana-enc .num{color:var(--suave);font-size:.85rem}
-.ventana-enc .cerrar{margin-left:auto;font-size:1.3rem;color:var(--suave);text-decoration:none;line-height:1}
-.ventana-cuerpo{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:0}
-.ventana-cuerpo.una{grid-template-columns:minmax(0,1fr)}
-@media (max-width:900px){.ventana-cuerpo{grid-template-columns:1fr}}
-.cz-form{display:flex;flex-direction:column}
-.form-c{padding:1.1rem 1.3rem;display:flex;flex-direction:column;gap:1.1rem;border-right:1px solid var(--linea);max-height:74vh;overflow:auto}
-.form-c h4{font:700 .78rem var(--texto);letter-spacing:.06em;text-transform:uppercase;color:var(--suave);margin:0 0 .5rem}
-.rej{display:grid;grid-template-columns:1fr 1fr;gap:.6rem .8rem}
-.rej label,.op label{display:flex;flex-direction:column;gap:.25rem;font-size:.78rem;color:var(--suave)}
-.form-c input,.form-c textarea,.form-c select{font:inherit;font-size:.88rem;padding:.45rem .6rem;border-radius:8px;border:1px solid var(--linea);background:var(--bg);color:var(--tinta);width:100%;box-sizing:border-box}
-.form-c textarea{min-height:3.6rem;resize:vertical}
-.cz-opciones{display:flex;flex-direction:column;gap:.7rem}
-.auto{font-size:.72rem;color:var(--suave)}
-.op{border:1px solid var(--linea);border-radius:12px;padding:.8rem;display:flex;flex-direction:column;gap:.6rem;background:var(--papel)}
-.op-enc{display:flex;align-items:center;gap:.6rem}
-.op-enc .n{font:700 .8rem var(--texto);color:var(--marca);letter-spacing:.05em;white-space:nowrap}
-.op-enc input{flex:1}
-.op-enc .x{background:none;border:0;color:var(--suave);cursor:pointer;font-size:1rem;display:none}
-.con-js .op-enc .x{display:inline-block}
-.renglon-bloque{display:flex;flex-direction:column;gap:.5rem}
-.renglon{display:grid;grid-template-columns:minmax(0,1fr) 8.5rem;gap:.5rem;align-items:start}
-.renglon .total{display:flex;align-items:center;gap:.3rem;font-size:.85rem;color:var(--suave)}
-.mas-linea{background:none;border:1px dashed var(--linea);border-radius:8px;padding:.4rem .7rem;color:var(--color);font:600 .8rem var(--texto);cursor:pointer;align-self:flex-start}
-.mas-linea{display:none}
-.con-js .mas-linea{display:inline-block}
-.con-js .cz-sobra{display:none}
-/* LA IA DE LOS TEXTOS DE LAS COTIZACIONES (pieza 3, 16-oct-2026): la clase de la maqueta `disenos/lucy-cotizaciones-ia/maqueta.html`. Sin JavaScript no sale. */
-.cz-ia{display:none}
-.con-js .ia-caja.cz-ia,.con-js .ia-fila.cz-ia{display:flex}
-.ia-caja{border:1px solid color-mix(in srgb,var(--color) 35%,var(--linea));background:color-mix(in srgb,var(--color) 6%,var(--papel));border-radius:12px;padding:.8rem;flex-direction:column;gap:.5rem;margin-bottom:.7rem}
-.ia-caja h5{margin:0;font:700 .8rem var(--texto);display:flex;align-items:center;gap:.4rem}
-.ia-pill{font:700 .62rem var(--texto);letter-spacing:.06em;padding:.08rem .4rem;border-radius:999px;background:var(--color);color:#fff}
-.ia-caja p{margin:0;font-size:.76rem;color:var(--suave)}
-.ia-caja label{display:flex;flex-direction:column;gap:.25rem;font-size:.78rem;color:var(--suave)}
-.ia-fila{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
-.btn-ia{font:600 .8rem var(--texto);padding:.4rem .75rem;border-radius:8px;border:1px solid var(--color);background:var(--papel);color:var(--color);cursor:pointer;align-items:center;gap:.35rem}
-.btn-ia:disabled{opacity:.55;cursor:not-allowed}
-.btn-ia.chico{font-size:.74rem;padding:.25rem .55rem;align-self:flex-start}
-.ia-espera{font-size:.76rem;color:var(--suave)}
-.ia-propuesta{border:1px dashed var(--color);border-radius:10px;padding:.6rem .7rem;background:var(--papel);font-size:.84rem;display:flex;flex-direction:column;gap:.45rem}
-.ia-propuesta .rot-ia{font:700 .68rem var(--texto);letter-spacing:.06em;text-transform:uppercase;color:var(--color)}
-.ia-propuesta .texto{white-space:pre-wrap;overflow-wrap:anywhere;color:var(--tinta)}
-.ia-error{border-radius:10px;padding:.55rem .7rem;font-size:.8rem;background:#fdecec;color:#8a1c1c;border:1px solid #f3c2c2}
-.ia-aviso{border-radius:10px;padding:.6rem .8rem;font-size:.82rem;background:#fff7d6;color:#5c4a00;border:1px solid #f0dc8a;margin-bottom:.7rem}
-.form-c .cz-falta-precio input{background:#fff7d6;border-color:#e0c040}
-.cond{display:flex;flex-direction:column;gap:.35rem}
-.cond label{flex-direction:row;align-items:center;gap:.5rem;font-size:.84rem;color:var(--tinta);display:flex}
-.cond label[hidden]{display:none}
-.cond input[type=checkbox]{width:auto;accent-color:var(--color)}
-.cond .cz-texto-propio{flex:1}
-.ventana-pie{display:flex;align-items:center;gap:.6rem;padding:.9rem 1.3rem;border-top:1px solid var(--linea);flex-wrap:wrap}
-/* El pie de la ventana de una cotización se queda a la vista (pegado abajo del velo) aunque la ventana sea más larga que la
-   pantalla: ahí están los botones de guardar y ahí sale el aviso de un guardado que el servidor rechazó. */
-.cz-ventana .ventana-pie{position:sticky;bottom:0;z-index:2;background:var(--papel);border-radius:0 0 16px 16px}
-.ventana-pie .cz-aviso-pie{flex:0 0 100%}
-.ventana-pie .cz-aviso-pie .aviso{margin:0}
-.ventana-pie .cz-aviso-vacio{display:none}
-.cz-aparte{margin:.6rem 1.3rem 0;padding:.7rem 1rem;border:1px dashed var(--linea);border-radius:10px}
-.cz-aparte h4{margin:0 0 .3rem}
-.cz-aparte textarea{width:100%;box-sizing:border-box;font:inherit;font-size:.85rem}
-.cz-aparte .copiar-aparte{margin-top:.4rem}
-.cz-aparte .copiar-aparte{display:none}.con-js .cz-aparte .copiar-aparte{display:inline-block}
-.cz-ventana input[aria-invalid="true"],.cz-ventana textarea[aria-invalid="true"]{border:2px solid var(--vencida);background:var(--vencida-fondo);outline:none}
-.ventana-pie .izq{margin-right:auto;font-size:.78rem;color:var(--suave)}
-.btn-prim{font:600 .88rem var(--texto);padding:.55rem 1.05rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
-.previa{padding:1.1rem 1.3rem;background:var(--bg);max-height:74vh;overflow:auto}
-.previa .rot{font:700 .72rem var(--texto);letter-spacing:.06em;text-transform:uppercase;color:var(--suave);margin:0 0 .6rem}
+{{ estilo_de_la_ventana() }}
 .notas-p .nota-item{border-top:1px solid var(--linea);padding:.6rem 0}
 .notas-p .nota-item:first-of-type{border-top:0;padding-top:0}
 .notas-p .nota-item small{color:var(--suave);font-size:.78rem}
