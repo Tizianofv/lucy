@@ -64,7 +64,7 @@ ESTILO_DEL_TOTAL = "total"
 ESTILO_DE_LA_LINEA = "gris"
 ESTILO_DEL_NETO = "neto"
 ETIQUETAS_DEL_PARA_DE_LA_FACTURA = {
-    "para": "PARA", "rnc_cedula": "RNC / CÉDULA", "fecha": "FECHA", "ncf_tipo": "TIPO DE NCF",
+    "para": "PARA", "rnc_cedula": "RNC", "fecha": "FECHA", "ncf_tipo": "TIPO DE NCF",
     "estado": "ESTADO", "motivo": "MOTIVO DE LA ANULACIÓN"}
 
 

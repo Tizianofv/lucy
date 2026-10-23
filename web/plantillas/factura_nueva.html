@@ -132,6 +132,11 @@
     <span class="izq">Se guarda como borrador en Facturas.</span>
     <a class="btn-linea" href="/facturas">Cancelar</a>
     <button class="btn-prim">Guardar como borrador</button>
+    <button name="accion" value="pedir_emision" class="btn-linea" data-pedir-emision>Guardar y emitir…</button>
+    {% if pedir_emision %}<div class="cz-aviso-pie" style="order:-1" data-confirmar-emision>
+      <p class="aviso">¿Emitir esta factura? Lo escrito se guarda y la factura recibe su número: ya no se puede corregir. Si la emisión no deja, queda guardada como borrador.</p>
+      <button name="accion" value="emitir" class="btn-prim" data-emitir>Sí, guardar y emitir</button>
+      <button name="accion" value="volver" class="btn-linea">Volver a escribir</button></div>{% endif %}
   </div>
 </form>
 {% endif %}

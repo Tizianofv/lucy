@@ -103,7 +103,7 @@ def _cuantas(palabra: str, pdf: bytes) -> int:
 def test_la_emitida_con_ncf_e_itbis_trae_todo_y_ninguna_marca():
     h = fa.hoja_de_factura(_f())
     assert (h["titulo"], h["codigo"], h["marca"]) == ("FACTURA DE SERVICIOS", "FAC-2026-001", None)
-    assert h["para"] == [("PARA", "Cliente de prueba"), ("RNC / CÉDULA", "131234567"), ("FECHA", "14 de octubre de 2026"),
+    assert h["para"] == [("PARA", "Cliente de prueba"), ("RNC", "131234567"), ("FECHA", "14 de octubre de 2026"),
                          ("TIPO DE NCF", "Crédito fiscal")]
     assert h["ncf"] == "NCF: B0100000001"
     assert h["encabezados"] == ("SERVICIO", "CANTIDAD", "PRECIO UNITARIO", "TOTAL")
