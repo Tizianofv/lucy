@@ -322,6 +322,10 @@ def opciones_de_responsable() -> tuple[tuple[str, str], ...]:
 # propia clave: `modulo_consultas:<clave larga>` en `CLAVES_API_CODE` y
 # `modulo_consultas=alertas:crear` en `PERMISOS_API_CODE` (nombre en
 # `QUIEN_DEL_MODULO_DE_CONSULTAS`).
+# Desde el 23-oct-2026 (L-COT): `cotizaciones:leer_para_embudo` (`GET /api/code/cotizaciones/para-embudo`,
+# solo lectura: las cotizaciones formales `borrador`/`enviada` con el teléfono del cliente). Lo lee el Registro
+# con su propia clave: `registro:<clave larga>` en `CLAVES_API_CODE` y `registro=cotizaciones:leer_para_embudo`
+# en `PERMISOS_API_CODE`. La sala lo pone en Railway, no este archivo.
 #
 # CERRADO POR DEFECTO, en dos niveles independientes:
 #   · Si `CLAVES_API_CODE` no está puesta (o no tiene ninguna pieza legible),

@@ -4333,7 +4333,10 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 23-oct-2026, defecto de color (`--color` y demás variables en las páginas de factura): +2 en disco y +2 EXENTOS
     # (`tests/test_variables_de_las_paginas.py` y `tests/test_variables_de_las_paginas_de_factura.py`, nuevos, exentos por
     # rol); VIGILADOS sin cambio. Medida: 235, 169, 66.
-    assert medido == {"en disco": 235, "exentos": 169, "vigilados": 66}, (
+    # 23-oct-2026, rama `trabajo/cotizaciones-para-embudo` (L-COT, el Registro lee las cotizaciones formales): +1 en disco
+    # y +1 EXENTO (`tests/test_api_code_cotizaciones_para_embudo.py`, nuevo, exento por rol); VIGILADOS sin cambio (se
+    # tocaron `db/db.py`, `web/api_code.py` y `config.py`, ya vigilados). Medida: 236, 170, 66.
+    assert medido == {"en disco": 236, "exentos": 170, "vigilados": 66}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
         "23-oct-2026 (facturas-colores-ventana) era {'en disco': 235, "
         "'exentos': 169, 'vigilados': 66}. La aserción de fondo —cero "

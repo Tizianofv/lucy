@@ -493,6 +493,56 @@ async def proyectos_del_cliente(
             "responsables": responsables_para_natalia()}
 
 
+# ── Las cotizaciones formales para el embudo del Registro (L-COT, 23-oct-2026) ─────────────────────────────
+#
+# Diseño aprobado: disenos/clientes-clasificar/DISENO.md, pieza L-COT. `GET /api/code/cotizaciones/para-embudo`,
+# permiso `cotizaciones:leer_para_embudo`. Solo lectura: no escribe nada ni avisa a nadie.
+#   · Sale por cotización: id, código, estado (`borrador`/`enviada`), `enviada_en`, `creado_en`, `opciones`
+#     (nombre y total de CADA opción: las opciones son alternativas, no se suman) y `telefono` del cliente del
+#     proyecto, leído de Noco igual que la ventana de la cotización (`noco_lectura.contacto`).
+#   · NO sale texto libre de la cotización (descripciones, detalles, condiciones), ni para_nombre, ni datos de
+#     otras tablas.
+#   · 401/403 los de siempre (antes de leer nada). 502 si la base no se lee o falta la tabla (nunca lista vacía en
+#     su lugar) y 502 si Noco no contesta (un teléfono en blanco sería indistinguible de «sin teléfono»).
+_PERMISO_COTIZACIONES_EMBUDO = "cotizaciones:leer_para_embudo"
+
+
+@router.get("/cotizaciones/para-embudo")
+async def cotizaciones_para_embudo(
+    quien: str = Depends(requiere(_PERMISO_COTIZACIONES_EMBUDO)),
+) -> dict:
+    try:
+        filas = await db.cotizaciones_para_embudo()
+    except Exception as e:
+        log.warning("cotizaciones para el embudo: la base no contestó (%s)", type(e).__name__)
+        raise HTTPException(status_code=502, detail="la base no contestó")
+    if filas is None:
+        log.warning("cotizaciones para el embudo: falta la tabla o una columna (migración sin aplicar)")
+        raise HTTPException(status_code=502, detail="la base no contestó")
+    telefonos: dict[int, str | None] = {}
+    salida = []
+    for f in filas:
+        noco = f["cliente_noco_id"]
+        if noco is not None and noco not in telefonos:
+            try:
+                contacto = await noco_lectura.contacto(noco)
+            except Exception as e:
+                log.warning("cotizaciones para el embudo: Noco no contestó (%s)", type(e).__name__)
+                raise HTTPException(status_code=502, detail="Noco no contestó")
+            telefonos[noco] = contacto["telefono"] if contacto else None
+        salida.append({
+            "id": f["id"],
+            "codigo": f["codigo"],
+            "estado": f["estado"],
+            "enviada_en": f["enviada_en"].isoformat() if f["enviada_en"] else None,
+            "creado_en": f["creado_en"].isoformat(),
+            "opciones": [{"nombre": op["nombre"], "total": _dinero_para_natalia(t)}
+                         for op, t in zip(f["contenido"]["opciones"], f["totales_por_opcion"])],
+            "telefono": telefonos[noco] if noco is not None else None,
+        })
+    return {"cotizaciones": salida}
+
+
 # ── Las consultas al responsable, para Natalia (18-oct-2026, pieza L3) ────
 #
 # Diseño aprobado: disenos/natalia-tareas-en-proyectos/DISENO.md §5. Natalia NO escribe tareas en Lucy: abre
