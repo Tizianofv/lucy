@@ -1233,7 +1233,13 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
                     sq: Navegacion[str] = "", estado: Navegacion[int] = 0,
                     editar_nota: Navegacion[int] = 0, borrar_nota: Navegacion[int] = 0,
                     cotizacion: NavegacionSellada[str] = "", corregir: Navegacion[int] = 0,
-                    rechazo: Navegacion[str] = "", ocupa: Aviso[int] = 0):
+                    rechazo: Navegacion[str] = "", ocupa: Aviso[int] = 0,
+                    # LA VENTANA DE UNA FACTURA ENCIMA DE ESTA PÁGINA (23-oct-2026): los mismos parámetros de navegación
+                    # que la de cotizaciones (`cotizacion`/`corregir` arriba), con sus nombres para no pisarse.
+                    # `factura` es `nueva` o el id de un borrador de ESTE proyecto; `corregir=1` la abre como formulario.
+                    factura: Navegacion[str] = "", factura_de_cotizacion: Navegacion[int] = 0,
+                    factura_opcion: Navegacion[int] = 0, cliente: Navegacion[int] = 0,
+                    ref: Navegacion[list[str]] = [], paso: Navegacion[str] = ""):
     """La página de proyectos (Lucy 1.0): los grupos y sus proyectos a la
     izquierda; a la derecha UN proyecto (`?p=`), las tareas sueltas de un grupo
     (`?g=`), las de «Sin grupo» (`?sin_grupo=1`) o el formulario de un proyecto
@@ -1280,12 +1286,16 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
         corregir = 0
         rechazo = ""
         ocupa = 0
+        # La ventana de una factura escribe (guarda un borrador): en solo ver no se arma, como la de cotizaciones.
+        factura, factura_de_cotizacion, factura_opcion = "", 0, 0
+        cliente, ref, paso = 0, [], ""
     if estado:
         # «Estado de los proyectos» solo lee la lista de proyectos: lo que abriría otra cosa o haría
         # otra lectura (la búsqueda de personas en Noco, las cuentas de borrar un grupo o un
         # proyecto, los avisos de «borrado») se apaga ANTES, como en solo ver. `q` se queda.
         pq = pdonde = quitar_grupo = grupo = hecho = ""
         borrar_proyecto = borrado = borrada = 0
+        factura, cliente, ref, paso = "", 0, [], ""      # la lista «Estado» no abre ninguna ventana
     modelo = await db.pagina_de_proyectos()
     visibles = _filtrar_por_busqueda(modelo, q)
     elegido = p or nombre_guardado or area_guardada or creado
@@ -1409,9 +1419,19 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
     fz = None
     if de_la_casa and vista["tipo"] == "proyecto":
         fz = await _facturas_del_proyecto(vista["proyecto"]["id"], vista["proyecto"].get("cliente_noco_id"))
+    # LA VENTANA DE UNA FACTURA ENCIMA DE LA PÁGINA DEL PROYECTO (23-oct-2026): el mismo mecanismo que la de cotizaciones
+    # —la dirección pide la ventana y el servidor pinta la página del proyecto con ella encima—. Solo la casa (escribe)
+    # y solo en la vista de UN proyecto. Sin `factura=` no se arma nada.
+    fzv = None
+    if de_la_casa and vista["tipo"] == "proyecto" and factura:
+        fzv = await _ventana_de_factura_del_proyecto(
+            vista["proyecto"]["id"], factura, corregir=corregir, cliente=cliente or None,
+            cotizacion=factura_de_cotizacion or None, opcion=factura_opcion or None,
+            refs=[r.strip() for r in ref if isinstance(r, str) and r.strip()],
+            sq=sq.strip(), pq=pq.strip(), paso=paso)
     return plantillas.TemplateResponse(
         request, "proyectos.html",
-        {"solo_ver": solo_ver, "cz": cz, "fz": fz,
+        {"solo_ver": solo_ver, "cz": cz, "fz": fz, "fzv": fzv,
          "cz_activas": de_la_casa,
          "cz_datos_de_la_hoja": (cotizaciones.datos_de_la_vista_previa()
                                  if cz and cz["ventana"] and "valores" in cz["ventana"] else None),
@@ -2558,20 +2578,29 @@ async def _lo_que_dice_el_registro_del_cliente(cliente_noco_id) -> dict | None:
     return await registro_lectura.lo_que_dice_el_registro_del_cliente(cliente_noco_id)
 
 
-def _enlace_de_nueva(proyecto=None, cotizacion=None, opcion=None, cliente=None) -> str:
-    """`&proyecto=3&cotizacion=2…`: solo enteros, así que nada escrito por la persona viaja en la dirección."""
-    partes = [f"&{k}={v}" for k, v in (("cliente", cliente), ("proyecto", proyecto), ("cotizacion", cotizacion),
-                                        ("opcion", opcion)) if isinstance(v, int) and not isinstance(v, bool)]
-    return "".join(partes)
+def _lo_que_la_ventana_lleva(pid, cotid, opcion_n, *, en_el_proyecto: bool) -> list[tuple[str, object]]:
+    """Lo que la ventana de una factura tiene que llevar en la dirección para seguir siendo la misma ventana del mismo
+    sitio. En su propia página (`/facturas/nueva`) son los nombres de siempre (`proyecto`, `cotizacion`, `opcion`); en la
+    página del proyecto (23-oct-2026, la ventana encima de la página) son los de ESA ruta (`p`, `factura=nueva`,
+    `factura_de_cotizacion`, `factura_opcion`). Solo enteros y el literal `nueva`: nada escrito por la persona viaja."""
+    if en_el_proyecto:
+        pares = [("p", pid), ("factura", "nueva"), ("factura_de_cotizacion", cotid), ("factura_opcion", opcion_n)]
+    else:
+        pares = [("proyecto", pid), ("cotizacion", cotid), ("opcion", opcion_n)]
+    return [(k, v) for k, v in pares if v == "nueva" or (isinstance(v, int) and not isinstance(v, bool) and v > 0)]
 
 
 async def _contexto_de_factura_nueva(*, cliente, proyecto, cotizacion, opcion, refs: list[str], sq: str, pq: str,
                                      quiere_escribir: bool, escrito: dict | None = None, errores=(),
-                                     pedir_emision: bool = False) -> dict:
+                                     pedir_emision: bool = False, en_el_proyecto: bool = False) -> dict:
     """Todo lo que la pantalla de «Nueva factura» necesita, en tres pasos que se ven según lo que ya se escogió:
     `cliente` (quién), `escoger` (qué sesiones o trabajos) y `escribir` (los renglones y los datos). Solo LEE:
     la App, Noco y la base. El cliente sale del proyecto si el proyecto lo tiene, o de la ficha que se escoge
-    en Noco; las sesiones, de esa ficha y de la búsqueda de sesiones que Lucy ya tiene."""
+    en Noco; las sesiones, de esa ficha y de la búsqueda de sesiones que Lucy ya tiene.
+
+    `en_el_proyecto` (23-oct-2026): la ventana se pinta ENCIMA de la página del proyecto, como la de cotizaciones, en
+    vez de en su propia página. Los pasos (GET) van a `/proyectos` y llevan `p`/`factura`; la ✕ y «Cancelar» vuelven al
+    proyecto. El POST de guardar NO cambia (`/facturas/nueva`), y por eso sus casillas escondidas tampoco."""
     avisos = []
     nombres = await _nombres_de_proyecto()
     pid = proyecto if isinstance(proyecto, int) and proyecto in nombres else None
@@ -2597,20 +2626,24 @@ async def _contexto_de_factura_nueva(*, cliente, proyecto, cotizacion, opcion, r
         except db.SesionNoEsta:
             cliente_id = None
         cliente_fijo = cliente_id is not None          # el cliente es el del proyecto: ahí no se cambia
+    lleva = _lo_que_la_ventana_lleva(pid, cot["id"] if cot else None, opcion_n, en_el_proyecto=en_el_proyecto)
     ctx = {"avisos": avisos, "errores": list(errores), "pedir_emision": pedir_emision, "proyecto": ({"id": pid, "nombre": nombres[pid]} if pid else None),
            "volver_a_la_app": enlace_al_inicio_de_la_app(),
            "cotizacion": ({"id": cot["id"], "codigo": cot["codigo"]} if cot else None), "opciones": opciones,
            "opcion": opcion_n, "cliente_id": cliente_id, "cliente_fijo": cliente_fijo, "cliente_nombre": "", "noco_ok": True, "refs": refs,
            "sq": sq, "pq": pq, "paso": "cliente", "busqueda_cliente": None, "candidatas": [], "hay_mas": False,
            "registro_ok": True, "elegidas": [], "valores": None, "busqueda": None, "hoy": db.hoy_rd(),
-           "enlace": _enlace_de_nueva(pid, cot["id"] if cot else None, opcion_n, None),
+           # A dónde van los GET de los pasos, qué llevan escondido y a dónde vuelven la ✕ y «Cancelar».
+           "destino": "/proyectos" if en_el_proyecto else "/facturas/nueva",
+           "ocultos_get": lleva, "enlace": "".join(f"&{k}={v}" for k, v in lleva),
+           "cerrar": (f"/proyectos?p={pid}#facturas" if en_el_proyecto and pid else "/facturas"),
            "enlace_con_cliente": "", "campos_marcados": {c["casilla"] for c in errores if c.get("casilla")},
            "pide_opcion": len(opciones) > 1}
     if cliente_id is None:
         ctx["busqueda_cliente"] = await _buscar_personas_para_la_pagina(pq, "factura-cliente")
         return ctx
     ctx["cliente_nombre"], ctx["noco_ok"] = await _nombre_del_cliente(cliente_id)
-    ctx["enlace_con_cliente"] = _enlace_de_nueva(pid, cot["id"] if cot else None, opcion_n, cliente_id)
+    ctx["enlace_con_cliente"] = f"&cliente={cliente_id}" + ctx["enlace"]
     # Las sesiones y trabajos de esa ficha, más las que ya se escogieron (vengan de la búsqueda o de la ficha).
     # Solo la ficha: las sesiones pedidas una por una vuelven mezcladas con las del cliente, sean de quien sean.
     lectura = await _lo_que_dice_el_registro_del_cliente(cliente_id)
@@ -2748,7 +2781,7 @@ async def factura_nueva(request: Request, cliente: Navegacion[int] = 0, proyecto
     ctx = await _contexto_de_factura_nueva(
         cliente=cliente or None, proyecto=proyecto or None, cotizacion=cotizacion or None, opcion=opcion or None,
         refs=refs, sq=sq.strip(), pq=pq.strip(), quiere_escribir=paso == "escribir")
-    return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "factura_nueva.html", ctx))
+    return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "factura_nueva.html", {**ctx, "ventana": ctx}))
 
 
 async def _factura_nueva_en_pantalla(request: Request, campos: dict, *, errores=(), pedir_emision: bool = False,
@@ -2762,7 +2795,10 @@ async def _factura_nueva_en_pantalla(request: Request, campos: dict, *, errores=
         opcion=campos["opcion"] if isinstance(campos["opcion"], int) else None,
         refs=campos["refs"], sq="", pq="", quiere_escribir=True, escrito=campos, errores=errores,
         pedir_emision=pedir_emision)
-    return _sin_guardar_en_cache(plantillas.TemplateResponse(request, "factura_nueva.html", ctx, status_code=status))
+    # `ventana` es el MISMO diccionario para el macro de la ventana (así la página suelta y la del proyecto pintan la
+    # misma ventana); el resto de las claves se quedan porque la plantilla las lee sueltas.
+    return _sin_guardar_en_cache(plantillas.TemplateResponse(
+        request, "factura_nueva.html", {**ctx, "ventana": ctx}, status_code=status))
 
 
 async def _factura_nueva_rechazada(request: Request, campos: dict, errores: list[dict]):
@@ -3234,6 +3270,37 @@ async def poner_proyecto_a_una_factura(request: Request, fid: int):
 def _entero_positivo(valor) -> int | None:
     texto = valor.strip() if isinstance(valor, str) else ""
     return int(texto) if texto.isascii() and texto.isdigit() and int(texto) > 0 else None
+
+
+async def _ventana_de_factura_del_proyecto(pid: int, factura: str, *, corregir: int, cliente, cotizacion, opcion,
+                                           refs: list[str], sq: str, pq: str, paso: str) -> dict | None:
+    """La ventana de una factura abierta ENCIMA de la página de su proyecto, como la de cotizaciones (23-oct-2026):
+    `factura=nueva` (los tres pasos, `_contexto_de_factura_nueva`) o `factura=<id>&corregir=1` (el formulario de un
+    borrador DE ESTE proyecto). `None` = no se abre nada: un id que no es un número, una factura que no existe, que no es
+    de este proyecto o que ya no es un borrador (una emitida o anulada no se corrige), y el caso sin `corregir`. Solo LEE.
+    Las rutas de guardar son las de siempre (`/facturas/nueva` y `/facturas/{id}/corregir`); lo único que cambia es dónde
+    se pinta y a dónde vuelve la ✕. Si la base no contesta, la página carga sin ventana (y se anota)."""
+    if factura == "nueva":
+        ctx = await _contexto_de_factura_nueva(
+            cliente=cliente, proyecto=pid, cotizacion=cotizacion, opcion=opcion, refs=refs, sq=sq, pq=pq,
+            quiere_escribir=paso == "escribir", en_el_proyecto=True)
+        return {"tipo": "nueva", **ctx}
+    fid = _entero_positivo(factura)
+    if fid is None or not corregir:
+        return None
+    try:
+        f = await db.factura_por_id(fid)
+    except Exception as e:
+        log_f.warning("Facturas: no se pudo leer la factura #%s para su ventana (%s).", fid, type(e).__name__)
+        return None
+    if f is None or f["proyecto_id"] != pid or f["estado"] != "borrador":
+        return None
+    valores = fp.valores_del_formulario(factura=f)
+    return {"tipo": "corregir", "f": f, "valores": valores,
+            "vista": fp.vista_previa_de_factura(fp.campos_de_la_vista_previa(valores)),
+            "hoja": facturas.hoja_de_factura(f), "candado": fp.candado(f["cambiado_en"]),
+            "campos_marcados": set(), "agregado": False, "pedir_emision": False,
+            "cerrar": f"/proyectos?p={pid}#facturas"}
 
 
 async def _facturas_del_proyecto(pid: int, cliente_noco_id: int | None) -> dict | None:

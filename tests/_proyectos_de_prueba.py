@@ -104,8 +104,9 @@ AGREGADAS_DEL_MODELO: dict = {}
 
 
 # Las facturas que el bloque «Facturas» del proyecto leería (filas con la forma de `db.facturas_para_la_lista`): una
-# EMITIDA del proyecto 1 y un BORRADOR sin proyecto (el que se puede ligar desde la página). Así los censos de controles
-# ven el bloque entero (enlaces, «Quitar del proyecto» y «Ligar a este proyecto»).
+# EMITIDA del proyecto 1, un BORRADOR del proyecto 1 (23-oct-2026: el que enseña «Corregir», que abre la ventana encima de
+# la página) y un BORRADOR sin proyecto (el que se puede ligar desde la página). Así los censos de controles ven el bloque
+# entero (enlaces, «Corregir», «Quitar del proyecto» y «Ligar a este proyecto»).
 def _una_factura_del_modelo(id, estado, numero, proyecto_id):
     from decimal import Decimal
     return dict(id=id, anio=2026, numero=numero, estado=estado, cliente_noco_id=101, para_nombre="Cliente de prueba",
@@ -115,7 +116,8 @@ def _una_factura_del_modelo(id, estado, numero, proyecto_id):
                 itbis=Decimal("0.00"), total=Decimal("1000.00"))
 
 
-FACTURAS_DEL_MODELO: list = [_una_factura_del_modelo(71, "emitida", 1, 1), _una_factura_del_modelo(72, "borrador", None, None)]
+FACTURAS_DEL_MODELO: list = [_una_factura_del_modelo(71, "emitida", 1, 1), _una_factura_del_modelo(73, "borrador", None, 1),
+                             _una_factura_del_modelo(72, "borrador", None, None)]
 
 
 # La carpeta de Drive donde el modelo de prueba dice que están las cotizaciones del proyecto 1 («Abrir en Drive»).

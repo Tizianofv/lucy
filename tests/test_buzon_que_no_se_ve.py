@@ -4333,10 +4333,14 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 23-oct-2026, defecto de color (`--color` y demás variables en las páginas de factura): +2 en disco y +2 EXENTOS
     # (`tests/test_variables_de_las_paginas.py` y `tests/test_variables_de_las_paginas_de_factura.py`, nuevos, exentos por
     # rol); VIGILADOS sin cambio. Medida: 235, 169, 66.
-    assert medido == {"en disco": 235, "exentos": 169, "vigilados": 66}, (
+    # 23-oct-2026, rama `trabajo/factura-en-proyectos` (la ventana de la factura encima de la página del proyecto): +1 en
+    # disco y +1 EXENTO (`tests/test_la_ventana_de_factura_en_el_proyecto.py`, nuevo, exento por rol); VIGILADOS sin
+    # cambio (`web/app.py` ya vigilado). Las plantillas nuevas (`_ventana_factura_nueva.html` y
+    # `_ventana_corregir_factura.html`) no son .py: no cuentan. Medida: 236, 170, 66.
+    assert medido == {"en disco": 236, "exentos": 170, "vigilados": 66}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "23-oct-2026 (facturas-colores-ventana) era {'en disco': 235, "
-        "'exentos': 169, 'vigilados': 66}. La aserción de fondo —cero "
+        "23-oct-2026 (factura-en-proyectos) era {'en disco': 236, "
+        "'exentos': 170, 'vigilados': 66}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "

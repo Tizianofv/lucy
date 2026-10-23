@@ -171,12 +171,17 @@ def lo_que_sale_a_proposito() -> list[tuple[str, str, str]]:
     # su POST a la ruta de la factura y vuelven a esta página con el redirect. Se declaran como CLASE (lo que empieza por
     # `/facturas`), pero la lista sale de las páginas que el servidor dibuja y se exige que estén las del modelo
     # (`pp.FACTURAS_DEL_MODELO`) y que la casa tenga «Hacer factura» por cada cotización del modelo.
-    de_facturas = [(f["tag"], f["href"]) for f in lo_que_se_toca("casa") if f["href"].startswith("/facturas")]
+    tocado = lo_que_se_toca("casa")
+    de_facturas = [(f["tag"], f["href"]) for f in tocado if f["href"].startswith("/facturas")]
     esperadas = {("a", f"/facturas/{f['id']}") for f in pp.FACTURAS_DEL_MODELO}
-    esperadas |= {("a", f"/facturas/nueva?proyecto={pid}&cotizacion={c['id']}")
-                  for pid, cs in pp.COTIZACIONES_DEL_MODELO.items() for c in cs}
     assert esperadas <= set(de_facturas), esperadas - set(de_facturas)
     declarados += [(t, h, "lleva a la pantalla de las facturas (otra pantalla): se va de la página") for t, h in de_facturas]
+    # «Hacer factura» ya NO se va de la página (23-oct-2026): abre la ventana de la factura encima de esta misma página, así
+    # que no se declara como salida; se exige que esté, uno por cada cotización del modelo, y que el censo la vea quedarse.
+    hacer = {f["href"] for f in tocado if f["tag"] == "a" and "cz-factura" in f["clase"]}
+    esperadas_hacer = {f"/proyectos?p={pid}&factura=nueva&factura_de_cotizacion={c['id']}#facturas"
+                       for pid, cs in pp.COTIZACIONES_DEL_MODELO.items() for c in cs}
+    assert esperadas_hacer <= hacer, esperadas_hacer - hacer
     return declarados
 
 

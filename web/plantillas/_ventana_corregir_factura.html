@@ -1,0 +1,56 @@
+{#- LA VENTANA DE «CORREGIR EL BORRADOR» (23-oct-2026): la misma ventana flotante de «Nueva factura» y de las cotizaciones
+    (el marco de `_ventana.html`): el formulario a la izquierda y «Así va a salir» (la hoja en vivo) a la derecha.
+    La usan la página de una factura (`/facturas/{id}?corregir=1`) y la página del proyecto, que la abre ENCIMA cuando la
+    factura es de ese proyecto. Lo único que cambia es `cerrar` (a dónde vuelven la ✕ y «Cancelar»). El POST es el de
+    siempre, `/facturas/{id}/corregir`. Ningún texto de dinero ni de fecha sale de acá. -#}
+{% from "_vista_previa_de_factura.html" import la_hoja %}
+{% from "_hoja_de_factura.html" import hoja_de_factura %}
+{% macro ventana_de_corregir_factura(v) -%}
+<div class="velo" role="dialog" aria-label="Corregir el borrador">
+<div class="cz-ventana">
+<div class="ventana-enc"><h2>Corregir el borrador</h2><span class="num">{{ v.f.codigo or 'Borrador' }}</span><a class="cerrar" href="{{ v.cerrar }}" aria-label="Cerrar">✕</a></div>
+{% set valores = v.valores %}
+<form method="post" action="/facturas/{{ v.f.id }}/corregir" data-corregir>
+  <input type="hidden" name="cambiado_en" value="{{ v.candado }}">
+  <div class="ventana-cuerpo">
+  <div class="form-c">
+  <div class="campos">
+    <label{% if 'para_nombre' in v.campos_marcados %} class="marcada"{% endif %}>A nombre de <input type="text" name="para_nombre" value="{{ valores.para_nombre }}" maxlength="200" required{% if 'para_nombre' in v.campos_marcados %} aria-invalid="true"{% endif %}></label>
+    <label{% if 'fecha' in v.campos_marcados %} class="marcada"{% endif %}>Fecha <input type="date" name="fecha" value="{{ valores.fecha }}"{% if 'fecha' in v.campos_marcados %} aria-invalid="true"{% endif %}></label>
+    <label{% if 'rnc_cedula' in v.campos_marcados %} class="marcada"{% endif %}>RNC o cédula (si lleva) <input type="text" name="rnc_cedula" value="{{ valores.rnc_cedula }}" maxlength="20"{% if 'rnc_cedula' in v.campos_marcados %} aria-invalid="true"{% endif %}></label>
+    <label{% if 'ncf' in v.campos_marcados %} class="marcada"{% endif %}>NCF (si lleva) <input type="text" name="ncf" value="{{ valores.ncf }}" maxlength="30"{% if 'ncf' in v.campos_marcados %} aria-invalid="true"{% endif %}></label>
+    <label{% if 'ncf' in v.campos_marcados %} class="marcada"{% endif %}>Tipo de NCF (si lleva NCF) <input type="text" name="ncf_tipo" value="{{ valores.ncf_tipo }}" maxlength="30"{% if 'ncf' in v.campos_marcados %} aria-invalid="true"{% endif %}></label>
+    <label class="casilla{% if 'itbis' in v.campos_marcados %} marcada{% endif %}"><input type="checkbox" name="itbis" value="18"{% if valores.itbis %} checked{% endif %}{% if 'itbis' in v.campos_marcados %} aria-invalid="true"{% endif %}> Suma ITBIS (18 %)</label>
+    <label{% if 'descuento' in v.campos_marcados %} class="marcada"{% endif %}>Descuento (si lleva) <input type="text" name="descuento" value="{{ valores.descuento }}" inputmode="decimal" placeholder="0" aria-label="Descuento de la factura"{% if 'descuento' in v.campos_marcados %} aria-invalid="true"{% endif %}></label>
+  </div>
+  <p class="suave">El descuento se resta del subtotal antes del ITBIS: no puede pasar del subtotal.</p>
+  <div class="scroll"><table class="reng">
+    <tr><th>Servicio</th><th>Descripción</th><th>Cantidad</th><th>Unidad</th><th>Precio unitario</th><th>Total</th></tr>
+    {% for r in valores.renglones %}{% set n = loop.index %}
+    <tr><td><input type="text" name="r-{{ n }}-descripcion" value="{{ r.descripcion }}" maxlength="300" aria-label="Servicio del renglón {{ n }}"></td>
+      <td><textarea name="r-{{ n }}-detalle" maxlength="2000" aria-label="Descripción del renglón {{ n }}">{{ r.detalle }}</textarea></td>
+      <td><input type="text" name="r-{{ n }}-cantidad" value="{{ r.cantidad }}" inputmode="decimal" placeholder="2" aria-label="Cantidad del renglón {{ n }}"></td>
+      <td><input type="text" name="r-{{ n }}-unidad" value="{{ r.unidad }}" maxlength="20" placeholder="horas" aria-label="Unidad del renglón {{ n }}"></td>
+      <td><input type="text" name="r-{{ n }}-precio" value="{{ r.precio }}" inputmode="decimal" placeholder="62,500" aria-label="Precio unitario del renglón {{ n }}"></td>
+      <td class="total-renglon">{{ r.total }}</td></tr>
+    {% endfor %}
+  </table></div>
+  <p class="suave">El total de cada renglón es la cantidad por el precio unitario: se calcula al guardar.</p>
+  {% if v.agregado %}<p class="suave" data-renglon-agregado>Los últimos renglones con datos son los de la sesión que pediste agregar; la cantidad, la unidad y el precio salen del registro (antes de ITBIS). Cámbialos si hace falta; no se guarda nada hasta que guardes.</p>{% endif %}
+  </div>
+  <div class="previa"><p class="rot">Así va a salir</p><div class="hoja-caja" data-hoja>{% if v.vista %}{{ la_hoja(v.vista) }}{% else %}{{ hoja_de_factura(v.hoja) }}{% endif %}</div></div>
+  </div>
+  <div class="ventana-pie">
+    <span class="izq">Se guarda en este mismo borrador.</span>
+    <a class="btn-linea" href="{{ v.cerrar }}">Cancelar</a>
+    <button class="btn-prim">Guardar los cambios</button>
+    <button name="accion" value="pedir_emision" class="btn-linea" data-pedir-emision>Guardar y emitir…</button>
+    {% if v.pedir_emision %}<div class="cz-aviso-pie" style="order:-1" data-confirmar-emision>
+      <p class="aviso">¿Emitir esta factura? Lo escrito se guarda y la factura recibe su número: ya no se puede corregir. Si la emisión no deja, queda guardada como borrador.</p>
+      <button name="accion" value="emitir" class="btn-prim" data-emitir>Sí, guardar y emitir</button>
+      <button name="accion" value="volver" class="btn-linea">Volver a corregir</button></div>{% endif %}
+  </div>
+</form>
+</div>
+</div>
+{%- endmacro %}

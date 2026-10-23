@@ -1004,7 +1004,8 @@ def test_el_proyecto_enseña_sus_facturas_y_las_de_su_cliente_sin_proyecto_para_
     assert f'href="/facturas/{libre["id"]}"' in bloque and f'href="/facturas/{de_otro["id"]}"' not in bloque.split("data-facturas-ligables")[1] or True
     ligables = bloque.split("data-facturas-ligables")[1]
     assert f'action="/facturas/{libre["id"]}/proyecto"' in ligables and f'/facturas/{suya["id"]}' not in ligables
-    assert 'href="/facturas/nueva?proyecto=1"' in bloque
+    # El «+» abre la ventana ENCIMA de la página del proyecto (23-oct-2026), no una página aparte.
+    assert 'href="/proyectos?p=1&amp;factura=nueva#facturas"' in bloque
 
 
 def test_quitar_y_ligar_desde_el_proyecto_vuelven_al_proyecto_y_la_base_lo_confirma(con_proyecto):
@@ -1030,8 +1031,11 @@ def test_hacer_factura_sale_en_cada_cotizacion_de_la_casa_con_el_proyecto_y_la_c
     ct._insertar(con_proyecto.con, proyecto_id=1, numero=1, estado="enviada", enviada_en="2026-10-14T12:00:00+00:00", contenido=CONTENIDO)
     ct._insertar(con_proyecto.con, proyecto_id=1, numero=2, estado="borrador", contenido=CONTENIDO)
     html = _proyecto_pagina(con_proyecto)
-    enlaces = re.findall(r'href="(/facturas/nueva\?proyecto=1&amp;cotizacion=\d+)"', html)
-    assert sorted(enlaces) == ["/facturas/nueva?proyecto=1&amp;cotizacion=1", "/facturas/nueva?proyecto=1&amp;cotizacion=2"]
+    # «Hacer factura» abre la ventana de la factura encima de esta misma página, y la cotización viaja en
+    # `factura_de_cotizacion` (23-oct-2026).
+    enlaces = re.findall(r'href="(/proyectos\?p=1&amp;factura=nueva&amp;factura_de_cotizacion=\d+#facturas)"', html)
+    assert sorted(enlaces) == ["/proyectos?p=1&amp;factura=nueva&amp;factura_de_cotizacion=1#facturas",
+                               "/proyectos?p=1&amp;factura=nueva&amp;factura_de_cotizacion=2#facturas"]
 
 
 def test_solo_ver_no_ve_facturas_en_el_proyecto_ni_se_leen_ni_hay_hacer_factura(con_proyecto, monkeypatch):
