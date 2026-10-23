@@ -70,7 +70,9 @@
   </div>
   {% if v.hay_mas %}<p class="suave">Hay más de 20: escribe más para acotar la búsqueda.</p>{% endif %}
   {% elif v.registro_ok %}<p class="vacio">No hay sesiones ni trabajos de este cliente a la vista. Búscalos por su código o por quien reservó.</p>{% endif %}
-  <div class="pie-guardar"><button name="paso" value="escribir">Continuar con las sesiones marcadas</button></div>
+  {#- `btn-prim`: el botón de la ventana, el mismo en la página suelta y en la del proyecto (la del proyecto no hereda
+      el `button{}` de `base.html`, así que sin clase salía como el botón gris del navegador). -#}
+  <div class="pie-guardar"><button name="paso" value="escribir" class="btn-prim">Continuar con las sesiones marcadas</button></div>
 </form>
 </div></div>
 

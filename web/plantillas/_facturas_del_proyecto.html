@@ -12,6 +12,13 @@
 {% from "_ventana_factura_nueva.html" import ventana_de_factura_nueva %}
 {% from "_ventana_corregir_factura.html" import ventana_de_corregir_factura %}
 {% from "_vista_previa_de_factura.html" import guion_de_la_vista_previa %}
+{#- EL ESTILO DE LA HOJA (23-oct-2026, la sala lo vio en Chrome): «Así va a salir» salía sin estilo dentro de la página del
+    proyecto —título enorme en negro, PARA y FECHA pegados, la tabla sin cabecera roja ni la franja negra del total— porque
+    `proyectos.html` no carga la hoja de las páginas de factura. No se copia: se emiten los MISMOS macros que usan
+    `/facturas/nueva` y `/facturas/{id}` (`estilo_de_la_hoja` para el papel y la tabla, `estilo_de_la_factura` para lo
+    suyo), y solo cuando hay ventana. La ventana de cotizaciones ya hacía esto con `estilo_de_la_hoja`. -#}
+{% from "_hoja_de_cotizacion.html" import estilo_de_la_hoja %}
+{% from "_hoja_de_factura.html" import estilo_de_la_factura %}
 <section class="bloque" id="facturas-del-proyecto" data-ancla>
  <div class="cotiz" id="facturas" data-ancla>
   <div class="cotiz-enc"><h3>Facturas</h3>
@@ -46,6 +53,7 @@
   </ul>
   {% endif %}
   {% if fzv %}
+    {{ estilo_de_la_hoja() }}{{ estilo_de_la_factura() }}
     {% if fzv.tipo == 'nueva' %}{{ ventana_de_factura_nueva(fzv) }}{% else %}{{ ventana_de_corregir_factura(fzv) }}{% endif %}
   {% endif %}
  </div>

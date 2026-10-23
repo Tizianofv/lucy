@@ -100,7 +100,7 @@ def test_los_tres_pasos_se_quedan_en_la_pagina_del_proyecto(con_proyecto, regist
     assert "2. ¿De cuáles sesiones o trabajos?" in paso2
     forma = re.search(r'<form method="get" action="/proyectos"[^>]*data-escoger[^>]*>', paso2)
     assert forma, "el paso 2 no se queda en la página del proyecto"
-    assert '<button name="paso" value="escribir">' in paso2
+    assert '<button name="paso" value="escribir" class="btn-prim">' in paso2
     assert 'name="p" value="1"' in paso2 and 'name="factura" value="nueva"' in paso2
 
     # Paso 3: lo escrito; el POST es el de SIEMPRE (`/facturas/nueva`, la misma puerta).
@@ -405,6 +405,41 @@ def test_el_paso_2_con_dos_sesiones_no_aplasta_el_texto(con_proyecto, registro):
 
     # Y la fila es un renglón (casilla y texto lado a lado), no una tabla ni una reja.
     assert _gana(reglas, fila, "display") == "flex"
+
+
+def test_la_hoja_de_la_factura_y_el_boton_de_continuar_traen_su_estilo(con_proyecto, registro):
+    """Lo que vio la sala en Chrome (23-oct-2026): dentro de la página del proyecto, «Así va a salir» salía sin estilo
+    («FACTURA DE SERVICIOS» en negro y enorme, PARA y FECHA pegados, la tabla sin cabecera roja ni la franja negra del
+    total) y el botón de continuar, como el gris del navegador: `proyectos.html` no carga la hoja de las páginas de
+    factura ni el `button{}` de `base.html`.
+
+    Se derivan las clases de la HOJA QUE SE PINTA (el DOM servido, no una lista tecleada) y se exige que cada una tenga
+    una regla en algún `<style>` de la página. Lo mismo con el botón: sus clases tienen que tener regla.
+    """
+    def pagina_y_reglas(**consulta):
+        html = _pagina(con_proyecto, **consulta)
+        arbol = _Arbol()
+        arbol.feed(html)
+        reglas = _reglas("".join(re.findall(r"<style[^>]*>(.*?)</style>", html, re.S)))
+        return arbol, {c for compuestos, _ in reglas for comp in compuestos for c in comp["clases"]}
+
+    # La hoja de «Así va a salir», en el paso 3.
+    arbol, con_regla = pagina_y_reglas(p=1, factura="nueva", ref=["11", "12"], paso="escribir")
+    caja = next((n for n in _todos(arbol.raiz) if "data-hoja" in n.attrs), None)
+    assert caja is not None, "el paso 3 no trae la hoja de «Así va a salir»"
+    clases_hoja = {c for n in _todos(caja) for c in n.clases}
+    # Que la hoja esté dibujada de verdad: sin esto, lo de abajo sería verde por no mirar nada.
+    assert {"hoja", "cod", "marca-f", "para-f", "sec-f", "tabla-f", "f-num", "tot-total", "pie"} <= clases_hoja, clases_hoja
+    assert not (clases_hoja - con_regla), \
+        f"la hoja de «Así va a salir» sale sin estilo: {sorted(clases_hoja - con_regla)} no tienen regla en ningún <style>"
+
+    # El botón de continuar, en el paso 2.
+    arbol, con_regla = pagina_y_reglas(p=1, factura="nueva")
+    boton = next((n for n in _todos(arbol.raiz) if n.tag == "button" and n.attrs.get("value") == "escribir"), None)
+    assert boton is not None, "el paso 2 no trae el botón de continuar"
+    assert boton.attrs.get("name") == "paso"
+    assert boton.clases, "el botón de continuar no lleva clase: en la página del proyecto sale como el del navegador"
+    assert not (boton.clases - con_regla), f"el botón de continuar no tiene regla: {sorted(boton.clases - con_regla)}"
 
 
 def test_ninguna_casilla_de_marcar_de_la_ventana_se_queda_con_la_fila(con_proyecto, registro):
