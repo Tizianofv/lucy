@@ -196,6 +196,17 @@ def test_un_rechazo_desde_la_ventana_del_proyecto_vuelve_a_la_ventana_con_el_avi
     assert not tgf.filas(con_proyecto, "facturas")     # nada escrito
 
 
+def test_un_rechazo_antes_de_guardar_tambien_se_queda_en_el_proyecto(con_proyecto, registro):
+    """Sin sesiones la ruta lo rechaza ANTES de tocar la base (otra salida del rechazo, la de arriba del formulario)."""
+    _, datos = _el_paso_3(con_proyecto)
+    datos.pop("ref")
+    r = cliente().post("/facturas/nueva", data=datos, follow_redirects=False)
+    assert r.status_code == 400
+    assert 'data-region="centro"' in r.text and ABRE_LA_VENTANA in r.text
+    assert "Escoge al menos una sesión o un trabajo para la factura." in r.text
+    assert not tgf.filas(con_proyecto, "facturas")
+
+
 def test_pedir_emision_desde_la_ventana_del_proyecto_pinta_la_confirmacion_encima(con_proyecto, registro):
     _, datos = _el_paso_3(con_proyecto)
     datos["accion"] = "pedir_emision"
