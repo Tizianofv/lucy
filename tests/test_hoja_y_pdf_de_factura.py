@@ -102,20 +102,21 @@ def _cuantas(palabra: str, pdf: bytes) -> int:
 
 def test_la_emitida_con_ncf_e_itbis_trae_todo_y_ninguna_marca():
     h = fa.hoja_de_factura(_f())
-    assert (h["titulo"], h["codigo"], h["marca"]) == ("FACTURA", "FAC-2026-001", None)
+    assert (h["titulo"], h["codigo"], h["marca"]) == ("FACTURA DE SERVICIOS", "FAC-2026-001", None)
     assert h["para"] == [("PARA", "Cliente de prueba"), ("RNC / CÉDULA", "131234567"), ("FECHA", "14 de octubre de 2026"),
-                         ("NCF", "B0100000001"), ("TIPO DE NCF", "Crédito fiscal")]
+                         ("TIPO DE NCF", "Crédito fiscal")]
+    assert h["ncf"] == "NCF: B0100000001"
     assert h["encabezados"] == ("SERVICIO", "CANTIDAD", "PRECIO UNITARIO", "TOTAL")
     # Un renglón sin cantidad ni precio unitario (de antes del detalle, pieza D2) se escribe 1 × su monto.
     assert [(r["descripcion"], r["detalle"], r["cantidad"], r["precio_unitario"], r["monto"]) for r in h["renglones"]] == [
         ("Grabación de bajo y güira", "Incluye mezcla.", "1", "RD$62,500", "RD$62,500"),
         ("Video musical", "Una toma.\nSegunda línea.", "1", "RD$15,250.50", "RD$15,250.50")]
     assert [(t["etiqueta"], t["total"]) for t in h["totales"]] == [
-        ("Subtotal", "RD$77,750.50"), ("ITBIS 18%", "RD$16,464.81"), ("TOTAL", "RD$107,935.99"),
+        ("Subtotal", "RD$77,750.50"), ("ITBIS (18%)", "RD$16,464.81"), ("Total factura (RD$)", "RD$107,935.99"),
         # Pieza D4: la factura lleva comprobante, así que debajo del total van la retención del ISR, el ITBIS
         # retenido (todo) y lo que el cliente paga de verdad —el bruto—.
-        ("Impuesto a retener (ISR 15%)", "RD$13,720.68"), ("ITBIS retenido", "RD$16,464.81"),
-        ("Total a pagar", "RD$77,750.50")]
+        ("Retención ISR (15%) sobre el servicio", "- RD$13,720.68"), ("Retención ITBIS (18%)", "- RD$16,464.81"),
+        ("Neto a pagar", "RD$77,750.50")]
     assert h["pie"] == cz.PIE_DEL_ESTUDIO
 
 
@@ -125,7 +126,7 @@ def test_sin_ncf_sin_itbis_y_sin_rnc_no_queda_ningun_hueco_ni_texto():
     for palabra in ("NCF", "ITBIS", "Subtotal", "RNC", "CÉDULA", "None", "TIPO"):
         assert palabra not in textos, palabra
     assert [p[0] for p in h["para"]] == ["PARA", "FECHA"]
-    assert [(t["etiqueta"], t["total"]) for t in h["totales"]] == [("TOTAL", "RD$77,750.50")]
+    assert [(t["etiqueta"], t["total"]) for t in h["totales"]] == [("Total factura (RD$)", "RD$77,750.50")]
 
 
 def test_el_ncf_y_el_itbis_son_cosas_distintas():
@@ -133,16 +134,16 @@ def test_el_ncf_y_el_itbis_son_cosas_distintas():
     NCF, el ITBIS sigue y no hay una sola línea de retención. (La factura con NCF y SIN ITBIS no existe: la puerta no
     la deja guardar.)"""
     con_ncf = fa.textos_de_la_factura(fa.hoja_de_factura(_f()))
-    assert "NCF" in con_ncf and "ITBIS 18%" in con_ncf
-    assert any("retenido" in t or "retenerse" in t for t in con_ncf)
+    assert any(t.startswith("NCF: ") for t in con_ncf) and "ITBIS (18%)" in con_ncf
+    assert any(t.startswith("Retención") for t in con_ncf)
     solo_itbis = fa.textos_de_la_factura(fa.hoja_de_factura(_f(ncf=False)))
-    assert "ITBIS 18%" in solo_itbis and "NCF" not in solo_itbis
-    assert not any("retenido" in t or "retenerse" in t for t in solo_itbis)
+    assert "ITBIS (18%)" in solo_itbis and not any(t.startswith("NCF") for t in solo_itbis)
+    assert not any(t.startswith("Retención") for t in solo_itbis)
 
 
 def test_el_borrador_dice_borrador_y_no_tiene_numero():
     h = fa.hoja_de_factura(_f("borrador"))
-    assert (h["titulo"], h["codigo"], h["marca"]) == ("FACTURA", "BORRADOR", "BORRADOR")
+    assert (h["titulo"], h["codigo"], h["marca"]) == ("FACTURA DE SERVICIOS", "BORRADOR", "BORRADOR")
     assert not any("FAC-" in t for t in fa.textos_de_la_factura(h))
 
 
@@ -193,19 +194,19 @@ def test_subtotal_itbis_y_total_de_la_hoja_son_los_de_totales_de_factura(montos,
     h = fa.hoja_de_factura(_f(renglones=renglones, itbis=pct, ncf=False))
     esperado = db.totales_de_factura([Decimal(m) for m in montos], None if pct is None else Decimal(pct))
     por_etiqueta = {t["etiqueta"]: t["total"] for t in h["totales"]}
-    assert por_etiqueta["TOTAL"] == cz.dinero_en_pesos(esperado["total"])
+    assert por_etiqueta["Total factura (RD$)"] == cz.dinero_en_pesos(esperado["total"])
     if pct is None:
-        assert list(por_etiqueta) == ["TOTAL"]
+        assert list(por_etiqueta) == ["Total factura (RD$)"]
     else:
         assert por_etiqueta["Subtotal"] == cz.dinero_en_pesos(esperado["subtotal"])
-        assert por_etiqueta["ITBIS 18%"] == cz.dinero_en_pesos(esperado["itbis"])
+        assert por_etiqueta["ITBIS (18%)"] == cz.dinero_en_pesos(esperado["itbis"])
 
 
 def test_la_hoja_no_recalcula_escribe_lo_que_trae_la_lectura():
     f = _f(ncf=False)
     f.update(subtotal=Decimal("1.00"), itbis=Decimal("2.00"), total=Decimal("3.00"))
     h = fa.hoja_de_factura(f)
-    assert [(t["etiqueta"], t["total"]) for t in h["totales"]] == [("Subtotal", "RD$1"), ("ITBIS 18%", "RD$2"), ("TOTAL", "RD$3")]
+    assert [(t["etiqueta"], t["total"]) for t in h["totales"]] == [("Subtotal", "RD$1"), ("ITBIS (18%)", "RD$2"), ("Total factura (RD$)", "RD$3")]
 
 
 def test_la_hoja_de_lo_que_lee_la_base_lleva_los_totales_de_la_base(mundo):
@@ -274,7 +275,7 @@ def test_el_pdf_con_muchos_renglones_no_pierde_texto_y_los_totales_quedan_al_fin
     assert leido.count(cabecera) == paginas          # cada página repite la cabecera de la tabla
     esperado = _sin_blancos("".join(fa.textos_de_la_factura(fa.hoja_de_factura(f))))
     assert leido.replace(cabecera, "") == esperado.replace(cabecera, "")
-    assert leido.index("Servicionúmero60") < leido.index("Subtotal") < leido.index("ITBIS18%") < leido.rindex("TOTAL")
+    assert leido.index("Servicionúmero60") < leido.index("Subtotal") < leido.index("ITBIS(18%)") < leido.rindex("Totalfactura(RD$)")
 
 
 def _factura_al_tope_de_la_puerta(letra):
@@ -341,9 +342,13 @@ def test_la_vista_previa_trae_los_mismos_textos_que_la_hoja(caso):
     leido = _sin_blancos("".join(p.textos))
     esperado = _sin_blancos("".join(fa.textos_de_la_factura(h)))
     if h["marca"]:
-        esperado = _sin_blancos("".join(fa.textos_de_la_factura(h)[:2] + [h["marca"]] + fa.textos_de_la_factura(h)[2:]))
+        # La marca en diagonal va después del número y del NCF, justo antes del bloque Para (en la macro).
+        textos = fa.textos_de_la_factura(h)
+        antes_del_para = textos.index(h["para"][0][0])
+        esperado = _sin_blancos("".join(textos[:antes_del_para] + [h["marca"]] + textos[antes_del_para:]))
     assert leido == esperado
-    assert any(t == "img" and a.get("src") == "/logo-cds.png" for t, a in p.etiquetas)
+    # La factura no lleva logo (modelo de Tiziano, 23-oct-2026): la hoja no trae ninguna imagen.
+    assert not any(t == "img" for t, a in p.etiquetas)
 
 
 def test_la_vista_previa_escapa_lo_que_se_escribio():
@@ -376,14 +381,18 @@ def test_hermanos_la_primera_pagina_y_el_pie_son_los_mismos():
     fac = _texto_del_pdf(_pdf(_f()))
     for linea in cz.PIE_DEL_ESTUDIO:
         assert _sin_blancos(linea) in _sin_blancos(cot) and _sin_blancos(linea) in _sin_blancos(fac)
-    # las dos usan la misma primera página: el logo y el título/código al centro (las llama el mismo escritor)
+    # La primera página es DISTINTA a propósito (modelo de Tiziano, 23-oct-2026): la factura no lleva logo y la
+    # cotización sí. Lo que se queda igual es el pie, y la cotización sigue usando su propia primera página.
     llamadas = []
     real = cz._abrir_la_hoja
     import unittest.mock as mock
     with mock.patch.object(cz, "_abrir_la_hoja", side_effect=lambda h, l: (llamadas.append(h["titulo"]), real(h, l))[1]):
         cz.pdf_de_cotizacion(cz.hoja_de_cotizacion(thc._cot()))
         _pdf(_f())
-    assert llamadas == ["COTIZACIÓN DE SERVICIOS", "FACTURA"]
+    assert llamadas == ["COTIZACIÓN DE SERVICIOS"]
+    from pypdf import PdfReader
+    pagina = PdfReader(io.BytesIO(_pdf(_f()))).pages[0]
+    assert len(pagina.images) == 0, "la factura no lleva imágenes: no lleva logo"
 
 
 def test_hermanos_el_dinero_se_escribe_con_la_misma_funcion():
@@ -430,7 +439,7 @@ def test_la_casa_baja_la_emitida_con_sus_cabeceras(mundo):
     assert "private" in resp.headers["cache-control"] and "no-store" in resp.headers["cache-control"]
     assert resp.content.startswith(b"%PDF")
     leido = _sin_blancos(_texto_del_pdf(resp.content))
-    assert "FAC-2026-001" in leido and "B0100000001" in leido and "131234567" in leido and "ITBIS18%" in leido
+    assert "FAC-2026-001" in leido and "B0100000001" in leido and "131234567" in leido and "ITBIS(18%)" in leido
     assert "BORRADOR" not in leido and "ANULADA" not in leido
 
 

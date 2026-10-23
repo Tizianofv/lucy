@@ -1,33 +1,47 @@
-{#- La hoja de una factura (pieza 3 del diseño «Facturas», 21-oct-2026): la vista previa.
+{#- La hoja de una factura (pieza 3 del diseño «Facturas», 21-oct-2026; estilo del modelo de Tiziano, 23-oct-2026): la vista previa.
     Solo DIBUJA el diccionario de `facturas.hoja_de_factura`: ningún texto sale de acá. Comparte las clases `.hoja`
     de la cotización (`estilo_de_la_hoja` de `_hoja_de_cotizacion.html`) y suma las suyas (`estilo_de_la_factura`).
+    Sin logo: arriba va el nombre y el RNC de quien factura (si están configurados), como en el modelo.
     Uso:  {% from "_hoja_de_cotizacion.html" import estilo_de_la_hoja %}
           {% from "_hoja_de_factura.html" import estilo_de_la_factura, hoja_de_factura %}
           {{ estilo_de_la_hoja() }} {{ estilo_de_la_factura() }} {{ hoja_de_factura(hoja) }} -#}
 {% macro estilo_de_la_factura() -%}
 <style>
+.hoja .emisor{margin:0 0 .4rem}
+.hoja .emisor b{display:block;font-size:1.05rem;color:#1d1d1d}
+.hoja .emisor span{display:block;color:#777;font-size:.8rem}
+.hoja .ncf-f{text-align:center;color:#c0272d;font-weight:700;font-size:.8rem;margin:.1rem 0 0}
 .hoja .marca-f{text-align:center;color:#c0272d;border:2px solid #c0272d;font:800 1rem system-ui;letter-spacing:.2em;padding:.3rem;margin:0 0 1.2rem;opacity:.85}
-.hoja .tot-f td{border-bottom:0;padding-top:.3rem;padding-bottom:.3rem}
+.hoja .para-f{display:grid;grid-template-columns:1fr 1fr;gap:.6rem 1rem;background:#f4f4f4;border-left:3px solid #c0272d;padding:.7rem 1rem;margin-bottom:1.2rem}
+.hoja .para-f small{display:block;font-size:.62rem;letter-spacing:.08em;color:#888}
+.hoja .para-f b{display:block;font-size:.85rem}
+.hoja .sec-f{color:#c0272d;font:700 .66rem system-ui;letter-spacing:.12em;border-bottom:1px solid #eee;padding-bottom:.3rem;margin:0 0 .2rem}
 .hoja .tabla-f th.f-num,.hoja .tabla-f td.f-num{text-align:right;white-space:nowrap}
 .hoja .tabla-f th.f-cant,.hoja .tabla-f td.f-cant{width:5.5rem}
 .hoja .tabla-f th.f-precio,.hoja .tabla-f td.f-precio{width:7rem}
+.hoja .tot-total td{background:#1a1a1a;color:#fff;border-bottom:0;padding:.5rem .6rem}
+.hoja .tot-total td b{color:#fff}
+.hoja .tot-gris td{color:#666;font-style:italic;padding-top:.3rem;padding-bottom:.3rem}
+.hoja .tot-neto td{color:#555;font-style:italic;font-weight:700}
 </style>
 {%- endmacro %}
 
 {% macro hoja_de_factura(h) -%}
 <div class="hoja">
-  <img class="logo-h" src="/logo-cds.png" alt="">
+  {% if h.emisor[0] or h.emisor[1] %}<div class="emisor">{% if h.emisor[0] %}<b>{{ h.emisor[0] }}</b>{% endif %}{% if h.emisor[1] %}<span>{{ h.emisor[1] }}</span>{% endif %}</div>{% endif %}
   <hr>
   <h1>{{ h.titulo }}</h1>
   <div class="cod">{{ h.codigo }}</div>
+  {% if h.ncf %}<div class="ncf-f">{{ h.ncf }}</div>{% endif %}
   {% if h.marca %}<div class="marca-f">{{ h.marca }}</div>{% endif %}
-  <div class="para">{% for etiqueta, valor in h.para %}<small>{{ etiqueta }}</small><b>{{ valor }}</b>{% endfor %}</div>
+  <div class="para-f">{% for etiqueta, valor in h.para %}<div><small>{{ etiqueta }}</small><b>{{ valor }}</b></div>{% endfor %}</div>
+  <div class="sec-f">{{ h.seccion }}</div>
   <table class="tabla-f"><tr><th>{{ h.encabezados[0] }}</th><th class="f-num f-cant">{{ h.encabezados[1] }}</th><th class="f-num f-precio">{{ h.encabezados[2] }}</th><th class="f-num">{{ h.encabezados[3] }}</th></tr>
   {% for r in h.renglones -%}
   <tr><td><b>{{ r.descripcion }}</b>{% if r.detalle %}<span>{{ r.detalle }}</span>{% endif %}</td><td class="f-num f-cant">{{ r.cantidad }}</td><td class="f-num f-precio">{{ r.precio_unitario }}</td><td class="f-num"><b>{{ r.monto }}</b></td></tr>
   {% endfor -%}
   {% for t in h.totales -%}
-  <tr class="tot-f"><td colspan="3"><b>{{ t.etiqueta }}</b></td><td class="f-num"><b>{{ t.total }}</b></td></tr>
+  <tr class="tot-{{ t.estilo }}"><td colspan="3"><b>{{ t.etiqueta }}</b></td><td class="f-num"><b>{{ t.total }}</b></td></tr>
   {% endfor -%}
   </table>
   <div class="pie">{{ h.pie[0] }}<br>{{ h.pie[1] }}</div>

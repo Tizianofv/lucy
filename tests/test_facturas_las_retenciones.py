@@ -56,7 +56,7 @@ import facturas as fa
 import facturas_panel as fp
 
 CENTAVOS = Decimal("0.01")
-RETENCION = "Impuesto a retener (ISR 15%)"
+RETENCION = "Retención ISR (15%) sobre el servicio"
 
 
 def _centavos(valor) -> Decimal:
@@ -156,9 +156,9 @@ def test_con_ncf_y_sin_itbis_la_puerta_no_la_deja_nacer(mundo):  # noqa: F811
 def test_la_hoja_pinta_las_tres_lineas_debajo_del_total_y_solo_con_ncf():
     con = fa.hoja_de_factura(_f())                                      # lleva NCF
     assert [t["etiqueta"] for t in con["totales"]] == [
-        "Subtotal", "ITBIS 18%", "TOTAL", RETENCION, "ITBIS retenido", "Total a pagar"]
+        "Subtotal", "ITBIS (18%)", "Total factura (RD$)", RETENCION, "Retención ITBIS (18%)", "Neto a pagar"]
     sin = fa.hoja_de_factura(_f(ncf=False))
-    assert [t["etiqueta"] for t in sin["totales"]] == ["Subtotal", "ITBIS 18%", "TOTAL"]
+    assert [t["etiqueta"] for t in sin["totales"]] == ["Subtotal", "ITBIS (18%)", "Total factura (RD$)"]
 
 
 def test_la_hoja_del_ejemplo_aprobado_escribe_las_cifras_del_ejemplo():
@@ -170,17 +170,17 @@ def test_la_hoja_del_ejemplo_aprobado_escribe_las_cifras_del_ejemplo():
     f.update(db.totales_de_factura([Decimal("12000.00")], Decimal("18.00"), Decimal("2000.00"), con_ncf=True))
     h = fa.hoja_de_factura(f)
     assert [(t["etiqueta"], t["total"]) for t in h["totales"]] == [
-        ("Subtotal", "RD$12,000"), ("Descuento", "- RD$2,000"), ("ITBIS 18%", "RD$2,117.65"),
-        ("TOTAL", "RD$13,882.36"), (RETENCION, "RD$1,764.71"), ("ITBIS retenido", "RD$2,117.65"),
-        ("Total a pagar", "RD$10,000")]
+        ("Subtotal", "RD$12,000"), ("Descuento", "- RD$2,000"), ("ITBIS (18%)", "RD$2,117.65"),
+        ("Total factura (RD$)", "RD$13,882.36"), (RETENCION, "- RD$1,764.71"), ("Retención ITBIS (18%)", "- RD$2,117.65"),
+        ("Neto a pagar", "RD$10,000")]
 
 
 def test_el_pdf_trae_las_tres_lineas_solo_con_ncf():
     con = _sin_blancos(_texto_del_pdf(_pdf(_f())))
-    for texto in ("Impuestoaretener(ISR15%)", "ITBISretenido", "Totalapagar"):
+    for texto in ("RetenciónISR(15%)sobreelservicio", "RetenciónITBIS(18%)", "Netoapagar"):
         assert texto in con, texto
     sin = _sin_blancos(_texto_del_pdf(_pdf(_f(ncf=False))))
-    for texto in ("Impresoaretener", "ITBISretenido", "Totalapagar"):
+    for texto in ("RetenciónISR", "RetenciónITBIS", "Netoapagar"):
         assert texto not in sin, texto
 
 
@@ -196,8 +196,8 @@ def test_la_lista_y_la_pagina_dicen_el_total_a_pagar_solo_con_ncf(pantalla):  # 
     # una sola fila lleva el «a pagar»: la que tiene NCF
     assert html.count("data-total-a-pagar") == 1
     pagina = cliente().get(f"/facturas/{con_ncf['id']}").text
-    assert "Total a pagar" in pagina and cz.dinero_en_pesos(Decimal("10000.00")) in pagina
-    assert "Total a pagar" not in cliente().get(f"/facturas/{sin_ncf['id']}").text
+    assert "Neto a pagar" in pagina and cz.dinero_en_pesos(Decimal("10000.00")) in pagina
+    assert "Neto a pagar" not in cliente().get(f"/facturas/{sin_ncf['id']}").text
 
 
 def test_las_cifras_de_la_retencion_no_se_guardan_en_la_base(mundo):  # noqa: F811

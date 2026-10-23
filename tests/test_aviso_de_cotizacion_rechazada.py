@@ -435,7 +435,7 @@ def test_sin_rechazo_el_pie_no_trae_aviso_y_la_lista_y_la_hoja_lo_dicen_arriba(m
 # ── El estilo: el pie se queda a la vista (que quede dentro de lo visible se midió en Chrome) ─────────────────
 
 def test_el_pie_de_la_ventana_se_queda_pegado_abajo_y_la_casilla_marcada_se_ve():
-    css = open("web/plantillas/proyectos.html", encoding="utf-8").read()
+    css = open("web/plantillas/proyectos.html", encoding="utf-8").read() + open("web/plantillas/_ventana.html", encoding="utf-8").read()
     assert re.search(r"\.cz-ventana \.ventana-pie\{[^}]*position:sticky;bottom:0", css)
     assert re.search(r"\.cz-ventana input\[aria-invalid=\"true\"\],\.cz-ventana textarea\[aria-invalid=\"true\"\]\{[^}]*border:2px solid var\(--vencida\)", css)
     assert re.search(r"\.ventana-pie \.cz-aviso-vacio\{display:none\}", css)

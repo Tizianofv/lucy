@@ -525,7 +525,7 @@ def test_la_pagina_enseña_la_hoja_del_pdf_con_el_estado_que_la_base_tiene(panta
     b = tgf.crear(itbis_pct=18, ncf="B0100000001", ncf_tipo="Crédito fiscal")
     html = _pagina(b["id"])
     assert 'data-hoja' in html and "FACTURA" in html and "BORRADOR" in html and "FAC-" not in html
-    assert "RD$1,000" in html and "ITBIS 18%" in html and "B0100000001" in html
+    assert "RD$1,000" in html and "ITBIS (18%)" in html and "B0100000001" in html
     e = tgf.emitir(b)
     html = _pagina(e["id"])
     assert "FAC-2026-001" in html and 'class="marca-f"' not in html
