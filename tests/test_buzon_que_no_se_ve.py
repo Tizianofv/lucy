@@ -4328,10 +4328,12 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 23-oct-2026, segunda vuelta (emitir desde la ventana y el estilo de la ventana, hallazgos H3): +2 en disco y +2 EXENTOS
     # (`tests/test_emitir_desde_la_ventana.py` y `tests/test_estilo_de_la_ventana_en_las_paginas.py`, nuevos, exentos por
     # rol); VIGILADOS sin cambio (`web/app.py` y `facturas.py` ya vigilados). Medida corriendo la prueba: 232, 166, 66.
-    assert medido == {"en disco": 232, "exentos": 166, "vigilados": 66}, (
+    # 23-oct-2026, defecto de producción (el CSS de la ventana fuera de <style>): +1 en disco y +1 EXENTO
+    # (`tests/test_estilo_de_la_ventana_dentro_de_style.py`, nuevo, exento por rol); VIGILADOS sin cambio. Medida: 233, 167, 66.
+    assert medido == {"en disco": 233, "exentos": 167, "vigilados": 66}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "23-oct-2026 (facturas-apariencia, segunda vuelta) era {'en disco': 232, "
-        "'exentos': 166, 'vigilados': 66}. La aserción de fondo —cero "
+        "23-oct-2026 (facturas-estilo-ventana) era {'en disco': 233, "
+        "'exentos': 167, 'vigilados': 66}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "
