@@ -180,6 +180,19 @@ def test_una_factura_del_proyecto_se_corrige_desde_su_ventana_y_vuelve_al_proyec
     assert tgf.filas(con_proyecto, "facturas")[0]["para_nombre"] == "Nombre corregido"
 
 
+def test_ni_el_post_de_corregir_se_cree_un_proyecto_que_no_es_el_de_la_factura(con_proyecto, registro):
+    """La misma comprobación del campo escondido en el OTRO POST: corregir. Con un proyecto que no es el de la factura,
+    el servidor lo ignora y la vuelta es la de siempre; nunca la página de ese otro proyecto."""
+    con_proyecto.con.create_function("now", 0, lambda: "2026-10-02 12:00:00+00:00")
+    f = _factura_en_proyecto(con_proyecto, proyecto_id=1)
+    datos = _lo_que_manda_el_formulario(_pagina(con_proyecto, p=1, factura=f["id"], corregir=1), "data-corregir")
+    datos["volver_al_proyecto"] = "2"
+    r = cliente().post(f"/facturas/{f['id']}/corregir", data=datos, follow_redirects=False)
+    assert r.status_code == 303, r.text[:300]
+    assert not r.headers["location"].startswith("/proyectos"), r.headers["location"]
+    assert r.headers["location"] == f"/facturas/{f['id']}"
+
+
 def test_un_rechazo_desde_la_ventana_del_proyecto_vuelve_a_la_ventana_con_el_aviso_y_lo_escrito(con_proyecto, registro):
     """Un NCF sin ITBIS lo rechaza la puerta de `db` (no el navegador): la página sigue siendo la del proyecto, con la
     ventana encima, la razón dentro y lo que la persona escribió."""
@@ -280,6 +293,12 @@ def test_la_opcion_de_una_cotizacion_se_escoge_en_el_paso_2_y_llega_al_paso_3(co
     assert '<select name="factura_opcion"' in ventana, "el paso 2 manda la opción con un nombre que la ruta no lee"
     forma = re.search(r"<form[^>]*data-escoger[^>]*>(.*?)</form>", ventana, re.S).group(1)
     assert forma.count('name="factura_opcion"') == 1, "dos valores del mismo nombre se pisan: el escondido y el select"
+    # Y con la opción ya escogida en la dirección (lo que pasa al volver al paso 2): sigue habiendo UN solo
+    # `factura_opcion` y el select sale con esa opción marcada.
+    ventana_ya = _ventana(_pagina(con_proyecto, p=1, factura="nueva", factura_de_cotizacion=1, factura_opcion=2))
+    forma_ya = re.search(r"<form[^>]*data-escoger[^>]*>(.*?)</form>", ventana_ya, re.S).group(1)
+    assert forma_ya.count('name="factura_opcion"') == 1, "con la opción en la dirección se manda dos veces"
+    assert re.search(r'<option value="2"\s+selected', forma_ya), "el select no sale con la opción que ya estaba"
     # Escoger la segunda y seguir: la opción viaja y el POST del paso 3 la lleva como `opcion` (la que lee la puerta).
     paso3 = _ventana(_pagina(con_proyecto, p=1, factura="nueva", factura_de_cotizacion=1, factura_opcion=2,
                              ref=["11"], paso="escribir"))
