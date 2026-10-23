@@ -9,8 +9,14 @@
 <div class="velo" role="dialog" aria-label="Corregir el borrador">
 <div class="cz-ventana">
 <div class="ventana-enc"><h2>Corregir el borrador</h2><span class="num">{{ v.f.codigo or 'Borrador' }}</span><a class="cerrar" href="{{ v.cerrar }}" aria-label="Cerrar">✕</a></div>
+{#- La razón de un guardado que la puerta no dejó (o de una emisión que no llegó): dentro de la ventana, que es donde
+    está la persona. -#}
+{% for e in v.errores %}<p class="aviso" role="alert" style="margin:.6rem 1.3rem 0" data-aviso-de-la-ventana>{{ e.texto if e.texto is defined else e }}</p>{% endfor %}
 {% set valores = v.valores %}
+{#- Abierta encima de la página del proyecto, la ventana vuelve ahí (el servidor lo comprueba contra el proyecto DE la
+    factura). La página de la factura no lo manda: esa vuelve a sí misma. -#}
 <form method="post" action="/facturas/{{ v.f.id }}/corregir" data-corregir>
+  {% if v.volver_al_proyecto %}<input type="hidden" name="volver_al_proyecto" value="{{ v.volver_al_proyecto }}">{% endif %}
   <input type="hidden" name="cambiado_en" value="{{ v.candado }}">
   <div class="ventana-cuerpo">
   <div class="form-c">

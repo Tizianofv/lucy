@@ -46,7 +46,9 @@
   {% for k, valor in v.ocultos_get %}<input type="hidden" name="{{ k }}" value="{{ valor }}">{% endfor %}
   {% if v.pide_opcion %}
   <div class="campos"><label>¿De cuál opción de la cotización?
-    <select name="opcion" aria-label="Opción de la cotización"><option value="">Escoge una…</option>
+    {#- El nombre del parámetro lo pone el servidor: `opcion` en la página suelta y `factura_opcion` en la del proyecto,
+        que es la ruta que lo recibe. -#}
+    <select name="{{ v.nombre_opcion }}" aria-label="Opción de la cotización"><option value="">Escoge una…</option>
     {% for o in v.opciones %}<option value="{{ o.n }}"{% if v.opcion == o.n %} selected{% endif %}>Opción {{ o.n }} · {{ o.nombre }} · {{ o.total }}</option>{% endfor %}</select></label></div>
   {% endif %}
   <div class="barra"><input type="text" name="sq" value="{{ v.sq }}" placeholder="Buscar otra sesión por su código o por quien reservó…" aria-label="Buscar una sesión del registro">
@@ -78,6 +80,9 @@
 
 {% else %}
 <form method="post" action="/facturas/nueva" data-factura-nueva>
+  {#- Abierta encima de la página del proyecto, la ventana vuelve ahí: el servidor lo comprueba contra el proyecto con el
+      que se guarda y lo ignora si no cuadra (no es un destino libre). -#}
+  {% if v.en_el_proyecto and v.proyecto %}<input type="hidden" name="volver_al_proyecto" value="{{ v.proyecto.id }}">{% endif %}
   <input type="hidden" name="cliente" value="{{ v.cliente_id }}">
   {% if v.proyecto %}<input type="hidden" name="proyecto" value="{{ v.proyecto.id }}">{% endif %}
   {% if v.cotizacion %}<input type="hidden" name="cotizacion" value="{{ v.cotizacion.id }}"><input type="hidden" name="opcion" value="{{ v.opcion or '' }}">{% endif %}

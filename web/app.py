@@ -1423,15 +1423,30 @@ async def proyectos(request: Request, area_guardada: AvisoQueElige[int] = 0,
     # —la dirección pide la ventana y el servidor pinta la página del proyecto con ella encima—. Solo la casa (escribe)
     # y solo en la vista de UN proyecto. Sin `factura=` no se arma nada.
     fzv = None
+    # Lo que un POST de la ventana dejó para volver a pintarla (lo escrito, la razón, la confirmación): solo lo pone
+    # `_la_pagina_del_proyecto_con_la_ventana`, en ESTA misma petición; no viaja en la dirección.
+    extra_de_la_ventana = getattr(request.state, "factura_ventana", None) or {}
     if de_la_casa and vista["tipo"] == "proyecto" and factura:
         fzv = await _ventana_de_factura_del_proyecto(
             vista["proyecto"]["id"], factura, corregir=corregir, cliente=cliente or None,
             cotizacion=factura_de_cotizacion or None, opcion=factura_opcion or None,
             refs=[r.strip() for r in ref if isinstance(r, str) and r.strip()],
-            sq=sq.strip(), pq=pq.strip(), paso=paso)
+            sq=sq.strip(), pq=pq.strip(), paso=paso,
+            escrito=extra_de_la_ventana.get("escrito"), errores=extra_de_la_ventana.get("errores", ()),
+            pedir_emision=extra_de_la_ventana.get("pedir_emision", False))
+    # EL AVISO DE UNA FACTURA GUARDADA (23-oct-2026): lo que se dice sale del ESTADO de la base al pintar (la factura
+    # está en la lista de este proyecto), no de la dirección: una dirección escrita a mano sin recibo no pinta nada, y
+    # con recibo tampoco dice «guardada» si esa factura no está.
+    aviso_factura = None
+    if hecho == "factura_guardada" and factura and fz:
+        fid_aviso = _entero_positivo(factura)
+        fila = next((x for x in fz["lista"] if x["id"] == fid_aviso), None)
+        if fila is not None:
+            aviso_factura = ("Borrador guardado en este proyecto." if fila["estado"] == "borrador"
+                             else f"Factura {fila['numero']} {fila['estado_texto'].lower()}.")
     return plantillas.TemplateResponse(
         request, "proyectos.html",
-        {"solo_ver": solo_ver, "cz": cz, "fz": fz, "fzv": fzv,
+        {"solo_ver": solo_ver, "cz": cz, "fz": fz, "fzv": fzv, "aviso_factura": aviso_factura,
          "cz_activas": de_la_casa,
          "cz_datos_de_la_hoja": (cotizaciones.datos_de_la_vista_previa()
                                  if cz and cz["ventana"] and "valores" in cz["ventana"] else None),
@@ -2635,10 +2650,16 @@ async def _contexto_de_factura_nueva(*, cliente, proyecto, cotizacion, opcion, r
            "registro_ok": True, "elegidas": [], "valores": None, "busqueda": None, "hoy": db.hoy_rd(),
            # A dónde van los GET de los pasos, qué llevan escondido y a dónde vuelven la ✕ y «Cancelar».
            "destino": "/proyectos" if en_el_proyecto else "/facturas/nueva",
-           "ocultos_get": lleva, "enlace": "".join(f"&{k}={v}" for k, v in lleva),
+           "enlace": "".join(f"&{k}={v}" for k, v in lleva),
            "cerrar": (f"/proyectos?p={pid}#facturas" if en_el_proyecto and pid else "/facturas"),
            "enlace_con_cliente": "", "campos_marcados": {c["casilla"] for c in errores if c.get("casilla")},
+           # El nombre del parámetro de la opción: en la página del proyecto es `factura_opcion` (el de ESA ruta).
+           "nombre_opcion": "factura_opcion" if en_el_proyecto else "opcion",
+           "en_el_proyecto": en_el_proyecto,
            "pide_opcion": len(opciones) > 1}
+    # Con varias opciones, la opción la lleva el `<select>` del paso 2 y NO otra vez escondida: dos valores del mismo
+    # nombre se pisan y la escogida se perdía. El `enlace` (los href) sí la lleva.
+    ctx["ocultos_get"] = [(k, v) for k, v in lleva if not (ctx["pide_opcion"] and k == ctx["nombre_opcion"])]
     if cliente_id is None:
         ctx["busqueda_cliente"] = await _buscar_personas_para_la_pagina(pq, "factura-cliente")
         return ctx
@@ -2806,7 +2827,7 @@ async def _factura_nueva_rechazada(request: Request, campos: dict, errores: list
     return await _factura_nueva_en_pantalla(request, campos, errores=errores, status=400)
 
 
-async def _emitir_lo_guardado(request: Request, chat: int, fid: int):
+async def _emitir_lo_guardado(request: Request, chat: int, fid: int, *, volver_al_proyecto: int | None = None):
     """Emite lo que acaba de guardarse con LA MISMA puerta de «Emitir» de la página de la factura (`db.emitir_factura`,
     con el candado que esa página leería) y la misma subida a Drive. Si la puerta no deja, lo escrito queda como
     borrador y la página lo dice. Nunca dice «emitida» si no lo está: el estado que muestra sale de la base."""
@@ -2825,10 +2846,21 @@ async def _emitir_lo_guardado(request: Request, chat: int, fid: int):
             log_f.warning("Facturas: la emisión de la factura #%s no dejó (%s)", fid, texto["clave"])
             razon = texto["razon"].rstrip(".")
             aviso = f"No se emitió: {razon[:1].lower() + razon[1:]}. Lo escrito SÍ quedó guardado como borrador."
+        if volver_al_proyecto is not None:
+            return await _la_pagina_del_proyecto_con_la_ventana(
+                request, volver_al_proyecto, fid=fid, errores=[{"texto": aviso, "casilla": None}], status=400)
         actual = await db.factura_por_id(fid)
         return await _pagina_de_factura(request, actual, errores=[{"texto": aviso, "casilla": None}], status=400)
     await _subir_factura_a_drive(fid)
+    if volver_al_proyecto is not None:
+        return _a_la_factura_guardada(volver_al_proyecto, fid)
     return RedirectResponse(f"/facturas/{fid}", status_code=303)
+
+
+def _a_la_factura_guardada(pid: int, fid: int):
+    """Vuelta a la página del proyecto con el aviso de la factura que quedó guardada, como las cotizaciones
+    (`?hecho=…&p=N&cotizacion=<id>`): el aviso no afirma nada por sí solo, la página lo comprueba contra la lista."""
+    return RedirectResponse(f"/proyectos?hecho=factura_guardada&p={pid}&factura={fid}#facturas", status_code=303)
 
 
 @app.post("/facturas/nueva")
@@ -2847,7 +2879,12 @@ async def guardar_factura_nueva(request: Request):
     formulario = await request.form()
     campos = fp.campos_del_formulario(formulario)
     accion = str(formulario.get("accion") or "")
+    # ¿La ventana estaba abierta encima de la página del proyecto? Solo si el campo escondido ES el proyecto con el
+    # que se guarda. Si es así, todo lo que sigue vuelve a la página del proyecto con la ventana encima.
+    pid_ventana = _el_proyecto_de_la_ventana(formulario, campos["proyecto"])
     if accion == "volver":
+        if pid_ventana is not None:
+            return await _la_pagina_del_proyecto_con_la_ventana(request, pid_ventana, campos=campos)
         return await _factura_nueva_en_pantalla(request, campos)
     # Lo que se comprueba ANTES de guardar: que haya sesiones o trabajos, que sean de este cliente y que se puedan ligar.
     ligas, errores = [], []
@@ -2860,8 +2897,13 @@ async def guardar_factura_nueva(request: Request):
         ligas, problemas = fp.ligas_de_las_refs(campos["refs"], lectura)
         errores += [{"texto": fp.frase_del_problema_de_liga(p) + " NO se guardó nada.", "casilla": None} for p in problemas]
     if errores:
+        if pid_ventana is not None:
+            return await _la_pagina_del_proyecto_con_la_ventana(request, pid_ventana, campos=campos, errores=errores,
+                                                                status=400)
         return await _factura_nueva_rechazada(request, campos, errores)
     if accion == "pedir_emision":
+        if pid_ventana is not None:
+            return await _la_pagina_del_proyecto_con_la_ventana(request, pid_ventana, campos=campos, pedir_emision=True)
         return await _factura_nueva_en_pantalla(request, campos, pedir_emision=True)
     try:
         f = await db.crear_borrador_de_factura(
@@ -2878,6 +2920,9 @@ async def guardar_factura_nueva(request: Request):
             log_f.exception("Facturas: falló la base al crear un borrador.")
         else:
             log_f.warning("Facturas: borrador rechazado (%s)", texto["clave"])
+        if pid_ventana is not None:
+            return await _la_pagina_del_proyecto_con_la_ventana(request, pid_ventana, campos=campos, errores=[texto],
+                                                                status=400)
         return await _factura_nueva_rechazada(request, campos, [texto])
     # Las demás sesiones o trabajos, una por una. Si alguna no se deja, el borrador YA existe: se dice cuál no y por qué.
     sin_ligar = []
@@ -2890,13 +2935,21 @@ async def guardar_factura_nueva(request: Request):
             sin_ligar.append(fp.frase_de_una_liga_que_no_se_pudo(liga, fp.texto_del_error(e)))
     if accion == "emitir":
         if sin_ligar:
-            actual = await db.factura_por_id(f["id"])
             avisos = [{"texto": t, "casilla": None} for t in sin_ligar] + [
                 {"texto": "Lo escrito quedó guardado como borrador: NO se emitió porque una sesión no se ligó.", "casilla": None}]
+            if pid_ventana is not None:
+                return await _la_pagina_del_proyecto_con_la_ventana(request, pid_ventana, fid=f["id"], errores=avisos,
+                                                                    status=200)
+            actual = await db.factura_por_id(f["id"])
             return await _pagina_de_factura(request, actual, errores=avisos, status=200)
-        return await _emitir_lo_guardado(request, chat, f["id"])
+        return await _emitir_lo_guardado(request, chat, f["id"], volver_al_proyecto=pid_ventana)
     if not sin_ligar:
+        if pid_ventana is not None:
+            return _a_la_factura_guardada(pid_ventana, f["id"])
         return RedirectResponse(f"/facturas/{f['id']}", status_code=303)
+    if pid_ventana is not None:
+        return await _la_pagina_del_proyecto_con_la_ventana(
+            request, pid_ventana, fid=f["id"], errores=[{"texto": t, "casilla": None} for t in sin_ligar], status=200)
     actual = await db.factura_por_id(f["id"])
     return await _pagina_de_factura(request, actual, errores=[{"texto": t, "casilla": None} for t in sin_ligar], status=200)
 
@@ -3083,10 +3136,15 @@ async def corregir_una_factura(request: Request, fid: int):
     formulario = await request.form()
     campos = fp.campos_del_formulario(formulario)
     accion = str(formulario.get("accion") or "")
+    f = await _factura_o_404(fid)
+    if f is None:
+        return _no_existe_la_factura()
+    # La ventana abierta encima de SU proyecto: el campo escondido tiene que ser el proyecto DE ESTA factura.
+    pid_ventana = _el_proyecto_de_la_ventana(formulario, f["proyecto_id"])
     if accion in ("pedir_emision", "volver"):
-        f = await _factura_o_404(fid)
-        if f is None:
-            return _no_existe_la_factura()
+        if pid_ventana is not None:
+            return await _la_pagina_del_proyecto_con_la_ventana(request, pid_ventana, campos=campos, fid=fid,
+                                                                pedir_emision=accion == "pedir_emision")
         return await _pagina_de_factura(request, f, corregir=1, escrito=campos, pedir_emision=accion == "pedir_emision")
     cambios = {k: campos[k] for k in ("para_nombre", "itbis_pct", "ncf", "ncf_tipo", "rnc_cedula", "renglones")}
     cambios["fecha"] = campos["fecha"]
@@ -3097,9 +3155,19 @@ async def corregir_una_factura(request: Request, fid: int):
     except db.FacturaSinSesion:
         return _fuera(request)
     except Exception as e:
+        if pid_ventana is not None:
+            texto = fp.texto_del_error(e)
+            if texto["clave"] == "base":
+                log_f.exception("Facturas: falló la base al corregir la factura #%s desde la ventana.", fid)
+            else:
+                log_f.warning("Facturas: la factura #%s rechazó un cambio (%s)", fid, texto["clave"])
+            return await _la_pagina_del_proyecto_con_la_ventana(request, pid_ventana, campos=campos, fid=fid,
+                                                                errores=[texto], status=400)
         return await _rechazo_de_una_factura(request, fid, e, corregir=1, escrito=campos)
     if accion == "emitir":
-        return await _emitir_lo_guardado(request, chat, fid)
+        return await _emitir_lo_guardado(request, chat, fid, volver_al_proyecto=pid_ventana)
+    if pid_ventana is not None:
+        return _a_la_factura_guardada(pid_ventana, fid)
     return RedirectResponse(f"/facturas/{fid}", status_code=303)
 
 
@@ -3272,8 +3340,44 @@ def _entero_positivo(valor) -> int | None:
     return int(texto) if texto.isascii() and texto.isdigit() and int(texto) > 0 else None
 
 
+def _el_proyecto_de_la_ventana(formulario, proyecto_de_la_factura) -> int | None:
+    """El proyecto al que vuelve la ventana de una factura, cuando el guardado vino de la página del proyecto: el campo
+    escondido `volver_al_proyecto`, y SOLO si es un entero positivo y es el MISMO proyecto con el que se guarda (crear) o
+    el de la factura (corregir). No es un destino libre: una dirección armada a mano no manda a otra página."""
+    valor = _entero_positivo(str(formulario.get("volver_al_proyecto") or "").strip())
+    return valor if valor is not None and valor == proyecto_de_la_factura else None
+
+
+async def _la_pagina_del_proyecto_con_la_ventana(request: Request, pid: int, *, campos: dict | None = None,
+                                                 errores=(), pedir_emision: bool = False, fid: int | None = None,
+                                                 status: int = 200):
+    """La respuesta de un POST que vino de la ventana abierta ENCIMA de la página de un proyecto (23-oct-2026): la página
+    del proyecto, con la ventana otra vez encima y lo que haya que decirle a la persona. Nunca saca de la página.
+
+    `fid` abre la ventana de corregir de esa factura (después de guardarla o de intentar emitirla); sin `fid`, la de
+    nueva, con `campos` en las casillas si los hay (un rechazo o «volver»). `errores` sale dentro de la ventana y
+    `pedir_emision` dibuja la confirmación. La página la pinta la MISMA ruta GET (`proyectos`), no una copia: lo único que
+    viaja por fuera es lo escrito y los avisos, en `request.state` (no en la dirección, y solo lo pone este POST)."""
+    request.state.factura_ventana = {"escrito": campos, "errores": list(errores), "pedir_emision": pedir_emision}
+    consulta: dict = {"p": pid}
+    if fid is not None:
+        consulta.update({"factura": str(fid), "corregir": 1})
+    else:
+        consulta["factura"] = "nueva"
+        if campos is not None:
+            def _entero(v):
+                return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0
+            consulta.update({"cliente": _entero(campos["cliente"]), "paso": "escribir", "ref": list(campos["refs"]),
+                             "factura_de_cotizacion": _entero(campos["cotizacion"]),
+                             "factura_opcion": _entero(campos["opcion"])})
+    respuesta = await proyectos(request, **consulta)
+    respuesta.status_code = status
+    return respuesta
+
+
 async def _ventana_de_factura_del_proyecto(pid: int, factura: str, *, corregir: int, cliente, cotizacion, opcion,
-                                           refs: list[str], sq: str, pq: str, paso: str) -> dict | None:
+                                           refs: list[str], sq: str, pq: str, paso: str, escrito: dict | None = None,
+                                           errores=(), pedir_emision: bool = False) -> dict | None:
     """La ventana de una factura abierta ENCIMA de la página de su proyecto, como la de cotizaciones (23-oct-2026):
     `factura=nueva` (los tres pasos, `_contexto_de_factura_nueva`) o `factura=<id>&corregir=1` (el formulario de un
     borrador DE ESTE proyecto). `None` = no se abre nada: un id que no es un número, una factura que no existe, que no es
@@ -3283,7 +3387,8 @@ async def _ventana_de_factura_del_proyecto(pid: int, factura: str, *, corregir: 
     if factura == "nueva":
         ctx = await _contexto_de_factura_nueva(
             cliente=cliente, proyecto=pid, cotizacion=cotizacion, opcion=opcion, refs=refs, sq=sq, pq=pq,
-            quiere_escribir=paso == "escribir", en_el_proyecto=True)
+            quiere_escribir=paso == "escribir", escrito=escrito, errores=errores, pedir_emision=pedir_emision,
+            en_el_proyecto=True)
         return {"tipo": "nueva", **ctx}
     fid = _entero_positivo(factura)
     if fid is None or not corregir:
@@ -3295,11 +3400,15 @@ async def _ventana_de_factura_del_proyecto(pid: int, factura: str, *, corregir: 
         return None
     if f is None or f["proyecto_id"] != pid or f["estado"] != "borrador":
         return None
-    valores = fp.valores_del_formulario(factura=f)
+    valores = fp.valores_del_formulario(factura=f, escrito=escrito)
     return {"tipo": "corregir", "f": f, "valores": valores,
             "vista": fp.vista_previa_de_factura(fp.campos_de_la_vista_previa(valores)),
             "hoja": facturas.hoja_de_factura(f), "candado": fp.candado(f["cambiado_en"]),
-            "campos_marcados": set(), "agregado": False, "pedir_emision": False,
+            "errores": list(errores),
+            "campos_marcados": {c["casilla"] for c in errores if isinstance(c, dict) and c.get("casilla")},
+            "agregado": False, "pedir_emision": bool(pedir_emision),
+            # Lo que hace que el POST vuelva a ESTA página (el servidor lo comprueba contra el proyecto de la factura).
+            "volver_al_proyecto": pid,
             "cerrar": f"/proyectos?p={pid}#facturas"}
 
 

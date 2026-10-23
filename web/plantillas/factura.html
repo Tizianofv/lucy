@@ -37,7 +37,7 @@
     (`_ventana_corregir_factura.html`), la MISMA que la página del proyecto abre encima de sí. -#}
 {% if se_corrige %}{{ ventana_de_corregir_factura({"f": f, "valores": valores, "vista": vista, "hoja": hoja,
     "candado": candado, "campos_marcados": campos_marcados, "agregado": agregado, "pedir_emision": pedir_emision,
-    "cerrar": "/facturas/" ~ f.id}) }}{% endif %}
+    "errores": [], "volver_al_proyecto": None, "cerrar": "/facturas/" ~ f.id}) }}{% endif %}
 
 {% if oferta %}
 <div class="confirma" data-ofrecer="{{ oferta.ref }}"><b>¿Agregar {% if oferta.cuantos == 1 %}el renglón{% else %}los {{ oferta.cuantos }} renglones{% endif %} de «{{ oferta.codigo or oferta.ref }}»?</b>

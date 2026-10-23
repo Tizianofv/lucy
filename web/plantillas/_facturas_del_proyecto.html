@@ -23,6 +23,7 @@
  <div class="cotiz" id="facturas" data-ancla>
   <div class="cotiz-enc"><h3>Facturas</h3>
     <a class="cotiz-mas{{ ' activo' if fzv and fzv.tipo == 'nueva' }}" href="/proyectos?p={{ m.id }}&amp;factura=nueva#facturas" title="Hacer una factura de este proyecto" aria-label="Hacer una factura de este proyecto">+</a></div>
+  {% if aviso_factura %}<p class="aviso ok" role="status" data-factura-guardada>{{ aviso_factura }}</p>{% endif %}
   {% if fz.lista %}
   <ul data-facturas-del-proyecto>
     {% for f in fz.lista %}

@@ -26,6 +26,8 @@ dos propiedades que aplastaban el texto. El «sin saltar» y los censos de contr
 """
 from __future__ import annotations
 
+import html as html_lib
+import json
 import re
 from html.parser import HTMLParser
 
@@ -59,6 +61,33 @@ def _pagina(m, con="casa", **consulta) -> str:
 
 
 ABRE_LA_VENTANA = '<div class="velo" role="dialog"'
+
+
+def _lo_que_manda_el_formulario(html: str, marca: str) -> dict:
+    """El cuerpo que la persona enviaría, leído del FORMULARIO QUE LA VENTANA PINTA (`marca` es su atributo identificador:
+    `data-factura-nueva` o `data-corregir`): cada casilla con el valor que trae el HTML, las de marcar solo si vienen
+    marcadas, `ref` repetido como lista y el texto de los `<textarea>`. Nada se teclea aquí."""
+    bloque = re.search(r"<form[^>]*" + marca + r"[^>]*>(.*?)</form>", html, re.S)
+    assert bloque, f"la ventana no trae el formulario {marca}"
+    datos: dict = {}
+    for etiqueta in re.findall(r"<input\b[^>]*>", bloque.group(1)):
+        a = {k: html_lib.unescape(v) for k, v in re.findall(r'([\w-]+)="([^"]*)"', etiqueta)}
+        nombre = a.get("name")
+        if not nombre:
+            continue
+        if a.get("type") in ("checkbox", "radio"):
+            if "checked" in etiqueta:
+                datos[nombre] = a.get("value", "on")
+            continue
+        if nombre == "ref":
+            datos.setdefault("ref", []).append(a.get("value", ""))
+        else:
+            datos[nombre] = a.get("value", "")
+    for etiqueta, texto in re.findall(r"<textarea\b([^>]*)>(.*?)</textarea>", bloque.group(1), re.S):
+        a = {k: html_lib.unescape(v) for k, v in re.findall(r'([\w-]+)="([^"]*)"', etiqueta)}
+        if a.get("name"):
+            datos[a["name"]] = html_lib.unescape(texto)
+    return datos
 
 
 def _ventana(html: str) -> str:
@@ -112,14 +141,140 @@ def test_los_tres_pasos_se_quedan_en_la_pagina_del_proyecto(con_proyecto, regist
     assert 'href="/facturas/nueva?' not in paso2 and 'action="/facturas/nueva"' not in paso2
 
 
-def test_guardar_desde_la_ventana_del_proyecto_crea_el_borrador_igual(con_proyecto, registro):
-    """Lo que manda el formulario del paso 3 (el mismo que pinta la ventana encima del proyecto) va por la ruta de
-    siempre y el borrador queda ligado al proyecto. La emisión desde esta ventana la vigila
-    `tests/test_emitir_desde_la_ventana.py` sobre la MISMA ruta."""
-    r = cliente().post("/facturas/nueva", data={**tpf.cuerpo(), "proyecto": "1"}, follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"].startswith("/facturas/"), r.text[:300]
+def _el_paso_3(con_proyecto, refs=("11",)):
+    """El HTML del paso 3 con la ventana encima del proyecto, y lo que manda su formulario."""
+    html = _pagina(con_proyecto, p=1, factura="nueva", ref=list(refs), paso="escribir")
+    return html, _lo_que_manda_el_formulario(html, "data-factura-nueva")
+
+
+def test_guardar_desde_la_ventana_del_proyecto_crea_el_borrador_y_vuelve_al_proyecto(con_proyecto, registro):
+    """Con el formulario que PINTA la ventana (no un cuerpo armado aparte): la ruta es la de siempre y el borrador queda
+    ligado al proyecto; desde el proyecto, la vuelta es a la página del proyecto con el aviso, como las cotizaciones."""
+    _, datos = _el_paso_3(con_proyecto)
+    assert datos["volver_al_proyecto"] == "1" and datos["proyecto"] == "1"
+    r = cliente().post("/facturas/nueva", data=datos, follow_redirects=False)
     creada = tgf.filas(con_proyecto, "facturas")[0]
+    assert r.status_code == 303, r.text[:300]
+    assert r.headers["location"] == f"/proyectos?hecho=factura_guardada&p=1&factura={creada['id']}#facturas"
     assert creada["proyecto_id"] == 1 and creada["estado"] == "borrador"
+    # Y al seguir la vuelta, la página del proyecto con el aviso (la misma que daría la ventana de cotizaciones).
+    html = cliente().get(r.headers["location"]).text
+    assert 'data-region="centro"' in html and 'data-factura-guardada' in html
+    assert "Borrador guardado en este proyecto." in html
+
+
+def test_una_factura_del_proyecto_se_corrige_desde_su_ventana_y_vuelve_al_proyecto(con_proyecto, registro):
+    # El `now()` de esta base de prueba devuelve "…T12:00:00+00:00" y el candado de `db` compara contra el instante ya
+    # pasado por el adaptador de sqlite ("… 12:00:00+00:00"): con la T, la comparación no cuadra NUNCA y todo rechazo
+    # sería «la factura cambió». Se deja el reloj en el formato que el adaptador escribe (es un artefacto de la base de
+    # prueba, no del camino que se mide): las rutas y la puerta son las de verdad.
+    con_proyecto.con.create_function("now", 0, lambda: "2026-10-02 12:00:00+00:00")
+    f = _factura_en_proyecto(con_proyecto, proyecto_id=1)
+    html = _pagina(con_proyecto, p=1, factura=f["id"], corregir=1)
+    datos = _lo_que_manda_el_formulario(html, "data-corregir")
+    assert datos["volver_al_proyecto"] == "1"
+    datos["para_nombre"] = "Nombre corregido"
+    r = cliente().post(f"/facturas/{f['id']}/corregir", data=datos, follow_redirects=False)
+    assert r.status_code == 303, re.findall(r'<p class="aviso[^"]*"[^>]*>(.*?)</p>', r.text, re.S)[:3]
+    assert r.headers["location"] == f"/proyectos?hecho=factura_guardada&p=1&factura={f['id']}#facturas"
+    assert tgf.filas(con_proyecto, "facturas")[0]["para_nombre"] == "Nombre corregido"
+
+
+def test_un_rechazo_desde_la_ventana_del_proyecto_vuelve_a_la_ventana_con_el_aviso_y_lo_escrito(con_proyecto, registro):
+    """Un NCF sin ITBIS lo rechaza la puerta de `db` (no el navegador): la página sigue siendo la del proyecto, con la
+    ventana encima, la razón dentro y lo que la persona escribió."""
+    _, datos = _el_paso_3(con_proyecto)
+    datos["ncf"] = "B0100000001"          # con comprobante y sin marcar el ITBIS: `ncf_sin_itbis`
+    datos["para_nombre"] = "Nombre que no se pierde"
+    r = cliente().post("/facturas/nueva", data=datos, follow_redirects=False)
+    assert r.status_code == 400
+    html = r.text
+    assert 'data-region="centro"' in html and 'data-region="cuerpo"' not in html
+    assert ABRE_LA_VENTANA in html and 'data-error-de-guardado' in html
+    assert "ITBIS" in html
+    assert 'value="Nombre que no se pierde"' in html
+    assert not tgf.filas(con_proyecto, "facturas")     # nada escrito
+
+
+def test_pedir_emision_desde_la_ventana_del_proyecto_pinta_la_confirmacion_encima(con_proyecto, registro):
+    _, datos = _el_paso_3(con_proyecto)
+    datos["accion"] = "pedir_emision"
+    r = cliente().post("/facturas/nueva", data=datos, follow_redirects=False)
+    assert r.status_code == 200
+    html = r.text
+    assert 'data-region="centro"' in html and ABRE_LA_VENTANA in html
+    assert "data-confirmar-emision" in html and "data-emitir" in html
+    assert "¿Emitir esta factura?" in html
+    assert not tgf.filas(con_proyecto, "facturas")     # pedir no guarda
+
+
+def test_volver_desde_la_confirmacion_de_emitir_se_queda_en_la_ventana_del_proyecto(con_proyecto, registro):
+    _, datos = _el_paso_3(con_proyecto)
+    datos["accion"] = "volver"
+    r = cliente().post("/facturas/nueva", data=datos, follow_redirects=False)
+    assert r.status_code == 200 and 'data-region="centro"' in r.text
+    assert "3. Escribe la factura" in r.text and 'value="' + datos["para_nombre"] + '"' in r.text
+    assert not tgf.filas(con_proyecto, "facturas")
+
+
+def test_emitir_desde_la_ventana_del_proyecto_vuelve_al_proyecto(con_proyecto, registro, monkeypatch):
+    """La emisión DE VERDAD (la puerta `db.emitir_factura` con su candado) la ejerce
+    `tests/test_emitir_desde_la_ventana.py` sobre la MISMA ruta y la base que tiene el reloj que su candado pide; aquí se
+    dobla solo para medir ADÓNDE vuelve, que es lo que cambió."""
+    import db.db as db
+
+    async def emitir_doblado(fid, chat, cambiado_en):
+        con_proyecto.con.execute("UPDATE facturas SET estado = 'emitida', anio = 2026, numero = 1, "
+                                 "emitida_en = '2026-10-21T12:00:00+00:00' WHERE id = ?", (fid,))
+        con_proyecto.con.commit()
+        return await db.factura_por_id(fid)
+
+    monkeypatch.setattr(db, "emitir_factura", emitir_doblado)
+    _, datos = _el_paso_3(con_proyecto)
+    datos["accion"] = "emitir"
+    r = cliente().post("/facturas/nueva", data=datos, follow_redirects=False)
+    creada = tgf.filas(con_proyecto, "facturas")[0]
+    assert r.status_code == 303
+    assert r.headers["location"] == f"/proyectos?hecho=factura_guardada&p=1&factura={creada['id']}#facturas"
+    html = cliente().get(r.headers["location"]).text
+    assert "Factura FAC-2026-001 emitida." in html
+
+
+def test_sin_el_campo_escondido_la_ventana_vuelve_a_la_pagina_de_la_factura(con_proyecto, registro):
+    """El destino no es libre: sin el campo escondido (o con otro proyecto) el POST vuelve a donde volvía antes."""
+    _, datos = _el_paso_3(con_proyecto)
+    datos.pop("volver_al_proyecto")
+    r = cliente().post("/facturas/nueva", data=datos, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/facturas/")
+    # Y un campo que NO es el proyecto de la factura se ignora igual (la otra sesión, que la 11 ya está facturada).
+    _, datos = _el_paso_3(con_proyecto, refs=("12",))
+    datos["volver_al_proyecto"] = "2"
+    r = cliente().post("/facturas/nueva", data=datos, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/facturas/")
+
+
+CONTENIDO_DE_DOS_OPCIONES = json.dumps(
+    {"opciones": [{"nombre": "A", "renglones": [{"descripcion": "Mezcla", "detalle": "", "total": "1000.00"}]},
+                  {"nombre": "B", "renglones": [{"descripcion": "Master", "detalle": "", "total": "2000.00"}]}],
+     "condiciones": []})
+
+
+def test_la_opcion_de_una_cotizacion_se_escoge_en_el_paso_2_y_llega_al_paso_3(con_proyecto, registro):
+    """La cotización con más de una opción: el `<select>` del paso 2 tiene que mandar el nombre que la ruta lee
+    (`factura_opcion`, no `opcion`), una sola vez, y la opción escogida tiene que llegar al paso 3 y al POST."""
+    import test_cotizaciones_tablas as ct
+    ct._insertar(con_proyecto.con, proyecto_id=1, numero=1, estado="enviada", enviada_en="2026-10-14T12:00:00+00:00",
+                 contenido=CONTENIDO_DE_DOS_OPCIONES)
+    ventana = _ventana(_pagina(con_proyecto, p=1, factura="nueva", factura_de_cotizacion=1))
+    assert '<select name="factura_opcion"' in ventana, "el paso 2 manda la opción con un nombre que la ruta no lee"
+    forma = re.search(r"<form[^>]*data-escoger[^>]*>(.*?)</form>", ventana, re.S).group(1)
+    assert forma.count('name="factura_opcion"') == 1, "dos valores del mismo nombre se pisan: el escondido y el select"
+    # Escoger la segunda y seguir: la opción viaja y el POST del paso 3 la lleva como `opcion` (la que lee la puerta).
+    paso3 = _ventana(_pagina(con_proyecto, p=1, factura="nueva", factura_de_cotizacion=1, factura_opcion=2,
+                             ref=["11"], paso="escribir"))
+    assert "3. Escribe la factura" in paso3
+    datos = _lo_que_manda_el_formulario(paso3, "data-factura-nueva")
+    assert datos["opcion"] == "2" and datos["cotizacion"] == "1"
 
 
 def test_desde_una_cotizacion_la_ventana_nace_de_ella_y_se_queda_en_el_proyecto(con_proyecto, registro):

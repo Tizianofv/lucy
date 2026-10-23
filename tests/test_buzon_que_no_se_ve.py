@@ -6065,9 +6065,12 @@ def test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_cuesta_hoy():
     # `getattr(ruta, "dependant", None)` (en `marcas_de`), `getattr(p.field_info, "json_schema_extra",
     # None)` (en `marcas_de`) y `getattr(r, "methods", None)` (en `parametros_sin_marca`). Los tres
     # nombres son literales enumerables; la aserción de «opacos» de arriba ya corrió y quedó verde.
-    assert cuantos == 18, (
+    # 23-oct-2026, rama `trabajo/factura-en-proyectos` (la ventana de la factura encima del proyecto): 18 → 19. El nuevo
+    # es de `web/app.py`, `getattr(request.state, "factura_ventana", None)` (lo que un POST de esa ventana deja para
+    # repintarla). El nombre es un literal enumerable y la aserción de «opacos» de arriba corrió y quedó verde.
+    assert cuantos == 19, (
         f"{_MARCA_CONTADOR}los archivos vigilados tienen {cuantos} llamadas a "
-        "getattr y el 7-oct-2026 (rama avisos-verdad) eran 18. La aserción de "
+        "getattr y el 23-oct-2026 (factura-en-proyectos) eran 19. La aserción de "
         "fondo —ninguna de esas llamadas pide un nombre que no se pueda "
         "enumerar— YA CORRIÓ arriba y quedó verde, así que esto NO es una "
         "fuga: es el precio del límite, que se movió. Hay que volver a mirar "
