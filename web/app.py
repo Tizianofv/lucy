@@ -2783,8 +2783,8 @@ async def _emitir_lo_guardado(request: Request, chat: int, fid: int):
         texto = fp.texto_del_error(e)
         if texto["clave"] == "base":
             log_f.exception("Facturas: falló la base al emitir la factura #%s desde la ventana.", fid)
-            aviso = ("No se sabe si la emisión llegó a la base: mira el estado de la factura antes de volver a intentar. "
-                     "Lo escrito quedó guardado como borrador.")
+            aviso = ("Lo escrito quedó guardado. No se sabe si la emisión llegó a la base: "
+                     "mira la factura antes de volver a intentar.")
         else:
             log_f.warning("Facturas: la emisión de la factura #%s no dejó (%s)", fid, texto["clave"])
             razon = texto["razon"].rstrip(".")

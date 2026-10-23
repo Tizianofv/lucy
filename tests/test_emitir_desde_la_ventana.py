@@ -71,6 +71,8 @@ def test_si_la_puerta_no_deja_emitir_queda_el_borrador_y_la_ventana_lo_dice(pant
     assert "quedó guardado como borrador" in r.text
     assert unica(pantalla)["estado"] == "borrador"
     assert 'data-confirmar-emision' not in r.text
+    assert 'class="pild emitida"' not in r.text
+    assert "Marcar como mandada a mano" not in r.text and "data-mandada-a-mano" not in r.text
 
 
 def test_corregir_pedir_emision_no_cambia_el_borrador(pantalla):
@@ -107,6 +109,7 @@ def test_corregir_con_la_puerta_negada_deja_el_borrador_corregido_y_lo_dice(pant
     assert r.status_code == 400 and "No se emitió: una factura con comprobante (NCF) lleva ITBIS." in r.text
     f = unica(pantalla)
     assert (f["estado"], f["para_nombre"]) == ("borrador", "Nombre Nuevo")
+    assert 'class="pild emitida"' not in r.text and "Marcar como mandada a mano" not in r.text
 
 
 def test_las_dos_ventanas_de_factura_traen_el_estilo_de_la_ventana(pantalla):
@@ -115,3 +118,41 @@ def test_las_dos_ventanas_de_factura_traen_el_estilo_de_la_ventana(pantalla):
     b = tgf.crear()
     corregir = tp._pagina(b["id"], corregir=1)
     assert ".cz-ventana{" in corregir and ".velo{" in corregir
+
+
+def test_en_corregir_el_primer_boton_del_formulario_es_guardar_los_cambios(pantalla):
+    """w05: el botón por omisión es el primero del formulario de corregir; Enter tiene que guardar, no pedir la emisión."""
+    b = tgf.crear()
+    form = tp._pagina(b["id"], corregir=1)
+    r = tp.cliente().post(f"/facturas/{b['id']}/corregir", data=_datos_de_corregir(form, accion="pedir_emision"))
+    assert r.status_code == 200 and 'value="emitir"' in r.text
+    despues_del_form = r.text[r.text.index('data-corregir'):]
+    primer_boton = despues_del_form[despues_del_form.index("<button"):]
+    assert "Guardar los cambios" in primer_boton[:primer_boton.index("</button>")]
+
+
+def test_fallo_de_la_base_al_emitir_dice_solo_lo_que_se_sabe(pantalla, monkeypatch):
+    """w08: si la base falla al emitir, la ventana no dice «como borrador» (no se sabe qué quedó en la base)."""
+    def la_base_se_cae(*_a, **_k):
+        raise RuntimeError("se cortó la conexión")
+    monkeypatch.setattr(db, "emitir_factura", la_base_se_cae)
+    r = tp.cliente().post("/facturas/nueva", data=tp.cuerpo(accion="emitir"), follow_redirects=False)
+    assert r.status_code == 400
+    assert "Lo escrito quedó guardado. No se sabe si la emisión llegó a la base" in r.text
+    assert "quedó guardado como borrador" not in r.text
+    assert unica(pantalla)["estado"] == "borrador"
+
+
+def test_si_la_base_falla_despues_de_confirmar_la_ventana_muestra_lo_que_dice_la_base(pantalla, monkeypatch):
+    """w08, lo otro: la emisión SÍ llegó y la base falló después. La ventana no puede decir «como borrador»: el estado que
+    se muestra es el de la base («emitida»)."""
+    real = db.emitir_factura
+
+    async def emite_y_se_cae(fid, chat, cambiado_en):
+        await real(fid, chat, cambiado_en)
+        raise RuntimeError("se cayó después de confirmar")
+    monkeypatch.setattr(db, "emitir_factura", emite_y_se_cae)
+    r = tp.cliente().post("/facturas/nueva", data=tp.cuerpo(accion="emitir"), follow_redirects=False)
+    assert unica(pantalla)["estado"] == "emitida"
+    assert "quedó guardado como borrador" not in r.text
+    assert 'class="pild emitida"' in r.text
