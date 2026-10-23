@@ -4336,10 +4336,15 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 23-oct-2026, rama `trabajo/cotizaciones-para-embudo` (L-COT, el Registro lee las cotizaciones formales): +1 en disco
     # y +1 EXENTO (`tests/test_api_code_cotizaciones_para_embudo.py`, nuevo, exento por rol); VIGILADOS sin cambio (se
     # tocaron `db/db.py`, `web/api_code.py` y `config.py`, ya vigilados). Medida: 236, 170, 66.
-    assert medido == {"en disco": 236, "exentos": 170, "vigilados": 66}, (
+    # 23-oct-2026, rama `trabajo/factura-en-proyectos` (la ventana de la factura encima de la página del proyecto): +1 en
+    # disco y +1 EXENTO (`tests/test_la_ventana_de_factura_en_el_proyecto.py`, nuevo, exento por rol); VIGILADOS sin
+    # cambio (`web/app.py` ya vigilado). Las plantillas nuevas (`_ventana_factura_nueva.html` y
+    # `_ventana_corregir_factura.html`) no son .py: no cuentan. Medida: 236, 170, 66.
+    # Las dos ramas juntas en `main` (23-oct-2026, la sala): 237, 171, 66.
+    assert medido == {"en disco": 237, "exentos": 171, "vigilados": 66}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
-        "23-oct-2026 (facturas-colores-ventana) era {'en disco': 235, "
-        "'exentos': 169, 'vigilados': 66}. La aserción de fondo —cero "
+        "23-oct-2026 (factura-en-proyectos) era {'en disco': 236, "
+        "'exentos': 170, 'vigilados': 66}. La aserción de fondo —cero "
         "archivos alcanzan la lista cruda— YA CORRIÓ arriba y quedó verde, "
         "así que esto NO es una fuga. Si los vigilados bajaron, algo se "
         "está saltando de más y «cero falsos positivos» dejó de "
@@ -6064,9 +6069,12 @@ def test_el_ayudante_generico_de_getattr_es_rojo_y_cuanto_cuesta_hoy():
     # `getattr(ruta, "dependant", None)` (en `marcas_de`), `getattr(p.field_info, "json_schema_extra",
     # None)` (en `marcas_de`) y `getattr(r, "methods", None)` (en `parametros_sin_marca`). Los tres
     # nombres son literales enumerables; la aserción de «opacos» de arriba ya corrió y quedó verde.
-    assert cuantos == 18, (
+    # 23-oct-2026, rama `trabajo/factura-en-proyectos` (la ventana de la factura encima del proyecto): 18 → 19. El nuevo
+    # es de `web/app.py`, `getattr(request.state, "factura_ventana", None)` (lo que un POST de esa ventana deja para
+    # repintarla). El nombre es un literal enumerable y la aserción de «opacos» de arriba corrió y quedó verde.
+    assert cuantos == 19, (
         f"{_MARCA_CONTADOR}los archivos vigilados tienen {cuantos} llamadas a "
-        "getattr y el 7-oct-2026 (rama avisos-verdad) eran 18. La aserción de "
+        "getattr y el 23-oct-2026 (factura-en-proyectos) eran 19. La aserción de "
         "fondo —ninguna de esas llamadas pide un nombre que no se pueda "
         "enumerar— YA CORRIÓ arriba y quedó verde, así que esto NO es una "
         "fuga: es el precio del límite, que se movió. Hay que volver a mirar "

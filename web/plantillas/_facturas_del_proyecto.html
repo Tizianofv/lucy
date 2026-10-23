@@ -3,11 +3,27 @@
     las ve ni las pide. `fz` lo arma `web/app.py::_facturas_del_proyecto` desde `db.facturas_para_la_lista`; el dinero y
     las fechas salen de `facturas_panel.fila_de_la_lista`. «Quitar» y «Ligar» son POST a la misma ruta de la página
     de la factura (`/facturas/N/proyecto`), que habla con la puerta de `db`; `volver=proyecto` hace que la persona regrese
-    a esta página. -#}
+    a esta página.
+
+    LA VENTANA DE LA FACTURA ENCIMA DE ESTA PÁGINA (23-oct-2026): el «+» ya no se va a `/facturas/nueva` en otra página;
+    abre la MISMA ventana de cotizaciones, encima de esta página (`?p=N&factura=nueva`), y lo mismo «Corregir» de un
+    borrador (`?p=N&factura=<id>&corregir=1`). La ventana que se pinta es la del macro de siempre
+    (`_ventana_factura_nueva.html` / `_ventana_corregir_factura.html`); `fzv` dice cuál y trae su contenido. -#}
+{% from "_ventana_factura_nueva.html" import ventana_de_factura_nueva %}
+{% from "_ventana_corregir_factura.html" import ventana_de_corregir_factura %}
+{% from "_vista_previa_de_factura.html" import guion_de_la_vista_previa %}
+{#- EL ESTILO DE LA HOJA (23-oct-2026, la sala lo vio en Chrome): «Así va a salir» salía sin estilo dentro de la página del
+    proyecto —título enorme en negro, PARA y FECHA pegados, la tabla sin cabecera roja ni la franja negra del total— porque
+    `proyectos.html` no carga la hoja de las páginas de factura. No se copia: se emiten los MISMOS macros que usan
+    `/facturas/nueva` y `/facturas/{id}` (`estilo_de_la_hoja` para el papel y la tabla, `estilo_de_la_factura` para lo
+    suyo), y solo cuando hay ventana. La ventana de cotizaciones ya hacía esto con `estilo_de_la_hoja`. -#}
+{% from "_hoja_de_cotizacion.html" import estilo_de_la_hoja %}
+{% from "_hoja_de_factura.html" import estilo_de_la_factura %}
 <section class="bloque" id="facturas-del-proyecto" data-ancla>
  <div class="cotiz" id="facturas" data-ancla>
   <div class="cotiz-enc"><h3>Facturas</h3>
-    <a class="cotiz-mas" href="/facturas/nueva?proyecto={{ m.id }}" title="Hacer una factura de este proyecto" aria-label="Hacer una factura de este proyecto">+</a></div>
+    <a class="cotiz-mas{{ ' activo' if fzv and fzv.tipo == 'nueva' }}" href="/proyectos?p={{ m.id }}&amp;factura=nueva#facturas" title="Hacer una factura de este proyecto" aria-label="Hacer una factura de este proyecto">+</a></div>
+  {% if aviso_factura %}<p class="aviso ok" role="status" data-factura-guardada>{{ aviso_factura }}</p>{% endif %}
   {% if fz.lista %}
   <ul data-facturas-del-proyecto>
     {% for f in fz.lista %}
@@ -15,6 +31,7 @@
       <a class="cz-codigo" href="/facturas/{{ f.id }}"><b>{{ f.numero }}</b></a>
       <span class="sub">{{ f.fecha }} · {{ f.cliente }} · {{ f.total }}</span>
       <a class="cz-pdf" href="/facturas/{{ f.id }}/pdf" download>PDF</a>
+      {% if f.estado == 'borrador' %}<a class="cz-pdf cz-corregir" style="margin-left:.6rem" href="/proyectos?p={{ m.id }}&amp;factura={{ f.id }}&amp;corregir=1#facturas" title="Corregir este borrador en esta página">Corregir</a>{% endif %}
       {% if f.estado != 'anulada' %}
       <form method="post" action="/facturas/{{ f.id }}/proyecto" style="display:inline;margin:0 0 0 .6rem">
         <input type="hidden" name="proyecto" value=""><input type="hidden" name="volver" value="proyecto"><input type="hidden" name="p" value="{{ m.id }}">
@@ -36,5 +53,10 @@
     {% endfor %}
   </ul>
   {% endif %}
+  {% if fzv %}
+    {{ estilo_de_la_hoja() }}{{ estilo_de_la_factura() }}
+    {% if fzv.tipo == 'nueva' %}{{ ventana_de_factura_nueva(fzv) }}{% else %}{{ ventana_de_corregir_factura(fzv) }}{% endif %}
+  {% endif %}
  </div>
 </section>
+{% if fzv %}{{ guion_de_la_vista_previa() }}{% endif %}
