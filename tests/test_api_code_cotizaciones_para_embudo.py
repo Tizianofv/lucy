@@ -303,6 +303,9 @@ def test_la_forma_es_la_del_contrato_y_no_sale_texto_libre(embudo):
     poner, _ = embudo
     poner()
     r = _leer()
+    # Lista EXACTA de llaves: una llave nueva en la respuesta pone esta prueba roja.
+    assert set(r.json()) == {"cotizaciones"}
+    assert r.json()["cotizaciones"], "la prueba no vigila nada si no hay cotizaciones"
     for c in r.json()["cotizaciones"]:
         assert set(c) == FORMA
         for op in c["opciones"]:
@@ -403,3 +406,26 @@ def test_leer_no_escribe_nada_en_la_base(embudo):
     antes = con.total_changes
     assert _leer().status_code == 200
     assert con.total_changes == antes
+
+
+def test_el_nombre_de_la_opcion_sale_en_una_linea_y_con_tope(embudo):
+    """El nombre es el único texto de la cotización que sale (el servicio del seguimiento). Por el camino de
+    producción: saltos y tabulaciones colapsados a espacios, y un nombre de 200 caracteres recortado a 80 con la
+    marca de la base al final."""
+    poner, _ = embudo
+    nombre_sucio = "Línea uno\\nLínea dos\\t" + "X" * 200   # JSON escapado: llega con saltos reales
+    poner(cotizaciones=[(1, 1, 1, "borrador", 1, None, None, [(nombre_sucio, ["10"])])])
+    op = _leer().json()["cotizaciones"][0]["opciones"][0]
+    assert set(op) == FORMA_OPCION
+    assert "\n" not in op["nombre"] and "\t" not in op["nombre"]
+    assert op["nombre"].startswith("Línea uno Línea dos X")
+    assert len(op["nombre"]) == 80
+    assert op["nombre"].endswith(api_code._MARCA_RECORTE)
+    assert op["total"] == "10.00"
+
+
+def test_un_nombre_corto_sale_igual_que_en_la_base(embudo):
+    poner, _ = embudo
+    poner(cotizaciones=[(1, 1, 1, "borrador", 1, None, None, [("Opción   Corta", ["5"])])])
+    op = _leer().json()["cotizaciones"][0]["opciones"][0]
+    assert op["nombre"] == "Opción Corta"   # los espacios dobles se colapsan; nada más se toca

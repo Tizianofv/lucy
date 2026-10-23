@@ -497,14 +497,25 @@ async def proyectos_del_cliente(
 #
 # Diseño aprobado: disenos/clientes-clasificar/DISENO.md, pieza L-COT. `GET /api/code/cotizaciones/para-embudo`,
 # permiso `cotizaciones:leer_para_embudo`. Solo lectura: no escribe nada ni avisa a nadie.
-#   · Sale por cotización: id, código, estado (`borrador`/`enviada`), `enviada_en`, `creado_en`, `opciones`
-#     (nombre y total de CADA opción: las opciones son alternativas, no se suman) y `telefono` del cliente del
-#     proyecto, leído de Noco igual que la ventana de la cotización (`noco_lectura.contacto`).
-#   · NO sale texto libre de la cotización (descripciones, detalles, condiciones), ni para_nombre, ni datos de
-#     otras tablas.
+#   · Sale por cotización, EXACTAMENTE estas llaves: `id`, `codigo`, `estado` (`borrador`/`enviada`), `enviada_en`,
+#     `creado_en`, `opciones` y `telefono` (del cliente del proyecto, leído de Noco igual que la ventana de la
+#     cotización: `noco_lectura.contacto`). Y por cada opción, EXACTAMENTE: `nombre` y `total`. Las opciones son
+#     alternativas: cada una con su total, no se suman.
+#   · `nombre` de la opción es el ÚNICO texto de la cotización que sale: es el que escribe el equipo (el servicio
+#     del seguimiento, «la cotización de {{2}}»). Sale en UNA línea (espacios y saltos colapsados) y con tope de
+#     80 caracteres; si se recorta, termina con la marca de `db.MARCA_RECORTE`.
+#   · NO sale ningún otro texto de la cotización (descripciones, detalles, condiciones), ni `para_nombre`, ni
+#     `para_telefono` guardado, ni datos de otras tablas.
 #   · 401/403 los de siempre (antes de leer nada). 502 si la base no se lee o falta la tabla (nunca lista vacía en
 #     su lugar) y 502 si Noco no contesta (un teléfono en blanco sería indistinguible de «sin teléfono»).
 _PERMISO_COTIZACIONES_EMBUDO = "cotizaciones:leer_para_embudo"
+_TOPE_NOMBRE_EMBUDO = 80
+
+
+def _nombre_para_embudo(nombre) -> str:
+    """El nombre de la opción en una sola línea y con tope (ver el comentario de la ruta)."""
+    una_linea = " ".join(str(nombre or "").split())
+    return _recortar(una_linea, _TOPE_NOMBRE_EMBUDO)[0]
 
 
 @router.get("/cotizaciones/para-embudo")
@@ -536,7 +547,7 @@ async def cotizaciones_para_embudo(
             "estado": f["estado"],
             "enviada_en": f["enviada_en"].isoformat() if f["enviada_en"] else None,
             "creado_en": f["creado_en"].isoformat(),
-            "opciones": [{"nombre": op["nombre"], "total": _dinero_para_natalia(t)}
+            "opciones": [{"nombre": _nombre_para_embudo(op["nombre"]), "total": _dinero_para_natalia(t)}
                          for op, t in zip(f["contenido"]["opciones"], f["totales_por_opcion"])],
             "telefono": telefonos[noco] if noco is not None else None,
         })
