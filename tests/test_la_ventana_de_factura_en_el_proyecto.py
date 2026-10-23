@@ -112,6 +112,16 @@ def test_los_tres_pasos_se_quedan_en_la_pagina_del_proyecto(con_proyecto, regist
     assert 'href="/facturas/nueva?' not in paso2 and 'action="/facturas/nueva"' not in paso2
 
 
+def test_guardar_desde_la_ventana_del_proyecto_crea_el_borrador_igual(con_proyecto, registro):
+    """Lo que manda el formulario del paso 3 (el mismo que pinta la ventana encima del proyecto) va por la ruta de
+    siempre y el borrador queda ligado al proyecto. La emisión desde esta ventana la vigila
+    `tests/test_emitir_desde_la_ventana.py` sobre la MISMA ruta."""
+    r = cliente().post("/facturas/nueva", data={**tpf.cuerpo(), "proyecto": "1"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/facturas/"), r.text[:300]
+    creada = tgf.filas(con_proyecto, "facturas")[0]
+    assert creada["proyecto_id"] == 1 and creada["estado"] == "borrador"
+
+
 def test_desde_una_cotizacion_la_ventana_nace_de_ella_y_se_queda_en_el_proyecto(con_proyecto, registro):
     import test_cotizaciones_tablas as ct
     import test_pantalla_de_facturas as tp
