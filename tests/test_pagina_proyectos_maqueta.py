@@ -336,7 +336,9 @@ def test_la_hoja_cambia_de_color_con_el_modo_y_la_regla_oscura_va_despues(mundo)
     css = _css(ver(mundo, p=1))
     claro = css.index(".gc{--color:var(--claro)}")
     oscuro = css.index(".gc{--color:var(--oscuro)}")
-    modo = css.index("@media (prefers-color-scheme: dark)")
+    # El @media que contiene la regla oscura es el último que se abre antes de ella (las variables de la
+    # ventana, en `_ventana.html`, abren su propio @media antes, y no tocan `.gc`).
+    modo = css.rindex("@media (prefers-color-scheme: dark)", 0, oscuro)
     # La clara va antes del bloque oscuro y la oscura DENTRO de él: la oscura gana.
     assert claro < modo < oscuro
     assert css.index("}}", oscuro) > oscuro and css.count(".gc{--color:") == 2

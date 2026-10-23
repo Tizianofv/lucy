@@ -1,3 +1,20 @@
+{#- LAS VARIABLES DEL DISEÑO DE LA VENTANA (23-oct-2026): una sola fuente para la página de proyectos (`:root`) y
+    para las páginas de factura (`.velo`, la ventana). Se escriben con su selector; el modo oscuro se
+    escribe igual. Solo estilo. -#}
+{% macro variables_de_la_ventana(selector) -%}
+{{ selector }}{
+  --bg:#f3f4f1; --papel:#ffffff; --tinta:#16201c; --suave:#5f6a65; --linea:#dfe3de;
+  --vencida:#b3261e; --vencida-fondo:#fbe9e7; --dormido:#9a6b00; --dormido-fondo:#fff4d6;
+  --ok:#1e6b3a; --color:#0f7c74; --marca:#eb2129;
+  --display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;
+  --texto:"Figtree",ui-sans-serif,system-ui,-apple-system,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+{{ selector }}{
+  --bg:#101614; --papel:#18201d; --tinta:#e7ece9; --suave:#9aa6a0; --linea:#2a3430;
+  --vencida:#f2867c; --vencida-fondo:#3a1f1c; --dormido:#e6b84f; --dormido-fondo:#3a2f12; --ok:#6cc38b; color-scheme:dark}}
+{%- endmacro %}
+
 {#- LA VENTANA DE LAS COTIZACIONES, en estilo compartido (23-oct-2026): el marco («Nueva…» flotante con su velo),
     su cabecera, su cuerpo de dos columnas («form-c» y «previa»), su pie y el aviso de un guardado rechazado.
     La usan la ventana de cotizaciones de `proyectos.html` y las de Facturas (`factura_nueva.html`, `factura.html`).
@@ -77,4 +94,5 @@
 .btn-prim{font:600 .88rem var(--texto);padding:.55rem 1.05rem;border-radius:8px;border:0;background:var(--color);color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
 .previa{padding:1.1rem 1.3rem;background:var(--bg);max-height:74vh;overflow:auto}
 .previa .rot{font:700 .72rem var(--texto);letter-spacing:.06em;text-transform:uppercase;color:var(--suave);margin:0 0 .6rem}
+.btn-linea{font:600 .82rem var(--texto);padding:.35rem .75rem;border-radius:8px;border:1px solid var(--linea);background:var(--papel);color:var(--tinta);cursor:pointer;text-decoration:none;display:inline-block}
 {%- endmacro %}
