@@ -10,6 +10,12 @@ import pytest  # noqa: F401
 from test_guardar_cotizacion import con  # noqa: F401  (fija el entorno antes de cargar `config`)
 from test_pagina_proyectos import gente, mundo  # noqa: F401  (fixtures que pide `m`)
 from test_cotizaciones_en_la_pagina import m, _casa, _pagina, _formulario, _post_de_la_pagina, _filas  # noqa: F401
+from test_cotizaciones_en_la_pagina import _guardar  # noqa: F401
+
+import asyncio
+
+import cotizaciones
+import db.db as db
 
 
 # ── La ventana ───────────────────────────────────────────────────────────────────────────────────
@@ -67,3 +73,29 @@ def test_tras_un_rechazo_la_casilla_del_rnc_y_la_del_correo_quedan_marcadas(m):
     assert "error=cotizacion_para_rnc_cedula_formato" in r.headers["location"], r.headers["location"]
     html = c.get(r.headers["location"].split("#")[0]).text
     assert re.search(r'name="para-rnc-cedula"[^>]*aria-invalid="true"', html), "el RNC no quedó marcado"
+
+
+def test_el_correo_y_el_rnc_llegan_por_cada_lectura_del_codigo_y_la_edicion_los_cambia(m):
+    """Una formal con correo y RNC: la lista del panel, la lectura de Drive (y su hoja), la ventana para corregir y la
+    hoja de la página lo traen; editar cambia el correo y un RNC vacío lo borra. Si alguien quita una columna de un
+    SELECT, esta prueba se pone roja en ese camino (la de hermanos lo mira en el SQL)."""
+    _guardar(para_correo="ana@ejemplo.do", para_rnc_cedula="131-23456-7")
+    cot = asyncio.run(db.cotizaciones_de_proyectos())[1][0]
+    assert (cot["para_correo"], cot["para_rnc_cedula"]) == ("ana@ejemplo.do", "131234567"), "lista del panel"
+    dr = asyncio.run(db.cotizacion_para_drive(1, 1))
+    assert (dr["para_correo"], dr["para_rnc_cedula"]) == ("ana@ejemplo.do", "131234567"), "lectura de Drive"
+    textos = cotizaciones.textos_de_la_hoja(cotizaciones.hoja_de_cotizacion(dr))
+    assert "CORREO" in textos and "ana@ejemplo.do" in textos and "131234567" in textos, "hoja de Drive"
+    c = _casa()
+    html = _pagina(c, p=1, cotizacion="1", corregir=1)
+    assert 'value="ana@ejemplo.do"' in html and 'value="131234567"' in html, "ventana para corregir"
+    assert "ana@ejemplo.do" in _pagina(c, p=1, cotizacion="1"), "hoja de la página"
+    # edición: cambia el correo y borra el RNC
+    datos = _post_de_la_pagina(_formulario(html), "borrador")
+    datos["para-correo"] = "nuevo@ejemplo.do"
+    datos["para-rnc-cedula"] = ""
+    r = c.post("/proyectos/1/cotizaciones/1", data=datos, follow_redirects=False)
+    assert r.status_code == 303 and "hecho=" in r.headers["location"], r.headers["location"]
+    fila = _filas(m)[0]
+    assert (fila["para_correo"], fila["para_rnc_cedula"]) == ("nuevo@ejemplo.do", None), "edición"
+    assert "nuevo@ejemplo.do" in _pagina(c, p=1, cotizacion="1"), "la página muestra lo editado"

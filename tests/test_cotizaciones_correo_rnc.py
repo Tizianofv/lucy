@@ -12,13 +12,16 @@ un volcado de la hoja, fuera de la suite).
 """
 from __future__ import annotations
 
+import ast
+import re
 import sqlite3
 from datetime import date
+from pathlib import Path
 
 import pytest
 
 from test_guardar_cotizacion import con, _guardar, _fila, _cuantas  # noqa: F401  (el fixture `con` vive allá)
-from test_cotizaciones_natalia_puerta import mundo, llamar, _fila as _fila_sql, _cuenta, CONTENIDO_BASE  # noqa: F401
+from test_cotizaciones_natalia_puerta import mundo, llamar, _fila as _fila_sql, _cuenta, CONTENIDO_BASE, _aprobar, _texto_del_pdf, pdf  # noqa: F401
 
 import cotizaciones  # primero las pruebas: fijan el entorno antes de cargar `config`
 import db.db as db
@@ -132,3 +135,33 @@ def test_el_check_de_la_base_frena_el_correo_largo_y_el_rnc_de_mas(con):
     with pytest.raises(sqlite3.IntegrityError):
         con.execute("UPDATE cotizaciones SET para_rnc_cedula = ? WHERE id = 1", ("1" * 21,))
     con.execute("UPDATE cotizaciones SET para_correo = ?, para_rnc_cedula = ? WHERE id = 1", ("a" * 254, "1" * 11))
+
+
+def test_el_pdf_aprobado_que_baja_natalia_lleva_el_correo_y_el_rnc(mundo):
+    r = llamar("POST", "/api/code/clientes/7/cotizaciones", json={
+        "contenido": CONTENIDO_BASE, "validez_dias": 15,
+        "para_correo": "cliente@ejemplo.do", "para_rnc_cedula": "131-23456-7"})
+    cid = r.json()["cotizacion"]["cotizacion_id"]
+    eid = llamar("POST", f"/api/code/clientes/7/cotizaciones/{cid}/envios", json={"canal": "whatsapp"}).json()["envio"]["envio_id"]
+    _aprobar(mundo, eid)
+    d = pdf(cid, eid)
+    assert d.status_code == 200, d.text[:200]
+    texto = _texto_del_pdf(d.content)
+    assert "cliente@ejemplo.do" in texto and "131234567" in texto and "CORREO" in texto, texto[:300]
+
+
+def test_todo_sql_de_cotizaciones_que_nombra_el_telefono_nombra_tambien_el_correo_y_el_rnc():
+    """Hermanos: cada sentencia SQL de `db/db.py` que lee, escribe o devuelve `para_telefono` lleva también
+    `para_correo` y `para_rnc_cedula`. Se saca de lo real (el árbol de `db/db.py`, por AST), no de una lista escrita."""
+    import db.db as db_mod
+    arbol = ast.parse(Path(db_mod.__file__).read_text(encoding="utf-8"))
+    sentencias = []
+    for n in ast.walk(arbol):
+        if isinstance(n, ast.Constant) and isinstance(n.value, str):
+            s = n.value
+            if "para_telefono" in s and re.search(r"\b(SELECT|UPDATE|INSERT|RETURNING)\b", s):
+                sentencias.append(s)
+                assert "para_correo" in s and "para_rnc_cedula" in s, s[:160]
+    # piso medido por AST el 24-oct-2026 en db/db.py: 7 sentencias (2 UPDATE, INSERT, SELECT de _cambiar, lectura de Natalia,
+    # lista del panel y lectura de Drive). Si no hubiera ninguna, la prueba pasaría en vacío.
+    assert len(sentencias) >= 7, len(sentencias)
