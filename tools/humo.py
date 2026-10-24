@@ -91,13 +91,17 @@ async def _tablas_de_drive_de_las_cotizaciones():
 
 async def _formales_de_las_cotizaciones():
     """Los SELECT de lo que agrega la base de las formales (24-oct-2026, `db/migrations/2026-10-24_cotizaciones_formales.sql`),
-    SIN tolerancia: la columna `hecha_por` de `cotizaciones` y la tabla `cotizacion_envios`. Contra una base sin esa
+    SIN tolerancia: la columna `hecha_por` de `cotizaciones`, las columnas `para_correo` y `para_rnc_cedula` (`db/migrations/2026-10-24_cotizaciones_correo_rnc.sql`) y la tabla `cotizacion_envios`. Contra una base sin esa
     migración, esta línea revienta con «column ... does not exist» o «relation ... does not exist». Son LECTURAS."""
     async with db.pool.connection() as conn:
         cur = conn.cursor(row_factory=db.dict_row)
         filas = {}
         await cur.execute("SELECT count(hecha_por) AS n FROM cotizaciones")
         filas["cotizaciones con hecha_por"] = (await cur.fetchone())["n"]
+        await cur.execute("SELECT count(para_correo) AS n, count(para_rnc_cedula) AS m FROM cotizaciones")
+        fila = await cur.fetchone()
+        filas["cotizaciones con para_correo"] = fila["n"]
+        filas["cotizaciones con para_rnc_cedula"] = fila["m"]
         await cur.execute("SELECT count(*) AS n FROM cotizacion_envios")
         filas["cotizacion_envios"] = (await cur.fetchone())["n"]
         return filas

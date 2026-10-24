@@ -4212,6 +4212,28 @@ TEXTO_DE_VALIDEZ_DE_COTIZACION = "Esta cotización tiene validez de {dias} días
 TEXTO_DE_ALTERNATIVAS_DE_COTIZACION = "Las {palabra} opciones son alternativas: se selecciona una sola para el proyecto."
 LARGO_PARA_NOMBRE_DE_COTIZACION = 200
 LARGO_PARA_TELEFONO_DE_COTIZACION = 40
+LARGO_PARA_CORREO_DE_COTIZACION = 254
+
+
+def _correo_de_cotizacion(crudo) -> str:
+    """El correo de la formal, con el mismo texto de cabecera que el nombre y el teléfono (de 0 a
+    `LARGO_PARA_CORREO_DE_COTIZACION` caracteres, lo que el PDF puede escribir). Vacío = sin correo: la hoja no lo escribe.
+    Sin chequeo de formato a propósito (solo el largo, como el teléfono)."""
+    return _texto_de_cotizacion(crudo, "para_correo", LARGO_PARA_CORREO_DE_COTIZACION, minimo=0)
+
+
+def _rnc_de_cotizacion(crudo) -> str:
+    """El RNC o la cédula de la formal, con la MISMA validación que la factura (`rnc_o_cedula_que_vale`: 9 o 11 cifras,
+    sin espacios ni guiones). Vacío = sin RNC (solo va cuando la formal es con comprobante). Un fallo sale como
+    `CotizacionNoVale` con la clave `para_rnc_cedula_*`."""
+    if crudo is None or (isinstance(crudo, str) and not crudo.strip()):
+        return ""
+    try:
+        return rnc_o_cedula_que_vale(crudo)
+    except FacturaNoVale as e:
+        if e.clave == "rnc_tipo":
+            raise CotizacionNoVale("para_rnc_cedula_tipo", "para_rnc_cedula: el RNC tiene que ser un texto") from None
+        raise CotizacionNoVale("para_rnc_cedula_formato", "para_rnc_cedula: el RNC lleva 9 cifras y la cédula 11") from None
 
 
 class CotizacionSinSesion(Exception):
@@ -4313,20 +4335,21 @@ async def _huella_de_formal_de_natalia(conn, accion: str, registro_id: int, ante
 # `creado_*`; las dos exigen el candado. La de borrador exige además que SIGA siendo borrador: una enviada
 # no vuelve atrás. La de enviar guarda `enviada_en` de la primera vez (`coalesce`), también al corregir.
 SENTENCIA_DE_GUARDAR_BORRADOR = (
-    "UPDATE cotizaciones SET para_nombre = %s, para_telefono = %s, fecha = %s, validez_dias = %s, "
+    "UPDATE cotizaciones SET para_nombre = %s, para_telefono = %s, para_correo = %s, para_rnc_cedula = %s, fecha = %s, validez_dias = %s, "
     "contenido = %s, cambiado_en = now() "
     "WHERE id = %s AND proyecto_id = %s AND cambiado_en = %s AND borrado_en IS NULL AND estado = 'borrador' "
-    "RETURNING id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en")
+    "RETURNING id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, para_correo, para_rnc_cedula, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en")
 SENTENCIA_DE_ENVIAR = (
     "UPDATE cotizaciones SET estado = 'enviada', enviada_en = coalesce(enviada_en, now()), "
-    "para_nombre = %s, para_telefono = %s, fecha = %s, validez_dias = %s, contenido = %s, cambiado_en = now() "
+    "para_nombre = %s, para_telefono = %s, para_correo = %s, para_rnc_cedula = %s, fecha = %s, validez_dias = %s, contenido = %s, cambiado_en = now() "
     "WHERE id = %s AND proyecto_id = %s AND cambiado_en = %s AND borrado_en IS NULL "
-    "RETURNING id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en")
+    "RETURNING id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, para_correo, para_rnc_cedula, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en")
 
 
 async def guardar_cotizacion(proyecto_id: int, chat_id: int, accion: str, contenido, validez_dias,
                              *, cotizacion_id: int | None = None, cambiado_en=None,
                              para_nombre: str | None = None, para_telefono: str | None = None,
+                             para_correo: str | None = None, para_rnc_cedula: str | None = None,
                              fecha=None) -> dict:
     """Guarda UNA cotización de un proyecto VIVO y devuelve la fila (más `codigo` y `creada`).
 
@@ -4338,7 +4361,8 @@ async def guardar_cotizacion(proyecto_id: int, chat_id: int, accion: str, conten
     `enviada_en`. `contenido` pasa por `contenido_de_cotizacion_que_vale` y los textos de `validez` y
     `alternativas` se rehacen. `para_nombre`/`para_telefono`: lo que el formulario trae (se copian);
     `None` en una nueva = el `cliente_nombre` del proyecto / sin teléfono, y en una existente = no tocar.
-    `fecha=None` = hoy en una nueva y no tocar en una existente. Errores: `CotizacionSinSesion`,
+    `para_correo`/`para_rnc_cedula` van como el teléfono (`None` = no tocar, "" = sin dato) y los valida
+    `_correo_de_cotizacion` / `_rnc_de_cotizacion`. `fecha=None` = hoy en una nueva y no tocar en una existente. Errores: `CotizacionSinSesion`,
     `CotizacionNoVale`, `CotizacionNoEsta`, `CotizacionCambio`, `CotizacionesSinTabla`. La fila y su huella
     (`crear`/`editar`/`enviar`/`corregir`, actor `panel`) van en la misma transacción."""
     from web.auth import puede_entrar
@@ -4354,6 +4378,8 @@ async def guardar_cotizacion(proyecto_id: int, chat_id: int, accion: str, conten
     # `None` = no hay / no tocar; `""` = dejarlo sin teléfono (se guarda NULL)
     telefono = None if para_telefono is None else _texto_de_cotizacion(
         para_telefono, "para_telefono", LARGO_PARA_TELEFONO_DE_COTIZACION, minimo=0)
+    correo = None if para_correo is None else _correo_de_cotizacion(para_correo)
+    rnc = None if para_rnc_cedula is None else _rnc_de_cotizacion(para_rnc_cedula)
     el_dia = None if fecha is None else _fecha_de_cotizacion(fecha)
     if cotizacion_id is not None:
         if cambiado_en is None:
@@ -4368,9 +4394,9 @@ async def guardar_cotizacion(proyecto_id: int, chat_id: int, accion: str, conten
         try:
             if cotizacion_id is None:
                 return await _crear_cotizacion(conn, cur, proyecto_id, chat_id, accion, guardable, validez,
-                                               nombre, telefono, el_dia)
+                                               nombre, telefono, el_dia, correo=correo, rnc=rnc)
             return await _cambiar_cotizacion(conn, cur, proyecto_id, cotizacion_id, accion, guardable, validez,
-                                             nombre, telefono, el_dia, candado)
+                                             nombre, telefono, el_dia, candado, correo=correo, rnc=rnc)
         except Exception as e:
             if _tabla_ausente(e):
                 raise CotizacionesSinTabla("cotizaciones no existe todavía") from e
@@ -4378,7 +4404,7 @@ async def guardar_cotizacion(proyecto_id: int, chat_id: int, accion: str, conten
 
 
 async def _crear_cotizacion(conn, cur, proyecto_id, chat_id, accion, guardable, validez, nombre, telefono, el_dia,
-                            *, hecha_por: str = "equipo"):
+                            *, hecha_por: str = "equipo", correo: str | None = None, rnc: str | None = None):
     if nombre is None:
         await cur.execute("SELECT cliente_nombre FROM proyectos WHERE id = %s", (proyecto_id,))
         de_la_ficha = (await cur.fetchone())["cliente_nombre"]
@@ -4388,8 +4414,8 @@ async def _crear_cotizacion(conn, cur, proyecto_id, chat_id, accion, guardable, 
     enviada = accion == "enviar"
     # Una sola línea a propósito: `tests/test_backup_alerta.py` lee las columnas de cada INSERT del código.
     await cur.execute(
-        "INSERT INTO cotizaciones (proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_por_chat_id, enviada_en, hecha_por) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CASE WHEN %s THEN now() END, %s) RETURNING id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en",
-        (proyecto_id, anio, numero, "enviada" if enviada else "borrador", nombre, telefono or None,
+        "INSERT INTO cotizaciones (proyecto_id, anio, numero, estado, para_nombre, para_telefono, para_correo, para_rnc_cedula, fecha, validez_dias, contenido, creado_por_chat_id, enviada_en, hecha_por) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CASE WHEN %s THEN now() END, %s) RETURNING id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, para_correo, para_rnc_cedula, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en",
+        (proyecto_id, anio, numero, "enviada" if enviada else "borrador", nombre, telefono or None, correo or None, rnc or None,
          el_dia or hoy_rd(), validez, guardable, chat_id, enviada, hecha_por))
     fila = dict(await cur.fetchone())
     motivo = ("formal creada por Natalia" if hecha_por == "natalia"
@@ -4402,9 +4428,9 @@ async def _crear_cotizacion(conn, cur, proyecto_id, chat_id, accion, guardable, 
 
 
 async def _cambiar_cotizacion(conn, cur, proyecto_id, cotizacion_id, accion, guardable, validez,
-                              nombre, telefono, el_dia, candado):
+                              nombre, telefono, el_dia, candado, *, correo=None, rnc=None):
     await cur.execute(
-        "SELECT id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en, hecha_por FROM cotizaciones WHERE id = %s AND proyecto_id = %s AND borrado_en IS NULL",
+        "SELECT id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, para_correo, para_rnc_cedula, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en, hecha_por FROM cotizaciones WHERE id = %s AND proyecto_id = %s AND borrado_en IS NULL",
         (cotizacion_id, proyecto_id))
     antes = await cur.fetchone()
     if antes is None:
@@ -4416,6 +4442,8 @@ async def _cambiar_cotizacion(conn, cur, proyecto_id, cotizacion_id, accion, gua
     parametros = (
         antes["para_nombre"] if nombre is None else nombre,
         antes["para_telefono"] if telefono is None else (telefono or None),
+        antes["para_correo"] if correo is None else (correo or None),
+        antes["para_rnc_cedula"] if rnc is None else (rnc or None),
         el_dia or antes["fecha"], validez, guardable, cotizacion_id, proyecto_id, candado)
     if accion == "enviar":
         await cur.execute(SENTENCIA_DE_ENVIAR, parametros)
@@ -4477,7 +4505,7 @@ async def cotizaciones_de_proyectos() -> dict[int, list[dict]] | None:
         cur = conn.cursor(row_factory=dict_row)
         try:
             await cur.execute(
-                "SELECT c.id, c.proyecto_id, c.anio, c.numero, c.estado, c.para_nombre, c.para_telefono, "
+                "SELECT c.id, c.proyecto_id, c.anio, c.numero, c.estado, c.para_nombre, c.para_telefono, c.para_correo, c.para_rnc_cedula, "
                 "c.fecha, c.validez_dias, c.contenido, c.creado_en, c.creado_por_chat_id, c.cambiado_en, "
                 "c.enviada_en, c.drive_archivo_id, c.drive_version, c.drive_error, c.hecha_por "
                 "FROM cotizaciones c JOIN proyectos p ON p.id = c.proyecto_id "
@@ -4549,7 +4577,7 @@ SENTENCIA_DE_LAS_FORMALES_DE_NATALIA = (
     "WHERE p.cliente_noco_id = %s AND c.hecha_por = 'natalia' "
     "AND c.borrado_en IS NULL AND p.borrado_en IS NULL ORDER BY c.creado_en DESC, c.id DESC LIMIT %s")
 SENTENCIA_DE_LEER_LA_FORMAL_DE_NATALIA = (
-    "SELECT id, proyecto_id, anio, numero, estado, hecha_por, para_nombre, para_telefono, fecha, validez_dias, "
+    "SELECT id, proyecto_id, anio, numero, estado, hecha_por, para_nombre, para_telefono, para_correo, para_rnc_cedula, fecha, validez_dias, "
     "contenido, creado_en, cambiado_en, enviada_en FROM cotizaciones WHERE id = %s")
 SENTENCIA_DE_ESTADO_DE_LA_FORMAL = (
     "SELECT id, estado, cambiado_en FROM cotizaciones WHERE id = %s AND borrado_en IS NULL")
@@ -4630,13 +4658,15 @@ async def _formales_con_sus_envios(cur, ids: list[int]) -> list[dict]:
     return salida
 
 
-async def crear_cotizacion_de_natalia(noco_id, contenido, validez_dias) -> dict:
+async def crear_cotizacion_de_natalia(noco_id, contenido, validez_dias, *, para_correo=None, para_rnc_cedula=None) -> dict:
     """Natalia HACE una formal (borrador, `hecha_por = 'natalia'`, sin chat) sobre el PROYECTO ABIERTO del cliente
     `noco_id`. El contenido pasa por la misma validación que la de la casa (`contenido_de_cotizacion_que_vale`). El número
     se toma al crear, como en la casa. Sin proyecto abierto: `ClienteSinProyectoAbierto` y nada escrito. Devuelve la fila
     con `codigo`. Errores: `ClienteSinProyectoAbierto`, `CotizacionNoVale`, `CotizacionesSinTabla`."""
     validez = _validez_de_cotizacion(validez_dias)
     guardable = condiciones_con_sus_textos_al_dia(contenido_de_cotizacion_que_vale(contenido), validez)
+    correo = _correo_de_cotizacion(para_correo)
+    rnc = _rnc_de_cotizacion(para_rnc_cedula)
     async with pool.connection() as conn:
         cur = conn.cursor(row_factory=dict_row)
         try:
@@ -4644,7 +4674,7 @@ async def crear_cotizacion_de_natalia(noco_id, contenido, validez_dias) -> dict:
             if proyecto is None:
                 raise ClienteSinProyectoAbierto("el cliente no tiene un proyecto abierto")
             fila = await _crear_cotizacion(conn, cur, proyecto["id"], None, "borrador", guardable, validez,
-                                           None, None, None, hecha_por="natalia")
+                                           None, None, None, hecha_por="natalia", correo=correo, rnc=rnc)
         except Exception as e:
             if _tabla_ausente(e):
                 raise CotizacionesSinTabla("cotizaciones no existe todavía") from e
@@ -5000,7 +5030,7 @@ async def cotizacion_para_drive(proyecto_id: int, cotizacion_id: int) -> dict | 
         cur = conn.cursor(row_factory=dict_row)
         try:
             await cur.execute(
-                "SELECT c.id, c.proyecto_id, c.anio, c.numero, c.estado, c.para_nombre, c.para_telefono, "
+                "SELECT c.id, c.proyecto_id, c.anio, c.numero, c.estado, c.para_nombre, c.para_telefono, c.para_correo, c.para_rnc_cedula, "
                 "c.fecha, c.validez_dias, c.contenido, c.creado_en, c.creado_por_chat_id, c.cambiado_en, "
                 "c.enviada_en, c.drive_archivo_id, c.drive_version, c.drive_error, "
                 "p.nombre AS proyecto_nombre, p.carpeta AS proyecto_carpeta "

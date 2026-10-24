@@ -2005,9 +2005,12 @@ function faltaElPrecio(descripcion, detalle, total) {
     var logo = el("img", "logo-h");
     logo.src = "/logo-cds.png"; logo.alt = "";
     var para = [[datos.para[0], valor(form, "para-nombre").trim()]];
-    if (valor(form, "para-telefono").trim()) para.push([datos.para[1], valor(form, "para-telefono").trim()]);
-    para.push([datos.para[2], fechaEnPalabrasDeLaHoja(valor(form, "fecha"), datos.meses)]);
-    para.push([datos.para[3], dias + " días"]);
+    if (valor(form, "para-correo").trim()) para.push([datos.para[1], valor(form, "para-correo").trim()]);
+    if (valor(form, "para-telefono").trim()) para.push([datos.para[2], valor(form, "para-telefono").trim()]);
+    var rnc = valor(form, "para-rnc-cedula").replace(/[\s-]/g, "");
+    if (rnc) para.push([datos.para[3], rnc]);
+    para.push([datos.para[4], fechaEnPalabrasDeLaHoja(valor(form, "fecha"), datos.meses)]);
+    para.push([datos.para[5], dias + " días"]);
     var cuerpo = [logo, el("hr"), el("h1", "", datos.titulo), el("div", "cod", codigo),
                   el("div", "para", "", [].concat.apply([], para.map(function (p) { return [el("small", "", p[0]), el("b", "", p[1])]; })))];
     opciones.forEach(function (op, i) {

@@ -477,6 +477,8 @@ CREATE TABLE cotizaciones (
   drive_version      TIMESTAMPTZ,
   drive_error        TEXT,
   hecha_por          TEXT NOT NULL DEFAULT 'equipo' CONSTRAINT cotizaciones_hecha_por_valida CHECK (hecha_por IN ('equipo', 'natalia')) CONSTRAINT cotizaciones_natalia_sin_chat CHECK (hecha_por = 'equipo' OR creado_por_chat_id IS NULL),
+  para_correo        TEXT CONSTRAINT cotizaciones_correo_valido CHECK (para_correo IS NULL OR length(para_correo) <= 254),
+  para_rnc_cedula    TEXT CONSTRAINT cotizaciones_rnc_cedula_valido CHECK (para_rnc_cedula IS NULL OR length(trim(para_rnc_cedula)) BETWEEN 1 AND 20),
   CONSTRAINT cotizaciones_numero_unico
     UNIQUE (anio, numero),
   CONSTRAINT cotizaciones_numero_positivo

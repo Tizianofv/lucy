@@ -359,12 +359,14 @@ def _claves_de_no_vale_en_db() -> set[str]:
     `campo` que de verdad se le pasan a `_texto_de_cotizacion` (su segundo argumento, un texto). Una clave que no sea ni un texto
     ni de esa forma pone roja la prueba."""
     arbol = ast.parse(open("db/db.py", encoding="utf-8").read())
-    campos = set()
+    campos, minimos = set(), {}
     for n in ast.walk(arbol):
         if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "_texto_de_cotizacion":
             campo = n.args[1] if len(n.args) > 1 else next((k.value for k in n.keywords if k.arg == "campo"), None)
             assert isinstance(campo, ast.Constant) and isinstance(campo.value, str), ast.dump(n)[:200]
             campos.add(campo.value)
+            minimo = next((k.value for k in n.keywords if k.arg == "minimo"), None)
+            minimos[campo.value] = minimo.value if isinstance(minimo, ast.Constant) else 1
     claves = set()
     for n in ast.walk(arbol):
         if isinstance(n, ast.Raise) and isinstance(n.exc, ast.Call) and getattr(n.exc.func, "id", None) == "CotizacionNoVale":
@@ -374,17 +376,24 @@ def _claves_de_no_vale_en_db() -> set[str]:
             else:
                 assert isinstance(arg, ast.JoinedStr) and len(arg.values) == 2 and isinstance(arg.values[0], ast.FormattedValue) \
                     and ast.unparse(arg.values[0].value) == "campo" and isinstance(arg.values[1], ast.Constant), ast.unparse(arg)
-                claves |= {f"{c}{arg.values[1].value}" for c in campos}
+                # `_vacio` no existe para un campo con `minimo=0` (`_texto_de_cotizacion`), así que no se expande para él
+                sin_vacio = {c for c, m in minimos.items() if m == 0}
+                claves |= {f"{c}{arg.values[1].value}" for c in campos
+                           if not (arg.values[1].value == "_vacio" and c in sin_vacio)}
     return claves
 
 
 def _motivos_con_campo_en_db() -> set[str]:
     """Los motivos que nombran un campo (`{campo}_vacio` y `{campo}_largo`), por AST: los f-strings de `_texto_de_cotizacion`."""
-    campos = set()
+    campos, sin_vacio = set(), set()
     for n in ast.walk(ast.parse(open("db/db.py", encoding="utf-8").read())):
         if isinstance(n, ast.Call) and getattr(n.func, "id", None) == "_texto_de_cotizacion":
-            campos.add(n.args[1].value if len(n.args) > 1 else next(k.value.value for k in n.keywords if k.arg == "campo"))
-    return {f"{c}{sufijo}" for c in campos for sufijo in ("_vacio", "_largo")}
+            campo = n.args[1].value if len(n.args) > 1 else next(k.value.value for k in n.keywords if k.arg == "campo")
+            campos.add(campo)
+            # `minimo=0` (el teléfono, el correo): ese texto puede ir vacío y `_texto_de_cotizacion` no levanta `_vacio` para él
+            if next((k.value.value for k in n.keywords if k.arg == "minimo"), 1) == 0:
+                sin_vacio.add(campo)
+    return ({f"{c}_vacio" for c in campos - sin_vacio} | {f"{c}_largo" for c in campos})
 
 
 def _errores_de_rechazo_de_lo_real() -> list[str]:

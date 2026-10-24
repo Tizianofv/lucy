@@ -40,6 +40,8 @@
   {%- elif error in ('cotizacion_condicion_vacio', 'cotizacion_condicion_largo') %}<p class="aviso">Una condición propia está vacía o es demasiado larga: corrige la casilla marcada en rojo. NO se guardó nada.</p>
   {%- elif error in ('cotizacion_para_nombre_vacio', 'cotizacion_para_nombre_largo') %}<p class="aviso">Al cliente le falta el nombre, o el nombre es demasiado largo: corrige la casilla marcada en rojo. NO se guardó nada.</p>
   {%- elif error in ('cotizacion_para_telefono_vacio', 'cotizacion_para_telefono_largo') %}<p class="aviso">El teléfono es demasiado largo: corrige la casilla marcada en rojo. NO se guardó nada.</p>
+  {%- elif error == 'cotizacion_para_correo_largo' %}<p class="aviso">El correo es demasiado largo: corrige la casilla marcada en rojo. NO se guardó nada.</p>
+  {%- elif error in ('cotizacion_para_rnc_cedula_formato', 'cotizacion_para_rnc_cedula_tipo') %}<p class="aviso">El RNC lleva 9 cifras y la cédula 11: corrige la casilla marcada en rojo. NO se guardó nada.</p>
   {%- elif error == 'cotizacion_drive_borrador' %}<p class="aviso">Un borrador no se sube a Drive: primero guárdalo con «Guardar y descargar PDF».</p>
   {%- elif error == 'cotizacion_carpeta_sigue' %}<p class="aviso">La carpeta todavía existe: no se creó otra.</p>
   {%- elif error == 'cotizacion_carpeta_sin_causa' %}<p class="aviso">Ninguna cotización de este proyecto dice que su carpeta falte: no se creó nada.</p>
@@ -141,7 +143,9 @@
        <div><h4>Para</h4>
         <div class="rej">
          <label>Cliente<input type="text" name="para-nombre" value="{{ f.para_nombre }}" maxlength="200" required aria-invalid="{{ 'true' if f.para_nombre_falta else 'false' }}"><span class="auto">Sale del cliente del proyecto; se puede corregir</span></label>
+         <label>Correo<input type="text" name="para-correo" value="{{ f.para_correo }}" maxlength="254" inputmode="email" aria-invalid="{{ 'true' if f.para_correo_falta else 'false' }}"><span class="auto">Opcional; sale en la hoja si lo pones</span></label>
          <label>Teléfono<input type="text" name="para-telefono" value="{{ f.para_telefono }}" maxlength="40" inputmode="tel" aria-invalid="{{ 'true' if f.para_telefono_falta else 'false' }}"><span class="auto">Sale de su ficha; se puede corregir</span></label>
+         <label>RNC o cédula (si lleva)<input type="text" name="para-rnc-cedula" value="{{ f.para_rnc_cedula }}" maxlength="20" inputmode="numeric" aria-invalid="{{ 'true' if f.para_rnc_cedula_falta else 'false' }}"><span class="auto">Solo con comprobante; opcional</span></label>
          <label>Fecha<input type="date" name="fecha" value="{{ f.fecha }}" required></label>
          <label>Validez<select name="validez" data-cz-validez>{% for d in (7, 15, 30) %}<option value="{{ d }}"{{ ' selected' if d == f.validez }}>{{ d }} días</option>{% endfor %}</select></label>
         </div></div>

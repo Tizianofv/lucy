@@ -132,7 +132,7 @@ def _base():
     con.execute("CREATE TABLE log_acciones (id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT, accion TEXT, "
                 "tabla TEXT, registro_id INTEGER, antes TEXT, despues TEXT, motivo TEXT, bandeja_id INTEGER)")
     # la migración de las cotizaciones, la de Drive (pieza 8) y la de las formales (24-oct-2026), una tras otra, como en producción
-    for texto in (t._texto_migracion(), t._texto_migracion_de_drive(), t._migracion_de_las_formales()):
+    for texto in (t._texto_migracion(), t._texto_migracion_de_drive(), t._migracion_de_las_formales(), t._migracion_de_correo_y_rnc()):
         for s in g._sentencias(texto):
             if not re.match(r"(BEGIN|COMMIT|COMMENT\s+ON)\b", s, re.I):
                 con.execute(t._a_sqlite(s))
