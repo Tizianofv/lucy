@@ -137,6 +137,16 @@ def teclado_de_envio_de_factura(envio_id: int, emite: bool = True) -> InlineKeyb
     ]])
 
 
+def teclado_de_envio_de_formal(envio_id: int) -> InlineKeyboardMarkup:
+    """Los botones de la tarjeta con que Lucy le pide a quien revisa que apruebe mandar una formal que hizo Natalia
+    (Lucy 5 del diseño «Cotización formal que hace Natalia»). `cfs:<id>` = aprobar, `cfn:<id>` = rechazar; el id es el del
+    ENVÍO (`cotizacion_envios.id`). La rama que los lee está en `al_pulsar`, detrás de su misma puerta."""
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Aprobar", callback_data=f"cfs:{envio_id}"),
+        InlineKeyboardButton("❌ Rechazar", callback_data=f"cfn:{envio_id}"),
+    ]])
+
+
 async def _cerrar_tarjeta(q, remate: str) -> None:
     """Saca los botones y deja escrito en qué terminó la tarjeta.
 
@@ -247,6 +257,51 @@ async def _contestar_envio_de_factura(q, envio_id: int, acepta: bool) -> None:
                         r["factura_id"], type(e).__name__)
 
 
+def _remate_de_envio_de_formal(r: dict) -> str:
+    """Lo que queda escrito en la tarjeta de una formal ya contestada. Sale de lo que `db.contestar_envio_de_cotizacion`
+    RELEYÓ: «aprobada» solo si quedó aprobada, y nunca promete que Natalia ya la mandó."""
+    resultado = r["resultado"]
+    if resultado == db.RESULTADO_ENVIO_APROBADO:
+        donde = "WhatsApp" if r.get("canal") == "whatsapp" else "correo"
+        return (f"✅ <b>Aprobada.</b> Natalia ya puede bajar el PDF de <b>{html.escape(r['codigo'])}</b> "
+                f"y mandarla por {donde}.")
+    if resultado == db.RESULTADO_ENVIO_RECHAZADO:
+        return "❌ <b>Rechazada.</b> No se manda nada."
+    if resultado == db.RESULTADO_ENVIO_NO_SE_PUDO:
+        return (f"❗ <b>No se pudo aprobar:</b> {html.escape(r.get('motivo') or 'sin motivo')}. "
+                "Natalia tiene que pedirla otra vez.")
+    return f"ℹ️ <i>Ya estaba contestada ({html.escape(str(r.get('estado') or ''))}).</i>"
+
+
+async def _contestar_envio_de_formal(q, envio_id: int, acepta: bool) -> None:
+    """Los botones Aprobar / Rechazar de la tarjeta de una formal de Natalia. TODA la decisión está en
+    `db.contestar_envio_de_cotizacion`; esto solo dice el resultado. La tarjeta es un documento con pie: se usa
+    `_cerrar_tarjeta_de_factura` para editar el pie (el mismo mecanismo que la tarjeta de las facturas)."""
+    chat = q.message.chat_id
+    try:
+        r = await db.contestar_envio_de_cotizacion(envio_id, chat, acepta)
+    except db.CotizacionesSinTabla:
+        await q.message.reply_text("Las formales de Natalia todavía no están disponibles.")
+        return
+    except Exception:
+        # Nada quedó escrito (la transacción se deshizo): la tarjeta y sus botones siguen ahí.
+        log.exception("No pude guardar la respuesta al envío de formal #%s", envio_id)
+        await q.message.reply_text("No pude guardar tu respuesta. La formal sigue esperando: toca de nuevo.")
+        return
+    resultado = r["resultado"]
+    if resultado == db.RESULTADO_ENVIO_NO_ES_TUYO:
+        await q.message.reply_text(f"Esto le toca a {r.get('revisa') or 'otra persona'}.")
+        return
+    if resultado == db.RESULTADO_ENVIO_NO_EXISTE:
+        await q.message.reply_text("Esa formal ya no existe.")
+        return
+    if resultado == db.RESULTADO_ENVIO_TODAVIA:
+        await q.message.reply_text("La tarjeta todavía se está preparando. Toca de nuevo en unos segundos.")
+        return
+    await _cerrar_tarjeta_de_factura(q, _remate_de_envio_de_formal(r))
+    log.info("Envío de formal #%s contestado: %s", envio_id, resultado)
+
+
 async def _contestar_consulta(q, consulta_id: int, acepta: bool) -> None:
     """Los botones Sí/No de una consulta de Natalia. TODA la decisión está en `db.contestar_consulta_de_natalia`
     (quién puede, el primero gana, la tarea y la consulta en una transacción); esto solo dice el resultado."""
@@ -322,6 +377,11 @@ async def al_pulsar(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # ── Las facturas de Natalia: Aprobar / Rechazar (pieza 9 de las facturas). Acá `bandeja_id` es el id del ENVÍO ──
     if accion == "fas" or accion == "fan":
         await _contestar_envio_de_factura(q, bandeja_id, acepta=(accion == "fas"))
+        return
+
+    # ── Las formales de Natalia: Aprobar / Rechazar (Lucy 5). Acá `bandeja_id` es el id del ENVÍO ──
+    if accion == "cfs" or accion == "cfn":
+        await _contestar_envio_de_formal(q, bandeja_id, acepta=(accion == "cfs"))
         return
 
     # ── Las consultas de Natalia: Sí / No (pieza L5). Acá `bandeja_id` es el id de la CONSULTA ─────────

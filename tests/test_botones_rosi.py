@@ -193,7 +193,8 @@ def test_la_lista_de_botones_sale_del_codigo_real():
     (`db.marcar_tarea_hecha`, `db.mover_vence`), sin manejador acá."""
     # + "cns" / "cnn": Sí / No de una consulta de Natalia (L5, 18-oct-2026; `tests/test_botones_de_consultas.py`).
     # + "fas" / "fan": Aprobar / Rechazar una factura que hizo Natalia (pieza 9 de las facturas, 21-oct-2026; `tests/test_facturas_natalia.py`).
-    assert set(_acciones_reales()) == {"ok", "alt", "no", "acc", "und", "undt", "cns", "cnn", "fas", "fan"}
+    # + "cfs" / "cfn": Aprobar / Rechazar una formal que hizo Natalia (Lucy 5, 24-oct-2026; `tests/test_cotizaciones_tarjeta_rosi.py`).
+    assert set(_acciones_reales()) == {"ok", "alt", "no", "acc", "und", "undt", "cns", "cnn", "fas", "fan", "cfs", "cfn"}
 
 
 def test_todo_manejador_de_boton_pasa_por_la_misma_puerta():
