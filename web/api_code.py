@@ -13,7 +13,7 @@ RUTAS DE ESTA PARTE, y solo éstas: `GET /tareas` (listar),
 `POST /tareas/{id}/cerrar`, `POST /tareas/{id}/tomar`, (1-oct-2026) los
 comentarios de una tarea de Code: `GET`/`POST /tareas/{id}/comentarios`, y
 (4-oct-2026) `POST /alertas` (permiso `alertas:crear`) y, desde el 18-oct-2026, la lectura
-`GET /clientes/{noco_id}/proyectos` (permiso `proyectos:leer_de_cliente`) y, de la
+`GET /clientes/{noco_id}/proyectos` (permiso `proyectos:leer_de_cliente`), `POST /clientes/{noco_id}/proyecto` (permiso `proyectos:crear_de_cliente`, Lucy 2) y, de la
 pieza L3, las consultas al responsable: `POST`/`GET /clientes/{noco_id}/consultas` (permisos
 `consultas:abrir` y `consultas:leer`) y, de la pieza 9 de las facturas (21-oct-2026), las facturas de Natalia:
 `GET`/`POST /clientes/{noco_id}/facturas`, `GET /clientes/{noco_id}/facturas/{id}`, `POST …/envios`, `GET …/envios/{id}/pdf`
@@ -47,7 +47,7 @@ from decimal import Decimal
 from typing import Annotated, Literal, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
 import config
@@ -491,6 +491,99 @@ async def proyectos_del_cliente(
     } for m in modelos]
     return {"noco_id": noco_id, "proyectos": proyectos,
             "responsables": responsables_para_natalia()}
+
+
+# ── Natalia crea el proyecto de un cliente (Lucy 2, diseño «Cotización formal que hace Natalia», 24-oct-2026) ──
+#
+# `POST /clientes/{noco_id}/proyecto`, permiso `proyectos:crear_de_cliente`, solo Natalia. Lo decide TODO Lucy: el grupo
+# es CDS, el nombre es el del cliente en Noco y el responsable sale de `config.chat_del_responsable_de_natalia()`.
+# LA PUERTA ÚNICA es `db.crear_proyecto(desde="natalia")`. Si el cliente ya tiene un proyecto abierto, ESA puerta lo
+# rechaza ANTES de escribir (`ClienteConProyecto`) y esta ruta contesta 200 con ese proyecto y `creado: false`. No hay
+# una segunda lectura de «un solo activo»: `proyecto_vivo_del_cliente` la llama solo `proyecto_puede_quedar_activo`.
+_PERMISO_CREAR_PROYECTO_DE_CLIENTE = "proyectos:crear_de_cliente"
+
+
+class _CuerpoVacioDeNatalia(BaseModel):
+    """El cuerpo es `{}`: Natalia no manda nombre, grupo, responsable ni teléfono. Cualquier campo es 422."""
+    model_config = ConfigDict(extra="forbid")
+
+
+def _proyecto_para_natalia(fila: dict, nombres: dict) -> dict:
+    """Solo los cinco campos que Natalia ve; el responsable va por NOMBRE, nunca por chat."""
+    return {"id": fila["id"], "nombre": fila["nombre"], "estado": fila["estado"], "area": fila["area"],
+            "responsable": nombres.get(fila["responsable_chat_id"])}
+
+
+async def _carpeta_para_natalia(proyecto_id: int) -> str:
+    """`ok` si la carpeta de Drive quedó (creada o ya estaba), `pendiente` si no. Nunca sube excepción: el proyecto ya
+    existe y la respuesta lo dice. (Import perezoso: `cotizaciones_drive` importa `crud`, como en `web/app.py`.)"""
+    import cotizaciones_drive
+    try:
+        resultado = await cotizaciones_drive.preparar_la_carpeta(proyecto_id)
+    except Exception:
+        log.exception("puerta de Code: la carpeta del proyecto %s falló", proyecto_id)
+        return "pendiente"
+    return "ok" if resultado.get("resultado") in ("lista", "ya_estaba") else "pendiente"
+
+
+async def _avisar_a_responsable(chat: int, texto: str) -> str:
+    """El aviso a la bandeja de quien revisa (`db.registrar_aviso`). `ok` si quedó escrito, `pendiente` si no."""
+    try:
+        await db.registrar_aviso(chat, texto)
+    except Exception:
+        log.exception("puerta de Code: no pude dejar el aviso del proyecto que creó Natalia")
+        return "pendiente"
+    return "ok"
+
+
+@router.post("/clientes/{noco_id}/proyecto")
+async def crear_proyecto_de_natalia(
+    cuerpo: _CuerpoVacioDeNatalia | None = None,
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere(_PERMISO_CREAR_PROYECTO_DE_CLIENTE, solo_de=config.QUIEN_DE_NATALIA)),
+) -> JSONResponse:
+    """Crea el proyecto del cliente `noco_id` si no tiene uno abierto.
+
+    RESPUESTAS: 201 `{"proyecto": {id, nombre, estado, area, responsable}, "creado": true, "carpeta": "ok"|"pendiente",
+    "aviso": "ok"|"pendiente"}`: la fila quedó escrita (`creado` solo es true con la fila guardada). 200
+    `{"proyecto": …, "creado": false}`: el cliente ya tenía un proyecto abierto; no se escribió nada. 404: la ficha no
+    existe. 409: nombre repetido con otro proyecto activo (se deja aviso a quien revisa); no se escribió nada. 422: el
+    pedido no vale (la ficha no sirve para un proyecto). 503: Noco no contestó o no hay responsable resoluble; no se
+    escribió nada. 401/403/429: la puerta de siempre."""
+    try:
+        ficha = await noco_lectura.persona(noco_id)
+    except noco_lectura.NocoNoContesta:
+        raise HTTPException(status_code=503, detail="no se pudo leer la ficha del cliente en NocoDB: no se creó nada") from None
+    if ficha is None:
+        raise HTTPException(status_code=404, detail="esa ficha de cliente no existe")
+    responsable = config.chat_del_responsable_de_natalia()
+    if responsable is None:
+        raise HTTPException(status_code=503, detail="no hay a quién dejarle el proyecto (el responsable no resuelve): no se creó nada")
+    nombres = config.nombres_con_code()
+    try:
+        nuevo = await db.crear_proyecto(None, "CDS", responsable, cliente_noco_id=noco_id,
+                                        leer_persona=noco_lectura.persona, desde="natalia")
+    except db.ClienteConProyecto as e:
+        ya = await db.proyecto_del_cliente_por_id(e.proyecto_id, noco_id)
+        if ya is None:
+            raise HTTPException(status_code=409, detail="el proyecto abierto del cliente cambió mientras se pedía: intenta de nuevo. No se creó nada.") from None
+        return JSONResponse(status_code=200, content={"proyecto": _proyecto_para_natalia(ya, nombres), "creado": False})
+    except db.NombreDeProyectoNoVale as e:
+        if e.clave == "repetido":
+            aviso = await _avisar_a_responsable(responsable, "Natalia quiso crear el proyecto de un cliente que no tenía uno abierto, pero ya hay otro proyecto activo con ese nombre. Hay que resolverlo.")
+            dicho = "Ya dejé el aviso para quien lo revisa." if aviso == "ok" else "No pude dejar el aviso."
+            raise HTTPException(status_code=409, detail=f"ya hay otro proyecto activo con ese nombre. No se creó nada. {dicho}") from None
+        raise HTTPException(status_code=422, detail=f"el nombre del cliente no sirve para un proyecto ({e.clave}). No se creó nada.") from None
+    except db.ProyectoNoSeCrea as e:
+        raise HTTPException(status_code=422, detail=f"no se pudo crear el proyecto ({e.clave}). No se creó nada.") from None
+    except noco_lectura.NocoNoContesta:
+        raise HTTPException(status_code=503, detail="no se pudo leer la ficha del cliente en NocoDB: no se creó nada") from None
+    carpeta = await _carpeta_para_natalia(nuevo["id"])
+    texto = (f"Natalia creó el proyecto «{nuevo['nombre']}» porque el cliente no tenía uno abierto. Carpeta de Drive: "
+             + ("lista." if carpeta == "ok" else "pendiente; se puede rehacer desde el panel."))
+    aviso = await _avisar_a_responsable(responsable, texto)
+    return JSONResponse(status_code=201, content={
+        "proyecto": _proyecto_para_natalia(nuevo, nombres), "creado": True, "carpeta": carpeta, "aviso": aviso})
 
 
 # ── Las cotizaciones formales para el embudo del Registro (L-COT, 23-oct-2026) ─────────────────────────────

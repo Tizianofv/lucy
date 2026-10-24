@@ -924,7 +924,8 @@ def test_el_cliente_se_lee_de_la_base_y_se_escribe_solo_por_poner_cliente_con_la
                         if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                                 and n.func.attr in ("poner_cliente", "crear_proyecto", "convertir_tarea_en_proyecto")):
                             llamadas[f.name] = {k.arg: ast.unparse(k.value) for k in n.keywords}
-    assert sorted(llamadas) == ["convertir_en_proyecto", "crear_proyecto_nuevo", "poner_cliente_del_proyecto"], llamadas
+    assert sorted(llamadas) == ["convertir_en_proyecto", "crear_proyecto_de_natalia", "crear_proyecto_nuevo",
+                                "poner_cliente_del_proyecto"], llamadas
     for nombre, kw in llamadas.items():
         assert kw["leer_persona"] == "noco_lectura.persona", (nombre, kw)
         assert "cliente_noco_id" in kw or nombre == "poner_cliente_del_proyecto", (nombre, kw)
