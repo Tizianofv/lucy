@@ -67,7 +67,7 @@
     sale arriba como siempre. Los avisos de `hecho` y los del cliente se quedan arriba. Una sola regla: el error es de una cotización. -#}
 {% set es_de_guardado = error and error.startswith('cotizacion_') %}
 <div class="cotiz" id="cotizaciones" data-ancla>
-  <div class="cotiz-enc"><h3>Cotizaciones</h3>
+  <div class="cotiz-enc"><h3>Cotización formal</h3>
     {% if cz.drive_url %}<a class="carpeta-enlace" href="{{ cz.drive_url }}" target="_blank" rel="noopener noreferrer">Abrir en Drive</a>{% endif %}
     {% if not solo_ver %}<a class="cotiz-mas{{ ' activo' if v and v.tipo == 'nueva' }}" href="/proyectos?p={{ m.id }}&amp;cotizacion=nueva{{ sufijo_filtro }}#cotizaciones" title="Crear una cotización" aria-label="Crear una cotización">+</a>{% endif %}</div>
   {% if not v %}{{ aviso_de_cotizacion }}{% endif %}
@@ -187,7 +187,7 @@
      </div>
      <div class="ventana-pie">
       <div class="cz-aviso-pie{{ '' if es_de_guardado else ' cz-aviso-vacio' }}" role="alert" data-cz-aviso-pie>{% if es_de_guardado %}{{ aviso_de_cotizacion }}{% endif %}</div>
-      <span class="izq">Se guarda en este proyecto, en «Cotizaciones».</span>
+      <span class="izq">Se guarda en este proyecto, en «Cotización formal».</span>
       <a class="btn-linea" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}#cotizaciones">Cancelar</a>
       {% if v.tipo != 'corregir' %}<button class="btn-linea" name="accion" value="borrador">Guardar borrador</button>{% endif %}
       <button class="btn-prim" name="accion" value="enviar">Guardar y descargar PDF</button>

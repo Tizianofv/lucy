@@ -249,7 +249,7 @@ def test_la_lista_sale_en_la_casa_con_su_mas_y_con_los_datos_de_cada_una(m):
     enviada = _guardar("enviar", contenido=_contenido(1, totales=[1000]))
     html = _pagina(_casa(), p=1)
     seccion = _seccion_de_cotizaciones(html)
-    assert "<h3>Cotizaciones</h3>" in seccion and 'href="/proyectos?p=1&amp;cotizacion=nueva#cotizaciones"' in seccion
+    assert "<h3>Cotización formal</h3>" in seccion and 'href="/proyectos?p=1&amp;cotizacion=nueva#cotizaciones"' in seccion
     assert borrador["codigo"] == "COT-2026-001" and enviada["codigo"] == "COT-2026-002"
     assert seccion.index("COT-2026-002") < seccion.index("COT-2026-001")                   # la más nueva arriba
     assert "Enviada" in seccion and "Borrador" in seccion
@@ -301,7 +301,7 @@ def test_sin_la_columna_de_la_carpeta_las_cotizaciones_salen_igual_y_la_carpeta_
     finally:
         panel.db.carpetas_de_proyectos, panel.db.carpetas_de_audio = guardada, guardada_audio
     assert "Carpetas del proyecto" not in html and "COT-2026-001" in _seccion_de_cotizaciones(html)
-    assert "<h2>Cotizaciones</h2>" in html
+    assert "<h2>Cotización formal</h2>" in html
 
 
 def test_sin_la_tabla_la_pagina_carga_y_no_sale_nada_de_cotizaciones(m, tabla_ausente_como_postgres):

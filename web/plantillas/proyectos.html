@@ -1372,7 +1372,7 @@ section.bloque.de-que-se-trata > .encabezado{margin-bottom:.25rem}
     {% set ver_cotizaciones = cz and (cz.lista or not solo_ver) %}
     {% if ver_carpeta or ver_audio or ver_cotizaciones %}
     <section class="bloque carpeta-p" id="carpeta-del-proyecto" data-ancla>
-      <div class="encabezado">{% if ver_carpeta or ver_audio %}<h2>Carpetas del proyecto</h2>{% else %}<h2>Cotizaciones</h2>{% endif %}
+      <div class="encabezado">{% if ver_carpeta or ver_audio %}<h2>Carpetas del proyecto</h2>{% else %}<h2>Cotización formal</h2>{% endif %}
         {% if ver_carpeta and not solo_ver and editar != 'carpeta' %}<a class="btn-linea" href="/proyectos?p={{ m.id }}&amp;editar=carpeta{{ sufijo_filtro }}#carpeta-del-proyecto">{{ 'Cambiar' if m.carpeta else 'Poner' }}</a>{% endif %}</div>
       {#- «DOCUMENTOS (DRIVE)» (pieza 2): la carpeta de siempre y, si el proyecto no tiene la suya en Drive, la frase y el
           botón. Solo la casa los ve: en solo ver no hay botón ni se dice que falta. Si no se pudo leer
