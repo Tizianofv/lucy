@@ -154,7 +154,8 @@ class _Mundo:
         con.execute("UPDATE proyectos SET borrado_en = '2026-10-01' WHERE id = 3")
         con.execute("CREATE TABLE log_acciones (id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT, accion TEXT, "
                     "tabla TEXT, registro_id INTEGER, antes TEXT, despues TEXT, motivo TEXT, bandeja_id INTEGER)")
-        for texto in (ct._texto_migracion(), ct._texto_migracion_de_drive()):
+        # la de las formales (24-oct-2026: `cotizaciones.hecha_por`): el SELECT de las cotizaciones de un proyecto la lee
+        for texto in (ct._texto_migracion(), ct._texto_migracion_de_drive(), ct._migracion_de_las_formales()):
             for s in g._sentencias(texto):
                 if not re.match(r"(BEGIN|COMMIT|COMMENT\s+ON)\b", s, re.I):
                     con.execute(ct._a_sqlite(s))
