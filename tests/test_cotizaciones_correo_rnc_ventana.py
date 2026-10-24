@@ -3,6 +3,8 @@ vuelve escapado tras un rechazo, y un RNC que no vale se rechaza sin escribir. L
 `test_cotizaciones_correo_rnc.py`. Va en su propio módulo porque el fixture `m` de la página es otro que el de Natalia."""
 from __future__ import annotations
 
+import re
+
 import pytest  # noqa: F401
 
 from test_guardar_cotizacion import con  # noqa: F401  (fija el entorno antes de cargar `config`)
@@ -48,3 +50,20 @@ def test_guardar_desde_la_ventana_escribe_el_correo_y_el_rnc(m):
     assert r.status_code == 303 and "hecho=cotizacion_enviada" in r.headers["location"], r.headers["location"]
     fila = _filas(m)[0]
     assert (fila["para_correo"], fila["para_rnc_cedula"]) == ("ana@ejemplo.do", "131234567")
+
+
+def test_tras_un_rechazo_la_casilla_del_rnc_y_la_del_correo_quedan_marcadas(m):
+    c = _casa()
+    datos = _post_de_la_pagina(_formulario(_pagina(c, p=1, cotizacion="nueva")), "enviar")
+    datos["para-rnc-cedula"] = "123"
+    datos["para-correo"] = "a" * 300
+    r = c.post("/proyectos/1/cotizaciones", data=datos, follow_redirects=False)
+    assert r.status_code == 303 and "error=cotizacion_para_correo_largo" in r.headers["location"], r.headers["location"]
+    html = c.get(r.headers["location"].split("#")[0]).text
+    assert re.search(r'name="para-correo"[^>]*aria-invalid="true"', html), "el correo no quedó marcado"
+    # el RNC se valida después del correo en la puerta: con los dos malos sale el primero; se prueba el RNC solo
+    datos["para-correo"] = "ana@ejemplo.do"
+    r = c.post("/proyectos/1/cotizaciones", data=datos, follow_redirects=False)
+    assert "error=cotizacion_para_rnc_cedula_formato" in r.headers["location"], r.headers["location"]
+    html = c.get(r.headers["location"].split("#")[0]).text
+    assert re.search(r'name="para-rnc-cedula"[^>]*aria-invalid="true"', html), "el RNC no quedó marcado"
