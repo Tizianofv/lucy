@@ -1180,6 +1180,8 @@ class _CotizacionNueva(BaseModel):
     model_config = ConfigDict(extra="forbid")
     contenido: dict
     validez_dias: StrictInt
+    para_correo: StrictStr | None = None
+    para_rnc_cedula: StrictStr | None = None
 
 
 def _hay_nulos(valor) -> bool:
@@ -1242,13 +1244,14 @@ async def crear_formal_de_natalia(
     """Natalia HACE una formal (borrador, `hecha_por = natalia`, sin chat) sobre el proyecto ABIERTO del cliente.
 
     PEDIDO: `{contenido: {opciones: [{nombre, renglones: [{descripcion, detalle?, total: "62500.00"}]}], condiciones?: [...]},
-    validez_dias: 7 | 15 | 30}`. El contenido se valida como el de la casa; los precios son los que manda Natalia.
+    validez_dias: 7 | 15 | 30, para_correo?: "texto", para_rnc_cedula?: "9 u 11 cifras"}`. El contenido se valida como el de la casa; los precios son los que manda Natalia.
     200 `{"cotizacion": {…}}` releído de la base. 409: el cliente no tiene proyecto abierto (no se escribe nada). 422: el
     contenido o la validez no valen. 503: falta una migración. 401/403/429: la puerta de siempre."""
     if _hay_nulos(cuerpo.contenido):
         raise HTTPException(status_code=422, detail="el texto no puede llevar caracteres nulos")
     try:
-        creada = await db.crear_cotizacion_de_natalia(noco_id, cuerpo.contenido, cuerpo.validez_dias)
+        creada = await db.crear_cotizacion_de_natalia(noco_id, cuerpo.contenido, cuerpo.validez_dias,
+                                                      para_correo=cuerpo.para_correo, para_rnc_cedula=cuerpo.para_rnc_cedula)
         relei = await db.cotizaciones_de_natalia(noco_id, creada["id"])
     except (db.CotizacionNoVale, db.CotizacionNoEsta, db.ClienteSinProyectoAbierto, db.CotizacionesSinTabla) as e:
         raise _por_que_la_formal_dijo_que_no(e) from None

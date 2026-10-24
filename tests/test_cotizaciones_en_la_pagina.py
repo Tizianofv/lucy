@@ -226,6 +226,9 @@ def _post_de_la_pagina(f: _Formulario, accion: str, texto=lambda nombre: f"Texto
             datos[nombre] = str(next(totales) * 100)
         elif nombre == "para-telefono" or nombre == "para-nombre":
             datos[nombre] = valor or texto(nombre)
+        elif nombre == "para-rnc-cedula":
+            # un RNC que la puerta acepta (9 cifras con guiones): el texto genérico de abajo no es un RNC
+            datos[nombre] = valor or "131-23456-7"
         else:
             datos[nombre] = valor or texto(nombre)
     datos["validez"] = "15"
@@ -390,11 +393,16 @@ def test_sin_javascript_se_crea_una_de_dos_opciones_y_dos_renglones_y_todo_lo_qu
     contenido = json.loads(guardada[0]["contenido"])
     assert [len(o["renglones"]) for o in contenido["opciones"]] == [2, 2]
     # cada casilla de texto de la página llegó a lo guardado
-    todo = guardada[0]["contenido"] + "|" + (guardada[0]["para_nombre"] or "") + "|" + (guardada[0]["para_telefono"] or "")
+    todo = (guardada[0]["contenido"] + "|" + (guardada[0]["para_nombre"] or "") + "|" + (guardada[0]["para_telefono"] or "")
+            + "|" + (guardada[0]["para_correo"] or ""))
+    # el RNC viaja con guiones y se guarda solo con cifras (la misma puerta que la factura)
+    assert guardada[0]["para_rnc_cedula"] == "131234567", guardada[0]["para_rnc_cedula"]
     for _, nombre, tipo, valor, _ in f.casillas:
         if nombre is None:
             continue           # sin `name` no viaja en el POST: la casilla de la IA («Lo que pidió el cliente»), probada en `test_cotizaciones_ia_en_la_ventana.py`
-        if tipo == "text" or nombre in ("para-nombre", "para-telefono") or tipo == "textarea":
+        if nombre == "para-rnc-cedula":
+            continue                                          # se mira arriba: se guarda sin guiones
+        if tipo == "text" or nombre in ("para-nombre", "para-telefono", "para-correo") or tipo == "textarea":
             if nombre.endswith("-total"):
                 continue                                          # el dinero se guarda ya limpio: se mira abajo
             esperado = datos[nombre]

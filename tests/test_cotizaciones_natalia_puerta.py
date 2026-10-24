@@ -64,7 +64,7 @@ def _base():
     con.execute("INSERT INTO proyectos VALUES (3, 'Proyecto de prueba tres', 'Cliente Inventado Tres', 9, 'IA', 'activo', NULL)")
     con.execute("CREATE TABLE log_acciones (id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT, accion TEXT, "
                 "tabla TEXT, registro_id INTEGER, antes TEXT, despues TEXT, motivo TEXT, bandeja_id INTEGER)")
-    for texto in (t._texto_migracion(), t._texto_migracion_de_drive(), t._migracion_de_las_formales()):
+    for texto in (t._texto_migracion(), t._texto_migracion_de_drive(), t._migracion_de_las_formales(), t._migracion_de_correo_y_rnc()):
         for s in gi._sentencias(texto):
             if not re.match(r"(BEGIN|COMMIT|COMMENT\s+ON)\b", s, re.I):
                 con.execute(t._a_sqlite(s))

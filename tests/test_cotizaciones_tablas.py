@@ -374,6 +374,13 @@ def test_el_guion_no_se_conecta_a_nada():
 # `CREATE INDEX` corren en SQLite; que Postgres acepte el mismo texto NO se ejerce aquí (lo cubre `tools/humo.py`
 # contra la base real, y el ensayo de la sala).
 
+def _migracion_de_correo_y_rnc() -> str:
+    # 24-oct-2026: el correo y el RNC o cédula de la formal (db/migrations/2026-10-24_cotizaciones_correo_rnc.sql)
+    suyas = [a for a in g._migraciones() if "para_rnc_cedula" in a.read_text(encoding="utf-8")]
+    assert len(suyas) == 1, suyas
+    return suyas[0].read_text(encoding="utf-8")
+
+
 def _migracion_de_las_formales() -> str:
     suyas = [a for a in g._migraciones()
              if "CREATE TABLE IF NOT EXISTS cotizacion_envios" in a.read_text(encoding="utf-8")]

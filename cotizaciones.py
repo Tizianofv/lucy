@@ -33,7 +33,7 @@ TITULO_DE_LA_HOJA = "COTIZACIÓN DE SERVICIOS"
 ENCABEZADOS_DE_LA_TABLA = ("DESCRIPCIÓN", "TOTAL")
 TITULO_DE_LAS_CONDICIONES = "CONDICIONES"
 ETIQUETA_TOTAL_DE_LA_OPCION = "Total de la opción"
-ETIQUETAS_DEL_PARA = ("PARA", "TELÉFONO", "FECHA", "VALIDEZ")
+ETIQUETAS_DEL_PARA = ("PARA", "CORREO", "TELÉFONO", "RNC O CÉDULA", "FECHA", "VALIDEZ")
 TITULO_DE_OPCION = "Opción {n} - {nombre}"
 
 _MESES = ("enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre",
@@ -58,13 +58,17 @@ def dinero_en_pesos(valor) -> str:
 
 def hoja_de_cotizacion(cot: dict) -> dict:
     """Los textos de la hoja de una cotización. `cot` es una de las que devuelve
-    `db.cotizaciones_de_proyectos()`: `codigo`, `para_nombre`, `para_telefono`, `fecha`, `validez_dias` y
+    `db.cotizaciones_de_proyectos()`: `codigo`, `para_nombre`, `para_correo`, `para_telefono`, `para_rnc_cedula`, `fecha`, `validez_dias` y
     `contenido` ya leído. Función pura."""
     contenido = cot["contenido"]
-    et_para, et_telefono, et_fecha, et_validez = ETIQUETAS_DEL_PARA
+    et_para, et_correo, et_telefono, et_rnc, et_fecha, et_validez = ETIQUETAS_DEL_PARA
     para = [(et_para, cot["para_nombre"])]
+    if cot.get("para_correo"):
+        para.append((et_correo, cot["para_correo"]))
     if cot.get("para_telefono"):
         para.append((et_telefono, cot["para_telefono"]))
+    if cot.get("para_rnc_cedula"):
+        para.append((et_rnc, cot["para_rnc_cedula"]))
     para.append((et_fecha, fecha_en_palabras(cot["fecha"])))
     para.append((et_validez, f"{cot['validez_dias']} días"))
     opciones = []
@@ -233,6 +237,15 @@ def _condicion_propia_no_vale(valor: str) -> bool:
                      "condiciones": [{"clave": None, "texto": valor, "marcada": True}]})
 
 
+def _rnc_no_vale(valor: str) -> bool:
+    """¿La puerta de `db` rechaza este RNC o cédula? La MISMA función que decide al guardar (`db._rnc_de_cotizacion`)."""
+    try:
+        db._rnc_de_cotizacion(valor)
+    except db.CotizacionNoVale:
+        return True
+    return False
+
+
 def _no_vale_de_la_cabecera(valor: str, campo: str, largo: int, minimo: int) -> bool:
     try:
         db._texto_de_cotizacion(valor, campo, largo, minimo=minimo)
@@ -293,24 +306,29 @@ def valores_del_formulario(cot: dict | None, *, nombre_del_cliente: str | None,
                      if c["clave"] is not None or _texto(c["texto"]).strip()]
         opciones = _opciones_de_lo_escrito(escrito["contenido"]["opciones"])
         nombre, telefono = _texto(escrito["para_nombre"]), _texto(escrito["para_telefono"])
+        correo, rnc = _texto(escrito["para_correo"]), _texto(escrito["para_rnc_cedula"])
         nombre_falta = escrito["para_nombre"] is not None and _no_vale_de_la_cabecera(
             nombre, "para_nombre", db.LARGO_PARA_NOMBRE_DE_COTIZACION, 1)
         telefono_falta = escrito["para_telefono"] is not None and _no_vale_de_la_cabecera(
             telefono, "para_telefono", db.LARGO_PARA_TELEFONO_DE_COTIZACION, 0)
+        correo_falta = escrito["para_correo"] is not None and _no_vale_de_la_cabecera(
+            correo, "para_correo", db.LARGO_PARA_CORREO_DE_COTIZACION, 0)
+        rnc_falta = escrito["para_rnc_cedula"] is not None and _rnc_no_vale(rnc)
         fecha = _texto(escrito["fecha"]) or hoy.isoformat()
         if cot is None:
             codigo, candado = codigo_que_toca or "", ""
         else:
             codigo, candado = cot["codigo"], _texto(escrito["cambiado_en"])
     elif cot is None:
-        nombre_falta = telefono_falta = False
+        nombre_falta = telefono_falta = correo_falta = rnc_falta = False
         validez = VALIDEZ_POR_OMISION
         guardadas = None
         opciones = []
         nombre, telefono, fecha = nombre_del_cliente or "", telefono_del_cliente or "", hoy.isoformat()
+        correo, rnc = "", ""
         codigo, candado = codigo_que_toca or "", ""
     else:
-        nombre_falta = telefono_falta = False
+        nombre_falta = telefono_falta = correo_falta = rnc_falta = False
         validez = cot["validez_dias"]
         guardadas = cot["contenido"]["condiciones"]
         opciones = [{"nombre": op["nombre"],
@@ -319,6 +337,7 @@ def valores_del_formulario(cot: dict | None, *, nombre_del_cliente: str | None,
                                    for r in op["renglones"]]}
                     for op in cot["contenido"]["opciones"]]
         nombre, telefono = cot["para_nombre"], cot["para_telefono"] or ""
+        correo, rnc = cot.get("para_correo") or "", cot.get("para_rnc_cedula") or ""
         fecha = _dia(cot["fecha"]).isoformat()
         codigo, candado = cot["codigo"], _candado(cot["cambiado_en"])
     # `sobra` marca lo que dibuja el servidor para quien no tiene JavaScript (con JavaScript se esconde y el
@@ -343,14 +362,17 @@ def valores_del_formulario(cot: dict | None, *, nombre_del_cliente: str | None,
     propias += [{"texto": "", "marcada": True, "sobra": True} for _ in range(CONDICIONES_EN_BLANCO_DE_SOBRA)]
     return {"codigo": codigo, "candado": candado, "para_nombre": nombre, "para_telefono": telefono,
             "fecha": fecha, "validez": validez, "opciones": opciones, "condiciones": conocidas,
-            "propias": propias, "para_nombre_falta": nombre_falta, "para_telefono_falta": telefono_falta}
+            "propias": propias, "para_nombre_falta": nombre_falta, "para_telefono_falta": telefono_falta,
+            "para_correo": correo, "para_rnc_cedula": rnc, "para_correo_falta": correo_falta,
+            "para_rnc_cedula_falta": rnc_falta}
 
 
 def texto_de_lo_escrito(campos: dict) -> str:
     """Lo que la persona escribió, como texto para LEER y copiar (el bloque «Lo que tú escribiste» de un guardado que se
     rechazó porque la cotización cambió). Solo lo escrito, tal cual; nada de esto se guarda."""
     filas = []
-    for etiqueta, clave in (("Cliente", "para_nombre"), ("Teléfono", "para_telefono"), ("Fecha", "fecha"), ("Validez (días)", "validez")):
+    for etiqueta, clave in (("Cliente", "para_nombre"), ("Correo", "para_correo"), ("Teléfono", "para_telefono"),
+                            ("RNC o cédula", "para_rnc_cedula"), ("Fecha", "fecha"), ("Validez (días)", "validez")):
         valor = campos.get(clave)
         valor = _texto(valor) if clave != "validez" else ("" if valor is None else str(valor))
         if valor.strip():
@@ -417,6 +439,7 @@ def campos_del_formulario(formulario) -> dict:
         validez = int(validez.strip())
     return {"contenido": {"opciones": opciones, "condiciones": condiciones}, "validez": validez,
             "para_nombre": formulario.get("para-nombre"), "para_telefono": formulario.get("para-telefono"),
+            "para_correo": formulario.get("para-correo"), "para_rnc_cedula": formulario.get("para-rnc-cedula"),
             "fecha": formulario.get("fecha"), "cambiado_en": formulario.get("cambiado_en") or None,
             "accion": formulario.get("accion")}
 

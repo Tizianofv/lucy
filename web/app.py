@@ -3896,7 +3896,8 @@ async def guardar_cotizacion_nueva(request: Request, pid: int):
     try:
         guardada = await db.guardar_cotizacion(
             pid, chat, campos["accion"], campos["contenido"], campos["validez"],
-            para_nombre=campos["para_nombre"], para_telefono=campos["para_telefono"], fecha=campos["fecha"])
+            para_nombre=campos["para_nombre"], para_telefono=campos["para_telefono"], para_correo=campos["para_correo"],
+            para_rnc_cedula=campos["para_rnc_cedula"], fecha=campos["fecha"])
     except db.CotizacionSinSesion:
         return _fuera(request)
     except Exception as e:
@@ -3919,7 +3920,8 @@ async def guardar_cotizacion_existente(request: Request, pid: int, cid: int):
         guardada = await db.guardar_cotizacion(
             pid, chat, campos["accion"], campos["contenido"], campos["validez"], cotizacion_id=cid,
             cambiado_en=campos["cambiado_en"], para_nombre=campos["para_nombre"],
-            para_telefono=campos["para_telefono"], fecha=campos["fecha"])
+            para_telefono=campos["para_telefono"], para_correo=campos["para_correo"],
+            para_rnc_cedula=campos["para_rnc_cedula"], fecha=campos["fecha"])
     except db.CotizacionSinSesion:
         return _fuera(request)
     except Exception as e:
