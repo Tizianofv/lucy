@@ -4373,7 +4373,7 @@ async def _crear_cotizacion(conn, cur, proyecto_id, chat_id, accion, guardable, 
     enviada = accion == "enviar"
     # Una sola línea a propósito: `tests/test_backup_alerta.py` lee las columnas de cada INSERT del código.
     await cur.execute(
-        "INSERT INTO cotizaciones (proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_por_chat_id, enviada_en) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CASE WHEN %s THEN now() END) RETURNING id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en",
+        "INSERT INTO cotizaciones (proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_por_chat_id, enviada_en, hecha_por) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CASE WHEN %s THEN now() END, 'equipo') RETURNING id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en",
         (proyecto_id, anio, numero, "enviada" if enviada else "borrador", nombre, telefono or None,
          el_dia or hoy_rd(), validez, guardable, chat_id, enviada))
     fila = dict(await cur.fetchone())

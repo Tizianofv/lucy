@@ -954,7 +954,9 @@ def test_la_migracion_de_drive_agrega_las_tres_columnas_y_la_tabla_y_el_esquema_
     agregadas = {c.lower(): t.lower() for c, t in re.findall(
         r"ALTER\s+TABLE\s+cotizaciones\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+(\w+)\s+(\w+)", sin_comentarios, re.I)}
     assert agregadas == _COLUMNAS_DE_DRIVE
-    assert tt._columnas_que_agregan_otras_migraciones("cotizaciones") == set(_COLUMNAS_DE_DRIVE)
+    # 24-oct-2026: la base de las formales agrega `hecha_por` (migración 2026-10-24_cotizaciones_formales.sql), así que
+    # las columnas que otras migraciones agregan a `cotizaciones` son las de Drive más esa.
+    assert tt._columnas_que_agregan_otras_migraciones("cotizaciones") == set(_COLUMNAS_DE_DRIVE) | {"hecha_por"}
     esquema = tt._ESQUEMA
     for c in _COLUMNAS_DE_DRIVE:
         assert re.search(rf"^\s+{c}\s", b2._ddl(esquema, "cotizaciones")[0], re.M), c

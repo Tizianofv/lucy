@@ -365,3 +365,162 @@ def test_el_guion_no_se_conecta_a_nada():
     codigo = re.sub(r'"""(.*?)"""', "", fuente, flags=re.S)
     assert not re.search(r"^\s*(import|from)\s+(psycopg|db|config|os)\b", codigo, re.M)
     assert "DATABASE" not in codigo and ".execute(" not in codigo
+
+
+# ── 9. Las formales de Natalia (24-oct-2026): `cotizaciones.hecha_por` y `cotizacion_envios` ────────
+#
+# La migración `db/migrations/2026-10-24_cotizaciones_formales.sql` se ejecuta en SQLITE sobre la migración de
+# `cotizaciones` (el mismo truco de `_a_sqlite`). Frontera: el `ALTER ... ADD COLUMN ... CONSTRAINT ... CHECK` y el
+# `CREATE INDEX` corren en SQLite; que Postgres acepte el mismo texto NO se ejerce aquí (lo cubre `tools/humo.py`
+# contra la base real, y el ensayo de la sala).
+
+def _migracion_de_las_formales() -> str:
+    suyas = [a for a in g._migraciones()
+             if "CREATE TABLE IF NOT EXISTS cotizacion_envios" in a.read_text(encoding="utf-8")]
+    assert len(suyas) == 1, suyas
+    return suyas[0].read_text(encoding="utf-8")
+
+
+def _aplicar(con: sqlite3.Connection, texto: str) -> None:
+    for s in g._sentencias(texto):
+        if re.match(r"(BEGIN|COMMIT|COMMENT\s+ON)\b", s, re.I):
+            continue
+        con.execute(_a_sqlite(s))
+
+
+def _base_con_las_formales() -> sqlite3.Connection:
+    con = _base_con_migracion()
+    _aplicar(con, _migracion_de_las_formales())
+    return con
+
+
+def _envio(con, **otros) -> None:
+    f = {"cotizacion_id": 1, "canal": "correo"}
+    f.update(otros)
+    con.execute(f"INSERT INTO cotizacion_envios ({', '.join(f)}) VALUES ({', '.join('?' for _ in f)})", tuple(f.values()))
+
+
+def test_las_filas_que_hay_quedan_equipo_y_las_nuevas_tambien_sin_decirlo():
+    con = _base_con_migracion()
+    _insertar(con, numero=1, creado_por_chat_id=7)          # una cotización de hoy, antes de la migración
+    _aplicar(con, _migracion_de_las_formales())
+    assert con.execute("SELECT hecha_por FROM cotizaciones").fetchall() == [("equipo",)]
+    _insertar(con, numero=2, creado_por_chat_id=7)          # una nueva, sin decir quién la hizo
+    assert con.execute("SELECT hecha_por FROM cotizaciones WHERE numero = 2").fetchone() == ("equipo",)
+
+
+@pytest.mark.parametrize("hecha_por,chat,entra", [
+    ("equipo", 7, True),
+    ("equipo", None, True),
+    ("natalia", None, True),       # la de Natalia no tiene chat
+    ("natalia", 7, False),         # la de Natalia con chat: el CHECK natalia_sin_chat la frena
+    ("casa", None, False),         # el valor viejo del diseño no existe en la base
+    ("Natalia", None, False),      # mayúsculas: no es el valor
+    ("", None, False),
+])
+def test_hecha_por_acepta_solo_sus_dos_valores_y_natalia_no_tiene_chat(hecha_por, chat, entra):
+    con = _base_con_las_formales()
+    if entra:
+        _insertar(con, hecha_por=hecha_por, creado_por_chat_id=chat)
+        assert con.execute("SELECT count(*) FROM cotizaciones").fetchone()[0] == 1
+    else:
+        with pytest.raises(sqlite3.IntegrityError):
+            _insertar(con, hecha_por=hecha_por, creado_por_chat_id=chat)
+        assert con.execute("SELECT count(*) FROM cotizaciones").fetchone()[0] == 0
+
+
+def test_el_esquema_y_la_migracion_dicen_lo_mismo_para_cotizacion_envios():
+    de_la_migracion = [b2._normal(s).replace("if not exists ", "")
+                       for s in b2._ddl(_migracion_de_las_formales(), "cotizacion_envios")]
+    del_esquema = [b2._normal(s) for s in b2._ddl(_ESQUEMA, "cotizacion_envios")]
+    assert del_esquema, "cotizacion_envios no está en db/schema.sql"
+    assert de_la_migracion == del_esquema
+
+
+def test_las_restricciones_nuevas_estan_en_la_migracion_y_en_el_esquema():
+    nombres = ["cotizaciones_hecha_por_valida", "cotizaciones_natalia_sin_chat"] + [
+        f"cotizacion_envios_{n}" for n in ("canal_valido", "estado_valido", "aprobacion_completa",
+                                           "no_sale_sin_aprobar", "enviado_con_fecha", "motivo_si_falla")]
+    migracion, esquema = _migracion_de_las_formales(), _ESQUEMA
+    for n in nombres:
+        assert f"CONSTRAINT {n}\n" in migracion or f"CONSTRAINT {n} " in migracion, n
+        assert f"CONSTRAINT {n}\n" in esquema or f"CONSTRAINT {n} " in esquema, n
+
+
+def test_los_vocabularios_de_envios_son_los_de_factura_envios():
+    """Los canales y estados de la formal son los mismos que los de la factura, leídos de sus CHECK (no tecleados)."""
+    de_facturas = (_ROOT / "db" / "migrations" / "2026-10-20_facturas.sql").read_text(encoding="utf-8")
+    for campo in ("canal", "estado"):
+        assert _valores_del_check(_migracion_de_las_formales(), f"cotizacion_envios_{campo}_valido") == \
+            _valores_del_check(de_facturas, f"factura_envios_{campo}_valido"), campo
+
+
+@pytest.mark.parametrize("otros", [
+    {"canal": "fax"},                                                        # canal fuera del vocabulario
+    {"estado": "listo"},                                                     # estado fuera del vocabulario
+    {"canal": "correo", "estado": "aprobado"},                               # aprobado sin aprobación
+    {"canal": "correo", "aprobado_por_chat_id": 7},                          # aprobador sin fecha
+    {"canal": "correo", "estado": "enviado", "aprobado_por_chat_id": 7,
+     "aprobado_en": "2026-10-24T10:00:00+00:00"},                            # enviado sin fecha de envío
+    {"canal": "correo", "estado": "rechazado"},                              # rechazado sin motivo
+    {"cotizacion_id": 999},                                                  # no hay tal formal
+])
+def test_cada_restriccion_de_envios_frena_su_borde(otros):
+    con = _base_con_las_formales()
+    _insertar(con, numero=1)
+    with pytest.raises(sqlite3.IntegrityError):
+        _envio(con, **otros)
+    assert con.execute("SELECT count(*) FROM cotizacion_envios").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("otros", [
+    {"canal": "mano", "estado": "enviado", "enviado_en": "2026-10-24"},      # mano no pide aprobación
+    {"canal": "correo", "estado": "aprobado", "aprobado_por_chat_id": 7,
+     "aprobado_en": "2026-10-24T10:00:00+00:00"},
+    {"canal": "whatsapp", "estado": "rechazado", "motivo": "no quiso"},
+])
+def test_los_envios_validos_entran(otros):
+    con = _base_con_las_formales()
+    _insertar(con, numero=1)
+    _envio(con, **otros)
+    assert con.execute("SELECT count(*) FROM cotizacion_envios").fetchone()[0] == 1
+
+
+def test_todo_escritor_de_cotizaciones_pone_hecha_por():
+    """Lo que CREA una cotización en el código: cada `INSERT INTO cotizaciones` lleva `hecha_por`. La lista de archivos
+    sale de recorrer el repo (no de teclearla). Frontera: busca el literal `INSERT INTO cotizaciones` (con espacios o
+    saltos entre las palabras) en el texto de cada .py fuera de `tests/` y de los venv; un INSERT armado en partes o
+    con el nombre de la tabla en una variable no se ve. Los UPDATE no crean filas y no se miran aquí."""
+    import test_buzon_que_no_se_ve as buzon          # la única puerta del repo para recorrer los .py (no entra al venv)
+    escritores: dict[str, list[str]] = {}
+    for p in buzon._py_en_disco(_ROOT):
+        rel = p.relative_to(_ROOT)
+        if any(x == "tests" or x.startswith(".") or "venv" in x for x in rel.parts):
+            continue
+        for m in re.finditer(r"INSERT\s+INTO\s+cotizaciones\b[^\n]*", p.read_text(encoding="utf-8", errors="replace")):
+            escritores.setdefault(rel.as_posix(), []).append(m.group(0))
+    assert list(escritores) == ["db/db.py"], escritores
+    for linea in escritores["db/db.py"]:
+        assert "hecha_por" in linea, linea
+
+
+def test_humo_lee_las_formales_y_su_lista_la_corre():
+    import ast
+    arbol = ast.parse((_ROOT / "tools" / "humo.py").read_text(encoding="utf-8"))
+    selects = {n.value for n in ast.walk(arbol) if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+    assert "SELECT count(hecha_por) AS n FROM cotizaciones" in selects
+    assert "SELECT count(*) AS n FROM cotizacion_envios" in selects
+    en_la_lista = [e for n in ast.walk(arbol) if isinstance(n, ast.Assign)
+                   and any(isinstance(x, ast.Name) and x.id == "pruebas" for x in n.targets)
+                   for e in ast.walk(n.value) if isinstance(e, ast.Name) and e.id == "_formales_de_las_cotizaciones"]
+    assert en_la_lista, "la función del humo existe pero no está en la lista `pruebas`"
+
+
+def test_cotizacion_envios_es_maquinaria_con_su_motivo():
+    tabla = "cotizacion_envios"
+    assert tabla in db.columnas_declaradas(), "db/schema.sql no la declara"
+    motivo = consultar.TABLAS_DE_MAQUINARIA.get(tabla)
+    assert isinstance(motivo, str) and len(motivo.split()) >= 4, f"{tabla} sin motivo en TABLAS_DE_MAQUINARIA"
+    assert tabla not in consultar.TABLAS_DE_TIZIANO
+    assert tabla not in crud.TABLAS, "Telegram no la edita en esta versión"
+    assert tabla not in consultar.ESQUEMA, "Lucy no la ve por Telegram"

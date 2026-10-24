@@ -476,6 +476,7 @@ CREATE TABLE cotizaciones (
   drive_archivo_id   TEXT,
   drive_version      TIMESTAMPTZ,
   drive_error        TEXT,
+  hecha_por          TEXT NOT NULL DEFAULT 'equipo' CONSTRAINT cotizaciones_hecha_por_valida CHECK (hecha_por IN ('equipo', 'natalia')) CONSTRAINT cotizaciones_natalia_sin_chat CHECK (hecha_por = 'equipo' OR creado_por_chat_id IS NULL),
   CONSTRAINT cotizaciones_numero_unico
     UNIQUE (anio, numero),
   CONSTRAINT cotizaciones_numero_positivo
@@ -513,6 +514,41 @@ CREATE TABLE drive_de_proyectos (
   carpeta_facturas_id    TEXT,
   creado_en              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- LAS FORMALES QUE HACE NATALIA (pieza 3 del diseño «Cotización formal que hace Natalia», 24-oct-2026; migración
+-- 2026-10-24_cotizaciones_formales.sql). `cotizaciones.hecha_por` dice quién la hizo ('equipo' o 'natalia').
+-- `cotizacion_envios` es por dónde salió cada formal y la aprobación de Rosi; mismo mecanismo que `factura_envios`.
+CREATE TABLE cotizacion_envios (
+  id                   BIGSERIAL PRIMARY KEY,
+  cotizacion_id        BIGINT NOT NULL REFERENCES cotizaciones(id),
+  canal                TEXT NOT NULL,
+  estado               TEXT NOT NULL DEFAULT 'pendiente',
+  creado_en            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  aprobado_por_chat_id BIGINT,
+  aprobado_en          TIMESTAMPTZ,
+  enviado_en           TIMESTAMPTZ,
+  motivo               TEXT,
+  tarjeta_msg_id       BIGINT,
+  visto_cambiado_en    TIMESTAMPTZ,
+  tarjeta_enviada_en   TIMESTAMPTZ,
+  recordada_en         TIMESTAMPTZ,
+  CONSTRAINT cotizacion_envios_canal_valido
+    CHECK (canal IN ('whatsapp', 'correo', 'mano')),
+  CONSTRAINT cotizacion_envios_estado_valido
+    CHECK (estado IN ('pendiente', 'aprobado', 'rechazado', 'enviado', 'no_se_pudo')),
+  CONSTRAINT cotizacion_envios_aprobacion_completa
+    CHECK ((aprobado_por_chat_id IS NULL) = (aprobado_en IS NULL)),
+  CONSTRAINT cotizacion_envios_no_sale_sin_aprobar
+    CHECK (canal = 'mano' OR estado NOT IN ('aprobado', 'enviado') OR aprobado_en IS NOT NULL),
+  CONSTRAINT cotizacion_envios_enviado_con_fecha
+    CHECK ((estado = 'enviado') = (enviado_en IS NOT NULL)),
+  CONSTRAINT cotizacion_envios_motivo_si_falla
+    CHECK (estado NOT IN ('rechazado', 'no_se_pudo') OR
+           (motivo IS NOT NULL AND length(trim(motivo)) BETWEEN 1 AND 500))
+);
+
+CREATE INDEX idx_cotizacion_envios_cotizacion
+  ON cotizacion_envios (cotizacion_id);
 
 -- EL DRIVE DE LAS FACTURAS (pieza 8 del diseño «Facturas», 21-oct-2026; migración 2026-10-21_facturas_drive.sql, cuya
 -- cabecera explica cada columna). `drive_de_proyectos.carpeta_facturas_id` es la subcarpeta `facturas` de cada proyecto;
