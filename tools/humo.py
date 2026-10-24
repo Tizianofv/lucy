@@ -89,6 +89,20 @@ async def _tablas_de_drive_de_las_cotizaciones():
         return filas
 
 
+async def _formales_de_las_cotizaciones():
+    """Los SELECT de lo que agrega la base de las formales (24-oct-2026, `db/migrations/2026-10-24_cotizaciones_formales.sql`),
+    SIN tolerancia: la columna `hecha_por` de `cotizaciones` y la tabla `cotizacion_envios`. Contra una base sin esa
+    migración, esta línea revienta con «column ... does not exist» o «relation ... does not exist». Son LECTURAS."""
+    async with db.pool.connection() as conn:
+        cur = conn.cursor(row_factory=db.dict_row)
+        filas = {}
+        await cur.execute("SELECT count(hecha_por) AS n FROM cotizaciones")
+        filas["cotizaciones con hecha_por"] = (await cur.fetchone())["n"]
+        await cur.execute("SELECT count(*) AS n FROM cotizacion_envios")
+        filas["cotizacion_envios"] = (await cur.fetchone())["n"]
+        return filas
+
+
 async def _columna_de_audio_sin_tolerancia():
     """El SELECT de la carpeta de audio (pieza 4 de «Carpetas del proyecto», 18-oct-2026), SIN tolerancia.
     `db.carpetas_de_audio()` TOLERA que la columna falte (devuelve `None` y la página sale sin la línea de audio),
@@ -327,6 +341,8 @@ async def main() -> int:
         ("tablas de cotizaciones (sin tolerancia)", _tablas_de_cotizaciones),
         # Lo que la pieza 8 agregó para Drive: ver `_tablas_de_drive_de_las_cotizaciones`. Una LECTURA.
         ("columnas y tabla de Drive de las cotizaciones (sin tolerancia)", _tablas_de_drive_de_las_cotizaciones),
+        # Las formales de Natalia (24-oct-2026): ver `_formales_de_las_cotizaciones`. Una LECTURA.
+        ("hecha_por y tabla de envíos de las formales (sin tolerancia)", _formales_de_las_cotizaciones),
         # La carpeta de audio (pieza 4 de «Carpetas del proyecto»): ver `_columna_de_audio_sin_tolerancia`. Una LECTURA.
         ("columna carpeta_audio de proyectos (sin tolerancia)", _columna_de_audio_sin_tolerancia),
         # Las consultas de Natalia (pieza L3): ver `_consultas_de_natalia_sin_tolerancia`. Una LECTURA.

@@ -102,6 +102,9 @@ TABLAS_DE_MAQUINARIA = {
                           "(donde Lucy guarda el PDF de sus cotizaciones): los "
                           "escribe solo el panel al subir una cotización y Lucy "
                           "no los consulta por Telegram",
+    "cotizacion_envios": "por dónde salió cada formal y la aprobación de Rosi "
+                         "que se pide antes de mandarla: la escribe solo la "
+                         "puerta de las formales y Lucy no la consulta por Telegram",
     "consultas_de_natalia": "las consultas que Natalia abre por un cliente (lo que "
                             "pidió el cliente, con sus palabras, y a quién se le "
                             "pregunta): las escribe solo la puerta de Natalia y su "

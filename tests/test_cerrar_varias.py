@@ -2366,7 +2366,10 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
     # 21-oct-2026 (pieza 8 de «Facturas»): 30 → 31 por `drive_carpetas_sueltas` (las carpetas de Drive que no son de ningún
     # proyecto). Queda FUERA de `crud.TABLAS` y es maquinaria en `cerebro/consultar.py`, como `drive_de_proyectos`: la escribe
     # solo `db.guardar_carpeta_suelta_de_drive`.
-    assert len(declaradas) == 31 and len(vigiladas) == 10, (
+    # 24-oct-2026 (base de las formales de Natalia): 31 → 32 por `cotizacion_envios` (por dónde salió cada formal y la
+    # aprobación de Rosi). Queda FUERA de `crud.TABLAS`, como `factura_envios`: la escribe SOLO la puerta de las formales
+    # y Lucy no tiene herramienta para tocarla por Telegram (`cerebro/consultar.py` la declara maquinaria).
+    assert len(declaradas) == 32 and len(vigiladas) == 10, (
         f"el reparto de tablas cambió: el esquema declara {len(declaradas)} y "
         f"`crud.TABLAS` vigila {len(vigiladas)} (el 1-oct-2026, E7, eran 20 y 10). "
         f"Las que quedan sin juzgar serían {sorted(sin_juzgar)}. No se afloja "
@@ -2386,7 +2389,7 @@ def test_la_frontera_de_las_tablas_vigiladas_esta_declarada():
         "sesiones_de_proyecto", "cotizaciones", "serie_cotizaciones", "drive_de_proyectos",
         "consultas_de_natalia",
         "facturas", "factura_renglones", "factura_ligas", "factura_envios", "serie_facturas",
-        "drive_carpetas_sueltas",
+        "drive_carpetas_sueltas", "cotizacion_envios",
     }, (f"cambió qué tablas quedan fuera del juicio de esta guarda: "
         f"{sorted(sin_juzgar)}. Una escritura a cualquiera de ellas se VE pero "
         f"no se exige que deje huella ni que salga en el parte.")
