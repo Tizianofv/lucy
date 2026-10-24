@@ -257,6 +257,13 @@ def test_a_los_minutos_sale_un_solo_recordatorio_respondiendo_a_la_tarjeta(mundo
     assert tg.mensajes[0]["reply_parameters"].message_id == 9001
 
 
+def test_dos_contenedores_no_reclaman_el_mismo_recordatorio_dos_veces(mundo, tg):
+    """Quien reclama primero se queda con la marca; el segundo recibe «no» aunque haya leído el envío a la vez."""
+    cid, eid, _ = con_tarjeta(tg)
+    assert correr(db.reclamar_recordatorio_de_formal(eid, T0)) is True
+    assert correr(db.reclamar_recordatorio_de_formal(eid, T0)) is False
+
+
 def test_una_formal_aprobada_no_se_recuerda(mundo, tg):
     cid, eid, _ = con_tarjeta(tg)
     tocar(f"cfs:{eid}", ROSI)
