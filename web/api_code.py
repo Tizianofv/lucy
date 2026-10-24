@@ -52,6 +52,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, Strict
 
 import config
 import db.db as db
+import cotizaciones
 import facturas
 import facturas_panel as fp
 import noco_lectura
@@ -1167,6 +1168,186 @@ async def anotar_resultado_del_envio(
         envio = await db.anotar_envio_de_natalia(noco_id, factura_id, envio_id, cuerpo.salio, cuerpo.motivo)
     except (db.FacturaNoVale, db.FacturaNoEsta, db.FacturaYaNoSeCorrige, db.FacturasSinTabla) as e:
         raise _por_que_la_puerta_dijo_que_no(e) from None
+    return {"envio": _envio_para_natalia(envio)}
+
+
+# ── LAS FORMALES QUE HACE NATALIA (Lucy 4, diseño «Cotización formal que hace Natalia», 24-oct-2026) ───────────
+# Mismo camino que las facturas de Natalia: crear sobre el proyecto abierto, pedir la aprobación de quien revisa,
+# bajar el PDF SOLO con el envío aprobado y anotar cómo terminó. «Enviada» solo si Natalia lo anota.
+
+
+class _CotizacionNueva(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    contenido: dict
+    validez_dias: StrictInt
+
+
+def _hay_nulos(valor) -> bool:
+    """Un caracter nulo en cualquier texto del pedido (en cualquier profundidad)."""
+    if isinstance(valor, str):
+        return "\x00" in valor
+    if isinstance(valor, dict):
+        return any(_hay_nulos(k) or _hay_nulos(v) for k, v in valor.items())
+    if isinstance(valor, list):
+        return any(_hay_nulos(x) for x in valor)
+    return False
+
+
+def _cotizacion_para_natalia(c: dict) -> dict:
+    """Una formal releída → lo que sale. `codigo` es el número que ya tiene (se toma al crear). `estado` es el de la base:
+    `borrador` hasta que Natalia anota que salió, y entonces `enviada`."""
+    contenido = c["contenido"]
+    fecha = c["fecha"]
+    return {
+        "cotizacion_id": c["id"], "codigo": c["codigo"], "estado": c["estado"], "hecha_por": c["hecha_por"],
+        "para_nombre": c["para_nombre"],
+        "fecha": fecha.isoformat() if isinstance(fecha, date) else str(fecha),
+        "validez_dias": c["validez_dias"],
+        "opciones": [{"nombre": op["nombre"],
+                      "renglones": [{"descripcion": r["descripcion"], "detalle": r["detalle"], "total": r["total"]}
+                                    for r in op["renglones"]],
+                      "total": _dinero_para_natalia(t)}
+                     for op, t in zip(contenido["opciones"], c["totales_por_opcion"])],
+        "condiciones": contenido["condiciones"],
+        "envios": [_envio_para_natalia(e) for e in c.get("envios", [])],
+    }
+
+
+def _por_que_la_formal_dijo_que_no(e: Exception) -> HTTPException:
+    """El `HTTPException` de lo que la puerta de `db` rechazó. 404: no es de Natalia / no existe. 409: el cliente no tiene
+    proyecto abierto, o el envío está en otro estado. 422: el pedido no vale. 503: falta una migración."""
+    if isinstance(e, db.CotizacionNoEsta):
+        return HTTPException(status_code=404, detail="esa formal no está")
+    if isinstance(e, db.ClienteSinProyectoAbierto):
+        return HTTPException(
+            status_code=409,
+            detail="el cliente no tiene un proyecto abierto: crea primero el proyecto (POST …/proyecto). No se guardó nada.")
+    if isinstance(e, db.CotizacionEnvioNoSeMueve):
+        return HTTPException(status_code=409, detail=str(e))
+    if isinstance(e, db.CotizacionCambio):
+        return HTTPException(status_code=409, detail="la formal cambió mientras se anotaba: vuelve a leerla. No se anotó nada.")
+    if isinstance(e, db.CotizacionNoVale):
+        return HTTPException(status_code=422, detail=str(e))
+    if isinstance(e, db.CotizacionesSinTabla):
+        return _sin_migrar_las_facturas()
+    raise e
+
+
+@router.post("/clientes/{noco_id}/cotizaciones")
+async def crear_formal_de_natalia(
+    cuerpo: _CotizacionNueva,
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere("cotizaciones:crear", solo_de=config.QUIEN_DE_NATALIA)),
+) -> dict:
+    """Natalia HACE una formal (borrador, `hecha_por = natalia`, sin chat) sobre el proyecto ABIERTO del cliente.
+
+    PEDIDO: `{contenido: {opciones: [{nombre, renglones: [{descripcion, detalle?, total: "62500.00"}]}], condiciones?: [...]},
+    validez_dias: 7 | 15 | 30}`. El contenido se valida como el de la casa; los precios son los que manda Natalia.
+    200 `{"cotizacion": {…}}` releído de la base. 409: el cliente no tiene proyecto abierto (no se escribe nada). 422: el
+    contenido o la validez no valen. 503: falta una migración. 401/403/429: la puerta de siempre."""
+    if _hay_nulos(cuerpo.contenido):
+        raise HTTPException(status_code=422, detail="el texto no puede llevar caracteres nulos")
+    try:
+        creada = await db.crear_cotizacion_de_natalia(noco_id, cuerpo.contenido, cuerpo.validez_dias)
+        relei = await db.cotizaciones_de_natalia(noco_id, creada["id"])
+    except (db.CotizacionNoVale, db.CotizacionNoEsta, db.ClienteSinProyectoAbierto, db.CotizacionesSinTabla) as e:
+        raise _por_que_la_formal_dijo_que_no(e) from None
+    if not relei:
+        log.error("puerta de Code: la formal %s se creó y la relectura no la encontró", creada["id"])
+        raise HTTPException(status_code=500, detail="la formal se creó pero no se pudo releer")
+    return {"cotizacion": _cotizacion_para_natalia(relei[0])}
+
+
+@router.get("/clientes/{noco_id}/cotizaciones")
+async def leer_formales_de_natalia(
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere("cotizaciones:listar", solo_de=config.QUIEN_DE_NATALIA)),
+) -> dict:
+    """Las formales que HIZO Natalia para ese cliente, la más nueva primero, cada una con sus envíos. Solo lee."""
+    try:
+        formales = await db.cotizaciones_de_natalia(noco_id)
+    except db.CotizacionesSinTabla as e:
+        raise _por_que_la_formal_dijo_que_no(e) from None
+    return {"noco_id": noco_id, "cotizaciones": [_cotizacion_para_natalia(c) for c in formales]}
+
+
+@router.get("/clientes/{noco_id}/cotizaciones/{cotizacion_id}")
+async def leer_una_formal_de_natalia(
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    cotizacion_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere("cotizaciones:leer", solo_de=config.QUIEN_DE_NATALIA)),
+) -> dict:
+    """UNA formal de Natalia: 200 `{"cotizacion": {…}}`, o 404 si no es suya / no es de ese cliente / no existe."""
+    try:
+        formales = await db.cotizaciones_de_natalia(noco_id, cotizacion_id)
+    except db.CotizacionesSinTabla as e:
+        raise _por_que_la_formal_dijo_que_no(e) from None
+    if not formales:
+        raise HTTPException(status_code=404, detail="esa formal no está")
+    return {"cotizacion": _cotizacion_para_natalia(formales[0])}
+
+
+@router.post("/clientes/{noco_id}/cotizaciones/{cotizacion_id}/envios")
+async def pedir_envio_de_formal(
+    cuerpo: _EnvioPedido,
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    cotizacion_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere("cotizaciones:pedir_envio", solo_de=config.QUIEN_DE_NATALIA)),
+) -> dict:
+    """Natalia pide que se APRUEBE mandar su formal por `canal` (`whatsapp` o `correo`). Nada sale al cliente hasta que
+    quien revisa la apruebe. 200 `{"envio": {envio_id, canal, estado, aprobada, pdf_listo, motivo}, "reusada": bool}`;
+    `pendiente` quiere decir que todavía no contestaron. 503: no hay a quién pedirle la aprobación: NO SE PIDIÓ NADA."""
+    if config.chat_de_quien_revisa_las_facturas() is None:
+        log.error("puerta de Code: no hay a quién mandarle la aprobación de las formales (REVISA_FACTURAS no resuelve)")
+        raise HTTPException(
+            status_code=503,
+            detail="Lucy no sabe a quién pedirle la aprobación de la formal: no se pidió nada. Avisale a la sala/Tiziano.")
+    try:
+        r = await db.pedir_envio_de_cotizacion_de_natalia(noco_id, cotizacion_id, cuerpo.canal)
+    except (db.CotizacionNoVale, db.CotizacionNoEsta, db.CotizacionesSinTabla) as e:
+        raise _por_que_la_formal_dijo_que_no(e) from None
+    return {"envio": _envio_para_natalia(r["envio"]), "reusada": r["reusada"]}
+
+
+@router.get("/clientes/{noco_id}/cotizaciones/{cotizacion_id}/envios/{envio_id}/pdf")
+async def pdf_de_formal_aprobada(
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    cotizacion_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    envio_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere("cotizaciones:pdf", solo_de=config.QUIEN_DE_NATALIA)),
+) -> Response:
+    """El PDF de la formal, SOLO si ese envío está APROBADO y la formal no salió ya por otro envío. 200 `application/pdf`.
+    409: el envío no se aprobó, se rechazó, ya terminó, o la formal ya salió por otro envío. 404: no es suya / no existe."""
+    try:
+        c = await db.formal_y_envio_para_el_pdf_de_natalia(noco_id, cotizacion_id, envio_id)
+    except (db.CotizacionNoEsta, db.CotizacionEnvioNoSeMueve, db.CotizacionesSinTabla) as e:
+        raise _por_que_la_formal_dijo_que_no(e) from None
+    pdf = cotizaciones.pdf_de_cotizacion(cotizaciones.hoja_de_cotizacion(c), borrador=c["estado"] != "enviada")
+    return Response(pdf, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{c["codigo"]}.pdf"',
+        "Cache-Control": "private, no-store"})
+
+
+@router.post("/clientes/{noco_id}/cotizaciones/{cotizacion_id}/envios/{envio_id}/resultado")
+async def anotar_resultado_de_formal(
+    cuerpo: _EnvioResultado,
+    noco_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    cotizacion_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    envio_id: int = Path(ge=1, le=_ID_MAXIMO_BIGINT),
+    quien: str = Depends(requiere("cotizaciones:anotar_envio", solo_de=config.QUIEN_DE_NATALIA)),
+) -> dict:
+    """Natalia anota cómo terminó un envío APROBADO: `{salio: true}` → la formal queda `enviada`; `{salio: false, motivo}` →
+    el envío queda `no_se_pudo` y la formal sigue `borrador`. Es lo ÚNICO que pone una formal en `enviada`.
+    200 `{"envio": {…}}` releído. 409: el envío no está aprobado. 422: falta el motivo."""
+    if "\x00" in cuerpo.motivo:
+        raise HTTPException(status_code=422, detail="el texto no puede llevar caracteres nulos")
+    if not cuerpo.salio and not (1 <= len(cuerpo.motivo.strip()) <= 500):
+        raise HTTPException(status_code=422, detail="cuando no salió, el motivo es obligatorio (de 1 a 500 caracteres)")
+    try:
+        envio = await db.anotar_envio_de_cotizacion_de_natalia(noco_id, cotizacion_id, envio_id, cuerpo.salio, cuerpo.motivo)
+    except (db.CotizacionNoVale, db.CotizacionNoEsta, db.CotizacionEnvioNoSeMueve, db.CotizacionCambio,
+            db.CotizacionesSinTabla) as e:
+        raise _por_que_la_formal_dijo_que_no(e) from None
     return {"envio": _envio_para_natalia(envio)}
 
 

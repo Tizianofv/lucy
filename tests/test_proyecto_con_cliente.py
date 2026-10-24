@@ -837,8 +837,11 @@ def test_G7n_la_comprobacion_vive_en_una_sola_funcion_y_todos_los_escritores_la_
             for nombre in ("proyecto_puede_quedar_activo", "proyecto_vivo_del_cliente", "cliente_es_obligatorio"):
                 if nombre in vistas:
                     llamadas.setdefault(nombre, set()).add((rel, fn.name))
-    # LA decisión de «un solo activo» la toma `proyecto_vivo_del_cliente` y la llama solo la función compartida
-    assert llamadas["proyecto_vivo_del_cliente"] == {("db/db.py", "proyecto_puede_quedar_activo")}
+    # LA decisión de «un solo activo» la toma `proyecto_vivo_del_cliente` y la llama solo la función compartida.
+    # Lucy 4 (24-oct-2026) agrega UNA LECTURA: `crear_cotizacion_de_natalia` busca el proyecto abierto del cliente para colgar
+    # la formal de él. No decide si se abre otro proyecto (no escribe `proyectos`).
+    assert llamadas["proyecto_vivo_del_cliente"] == {("db/db.py", "proyecto_puede_quedar_activo"),
+                                                     ("db/db.py", "crear_cotizacion_de_natalia")}
     # y la función compartida la llaman LOS CINCO escritores (editar y deshacer son los dos genéricos de crud)
     assert llamadas["proyecto_puede_quedar_activo"] == {
         ("db/db.py", "crear_proyecto"), ("db/db.py", "convertir_tarea_en_proyecto"), ("db/db.py", "poner_cliente"),

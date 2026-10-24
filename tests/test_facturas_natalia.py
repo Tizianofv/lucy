@@ -1238,7 +1238,7 @@ def _funciones_de_db_de_natalia():
     return {n: f for n, f in vars(db).items()
             if inspect.iscoroutinefunction(f) and not n.startswith("_") and f.__module__ == db.__name__
             and "noco_id" in inspect.signature(f).parameters and ("factura" in n or "natalia" in n)
-            and "consulta" not in n}
+            and "consulta" not in n and "cotizacion" not in n and "formal" not in n}  # las de las formales tienen su censo propio
 
 
 def test_toda_funcion_de_db_que_recibe_la_ficha_de_una_factura_la_filtra_en_su_sql():

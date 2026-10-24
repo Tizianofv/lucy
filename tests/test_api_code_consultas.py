@@ -581,7 +581,8 @@ def test_G2_los_hermanos_las_rutas_con_ficha_son_estas_y_las_dos_de_consultas_fi
     # Las rutas de las facturas de Natalia (pieza 9, 21-oct-2026) también llevan la ficha; su «otro cliente no la ve» y
     # su censo viven en `tests/test_facturas_natalia.py`. Aquí quedan las tres de siempre.
     con_ficha = sorted((m, p, perm) for m, p, perm in api_code.rutas_registradas(panel.app)
-                       if "{noco_id}" in p and "/facturas" not in p)
+                       if "{noco_id}" in p and "/facturas" not in p and "/cotizaciones" not in p)
+    # las de las formales (Lucy 4) tienen su censo y su «otra ficha no la ve» en `tests/test_cotizaciones_natalia_puerta.py`
     assert [(m, p) for m, p, _ in con_ficha] == [
         ("GET", "/api/code/clientes/{noco_id}/consultas"), ("GET", "/api/code/clientes/{noco_id}/proyectos"),
         ("POST", "/api/code/clientes/{noco_id}/consultas"), ("POST", "/api/code/clientes/{noco_id}/proyecto")]

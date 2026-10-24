@@ -4344,7 +4344,10 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # 24-oct-2026, rama `trabajo/natalia-crea-proyecto` (Lucy 2, Natalia crea el proyecto del cliente): +1 en disco y +1
     # EXENTO (`tests/test_natalia_crea_proyecto.py`, nuevo, exento por rol); VIGILADOS sin cambio (se tocaron `config.py`,
     # `db/db.py` y `web/api_code.py`, ya vigilados). Medida: 238, 172, 66.
-    assert medido == {"en disco": 238, "exentos": 172, "vigilados": 66}, (
+    # 24-oct-2026, rama `trabajo/formales-puerta-natalia` (Lucy 4, las formales que hace Natalia): +1 en disco y +1 EXENTO
+    # (`tests/test_cotizaciones_natalia_puerta.py`, nuevo, exento por rol); VIGILADOS sin cambio (se tocaron `db/db.py` y
+    # `web/api_code.py`, ya vigilados). Medida: 239, 173, 66.
+    assert medido == {"en disco": 239, "exentos": 173, "vigilados": 66}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
         "23-oct-2026 (factura-en-proyectos) era {'en disco': 236, "
         "'exentos': 170, 'vigilados': 66}. La aserción de fondo —cero "
