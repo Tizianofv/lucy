@@ -4790,6 +4790,192 @@ async def anotar_envio_de_cotizacion_de_natalia(noco_id, cotizacion_id: int, env
             raise
 
 
+# ── LA TARJETA DE ROSI PARA LAS FORMALES (Lucy 5 del diseño «Cotización formal que hace Natalia», 24-oct-2026) ─────
+#
+# El mismo camino que la tarjeta de las facturas de Natalia (`contestar_envio_de_factura`, `_mandar_tarjetas_de_facturas`):
+# un envío `pendiente` sin tarjeta, la tarjeta solo al chat de quien revisa (`REVISA_FACTURAS`), el primero que contesta
+# gana (se bloquea la fila del envío, sin cambiarla), y el candado de versión: `visto_cambiado_en` es el `cambiado_en` del
+# PDF que vio Rosi. Solo las formales `hecha_por = 'natalia'`. Aprobar NO cambia `cotizaciones`: la formal sigue borrador hasta
+# que Natalia anota que salió (`anotar_envio_de_cotizacion_de_natalia`). Rechazar solo cambia el envío.
+
+SENTENCIA_DE_LOS_ENVIOS_DE_FORMALES_SIN_TARJETA = (
+    "SELECT e.id, e.cotizacion_id, e.canal FROM cotizacion_envios e JOIN cotizaciones c ON c.id = e.cotizacion_id "
+    "WHERE e.estado = 'pendiente' AND e.tarjeta_msg_id IS NULL AND e.canal IN ('whatsapp', 'correo') "
+    "AND c.hecha_por = 'natalia' AND c.borrado_en IS NULL ORDER BY e.id")
+SENTENCIA_DE_MARCAR_LA_TARJETA_DE_FORMAL = (
+    "UPDATE cotizacion_envios SET tarjeta_msg_id = %s, visto_cambiado_en = %s, tarjeta_enviada_en = %s "
+    "WHERE id = %s AND estado = 'pendiente' AND tarjeta_msg_id IS NULL RETURNING id")
+SENTENCIA_DE_LOS_ENVIOS_DE_FORMALES_PARA_RECORDAR = (
+    "SELECT e.id, e.cotizacion_id, e.canal, e.tarjeta_msg_id FROM cotizacion_envios e JOIN cotizaciones c ON c.id = e.cotizacion_id "
+    "WHERE e.estado = 'pendiente' AND e.tarjeta_msg_id IS NOT NULL AND e.recordada_en IS NULL "
+    "AND e.tarjeta_enviada_en <= %s AND e.canal IN ('whatsapp', 'correo') "
+    "AND c.hecha_por = 'natalia' AND c.borrado_en IS NULL ORDER BY e.id")
+SENTENCIA_DE_RECLAMAR_EL_RECORDATORIO_DE_FORMAL = (
+    "UPDATE cotizacion_envios SET recordada_en = %s WHERE id = %s AND estado = 'pendiente' AND recordada_en IS NULL "
+    "RETURNING id")
+SENTENCIA_DE_SOLTAR_EL_RECORDATORIO_DE_FORMAL = (
+    "UPDATE cotizacion_envios SET recordada_en = NULL WHERE id = %s AND estado = 'pendiente' RETURNING id")
+# El primero que contesta gana: se bloquea la FILA DEL ENVÍO con una escritura que no cambia nada (lo mismo que
+# `_tomar_factura`, pero sobre el envío). Cualquier cancelación de la casa escribe ese mismo envío, así que se
+# serializa con ella. La formal se lee después, sin escribirla.
+SENTENCIA_DE_TOMAR_EL_ENVIO_DE_FORMAL = (
+    "UPDATE cotizacion_envios SET creado_en = creado_en WHERE id = %s "
+    "RETURNING id, cotizacion_id, canal, estado, tarjeta_msg_id, visto_cambiado_en")
+SENTENCIA_DE_LEER_LA_FORMAL_PARA_CONTESTAR = (
+    "SELECT id, anio, numero, estado, hecha_por, cambiado_en, borrado_en FROM cotizaciones WHERE id = %s")
+SENTENCIA_DE_OTRO_ENVIO_DE_FORMAL_APROBADO = (
+    "SELECT id, canal, estado FROM cotizacion_envios WHERE cotizacion_id = %s AND id <> %s "
+    "AND estado IN ('aprobado', 'enviado') ORDER BY id DESC LIMIT 1")
+SENTENCIA_DE_APROBAR_ENVIO_DE_FORMAL = (
+    "UPDATE cotizacion_envios SET estado = 'aprobado', aprobado_por_chat_id = %s, aprobado_en = now() "
+    "WHERE id = %s AND estado = 'pendiente' RETURNING id")
+SENTENCIA_DE_RECHAZAR_ENVIO_DE_FORMAL = (
+    "UPDATE cotizacion_envios SET estado = 'rechazado', motivo = %s WHERE id = %s AND estado = 'pendiente' RETURNING id")
+SENTENCIA_DE_ENVIO_DE_FORMAL_QUE_NO_SE_PUDO_APROBAR = (
+    "UPDATE cotizacion_envios SET estado = 'no_se_pudo', motivo = %s WHERE id = %s AND estado = 'pendiente' RETURNING id")
+
+
+def _con_el_aviso_de_la_tabla_de_formales(funcion):
+    """Cada función pública de la tarjeta de las formales: la tabla ausente (42P01) sale como `CotizacionesSinTabla`."""
+    @functools.wraps(funcion)
+    async def envuelta(*args, **kw):
+        try:
+            return await funcion(*args, **kw)
+        except Exception as e:
+            if _tabla_ausente(e):
+                raise CotizacionesSinTabla("cotizaciones no existe todavía") from e
+            raise
+    return envuelta
+
+
+@_con_el_aviso_de_la_tabla_de_formales
+async def envios_de_formal_sin_tarjeta() -> list[dict]:
+    """Los envíos `pendiente` por WhatsApp o correo de formales de Natalia cuya tarjeta todavía no salió. Una lectura."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_LOS_ENVIOS_DE_FORMALES_SIN_TARJETA)
+        return [dict(r) for r in await cur.fetchall()]
+
+
+@_con_el_aviso_de_la_tabla_de_formales
+async def formal_de_la_tarjeta(cotizacion_id: int) -> dict | None:
+    """La formal (leída, con `codigo`, `contenido`, `totales_por_opcion` y `cambiado_en`) para armar su tarjeta. Una lectura."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_LEER_LA_FORMAL_DE_NATALIA, (cotizacion_id,))
+        fila = await cur.fetchone()
+    return None if fila is None else _cotizacion_leida(fila)
+
+
+@_con_el_aviso_de_la_tabla_de_formales
+async def marcar_tarjeta_de_formal(envio_id: int, mensaje_id: int, visto_cambiado_en, enviada_en) -> bool:
+    """Anota que la tarjeta del envío SALIÓ (el `message_id` de Telegram) y con qué `cambiado_en` se armó su PDF.
+    `True` si escribió; `False` si el envío ya no estaba pendiente sin tarjeta. No pide sesión ni deja huella."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_MARCAR_LA_TARJETA_DE_FORMAL, (mensaje_id, visto_cambiado_en, enviada_en, envio_id))
+        return await cur.fetchone() is not None
+
+
+@_con_el_aviso_de_la_tabla_de_formales
+async def envios_de_formal_para_recordar(enviada_antes_de) -> list[dict]:
+    """Los envíos pendientes de formales con tarjeta enviada a `enviada_antes_de` o antes y sin recordar. Una lectura."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_LOS_ENVIOS_DE_FORMALES_PARA_RECORDAR, (enviada_antes_de,))
+        return [dict(r) for r in await cur.fetchall()]
+
+
+@_con_el_aviso_de_la_tabla_de_formales
+async def reclamar_recordatorio_de_formal(envio_id: int, cuando) -> bool:
+    """Se queda con el recordatorio de ese envío: `True` solo para quien lo marca primero."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_RECLAMAR_EL_RECORDATORIO_DE_FORMAL, (cuando, envio_id))
+        return await cur.fetchone() is not None
+
+
+@_con_el_aviso_de_la_tabla_de_formales
+async def soltar_recordatorio_de_formal(envio_id: int) -> bool:
+    """Devuelve el recordatorio reclamado cuando el mensaje NO salió."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_SOLTAR_EL_RECORDATORIO_DE_FORMAL, (envio_id,))
+        return await cur.fetchone() is not None
+
+
+@_con_el_aviso_de_la_tabla_de_formales
+async def contestar_envio_de_cotizacion(envio_id: int, chat_id: int, acepta: bool) -> dict:
+    """La respuesta de quien REVISA a un envío `pendiente` de una formal de Natalia (los botones Aprobar / Rechazar).
+    Devuelve `{"resultado": ..., ...}` y nunca dice «aprobada» si no quedó aprobada:
+      · `no_es_tuyo`: el chat no es el de quien revisa; no cambia nada.
+      · `no_existe` (también si la formal no es de Natalia o ya no está), `todavia` (la tarjeta aún no está anotada),
+        `ya_contestado` (con su `estado`).
+      · `rechazada`: el envío pasa a `rechazado` con su motivo.
+      · `aprobada`: el envío pasa a `aprobado` con quién y cuándo. La formal NO cambia.
+      · `no_se_pudo`: la formal cambió después de la tarjeta, ya hay otro envío aprobado o enviado para ella, o no se pudo
+        aprobar; el envío pasa a `no_se_pudo` con la razón y Natalia tiene que pedirla de nuevo. Trae `motivo`.
+    Pide sesión de la casa antes de abrir la conexión."""
+    from web.auth import puede_entrar
+    if chat_id is None or not puede_entrar(chat_id):
+        raise CotizacionSinSesion("quien escribe no entra al panel")
+    if not isinstance(acepta, bool):
+        raise CotizacionNoVale("acepta", "acepta es verdadero o falso")
+    revisora = _config.chat_de_quien_revisa_las_facturas()
+    if revisora is None or chat_id != revisora:
+        return {"resultado": RESULTADO_ENVIO_NO_ES_TUYO, "revisa": _config.NOMBRE_DE_QUIEN_REVISA_LAS_FACTURAS}
+    quien = _nombre_de_quien_toco(chat_id)
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(SENTENCIA_DE_TOMAR_EL_ENVIO_DE_FORMAL, (envio_id,))  # bloquea el envío: el primero gana
+        envio = await cur.fetchone()
+        if envio is None or envio["canal"] == "mano":
+            return {"resultado": RESULTADO_ENVIO_NO_EXISTE}
+        cotizacion_id = envio["cotizacion_id"]
+        await cur.execute(SENTENCIA_DE_LEER_LA_FORMAL_PARA_CONTESTAR, (cotizacion_id,))
+        formal = await cur.fetchone()
+        if formal is None or formal["hecha_por"] != "natalia" or formal["borrado_en"] is not None:
+            return {"resultado": RESULTADO_ENVIO_NO_EXISTE}
+        if envio["estado"] != "pendiente":
+            return {"resultado": RESULTADO_ENVIO_YA_CONTESTADO, "estado": envio["estado"], "cotizacion_id": cotizacion_id}
+        if envio["tarjeta_msg_id"] is None:
+            return {"resultado": RESULTADO_ENVIO_TODAVIA, "cotizacion_id": cotizacion_id}
+        antes = {"envio_id": envio_id, "estado": "pendiente"}
+        if not acepta:
+            motivo = f"Rechazada por {quien}"
+            await cur.execute(SENTENCIA_DE_RECHAZAR_ENVIO_DE_FORMAL, (motivo, envio_id))
+            await cur.fetchone()
+            await _huella_de_cotizacion(conn, "rechazar_envio", cotizacion_id, antes,
+                                        {"envio_id": envio_id, "estado": "rechazado"}, motivo)
+            return {"resultado": RESULTADO_ENVIO_RECHAZADO, "cotizacion_id": cotizacion_id, "canal": envio["canal"]}
+
+        async def no_se_pudo(razon: str) -> dict:
+            await cur.execute(SENTENCIA_DE_ENVIO_DE_FORMAL_QUE_NO_SE_PUDO_APROBAR, (razon, envio_id))
+            await cur.fetchone()
+            await _huella_de_cotizacion(conn, "no_se_pudo_aprobar_envio", cotizacion_id, antes,
+                                        {"envio_id": envio_id, "estado": "no_se_pudo"}, razon)
+            return {"resultado": RESULTADO_ENVIO_NO_SE_PUDO, "cotizacion_id": cotizacion_id, "motivo": razon}
+
+        # UNA FORMAL TIENE UN SOLO ENVÍO VIVO A LA VEZ: no se aprueba si otro envío suyo ya está aprobado o enviado.
+        await cur.execute(SENTENCIA_DE_OTRO_ENVIO_DE_FORMAL_APROBADO, (cotizacion_id, envio_id))
+        otro = await cur.fetchone()
+        if otro is not None:
+            if otro["estado"] == "enviado":
+                return await no_se_pudo(f"la formal ya salió al cliente por {otro['canal']}: no se manda dos veces")
+            return await no_se_pudo(
+                f"ya hay otro envío aprobado para esta formal (por {otro['canal']}): no se aprueba un segundo")
+        # EL CANDADO: la tarjeta se armó con la versión que se guardó en `visto_cambiado_en`; si la formal cambió, no.
+        if _instante_leido(envio["visto_cambiado_en"]) != _instante_leido(formal["cambiado_en"]):
+            return await no_se_pudo("La formal cambió después de enviarte la tarjeta: hay que pedirla otra vez")
+        await cur.execute(SENTENCIA_DE_APROBAR_ENVIO_DE_FORMAL, (chat_id, envio_id))
+        await cur.fetchone()
+        await _huella_de_cotizacion(conn, "aprobar_envio", cotizacion_id, antes,
+                                    {"envio_id": envio_id, "estado": "aprobado", "canal": envio["canal"]},
+                                    f"envío aprobado por {quien} desde Telegram")
+        return {"resultado": RESULTADO_ENVIO_APROBADO, "cotizacion_id": cotizacion_id, "canal": envio["canal"],
+                "codigo": codigo_de_cotizacion(formal["anio"], formal["numero"])}
+
+
 # ── EL DRIVE DE LAS COTIZACIONES (pieza 8 del diseño «Cotizaciones en Proyectos», 16-oct-2026) ─────────────
 #
 # Aquí solo hay SQL. Quién sube, en qué orden y con qué frases lo decide `cotizaciones_drive.py`; quién habla

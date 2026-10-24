@@ -4355,7 +4355,11 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # `cotizaciones.py`): +1 en disco y +1 EXENTO (`tests/test_factura_tabla_pieza1.py`, nuevo, exento por rol); VIGILADOS
     # sin cambio (`cotizaciones.py` y `facturas.py` ya vigilados). La referencia es un JSON en `tests/fixtures/`: no es .py.
     # Medida: 241, 175, 66.
-    assert medido == {"en disco": 241, "exentos": 175, "vigilados": 66}, (
+    # 24-oct-2026, rama `trabajo/formales-tarjeta-rosi` (Lucy 5, la tarjeta de Rosi para las formales): +1 en disco y +1
+    # EXENTO (`tests/test_cotizaciones_tarjeta_rosi.py`, nuevo, exento por rol); VIGILADOS sin cambio (medido: 66; se
+    # tocaron `cerebro/despertador.py`, `acciones/botones.py`, `cerebro/interpretar.py` y `db/db.py`). Medida: 241, 175, 66.
+    # Las dos ramas juntas en `main` (24-oct-2026, la sala): 242, 176, 66.
+    assert medido == {"en disco": 242, "exentos": 176, "vigilados": 66}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
         "23-oct-2026 (factura-en-proyectos) era {'en disco': 236, "
         "'exentos': 170, 'vigilados': 66}. La aserción de fondo —cero "

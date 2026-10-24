@@ -282,6 +282,12 @@ async def bucle(bot) -> None:
             except Exception:
                 log.warning("Las facturas de Natalia tropezaron; reintento en "
                             "la próxima.", exc_info=True)
+            # Las tarjetas de las formales de Natalia para quien las revisa: aparte, con su propio try, por lo mismo.
+            try:
+                await despertador.revisar_envios_de_formales(bot)
+            except Exception:
+                log.warning("Las formales de Natalia tropezaron; reintento en "
+                            "la próxima.", exc_info=True)
         if vuelta % 12 == 0:
             try:
                 await memoria.indexar_pendientes()

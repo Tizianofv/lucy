@@ -609,6 +609,110 @@ async def revisar_envios_de_facturas(bot, ahora=None) -> int:
         return 0
 
 
+# ── Las formales de Natalia: la tarjeta para quien las revisa (Lucy 5 del diseño «Cotización formal que hace Natalia») ──
+#
+# Igual que las facturas (arriba): un envío `pendiente` sin tarjeta sale como tarjeta con el PDF y los botones Aprobar /
+# Rechazar, SOLO para `config.chat_de_quien_revisa_las_facturas()` (la misma persona que revisa las facturas). El PDF es el
+# que Natalia bajaría al aprobar (sin marca de borrador). Aprobar no envía ni cambia la formal.
+
+def _texto_de_tarjeta_de_formal(c: dict, canal: str) -> str:
+    """El texto que acompaña al PDF de la formal. Plano (sin `parse_mode`). Dice lo que pasa al aprobar, sin prometer más."""
+    import cotizaciones
+    donde = "WhatsApp" if canal == "whatsapp" else "correo"
+    opciones = c["contenido"]["opciones"]
+    if len(opciones) == 1:
+        detalle = f"total {cotizaciones.dinero_en_pesos(c['totales_por_opcion'][0])}"
+    else:
+        detalle = f"{len(opciones)} opciones: " + "; ".join(
+            f"{op['nombre']} {cotizaciones.dinero_en_pesos(t)}" for op, t in zip(opciones, c["totales_por_opcion"]))
+    return (f"🧾 Natalia hizo una cotización formal ({c['codigo']}) para {c['para_nombre']}: {detalle}. "
+            f"El cliente la pidió por {donde}. Si la apruebas, Natalia puede bajarla y mandarla. Si la rechazas, no sale nada.")
+
+
+async def _mandar_tarjetas_de_formales(bot, revisora: int, ahora) -> int:
+    """Manda la tarjeta de cada envío pendiente de formal sin tarjeta y anota el mensaje SOLO si Telegram devolvió uno con
+    `message_id`. Si falla, el envío sigue sin tarjeta y se reintenta."""
+    import cotizaciones
+    from acciones.botones import teclado_de_envio_de_formal
+    mandadas = 0
+    for e in await db.envios_de_formal_sin_tarjeta():
+        try:
+            c = await db.formal_de_la_tarjeta(e["cotizacion_id"])
+            if c is None:
+                continue
+            pdf = cotizaciones.pdf_de_cotizacion(cotizaciones.hoja_de_cotizacion(c), borrador=False)
+            texto = _texto_de_tarjeta_de_formal(c, e["canal"])
+            with copia_dueno.sin_copiar():
+                mensaje = await bot.send_document(
+                    chat_id=revisora, document=pdf, filename=f"{c['codigo']}.pdf", caption=texto[:1000],
+                    reply_markup=teclado_de_envio_de_formal(e["id"]))
+        except Exception:
+            log.warning("Envío de formal #%s: la tarjeta no salió; se reintenta.", e["id"], exc_info=True)
+            continue
+        numero = _id_del_mensaje(mensaje)
+        if numero is None:
+            continue
+        if not await db.marcar_tarjeta_de_formal(e["id"], numero, c["cambiado_en"], ahora):
+            log.warning("Envío de formal #%s: la tarjeta salió pero el envío ya no estaba pendiente sin tarjeta.", e["id"])
+            continue
+        mandadas += 1
+        try:
+            await db.registrar_aviso(revisora, texto)
+        except Exception:
+            log.warning("Envío de formal #%s: no pude dejar constancia de la tarjeta; sigo igual.", e["id"], exc_info=True)
+    return mandadas
+
+
+async def _recordar_envios_de_formales(bot, revisora: int, ahora) -> int:
+    """A los `RECORDAR_CONSULTA_MIN` minutos de la tarjeta, UN recordatorio por envío que sigue pendiente, respondiendo a
+    la tarjeta. Reclama la marca antes de mandar; si el mensaje no salió, la suelta."""
+    recordados = 0
+    for e in await db.envios_de_formal_para_recordar(ahora - timedelta(minutes=RECORDAR_CONSULTA_MIN)):
+        try:
+            c = await db.formal_de_la_tarjeta(e["cotizacion_id"])
+        except Exception:
+            log.warning("Envío de formal #%s: no pude leer la formal para recordarla.", e["id"], exc_info=True)
+            continue
+        if c is None:
+            continue
+        if not await db.reclamar_recordatorio_de_formal(e["id"], ahora):
+            continue                                   # otro (u otra vuelta) lo reclamó, o ya no está pendiente
+        donde = "WhatsApp" if e["canal"] == "whatsapp" else "correo"
+        texto = f"⏰ Sigue pendiente: la cotización formal de {c['para_nombre']} que Natalia pidió mandar por {donde}. ¿La apruebas?"
+        try:
+            mensaje = await _mandar_al_responsable(bot, {"responsable_chat_id": revisora, "id": e["id"]}, texto,
+                                                   responder_a=e["tarjeta_msg_id"])
+        except Exception:
+            log.warning("Envío de formal #%s: el recordatorio no salió; se reintenta.", e["id"], exc_info=True)
+            mensaje = None
+        if _id_del_mensaje(mensaje) is None:
+            await db.soltar_recordatorio_de_formal(e["id"])
+            continue
+        recordados += 1
+        try:
+            await db.registrar_aviso(revisora, texto)
+        except Exception:
+            log.warning("Envío de formal #%s: no pude dejar constancia del recordatorio; sigo igual.", e["id"], exc_info=True)
+    return recordados
+
+
+async def revisar_envios_de_formales(bot, ahora=None) -> int:
+    """Una vuelta del despertador sobre los envíos de formales de Natalia que esperan tarjeta. Devuelve cuántas tarjetas
+    salieron. Sin la migración (`CotizacionesSinTabla`) no hace nada; sin a quién mandársela lo dice en el registro."""
+    ahora = ahora or datetime.now(timezone.utc)
+    try:
+        pendientes = await db.envios_de_formal_sin_tarjeta()
+        revisora = config.chat_de_quien_revisa_las_facturas()
+        if revisora is None:
+            log.warning("Envíos de formales: no hay a quién mandarle tarjetas ni recordatorios (REVISA_FACTURAS).")
+            return 0
+        mandadas = await _mandar_tarjetas_de_formales(bot, revisora, ahora) if pendientes else 0
+        return mandadas + await _recordar_envios_de_formales(bot, revisora, ahora)
+    except db.CotizacionesSinTabla:
+        log.debug("Envíos de formales: todavía falta la migración; nada que hacer.")
+        return 0
+
+
 def _campanadas(anticipos, enviados, faltan: int) -> set[int]:
     """Cuáles de los minutos-antes de una fila deben sonar AHORA.
 
