@@ -33,6 +33,7 @@ import test_cotizaciones_tablas as t
 import test_grupo_ia as gi
 import config
 import db.db as db
+import web.auth as auth
 import web.api_code as api_code
 import web.app as panel
 
@@ -358,3 +359,105 @@ def test_la_sala_con_todos_los_permisos_no_entra_porque_no_es_natalia(mundo):
     for m, ruta, _perm, cuerpo in _llamadas_de_cada_ruta():
         assert llamar(m, ruta, clave=K_SALA, json=cuerpo).status_code == 403, (m, ruta)
     assert _cuenta(mundo, "cotizaciones") == antes
+
+
+# ── H1 / H2 (testigo de 24-oct-2026): la casa no envía una formal de Natalia; si cambia una, sus envíos vivos se cancelan ──
+
+def _casa():
+    """La casa por su ruta real: una sesión firmada del chat dueño (el mismo de las pruebas del panel)."""
+    c = TestClient(panel.app, base_url="https://testserver")
+    c.cookies.set(panel.COOKIE, auth.crear_token(DUENO, auth.VIDA_SESION))
+    return c
+
+
+def _version(con, cid):
+    return _fila(con, "SELECT cambiado_en FROM cotizaciones WHERE id = ?", (cid,))["cambiado_en"]
+
+
+def _datos_de_la_casa(accion, cambiado_en):
+    return {"op-0-nombre": "Única", "op-0-r-0-descripcion": "Sesión de prueba", "op-0-r-0-detalle": "",
+            "op-0-r-0-total": "62500.00", "validez": "15", "para-nombre": "Cliente Inventado Uno",
+            "accion": accion, "cambiado_en": str(cambiado_en)}
+
+
+def _guardar_la_casa(con, cid, accion="borrador"):
+    import asyncio
+    return asyncio.run(db.guardar_cotizacion(1, DUENO, accion, CONTENIDO_BASE, 15, cotizacion_id=cid,
+                                             cambiado_en=_version(con, cid)))
+
+
+def _formal_con_envio(canal="whatsapp"):
+    cid = crear().json()["cotizacion"]["cotizacion_id"]
+    return cid, pedir(cid, canal).json()["envio"]["envio_id"]
+
+
+def test_la_casa_no_envia_una_formal_de_natalia_por_la_ruta_real(mundo, monkeypatch):
+    async def _sin_drive(pid, cid):              # Drive no se toca en las pruebas: si la casa llegara a enviar, aquí se vería
+        raise AssertionError("la casa subió a Drive una formal de Natalia")
+    monkeypatch.setattr(panel, "_subir_a_drive", _sin_drive)
+    cid, eid = _formal_con_envio()
+    r = _casa().post(f"/proyectos/1/cotizaciones/{cid}", data=_datos_de_la_casa("enviar", _version(mundo, cid)),
+                     follow_redirects=False)
+    assert r.status_code == 303 and "error=cotizacion_enviar_de_natalia" in r.headers["location"], r.headers["location"]
+    assert _fila(mundo, "SELECT estado, enviada_en, hecha_por FROM cotizaciones WHERE id = ?", (cid,)) == {
+        "estado": "borrador", "enviada_en": None, "hecha_por": "natalia"}
+    assert _fila(mundo, "SELECT estado FROM cotizacion_envios WHERE id = ?", (eid,))["estado"] == "pendiente"
+
+
+def test_la_casa_si_guarda_un_borrador_de_natalia_y_eso_cancela_su_envio_pendiente(mundo):
+    cid, eid = _formal_con_envio()
+    _guardar_la_casa(mundo, cid)
+    envio = _fila(mundo, "SELECT estado, motivo FROM cotizacion_envios WHERE id = ?", (eid,))
+    assert envio["estado"] == "no_se_pudo" and "pedirla otra vez" in envio["motivo"]
+    otra = pedir(cid, "correo")
+    assert otra.status_code == 200 and otra.json()["reusada"] is False
+    nuevo = otra.json()["envio"]
+    assert nuevo["envio_id"] != eid and nuevo["estado"] == "pendiente"
+    assert _fila(mundo, "SELECT visto_cambiado_en FROM cotizacion_envios WHERE id = ?", (nuevo["envio_id"],))[
+        "visto_cambiado_en"] == _version(mundo, cid)
+
+
+def test_la_casa_cambia_una_formal_aprobada_y_natalia_no_puede_anotar_que_salio(mundo):
+    cid, eid = _formal_con_envio()
+    _aprobar(mundo, eid)
+    _guardar_la_casa(mundo, cid)
+    assert anotar(cid, eid, True).status_code == 409
+    assert pdf(cid, eid).status_code == 409
+    assert _fila(mundo, "SELECT estado FROM cotizaciones WHERE id = ?", (cid,))["estado"] == "borrador"
+    assert _fila(mundo, "SELECT estado FROM cotizacion_envios WHERE id = ?", (eid,))["estado"] == "no_se_pudo"
+
+
+def test_un_envio_vivo_con_otra_version_no_se_reusa_aunque_nadie_lo_cancelara(mundo):
+    cid, eid = _formal_con_envio()
+    mundo.execute("UPDATE cotizaciones SET cambiado_en = '2026-10-15T09:00:00+00:00' WHERE id = ?", (cid,))
+    mundo.commit()
+    otra = pedir(cid, "correo")
+    assert otra.status_code == 200 and otra.json()["reusada"] is False and otra.json()["envio"]["envio_id"] != eid
+    assert _fila(mundo, "SELECT estado FROM cotizacion_envios WHERE id = ?", (eid,))["estado"] == "no_se_pudo"
+
+
+def test_anotar_salio_con_la_version_cambiada_sin_cancelacion_se_niega(mundo):
+    cid, eid = _formal_con_envio()
+    _aprobar(mundo, eid)
+    mundo.execute("UPDATE cotizaciones SET cambiado_en = '2026-10-15T09:00:00+00:00' WHERE id = ?", (cid,))
+    mundo.commit()
+    r = anotar(cid, eid, True)
+    assert r.status_code == 409 and "pedirla otra vez" in r.json()["detail"], r.text
+    assert _fila(mundo, "SELECT estado FROM cotizaciones WHERE id = ?", (cid,))["estado"] == "borrador"
+
+
+def test_pedir_sobre_una_formal_enviada_sin_envio_enviado_es_422(mundo):
+    cid = crear().json()["cotizacion"]["cotizacion_id"]
+    mundo.execute("UPDATE cotizaciones SET estado = 'enviada', enviada_en = '2026-10-14T13:00:00+00:00' WHERE id = ?", (cid,))
+    mundo.commit()
+    r = pedir(cid, "whatsapp")
+    assert r.status_code == 422 and "no se vuelve a mandar" in r.json()["detail"], r.text
+    assert _cuenta(mundo, "cotizacion_envios") == 0
+
+
+def test_si_no_hay_a_quien_pedirle_la_aprobacion_es_503_y_no_se_pide_nada(mundo, monkeypatch):
+    cid = crear().json()["cotizacion"]["cotizacion_id"]
+    monkeypatch.setattr(config, "NOMBRE_DE_QUIEN_REVISA_LAS_FACTURAS", "Nadie Inventado")
+    r = pedir(cid, "whatsapp")
+    assert r.status_code == 503 and "no se pidió nada" in r.json()["detail"], r.text
+    assert _cuenta(mundo, "cotizacion_envios") == 0

@@ -4404,12 +4404,15 @@ async def _crear_cotizacion(conn, cur, proyecto_id, chat_id, accion, guardable, 
 async def _cambiar_cotizacion(conn, cur, proyecto_id, cotizacion_id, accion, guardable, validez,
                               nombre, telefono, el_dia, candado):
     await cur.execute(
-        "SELECT id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en FROM cotizaciones WHERE id = %s AND proyecto_id = %s AND borrado_en IS NULL",
+        "SELECT id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en, hecha_por FROM cotizaciones WHERE id = %s AND proyecto_id = %s AND borrado_en IS NULL",
         (cotizacion_id, proyecto_id))
     antes = await cur.fetchone()
     if antes is None:
         raise CotizacionNoEsta("esa cotización no está en ese proyecto")
     antes = dict(antes)
+    if accion == "enviar" and antes["hecha_por"] == "natalia":
+        # La formal la hizo Natalia: la envía ella desde Lucy (Rosi aprueba; «enviada» solo si Natalia anota que salió).
+        raise CotizacionNoVale("enviar_de_natalia", "la formal la hizo Natalia: la envía ella, la casa no")
     parametros = (
         antes["para_nombre"] if nombre is None else nombre,
         antes["para_telefono"] if telefono is None else (telefono or None),
@@ -4424,6 +4427,9 @@ async def _cambiar_cotizacion(conn, cur, proyecto_id, cotizacion_id, accion, gua
             raise CotizacionEnviadaSoloSeEnvia("una enviada no vuelve a borrador")
         raise CotizacionCambio("la cotización cambió mientras se editaba")
     fila = dict(fila)
+    if antes["hecha_por"] == "natalia":
+        await cur.execute(SENTENCIA_DE_CANCELAR_LOS_ENVIOS_VIVOS, (MOTIVO_DE_FORMAL_CAMBIADA, cotizacion_id))
+        await cur.fetchall()
     if antes["estado"] == "enviada":
         huella, motivo = "corregir", "cotización enviada corregida desde el panel (conserva su número)"
     elif accion == "enviar":
@@ -4570,6 +4576,14 @@ SENTENCIA_DE_ANOTAR_QUE_NO_SALIO_DE_FORMAL = (
     "UPDATE cotizacion_envios SET estado = 'no_se_pudo', motivo = %s WHERE id = %s AND estado = 'aprobado' RETURNING id")
 # «Enviada» solo por aquí: la anotación de Natalia que dice que salió. Mismo instante para la fecha (`coalesce`).
 # Con el candado de la versión que se leyó: si la casa la cambió mientras tanto, no se marca (`CotizacionCambio`).
+MOTIVO_DE_FORMAL_CAMBIADA = "la formal cambió después de pedir la aprobación: hay que pedirla otra vez"
+# Si la casa cambia una formal de Natalia con un envío vivo, ese envío deja de valer (diseño, «Pedir la aprobación»).
+SENTENCIA_DE_CANCELAR_LOS_ENVIOS_VIVOS = (
+    "UPDATE cotizacion_envios SET estado = 'no_se_pudo', motivo = %s WHERE cotizacion_id = %s "
+    "AND estado IN ('pendiente', 'aprobado') RETURNING id")
+SENTENCIA_DE_CANCELAR_UN_ENVIO = (
+    "UPDATE cotizacion_envios SET estado = 'no_se_pudo', motivo = %s WHERE id = %s "
+    "AND estado IN ('pendiente', 'aprobado') RETURNING id")
 SENTENCIA_DE_MARCAR_LA_FORMAL_ENVIADA = (
     "UPDATE cotizaciones SET estado = 'enviada', enviada_en = coalesce(enviada_en, now()) "
     "WHERE id = %s AND borrado_en IS NULL AND cambiado_en = %s RETURNING id")
@@ -4675,6 +4689,10 @@ async def pedir_envio_de_cotizacion_de_natalia(noco_id, cotizacion_id: int, cana
                 return {"envio": _envio_de_formal_leido(salio), "reusada": True}
             await cur.execute(SENTENCIA_DE_UN_ENVIO_DE_FORMAL_VIVO, (cotizacion_id,))
             vivo = await cur.fetchone()
+            if vivo is not None and _instante_leido(vivo["visto_cambiado_en"]) != _instante_leido(formal["cambiado_en"]):
+                await cur.execute(SENTENCIA_DE_CANCELAR_UN_ENVIO, (MOTIVO_DE_FORMAL_CAMBIADA, vivo["id"]))
+                await cur.fetchone()
+                vivo = None
             if vivo is not None:
                 return {"envio": _envio_de_formal_leido(vivo), "reusada": True}
             if estado != "borrador":
@@ -4748,6 +4766,9 @@ async def anotar_envio_de_cotizacion_de_natalia(noco_id, cotizacion_id: int, env
                 return _envio_de_formal_leido(el)
             if el["estado"] != "aprobado":
                 raise CotizacionEnvioNoSeMueve(f"el envío está {el['estado']}: solo se anota uno que ya se aprobó")
+            if salio and _instante_leido(el["visto_cambiado_en"]) != _instante_leido(formal["cambiado_en"]):
+                raise CotizacionEnvioNoSeMueve(
+                    "la formal cambió después de pedir la aprobación: no se anotó que salió; hay que pedirla otra vez")
             if salio:
                 await cur.execute(SENTENCIA_DE_ANOTAR_QUE_SALIO_DE_FORMAL, (envio_id,))
                 await cur.fetchone()
