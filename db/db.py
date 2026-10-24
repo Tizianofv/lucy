@@ -4658,13 +4658,17 @@ async def _formales_con_sus_envios(cur, ids: list[int]) -> list[dict]:
     return salida
 
 
-async def crear_cotizacion_de_natalia(noco_id, contenido, validez_dias, *, para_correo=None, para_rnc_cedula=None) -> dict:
+async def crear_cotizacion_de_natalia(noco_id, contenido, validez_dias, *, para_telefono=None, para_correo=None,
+                                      para_rnc_cedula=None) -> dict:
     """Natalia HACE una formal (borrador, `hecha_por = 'natalia'`, sin chat) sobre el PROYECTO ABIERTO del cliente
     `noco_id`. El contenido pasa por la misma validación que la de la casa (`contenido_de_cotizacion_que_vale`). El número
-    se toma al crear, como en la casa. Sin proyecto abierto: `ClienteSinProyectoAbierto` y nada escrito. Devuelve la fila
+    se toma al crear, como en la casa. El teléfono pasa por la misma validación que el del panel (`guardar_cotizacion`):
+    `None` = sin teléfono. Sin proyecto abierto: `ClienteSinProyectoAbierto` y nada escrito. Devuelve la fila
     con `codigo`. Errores: `ClienteSinProyectoAbierto`, `CotizacionNoVale`, `CotizacionesSinTabla`."""
     validez = _validez_de_cotizacion(validez_dias)
     guardable = condiciones_con_sus_textos_al_dia(contenido_de_cotizacion_que_vale(contenido), validez)
+    telefono = None if para_telefono is None else _texto_de_cotizacion(
+        para_telefono, "para_telefono", LARGO_PARA_TELEFONO_DE_COTIZACION, minimo=0)
     correo = _correo_de_cotizacion(para_correo)
     rnc = _rnc_de_cotizacion(para_rnc_cedula)
     async with pool.connection() as conn:
@@ -4674,7 +4678,7 @@ async def crear_cotizacion_de_natalia(noco_id, contenido, validez_dias, *, para_
             if proyecto is None:
                 raise ClienteSinProyectoAbierto("el cliente no tiene un proyecto abierto")
             fila = await _crear_cotizacion(conn, cur, proyecto["id"], None, "borrador", guardable, validez,
-                                           None, None, None, hecha_por="natalia", correo=correo, rnc=rnc)
+                                           None, telefono, None, hecha_por="natalia", correo=correo, rnc=rnc)
         except Exception as e:
             if _tabla_ausente(e):
                 raise CotizacionesSinTabla("cotizaciones no existe todavía") from e
