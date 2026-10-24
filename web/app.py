@@ -1202,10 +1202,11 @@ async def _pantalla_de_cotizaciones(m: dict, todas: dict | None, contacto: dict 
                            "titulo": cot["codigo"], "numero": "borrador" if cot["estado"] == "borrador" else "enviada: se puede corregir",
                            "valores": valores, "hoja": hoja,
                            "id": cot["id"],
-                           "escrito_aparte": cotizaciones.texto_de_lo_escrito(aparte) if aparte else None}
+                           "escrito_aparte": cotizaciones.texto_de_lo_escrito(aparte) if aparte else None,
+                           "la_hizo_natalia": abierta["la_hizo_natalia"]}
             else:
                 ventana = {"tipo": "hoja", "titulo": cot["codigo"], "numero": "borrador" if cot["estado"] == "borrador" else "enviada",
-                           "hoja": hoja, "cot": abierta}
+                           "hoja": hoja, "cot": abierta, "la_hizo_natalia": abierta["la_hizo_natalia"]}
     return {"lista": lista, "ventana": ventana, "abierta": abierta,
             "drive_url": await _enlace_de_drive_de_las_cotizaciones(pid)}
 

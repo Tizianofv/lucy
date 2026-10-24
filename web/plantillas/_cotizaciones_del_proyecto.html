@@ -67,7 +67,7 @@
     sale arriba como siempre. Los avisos de `hecho` y los del cliente se quedan arriba. Una sola regla: el error es de una cotización. -#}
 {% set es_de_guardado = error and error.startswith('cotizacion_') %}
 <div class="cotiz" id="cotizaciones" data-ancla>
-  <div class="cotiz-enc"><h3>Cotizaciones</h3>
+  <div class="cotiz-enc"><h3>Cotización formal</h3>
     {% if cz.drive_url %}<a class="carpeta-enlace" href="{{ cz.drive_url }}" target="_blank" rel="noopener noreferrer">Abrir en Drive</a>{% endif %}
     {% if not solo_ver %}<a class="cotiz-mas{{ ' activo' if v and v.tipo == 'nueva' }}" href="/proyectos?p={{ m.id }}&amp;cotizacion=nueva{{ sufijo_filtro }}#cotizaciones" title="Crear una cotización" aria-label="Crear una cotización">+</a>{% endif %}</div>
   {% if not v %}{{ aviso_de_cotizacion }}{% endif %}
@@ -77,6 +77,7 @@
     <li><span class="pild{{ '' if c.enviada else ' borr' }}">{{ 'Enviada' if c.enviada else 'Borrador' }}</span>
       <a class="cz-codigo" href="/proyectos?p={{ m.id }}&amp;cotizacion={{ c.id }}{{ sufijo_filtro }}#cotizaciones"><b>{{ c.codigo }}</b></a>
       <span class="sub">{{ c.fecha }} · {{ c.opciones }} · {{ c.precio }}</span>
+      {% if c.la_hizo_natalia %}<span class="sub cz-natalia">La hizo Natalia</span>{% endif %}
       {% if c.drive %}<span class="sub cz-drive cz-drive-{{ c.drive.estado }}">{{ c.drive.etiqueta }}</span>{% endif %}
       <a class="cz-pdf" href="/proyectos/{{ m.id }}/cotizaciones/{{ c.id }}/pdf" download>PDF</a>
       {#- «Hacer factura» abre la ventana de la factura ENCIMA de esta página (23-oct-2026), como el «+» de Facturas;
@@ -90,7 +91,7 @@
   {{ estilo_de_la_hoja() }}
   <div class="velo" role="dialog" aria-label="{{ v.titulo }}">
    <div class="cz-ventana">
-    <div class="ventana-enc"><h2>{{ v.titulo }}</h2><span class="num">{{ v.numero }}</span>
+    <div class="ventana-enc"><h2>{{ v.titulo }}</h2><span class="num">{{ v.numero }}</span>{% if v.la_hizo_natalia %}<span class="sub cz-natalia">La hizo Natalia</span>{% endif %}
       <a class="cerrar" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}#cotizaciones" aria-label="Cerrar">✕</a></div>
     {% if v.tipo == 'hoja' or not es_de_guardado %}{{ aviso_de_cotizacion }}{% endif %}
     {#- BUSCAR EL CLIENTE AQUÍ (16-oct-2026): solo en «Nueva cotización» y solo si el proyecto no tiene cliente. Es el mismo
@@ -187,7 +188,7 @@
      </div>
      <div class="ventana-pie">
       <div class="cz-aviso-pie{{ '' if es_de_guardado else ' cz-aviso-vacio' }}" role="alert" data-cz-aviso-pie>{% if es_de_guardado %}{{ aviso_de_cotizacion }}{% endif %}</div>
-      <span class="izq">Se guarda en este proyecto, en «Cotizaciones».</span>
+      <span class="izq">Se guarda en este proyecto, en «Cotización formal».</span>
       <a class="btn-linea" href="/proyectos?p={{ m.id }}{{ sufijo_filtro }}#cotizaciones">Cancelar</a>
       {% if v.tipo != 'corregir' %}<button class="btn-linea" name="accion" value="borrador">Guardar borrador</button>{% endif %}
       <button class="btn-prim" name="accion" value="enviar">Guardar y descargar PDF</button>
