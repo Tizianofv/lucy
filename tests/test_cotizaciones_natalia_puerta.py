@@ -248,6 +248,30 @@ def test_con_aprobacion_el_pdf_baja_y_la_formal_sigue_borrador(mundo):
     assert _fila(mundo, "SELECT estado FROM cotizaciones WHERE id = ?", (cid,))["estado"] == "borrador"
 
 
+def _texto_del_pdf(data: bytes) -> str:
+    import io
+    from pypdf import PdfReader
+    return "\n".join(p.extract_text() or "" for p in PdfReader(io.BytesIO(data)).pages)
+
+
+def test_el_pdf_aprobado_que_baja_natalia_no_dice_borrador_y_la_marca_si_se_puede_ver(mundo):
+    """El PDF que Rosi aprobó y Natalia manda al cliente NO lleva la marca BORRADOR, aunque la formal siga `borrador`
+    (hasta que Natalia anote que salió). Control: la misma formal renderizada con la marca SÍ la muestra, así que la
+    aserción puede fallar."""
+    import cotizaciones
+    cid = crear().json()["cotizacion"]["cotizacion_id"]
+    eid = pedir(cid).json()["envio"]["envio_id"]
+    _aprobar(mundo, eid)
+    r = pdf(cid, eid)
+    assert r.status_code == 200 and r.content.startswith(b"%PDF")
+    assert _fila(mundo, "SELECT estado FROM cotizaciones WHERE id = ?", (cid,))["estado"] == "borrador"
+    assert "BORRADOR" not in _texto_del_pdf(r.content)
+    import asyncio
+    formal = asyncio.run(db.cotizaciones_de_natalia(7, cid))[0]
+    con_marca = cotizaciones.pdf_de_cotizacion(cotizaciones.hoja_de_cotizacion(formal), borrador=True)
+    assert "BORRADOR" in _texto_del_pdf(con_marca)
+
+
 def test_si_la_formal_cambio_despues_de_pedir_la_aprobacion_el_pdf_no_baja(mundo):
     cid = crear().json()["cotizacion"]["cotizacion_id"]
     eid = pedir(cid).json()["envio"]["envio_id"]

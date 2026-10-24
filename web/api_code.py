@@ -1322,7 +1322,9 @@ async def pdf_de_formal_aprobada(
         c = await db.formal_y_envio_para_el_pdf_de_natalia(noco_id, cotizacion_id, envio_id)
     except (db.CotizacionNoEsta, db.CotizacionEnvioNoSeMueve, db.CotizacionesSinTabla) as e:
         raise _por_que_la_formal_dijo_que_no(e) from None
-    pdf = cotizaciones.pdf_de_cotizacion(cotizaciones.hoja_de_cotizacion(c), borrador=c["estado"] != "enviada")
+    # Sin marca de BORRADOR: es el PDF que Rosi aprobó y Natalia manda al cliente (sala, 24-oct-2026). La regla de la pantalla
+    # de la casa (borrador = estado != 'enviada') sigue en `web/app.py` para las que no están aprobadas.
+    pdf = cotizaciones.pdf_de_cotizacion(cotizaciones.hoja_de_cotizacion(c), borrador=False)
     return Response(pdf, media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="{c["codigo"]}.pdf"',
         "Cache-Control": "private, no-store"})
