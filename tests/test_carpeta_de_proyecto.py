@@ -662,8 +662,12 @@ def test_los_archivos_de_codigo_que_nombran_la_columna_son_estos():
     # `tools/crear_carpetas_de_drive.py` (18-oct-2026, pieza 3 de «Carpetas del proyecto»): el guion de una vez LEE la
     # columna, por `db.carpetas_de_proyectos` y `db.carpeta_guardada`, para repartir los proyectos; no escribe en ella
     # (el enlace lo escribe `preparar_la_carpeta`, por `crud.editar`). Una prueba suya lo vigila (`_infracciones`).
+    # `web/api_code.py` (24-oct-2026, Lucy 2): la ruta de Natalia que crea el proyecto devuelve en su respuesta la clave
+    # `"carpeta"` con el estado de la carpeta de Drive («ok» o «pendiente»), como pide el diseño. Es la respuesta de la
+    # ruta, NO la columna `proyectos.carpeta`: no lee ni escribe esa columna (la escribe `preparar_la_carpeta`).
     assert nombran == {"db/db.py", "acciones/crud.py", "web/app.py", "cerebro/consultar.py",
-                       "cotizaciones_drive.py", "conftest.py", "tools/crear_carpetas_de_drive.py"}, nombran
+                       "cotizaciones_drive.py", "conftest.py", "tools/crear_carpetas_de_drive.py",
+                       "web/api_code.py"}, nombran
 
 
 def test_ningun_sql_escrito_a_mano_nombra_la_columna_y_los_genericos_son_los_medidos():

@@ -326,6 +326,9 @@ def opciones_de_responsable() -> tuple[tuple[str, str], ...]:
 # solo lectura: las cotizaciones formales `borrador`/`enviada` con el teléfono del cliente). Lo lee el Registro
 # con su propia clave: `registro:<clave larga>` en `CLAVES_API_CODE` y `registro=cotizaciones:leer_para_embudo`
 # en `PERMISOS_API_CODE`. La sala lo pone en Railway, no este archivo.
+# Lucy 2 (24-oct-2026): `proyectos:crear_de_cliente` (`POST /api/code/clientes/{noco_id}/proyecto`, solo `natalia`).
+# Para que Natalia lo use, la sala lo suma a la fila de `natalia` en `PERMISOS_API_CODE`. La sala lo pone en Railway.
+# El responsable de esos proyectos sale de `RESPONSABLE_DE_PROYECTO_DE_NATALIA` (por omisión «Rosi»).
 #
 # CERRADO POR DEFECTO, en dos niveles independientes:
 #   · Si `CLAVES_API_CODE` no está puesta (o no tiene ninguna pieza legible),
@@ -509,6 +512,23 @@ def chat_de_quien_revisa_las_facturas() -> int | None:
     la verdad cuando es `None` (no inventa un destino)."""
     chat = dueno_de_calendario(NOMBRE_DE_QUIEN_REVISA_LAS_FACTURAS)
     return chat if chat is not None and puede_recibir_telegram(chat) else None
+
+
+# ── QUIÉN ES RESPONSABLE DE UN PROYECTO QUE CREA NATALIA (Lucy 2, diseño «Cotización formal que hace Natalia», 24-oct-2026)
+#
+# Natalia crea el proyecto de un cliente que no tiene uno abierto; el responsable es Rosi por omisión. Se dice por NOMBRE,
+# igual que `REVISA_FACTURAS`, y nunca por chat en este archivo público. Cambiarlo es cambiar la variable en Railway.
+NOMBRE_DEL_RESPONSABLE_DE_PROYECTO_DE_NATALIA = os.environ.get("RESPONSABLE_DE_PROYECTO_DE_NATALIA", "Rosi").strip()
+
+
+def chat_del_responsable_de_natalia() -> int | None:
+    """El chat de quien queda como responsable de un proyecto que crea Natalia, o `None` si no hay a quién: el nombre
+    no resuelve contra `personas_del_panel()`, o esa persona no puede ser responsable o no recibe Telegram. Quien la
+    llama contesta 503 y no escribe nada cuando es `None`."""
+    chat = dueno_de_calendario(NOMBRE_DEL_RESPONSABLE_DE_PROYECTO_DE_NATALIA)
+    if chat is None or not puede_ser_responsable(chat) or not puede_recibir_telegram(chat):
+        return None
+    return chat
 
 
 def chat_escrito(texto):

@@ -4589,6 +4589,20 @@ async def proyecto_para_la_carpeta(proyecto_id: int) -> dict | None:
     return None if fila is None else dict(fila)
 
 
+async def proyecto_del_cliente_por_id(proyecto_id: int, noco_id: int) -> dict | None:
+    """El proyecto VIVO de ese cliente como `{id, nombre, estado, area, responsable_chat_id}`, o `None`. La lectura
+    de la respuesta de `POST /api/code/clientes/{noco_id}/proyecto` cuando el cliente ya tenía uno abierto. Una lectura;
+    no decide nada (lo decide `proyecto_puede_quedar_activo`)."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        await cur.execute(
+            "SELECT id, nombre, estado, area, responsable_chat_id FROM proyectos "
+            "WHERE id = %s AND cliente_noco_id = %s AND borrado_en IS NULL",
+            (proyecto_id, noco_id))
+        fila = await cur.fetchone()
+    return None if fila is None else dict(fila)
+
+
 async def proyecto_para_el_aviso(proyecto_id: int) -> dict | None:
     """El proyecto VIVO como `{id, nombre, estado, area}`, o `None` si no existe o está en la papelera. La lectura mínima
     de los avisos que nombran a OTRO proyecto («el cliente tiene un proyecto activo»): la pantalla decide con ella si
@@ -5138,7 +5152,7 @@ async def crear_proyecto(nombre: str | None, area: str, responsable_chat_id: int
 
     DEVUELVE LA FILA CON SU `log_id` — el asa para deshacer, que es lo que `cerebro/agente.py::_anotar` necesita.
     """
-    if desde not in ("panel", "lucy"):
+    if desde not in ("panel", "lucy", "natalia"):
         raise ValueError(f"origen de proyecto desconocido: {desde!r}")
     obligatorio = cliente_es_obligatorio(area)
     pedido = nombre
@@ -5195,7 +5209,17 @@ async def crear_proyecto(nombre: str | None, area: str, responsable_chat_id: int
         # conexión, que en SQLite son tuplas — el mismo motivo por el que
         # `convertir_tarea_en_proyecto` lee su `RETURNING id` con `cur`.
         huella = (nuevo["id"], json.dumps(nuevo, default=str, ensure_ascii=False))
-        if desde == "lucy":
+        if desde == "natalia":
+            # Lucy 2 (24-oct-2026): Natalia crea el proyecto de un cliente sin proyecto abierto. Actor LITERAL.
+            await cur.execute(
+                """
+                INSERT INTO log_acciones
+                  (actor, accion, tabla, registro_id, antes, despues, motivo)
+                VALUES ('natalia', 'crear', 'proyectos', %s, NULL, %s,
+                        'Proyecto nuevo, creado por Natalia')
+                RETURNING id
+                """, huella)
+        elif desde == "lucy":
             await cur.execute(
                 """
                 INSERT INTO log_acciones

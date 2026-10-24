@@ -4341,7 +4341,10 @@ def test_cuantos_falsos_positivos_hay_hoy_sobre_los_archivos_reales():
     # cambio (`web/app.py` ya vigilado). Las plantillas nuevas (`_ventana_factura_nueva.html` y
     # `_ventana_corregir_factura.html`) no son .py: no cuentan. Medida: 236, 170, 66.
     # Las dos ramas juntas en `main` (23-oct-2026, la sala): 237, 171, 66.
-    assert medido == {"en disco": 237, "exentos": 171, "vigilados": 66}, (
+    # 24-oct-2026, rama `trabajo/natalia-crea-proyecto` (Lucy 2, Natalia crea el proyecto del cliente): +1 en disco y +1
+    # EXENTO (`tests/test_natalia_crea_proyecto.py`, nuevo, exento por rol); VIGILADOS sin cambio (se tocaron `config.py`,
+    # `db/db.py` y `web/api_code.py`, ya vigilados). Medida: 238, 172, 66.
+    assert medido == {"en disco": 238, "exentos": 172, "vigilados": 66}, (
         f"{_MARCA_CONTADOR}el reparto de archivos cambió: {medido}, y el "
         "23-oct-2026 (factura-en-proyectos) era {'en disco': 236, "
         "'exentos': 170, 'vigilados': 66}. La aserción de fondo —cero "

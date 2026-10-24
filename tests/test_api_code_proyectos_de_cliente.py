@@ -306,15 +306,17 @@ def test_G1_el_orden_es_activos_primero_luego_pausados_y_al_final_cerrados(natal
 
 def test_G1_los_hermanos_con_noco_id_en_la_ruta_son_estos_y_todos_estan_cubiertos():
     """HERMANOS, SACADOS DE LO REAL (lo que FastAPI registró): toda ruta de `/api/code` que
-    lleva la ficha de un cliente en la ruta. Son TRES: esta lectura y las dos de las consultas (pieza L3, cuyo
-    «otro cliente no lo ve» vive en `tests/test_api_code_consultas.py`, G2 y su censo). El día que haya una
-    cuarta esta prueba se rompe y obliga a escribirle su propia prueba antes de sumarla aquí."""
+    lleva la ficha de un cliente en la ruta. Son CUATRO: esta lectura, las dos de las consultas (pieza L3, cuyo
+    «otro cliente no lo ve» vive en `tests/test_api_code_consultas.py`, G2 y su censo), y la de Lucy 2 (crear el proyecto
+    de un cliente), cuya prueba propia es `tests/test_natalia_crea_proyecto.py` (G1 a G6). El día que haya una quinta
+    esta prueba se rompe y obliga a escribirle su propia prueba antes de sumarla aquí."""
     con_ficha = sorted((m, p, perm) for m, p, perm in api_code.rutas_registradas(panel.app)
                        if "{noco_id}" in p and "/facturas" not in p)     # las de las facturas: `tests/test_facturas_natalia.py`
     assert con_ficha == [
         ("GET", "/api/code/clientes/{noco_id}/consultas", "consultas:leer"),
         ("GET", "/api/code/clientes/{noco_id}/proyectos", PERMISO),
-        ("POST", "/api/code/clientes/{noco_id}/consultas", "consultas:abrir")]
+        ("POST", "/api/code/clientes/{noco_id}/consultas", "consultas:abrir"),
+        ("POST", "/api/code/clientes/{noco_id}/proyecto", "proyectos:crear_de_cliente")]
 
 
 # ═══════════════════════════════════════════════════════════════════════

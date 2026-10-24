@@ -429,7 +429,10 @@ def test_toda_ruta_que_escribe_en_proyectos_exige_sesion_de_la_casa_por_la_puert
 # (`cerebro/bancos/categorias.py`), que no es un grupo, y 'IA' en `db.AREA_TECNICA`.
 # FRONTERA: ve los textos EXACTOS; no ve un nombre dentro de una frase ni armado por partes, ni
 # el CSS de la plantilla (`.grupo[data-g="acd"]` solo pinta el ícono de ACD, no lo exige).
-_EXENTOS = {("cerebro/bancos/categorias.py", "Hogar"), ("db/db.py", "IA")}
+# 'CDS' en `web/api_code.py` (24-oct-2026, Lucy 2): la ruta `POST /api/code/clientes/{noco_id}/proyecto` crea el proyecto
+# del cliente de Natalia con el grupo FIJO «CDS». Así lo aprobó Tiziano en el diseño «Cotización formal que hace Natalia»
+# («Natalia atiende clientes de la casa; Natalia no elige el área»). Medido: es el único literal de grupo que sale de ahí.
+_EXENTOS = {("cerebro/bancos/categorias.py", "Hogar"), ("db/db.py", "IA"), ("web/api_code.py", "CDS")}
 
 
 def test_ningun_codigo_de_produccion_da_por_fijo_el_nombre_de_un_grupo_salvo_el_tecnico():

@@ -273,8 +273,8 @@ def _con_creadores(raiz) -> list:
 def test_todo_camino_que_crea_un_proyecto_pide_la_carpeta_despues_de_guardarlo():
     creadores = _con_creadores(_ROOT)
     # el trinquete: hoy son estos tres; uno nuevo se pone rojo hasta que alguien lo mire (y la lista sale del árbol)
-    assert creadores == [("acciones/crud.py", "crear_proyecto"), ("web/app.py", "convertir_en_proyecto"),
-                         ("web/app.py", "crear_proyecto_nuevo")], creadores
+    assert creadores == [("acciones/crud.py", "crear_proyecto"), ("web/api_code.py", "crear_proyecto_de_natalia"),
+                         ("web/app.py", "convertir_en_proyecto"), ("web/app.py", "crear_proyecto_nuevo")], creadores
     assert _sin_la_carpeta(_ROOT) == []
 
 

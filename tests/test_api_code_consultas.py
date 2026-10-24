@@ -584,7 +584,7 @@ def test_G2_los_hermanos_las_rutas_con_ficha_son_estas_y_las_dos_de_consultas_fi
                        if "{noco_id}" in p and "/facturas" not in p)
     assert [(m, p) for m, p, _ in con_ficha] == [
         ("GET", "/api/code/clientes/{noco_id}/consultas"), ("GET", "/api/code/clientes/{noco_id}/proyectos"),
-        ("POST", "/api/code/clientes/{noco_id}/consultas")]
+        ("POST", "/api/code/clientes/{noco_id}/consultas"), ("POST", "/api/code/clientes/{noco_id}/proyecto")]
     arbol = ast.parse((_ROOT / "db" / "db.py").read_text(encoding="utf-8"))
     for nombre in ("proyectos_de_cliente", "consultas_de_natalia_de_cliente"):
         fn = next(n for n in ast.walk(arbol) if isinstance(n, ast.AsyncFunctionDef) and n.name == nombre)
