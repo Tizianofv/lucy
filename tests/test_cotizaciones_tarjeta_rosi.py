@@ -24,7 +24,9 @@ Correr:  python3 -m pytest tests/test_cotizaciones_tarjeta_rosi.py -q
 """
 from __future__ import annotations
 
+import ast
 import asyncio
+import inspect
 import types
 from datetime import datetime, timedelta, timezone
 
@@ -36,7 +38,9 @@ from test_cotizaciones_natalia_puerta import (  # noqa: F401  (fixture y ayudant
     DUENO, ROSI, _fila, _formal_de_la_casa, _texto_del_pdf, crear, mundo, pedir)
 
 import acciones.botones as botones
+import cerebro.copia_dueno as copia_dueno
 import cerebro.despertador as despertador
+import cerebro.interpretar as interpretar
 import config
 import db.db as db
 
@@ -262,6 +266,41 @@ def test_dos_contenedores_no_reclaman_el_mismo_recordatorio_dos_veces(mundo, tg)
     cid, eid, _ = con_tarjeta(tg)
     assert correr(db.reclamar_recordatorio_de_formal(eid, T0)) is True
     assert correr(db.reclamar_recordatorio_de_formal(eid, T0)) is False
+
+
+def test_el_bucle_llama_a_las_formales_dentro_de_la_vuelta_con_su_propio_try():
+    """Como las consultas de Natalia: la llamada del despertador de formales está en el bucle, en un `try` propio (ni el de
+    `revisar` ni el de las facturas), así que una falla suya no apaga las otras."""
+    arbol = ast.parse(inspect.getsource(interpretar.bucle))
+    llamadas = []
+    for n in ast.walk(arbol):
+        if isinstance(n, ast.Try):
+            dentro = {c.func.attr for t in n.body for c in ast.walk(t)
+                      if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute)}
+            if "revisar_envios_de_formales" in dentro:
+                llamadas.append(dentro)
+    assert len(llamadas) == 1
+    assert "revisar" not in llamadas[0] and "revisar_envios_de_facturas" not in llamadas[0]
+
+
+def test_si_quien_revisa_es_el_dueno_ni_la_tarjeta_ni_el_recordatorio_se_copian(mundo, tg, monkeypatch):
+    """La copia al dueño (`copia_dueno`) corre sobre `send_message`. Con quien revisa = el dueño, el recordatorio (que sale por
+    `send_message`, en `_mandar_al_responsable`, dentro de `sin_copiar`) no se copia; la tarjeta (`send_document`) tampoco."""
+    monkeypatch.setattr(config, "chat_de_quien_revisa_las_facturas", lambda: DUENO)
+    copias = []
+
+    async def _registrar(bot, texto, kwargs):
+        copias.append(texto)
+    monkeypatch.setattr(copia_dueno, "_copiar", _registrar)
+    copia_dueno.instalar()
+    try:
+        con_tarjeta(tg)
+        assert tg.documentos[0]["chat_id"] == DUENO
+        assert vuelta(tg, T0 + timedelta(minutes=despertador.RECORDAR_CONSULTA_MIN)) == 1
+        assert [m["chat_id"] for m in tg.mensajes] == [DUENO]
+        assert copias == []
+    finally:
+        copia_dueno.desinstalar()
 
 
 def test_una_formal_aprobada_no_se_recuerda(mundo, tg):
