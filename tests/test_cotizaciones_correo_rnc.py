@@ -13,6 +13,7 @@ un volcado de la hoja, fuera de la suite).
 from __future__ import annotations
 
 import ast
+import asyncio
 import re
 import sqlite3
 from datetime import date
@@ -21,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from test_guardar_cotizacion import con, _guardar, _fila, _cuantas  # noqa: F401  (el fixture `con` vive allá)
-from test_cotizaciones_natalia_puerta import mundo, llamar, _fila as _fila_sql, _cuenta, CONTENIDO_BASE, _aprobar, _texto_del_pdf, pdf  # noqa: F401
+from test_cotizaciones_natalia_puerta import mundo, llamar, _fila as _fila_sql, _cuenta, CONTENIDO_BASE, _aprobar, _texto_del_pdf, pdf, DUENO  # noqa: F401
 
 import cotizaciones  # primero las pruebas: fijan el entorno antes de cargar `config`
 import db.db as db
@@ -165,3 +166,63 @@ def test_todo_sql_de_cotizaciones_que_nombra_el_telefono_nombra_tambien_el_corre
     # piso medido por AST el 24-oct-2026 en db/db.py: 7 sentencias (2 UPDATE, INSERT, SELECT de _cambiar, lectura de Natalia,
     # lista del panel y lectura de Drive). Si no hubiera ninguna, la prueba pasaría en vacío.
     assert len(sentencias) >= 7, len(sentencias)
+
+
+# ── El teléfono en la API de Natalia (24-oct-2026; «Nombre, correo, teléfono y RNC») ─────────────────────
+
+def test_la_api_de_natalia_acepta_el_telefono_y_lo_guarda(mundo):
+    r = llamar("POST", "/api/code/clientes/7/cotizaciones",
+               json={"contenido": CONTENIDO_BASE, "validez_dias": 15, "para_telefono": "809-555-0101"})
+    assert r.status_code == 200, r.text
+    fila = _fila_sql(mundo, "SELECT para_telefono FROM cotizaciones WHERE id = ?",
+                     (r.json()["cotizacion"]["cotizacion_id"],))
+    assert fila == {"para_telefono": "809-555-0101"}
+
+
+def test_sin_telefono_o_vacio_la_api_guarda_nulo(mundo):
+    for extra in ({}, {"para_telefono": None}, {"para_telefono": ""}, {"para_telefono": "   "}):
+        r = llamar("POST", "/api/code/clientes/7/cotizaciones",
+                   json={"contenido": CONTENIDO_BASE, "validez_dias": 15, **extra})
+        assert r.status_code == 200, r.text
+        fila = _fila_sql(mundo, "SELECT para_telefono FROM cotizaciones WHERE id = ?",
+                         (r.json()["cotizacion"]["cotizacion_id"],))
+        assert fila == {"para_telefono": None}, extra
+
+
+@pytest.mark.parametrize("malo", ["8" * 41, "809\x07555", "809 555", "809 555 0101 ☎"])
+def test_el_telefono_que_no_vale_es_422_y_no_escribe(mundo, malo):
+    r = llamar("POST", "/api/code/clientes/7/cotizaciones",
+               json={"contenido": CONTENIDO_BASE, "validez_dias": 15, "para_telefono": malo})
+    assert r.status_code == 422, r.text
+    assert _cuenta(mundo, "cotizaciones") == 0
+
+
+def test_el_telefono_que_no_es_texto_es_422_y_no_escribe(mundo):
+    r = llamar("POST", "/api/code/clientes/7/cotizaciones",
+               json={"contenido": CONTENIDO_BASE, "validez_dias": 15, "para_telefono": 8095550101})
+    assert r.status_code == 422, r.text
+    assert _cuenta(mundo, "cotizaciones") == 0
+
+
+@pytest.mark.parametrize("malo", ["8" * 41, "809\x07555", "809 555", "809 555 0101 ☎"])
+def test_el_panel_y_la_api_rechazan_el_telefono_con_el_mismo_mensaje(mundo, malo):
+    """Hermanos: el panel (`guardar_cotizacion`) y la API de Natalia validan el teléfono con la misma regla y
+    contestan el mismo texto. El panel se llama directo, con el mismo `DUENO` que la prueba de la puerta."""
+    with pytest.raises(db.CotizacionNoVale) as e:
+        asyncio.run(db.guardar_cotizacion(1, DUENO, "borrador", CONTENIDO_BASE, 15, para_telefono=malo))
+    r = llamar("POST", "/api/code/clientes/7/cotizaciones",
+               json={"contenido": CONTENIDO_BASE, "validez_dias": 15, "para_telefono": malo})
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == str(e.value)
+    assert _cuenta(mundo, "cotizaciones") == 0
+
+
+def test_el_pdf_aprobado_que_baja_natalia_lleva_el_telefono(mundo):
+    r = llamar("POST", "/api/code/clientes/7/cotizaciones", json={
+        "contenido": CONTENIDO_BASE, "validez_dias": 15, "para_telefono": "809-555-0101"})
+    cid = r.json()["cotizacion"]["cotizacion_id"]
+    eid = llamar("POST", f"/api/code/clientes/7/cotizaciones/{cid}/envios", json={"canal": "whatsapp"}).json()["envio"]["envio_id"]
+    _aprobar(mundo, eid)
+    d = pdf(cid, eid)
+    assert d.status_code == 200, d.text[:200]
+    assert "809-555-0101" in _texto_del_pdf(d.content)
