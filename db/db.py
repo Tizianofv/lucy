@@ -4295,6 +4295,20 @@ async def _huella_de_cotizacion(conn, accion: str, registro_id: int, antes, desp
          motivo))
 
 
+async def _huella_de_formal_de_natalia(conn, accion: str, registro_id: int, antes, despues, motivo: str) -> None:
+    """La misma huella que `_huella_de_cotizacion`, con el actor de Natalia (literal, para que el censo de actores lo vea)."""
+    await conn.execute(
+        """
+        INSERT INTO log_acciones
+          (actor, accion, tabla, registro_id, antes, despues, motivo, bandeja_id)
+        VALUES ('natalia', %s, 'cotizaciones', %s, %s, %s, %s, NULL)
+        """,
+        (accion, registro_id,
+         json.dumps(antes, default=str, ensure_ascii=False) if antes else None,
+         json.dumps(despues, default=str, ensure_ascii=False) if despues else None,
+         motivo))
+
+
 # Las dos sentencias que cambian una cotización YA hecha. Ninguna toca `proyecto_id`, `anio`, `numero` ni
 # `creado_*`; las dos exigen el candado. La de borrador exige además que SIGA siendo borrador: una enviada
 # no vuelve atrás. La de enviar guarda `enviada_en` de la primera vez (`coalesce`), también al corregir.
@@ -4363,7 +4377,8 @@ async def guardar_cotizacion(proyecto_id: int, chat_id: int, accion: str, conten
             raise
 
 
-async def _crear_cotizacion(conn, cur, proyecto_id, chat_id, accion, guardable, validez, nombre, telefono, el_dia):
+async def _crear_cotizacion(conn, cur, proyecto_id, chat_id, accion, guardable, validez, nombre, telefono, el_dia,
+                            *, hecha_por: str = "equipo"):
     if nombre is None:
         await cur.execute("SELECT cliente_nombre FROM proyectos WHERE id = %s", (proyecto_id,))
         de_la_ficha = (await cur.fetchone())["cliente_nombre"]
@@ -4373,24 +4388,31 @@ async def _crear_cotizacion(conn, cur, proyecto_id, chat_id, accion, guardable, 
     enviada = accion == "enviar"
     # Una sola línea a propósito: `tests/test_backup_alerta.py` lee las columnas de cada INSERT del código.
     await cur.execute(
-        "INSERT INTO cotizaciones (proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_por_chat_id, enviada_en, hecha_por) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CASE WHEN %s THEN now() END, 'equipo') RETURNING id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en",
+        "INSERT INTO cotizaciones (proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_por_chat_id, enviada_en, hecha_por) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CASE WHEN %s THEN now() END, %s) RETURNING id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en",
         (proyecto_id, anio, numero, "enviada" if enviada else "borrador", nombre, telefono or None,
-         el_dia or hoy_rd(), validez, guardable, chat_id, enviada))
+         el_dia or hoy_rd(), validez, guardable, chat_id, enviada, hecha_por))
     fila = dict(await cur.fetchone())
-    await _huella_de_cotizacion(conn, "crear", fila["id"], None, fila,
-                                "cotización creada desde el panel de proyectos" + (" y enviada" if enviada else ""))
+    motivo = ("formal creada por Natalia" if hecha_por == "natalia"
+              else "cotización creada desde el panel de proyectos" + (" y enviada" if enviada else ""))
+    if hecha_por == "natalia":
+        await _huella_de_formal_de_natalia(conn, "crear", fila["id"], None, fila, motivo)
+    else:
+        await _huella_de_cotizacion(conn, "crear", fila["id"], None, fila, motivo)
     return {**fila, "codigo": codigo_de_cotizacion(fila["anio"], fila["numero"]), "creada": True}
 
 
 async def _cambiar_cotizacion(conn, cur, proyecto_id, cotizacion_id, accion, guardable, validez,
                               nombre, telefono, el_dia, candado):
     await cur.execute(
-        "SELECT id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en FROM cotizaciones WHERE id = %s AND proyecto_id = %s AND borrado_en IS NULL",
+        "SELECT id, proyecto_id, anio, numero, estado, para_nombre, para_telefono, fecha, validez_dias, contenido, creado_en, creado_por_chat_id, cambiado_en, enviada_en, hecha_por FROM cotizaciones WHERE id = %s AND proyecto_id = %s AND borrado_en IS NULL",
         (cotizacion_id, proyecto_id))
     antes = await cur.fetchone()
     if antes is None:
         raise CotizacionNoEsta("esa cotización no está en ese proyecto")
     antes = dict(antes)
+    if accion == "enviar" and antes["hecha_por"] == "natalia":
+        # La formal la hizo Natalia: la envía ella desde Lucy (Rosi aprueba; «enviada» solo si Natalia anota que salió).
+        raise CotizacionNoVale("enviar_de_natalia", "la formal la hizo Natalia: la envía ella, la casa no")
     parametros = (
         antes["para_nombre"] if nombre is None else nombre,
         antes["para_telefono"] if telefono is None else (telefono or None),
@@ -4405,6 +4427,9 @@ async def _cambiar_cotizacion(conn, cur, proyecto_id, cotizacion_id, accion, gua
             raise CotizacionEnviadaSoloSeEnvia("una enviada no vuelve a borrador")
         raise CotizacionCambio("la cotización cambió mientras se editaba")
     fila = dict(fila)
+    if antes["hecha_por"] == "natalia":
+        await cur.execute(SENTENCIA_DE_CANCELAR_LOS_ENVIOS_VIVOS, (MOTIVO_DE_FORMAL_CAMBIADA, cotizacion_id))
+        await cur.fetchall()
     if antes["estado"] == "enviada":
         huella, motivo = "corregir", "cotización enviada corregida desde el panel (conserva su número)"
     elif accion == "enviar":
@@ -4491,6 +4516,278 @@ async def cotizaciones_para_embudo() -> list[dict] | None:
                 return None
             raise
     return [_cotizacion_leida(f) for f in filas]
+
+
+# ── LAS FORMALES QUE HACE NATALIA (Lucy 4, diseño «Cotización formal que hace Natalia», 24-oct-2026) ─────────
+#
+# Copia del mecanismo de las facturas de Natalia (`crear_borrador_de_factura_de_natalia`, `pedir_envio_de_factura_de_natalia`,
+# `factura_y_envio_para_el_pdf_de_natalia`, `anotar_envio_de_natalia`). Una formal de Natalia cuelga del PROYECTO ABIERTO del
+# cliente, el que decide `proyecto_vivo_del_cliente`. Si el cliente no tiene uno, no se escribe nada y Natalia crea el proyecto
+# antes (`POST /api/code/clientes/{noco_id}/proyecto`). La formal nace `borrador` con `hecha_por = 'natalia'` y sin chat. Pedir el
+# envío crea un `cotizacion_envios` `pendiente` (la tarjeta para quien revisa es la pieza 5). La formal pasa a `enviada` SOLO
+# cuando Natalia anota que salió. Nada de aquí sale al cliente: la puerta solo guarda, lista y entrega el PDF aprobado.
+
+TOPE_DE_COTIZACIONES_DE_NATALIA = 50
+CANALES_DE_FORMAL_QUE_PIDEN_APROBACION = ("whatsapp", "correo")
+
+
+class ClienteSinProyectoAbierto(Exception):
+    """El cliente no tiene un proyecto abierto: Natalia lo crea antes. NO se guardó nada."""
+
+
+class CotizacionEnvioNoSeMueve(Exception):
+    """El envío de la formal no está en el estado que pide la acción (el PDF y la anotación piden `aprobado`), o la formal
+    cambió después de pedir la aprobación. El mensaje dice por qué."""
+
+
+SENTENCIA_DE_LA_FORMAL_DE_NATALIA = (
+    "SELECT c.id FROM cotizaciones c JOIN proyectos p ON p.id = c.proyecto_id "
+    "WHERE c.id = %s AND p.cliente_noco_id = %s AND c.hecha_por = 'natalia' "
+    "AND c.borrado_en IS NULL AND p.borrado_en IS NULL")
+SENTENCIA_DE_LAS_FORMALES_DE_NATALIA = (
+    "SELECT c.id FROM cotizaciones c JOIN proyectos p ON p.id = c.proyecto_id "
+    "WHERE p.cliente_noco_id = %s AND c.hecha_por = 'natalia' "
+    "AND c.borrado_en IS NULL AND p.borrado_en IS NULL ORDER BY c.creado_en DESC, c.id DESC LIMIT %s")
+SENTENCIA_DE_LEER_LA_FORMAL_DE_NATALIA = (
+    "SELECT id, proyecto_id, anio, numero, estado, hecha_por, para_nombre, para_telefono, fecha, validez_dias, "
+    "contenido, creado_en, cambiado_en, enviada_en FROM cotizaciones WHERE id = %s")
+SENTENCIA_DE_ESTADO_DE_LA_FORMAL = (
+    "SELECT id, estado, cambiado_en FROM cotizaciones WHERE id = %s AND borrado_en IS NULL")
+SENTENCIA_DE_LOS_ENVIOS_DE_FORMALES = (
+    "SELECT id, cotizacion_id, canal, estado, creado_en, aprobado_por_chat_id, aprobado_en, enviado_en, motivo, visto_cambiado_en "
+    "FROM cotizacion_envios WHERE cotizacion_id = %s ORDER BY id")
+SENTENCIA_DE_UN_ENVIO_DE_FORMAL = (
+    "SELECT id, cotizacion_id, canal, estado, creado_en, aprobado_por_chat_id, aprobado_en, enviado_en, motivo, visto_cambiado_en "
+    "FROM cotizacion_envios WHERE id = %s")
+SENTENCIA_DE_UN_ENVIO_DE_FORMAL_YA_ENVIADO = (
+    "SELECT id, cotizacion_id, canal, estado, creado_en, aprobado_por_chat_id, aprobado_en, enviado_en, motivo, visto_cambiado_en "
+    "FROM cotizacion_envios WHERE cotizacion_id = %s AND estado = 'enviado' ORDER BY id DESC LIMIT 1")
+# Una formal tiene un solo envío vivo a la vez (pendiente, aprobado o enviado), igual que las facturas de Natalia.
+SENTENCIA_DE_UN_ENVIO_DE_FORMAL_VIVO = (
+    "SELECT id, cotizacion_id, canal, estado, creado_en, aprobado_por_chat_id, aprobado_en, enviado_en, motivo, visto_cambiado_en "
+    "FROM cotizacion_envios WHERE cotizacion_id = %s AND estado IN ('pendiente', 'aprobado') ORDER BY id DESC LIMIT 1")
+SENTENCIA_DE_PEDIR_ENVIO_DE_FORMAL = (
+    "INSERT INTO cotizacion_envios (cotizacion_id, canal, estado, visto_cambiado_en) "
+    "VALUES (%s, %s, 'pendiente', %s) RETURNING id")
+SENTENCIA_DE_ANOTAR_QUE_SALIO_DE_FORMAL = (
+    "UPDATE cotizacion_envios SET estado = 'enviado', enviado_en = now() WHERE id = %s AND estado = 'aprobado' "
+    "RETURNING id")
+SENTENCIA_DE_ANOTAR_QUE_NO_SALIO_DE_FORMAL = (
+    "UPDATE cotizacion_envios SET estado = 'no_se_pudo', motivo = %s WHERE id = %s AND estado = 'aprobado' RETURNING id")
+# «Enviada» solo por aquí: la anotación de Natalia que dice que salió. Mismo instante para la fecha (`coalesce`).
+# Con el candado de la versión que se leyó: si la casa la cambió mientras tanto, no se marca (`CotizacionCambio`).
+MOTIVO_DE_FORMAL_CAMBIADA = "la formal cambió después de pedir la aprobación: hay que pedirla otra vez"
+# Si la casa cambia una formal de Natalia con un envío vivo, ese envío deja de valer (diseño, «Pedir la aprobación»).
+SENTENCIA_DE_CANCELAR_LOS_ENVIOS_VIVOS = (
+    "UPDATE cotizacion_envios SET estado = 'no_se_pudo', motivo = %s WHERE cotizacion_id = %s "
+    "AND estado IN ('pendiente', 'aprobado') RETURNING id")
+SENTENCIA_DE_CANCELAR_UN_ENVIO = (
+    "UPDATE cotizacion_envios SET estado = 'no_se_pudo', motivo = %s WHERE id = %s "
+    "AND estado IN ('pendiente', 'aprobado') RETURNING id")
+SENTENCIA_DE_MARCAR_LA_FORMAL_ENVIADA = (
+    "UPDATE cotizaciones SET estado = 'enviada', enviada_en = coalesce(enviada_en, now()) "
+    "WHERE id = %s AND borrado_en IS NULL AND cambiado_en = %s RETURNING id")
+
+
+def _envio_de_formal_leido(fila) -> dict:
+    """Un envío de formal como lo ve quien lo lee: nada de chats. `aprobada` dice si alguien lo aprobó (lo que deja
+    bajar el PDF)."""
+    e = dict(fila)
+    return {"id": e["id"], "cotizacion_id": e["cotizacion_id"], "canal": e["canal"], "estado": e["estado"],
+            "creado_en": _instante_leido(e["creado_en"]), "aprobado_en": _instante_leido(e["aprobado_en"]),
+            "enviado_en": _instante_leido(e["enviado_en"]), "motivo": e["motivo"],
+            "aprobada": e["estado"] in ("aprobado", "enviado") and e["canal"] != "mano"}
+
+
+async def _formal_de_natalia(cur, noco_id, cotizacion_id) -> None:
+    """Sale con `CotizacionNoEsta` si la formal no es de Natalia o no es de ese cliente (igual que si no existiera)."""
+    await cur.execute(SENTENCIA_DE_LA_FORMAL_DE_NATALIA, (cotizacion_id, noco_id))
+    if await cur.fetchone() is None:
+        raise CotizacionNoEsta("esa formal no está")
+
+
+async def _estado_de_la_formal(cur, cotizacion_id) -> dict:
+    """El estado y el candado (`cambiado_en`) de la formal, tal como están ahora. La escritura que depende de ellos lleva el
+    candado en su WHERE, así que si la casa la cambia en medio, no se escribe nada."""
+    await cur.execute(SENTENCIA_DE_ESTADO_DE_LA_FORMAL, (cotizacion_id,))
+    fila = await cur.fetchone()
+    if fila is None:
+        raise CotizacionNoEsta("esa formal no está")
+    return dict(fila)
+
+
+async def _formales_con_sus_envios(cur, ids: list[int]) -> list[dict]:
+    salida = []
+    for i in ids:
+        await cur.execute(SENTENCIA_DE_LEER_LA_FORMAL_DE_NATALIA, (i,))
+        fila = await cur.fetchone()
+        if fila is None:
+            continue
+        c = _cotizacion_leida(fila)
+        await cur.execute(SENTENCIA_DE_LOS_ENVIOS_DE_FORMALES, (i,))
+        c["envios"] = [_envio_de_formal_leido(e) for e in await cur.fetchall()]
+        salida.append(c)
+    return salida
+
+
+async def crear_cotizacion_de_natalia(noco_id, contenido, validez_dias) -> dict:
+    """Natalia HACE una formal (borrador, `hecha_por = 'natalia'`, sin chat) sobre el PROYECTO ABIERTO del cliente
+    `noco_id`. El contenido pasa por la misma validación que la de la casa (`contenido_de_cotizacion_que_vale`). El número
+    se toma al crear, como en la casa. Sin proyecto abierto: `ClienteSinProyectoAbierto` y nada escrito. Devuelve la fila
+    con `codigo`. Errores: `ClienteSinProyectoAbierto`, `CotizacionNoVale`, `CotizacionesSinTabla`."""
+    validez = _validez_de_cotizacion(validez_dias)
+    guardable = condiciones_con_sus_textos_al_dia(contenido_de_cotizacion_que_vale(contenido), validez)
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            proyecto = await proyecto_vivo_del_cliente(cur, noco_id)
+            if proyecto is None:
+                raise ClienteSinProyectoAbierto("el cliente no tiene un proyecto abierto")
+            fila = await _crear_cotizacion(conn, cur, proyecto["id"], None, "borrador", guardable, validez,
+                                           None, None, None, hecha_por="natalia")
+        except Exception as e:
+            if _tabla_ausente(e):
+                raise CotizacionesSinTabla("cotizaciones no existe todavía") from e
+            raise
+    return fila
+
+
+async def cotizaciones_de_natalia(noco_id, cotizacion_id: int | None = None) -> list[dict]:
+    """Las formales que HIZO Natalia para ese cliente (la más nueva primero, hasta `TOPE_DE_COTIZACIONES_DE_NATALIA`),
+    o solo `cotizacion_id` si es una de ellas. Cada una con su `codigo`, su `contenido` leído, sus totales y sus
+    `envios`. Una lectura: no pide sesión."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            if cotizacion_id is None:
+                await cur.execute(SENTENCIA_DE_LAS_FORMALES_DE_NATALIA, (noco_id, TOPE_DE_COTIZACIONES_DE_NATALIA))
+            else:
+                await cur.execute(SENTENCIA_DE_LA_FORMAL_DE_NATALIA, (cotizacion_id, noco_id))
+            ids = [r["id"] for r in await cur.fetchall()]
+            return await _formales_con_sus_envios(cur, ids)
+        except Exception as e:
+            if _tabla_ausente(e):
+                raise CotizacionesSinTabla("cotizaciones no existe todavía") from e
+            raise
+
+
+async def pedir_envio_de_cotizacion_de_natalia(noco_id, cotizacion_id: int, canal) -> dict:
+    """Natalia pide que se APRUEBE mandar su formal por `canal`. Crea el envío `pendiente` (la tarjeta la manda la pieza 5)
+    y devuelve `{"envio": ..., "reusada": bool}`. Si la formal ya tiene un envío vivo o uno enviado, devuelve ese (sin
+    crear otro). La formal NO cambia de estado: sigue `borrador` hasta que Natalia anota que salió."""
+    if canal not in CANALES_DE_FORMAL_QUE_PIDEN_APROBACION:
+        raise CotizacionNoVale("canal", f"el canal es {' o '.join(CANALES_DE_FORMAL_QUE_PIDEN_APROBACION)}")
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await _formal_de_natalia(cur, noco_id, cotizacion_id)
+            formal = await _estado_de_la_formal(cur, cotizacion_id)
+            estado = formal["estado"]
+            await cur.execute(SENTENCIA_DE_UN_ENVIO_DE_FORMAL_YA_ENVIADO, (cotizacion_id,))
+            salio = await cur.fetchone()
+            if salio is not None:
+                return {"envio": _envio_de_formal_leido(salio), "reusada": True}
+            await cur.execute(SENTENCIA_DE_UN_ENVIO_DE_FORMAL_VIVO, (cotizacion_id,))
+            vivo = await cur.fetchone()
+            if vivo is not None and _instante_leido(vivo["visto_cambiado_en"]) != _instante_leido(formal["cambiado_en"]):
+                await cur.execute(SENTENCIA_DE_CANCELAR_UN_ENVIO, (MOTIVO_DE_FORMAL_CAMBIADA, vivo["id"]))
+                await cur.fetchone()
+                vivo = None
+            if vivo is not None:
+                return {"envio": _envio_de_formal_leido(vivo), "reusada": True}
+            if estado != "borrador":
+                raise CotizacionNoVale("estado", "una formal enviada no se vuelve a mandar")
+            await cur.execute(SENTENCIA_DE_PEDIR_ENVIO_DE_FORMAL, (cotizacion_id, canal, formal["cambiado_en"]))
+            envio_id = (await cur.fetchone())["id"]
+            await cur.execute(SENTENCIA_DE_UN_ENVIO_DE_FORMAL, (envio_id,))
+            creado = await cur.fetchone()
+            await _huella_de_formal_de_natalia(conn, "pedir_envio", cotizacion_id, None,
+                                               {"envio_id": envio_id, "canal": canal},
+                                               f"Natalia pidió mandar la formal por {canal}")
+            return {"envio": _envio_de_formal_leido(creado), "reusada": False}
+        except Exception as e:
+            if _tabla_ausente(e):
+                raise CotizacionesSinTabla("cotizaciones no existe todavía") from e
+            raise
+
+
+async def formal_y_envio_para_el_pdf_de_natalia(noco_id, cotizacion_id: int, envio_id: int) -> dict:
+    """La formal (leída, con su `codigo`) cuyo PDF puede bajar Natalia: SOLO si es suya y de ese cliente, y el envío
+    `envio_id` de esa formal está APROBADO. Si ya salió al cliente por otro envío, no se entrega (no se manda dos veces).
+    Una lectura. Errores: `CotizacionNoEsta`, `CotizacionEnvioNoSeMueve`, `CotizacionesSinTabla`."""
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await _formal_de_natalia(cur, noco_id, cotizacion_id)
+            await cur.execute(SENTENCIA_DE_LEER_LA_FORMAL_DE_NATALIA, (cotizacion_id,))
+            c = _cotizacion_leida(await cur.fetchone())
+            await cur.execute(SENTENCIA_DE_LOS_ENVIOS_DE_FORMALES, (cotizacion_id,))
+            todos = await cur.fetchall()
+        except Exception as e:
+            if _tabla_ausente(e):
+                raise CotizacionesSinTabla("cotizaciones no existe todavía") from e
+            raise
+    el_envio = next((e for e in todos if e["id"] == envio_id), None)
+    if el_envio is None:
+        raise CotizacionNoEsta("ese envío no está")
+    if el_envio["estado"] != "aprobado":
+        raise CotizacionEnvioNoSeMueve(f"el envío está {el_envio['estado']}: el PDF se baja con el envío aprobado")
+    if _instante_leido(el_envio["visto_cambiado_en"]) != _instante_leido(c["cambiado_en"]):
+        raise CotizacionEnvioNoSeMueve("la formal cambió después de pedir la aprobación: hay que pedirla otra vez")
+    salio = next((e for e in todos if e["id"] != envio_id and e["estado"] == "enviado"), None)
+    if salio is not None:
+        raise CotizacionEnvioNoSeMueve(f"la formal ya salió al cliente por {salio['canal']}: no se manda dos veces")
+    return c
+
+
+async def anotar_envio_de_cotizacion_de_natalia(noco_id, cotizacion_id: int, envio_id: int, salio, motivo=None) -> dict:
+    """Natalia anota cómo terminó un envío APROBADO: `salio=True` → envío `enviado` y formal `enviada` (con la fecha de
+    ahora); `salio=False` → envío `no_se_pudo` con su `motivo` (obligatorio) y la formal sigue `borrador`. Es lo ÚNICO que
+    pone una formal de Natalia en `enviada`. Anotar lo mismo dos veces no cambia nada. Devuelve el envío releído."""
+    if not isinstance(salio, bool):
+        raise CotizacionNoVale("salio", "salio es verdadero o falso")
+    # El motivo no pasa por `_texto_de_cotizacion`: no es un campo de la ventana de la casa (su aviso no existe). La ruta lo
+    # valida antes con 422; aquí queda la red para quien llame a `db` directo.
+    if not salio and (not isinstance(motivo, str) or not motivo.strip() or len(motivo) > 500):
+        raise ValueError("el motivo de un envío que no salió es obligatorio, de 1 a 500 caracteres")
+    el_motivo = None if salio else motivo.strip()
+    async with pool.connection() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            await _formal_de_natalia(cur, noco_id, cotizacion_id)
+            formal = await _estado_de_la_formal(cur, cotizacion_id)
+            await cur.execute(SENTENCIA_DE_LOS_ENVIOS_DE_FORMALES, (cotizacion_id,))
+            todos = await cur.fetchall()
+            el = next((e for e in todos if e["id"] == envio_id), None)
+            if el is None:
+                raise CotizacionNoEsta("ese envío no está")
+            pedido = "enviado" if salio else "no_se_pudo"
+            if el["estado"] == pedido:
+                return _envio_de_formal_leido(el)
+            if el["estado"] != "aprobado":
+                raise CotizacionEnvioNoSeMueve(f"el envío está {el['estado']}: solo se anota uno que ya se aprobó")
+            if salio and _instante_leido(el["visto_cambiado_en"]) != _instante_leido(formal["cambiado_en"]):
+                raise CotizacionEnvioNoSeMueve(
+                    "la formal cambió después de pedir la aprobación: no se anotó que salió; hay que pedirla otra vez")
+            if salio:
+                await cur.execute(SENTENCIA_DE_ANOTAR_QUE_SALIO_DE_FORMAL, (envio_id,))
+                await cur.fetchone()
+                await cur.execute(SENTENCIA_DE_MARCAR_LA_FORMAL_ENVIADA, (cotizacion_id, formal["cambiado_en"]))
+                if await cur.fetchone() is None:
+                    raise CotizacionCambio("la formal cambió mientras se anotaba")
+            else:
+                await cur.execute(SENTENCIA_DE_ANOTAR_QUE_NO_SALIO_DE_FORMAL, (el_motivo, envio_id))
+                await cur.fetchone()
+            await cur.execute(SENTENCIA_DE_UN_ENVIO_DE_FORMAL, (envio_id,))
+            despues = await cur.fetchone()
+            await _huella_de_formal_de_natalia(
+                conn, "anotar_envio", cotizacion_id, _envio_de_formal_leido(el), _envio_de_formal_leido(despues),
+                "Natalia anotó que la formal salió" if salio else "Natalia anotó que la formal no salió")
+            return _envio_de_formal_leido(despues)
+        except Exception as e:
+            if _tabla_ausente(e):
+                raise CotizacionesSinTabla("cotizaciones no existe todavía") from e
+            raise
 
 
 # ── EL DRIVE DE LAS COTIZACIONES (pieza 8 del diseño «Cotizaciones en Proyectos», 16-oct-2026) ─────────────

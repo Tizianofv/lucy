@@ -311,7 +311,8 @@ def test_G1_los_hermanos_con_noco_id_en_la_ruta_son_estos_y_todos_estan_cubierto
     de un cliente), cuya prueba propia es `tests/test_natalia_crea_proyecto.py` (G1 a G6). El día que haya una quinta
     esta prueba se rompe y obliga a escribirle su propia prueba antes de sumarla aquí."""
     con_ficha = sorted((m, p, perm) for m, p, perm in api_code.rutas_registradas(panel.app)
-                       if "{noco_id}" in p and "/facturas" not in p)     # las de las facturas: `tests/test_facturas_natalia.py`
+                       if "{noco_id}" in p and "/facturas" not in p and "/cotizaciones" not in p)
+    # las de las facturas (`tests/test_facturas_natalia.py`) y las de las formales (`tests/test_cotizaciones_natalia_puerta.py`)
     assert con_ficha == [
         ("GET", "/api/code/clientes/{noco_id}/consultas", "consultas:leer"),
         ("GET", "/api/code/clientes/{noco_id}/proyectos", PERMISO),
