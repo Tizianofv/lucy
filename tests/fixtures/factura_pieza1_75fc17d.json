@@ -1,0 +1,921 @@
+{
+ "anulada_motivo": {
+  "flujos_sha256": [
+   "d1e462a7a4f03b9b480cf5395123d3233feea344cd077552974cdb9da9fe9249"
+  ],
+  "hoja": {
+   "codigo": "FAC-2026-001",
+   "emisor": [
+    "",
+    ""
+   ],
+   "encabezados": [
+    "SERVICIO",
+    "CANTIDAD",
+    "PRECIO UNITARIO",
+    "TOTAL"
+   ],
+   "marca": "ANULADA",
+   "ncf": "NCF: B0100000001",
+   "para": [
+    [
+     "PARA",
+     "Cliente de prueba"
+    ],
+    [
+     "RNC",
+     "131234567"
+    ],
+    [
+     "FECHA",
+     "14 de octubre de 2026"
+    ],
+    [
+     "TIPO DE NCF",
+     "Crédito fiscal"
+    ],
+    [
+     "ESTADO",
+     "ANULADA"
+    ],
+    [
+     "MOTIVO DE LA ANULACIÓN",
+     "Error de monto"
+    ]
+   ],
+   "pie": [
+    "Santo Domingo, República Dominicana",
+    "(809) 687-9641 · caribbeandreamstudios@gmail.com"
+   ],
+   "renglones": [
+    {
+     "cantidad": "2 horas",
+     "descripcion": "Grabación de bajo y güira",
+     "detalle": "Incluye mezcla.",
+     "monto": "RD$62,500",
+     "precio_unitario": "RD$31,250"
+    },
+    {
+     "cantidad": "1 video",
+     "descripcion": "Video musical",
+     "detalle": "Una toma.\nSegunda línea.",
+     "monto": "RD$15,250.50",
+     "precio_unitario": "RD$15,250.50"
+    }
+   ],
+   "seccion": "SERVICIOS",
+   "titulo": "FACTURA DE SERVICIOS",
+   "totales": [
+    {
+     "estilo": "gris",
+     "etiqueta": "Subtotal",
+     "total": "RD$77,750.50"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "ITBIS (18%)",
+     "total": "RD$16,464.81"
+    },
+    {
+     "estilo": "total",
+     "etiqueta": "Total factura (RD$)",
+     "total": "RD$107,935.99"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "Retención ISR (15%) sobre el servicio",
+     "total": "- RD$13,720.68"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "Retención ITBIS (18%)",
+     "total": "- RD$16,464.81"
+    },
+    {
+     "estilo": "neto",
+     "etiqueta": "Neto a pagar",
+     "total": "RD$77,750.50"
+    }
+   ]
+  },
+  "paginas": 1,
+  "texto": [
+   "FACTURA DE SERVICIOS\nFAC-2026-001\nNCF: B0100000001\nPARA\nCliente de prueba\nRNC\n131234567\nFECHA\n14 de octubre de 2026\nTIPO DE NCF\nCrédito fiscal\nESTADO\nANULADA\nMOTIVO DE LA ANULACIÓN\nError de monto\nSERVICIOS\nSERVICIO CANTIDAD\nPRECIO\nUNITARIO\nTOTAL\nGrabación de bajo y güira\nIncluye mezcla.\n2 horas RD$31,250 RD$62,500\nVideo musical\nUna toma.\nSegunda línea.\n1 video RD$15,250.50 RD$15,250.50\nSubtotal RD$77,750.50\nITBIS (18%) RD$16,464.81\nTotal factura (RD$) RD$107,935.99\nRetención ISR (15%) sobre el servicio - RD$13,720.68\nRetención ITBIS (18%) - RD$16,464.81\nNeto a pagar RD$77,750.50\nSanto Domingo, República Dominicana\n(809) 687-9641 · caribbeandreamstudios@gmail.com\nANULADA"
+  ]
+ },
+ "borrador_sin_nada": {
+  "flujos_sha256": [
+   "3d076298f408e6428592c5d511104160e814d1567c58650b7534e4a696d031e9"
+  ],
+  "hoja": {
+   "codigo": "BORRADOR",
+   "emisor": [
+    "",
+    ""
+   ],
+   "encabezados": [
+    "SERVICIO",
+    "CANTIDAD",
+    "PRECIO UNITARIO",
+    "TOTAL"
+   ],
+   "marca": "BORRADOR",
+   "ncf": null,
+   "para": [
+    [
+     "PARA",
+     "Cliente de prueba"
+    ],
+    [
+     "FECHA",
+     "14 de octubre de 2026"
+    ]
+   ],
+   "pie": [
+    "Santo Domingo, República Dominicana",
+    "(809) 687-9641 · caribbeandreamstudios@gmail.com"
+   ],
+   "renglones": [
+    {
+     "cantidad": "2 horas",
+     "descripcion": "Grabación de bajo y güira",
+     "detalle": "Incluye mezcla.",
+     "monto": "RD$62,500",
+     "precio_unitario": "RD$31,250"
+    },
+    {
+     "cantidad": "1 video",
+     "descripcion": "Video musical",
+     "detalle": "Una toma.\nSegunda línea.",
+     "monto": "RD$15,250.50",
+     "precio_unitario": "RD$15,250.50"
+    }
+   ],
+   "seccion": "SERVICIOS",
+   "titulo": "FACTURA DE SERVICIOS",
+   "totales": [
+    {
+     "estilo": "total",
+     "etiqueta": "Total factura (RD$)",
+     "total": "RD$77,750.50"
+    }
+   ]
+  },
+  "paginas": 1,
+  "texto": [
+   "FACTURA DE SERVICIOS\nBORRADOR\nPARA\nCliente de prueba\nFECHA\n14 de octubre de 2026\nSERVICIOS\nSERVICIO CANTIDAD\nPRECIO\nUNITARIO\nTOTAL\nGrabación de bajo y güira\nIncluye mezcla.\n2 horas RD$31,250 RD$62,500\nVideo musical\nUna toma.\nSegunda línea.\n1 video RD$15,250.50 RD$15,250.50\nTotal factura (RD$) RD$77,750.50\nSanto Domingo, República Dominicana\n(809) 687-9641 · caribbeandreamstudios@gmail.com\nBORRADOR"
+  ]
+ },
+ "cantidades_largas": {
+  "flujos_sha256": [
+   "c8bd805a7f59982c201bce9e832b98ebc53339ee3404afc90badf7171d214471"
+  ],
+  "hoja": {
+   "codigo": "FAC-2026-001",
+   "emisor": [
+    "",
+    ""
+   ],
+   "encabezados": [
+    "SERVICIO",
+    "CANTIDAD",
+    "PRECIO UNITARIO",
+    "TOTAL"
+   ],
+   "marca": null,
+   "ncf": "NCF: B0100000001",
+   "para": [
+    [
+     "PARA",
+     "Cliente de prueba"
+    ],
+    [
+     "RNC",
+     "131234567"
+    ],
+    [
+     "FECHA",
+     "14 de octubre de 2026"
+    ],
+    [
+     "TIPO DE NCF",
+     "Crédito fiscal"
+    ]
+   ],
+   "pie": [
+    "Santo Domingo, República Dominicana",
+    "(809) 687-9641 · caribbeandreamstudios@gmail.com"
+   ],
+   "renglones": [
+    {
+     "cantidad": "99999999.99 unidades",
+     "descripcion": "Servicio con un nombre bastante largo para forzar el salto de la columna",
+     "detalle": "",
+     "monto": "RD$9,999,999,998,000,000",
+     "precio_unitario": "RD$99,999,999.99"
+    }
+   ],
+   "seccion": "SERVICIOS",
+   "titulo": "FACTURA DE SERVICIOS",
+   "totales": [
+    {
+     "estilo": "gris",
+     "etiqueta": "Subtotal",
+     "total": "RD$9,999,999,998,000,000"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "ITBIS (18%)",
+     "total": "RD$2,117,647,058,400,000"
+    },
+    {
+     "estilo": "total",
+     "etiqueta": "Total factura (RD$)",
+     "total": "RD$13,882,352,938,400,000"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "Retención ISR (15%) sobre el servicio",
+     "total": "- RD$1,764,705,882,000,000"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "Retención ITBIS (18%)",
+     "total": "- RD$2,117,647,058,400,000"
+    },
+    {
+     "estilo": "neto",
+     "etiqueta": "Neto a pagar",
+     "total": "RD$9,999,999,998,000,000"
+    }
+   ]
+  },
+  "paginas": 1,
+  "texto": [
+   "FACTURA DE SERVICIOS\nFAC-2026-001\nNCF: B0100000001\nPARA\nCliente de prueba\nRNC\n131234567\nFECHA\n14 de octubre de 2026\nTIPO DE NCF\nCrédito fiscal\nSERVICIOS\nSERVICIO CANTIDAD\nPRECIO\nUNITARIO\nTOTAL\nServicio con un\nnombre bastante\nlargo para forzar el\nsalto de la columna\n99999999.99 unidades RD$99,999,999.99 RD$9,999,999,998,000,000\nSubtotal RD$9,999,999,998,000,000\nITBIS (18%) RD$2,117,647,058,400,000\nTotal factura (RD$) RD$13,882,352,938,400,000\nRetención ISR (15%) sobre el servicio - RD$1,764,705,882,000,000\nRetención ITBIS (18%) - RD$2,117,647,058,400,000\nNeto a pagar RD$9,999,999,998,000,000\nSanto Domingo, República Dominicana\n(809) 687-9641 · caribbeandreamstudios@gmail.com"
+  ]
+ },
+ "emitida_ncf_itbis": {
+  "flujos_sha256": [
+   "6bf47b3409e8839a9382cc07831229936d5432d4c870a33b87525e491816b2de"
+  ],
+  "hoja": {
+   "codigo": "FAC-2026-001",
+   "emisor": [
+    "",
+    ""
+   ],
+   "encabezados": [
+    "SERVICIO",
+    "CANTIDAD",
+    "PRECIO UNITARIO",
+    "TOTAL"
+   ],
+   "marca": null,
+   "ncf": "NCF: B0100000001",
+   "para": [
+    [
+     "PARA",
+     "Cliente de prueba"
+    ],
+    [
+     "RNC",
+     "131234567"
+    ],
+    [
+     "FECHA",
+     "14 de octubre de 2026"
+    ],
+    [
+     "TIPO DE NCF",
+     "Crédito fiscal"
+    ]
+   ],
+   "pie": [
+    "Santo Domingo, República Dominicana",
+    "(809) 687-9641 · caribbeandreamstudios@gmail.com"
+   ],
+   "renglones": [
+    {
+     "cantidad": "2 horas",
+     "descripcion": "Grabación de bajo y güira",
+     "detalle": "Incluye mezcla.",
+     "monto": "RD$62,500",
+     "precio_unitario": "RD$31,250"
+    },
+    {
+     "cantidad": "1 video",
+     "descripcion": "Video musical",
+     "detalle": "Una toma.\nSegunda línea.",
+     "monto": "RD$15,250.50",
+     "precio_unitario": "RD$15,250.50"
+    }
+   ],
+   "seccion": "SERVICIOS",
+   "titulo": "FACTURA DE SERVICIOS",
+   "totales": [
+    {
+     "estilo": "gris",
+     "etiqueta": "Subtotal",
+     "total": "RD$77,750.50"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "ITBIS (18%)",
+     "total": "RD$16,464.81"
+    },
+    {
+     "estilo": "total",
+     "etiqueta": "Total factura (RD$)",
+     "total": "RD$107,935.99"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "Retención ISR (15%) sobre el servicio",
+     "total": "- RD$13,720.68"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "Retención ITBIS (18%)",
+     "total": "- RD$16,464.81"
+    },
+    {
+     "estilo": "neto",
+     "etiqueta": "Neto a pagar",
+     "total": "RD$77,750.50"
+    }
+   ]
+  },
+  "paginas": 1,
+  "texto": [
+   "FACTURA DE SERVICIOS\nFAC-2026-001\nNCF: B0100000001\nPARA\nCliente de prueba\nRNC\n131234567\nFECHA\n14 de octubre de 2026\nTIPO DE NCF\nCrédito fiscal\nSERVICIOS\nSERVICIO CANTIDAD\nPRECIO\nUNITARIO\nTOTAL\nGrabación de bajo y güira\nIncluye mezcla.\n2 horas RD$31,250 RD$62,500\nVideo musical\nUna toma.\nSegunda línea.\n1 video RD$15,250.50 RD$15,250.50\nSubtotal RD$77,750.50\nITBIS (18%) RD$16,464.81\nTotal factura (RD$) RD$107,935.99\nRetención ISR (15%) sobre el servicio - RD$13,720.68\nRetención ITBIS (18%) - RD$16,464.81\nNeto a pagar RD$77,750.50\nSanto Domingo, República Dominicana\n(809) 687-9641 · caribbeandreamstudios@gmail.com"
+  ]
+ },
+ "emitida_sin_ncf_con_descuento": {
+  "flujos_sha256": [
+   "bbf6c32a675a6845055bc745b0532a50c346c188e26cfc2cc2e40f943f908280"
+  ],
+  "hoja": {
+   "codigo": "FAC-2026-001",
+   "emisor": [
+    "",
+    ""
+   ],
+   "encabezados": [
+    "SERVICIO",
+    "CANTIDAD",
+    "PRECIO UNITARIO",
+    "TOTAL"
+   ],
+   "marca": null,
+   "ncf": null,
+   "para": [
+    [
+     "PARA",
+     "Cliente de prueba"
+    ],
+    [
+     "RNC",
+     "131234567"
+    ],
+    [
+     "FECHA",
+     "14 de octubre de 2026"
+    ]
+   ],
+   "pie": [
+    "Santo Domingo, República Dominicana",
+    "(809) 687-9641 · caribbeandreamstudios@gmail.com"
+   ],
+   "renglones": [
+    {
+     "cantidad": "2 horas",
+     "descripcion": "Grabación de bajo y güira",
+     "detalle": "Incluye mezcla.",
+     "monto": "RD$62,500",
+     "precio_unitario": "RD$31,250"
+    },
+    {
+     "cantidad": "1 video",
+     "descripcion": "Video musical",
+     "detalle": "Una toma.\nSegunda línea.",
+     "monto": "RD$15,250.50",
+     "precio_unitario": "RD$15,250.50"
+    }
+   ],
+   "seccion": "SERVICIOS",
+   "titulo": "FACTURA DE SERVICIOS",
+   "totales": [
+    {
+     "estilo": "gris",
+     "etiqueta": "Subtotal",
+     "total": "RD$77,750.50"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "ITBIS (18%)",
+     "total": "RD$13,995.09"
+    },
+    {
+     "estilo": "total",
+     "etiqueta": "Total factura (RD$)",
+     "total": "RD$91,745.59"
+    }
+   ]
+  },
+  "paginas": 1,
+  "texto": [
+   "FACTURA DE SERVICIOS\nFAC-2026-001\nPARA\nCliente de prueba\nRNC\n131234567\nFECHA\n14 de octubre de 2026\nSERVICIOS\nSERVICIO CANTIDAD\nPRECIO\nUNITARIO\nTOTAL\nGrabación de bajo y güira\nIncluye mezcla.\n2 horas RD$31,250 RD$62,500\nVideo musical\nUna toma.\nSegunda línea.\n1 video RD$15,250.50 RD$15,250.50\nSubtotal RD$77,750.50\nITBIS (18%) RD$13,995.09\nTotal factura (RD$) RD$91,745.59\nSanto Domingo, República Dominicana\n(809) 687-9641 · caribbeandreamstudios@gmail.com"
+  ]
+ },
+ "muchos_renglones": {
+  "flujos_sha256": [
+   "cb326c5f8099ae854219ee3c90d9c5fd360b721a1653b65cf9cb62d3b12b7005",
+   "844c47f56ff3e869c5d085d980133a61851c7875000a4bc8785e9ed4266d6bae",
+   "0cc81d2c8486bdd0a98ae4fb3cede256ab6df316e5885bfe44abc506501a6e6c"
+  ],
+  "hoja": {
+   "codigo": "FAC-2026-001",
+   "emisor": [
+    "",
+    ""
+   ],
+   "encabezados": [
+    "SERVICIO",
+    "CANTIDAD",
+    "PRECIO UNITARIO",
+    "TOTAL"
+   ],
+   "marca": null,
+   "ncf": "NCF: B0100000001",
+   "para": [
+    [
+     "PARA",
+     "Cliente de prueba"
+    ],
+    [
+     "RNC",
+     "131234567"
+    ],
+    [
+     "FECHA",
+     "14 de octubre de 2026"
+    ],
+    [
+     "TIPO DE NCF",
+     "Crédito fiscal"
+    ]
+   ],
+   "pie": [
+    "Santo Domingo, República Dominicana",
+    "(809) 687-9641 · caribbeandreamstudios@gmail.com"
+   ],
+   "renglones": [
+    {
+     "cantidad": "1 horas",
+     "descripcion": "Renglón número 1",
+     "detalle": "detalle ",
+     "monto": "RD$1,250.25",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "2 horas",
+     "descripcion": "Renglón número 2",
+     "detalle": "detalle detalle ",
+     "monto": "RD$2,500.50",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "3 horas",
+     "descripcion": "Renglón número 3",
+     "detalle": "detalle detalle detalle ",
+     "monto": "RD$3,750.75",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "4 horas",
+     "descripcion": "Renglón número 4",
+     "detalle": "",
+     "monto": "RD$5,001",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "5 horas",
+     "descripcion": "Renglón número 5",
+     "detalle": "detalle ",
+     "monto": "RD$6,251.25",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "6 horas",
+     "descripcion": "Renglón número 6",
+     "detalle": "detalle detalle ",
+     "monto": "RD$7,501.50",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "7 horas",
+     "descripcion": "Renglón número 7",
+     "detalle": "detalle detalle detalle ",
+     "monto": "RD$8,751.75",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "8 horas",
+     "descripcion": "Renglón número 8",
+     "detalle": "",
+     "monto": "RD$10,002",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "9 horas",
+     "descripcion": "Renglón número 9",
+     "detalle": "detalle ",
+     "monto": "RD$11,252.25",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "10 horas",
+     "descripcion": "Renglón número 10",
+     "detalle": "detalle detalle ",
+     "monto": "RD$12,502.50",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "11 horas",
+     "descripcion": "Renglón número 11",
+     "detalle": "detalle detalle detalle ",
+     "monto": "RD$13,752.75",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "12 horas",
+     "descripcion": "Renglón número 12",
+     "detalle": "",
+     "monto": "RD$15,003",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "13 horas",
+     "descripcion": "Renglón número 13",
+     "detalle": "detalle ",
+     "monto": "RD$16,253.25",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "14 horas",
+     "descripcion": "Renglón número 14",
+     "detalle": "detalle detalle ",
+     "monto": "RD$17,503.50",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "15 horas",
+     "descripcion": "Renglón número 15",
+     "detalle": "detalle detalle detalle ",
+     "monto": "RD$18,753.75",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "16 horas",
+     "descripcion": "Renglón número 16",
+     "detalle": "",
+     "monto": "RD$20,004",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "17 horas",
+     "descripcion": "Renglón número 17",
+     "detalle": "detalle ",
+     "monto": "RD$21,254.25",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "18 horas",
+     "descripcion": "Renglón número 18",
+     "detalle": "detalle detalle ",
+     "monto": "RD$22,504.50",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "19 horas",
+     "descripcion": "Renglón número 19",
+     "detalle": "detalle detalle detalle ",
+     "monto": "RD$23,754.75",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "20 horas",
+     "descripcion": "Renglón número 20",
+     "detalle": "",
+     "monto": "RD$25,005",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "21 horas",
+     "descripcion": "Renglón número 21",
+     "detalle": "detalle ",
+     "monto": "RD$26,255.25",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "22 horas",
+     "descripcion": "Renglón número 22",
+     "detalle": "detalle detalle ",
+     "monto": "RD$27,505.50",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "23 horas",
+     "descripcion": "Renglón número 23",
+     "detalle": "detalle detalle detalle ",
+     "monto": "RD$28,755.75",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "24 horas",
+     "descripcion": "Renglón número 24",
+     "detalle": "",
+     "monto": "RD$30,006",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "25 horas",
+     "descripcion": "Renglón número 25",
+     "detalle": "detalle ",
+     "monto": "RD$31,256.25",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "26 horas",
+     "descripcion": "Renglón número 26",
+     "detalle": "detalle detalle ",
+     "monto": "RD$32,506.50",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "27 horas",
+     "descripcion": "Renglón número 27",
+     "detalle": "detalle detalle detalle ",
+     "monto": "RD$33,756.75",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "28 horas",
+     "descripcion": "Renglón número 28",
+     "detalle": "",
+     "monto": "RD$35,007",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "29 horas",
+     "descripcion": "Renglón número 29",
+     "detalle": "detalle ",
+     "monto": "RD$36,257.25",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "30 horas",
+     "descripcion": "Renglón número 30",
+     "detalle": "detalle detalle ",
+     "monto": "RD$37,507.50",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "31 horas",
+     "descripcion": "Renglón número 31",
+     "detalle": "detalle detalle detalle ",
+     "monto": "RD$38,757.75",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "32 horas",
+     "descripcion": "Renglón número 32",
+     "detalle": "",
+     "monto": "RD$40,008",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "33 horas",
+     "descripcion": "Renglón número 33",
+     "detalle": "detalle ",
+     "monto": "RD$41,258.25",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "34 horas",
+     "descripcion": "Renglón número 34",
+     "detalle": "detalle detalle ",
+     "monto": "RD$42,508.50",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "35 horas",
+     "descripcion": "Renglón número 35",
+     "detalle": "detalle detalle detalle ",
+     "monto": "RD$43,758.75",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "36 horas",
+     "descripcion": "Renglón número 36",
+     "detalle": "",
+     "monto": "RD$45,009",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "37 horas",
+     "descripcion": "Renglón número 37",
+     "detalle": "detalle ",
+     "monto": "RD$46,259.25",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "38 horas",
+     "descripcion": "Renglón número 38",
+     "detalle": "detalle detalle ",
+     "monto": "RD$47,509.50",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "39 horas",
+     "descripcion": "Renglón número 39",
+     "detalle": "detalle detalle detalle ",
+     "monto": "RD$48,759.75",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "40 horas",
+     "descripcion": "Renglón número 40",
+     "detalle": "",
+     "monto": "RD$50,010",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "41 horas",
+     "descripcion": "Renglón número 41",
+     "detalle": "detalle ",
+     "monto": "RD$51,260.25",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "42 horas",
+     "descripcion": "Renglón número 42",
+     "detalle": "detalle detalle ",
+     "monto": "RD$52,510.50",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "43 horas",
+     "descripcion": "Renglón número 43",
+     "detalle": "detalle detalle detalle ",
+     "monto": "RD$53,760.75",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "44 horas",
+     "descripcion": "Renglón número 44",
+     "detalle": "",
+     "monto": "RD$55,011",
+     "precio_unitario": "RD$1,250.25"
+    },
+    {
+     "cantidad": "45 horas",
+     "descripcion": "Renglón número 45",
+     "detalle": "detalle ",
+     "monto": "RD$56,261.25",
+     "precio_unitario": "RD$1,250.25"
+    }
+   ],
+   "seccion": "SERVICIOS",
+   "titulo": "FACTURA DE SERVICIOS",
+   "totales": [
+    {
+     "estilo": "gris",
+     "etiqueta": "Subtotal",
+     "total": "RD$1,294,008.75"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "ITBIS (18%)",
+     "total": "RD$274,025.38"
+    },
+    {
+     "estilo": "total",
+     "etiqueta": "Total factura (RD$)",
+     "total": "RD$1,796,388.62"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "Retención ISR (15%) sobre el servicio",
+     "total": "- RD$228,354.49"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "Retención ITBIS (18%)",
+     "total": "- RD$274,025.38"
+    },
+    {
+     "estilo": "neto",
+     "etiqueta": "Neto a pagar",
+     "total": "RD$1,294,008.75"
+    }
+   ]
+  },
+  "paginas": 3,
+  "texto": [
+   "FACTURA DE SERVICIOS\nFAC-2026-001\nNCF: B0100000001\nPARA\nCliente de prueba\nRNC\n131234567\nFECHA\n14 de octubre de 2026\nTIPO DE NCF\nCrédito fiscal\nSERVICIOS\nSERVICIO CANTIDAD\nPRECIO\nUNITARIO\nTOTAL\nRenglón número 1\ndetalle \n1 horas RD$1,250.25 RD$1,250.25\nRenglón número 2\ndetalle detalle \n2 horas RD$1,250.25 RD$2,500.50\nRenglón número 3\ndetalle detalle detalle \n3 horas RD$1,250.25 RD$3,750.75\nRenglón número 4 4 horas RD$1,250.25 RD$5,001\nRenglón número 5\ndetalle \n5 horas RD$1,250.25 RD$6,251.25\nRenglón número 6\ndetalle detalle \n6 horas RD$1,250.25 RD$7,501.50\nRenglón número 7\ndetalle detalle detalle \n7 horas RD$1,250.25 RD$8,751.75\nRenglón número 8 8 horas RD$1,250.25 RD$10,002\nRenglón número 9\ndetalle \n9 horas RD$1,250.25 RD$11,252.25\nRenglón número 10\ndetalle detalle \n10 horas RD$1,250.25 RD$12,502.50\nRenglón número 11\ndetalle detalle detalle \n11 horas RD$1,250.25 RD$13,752.75\nRenglón número 12 12 horas RD$1,250.25 RD$15,003\nRenglón número 13\ndetalle \n13 horas RD$1,250.25 RD$16,253.25",
+   "SERVICIO CANTIDAD\nPRECIO\nUNITARIO\nTOTAL\nRenglón número 14\ndetalle detalle \n14 horas RD$1,250.25 RD$17,503.50\nRenglón número 15\ndetalle detalle detalle \n15 horas RD$1,250.25 RD$18,753.75\nRenglón número 16 16 horas RD$1,250.25 RD$20,004\nRenglón número 17\ndetalle \n17 horas RD$1,250.25 RD$21,254.25\nRenglón número 18\ndetalle detalle \n18 horas RD$1,250.25 RD$22,504.50\nRenglón número 19\ndetalle detalle detalle \n19 horas RD$1,250.25 RD$23,754.75\nRenglón número 20 20 horas RD$1,250.25 RD$25,005\nRenglón número 21\ndetalle \n21 horas RD$1,250.25 RD$26,255.25\nRenglón número 22\ndetalle detalle \n22 horas RD$1,250.25 RD$27,505.50\nRenglón número 23\ndetalle detalle detalle \n23 horas RD$1,250.25 RD$28,755.75\nRenglón número 24 24 horas RD$1,250.25 RD$30,006\nRenglón número 25\ndetalle \n25 horas RD$1,250.25 RD$31,256.25\nRenglón número 26\ndetalle detalle \n26 horas RD$1,250.25 RD$32,506.50\nRenglón número 27\ndetalle detalle detalle \n27 horas RD$1,250.25 RD$33,756.75\nRenglón número 28 28 horas RD$1,250.25 RD$35,007\nRenglón número 29\ndetalle \n29 horas RD$1,250.25 RD$36,257.25\nRenglón número 30\ndetalle detalle \n30 horas RD$1,250.25 RD$37,507.50\nRenglón número 31\ndetalle detalle detalle \n31 horas RD$1,250.25 RD$38,757.75\nRenglón número 32 32 horas RD$1,250.25 RD$40,008",
+   "SERVICIO CANTIDAD\nPRECIO\nUNITARIO\nTOTAL\nRenglón número 33\ndetalle \n33 horas RD$1,250.25 RD$41,258.25\nRenglón número 34\ndetalle detalle \n34 horas RD$1,250.25 RD$42,508.50\nRenglón número 35\ndetalle detalle detalle \n35 horas RD$1,250.25 RD$43,758.75\nRenglón número 36 36 horas RD$1,250.25 RD$45,009\nRenglón número 37\ndetalle \n37 horas RD$1,250.25 RD$46,259.25\nRenglón número 38\ndetalle detalle \n38 horas RD$1,250.25 RD$47,509.50\nRenglón número 39\ndetalle detalle detalle \n39 horas RD$1,250.25 RD$48,759.75\nRenglón número 40 40 horas RD$1,250.25 RD$50,010\nRenglón número 41\ndetalle \n41 horas RD$1,250.25 RD$51,260.25\nRenglón número 42\ndetalle detalle \n42 horas RD$1,250.25 RD$52,510.50\nRenglón número 43\ndetalle detalle detalle \n43 horas RD$1,250.25 RD$53,760.75\nRenglón número 44 44 horas RD$1,250.25 RD$55,011\nRenglón número 45\ndetalle \n45 horas RD$1,250.25 RD$56,261.25\nSubtotal RD$1,294,008.75\nITBIS (18%) RD$274,025.38\nTotal factura (RD$) RD$1,796,388.62\nRetención ISR (15%) sobre el servicio - RD$228,354.49\nRetención ITBIS (18%) - RD$274,025.38\nNeto a pagar RD$1,294,008.75\nSanto Domingo, República Dominicana\n(809) 687-9641 · caribbeandreamstudios@gmail.com"
+  ]
+ },
+ "renglon_de_antes": {
+  "flujos_sha256": [
+   "d70c1c23347a844f2a30c14a6564b29fb0cdd61eb211ed45f583f4a22aae5bd1"
+  ],
+  "hoja": {
+   "codigo": "FAC-2026-001",
+   "emisor": [
+    "",
+    ""
+   ],
+   "encabezados": [
+    "SERVICIO",
+    "CANTIDAD",
+    "PRECIO UNITARIO",
+    "TOTAL"
+   ],
+   "marca": null,
+   "ncf": "NCF: B0100000001",
+   "para": [
+    [
+     "PARA",
+     "Cliente de prueba"
+    ],
+    [
+     "RNC",
+     "131234567"
+    ],
+    [
+     "FECHA",
+     "14 de octubre de 2026"
+    ],
+    [
+     "TIPO DE NCF",
+     "Crédito fiscal"
+    ]
+   ],
+   "pie": [
+    "Santo Domingo, República Dominicana",
+    "(809) 687-9641 · caribbeandreamstudios@gmail.com"
+   ],
+   "renglones": [
+    {
+     "cantidad": "1",
+     "descripcion": "Renglón de antes del detalle",
+     "detalle": "",
+     "monto": "RD$4,000",
+     "precio_unitario": "RD$4,000"
+    }
+   ],
+   "seccion": "SERVICIOS",
+   "titulo": "FACTURA DE SERVICIOS",
+   "totales": [
+    {
+     "estilo": "gris",
+     "etiqueta": "Subtotal",
+     "total": "RD$4,000"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "ITBIS (18%)",
+     "total": "RD$847.06"
+    },
+    {
+     "estilo": "total",
+     "etiqueta": "Total factura (RD$)",
+     "total": "RD$5,552.94"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "Retención ISR (15%) sobre el servicio",
+     "total": "- RD$705.88"
+    },
+    {
+     "estilo": "gris",
+     "etiqueta": "Retención ITBIS (18%)",
+     "total": "- RD$847.06"
+    },
+    {
+     "estilo": "neto",
+     "etiqueta": "Neto a pagar",
+     "total": "RD$4,000"
+    }
+   ]
+  },
+  "paginas": 1,
+  "texto": [
+   "FACTURA DE SERVICIOS\nFAC-2026-001\nNCF: B0100000001\nPARA\nCliente de prueba\nRNC\n131234567\nFECHA\n14 de octubre de 2026\nTIPO DE NCF\nCrédito fiscal\nSERVICIOS\nSERVICIO CANTIDAD\nPRECIO\nUNITARIO\nTOTAL\nRenglón de antes del detalle 1 RD$4,000 RD$4,000\nSubtotal RD$4,000\nITBIS (18%) RD$847.06\nTotal factura (RD$) RD$5,552.94\nRetención ISR (15%) sobre el servicio - RD$705.88\nRetención ITBIS (18%) - RD$847.06\nNeto a pagar RD$4,000\nSanto Domingo, República Dominicana\n(809) 687-9641 · caribbeandreamstudios@gmail.com"
+  ]
+ }
+}
