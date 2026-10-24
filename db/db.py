@@ -4454,7 +4454,7 @@ async def cotizaciones_de_proyectos() -> dict[int, list[dict]] | None:
             await cur.execute(
                 "SELECT c.id, c.proyecto_id, c.anio, c.numero, c.estado, c.para_nombre, c.para_telefono, "
                 "c.fecha, c.validez_dias, c.contenido, c.creado_en, c.creado_por_chat_id, c.cambiado_en, "
-                "c.enviada_en, c.drive_archivo_id, c.drive_version, c.drive_error "
+                "c.enviada_en, c.drive_archivo_id, c.drive_version, c.drive_error, c.hecha_por "
                 "FROM cotizaciones c JOIN proyectos p ON p.id = c.proyecto_id "
                 "WHERE c.borrado_en IS NULL AND p.borrado_en IS NULL "
                 "ORDER BY c.creado_en DESC, c.id DESC")

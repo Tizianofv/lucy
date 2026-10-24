@@ -166,7 +166,9 @@ def resumen_de_cotizacion(cot: dict) -> dict:
     precio = dinero_en_pesos(menor) if menor == mayor else f"{dinero_en_pesos(menor)} a {dinero_en_pesos(mayor)}"
     return {"id": cot["id"], "codigo": cot["codigo"], "estado": cot["estado"],
             "enviada": cot["estado"] == "enviada", "fecha": fecha_corta(cot["fecha"]),
-            "opciones": f"{n} opción" if n == 1 else f"{n} opciones", "precio": precio}
+            "opciones": f"{n} opción" if n == 1 else f"{n} opciones", "precio": precio,
+            # Quién la hizo (`cotizaciones.hecha_por`): solo la pantalla lo mira; la hoja y el PDF no lo leen.
+            "la_hizo_natalia": cot.get("hecha_por") == "natalia"}
 
 
 def _candado(cambiado_en) -> str:
